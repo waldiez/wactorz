@@ -11,6 +11,7 @@ topic means every command is handled twice.
 import asyncio
 import time
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
@@ -121,6 +122,43 @@ class TestCancellationIsNotSwallowed:
         # Cancelled or not, an actor that has stopped must not keep references
         # to the tasks of the run that just ended.
         assert worker._tasks == []
+
+
+class TestRestartingTheSameInstance:
+    """Counters are restored for a fresh actor, not re-added to a live one."""
+
+    async def test_the_message_count_does_not_double(self, worker: _Worker, tmp_path: Path) -> None:
+        worker._persistence_api = None
+        worker._persistence_dir = tmp_path
+        worker.metrics.messages_processed = 7
+
+        for _ in range(3):
+            await worker.stop()
+            await worker.start()
+
+        # The supervisor restarts by building a new actor, where adding the
+        # persisted count is right. start() restarts this same object, whose
+        # count is already the live total — adding it again gave 14, then 28.
+        assert worker.metrics.messages_processed == 7
+        await worker.stop()
+
+    async def test_a_fresh_instance_still_restores(self, tmp_path: Path) -> None:
+        first = _Worker()
+        first._persistence_api = None
+        first._persistence_dir = tmp_path
+        await first.start()
+        first.metrics.messages_processed = 7
+        await first.stop()
+
+        second = _Worker()
+        second._persistence_api = None
+        second._persistence_dir = tmp_path
+        await second.start()
+        try:
+            # This is the case the restore exists for, and it must keep working.
+            assert second.metrics.messages_processed == 7
+        finally:
+            await second.stop()
 
 
 class TestStopDoesNotHang:

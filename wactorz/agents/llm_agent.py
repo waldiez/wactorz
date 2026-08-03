@@ -1472,12 +1472,22 @@ class LLMAgent(Actor):
         self._conversation_history = clean[-self.max_history :]
         self._history_summary = self.recall("history_summary", "")
 
-        # Restore lifetime cost so heartbeats carry accurate totals after restart
-        saved_cost = self.recall("_final_cost", {})
-        if isinstance(saved_cost, dict):
-            self.total_input_tokens += saved_cost.get("input_tokens", 0)
-            self.total_output_tokens += saved_cost.get("output_tokens", 0)
-            self.total_cost_usd += saved_cost.get("cost_usd", 0.0)
+        # Restore lifetime cost so heartbeats carry accurate totals after restart.
+        # Only into a fresh instance: the supervisor restarts by building a new
+        # agent, but the start command restarts this same object, whose totals
+        # are already the live ones — adding the persisted values there doubles
+        # the agent's lifetime spend, and that figure reaches both the dashboard
+        # headline and the durable ledger.
+        #
+        # All three are checked, not just the cost: a locally hosted model with
+        # no pricing leaves cost at zero while tokens accumulate, and those would
+        # double on their own.
+        if not (self.total_input_tokens or self.total_output_tokens or self.total_cost_usd):
+            saved_cost = self.recall("_final_cost", {})
+            if isinstance(saved_cost, dict):
+                self.total_input_tokens += saved_cost.get("input_tokens", 0)
+                self.total_output_tokens += saved_cost.get("output_tokens", 0)
+                self.total_cost_usd += saved_cost.get("cost_usd", 0.0)
         # Align persisted baseline so global cost doesn't re-add lifetime spend on first
         # _persist_cost() after restart.
         self._last_persisted_usd = self.total_cost_usd

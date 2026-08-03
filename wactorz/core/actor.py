@@ -197,10 +197,15 @@ class Actor(ABC):
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
         await self._load_persistent_state()
-        # Restore message count from previous session
-        saved_msgs = self.recall("_messages_processed", {})
-        if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
-            self.metrics.messages_processed += int(saved_msgs["count"])
+        # Restore the message count from a previous run — but only into a fresh
+        # instance. The supervisor restarts by building a new actor, whose count
+        # is zero; the start command restarts *this* object, whose count is
+        # already the live total. Adding the persisted value there counts every
+        # message twice, and again on each subsequent stop/start.
+        if self.metrics.messages_processed == 0:
+            saved_msgs = self.recall("_messages_processed", {})
+            if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
+                self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
         self._tasks.append(asyncio.create_task(self._message_loop()))
         self._tasks.append(asyncio.create_task(self._heartbeat_loop()))

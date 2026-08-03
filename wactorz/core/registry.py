@@ -4,10 +4,13 @@ Supervisor implements Erlang/OTP-style supervision trees.
 """
 
 import asyncio
+import gc
 import inspect
 import logging
 import os
+import sqlite3
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Optional
@@ -395,7 +398,7 @@ class Supervisor:
             await spec.factory() if inspect.iscoroutinefunction(spec.factory) else spec.factory()
         )
         self._inject(actor)
-        actor.supervisor_id = id(self)
+        actor.supervisor_id = str(id(self))
         await self._registry.register(actor)
         await actor.start()
         logger.debug(f"[Supervisor] Spawned '{name}' ({actor.actor_id[:8]}).")
@@ -444,9 +447,6 @@ class Supervisor:
             )
 
             if sender is not None:
-                import time as _t
-                import uuid
-
                 from .actor import Message, MessageType
 
                 msg = Message(
@@ -457,7 +457,7 @@ class Supervisor:
                         "agent_name": "supervisor",
                         "message": message,
                         "severity": severity,
-                        "timestamp": _t.time(),
+                        "timestamp": time.time(),
                     },
                     message_id=str(uuid.uuid4()),
                 )
@@ -465,14 +465,12 @@ class Supervisor:
             else:
                 # No running actor to send from — fall back to direct append
                 if hasattr(main, "_pending_notifications"):
-                    import time as _t
-
-                    main._pending_notifications.append(
+                    main._pending_notifications.append(  # pyright: ignore[reportAttributeAccessIssue]
                         {
                             "severity": severity,
                             "message": message,
                             "source": "supervisor",
-                            "timestamp": _t.time(),
+                            "timestamp": time.time(),
                         }
                     )
         except Exception as exc:
@@ -593,8 +591,6 @@ class ActorSystem:
         if self._mqtt_client:
             await self._mqtt_client.disconnect()
             self._mqtt_client = None  # drop ref so GC can collect paho client now
-        import gc
-
         gc.collect()  # break aiomqtt↔paho ref cycle while loop is open
         logger.info("[ActorSystem] All actors stopped.")
 
@@ -669,8 +665,6 @@ class _MQTTPublisher:
 
     def _init_db(self):
         """Create outbox table if it doesn't exist."""
-        import sqlite3
-
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
         with sqlite3.connect(self._db_path) as db:
             db.execute("""
@@ -687,9 +681,6 @@ class _MQTTPublisher:
 
     def _save_to_db(self, topic: str, payload: str, retain: bool, qos: int) -> int:
         """Persist a message to SQLite. Returns row id."""
-        import sqlite3
-        import time as _t
-
         try:
             with sqlite3.connect(self._db_path) as db:
                 cur = db.execute(
@@ -701,19 +692,17 @@ class _MQTTPublisher:
                         else payload.decode("utf-8", errors="replace"),
                         int(retain),
                         qos,
-                        _t.time(),
+                        time.time(),
                     ),
                 )
                 db.commit()
-                return cur.lastrowid
+                return cur.lastrowid or 0
         except Exception as e:
             logger.debug(f"[MQTT] Outbox write failed: {e}")
             return -1
 
     def _delete_from_db(self, row_id: int):
         """Remove a delivered message from the outbox."""
-        import sqlite3
-
         try:
             with sqlite3.connect(self._db_path) as db:
                 db.execute("DELETE FROM outbox WHERE id = ?", (row_id,))
@@ -723,8 +712,6 @@ class _MQTTPublisher:
 
     def _load_pending_from_db(self):
         """On startup, reload undelivered QoS 1 messages into the in-memory queue."""
-        import sqlite3
-
         try:
             with sqlite3.connect(self._db_path) as db:
                 rows = db.execute(
@@ -839,11 +826,3 @@ class _MQTTPublisher:
                     logger.debug(f"[MQTT] Still disconnected — retrying in {backoff:.1f}s")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)  # exponential backoff, cap at 30s
-
-
-class _NoOpMQTT:
-    async def publish(self, topic: str, payload: str):
-        pass
-
-    async def disconnect(self):
-        pass

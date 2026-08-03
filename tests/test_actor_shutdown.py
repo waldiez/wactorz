@@ -86,6 +86,43 @@ class TestStartingAgain:
         assert worker.handled == ["after restart"]
 
 
+class TestCancellationIsNotSwallowed:
+    """Consuming a caller's cancellation strands whoever is waiting on it."""
+
+    async def test_stop_lets_cancellation_through(self, worker: _Worker) -> None:
+        started = asyncio.Event()
+
+        async def _stopper() -> None:
+            started.set()
+            await worker.stop()
+
+        task = asyncio.create_task(_stopper())
+        await started.wait()
+        await asyncio.sleep(0)
+        task.cancel()
+
+        # Without this the error was caught inside the wind-down and dropped:
+        # the task carried on as though it had never been cancelled, and
+        # whoever awaited it waited for good. This is how the supervisor's
+        # watch loop survived its own cancellation and hung Supervisor.stop().
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    async def test_the_task_list_is_cleared_even_when_cancelled(self, worker: _Worker) -> None:
+        async def _stopper() -> None:
+            await worker.stop()
+
+        task = asyncio.create_task(_stopper())
+        await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Cancelled or not, an actor that has stopped must not keep references
+        # to the tasks of the run that just ended.
+        assert worker._tasks == []
+
+
 class TestStopDoesNotHang:
     async def test_a_task_that_will_not_unwind_is_given_up_on(self, worker: _Worker) -> None:
         running = asyncio.Event()

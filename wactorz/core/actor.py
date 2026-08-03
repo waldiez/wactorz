@@ -291,25 +291,27 @@ class Actor(ABC):
         others = [task for task in self._tasks if task is not current]
         for task in others:
             task.cancel()
-        if others:
-            try:
-                # Shielded and bounded: a task that will not unwind must not
-                # hold up shutdown, and cancellation arriving from outside must
-                # not abandon the cleanup that follows.
+        try:
+            if others:
+                # Bounded: a task that will not unwind must not hold up shutdown.
                 await asyncio.wait_for(
                     asyncio.shield(asyncio.gather(*others, return_exceptions=True)),
                     timeout=self.TASK_SHUTDOWN_TIMEOUT,
                 )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[%s] %d task(s) did not stop within %.0fs.",
-                    self.name,
-                    sum(1 for task in others if not task.done()),
-                    self.TASK_SHUTDOWN_TIMEOUT,
-                )
-            except asyncio.CancelledError:
-                pass
-        self._tasks.clear()
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[%s] %d task(s) did not stop within %gs.",
+                self.name,
+                sum(1 for task in others if not task.done()),
+                self.TASK_SHUTDOWN_TIMEOUT,
+            )
+        # CancelledError is deliberately not caught. Swallowing it consumes the
+        # caller's own cancellation: the supervisor's watch loop was cancelled
+        # here while stopping an actor, never saw the error, resumed its poll
+        # loop, and left Supervisor.stop() awaiting a task that could no longer
+        # finish. Clearing the task list still happens either way.
+        finally:
+            self._tasks.clear()
 
     async def pause(self):
         """Stop processing messages, keeping the mailbox and registration."""

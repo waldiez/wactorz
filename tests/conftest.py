@@ -6,9 +6,12 @@ into tests that believe they are fully injected — and the failure mode is
 confusing rather than loud: the test looks wrong, not the environment.
 """
 
+from typing import Any
+
 import pytest
 
 from wactorz import llm_factory
+from wactorz.core import mqtt
 
 
 @pytest.fixture(autouse=True)
@@ -27,3 +30,41 @@ def _no_ambient_llm_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     explicitly via `provider_for(..., overrides=...)`, which takes precedence.
     """
     monkeypatch.setattr(llm_factory, "parse_overrides", lambda _spec: {})
+
+
+#: The real factory, for the tests that exist to exercise it.
+real_mqtt_client = mqtt.mqtt_client
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_broker(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never open a real MQTT connection from a test.
+
+    Two problems, one cause. A broker running on the default port
+    results in tests quietly connecting to it, so what is exercised depends on
+    whether mosquitto happens to be up. And where no broker is listening,
+    an actor's command listener still builds an ``aiomqtt.Client`` before the
+    connection failed; cancelling the listener mid-attempt leaves that client to
+    be finalised after the loop ia closed, which paho reports at the end of a
+    run as a wall of "Event loop is closed".
+
+    Refusing at the factory means no client object is ever constructed. Callers
+    treat it as a broker that is down, which they already handle. A test that
+    wants to drive the connection substitutes its own factory, and wins — this
+    fixture only sets the default.
+    """
+
+    if request.node.get_closest_marker("real_mqtt_client"):
+        return
+
+    def _refuse(hostname: str, port: int, **_kwargs: Any) -> None:
+        raise ConnectionRefusedError(f"no broker in tests ({hostname}:{port})")
+
+    monkeypatch.setattr(mqtt, "mqtt_client", _refuse)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "real_mqtt_client: leave wactorz.core.mqtt.mqtt_client alone — for tests of the factory",
+    )

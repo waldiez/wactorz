@@ -5,6 +5,12 @@ import types
 import unittest
 from unittest import mock
 
+import pytest
+
+# This module tests the factory itself, so it opts out of the suite-wide
+# fixture that replaces it with one refusing to connect.
+pytestmark = pytest.mark.real_mqtt_client
+
 
 class MqttClientFactoryTest(unittest.TestCase):
     def _call(self, cfg_user, cfg_pass, **kwargs):

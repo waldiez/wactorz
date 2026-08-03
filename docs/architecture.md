@@ -56,7 +56,7 @@ The framework is built on three ideas: every agent is an independent **actor** w
 | File | Responsibility |
 |------|----------------|
 | `actor.py` | `Actor` base class — message loop, heartbeat, persistence (SQLite / memory / Pickle), supervisor strategy enum |
-| `registry.py` | `ActorSystem`, `ActorRegistry`, `Supervisor`, `_MQTTPublisher` (shared aiomqtt connection) |
+| `registry.py` | `ActorSystem`, `ActorRegistry`, `Supervisor`, `MQTTPublisher` (shared aiomqtt connection) |
 
 ### Built-in Agents — `wactorz/agents/`
 

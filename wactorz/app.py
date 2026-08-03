@@ -120,8 +120,8 @@ async def build_system(args: argparse.Namespace):
     )
     # MQTT client must exist before factories run so injected actors can publish
     system._mqtt_client = await __import__(
-        "wactorz.core.registry", fromlist=["_MQTTPublisher"]
-    )._MQTTPublisher.create(
+        "wactorz.core.registry", fromlist=["MQTTPublisher"]
+    ).MQTTPublisher.create(
         args.mqtt_broker or CONFIG.mqtt_host,
         args.mqtt_port or CONFIG.mqtt_port,
         db_path=os.path.join(_sd, "mqtt_outbox.db"),

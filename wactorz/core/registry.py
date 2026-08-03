@@ -3,6 +3,8 @@ ActorSystem orchestrates startup, shutdown, and actor lifecycle.
 Supervisor implements Erlang/OTP-style supervision trees.
 """
 
+from __future__ import annotations
+
 import asyncio
 import gc
 import inspect
@@ -11,9 +13,8 @@ import os
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Optional
 
 from .actor import Actor, Message, MessageType, SupervisorStrategy
 from .paths import resolve_state_dir
@@ -36,14 +37,14 @@ class SupervisedSpec:
     restart_delay : seconds to wait before restarting (lets dependencies settle).
     """
 
-    factory: Callable[[], "Actor"]
+    factory: Callable[[], Actor | Awaitable[Actor]]
     strategy: SupervisorStrategy = SupervisorStrategy.ONE_FOR_ONE
     max_restarts: int = 5
     restart_window: float = 60.0
     restart_delay: float = 1.0
 
     # Runtime state — managed by Supervisor, not set by caller
-    actor: Optional["Actor"] = field(default=None, repr=False)
+    actor: Actor | None = field(default=None, repr=False)
     _restart_times: list = field(default_factory=list, repr=False)
     # Set to True when an actor is intentionally stopped/deleted by the user,
     # or when it has exhausted its restart budget.  The watch_loop skips retired specs.
@@ -59,6 +60,7 @@ class SupervisedSpec:
 
     @property
     def exhausted(self) -> bool:
+        """Whether the restart budget for the current window is spent."""
         now = time.time()
         cutoff = now - self.restart_window
         recent = [t for t in self._restart_times if t > cutoff]
@@ -79,6 +81,7 @@ class ActorRegistry:
         self._supervisor_ref: Supervisor | None = None
 
     async def register(self, actor: Actor):
+        """Add an actor, replacing any earlier one holding the same id."""
         async with self._lock:
             existing = self._actors.get(actor.actor_id)
             if existing is not None and existing is not actor:
@@ -90,44 +93,50 @@ class ActorRegistry:
                 # invokes both callbacks. Stop the old instance asynchronously so
                 # its background tasks (and any aiomqtt subscriptions) shut down.
                 logger.warning(
-                    f"[Registry] Overwriting existing actor '{existing.name}' "
-                    f"({actor.actor_id[:8]}) — stopping old instance to prevent "
-                    f"duplicate listeners / double MQTT delivery."
+                    "[Registry] Overwriting existing actor '%s' (%s) — stopping old instance to prevent duplicate listeners / double MQTT delivery.",
+                    existing.name,
+                    actor.actor_id[:8],
                 )
                 # Schedule stop outside this lock to avoid re-entrancy / deadlock.
                 # stop() acquires no shared locks but may await on tasks that do.
                 asyncio.create_task(existing.stop())
             actor._registry = self
             self._actors[actor.actor_id] = actor
-            logger.info(f"[Registry] Registered {actor.name} ({actor.actor_id[:8]})")
+            logger.info("[Registry] Registered %s (%s)", actor.name, actor.actor_id[:8])
 
     async def unregister(self, actor_id: str):
+        """Remove an actor. Does not stop it — the caller owns that."""
         async with self._lock:
             if actor_id in self._actors:
                 del self._actors[actor_id]
-                logger.info(f"[Registry] Unregistered {actor_id[:8]}")
+                logger.info("[Registry] Unregistered %s", actor_id[:8])
 
     async def deliver(self, target_id: str, msg: Message) -> bool:
+        """Put a message in one actor's mailbox. False if no such actor."""
         actor = self._actors.get(target_id)
         if actor is None:
-            logger.warning(f"[Registry] Unknown target: {target_id[:8]}")
+            logger.warning("[Registry] Unknown target: %s", target_id[:8])
             return False
         await actor.receive(msg)
         return True
 
     async def broadcast(self, sender_id: str, msg_type: MessageType, payload=None):
+        """Send a message to every registered actor except the sender."""
         msg = Message(type=msg_type, sender_id=sender_id, payload=payload)
         for actor_id, actor in list(self._actors.items()):
             if actor_id != sender_id:
                 await actor.receive(msg)
 
     def get(self, actor_id: str) -> Actor | None:
+        """The actor with this id, or None."""
         return self._actors.get(actor_id)
 
     def all_actors(self) -> list[Actor]:
+        """Every registered actor."""
         return list(self._actors.values())
 
     def find_by_name(self, name: str) -> Actor | None:
+        """The first actor with this name, or None. Names are not unique."""
         for actor in self._actors.values():
             if actor.name == name:
                 return actor
@@ -162,8 +171,8 @@ class Supervisor:
 
     def __init__(
         self,
-        registry: "ActorRegistry",
-        inject_fn: Callable[["Actor"], None],
+        registry: ActorRegistry,
+        inject_fn: Callable[[Actor], None],
         poll_interval: float = 2.0,
     ):
         self._registry = registry
@@ -179,12 +188,12 @@ class Supervisor:
     def supervise(
         self,
         name: str,
-        factory: Callable[[], "Actor"],
+        factory: Callable[[], Actor | Awaitable[Actor]],
         strategy: SupervisorStrategy = SupervisorStrategy.ONE_FOR_ONE,
         max_restarts: int = 5,
         restart_window: float = 60.0,
         restart_delay: float = 1.0,
-    ) -> "Supervisor":
+    ) -> Supervisor:
         """Register an actor to be supervised. Call before start()."""
         spec = SupervisedSpec(
             factory=factory,
@@ -212,7 +221,7 @@ class Supervisor:
         if spec is not None:
             spec.retired = True
             spec.actor = None
-            logger.info(f"[Supervisor] Released '{name}' from supervision (intentional stop).")
+            logger.info("[Supervisor] Released '%s' from supervision (intentional stop).", name)
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -224,7 +233,7 @@ class Supervisor:
             spec.actor = actor
 
         self._watch_task = asyncio.create_task(self._watch_loop())
-        logger.info(f"[Supervisor] Started. Supervising: {list(self._specs)}")
+        logger.info("[Supervisor] Started. Supervising: %s", list(self._specs))
 
     # ── Watch loop ────────────────────────────────────────────────────────────
 
@@ -270,8 +279,9 @@ class Supervisor:
                         # ── Mode 1: FAILED state ───────────────────────────────
                         if actor.state == ActorState.FAILED:
                             logger.warning(
-                                f"[Supervisor] '{name}' is FAILED — "
-                                f"applying {spec.strategy.value} strategy."
+                                "[Supervisor] '%s' is FAILED — applying %s strategy.",
+                                name,
+                                spec.strategy.value,
                             )
                             await self._apply_strategy(name, spec)
                             continue
@@ -283,9 +293,12 @@ class Supervisor:
                             silence = time.time() - actor.metrics.last_heartbeat
                             if silence > self.HEARTBEAT_TIMEOUT:
                                 logger.warning(
-                                    f"[Supervisor] '{name}' last heartbeat was {silence:.0f}s ago "
-                                    f"(threshold={self.HEARTBEAT_TIMEOUT}s) — presumed crashed. "
-                                    f"Forcing FAILED and restarting."
+                                    "[Supervisor] '%s' last heartbeat was %.0fs ago "
+                                    "(threshold=%ss) — presumed crashed. "
+                                    "Forcing FAILED and restarting.",
+                                    name,
+                                    silence,
+                                    self.HEARTBEAT_TIMEOUT,
                                 )
                                 actor.state = ActorState.FAILED
                                 await self._apply_strategy(name, spec)
@@ -294,9 +307,10 @@ class Supervisor:
                         # ── Mode 3: Error storm ────────────────────────────────
                         if actor.metrics.errors >= self.ERROR_STORM_THRESHOLD:
                             logger.warning(
-                                f"[Supervisor] '{name}' has {actor.metrics.errors} errors "
-                                f"(threshold={self.ERROR_STORM_THRESHOLD}) — error storm detected. "
-                                f"Forcing FAILED and restarting."
+                                "[Supervisor] '%s' has %s errors (threshold=%s) — error storm detected. Forcing FAILED and restarting.",
+                                name,
+                                actor.metrics.errors,
+                                self.ERROR_STORM_THRESHOLD,
                             )
                             actor.state = ActorState.FAILED
                             await self._apply_strategy(name, spec)
@@ -305,7 +319,7 @@ class Supervisor:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error(f"[Supervisor] watch_loop error: {exc}", exc_info=True)
+                logger.error("[Supervisor] watch_loop error: %s", exc, exc_info=True)
 
     # ── Strategy application ─────────────────────────────────────────────────
 
@@ -326,7 +340,7 @@ class Supervisor:
         elif crashed_spec.strategy == SupervisorStrategy.REST_FOR_ONE:
             idx = self._order.index(crashed_name)
             affected = self._order[idx:]  # crashed + everyone registered after it
-            logger.info(f"[Supervisor] REST_FOR_ONE — restarting: {affected}")
+            logger.info("[Supervisor] REST_FOR_ONE — restarting: %s", affected)
             for name in reversed(affected):
                 spec = self._specs[name]
                 if spec.actor and name != crashed_name:
@@ -339,9 +353,10 @@ class Supervisor:
     async def _restart_one(self, name: str, spec: SupervisedSpec):
         if spec.exhausted:
             logger.critical(
-                f"[Supervisor] '{name}' has exhausted its restart budget "
-                f"({spec.max_restarts} restarts / {spec.restart_window}s). "
-                f"Retiring — manual intervention required."
+                "[Supervisor] '%s' has exhausted its restart budget (%s restarts / %ss). Retiring — manual intervention required.",
+                name,
+                spec.max_restarts,
+                spec.restart_window,
             )
             # Mark retired so the watch_loop stops polling this spec permanently.
             # Issue 1 fix: without this, the watch_loop would keep calling _restart_one
@@ -366,8 +381,10 @@ class Supervisor:
             await asyncio.sleep(spec.restart_delay)
 
         logger.info(
-            f"[Supervisor] Restarting '{name}' "
-            f"(attempt {len(spec._restart_times)}/{spec.max_restarts})."
+            "[Supervisor] Restarting '%s' (attempt %s/%s).",
+            name,
+            len(spec._restart_times),
+            spec.max_restarts,
         )
 
         # Stop the old actor cleanly if possible
@@ -382,7 +399,7 @@ class Supervisor:
         # immediately re-trigger on the very first poll after restart.
         new_actor.metrics.errors = 0
 
-        logger.info(f"[Supervisor] '{name}' restarted successfully.")
+        logger.info("[Supervisor] '%s' restarted successfully.", name)
         await self._notify_main(
             f"♻️ **{name}** crashed and was automatically restarted "
             f"(restart #{new_actor.metrics.restart_count} of {spec.max_restarts}). "
@@ -392,16 +409,19 @@ class Supervisor:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    async def _spawn_actor(self, name: str, spec: SupervisedSpec) -> "Actor":
+    async def _spawn_actor(self, name: str, spec: SupervisedSpec) -> Actor:
         """Create actor via factory, inject MQTT, register, and start."""
-        actor = (
-            await spec.factory() if inspect.iscoroutinefunction(spec.factory) else spec.factory()
-        )
+        # Ask the result, not the callable: iscoroutinefunction is False for an
+        # async callable object, and for functools.partial of a coroutine
+        # function before 3.12 — either would have been registered un-awaited,
+        # putting a coroutine object where the supervisor expects an actor.
+        made = spec.factory()
+        actor = await made if inspect.isawaitable(made) else made
         self._inject(actor)
         actor.supervisor_id = str(id(self))
         await self._registry.register(actor)
         await actor.start()
-        logger.debug(f"[Supervisor] Spawned '{name}' ({actor.actor_id[:8]}).")
+        logger.debug("[Supervisor] Spawned '%s' (%s).", name, actor.actor_id[:8])
         return actor
 
     async def _stop_actor(self, name: str, spec: SupervisedSpec):
@@ -412,7 +432,7 @@ class Supervisor:
         try:
             await actor.stop()
         except Exception as exc:
-            logger.warning(f"[Supervisor] Error stopping '{name}': {exc}")
+            logger.warning("[Supervisor] Error stopping '%s': %s", name, exc)
         try:
             await self._registry.unregister(actor.actor_id)
         except Exception:
@@ -447,8 +467,6 @@ class Supervisor:
             )
 
             if sender is not None:
-                from .actor import Message, MessageType
-
                 msg = Message(
                     type=MessageType.TASK,
                     sender_id=sender.actor_id,
@@ -474,7 +492,7 @@ class Supervisor:
                         }
                     )
         except Exception as exc:
-            logger.warning(f"[Supervisor] Could not notify main: {exc}")
+            logger.warning("[Supervisor] Could not notify main: %s", exc)
 
     # ── Introspection ─────────────────────────────────────────────────────────
 
@@ -499,6 +517,7 @@ class Supervisor:
         return result
 
     async def stop(self):
+        """Stop supervising, then stop every supervised actor."""
         if self._watch_task:
             self._watch_task.cancel()
         async with self._lock:
@@ -520,6 +539,10 @@ class ActorSystem:
         self._running = False
         self._supervisor: Supervisor | None = None
         self._state_dir = resolve_state_dir(state_dir)
+        # Created in start(), which is the first point an MQTT client exists to
+        # give it. Declared here so the attribute is not conjured into being
+        # halfway through the object's life.
+        self.topic_bus = None
 
     def _inject(self, actor: Actor):
         """Inject MQTT client + broker/port into an actor so it can publish and subscribe."""
@@ -528,7 +551,7 @@ class ActorSystem:
         actor._mqtt_port = self._mqtt_port
 
     @property
-    def supervisor(self) -> "Supervisor":
+    def supervisor(self) -> Supervisor:
         """Lazy-create the Supervisor bound to this system's registry and inject function."""
         if self._supervisor is None:
             self._supervisor = Supervisor(self.registry, self._inject)
@@ -548,11 +571,12 @@ class ActorSystem:
         }
 
     async def start(self, *initial_actors: Actor):
+        """Bring the system up: MQTT, topic bus, the given actors, supervision."""
         self._running = True
 
         os.makedirs(self._state_dir, exist_ok=True)
         db_path = os.path.join(self._state_dir, "mqtt_outbox.db")
-        self._mqtt_client = await _MQTTPublisher.create(
+        self._mqtt_client = await MQTTPublisher.create(
             self._mqtt_broker, self._mqtt_port, db_path=db_path
         )
 
@@ -571,7 +595,7 @@ class ActorSystem:
             await self.registry.register(actor)
             await actor.start()
 
-        logger.info(f"[ActorSystem] Started with {len(initial_actors)} actors.")
+        logger.info("[ActorSystem] Started with %s actors.", len(initial_actors))
 
     async def spawn(self, actor_class: type[Actor], **kwargs) -> Actor:
         """Spawn and register a new actor in the system."""
@@ -582,6 +606,7 @@ class ActorSystem:
         return actor
 
     async def stop_all(self):
+        """Shut everything down in reverse: supervisor, actors, then MQTT."""
         self._running = False
         # Stop supervisor first so it doesn't try to restart actors we're about to stop
         if self._supervisor:
@@ -595,6 +620,7 @@ class ActorSystem:
         logger.info("[ActorSystem] All actors stopped.")
 
     async def run_forever(self):
+        """Block until the system is stopped or interrupted."""
         try:
             while self._running:
                 await asyncio.sleep(1)
@@ -603,7 +629,7 @@ class ActorSystem:
             await self.stop_all()
 
 
-class _MQTTPublisher:
+class MQTTPublisher:
     """Reliable async MQTT publisher with:
       - Persistent in-memory outbox queue (messages survive reconnects)
       - SQLite-backed durable outbox (messages survive process crashes)
@@ -642,23 +668,27 @@ class _MQTTPublisher:
     @classmethod
     async def create(
         cls, broker: str, port: int, db_path: str = "./state/mqtt_outbox.db"
-    ) -> "_MQTTPublisher":
+    ) -> MQTTPublisher:
+        """Build a publisher and connect it, or return one that quietly no-ops."""
         pub = cls(db_path=db_path)
         try:
-            import aiomqtt  # noqa: F401
+            import aiomqtt  # noqa: F401  # pylint: disable=unused-import
 
             pub._init_db()
             pub._load_pending_from_db()
             pub._task = asyncio.create_task(pub._run(broker, port))
             pub._available = True
             logger.info(
-                f"[MQTT] Publisher started → {broker}:{port} | "
-                f"client_id={pub._client_id} | outbox_db={db_path}"
+                "[MQTT] Publisher started → %s:%s | client_id=%s | outbox_db=%s",
+                broker,
+                port,
+                pub._client_id,
+                db_path,
             )
         except ImportError:
             logger.warning("[MQTT] aiomqtt not installed. MQTT disabled.")
         except Exception as e:
-            logger.warning(f"[MQTT] Publisher unavailable: {e}")
+            logger.warning("[MQTT] Publisher unavailable: %s", e)
         return pub
 
     # ── SQLite outbox ──────────────────────────────────────────────────────
@@ -698,7 +728,7 @@ class _MQTTPublisher:
                 db.commit()
                 return cur.lastrowid or 0
         except Exception as e:
-            logger.debug(f"[MQTT] Outbox write failed: {e}")
+            logger.debug("[MQTT] Outbox write failed: %s", e)
             return -1
 
     def _delete_from_db(self, row_id: int):
@@ -708,7 +738,7 @@ class _MQTTPublisher:
                 db.execute("DELETE FROM outbox WHERE id = ?", (row_id,))
                 db.commit()
         except Exception as e:
-            logger.debug(f"[MQTT] Outbox delete failed: {e}")
+            logger.debug("[MQTT] Outbox delete failed: %s", e)
 
     def _load_pending_from_db(self):
         """On startup, reload undelivered QoS 1 messages into the in-memory queue."""
@@ -718,15 +748,16 @@ class _MQTTPublisher:
                     "SELECT id, topic, payload, retain, qos FROM outbox ORDER BY id"
                 ).fetchall()
             if rows:
-                logger.info(f"[MQTT] Replaying {len(rows)} undelivered message(s) from outbox")
+                logger.info("[MQTT] Replaying %s undelivered message(s) from outbox", len(rows))
             for row_id, topic, payload, retain, qos in rows:
                 self._queue.put_nowait((topic, payload, bool(retain), qos, row_id))
         except Exception as e:
-            logger.debug(f"[MQTT] Outbox load failed: {e}")
+            logger.debug("[MQTT] Outbox load failed: %s", e)
 
     # ── Public API ─────────────────────────────────────────────────────────
 
     async def publish(self, topic: str, payload, retain: bool = False, qos: int = 0):
+        """Queue a message for delivery. Returns without waiting for the broker."""
         if not self._available:
             return
 
@@ -747,6 +778,7 @@ class _MQTTPublisher:
             await self._queue.put((topic, payload, retain, qos, -1))
 
     async def disconnect(self):
+        """Stop the drain loop and close the connection."""
         if self._task:
             self._task.cancel()
             try:
@@ -756,10 +788,12 @@ class _MQTTPublisher:
 
     @property
     def connected(self) -> bool:
+        """Whether the broker connection is currently up."""
         return self._connected
 
     @property
     def queue_depth(self) -> int:
+        """How many messages are waiting to be sent."""
         return self._queue.qsize()
 
     # ── Background drain loop ──────────────────────────────────────────────
@@ -785,7 +819,7 @@ class _MQTTPublisher:
                     keepalive=30,
                 ) as client:
                     self._connected = True
-                    logger.info(f"[MQTT] Publisher connected | client_id={self._client_id}")
+                    logger.info("[MQTT] Publisher connected | client_id=%s", self._client_id)
 
                     while True:
                         # Peek at item without removing from queue
@@ -804,7 +838,7 @@ class _MQTTPublisher:
                             _last_exc_str = None
                         except Exception as pub_err:
                             # Put back at front of queue and reconnect
-                            logger.warning(f"[MQTT] Publish failed: {pub_err} — requeueing")
+                            logger.warning("[MQTT] Publish failed: %s — requeueing", pub_err)
                             await self._queue.put(item)  # re-enqueue
                             self._queue.task_done()
                             raise  # trigger reconnect
@@ -817,12 +851,15 @@ class _MQTTPublisher:
                 exc_str = str(e)
                 if exc_str != _last_exc_str:
                     logger.warning(
-                        f"[MQTT] Publisher disconnected: {e}. "
-                        f"Reconnecting in {backoff:.1f}s... "
-                        f"(queue depth: {self._queue.qsize()})"
+                        "[MQTT] Publisher disconnected: %s. "
+                        "Reconnecting in %.1fs... "
+                        "(queue depth: %d)",
+                        e,
+                        backoff,
+                        self._queue.qsize(),
                     )
                     _last_exc_str = exc_str
                 else:
-                    logger.debug(f"[MQTT] Still disconnected — retrying in {backoff:.1f}s")
+                    logger.debug("[MQTT] Still disconnected — retrying in %.1fs", backoff)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)  # exponential backoff, cap at 30s

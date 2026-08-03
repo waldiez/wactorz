@@ -2,6 +2,8 @@
 Every agent IS an actor. Actors communicate via message passing only.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -49,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 
 class ActorState(str, Enum):
+    """Where an actor is in its lifecycle."""
+
     IDLE = "idle"
     RUNNING = "running"
     PAUSED = "paused"
@@ -57,6 +61,8 @@ class ActorState(str, Enum):
 
 
 class MessageType(str, Enum):
+    """What a message is asking of its recipient."""
+
     # Lifecycle
     START = "start"
     STOP = "stop"
@@ -76,6 +82,8 @@ class MessageType(str, Enum):
 
 @dataclass
 class Message:
+    """One unit of communication between actors."""
+
     type: MessageType
     sender_id: str
     payload: Any = None
@@ -84,6 +92,7 @@ class Message:
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
+        """A JSON-serialisable form, for MQTT and the dashboard."""
         return {
             "type": self.type.value,
             "sender_id": self.sender_id,
@@ -96,6 +105,8 @@ class Message:
 
 @dataclass
 class ActorMetrics:
+    """Running counters for one actor, reported in heartbeats."""
+
     messages_processed: int = 0
     errors: int = 0
     start_time: float = field(default_factory=time.time)
@@ -106,6 +117,7 @@ class ActorMetrics:
 
     @property
     def uptime(self) -> float:
+        """Seconds since the actor started."""
         return time.time() - self.start_time
 
 
@@ -176,7 +188,7 @@ class Actor(ABC):
         except Exception:
             pass
 
-        logger.info(f"[{self.name}] Actor created with id={self.actor_id}")
+        logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -194,7 +206,7 @@ class Actor(ABC):
         self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
         self._tasks.append(asyncio.create_task(self._command_listener()))
         await self._publish_status()
-        logger.info(f"[{self.name}] Actor started.")
+        logger.info("[%s] Actor started.", self.name)
 
     async def stop(self):
         """Gracefully stop the actor."""
@@ -226,7 +238,7 @@ class Actor(ABC):
                 {
                     "input_tokens": getattr(self, "total_input_tokens", 0),
                     "output_tokens": getattr(self, "total_output_tokens", 0),
-                    "cost_usd": round(self.total_cost_usd, 6),
+                    "cost_usd": round(getattr(self, "total_cost_usd", 0), 6),
                     "name": self.name,
                     "stopped_at": time.time(),
                 },
@@ -257,13 +269,15 @@ class Actor(ABC):
                 bus.unregister(self.name)
         except Exception:
             pass  # TopicBus not initialised or unavailable — not fatal
-        logger.info(f"[{self.name}] Actor stopped.")
+        logger.info("[%s] Actor stopped.", self.name)
 
     async def pause(self):
+        """Stop processing messages, keeping the mailbox and registration."""
         self.state = ActorState.PAUSED
         await self._publish_status()
 
     async def resume(self):
+        """Start processing messages again after a pause."""
         self.state = ActorState.RUNNING
         await self._publish_status()
 
@@ -298,7 +312,7 @@ class Actor(ABC):
                 break
             except Exception as e:
                 self.metrics.errors += 1
-                logger.error(f"[{self.name}] Error in message loop: {e}", exc_info=True)
+                logger.error("[%s] Error in message loop: %s", self.name, e, exc_info=True)
 
     async def _dispatch(self, msg: Message):
         """Dispatch message to the appropriate handler."""
@@ -360,7 +374,7 @@ class Actor(ABC):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"[{self.name}] Heartbeat error: {e}")
+                logger.warning("[%s] Heartbeat error: %s", self.name, e)
 
     def _estimate_memory_mb(self) -> float:
         """Bounded deep-size walk over this actor's own data structures.
@@ -480,7 +494,7 @@ class Actor(ABC):
         after the direct-dispatch change that means agents on remote nodes.
         """
         try:
-            import aiomqtt  # noqa: F401
+            import aiomqtt  # noqa: F401  # pylint: disable=unused-import
         except ImportError:
             return
         from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
@@ -518,7 +532,7 @@ class Actor(ABC):
     async def send(self, target_id: str, msg_type: MessageType, payload: Any = None) -> bool:
         """Send a message to another actor."""
         if self._registry is None:
-            logger.warning(f"[{self.name}] No registry attached, cannot send messages.")
+            logger.warning("[%s] No registry attached, cannot send messages.", self.name)
             return False
         msg = Message(type=msg_type, sender_id=self.actor_id, payload=payload)
         return await self._registry.deliver(target_id, msg)
@@ -534,7 +548,7 @@ class Actor(ABC):
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
-    async def spawn(self, actor_class: type, **kwargs) -> "Actor":
+    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
         """Spawn a child actor. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
         - Registry (so it can send/receive messages)
@@ -582,23 +596,18 @@ class Actor(ABC):
             if self._registry and hasattr(self._registry, "_supervisor_ref"):
                 supervisor = self._registry._supervisor_ref
                 if supervisor is not None and child.name not in supervisor._specs:
-                    # Capture child class + kwargs for the factory closure
-                    _child_class = actor_class
-                    _child_kwargs = dict(kwargs)
-                    _child_name = child.name
-                    _mqtt_client = self._mqtt_client
-                    _mqtt_broker = self._mqtt_broker
-                    _mqtt_port = self._mqtt_port
-                    _persistence_api = self._persistence_api
+                    # Snapshot what the child was built from. The factory runs
+                    # again on every restart, possibly much later, and must
+                    # rebuild the child as it was rather than from whatever this
+                    # actor's settings have become since.
+                    cls = actor_class
+                    kw = dict(kwargs)
+                    mc = self._mqtt_client
+                    mb = self._mqtt_broker
+                    mp = self._mqtt_port
+                    papi = self._persistence_api
 
-                    async def _child_factory(
-                        cls=_child_class,
-                        kw=_child_kwargs,
-                        mc=_mqtt_client,
-                        mb=_mqtt_broker,
-                        mp=_mqtt_port,
-                        papi=_persistence_api,
-                    ):
+                    async def _child_factory() -> Actor:
                         c = cls(**kw)
                         c._mqtt_client = mc
                         c._mqtt_broker = mb
@@ -632,14 +641,14 @@ class Actor(ABC):
                     supervisor._specs[child.name].actor = child
                     if child.name not in supervisor._order:
                         supervisor._order.append(child.name)
-                    child.supervisor_id = id(supervisor)
+                    child.supervisor_id = str(id(supervisor))
                     logger.info(
-                        f"[{self.name}] Child '{child.name}' auto-registered under Supervisor."
+                        "[%s] Child '%s' auto-registered under Supervisor.", self.name, child.name
                     )
         except Exception as _sup_err:
             # Never let supervision registration crash the spawn itself
             logger.warning(
-                f"[{self.name}] Could not auto-supervise child '{child.name}': {_sup_err}"
+                "[%s] Could not auto-supervise child '%s': %s", self.name, child.name, _sup_err
             )
 
         # Immediately announce to monitor - don't wait for heartbeat loop
@@ -658,7 +667,7 @@ class Actor(ABC):
             f"agents/{self.actor_id}/spawned",
             {"child_id": child.actor_id, "child_name": child.name, "timestamp": time.time()},
         )
-        logger.info(f"[{self.name}] Spawned: {child.name} ({child.actor_id[:8]})")
+        logger.info("[%s] Spawned: %s (%s)", self.name, child.name, child.actor_id[:8])
         return child
 
     # ─── Persistence ──────────────────────────────────────────────────────────
@@ -686,10 +695,11 @@ class Actor(ABC):
                     with open(path, "rb") as f:
                         self._persistent_state = pickle.load(f)
                     logger.info(
-                        f"[{self.name}] Loaded legacy persistent state (will migrate on first persist)."
+                        "[%s] Loaded legacy persistent state (will migrate on first persist).",
+                        self.name,
                     )
                 except Exception as e:
-                    logger.error(f"[{self.name}] Failed to load legacy state: {e}")
+                    logger.error("[%s] Failed to load legacy state: %s", self.name, e)
             return
         # Legacy pickle path
         path = self._persistence_dir / "state.pkl"
@@ -697,9 +707,9 @@ class Actor(ABC):
             try:
                 with open(path, "rb") as f:
                     self._persistent_state = pickle.load(f)
-                logger.info(f"[{self.name}] Loaded persistent state.")
+                logger.info("[%s] Loaded persistent state.", self.name)
             except Exception as e:
-                logger.error(f"[{self.name}] Failed to load state: {e}")
+                logger.error("[%s] Failed to load state: %s", self.name, e)
 
     def persist(self, key: str, value: Any):
         """Persist a key-value pair. Routes to the correct backend:
@@ -759,7 +769,7 @@ class Actor(ABC):
                     encoded = json.dumps(payload)
                 await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
             except Exception as e:
-                logger.debug(f"[{self.name}] MQTT publish failed: {e}")
+                logger.debug("[%s] MQTT publish failed: %s", self.name, e)
 
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
@@ -787,6 +797,7 @@ class Actor(ABC):
     # ─── Status ───────────────────────────────────────────────────────────────
 
     def get_status(self) -> dict:
+        """This actor's identity, state and counters, as the dashboard shows them."""
         return {
             "actor_id": self.actor_id,
             "name": self.name,
@@ -805,11 +816,11 @@ class Actor(ABC):
     async def publish_manifest(
         self,
         description: str = "",
-        publishes: list = None,
-        capabilities: list = None,
-        input_schema: dict = None,
-        output_schema: dict = None,
-    ):
+        publishes: list[str] | None = None,
+        capabilities: list[str] | None = None,
+        input_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None,
+    ) -> None:
         """Publish a capability manifest so main's topic registry can discover this actor.
         Call from on_start() in any actor that wants to be discoverable.
         Manifests are retained — main sees them immediately even after restart.
@@ -818,8 +829,6 @@ class Actor(ABC):
             input_schema  = {"city": "str — city name to fetch weather for"}
             output_schema = {"temp_c": "float", "condition": "str", "humidity": "int"}
         """
-        import time as _t
-
         manifest = {
             "name": self.name,
             "actor_id": self.actor_id,
@@ -828,7 +837,7 @@ class Actor(ABC):
             "capabilities": capabilities or [],
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},
-            "timestamp": _t.time(),
+            "timestamp": time.time(),
         }
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 

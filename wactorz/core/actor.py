@@ -211,8 +211,7 @@ class Actor(ABC):
     async def stop(self):
         """Gracefully stop the actor."""
         self.state = ActorState.STOPPED
-        for task in self._tasks:
-            task.cancel()
+        await self._wind_down_tasks()
         # Shield cleanup from CancelledError — chat tasks run as fire-and-forget
         # asyncio tasks outside actor._tasks and get cancelled by asyncio.run()
         # cleanup BEFORE these awaits if we don't shield them.
@@ -270,6 +269,47 @@ class Actor(ABC):
         except Exception:
             pass  # TopicBus not initialised or unavailable — not fatal
         logger.info("[%s] Actor stopped.", self.name)
+
+    #: How long stop() waits for a cancelled task before giving up on it.
+    TASK_SHUTDOWN_TIMEOUT = 5.0
+
+    async def _wind_down_tasks(self) -> None:
+        """Cancel the actor's own tasks and wait for them to actually finish.
+
+        ``cancel()`` only requests cancellation. Returning without awaiting left
+        a task that was part-way through a message to unwind after ``stop()``
+        had already reported the actor stopped — and since the task list was
+        never cleared, starting the actor again ran a second message loop, a
+        second heartbeat and a second command listener alongside the ones still
+        winding down, so every command was handled twice.
+
+        The task this runs in is left alone: a stop command arrives on the
+        command listener, and a task cannot wait for itself. Each loop is
+        written to exit once the state is STOPPED, which is already set.
+        """
+        current = asyncio.current_task()
+        others = [task for task in self._tasks if task is not current]
+        for task in others:
+            task.cancel()
+        if others:
+            try:
+                # Shielded and bounded: a task that will not unwind must not
+                # hold up shutdown, and cancellation arriving from outside must
+                # not abandon the cleanup that follows.
+                await asyncio.wait_for(
+                    asyncio.shield(asyncio.gather(*others, return_exceptions=True)),
+                    timeout=self.TASK_SHUTDOWN_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[%s] %d task(s) did not stop within %.0fs.",
+                    self.name,
+                    sum(1 for task in others if not task.done()),
+                    self.TASK_SHUTDOWN_TIMEOUT,
+                )
+            except asyncio.CancelledError:
+                pass
+        self._tasks.clear()
 
     async def pause(self):
         """Stop processing messages, keeping the mailbox and registration."""

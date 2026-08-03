@@ -443,15 +443,23 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
         await reply_fn(f"Agent @{target_name} not found.")
         return
 
+    # Every path below reaches into the agent directly rather than through its
+    # mailbox, so none of the states that suspend the mailbox stop it answering
+    # on their own: a paused agent replied as though nothing had happened, and a
+    # stopped one kept answering after its message loop had been cancelled.
+    #
     # ``==`` not ``is``: ActorState is a str-enum compared by value everywhere
     # else in the codebase, and identity is not safe here — the test suite has
     # wactorz.core.actor loaded under two module identities, so the enum members
     # are distinct objects with equal values.
-    if target.state == ActorState.PAUSED:
-        # Pausing stops the mailbox loop, and every path below reaches into the
-        # agent directly rather than through it — so without this, a paused
-        # agent answered chat as if nothing had happened.
-        await reply_fn(f"@{target.name} is paused. Resume it to send messages.")
+    _unavailable = {
+        ActorState.PAUSED.value: "is paused. Resume it to send messages.",
+        ActorState.STOPPED.value: "is stopped. Start it to send messages.",
+        ActorState.FAILED.value: "has failed. It should restart shortly.",
+    }
+    reason = _unavailable.get(getattr(target.state, "value", target.state))
+    if reason is not None:
+        await reply_fn(f"@{target.name} {reason}")
         await _end_fn()
         return
 

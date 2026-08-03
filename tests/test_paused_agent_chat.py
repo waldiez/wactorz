@@ -89,6 +89,43 @@ class TestAPausedAgent:
         assert ends == 1
 
 
+class TestAStoppedAgent:
+    async def test_it_does_not_answer(self, agent: _Talker) -> None:
+        runtime.registry = _Registry(agent)
+        agent.state = ActorState.STOPPED
+
+        replies, _ends = await _say("@weather-agent what is the weather")
+
+        # stop() cancels the message loop, but chat never used it — the agent
+        # object is still there and its methods still work.
+        assert agent.asked == []
+        assert "stopped" in replies[0].lower()
+
+    async def test_it_answers_again_once_started(self, agent: _Talker) -> None:
+        runtime.registry = _Registry(agent)
+        agent.state = ActorState.STOPPED
+        await _say("@weather-agent first")
+
+        agent.state = ActorState.RUNNING
+        replies, _ends = await _say("@weather-agent second")
+
+        assert agent.asked == ["second"]
+        assert replies == ["sunny"]
+
+
+class TestAFailedAgent:
+    async def test_it_does_not_answer(self, agent: _Talker) -> None:
+        runtime.registry = _Registry(agent)
+        agent.state = ActorState.FAILED
+
+        replies, _ends = await _say("@weather-agent hello")
+
+        # The supervisor is about to restart it; answering from a failed agent
+        # would be answering from something already being replaced.
+        assert agent.asked == []
+        assert "failed" in replies[0].lower()
+
+
 class TestARunningAgent:
     async def test_it_still_answers(self, agent: _Talker) -> None:
         runtime.registry = _Registry(agent)

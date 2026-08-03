@@ -13,12 +13,6 @@ by :func:`wactorz.monitoring.log_setup.setup_logging` instead.
 import asyncio
 import io
 import sys
-from pathlib import Path
-
-# Make the package importable when launched directly (not via the console script).
-_PKG_DIR = str(Path(__file__).parent)
-if sys.path[0] != _PKG_DIR:
-    sys.path.insert(0, _PKG_DIR)
 
 WACTORZ_BOOTSTRAP = False
 

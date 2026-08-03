@@ -366,27 +366,23 @@ class Actor(ABC):
 
     def _setup_default_handlers(self):
         self._handlers = {
-            MessageType.STOP: self._handle_stop,
-            MessageType.PAUSE: self._handle_pause,
-            MessageType.RESUME: self._handle_resume,
+            MessageType.START: self._handle_lifecycle,
+            MessageType.STOP: self._handle_lifecycle,
+            MessageType.PAUSE: self._handle_lifecycle,
+            MessageType.RESUME: self._handle_lifecycle,
             MessageType.STATUS_REQUEST: self._handle_status_request,
             MessageType.HEARTBEAT: self._handle_heartbeat_msg,
         }
 
-    async def _handle_stop(self, msg: Message):
-        # Release from supervision before stopping so the heartbeat watchdog
-        # doesn't race to restart us after we go quiet.
-        if self._registry and hasattr(self._registry, "_supervisor_ref"):
-            sup = self._registry._supervisor_ref
-            if sup is not None:
-                sup.release(self.name)
-        await self.stop()
+    async def _handle_lifecycle(self, msg: Message):
+        """Apply a lifecycle message through the one implementation of it.
 
-    async def _handle_pause(self, msg: Message):
-        await self.pause()
-
-    async def _handle_resume(self, msg: Message):
-        await self.resume()
+        These used to be three separate handlers, one of which repeated the
+        supervision release by hand. Message-passing is another way to ask for
+        the same thing, not another set of rules — so a protected actor now
+        refuses a STOP message as it already refused the other routes.
+        """
+        await self.apply_command(msg.type.value)
 
     async def _handle_status_request(self, msg: Message):
         status = self.get_status()
@@ -476,7 +472,7 @@ class Actor(ABC):
             "restart_count": self.metrics.restart_count,
         }
 
-    LIFECYCLE_COMMANDS = ("pause", "resume", "stop", "delete")
+    LIFECYCLE_COMMANDS = ("start", "pause", "resume", "stop", "delete")
 
     def _release_from_supervision(self) -> None:
         """Tell the supervisor this actor is leaving deliberately.
@@ -489,6 +485,18 @@ class Actor(ABC):
             sup = self._registry._supervisor_ref
             if sup is not None:
                 sup.release(self.name)
+
+    def _resume_supervision(self) -> None:
+        """Put this actor back under supervision after a deliberate stop.
+
+        The mirror of :meth:`_release_from_supervision`. Without it a restarted
+        actor runs unwatched — it would crash and stay down, which is exactly
+        what supervision exists to prevent.
+        """
+        if self._registry and hasattr(self._registry, "_supervisor_ref"):
+            sup = self._registry._supervisor_ref
+            if sup is not None:
+                sup.resupervise(self.name, self)
 
     async def apply_command(self, command: str) -> bool:
         """Run a lifecycle command on this actor. Returns whether it took effect.
@@ -509,7 +517,13 @@ class Actor(ABC):
             logger.warning("[%s] Ignoring %r — actor is protected.", self.name, command)
             return False
 
-        if command == "pause":
+        if command == "start":
+            if self.state != ActorState.STOPPED:
+                logger.warning("[%s] Ignoring 'start' — actor is %s.", self.name, self.state.value)
+                return False
+            await self.start()
+            self._resume_supervision()
+        elif command == "pause":
             await self.pause()
         elif command == "resume":
             await self.resume()

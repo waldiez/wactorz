@@ -103,6 +103,11 @@ async def _lifecycle_handler(request: web.Request, command: str, status: str) ->
     return web.json_response({"status": status})
 
 
+async def start_actor_handler(request: web.Request) -> Response:
+    """Bring a stopped actor back up, under supervision again."""
+    return await _lifecycle_handler(request, "start", "starting")
+
+
 async def pause_actor_handler(request: web.Request) -> Response:
     """Suspend an actor's message processing, leaving it in the registry."""
     return await _lifecycle_handler(request, "pause", "pausing")

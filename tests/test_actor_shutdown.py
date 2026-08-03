@@ -39,7 +39,7 @@ async def worker_fixture() -> AsyncIterator[_Worker]:
     actor = _Worker()
     await actor.start()
     yield actor
-    if actor.state is not ActorState.STOPPED:
+    if actor.state != ActorState.STOPPED:
         await actor.stop()
 
 
@@ -168,4 +168,4 @@ class TestStopDoesNotHang:
         worker._tasks.append(own)
 
         await asyncio.wait_for(own, timeout=3)
-        assert worker.state is ActorState.STOPPED
+        assert worker.state == ActorState.STOPPED

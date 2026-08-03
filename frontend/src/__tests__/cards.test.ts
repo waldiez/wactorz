@@ -94,10 +94,17 @@ describe("appendActionBtns", () => {
         expect(actions(c)).toEqual(["resume", "stop", "delete"]);
     });
 
-    it("stopped → Delete only (no Stop)", () => {
+    it("stopped → Start and Delete (no Stop)", () => {
         const c = document.createElement("div");
         appendActionBtns(c, agent("worker", { state: "stopped" }));
-        expect(actions(c)).toEqual(["delete"]);
+        // Delete used to be the only thing left, which made Stop irreversible.
+        expect(actions(c)).toEqual(["start", "delete"]);
+    });
+
+    it("running → no Start", () => {
+        const c = document.createElement("div");
+        appendActionBtns(c, agent("worker", { state: "running" }));
+        expect(actions(c)).not.toContain("start");
     });
 
     it("protected (but messageable) → Pause only, no Stop/Delete", () => {

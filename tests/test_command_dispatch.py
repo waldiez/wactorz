@@ -12,10 +12,13 @@ later — the delete path reached that state by calling ``stop()`` directly.
 """
 
 import json
+from typing import cast
 
 import pytest
+from aiohttp import web
 
-from wactorz.core.actor import Actor, ActorState
+from wactorz.core.actor import Actor, ActorState, Message, MessageType
+from wactorz.core.registry import ActorRegistry
 from wactorz.web import api_actors, lifecycle, runtime, ws
 
 
@@ -26,6 +29,9 @@ class _Recorder(Actor):
         super().__init__(name=name)
         self.protected = protected
         self.calls: list[str] = []
+
+    async def start(self) -> None:
+        self.calls.append("start")
 
     async def pause(self) -> None:
         self.calls.append("pause")
@@ -43,15 +49,20 @@ class _Recorder(Actor):
 class _Supervisor:
     def __init__(self) -> None:
         self.released: list[str] = []
+        self.resupervised: list[str] = []
 
     def release(self, name: str) -> None:
         self.released.append(name)
+
+    def resupervise(self, name: str, _actor: Actor) -> None:
+        self.resupervised.append(name)
 
 
 class _Registry:
     def __init__(self, actor: Actor | None = None) -> None:
         self._actor = actor
-        self._supervisor_ref = _Supervisor()
+        self.supervisor = _Supervisor()
+        self._supervisor_ref = self.supervisor
         self.unregistered: list[str] = []
 
     def get(self, actor_id: str) -> Actor | None:
@@ -66,6 +77,12 @@ class _Registry:
 
     async def unregister(self, actor_id: str) -> None:
         self.unregistered.append(actor_id)
+
+
+def _attach(actor: Actor, registry: "_Registry") -> "_Registry":
+    """Give an actor a stand-in registry, keeping the concrete type for asserts."""
+    actor._registry = cast(ActorRegistry, registry)
+    return registry
 
 
 class _Broker:
@@ -83,6 +100,11 @@ class _Request:
         self.match_info = {"actor_id": actor_id}
 
 
+def _request(actor_id: str) -> web.Request:
+    """A stand-in request, cast at the one place the handlers need the real type."""
+    return cast(web.Request, _Request(actor_id))
+
+
 @pytest.fixture(autouse=True)
 def _restore_runtime():
     registry, client = runtime.registry, runtime.mqtt_client_ref
@@ -97,35 +119,34 @@ def _payload(response) -> dict:
 class TestApplyCommand:
     async def test_stop_releases_from_supervision_before_stopping(self) -> None:
         actor = _Recorder()
-        actor._registry = _Registry(actor)
+        registry = _attach(actor, _Registry(actor))
 
         assert await actor.apply_command("stop") is True
 
         # Without the release, the heartbeat watchdog restarts the actor ~35s
         # after this deliberate stop.
-        assert actor._registry._supervisor_ref.released == ["worker"]
+        assert registry.supervisor.released == ["worker"]
         assert actor.calls == ["stop"]
 
     async def test_delete_releases_unregisters_and_stops(self) -> None:
         actor = _Recorder()
-        registry = _Registry(actor)
-        actor._registry = registry
+        registry = _attach(actor, _Registry(actor))
 
         assert await actor.apply_command("delete") is True
 
-        assert registry._supervisor_ref.released == ["worker"]
+        assert registry.supervisor.released == ["worker"]
         assert registry.unregistered == [actor.actor_id]
         assert actor.calls == ["stop"]
 
     async def test_a_protected_actor_refuses_and_says_so(self) -> None:
         actor = _Recorder(protected=True)
-        actor._registry = _Registry(actor)
+        registry = _attach(actor, _Registry(actor))
 
         for command in ("stop", "pause", "delete"):
             assert await actor.apply_command(command) is False
 
         assert actor.calls == []
-        assert actor._registry._supervisor_ref.released == []
+        assert registry.supervisor.released == []
 
     async def test_a_protected_actor_still_resumes(self) -> None:
         actor = _Recorder(protected=True)
@@ -143,7 +164,7 @@ class TestApplyCommand:
 class TestDispatchCommand:
     async def test_a_local_actor_is_driven_without_the_broker(self) -> None:
         actor = _Recorder()
-        runtime.registry = _Registry(actor)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
         runtime.mqtt_client_ref = None
 
         assert await lifecycle.dispatch_command(actor.actor_id, "pause", "test") == "local"
@@ -151,7 +172,7 @@ class TestDispatchCommand:
 
     async def test_a_local_actor_is_not_routed_through_the_broker(self) -> None:
         actor = _Recorder()
-        runtime.registry = _Registry(actor)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
         runtime.mqtt_client_ref = broker = _Broker()
 
         await lifecycle.dispatch_command(actor.actor_id, "pause", "test")
@@ -160,33 +181,99 @@ class TestDispatchCommand:
         assert broker.published == []
 
     async def test_a_remote_actor_still_goes_over_the_broker(self) -> None:
-        runtime.registry = _Registry(None)
+        runtime.registry = cast(ActorRegistry, _Registry(None))
         runtime.mqtt_client_ref = broker = _Broker()
 
         assert await lifecycle.dispatch_command("remote-1", "pause", "test") == "broker"
         assert broker.published[0][0] == "agents/remote-1/commands"
 
     async def test_an_undeliverable_command_reports_failure(self) -> None:
-        runtime.registry = _Registry(None)
+        runtime.registry = cast(ActorRegistry, _Registry(None))
         runtime.mqtt_client_ref = None
 
         assert await lifecycle.dispatch_command("remote-1", "pause", "test") == ""
 
     async def test_a_refusal_is_distinguished_from_a_failure(self) -> None:
         actor = _Recorder(protected=True)
-        runtime.registry = _Registry(actor)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
         runtime.mqtt_client_ref = None
 
         assert await lifecycle.dispatch_command(actor.actor_id, "pause", "test") == "refused"
 
 
+class TestStart:
+    async def test_a_stopped_actor_can_be_started_again(self) -> None:
+        actor = _Recorder()
+        _registry = _attach(actor, _Registry(actor))
+        await actor.apply_command("stop")
+        actor.state = ActorState.STOPPED
+
+        assert await actor.apply_command("start") is True
+        assert actor.calls == ["stop", "start"]
+
+    async def test_starting_puts_it_back_under_supervision(self) -> None:
+        actor = _Recorder()
+        registry = _attach(actor, _Registry(actor))
+        await actor.apply_command("stop")
+        actor.state = ActorState.STOPPED
+        assert registry.supervisor.released == ["worker"]
+
+        await actor.apply_command("start")
+
+        # Stopping retires the spec so the watchdog leaves it alone. Starting
+        # has to undo that, or the actor runs unwatched from then on.
+        assert registry.supervisor.resupervised == ["worker"]
+
+    async def test_starting_a_running_actor_is_refused(self) -> None:
+        actor = _Recorder()
+        actor.state = ActorState.RUNNING
+
+        # Starting twice would add a second message loop and a second command
+        # listener alongside the first.
+        assert await actor.apply_command("start") is False
+        assert actor.calls == []
+
+
+class TestLifecycleMessages:
+    """Message-passing is another route to the same rules, not another set."""
+
+    async def test_a_stop_message_releases_from_supervision(self) -> None:
+        actor = _Recorder()
+        registry = _attach(actor, _Registry(actor))
+
+        await actor._dispatch(Message(type=MessageType.STOP, sender_id="peer"))
+
+        assert registry.supervisor.released == ["worker"]
+        assert actor.calls == ["stop"]
+
+    async def test_a_start_message_starts_a_stopped_actor(self) -> None:
+        actor = _Recorder()
+        _attach(actor, _Registry(actor))
+        actor.state = ActorState.STOPPED
+
+        # MessageType.START existed but had no handler, so it fell through to
+        # the agent's own handle_message and did nothing.
+        await actor._dispatch(Message(type=MessageType.START, sender_id="peer"))
+
+        assert actor.calls == ["start"]
+
+    async def test_a_protected_actor_refuses_a_stop_message(self) -> None:
+        actor = _Recorder(protected=True)
+        registry = _attach(actor, _Registry(actor))
+
+        await actor._dispatch(Message(type=MessageType.STOP, sender_id="peer"))
+
+        assert actor.calls == []
+        assert registry.supervisor.released == []
+
+
 class TestHTTPHandlers:
     async def test_pause_takes_effect_with_the_broker_down(self) -> None:
         actor = _Recorder()
-        runtime.registry = _Registry(actor)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
         runtime.mqtt_client_ref = None
 
-        response = await api_actors.pause_actor_handler(_Request(actor.actor_id))
+        response = await api_actors.pause_actor_handler(_request(actor.actor_id))  # pyright: ignore[reportArgumentType]
 
         assert response.status == 200
         assert _payload(response) == {"status": "pausing"}
@@ -194,19 +281,31 @@ class TestHTTPHandlers:
 
     async def test_resume_takes_effect_with_the_broker_down(self) -> None:
         actor = _Recorder()
-        runtime.registry = _Registry(actor)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
         runtime.mqtt_client_ref = None
 
-        response = await api_actors.resume_actor_handler(_Request(actor.actor_id))
+        response = await api_actors.resume_actor_handler(_request(actor.actor_id))  # pyright: ignore[reportArgumentType]
 
         assert response.status == 200
         assert actor.calls == ["resume"]
 
+    async def test_start_reaches_a_stopped_actor(self) -> None:
+        actor = _Recorder()
+        actor.state = ActorState.STOPPED
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
+        runtime.mqtt_client_ref = None
+
+        response = await api_actors.start_actor_handler(_request(actor.actor_id))  # pyright: ignore[reportArgumentType]
+
+        assert response.status == 200
+        assert _payload(response) == {"status": "starting"}
+        assert actor.calls == ["start"]
+
     async def test_a_protected_actor_is_refused(self) -> None:
         actor = _Recorder(protected=True)
-        runtime.registry = _Registry(actor)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
 
-        response = await api_actors.pause_actor_handler(_Request(actor.actor_id))
+        response = await api_actors.pause_actor_handler(_request(actor.actor_id))  # pyright: ignore[reportArgumentType]
 
         assert response.status == 403
         assert actor.calls == []
@@ -215,7 +314,7 @@ class TestHTTPHandlers:
 class TestWebSocketCommands:
     async def test_pause_reaches_a_local_actor_with_the_broker_down(self) -> None:
         actor = _Recorder()
-        runtime.registry = _Registry(actor)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
         runtime.mqtt_client_ref = None
         runtime.state["agents"][actor.actor_id] = {"state": "running"}
 
@@ -229,7 +328,7 @@ class TestWebSocketCommands:
     async def test_an_undelivered_command_does_not_move_the_dashboard(self) -> None:
         # The agent is on another node and the broker is down: nothing happened,
         # so the browser must not be told the agent is now paused.
-        runtime.registry = _Registry(None)
+        runtime.registry = cast(ActorRegistry, _Registry(None))
         runtime.mqtt_client_ref = None
         runtime.state["agents"]["remote-1"] = {"state": "running"}
 
@@ -245,7 +344,7 @@ class TestCommandListener:
         # The listener returns after stop/delete. If it returned on a *refused*
         # stop, a protected actor would go deaf to every later command.
         actor = _Recorder(protected=True)
-        actor._registry = _Registry(actor)
+        _registry = _attach(actor, _Registry(actor))
 
         assert await actor.apply_command("stop") is False
-        assert actor.state is not ActorState.STOPPED
+        assert actor.state != ActorState.STOPPED

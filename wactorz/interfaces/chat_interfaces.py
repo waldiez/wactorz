@@ -1106,6 +1106,7 @@ class RESTInterface:
             from ..core.actor import MessageType
 
             cmd_map = {
+                "start": MessageType.START,
                 "stop": MessageType.STOP,
                 "pause": MessageType.PAUSE,
                 "resume": MessageType.RESUME,
@@ -1136,34 +1137,41 @@ class RESTInterface:
             )
             return web.json_response({"status": "sent"})
 
-        async def stop_actor_endpoint(request):
+        async def _lifecycle_endpoint(request, command: str, status: str):
+            """Run a lifecycle command through the actor's own implementation.
+
+            These endpoints used to call ``actor.stop()``/``pause()``/``resume()``
+            directly. That skipped the supervision release, so an actor stopped
+            here looked to the watchdog exactly like one that had crashed and was
+            restarted moments later.
+            """
             actor = _lookup_actor(request.match_info["actor_id"])
             if actor is None:
-                return web.Response(status=404, text="actor not found")
+                return web.json_response({"error": "actor not found"}, status=404)
             if getattr(actor, "protected", False):
-                return web.Response(status=403, text="actor is protected")
-            await actor.stop()
-            if registry is not None:
-                await registry.unregister(actor.actor_id)
-            return web.Response(text="stopping")
+                return web.json_response({"error": "actor is protected"}, status=403)
+            if not await actor.apply_command(command):
+                return web.json_response({"error": f"{command} was refused"}, status=409)
+            return web.json_response({"status": status})
+
+        async def start_actor_endpoint(request):
+            return await _lifecycle_endpoint(request, "start", "starting")
+
+        async def stop_actor_endpoint(request):
+            # apply_command("stop") releases from supervision but leaves the
+            # actor registered; this endpoint has always removed it as well.
+            response = await _lifecycle_endpoint(request, "stop", "stopping")
+            if response.status == 200 and registry is not None:
+                actor = _lookup_actor(request.match_info["actor_id"])
+                if actor is not None:
+                    await registry.unregister(actor.actor_id)
+            return response
 
         async def pause_actor_endpoint(request):
-            actor = _lookup_actor(request.match_info["actor_id"])
-            if actor is None:
-                return web.Response(status=404, text="actor not found")
-            if getattr(actor, "protected", False):
-                return web.Response(status=403, text="actor is protected")
-            await actor.pause()
-            return web.json_response({"status": "pausing"})
+            return await _lifecycle_endpoint(request, "pause", "pausing")
 
         async def resume_actor_endpoint(request):
-            actor = _lookup_actor(request.match_info["actor_id"])
-            if actor is None:
-                return web.Response(status=404, text="actor not found")
-            if getattr(actor, "protected", False):
-                return web.Response(status=403, text="actor is protected")
-            await actor.resume()
-            return web.json_response({"status": "resuming"})
+            return await _lifecycle_endpoint(request, "resume", "resuming")
 
         async def metrics_endpoint(request):
             actor = _lookup_actor(request.match_info["actor_id"])
@@ -1193,6 +1201,7 @@ class RESTInterface:
         app.router.add_get("/actors/{actor_id}", actor_endpoint)
         app.router.add_post("/actors/{actor_id}/message", actor_message_endpoint)
         app.router.add_delete("/actors/{actor_id}", stop_actor_endpoint)
+        app.router.add_post("/actors/{actor_id}/start", start_actor_endpoint)
         app.router.add_post("/actors/{actor_id}/pause", pause_actor_endpoint)
         app.router.add_post("/actors/{actor_id}/resume", resume_actor_endpoint)
         app.router.add_get("/actors/{actor_id}/metrics", metrics_endpoint)

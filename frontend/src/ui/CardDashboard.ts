@@ -33,6 +33,7 @@ import { IconName } from "./dashboard/icons";
 import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
+import type { AgentAction } from "./dashboard/cards";
 import { MetricsController } from "./dashboard/metrics";
 import { seedServerConfig } from "../config/serverConfig";
 import { emit, listen } from "../events";
@@ -470,7 +471,7 @@ export class CardDashboard {
 
     private _sendCommand(
         id: string,
-        action: "pause" | "resume" | "stop" | "delete",
+        action: AgentAction,
         btn?: HTMLButtonElement,
     ): void {
         if (btn) {

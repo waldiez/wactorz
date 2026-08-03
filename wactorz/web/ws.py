@@ -309,7 +309,7 @@ async def handle_command(cmd: dict[str, Any]) -> None:
     agent_id = cmd.get("agent_id")
     if not command or not agent_id:
         return
-    if command not in {"pause", "stop", "resume", "delete"}:
+    if command not in {"start", "pause", "stop", "resume", "delete"}:
         return
 
     logger.info("[cmd] %s -> %s", command.upper(), agent_id[:8])
@@ -341,7 +341,7 @@ async def handle_command(cmd: dict[str, Any]) -> None:
         )
         runtime.state["agents"].get(agent_id, {})["state"] = (
             "stopped" if command == "stop" else "paused" if command == "pause" else "running"
-        )
+        )  # start and resume both end up running
         await broadcast({"type": "patch", "state": events.snapshot()})
     except Exception as exc:
         logger.error("[cmd] %s failed: %s", command, exc)

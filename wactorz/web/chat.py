@@ -17,7 +17,7 @@ from aiohttp import web
 from aiohttp.web import Response
 
 from ..agents.main_actor import MainActor
-from ..core.actor import Message, MessageType
+from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from . import runtime
 
@@ -441,6 +441,18 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                     return
 
         await reply_fn(f"Agent @{target_name} not found.")
+        return
+
+    # ``==`` not ``is``: ActorState is a str-enum compared by value everywhere
+    # else in the codebase, and identity is not safe here — the test suite has
+    # wactorz.core.actor loaded under two module identities, so the enum members
+    # are distinct objects with equal values.
+    if target.state == ActorState.PAUSED:
+        # Pausing stops the mailbox loop, and every path below reaches into the
+        # agent directly rather than through it — so without this, a paused
+        # agent answered chat as if nothing had happened.
+        await reply_fn(f"@{target.name} is paused. Resume it to send messages.")
+        await _end_fn()
         return
 
     msg = f"[io-gateway] → {target.name}: {text[:60]!r}"

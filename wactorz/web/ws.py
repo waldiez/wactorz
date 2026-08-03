@@ -19,26 +19,122 @@ from . import chat, events, lifecycle, runtime
 logger = logging.getLogger(__name__)
 
 
+# How many frames a client may fall behind before it is resynchronised rather
+# than fed a backlog. Large enough that an ordinary hiccup rides through; small
+# enough that a stuck socket cannot pin unbounded memory.
+_CLIENT_QUEUE_DEPTH = 256
+
+
+class Channel:
+    """One client's outbound queue and the task that drains it.
+
+    Broadcasting used to await ``send_str`` for each client in turn, from inside
+    the broker message loop — so a browser on a slow link stalled *ingest* for
+    every other client and for MQTT itself. Handing each client its own queue and
+    writer means a slow one falls behind alone.
+    """
+
+    def __init__(self, ws: web.WebSocketResponse) -> None:
+        self.ws = ws
+        self._queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=_CLIENT_QUEUE_DEPTH)
+        self._writer = asyncio.create_task(self._drain())
+        self.dropped = 0
+
+    def send(self, payload: str) -> None:
+        """Queue a frame. Never blocks, never raises.
+
+        On overflow the backlog is discarded and a resync marker queued in its
+        place. Dropping frames silently would leave that client's state quietly
+        wrong — it would keep applying patches to a base it never received — so
+        it is told to start again instead.
+        """
+        try:
+            self._queue.put_nowait(payload)
+            return
+        except asyncio.QueueFull:
+            pass
+
+        self.dropped += 1
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:  # pragma: no cover - racing drain
+                break
+        try:
+            self._queue.put_nowait(None)  # resync marker
+        except asyncio.QueueFull:  # pragma: no cover - drained above
+            pass
+
+    async def _drain(self) -> None:
+        while True:
+            payload = await self._queue.get()
+            if payload is None:
+                logger.warning(
+                    "[broadcast] client fell behind (%d drop events); resynchronising",
+                    self.dropped,
+                )
+                try:
+                    payload = json.dumps({"type": "full_snapshot", "state": events.snapshot()})
+                except Exception as exc:
+                    # Building the snapshot reads the database, so it can fail.
+                    # Skip this resync rather than letting the writer die: a dead
+                    # writer is a client that silently stops updating.
+                    logger.warning("[broadcast] could not build resync snapshot: %s", exc)
+                    continue
+            try:
+                await self.ws.send_str(payload)
+            except Exception as exc:
+                logger.warning("[broadcast] WS send failed: %s", exc)
+                await self._retire()
+                return
+
+    async def _retire(self) -> None:
+        """Stop serving this client, and close the socket so it knows.
+
+        Leaving the socket open would give the browser a working command channel
+        with no updates arriving — it would look connected while showing stale
+        state. Closing ends the handler's receive loop now instead of whenever
+        the client happens to notice.
+        """
+        runtime.ws_clients.discard(self)
+        try:
+            await self.ws.close()
+        except Exception as exc:
+            logger.debug("[broadcast] closing a failed socket raised: %s", exc)
+
+    async def close(self) -> None:
+        """Stop the writer. Never raises into the caller's cleanup path."""
+        self._writer.cancel()
+        try:
+            await self._writer
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            # The writer had already died of something else. Report it rather
+            # than re-raising from a caller's ``finally``, where it would mask
+            # whatever actually brought the connection down.
+            logger.warning("[broadcast] writer task ended in error: %s", exc)
+
+
 async def broadcast(msg: dict[str, Any]) -> None:
-    """Broadcast a message to all connected clients."""
+    """Hand a message to every connected client's queue.
+
+    Returns as soon as the frames are queued: no client's link speed can delay
+    the caller, which is the broker message loop.
+    """
     if not runtime.ws_clients:
         return
     payload = json.dumps(msg)
-    dead = set()
-    for ws in list(runtime.ws_clients):
-        try:
-            await ws.send_str(payload)
-        except Exception as e:
-            logger.warning("[broadcast] WS send failed: %s", e)
-            dead.add(ws)
-    runtime.ws_clients.difference_update(dead)
+    for channel in list(runtime.ws_clients):
+        channel.send(payload)
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     """Handle websocket connection."""
     ws = web.WebSocketResponse()
     await ws.prepare(request)
-    runtime.ws_clients.add(ws)
+    channel = Channel(ws)
+    runtime.ws_clients.add(channel)
     logger.info("WebSocket client connected. Total: %d", len(runtime.ws_clients))
 
     # Send initial state
@@ -198,7 +294,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
     finally:
-        runtime.ws_clients.discard(ws)
+        runtime.ws_clients.discard(channel)
+        await channel.close()
         logger.info("WebSocket client disconnected. Total: %d", len(runtime.ws_clients))
     return ws
 

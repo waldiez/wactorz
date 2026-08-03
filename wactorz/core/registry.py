@@ -16,7 +16,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .actor import Actor, Message, MessageType, SupervisorStrategy
+from .actor import Actor, ActorState, Message, MessageType, SupervisorStrategy
 from .mqtt_publisher import MQTTPublisher
 from .paths import resolve_state_dir
 
@@ -248,79 +248,86 @@ class Supervisor:
     async def _watch_loop(self):
         """Poll supervised actors for failure and trigger restarts.
 
-        Detects three Erlang-style failure modes:
-        1. state == FAILED   — actor explicitly marked itself dead (compile/setup/process exhausted)
-        2. Heartbeat silence — actor task is frozen/deadlocked and stopped updating metrics
-        3. Error storm       — actor is alive but accumulating errors beyond a safe threshold
+        Detection runs under the lock; the restart itself does not. Restarting
+        means waiting out ``restart_delay``, stopping an actor and starting a
+        new one — holding the lock across all of that made one slow actor stall
+        supervision of every other, and blocked anything else that needed it.
         """
-        from .actor import ActorState
-
         while True:
             try:
                 await asyncio.sleep(self._poll_interval)
-                async with self._lock:
-                    for name, spec in list(self._specs.items()):
-                        # ── Skip specs that are intentionally retired ──────────
-                        # retired = user-stopped/deleted OR budget-exhausted.
-                        # We never restart these — that's the whole point.
-                        if spec.retired:
-                            continue
-
-                        actor = spec.actor
-                        if actor is None:
-                            continue
-
-                        # ── Skip actors that were intentionally stopped ─────────
-                        # STOPPED means a deliberate stop/delete command was issued.
-                        # PAUSED means the user explicitly paused it.
-                        # Neither is a crash — do NOT restart them.
-                        if actor.state in (ActorState.STOPPED, ActorState.PAUSED):
-                            continue
-
-                        # ── Mode 1: FAILED state ───────────────────────────────
-                        if actor.state == ActorState.FAILED:
-                            logger.warning(
-                                "[Supervisor] '%s' is FAILED — applying %s strategy.",
-                                name,
-                                spec.strategy.value,
-                            )
-                            await self._apply_strategy(name, spec)
-                            continue
-
-                        # ── Mode 2: Heartbeat silence ──────────────────────────
-                        # Skip actors that just started (give them 2× the timeout to warm up).
-                        uptime = actor.metrics.uptime
-                        if uptime > self.HEARTBEAT_TIMEOUT * 2:
-                            silence = time.time() - actor.metrics.last_heartbeat
-                            if silence > self.HEARTBEAT_TIMEOUT:
-                                logger.warning(
-                                    "[Supervisor] '%s' last heartbeat was %.0fs ago "
-                                    "(threshold=%ss) — presumed crashed. "
-                                    "Forcing FAILED and restarting.",
-                                    name,
-                                    silence,
-                                    self.HEARTBEAT_TIMEOUT,
-                                )
-                                actor.state = ActorState.FAILED
-                                await self._apply_strategy(name, spec)
-                                continue
-
-                        # ── Mode 3: Error storm ────────────────────────────────
-                        if actor.metrics.errors >= self.ERROR_STORM_THRESHOLD:
-                            logger.warning(
-                                "[Supervisor] '%s' has %s errors (threshold=%s) — error storm detected. Forcing FAILED and restarting.",
-                                name,
-                                actor.metrics.errors,
-                                self.ERROR_STORM_THRESHOLD,
-                            )
-                            actor.state = ActorState.FAILED
-                            await self._apply_strategy(name, spec)
-                            continue
-
+                for name, spec in await self._detect_failures():
+                    await self._supervise_one(name, spec)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
                 logger.error("[Supervisor] watch_loop error: %s", exc, exc_info=True)
+
+    def _failure_reason(self, spec: SupervisedSpec) -> str | None:
+        """Why this spec needs supervision, or None if there is nothing to do.
+
+        Three Erlang-style failure modes, plus the case of a spec that should
+        have an actor and does not. Reads state without changing any, so it can
+        be asked again later to confirm the answer still holds.
+        """
+        if spec.retired:
+            return None
+
+        actor = spec.actor
+        if actor is None:
+            # Should be running and is not: a respawn failed, or never ran.
+            return "no running actor"
+
+        # STOPPED means a deliberate stop or delete; PAUSED means the user
+        # paused it. Neither is a crash.
+        if actor.state in (ActorState.STOPPED, ActorState.PAUSED):
+            return None
+
+        if actor.state == ActorState.FAILED:
+            return f"state is FAILED — applying {spec.strategy.value}"
+
+        # Give a freshly started actor twice the timeout to warm up.
+        if actor.metrics.uptime > self.HEARTBEAT_TIMEOUT * 2:
+            silence = time.time() - actor.metrics.last_heartbeat
+            if silence > self.HEARTBEAT_TIMEOUT:
+                return (
+                    f"last heartbeat {silence:.0f}s ago "
+                    f"(threshold {self.HEARTBEAT_TIMEOUT}s) — presumed crashed"
+                )
+
+        if actor.metrics.errors >= self.ERROR_STORM_THRESHOLD:
+            return (
+                f"{actor.metrics.errors} errors "
+                f"(threshold {self.ERROR_STORM_THRESHOLD}) — error storm"
+            )
+
+        return None
+
+    async def _detect_failures(self) -> list[tuple[str, SupervisedSpec]]:
+        """Specs needing attention this cycle. Brief, and the only locked part."""
+        async with self._lock:
+            return [
+                (name, spec)
+                for name, spec in list(self._specs.items())
+                if self._failure_reason(spec) is not None
+            ]
+
+    async def _supervise_one(self, name: str, spec: SupervisedSpec) -> None:
+        """Act on one detected failure, having confirmed it is still real."""
+        async with self._lock:
+            # The lock was released between detection and now, so the spec may
+            # have been retired, replaced, or have recovered on its own.
+            if self._specs.get(name) is not spec:
+                return
+            why = self._failure_reason(spec)
+            if why is None:
+                return
+            actor = spec.actor
+            if actor is not None:
+                actor.state = ActorState.FAILED
+
+        logger.warning("[Supervisor] '%s': %s.", name, why)
+        await self._apply_strategy(name, spec)
 
     # ── Strategy application ─────────────────────────────────────────────────
 
@@ -351,31 +358,37 @@ class Supervisor:
 
     # ── Individual restart ────────────────────────────────────────────────────
 
+    async def _retire(self, name: str, spec: SupervisedSpec, why: str) -> None:
+        """Stop supervising an actor for good, and say so where someone will see it.
+
+        Retiring is the end of the line for a spec: nothing restarts it
+        afterwards. Doing that silently leaves an agent absent from the system
+        with no account of why, which is only discovered when someone notices
+        the work it was doing has stopped.
+        """
+        # The watch loop skips retired specs, so this also stops the same
+        # critical message repeating on every poll.
+        spec.retired = True
+        spec.actor = None
+        logger.critical("[Supervisor] Retiring '%s': %s. Manual intervention required.", name, why)
+        await self._notify_main(
+            f"🚨 **{name}** has crashed {spec.max_restarts} times and the Supervisor has given up. "
+            f"It is permanently stopped. Delete it and spawn a new one, or fix its code.",
+            severity="critical",
+        )
+
     async def _restart_one(self, name: str, spec: SupervisedSpec):
         if spec.exhausted:
-            logger.critical(
-                "[Supervisor] '%s' has exhausted its restart budget (%s restarts / %ss). Retiring — manual intervention required.",
+            await self._retire(
                 name,
-                spec.max_restarts,
-                spec.restart_window,
-            )
-            # Mark retired so the watch_loop stops polling this spec permanently.
-            # Issue 1 fix: without this, the watch_loop would keep calling _restart_one
-            # every poll cycle even after budget is gone, logging the same critical
-            # message endlessly and potentially re-entering the restart path.
-            spec.retired = True
-            spec.actor = None
-            await self._notify_main(
-                f"🚨 **{name}** has crashed {spec.max_restarts} times and the Supervisor has given up. "
-                f"It is permanently stopped. Delete it and spawn a new one, or fix its code.",
-                severity="critical",
+                spec,
+                f"exhausted its restart budget ({spec.max_restarts} restarts "
+                f"/ {spec.restart_window}s)",
             )
             return
 
-        within_budget = spec.record_restart()
-        if not within_budget:
-            spec.retired = True
-            spec.actor = None
+        if not spec.record_restart():
+            await self._retire(name, spec, "restart budget exceeded")
             return
 
         if spec.restart_delay > 0:
@@ -392,8 +405,23 @@ class Supervisor:
         if spec.actor:
             await self._stop_actor(name, spec)
 
-        # Spawn a fresh one
-        new_actor = await self._spawn_actor(name, spec)
+        # Spawn a fresh one. _stop_actor above has already cleared spec.actor, so
+        # a failure here leaves the spec with no actor — and the watch loop's own
+        # error handler only logs. Without catching it the spec sat at None
+        # forever, skipped on every subsequent poll: one bad factory call and the
+        # agent was gone for the life of the process, with a single log line.
+        try:
+            new_actor = await self._spawn_actor(name, spec)
+        except Exception as exc:
+            spec.actor = None
+            logger.error("[Supervisor] Respawn of '%s' failed: %s", name, exc, exc_info=True)
+            if spec.exhausted:
+                await self._retire(name, spec, "every restart attempt failed to start it")
+            # Otherwise the spec keeps its actor at None, which the watch loop
+            # now reads as "should be running but isn't" and tries again — each
+            # attempt costing budget, so a persistent failure ends rather than
+            # retrying forever.
+            return
         spec.actor = new_actor
         new_actor.metrics.restart_count = len(spec._restart_times)
         # Fresh start — reset error counter so error-storm detector doesn't
@@ -519,8 +547,17 @@ class Supervisor:
 
     async def stop(self):
         """Stop supervising, then stop every supervised actor."""
-        if self._watch_task:
+        if self._watch_task and self._watch_task is not asyncio.current_task():
+            # Awaited, not just cancelled: restarts now run outside the lock, so
+            # without waiting for the loop to actually stop, a restart already in
+            # flight would finish afterwards and register a fresh actor into a
+            # system that has just been shut down.
             self._watch_task.cancel()
+            try:
+                await self._watch_task
+            except asyncio.CancelledError:
+                pass
+            self._watch_task = None
         async with self._lock:
             for name in reversed(self._order):
                 await self._stop_actor(name, self._specs[name])

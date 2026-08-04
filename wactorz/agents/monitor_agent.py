@@ -71,10 +71,13 @@ class MonitorActor(Actor):
 
         # Prime the baseline on the cached instance so the first real reading
         # is meaningful (cpu_percent needs two samples on the same object).
-        try:
-            self._proc.cpu_percent(interval=None)
-        except Exception:
-            pass
+        if self._proc is not None:
+            # Declared Any | None on Actor, where psutil.Process() is built
+            # inside a try — it can fail, and this agent reads it every cycle.
+            try:
+                self._proc.cpu_percent(interval=None)
+            except Exception:
+                pass
 
         self._tasks.append(asyncio.create_task(self._monitor_loop()))
         logger.info(f"[{self.name}] Monitor started. check_interval={self.check_interval}s")
@@ -205,7 +208,7 @@ class MonitorActor(Actor):
         for actor_id, event in list(self._error_registry.items()):
             actor = self._find_actor(actor_id)
             name = event.get("name", actor_id[:8])
-            if actor and hasattr(actor, "_consecutive_errors") and actor._consecutive_errors == 0:
+            if actor and hasattr(actor, "_consecutive_errors") and actor._consecutive_errors == 0:  # pyright: ignore[reportAttributeAccessIssue]
                 del self._error_registry[actor_id]
                 await self._notify_main(
                     actor_id,
@@ -332,9 +335,14 @@ class MonitorActor(Actor):
         await self._mqtt_publish("system/health", health)
 
     async def _publish_host_stats(self):
+        proc = self._proc
+        if proc is None:
+            # No process handle means no host stats; the rest of the monitor's
+            # reporting is unaffected, so this is a skip rather than a failure.
+            return
         try:
-            cpu_pct = self._proc.cpu_percent(interval=None)
-            mem_info = self._proc.memory_info()
+            cpu_pct = proc.cpu_percent(interval=None)
+            mem_info = proc.memory_info()
             mem_used_mb = mem_info.rss / 1024 / 1024
             mem_total_mb = psutil.virtual_memory().total / 1024 / 1024
             stats = {

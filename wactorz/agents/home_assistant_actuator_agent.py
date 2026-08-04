@@ -372,8 +372,21 @@ class HomeAssistantActuatorAgent(Actor):
                     action.service,
                 )
                 return
+        ha = self._ha
+        if ha is None:
+            # Re-read after the wait rather than trusting it: the event only
+            # says the connection attempt finished, and it can fire before the
+            # client is assigned. Nothing checked this, so that race crashed.
+            logger.error(
+                "[%s] HA connection signalled ready but is not available — "
+                "cannot call service %s.%s",
+                self.name,
+                action.domain,
+                action.service,
+            )
+            return
         try:
-            await self._ha.call_service(
+            await ha.call_service(
                 action.domain,
                 action.service,
                 action.entity_id,

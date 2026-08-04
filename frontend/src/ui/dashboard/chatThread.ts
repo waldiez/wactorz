@@ -50,6 +50,22 @@ function buildImageThumb(url: string, name: string): HTMLImageElement {
     return img;
 }
 
+/** Let an inline image be opened full size, by pointer or keyboard. */
+function makeZoomable(img: HTMLImageElement): void {
+    const name = img.alt || "image";
+    img.setAttribute("role", "button");
+    img.tabIndex = 0;
+    img.setAttribute("aria-label", `Open preview: ${name}`);
+    const open = (): void => openLightbox(img.src, name);
+    img.addEventListener("click", open);
+    img.addEventListener("keydown", e => {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            open();
+        }
+    });
+}
+
 /** Image thumbnail (click → lightbox) or file chip for one attachment. */
 function buildAttachmentEl(att: Attachment): HTMLElement {
     const url = att.url ? safeAttachmentUrl(att.url) : "";
@@ -83,7 +99,14 @@ function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
     if (isUser) {
         bubble.textContent = msg.content;
     } else if (msg.content) {
-        bubble.appendChild(renderMarkdown(msg.content));
+        const rendered = renderMarkdown(msg.content);
+        // Images the renderer produced are inert; the lightbox lives in this
+        // layer, so the click behaviour is attached here rather than pulling a
+        // dashboard import down into the markdown renderer.
+        rendered.querySelectorAll("img.af-chat-md-img").forEach(el => {
+            makeZoomable(el as HTMLImageElement);
+        });
+        bubble.appendChild(rendered);
     }
     if (msg.attachments?.length) {
         bubble.appendChild(buildAttachments(msg.attachments));

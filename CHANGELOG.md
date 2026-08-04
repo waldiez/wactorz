@@ -7,6 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Images in an agent's reply are shown as images.** An agent answering with a camera snapshot or a generated chart sends it inline, and the chat rendered that as a wall of base64 text. Such images now appear in the message, bounded so a full-resolution frame cannot stretch the conversation, and clicking one opens it full size. Only real image formats are accepted — PNG, JPEG, GIF, WebP and AVIF, whether inline or fetched over http(s) — and anything else is left as the text it was rather than silently dropped. SVG is excluded on purpose, because it can carry scripts.
 - **A stopped agent can be started again.** Stopping one left deleting it as the only remaining action, so stopping was effectively permanent. Agent cards now offer **Start** for a stopped agent, `/start <agent>` does the same from chat, and the agent goes back under supervision — without that it would run unwatched, crashing and staying down. This is not the same as `/agents restart`, which re-creates an agent from its saved spawn configuration; Start resumes the one that is already there, including built-in agents that were never spawned from chat.
 
 ### Changed

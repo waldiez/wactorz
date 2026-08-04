@@ -1673,13 +1673,17 @@ class _AgentAPI:
 
         # Deduplication guard — prevent double-subscription if setup() is called
         # more than once (e.g. on reconnect). Same topic+callback combo gets one listener.
+        # (topic, id(callback)) → callback. A dict rather than a set of keys:
+        # id() is unique only among *live* objects, so holding the callback is
+        # what stops its address being recycled by a later one and that
+        # subscription silently skipped as a duplicate.
         if not hasattr(actor, "_subscribed_topics"):
-            actor._subscribed_topics: set = set()
+            actor._subscribed_topics: dict = {}
         sub_key = (topic, id(callback))
         if sub_key in actor._subscribed_topics:
             logger.debug(f"[{actor.name}] Already subscribed to {topic} — skipping duplicate")
             return _AWAITABLE_NONE
-        actor._subscribed_topics.add(sub_key)
+        actor._subscribed_topics[sub_key] = callback
 
         task = asyncio.create_task(_listener())
         actor._tasks.append(task)

@@ -321,9 +321,12 @@ class _RemoteAgentAPI:
         # local DynamicAgent behaviour so the planner sees real field names
         # for remote agents, not just LLM-declared guesses.
         self._observed_samples: dict[str, dict] = {}
-        # Set of (topic, id(callback)) pairs — dedup guard against double
+        # (topic, id(callback)) → callback — dedup guard against double
         # subscribe() when setup() runs more than once (e.g. on reconnect).
-        self._subscribed_topics: set = set()
+        # A dict rather than a set of keys: id() is unique only among *live*
+        # objects, so holding the callback is what stops its address being
+        # recycled by a later one and that subscription silently skipped.
+        self._subscribed_topics: dict = {}
         # Background subscriber tasks, kept so they can be cancelled on stop()
         # and not garbage-collected while running.
         self._subscriber_tasks: list[asyncio.Task] = []
@@ -471,6 +474,13 @@ class _RemoteAgentAPI:
 
         try:
             sig = inspect.signature(callback)
+        except (TypeError, ValueError):
+            sig = None  # Not introspectable — proceed and let runtime catch it
+        if sig is not None:
+            # Raised outside the try above: it used to sit inside it, where the
+            # very except meant to tolerate an un-inspectable callback swallowed
+            # this error instead — so the check never fired and the author of the
+            # generated agent got an opaque failure later rather than this.
             params = [p for p in sig.parameters.values() if p.default is inspect.Parameter.empty]
             if len(params) == 0:
                 raise TypeError(
@@ -478,15 +488,13 @@ class _RemoteAgentAPI:
                     f"Got a function with no required parameters. "
                     f"Fix: async def {callback.__name__}(payload): ..."
                 )
-        except (TypeError, ValueError):
-            pass  # Can't inspect — proceed and let runtime catch it
 
         # Dedup — same topic+callback pair only registers one listener.
         sub_key = (topic, id(callback))
         if sub_key in self._subscribed_topics:
             logger.debug(f"[{self.name}] Already subscribed to {topic} — skipping duplicate")
             return _AWAITABLE_NONE
-        self._subscribed_topics.add(sub_key)
+        self._subscribed_topics[sub_key] = callback
 
         broker = self._agent._runner.broker
         port = self._agent._runner.port

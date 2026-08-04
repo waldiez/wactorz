@@ -745,7 +745,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             ("/pause ", "pause", ActorState.PAUSED),
             ("/resume ", "resume", ActorState.RUNNING),
         ):
-            if stripped.startswith(_cmd):
+            # Both spellings: `text` is already stripped, so a bare "/pause"
+            # never matched the prefix form and fell through to the LLM — the
+            # usage hint below could not be reached at all.
+            if stripped == _cmd.strip() or stripped.startswith(_cmd):
                 agent_name = stripped[len(_cmd) :].strip()
                 if not agent_name:
                     return note_prefix + f"Usage: {_cmd.strip()} <agent-name>"

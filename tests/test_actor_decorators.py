@@ -10,7 +10,7 @@ import json
 import sys
 from collections.abc import Generator
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,20 +20,23 @@ from wactorz import ext
 from wactorz.web import api_actors, runtime
 
 
-def _purge_fake_submodules() -> dict[str, ModuleType]:
-    """Drop every ``wactorz.ext.*`` module, returning what was removed.
+def _purge_fake_submodules() -> None:
+    """Drop fake (test-written) extension modules, never the real ones.
 
-    The prefix catches the *real* extensions too, not only the fakes a test
-    writes — so without putting them back, the next import builds a fresh module
-    object with fresh module state. `wactorz.ext.tts` keeps its availability
-    flag there, and a test that resolves one identity while the running app
-    holds the other sees a different answer than the app does.
+    Purging every ``wactorz.ext.*`` module and restoring the real ones at
+    teardown is not enough: putting ``sys.modules`` back does not restore the
+    package *attributes*, so ``wactorz.ext.tts`` can end up one object in
+    ``sys.modules`` and another on the package — and which one a caller gets
+    then depends on its import style. Filter by file location instead: real
+    extensions live in the package and stay put; fakes live in a tmp dir.
     """
-    removed: dict[str, ModuleType] = {}
-    for name in list(sys.modules):
-        if name.startswith("wactorz.ext."):
-            removed[name] = sys.modules.pop(name)
-    return removed
+    real_dir = str(Path(ext.__file__).parent)
+    for name, mod in list(sys.modules.items()):
+        if not name.startswith("wactorz.ext."):
+            continue
+        mod_file = getattr(mod, "__file__", None)
+        if mod_file is None or not str(mod_file).startswith(real_dir):
+            sys.modules.pop(name, None)
 
 
 @pytest.fixture(name="registry_and_ext")
@@ -49,7 +52,7 @@ def registry_and_ext_fixture(
         "    return decorate\n",
         encoding="utf-8",
     )
-    real_extensions = _purge_fake_submodules()
+    _purge_fake_submodules()
     monkeypatch.setattr(ext, "__path__", [str(tmp_path)])
 
     actor = SimpleNamespace(actor_id="main", name="main", protected=True, metrics=None)
@@ -57,7 +60,6 @@ def registry_and_ext_fixture(
     monkeypatch.setattr(runtime, "state", {"agents": {}})
     yield
     _purge_fake_submodules()
-    sys.modules.update(real_extensions)
 
 
 async def test_actors_handler_applies_registered_decorator(

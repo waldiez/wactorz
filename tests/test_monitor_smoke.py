@@ -11,6 +11,7 @@ No MQTT broker and no actor registry are required — every handler must degrade
 gracefully when ``runtime.registry`` is ``None`` (legacy/standalone mode).
 """
 
+import sys
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest import mock
@@ -59,17 +60,17 @@ async def client_fixture() -> AsyncGenerator[TestClient, Any]:
     the feature to its not-installed state; the route is still dispatched, it
     just takes the 503 branch.
     """
-    # Resolved here rather than at import time: tests/ext and
-    # test_actor_decorators drop ext modules from sys.modules, and the ext
-    # loader re-imports them — a module-level binding would go stale and pin
-    # the wrong object. Started/stopped by hand so it holds for the whole
-    # request regardless of fixture teardown order.
-    from wactorz.ext import tts as tts_ext
-
+    # Resolve the module the same way the extension loader does —
+    # importlib.import_module, i.e. the sys.modules entry — and pin *after*
+    # build_app() has imported it. `from wactorz.ext import tts` binds through
+    # the package *attribute*, which sys.modules-purging tests can leave
+    # pointing at a different module object than the loader's; pinning that
+    # other object is how the handler served 200 here while pinned off.
+    app = build_app()
+    tts_ext = sys.modules["wactorz.ext.tts"]
     pinned = mock.patch.object(tts_ext._tts_state, "available", False)
     pinned.start()
     try:
-        app = build_app()
         async with TestClient(TestServer(app)) as c:
             yield c
     finally:

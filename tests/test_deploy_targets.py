@@ -22,7 +22,12 @@ import pytest
 from wactorz import config as config_module
 from wactorz.agents import installer_agent as installer_module
 from wactorz.agents.installer_agent import InstallerAgent
-from wactorz.config import DeployTarget, deploy_target, deploy_target_for_host
+from wactorz.config import (
+    DeployTarget,
+    deploy_name_error,
+    deploy_target,
+    deploy_target_for_host,
+)
 from wactorz.web import chat
 
 SECRET = "hunter2-should-never-appear"
@@ -411,6 +416,74 @@ async def test_strict_mode_refuses_an_unknown_host(installer, targets, tmp_path:
 
     with pytest.raises(PermissionError, match="DEPLOY_STRICT_HOST_KEYS"):
         await installer._known_hosts("10.0.0.5", 22)
+
+
+# ── Node names that cannot be MQTT topics ──────────────────────────────────
+# The name is interpolated into nodes/<name>/heartbeat and nodes/<name>/spawn.
+# A wildcard in it is not a parse error anywhere — the deploy succeeds, the
+# runner starts, the broker then refuses every publish and every subscribe, and
+# it reconnects every 3s forever while /nodes stays empty. Caught by hand once;
+# pinned here so it stays caught.
+
+
+@pytest.mark.parametrize("bad", ["rpi-kitchen#", "rpi+kitchen", "rpi/kitchen", "", "  "])
+def test_unusable_node_names_are_rejected(bad: str) -> None:
+    assert deploy_name_error(bad) is not None
+
+
+@pytest.mark.parametrize("ok", ["rpi-kitchen", "rpi_kitchen", "node1", "RPi.Kitchen"])
+def test_usable_node_names_are_accepted(ok: str) -> None:
+    assert deploy_name_error(ok) is None
+
+
+def test_the_rule_matches_what_mqtt_actually_does() -> None:
+    """The rule must match the broker's behaviour, not a guess at it.
+
+    paho is the client the runner uses, so ask it directly. The two forbidden
+    characters fail in different ways, which is why both are banned:
+
+    * ``#`` and ``+`` are the wildcards — paho raises, so the runner is refused
+      on every publish and every subscribe and reconnects forever.
+    * ``/`` raises nothing at all. It is the level separator, so the runner
+      quietly publishes to ``nodes/rpi/kitchen/heartbeat`` while the dashboard
+      watches ``nodes/rpi/kitchen`` — a node that runs, works, and is invisible.
+      The silent one is the more dangerous of the two.
+    """
+    paho = pytest.importorskip("paho.mqtt.client")
+    client = paho.Client(paho.CallbackAPIVersion.VERSION2)
+
+    for char in "#+":
+        name = f"rpi{char}kitchen"
+        with pytest.raises(ValueError):
+            client.publish(f"nodes/{name}/heartbeat", b"x")
+        with pytest.raises(ValueError):
+            client.subscribe(f"nodes/{name}/spawn")
+        assert deploy_name_error(name) is not None, f"{char!r} accepted but MQTT refuses it"
+
+    # '/' is accepted by MQTT and still wrong — it adds a topic level.
+    client.publish("nodes/rpi/kitchen/heartbeat", b"x")
+    assert deploy_name_error("rpi/kitchen") is not None
+
+    # Control case: a name the rule accepts has to actually work.
+    client.publish("nodes/rpi-kitchen/heartbeat", b"x")
+    client.subscribe("nodes/rpi-kitchen/spawn")
+
+
+async def test_deploy_refuses_an_unusable_name_before_touching_the_network(
+    installer, targets, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No SSH, no upload, no runner started — and no success reported."""
+    targets(DeployTarget(name="rpi-kitchen#", host="10.0.0.5", password="pw"))
+
+    async def _no_ssh(*_args, **_kwargs):  # pragma: no cover - must never run
+        raise AssertionError("deploy connected despite an unusable node name")
+
+    monkeypatch.setattr(installer_module.asyncssh, "connect", _no_ssh)
+
+    result = await installer._node_deploy({"host": "10.0.0.5", "node_name": "rpi-kitchen#"})
+
+    assert result["success"] is False
+    assert "MQTT topic" in result["error"]
 
 
 # ── Installer: host keys, against a real SSH server ────────────────────────

@@ -104,6 +104,40 @@ def _env_slug(name: str) -> str:
     return re.sub(r"[^A-Z0-9]+", "_", name.strip().upper()).strip("_")
 
 
+#: Characters a node name may not contain, because it becomes one level of an
+#: MQTT topic: ``#`` and ``+`` are the wildcards, ``/`` is the level separator.
+_NODE_NAME_FORBIDDEN = ("#", "+", "/")
+
+
+def deploy_name_error(node_name: str) -> str | None:
+    """Why ``node_name`` cannot name a node, or None if it can.
+
+    The name is interpolated straight into the runner's MQTT topics
+    (``nodes/<name>/heartbeat`` to publish, ``nodes/<name>/spawn`` to
+    subscribe), so a wildcard or a separator in it produces a runner that
+    connects to the broker and is then refused on every publish and every
+    subscribe. It retries forever, never appears in ``/nodes``, and fills its
+    log — while the deploy that started it reports success. Catching the name
+    up front is the difference between an error and a silent non-working node.
+    """
+    name = (node_name or "").strip()
+    if not name:
+        return "Node name is empty."
+    bad = [c for c in _NODE_NAME_FORBIDDEN if c in name]
+    if bad:
+        return (
+            f"Node name {name!r} contains {' and '.join(repr(c) for c in bad)}, which "
+            f"cannot appear in an MQTT topic — the runner would be refused by the "
+            f"broker on every publish and subscribe. Rename the node without it.\n"
+            f"Note: '#' with no space before it does not start a comment in a .env "
+            f"file, so `DEPLOY_TARGETS=rpi-kitchen#,rpi-garage` names a node "
+            f"'rpi-kitchen#'."
+        )
+    if name != node_name:
+        return f"Node name {node_name!r} has leading or trailing whitespace."
+    return None
+
+
 def _deploy_targets() -> tuple[DeployTarget, ...]:
     """Parse ``DEPLOY_TARGETS`` plus the ``DEPLOY_<NODE>_*`` block for each entry."""
     raw = (os.getenv("DEPLOY_TARGETS") or "").replace(";", ",")

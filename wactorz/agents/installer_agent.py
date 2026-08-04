@@ -16,6 +16,7 @@ from ..config import (
     CONFIG,
     DeployTarget,
     deploy_env_prefix,
+    deploy_name_error,
     deploy_target,
     deploy_target_for_host,
 )
@@ -571,6 +572,14 @@ class InstallerAgent(Actor):
 
         if not host:
             return {"error": "Missing 'host' in payload"}
+
+        # Before anything reaches the network: a name that cannot be an MQTT
+        # topic level yields a runner the broker refuses on every operation,
+        # so it would retry forever while this deploy reported success.
+        name_problem = deploy_name_error(str(node_name))
+        if name_problem:
+            self._log_remote(f"Refusing deploy: {name_problem}")
+            return {"success": False, "node_name": node_name, "host": host, "error": name_problem}
 
         target = self._resolve_ssh_target(payload)
         if target is None:

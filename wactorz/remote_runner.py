@@ -2114,6 +2114,23 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    # The node name becomes one level of every topic this runner uses
+    # (nodes/<name>/heartbeat to publish, nodes/<name>/spawn to subscribe), so
+    # an MQTT wildcard or separator in it makes the broker refuse every publish
+    # and every subscribe. Without this check the runner connects, fails each
+    # operation, and reconnects every 3s forever — filling its log and never
+    # appearing on the dashboard. Duplicated from wactorz/config.py's
+    # deploy_name_error rather than imported: this file is deployed to the edge
+    # node on its own, with no wactorz package alongside it.
+    bad = [c for c in ("#", "+", "/") if c in node_name]
+    if bad or not node_name.strip():
+        problem = f"contains {' and '.join(repr(c) for c in bad)}" if bad else "is empty"
+        logger.error(
+            f"[runner] Refusing to start: node name {node_name!r} {problem}, which "
+            f"cannot appear in an MQTT topic. Rename the node and redeploy."
+        )
+        raise SystemExit(2)
+
     runner = _RemoteRunner(broker=args.broker, port=args.port, node_name=node_name)
 
     # Graceful shutdown on SIGINT / SIGTERM

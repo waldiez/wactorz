@@ -329,6 +329,50 @@ async def handle_slash(text: str, reply_fn) -> bool:
     return False
 
 
+#: Correlation id → the queue waiting for that request's RESULT. One entry per
+#: in-flight chat turn; the interceptor below routes by this rather than
+#: assuming there is only ever one.
+_PENDING_REPLIES: dict[str, asyncio.Queue] = {}
+
+
+def _install_reply_capture(target: Any) -> None:
+    """Teach an agent's ``send`` to hand RESULTs back to the waiting chat turn.
+
+    Agents reply to ``msg.reply_to or msg.sender_id``, and a chat turn is not a
+    real actor, so the reply has nowhere to go unless it is intercepted.
+
+    Installed **once per agent and never removed**. It used to be patched in and
+    restored around each turn, which broke under two concurrent turns to the
+    same agent: the second saved the first's interceptor as "the original", the
+    first restored the real method — so the second's replies stopped being
+    captured — and the second then restored the first's interceptor, leaving
+    the agent permanently sending its results into an abandoned queue.
+
+    Correlating by id also fixes the other half: the old interceptor captured
+    *any* RESULT, so a reply meant for one turn could be handed to another.
+    """
+    if getattr(target, "_io_gateway_capture_installed", False):
+        return
+    original_send = target.send
+
+    async def _capture_send(
+        target_id: str,
+        msg_type: MessageType,
+        payload: Any = None,
+        **kw: Any,
+    ) -> bool:
+        if msg_type == MessageType.RESULT:
+            queue = _PENDING_REPLIES.get(target_id)
+            if queue is not None:
+                await queue.put(payload)
+                return True
+            # Not for a chat turn — an ordinary actor-to-actor result.
+        return await original_send(target_id, msg_type, payload, **kw)
+
+    target.send = _capture_send
+    target._io_gateway_capture_installed = True
+
+
 async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None):
     """Core chat routing — slash commands, @mentions, or main-actor stream.
 
@@ -509,27 +553,19 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             await _end_fn()
             return
 
-        # All other message-passing agents: intercept send() to capture RESULT
-        reply_queue = asyncio.Queue()
-        original_send = target.send  # save so we can restore
-
-        async def _capture_send(
-            target_id: str,
-            msg_type: MessageType,
-            payload: Any = None,
-            **kw: Any,
-        ) -> bool:
-            if msg_type == MessageType.RESULT:
-                await reply_queue.put(payload)
-                return True
-            return await original_send(target_id, msg_type, payload, **kw)
-
-        target.send = _capture_send
+        # All other message-passing agents: intercept send() to capture the
+        # RESULT, since it is addressed to a correlation id rather than a real
+        # actor. The interceptor is installed once per agent and correlates by
+        # that id; it is never swapped back.
+        correlation_id = f"io-gateway:{uuid.uuid4().hex[:12]}"
+        reply_queue: asyncio.Queue = asyncio.Queue()
+        _install_reply_capture(target)
+        _PENDING_REPLIES[correlation_id] = reply_queue
         try:
             msg = Message(
                 type=MessageType.TASK,
-                sender_id="io-gateway",
-                reply_to="io-gateway",
+                sender_id=correlation_id,
+                reply_to=correlation_id,
                 payload={"text": text},
             )
             await target.handle_message(msg)
@@ -559,7 +595,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             logger.error(msg, exc_info=True)
             await reply_fn(f"[error] {target.name}: {exc}")
         finally:
-            target.send = original_send  # always restore
+            _PENDING_REPLIES.pop(correlation_id, None)
             await _end_fn()
 
 

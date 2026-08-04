@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import uuid
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
@@ -846,9 +846,17 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 if self._registry:
                     target = self._registry.find_by_name(agent_name)
                     if target:
-                        actor_id = target.actor_id
-                        await self._registry.unregister(actor_id)
-                        await target.stop()
+                        # apply_command, not stop(): this ran stop() for *both*
+                        # verbs, so `/agents pause` stopped the agent and then
+                        # reported it paused. It also skipped the supervision
+                        # release, which makes a deliberate stop look like a
+                        # crash to the watchdog, and unregistered before
+                        # stopping, leaving the actor unreachable while it was
+                        # still shutting down.
+                        if not await target.apply_command(verb):
+                            return note_prefix + (
+                                f"'{agent_name}' refused {verb} (it may be protected)."
+                            )
                         self._record_agent_deletion(
                             agent_name, reason=f"manually {past} via /agents"
                         )
@@ -878,8 +886,13 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             if self._registry:
                 target = self._registry.find_by_name(agent_name)
                 if target:
+                    # Release from supervision and stop *before* unregistering.
+                    # Stopping a still-supervised actor looks like a crash, and
+                    # unregistering first leaves it unreachable while it shuts
+                    # down. Unlike the stop path above, the actor really does go
+                    # here — a fresh one replaces it below.
+                    await target.apply_command("stop")
                     await self._registry.unregister(target.actor_id)
-                    await target.stop()
             new_config = dict(config)
             new_config["replace"] = True
             await self._spawn_from_config(new_config, save=True)
@@ -1007,7 +1020,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
             # ── Live registry ──
             lines.append("\U0001f7e2 **Live registry** (running NOW in this process):")
-            if live_user:
+            if live_user and self._registry:
                 for name in sorted(live_user):
                     actor = self._registry.find_by_name(name)
                     state = actor.state.name if actor else "?"
@@ -1197,7 +1210,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                             f"[main] '{target_name}' not running — auto-spawning via {catalog_name}..."
                         )
                         try:
-                            spawn_result = await catalog_actor._action_spawn(target_name, {})
+                            spawn_result = await catalog_actor._action_spawn(target_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                             if spawn_result and spawn_result.get("ok"):
                                 await asyncio.sleep(0.5)
                                 local_target = (
@@ -1734,7 +1747,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             cat = self._registry.find_by_name("catalog")
             if cat and hasattr(cat, "list_recipes"):
                 try:
-                    for recipe_name in cat.list_recipes():
+                    for recipe_name in cat.list_recipes():  # pyright: ignore[reportAttributeAccessIssue]
                         if _normalize_agent_name(recipe_name) == want:
                             return recipe_name
                 except Exception:
@@ -1767,7 +1780,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
                     logger.info(f"[{self.name}] Auto-spawning '{agent_name}' via catalog...")
                     try:
-                        spawn_result = await catalog_actor._action_spawn(agent_name, {})
+                        spawn_result = await catalog_actor._action_spawn(agent_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                         if spawn_result and spawn_result.get("ok"):
                             await asyncio.sleep(0.5)
                             target = (
@@ -2013,7 +2026,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                                 f"[{self.name}] LLM tried to write '{req_name}'; spawning catalog "
                                 f"recipe '{recipe_name}' instead"
                             )
-                            spawn_result = await catalog_actor._action_spawn(recipe_name, {})
+                            spawn_result = await catalog_actor._action_spawn(recipe_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                             if spawn_result and spawn_result.get("ok"):
                                 await asyncio.sleep(0.5)
                                 actor = (
@@ -2413,7 +2426,7 @@ async def handle_task(agent, payload):
         return
 
     async def _update_node_desired_state(
-        self, node: str, new_config: dict = None, remove_name: str = None
+        self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
     ) -> None:
         """Maintain nodes/{node}/desired_state as a retained MQTT message containing
         ALL agents that should run on this node. The runner reads this on startup
@@ -3463,7 +3476,7 @@ async def handle_task(agent, payload):
                                                 f"wactorz.actor.{aname}",
                                             )
                                         )
-                                        mon._last_seen[remote_id] = _t.time()
+                                        mon._last_seen[remote_id] = _t.time()  # pyright: ignore[reportAttributeAccessIssue]
                         elif topic.endswith("/migrate_result"):
                             success = data.get("success", False)
                             agent = data.get("agent", "?")

@@ -220,6 +220,11 @@ class Supervisor:
         """
         spec = self._specs.get(name)
         if spec is not None:
+            if spec.actor is not None:
+                # Cleared, or the actor goes on reporting supervised=True in
+                # get_status() — and so to the dashboard and /api/actors — after
+                # it has been deliberately released.
+                spec.actor.supervisor_id = None
             spec.retired = True
             spec.actor = None
             logger.info("[Supervisor] Released '%s' from supervision (intentional stop).", name)
@@ -239,6 +244,7 @@ class Supervisor:
             return
         spec.retired = False
         spec.actor = actor
+        actor.supervisor_id = str(id(self))
         # The old crashes are not this run's. Leaving them counted means an actor
         # started after a rough patch gets a fraction of a restart budget.
         spec._restart_times.clear()

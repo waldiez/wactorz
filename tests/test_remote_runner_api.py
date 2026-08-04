@@ -7,8 +7,11 @@ only how ``installer_agent`` deploys it.
 """
 
 import asyncio
+import json
+import os
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -413,3 +416,137 @@ class TestLLMBridge:
         # agent's data rather than in a private buffer.
         assert api.state["_chat_history"][0]["content"] == "earlier"
         assert len(api.state["_chat_history"]) == 3
+
+
+class _NodeRunner:
+    """The runner a `_RemoteAgent` reads its node identity from."""
+
+    node_name = "node-a"
+    broker = "localhost"
+    port = 1883
+
+
+def _agent(code: str = "", state_dir: str = "/tmp", **config: Any) -> Any:
+    cfg = {"name": "edge-agent", "code": code, **config}
+    return remote_runner._RemoteAgent(cfg, cast(Any, _NodeRunner()), state_dir=state_dir)
+
+
+class TestAgentIdentity:
+    def test_the_actor_id_is_derived_from_the_name(self) -> None:
+        first = _agent()
+        second = _agent()
+
+        # uuid5, not uuid4: a node that restarts must present the same actor to
+        # main, or every reboot looks like a new agent.
+        assert first.actor_id == second.actor_id
+
+    def test_a_different_name_is_a_different_actor(self) -> None:
+        assert _agent(name="a").actor_id != _agent(name="b").actor_id
+
+    def test_an_unnamed_agent_still_gets_a_name(self) -> None:
+        agent = remote_runner._RemoteAgent({}, cast(Any, _NodeRunner()))
+
+        assert agent.name.startswith("remote-agent-")
+
+
+class TestAgentStateFile:
+    def test_a_name_with_separators_stays_inside_the_state_directory(self, tmp_path: Path) -> None:
+        agent = _agent(name="../../etc/passwd", state_dir=str(tmp_path))
+
+        # The state file is written and later read back, so a name that escaped
+        # would let a spawn payload choose where a node writes.
+        assert Path(agent._state_path).parent == tmp_path
+
+    def test_state_survives_a_round_trip(self, tmp_path: Path) -> None:
+        agent = _agent(state_dir=str(tmp_path))
+        agent._persistent_state = {"seen": 3}
+        agent._save_state()
+
+        reloaded = _agent(state_dir=str(tmp_path))
+        reloaded._load_state()
+
+        assert reloaded._persistent_state == {"seen": 3}
+
+    def test_a_corrupt_state_file_leaves_the_agent_startable(self, tmp_path: Path) -> None:
+        agent = _agent(state_dir=str(tmp_path))
+        Path(agent._state_path).write_text("{ not json")
+
+        agent._load_state()
+
+        # Refusing to start would strand the node; it comes up with nothing.
+        assert agent._persistent_state == {}
+
+    def test_loading_without_a_file_is_a_no_op(self, tmp_path: Path) -> None:
+        agent = _agent(state_dir=str(tmp_path))
+        agent._load_state()
+        assert agent._persistent_state == {}
+
+
+class TestDeleteState:
+    def test_it_removes_the_file_and_reports_that_it_did(self, tmp_path: Path) -> None:
+        agent = _agent(state_dir=str(tmp_path))
+        agent._persistent_state = {"seen": 3}
+        agent._save_state()
+
+        assert agent._delete_state() is True
+        assert not os.path.exists(agent._state_path)
+
+    def test_it_wipes_memory_so_a_late_save_cannot_restore_it(self, tmp_path: Path) -> None:
+        agent = _agent(state_dir=str(tmp_path))
+        agent._persistent_state = {"seen": 3}
+        agent._save_state()
+
+        agent._delete_state()
+        agent._save_state()  # as the supervisor loop may still do on the way down
+
+        # In-memory state is cleared first for exactly this reason: otherwise a
+        # delete would be undone by a save already in flight, and the agent
+        # would come back with its full state on the next startup.
+        assert json.loads(Path(agent._state_path).read_text()) == {}
+
+    def test_deleting_nothing_reports_false(self, tmp_path: Path) -> None:
+        # A stop that never saved, or a second delete — neither is an error.
+        assert _agent(state_dir=str(tmp_path))._delete_state() is False
+
+
+class TestCompile:
+    """The front door to `exec` of code that arrived over the broker."""
+
+    def test_it_binds_the_lifecycle_functions(self) -> None:
+        agent = _agent(
+            code=(
+                "async def setup(agent):\n    pass\n"
+                "async def process(agent):\n    pass\n"
+                "async def handle_task(agent, payload):\n    return payload\n"
+            )
+        )
+
+        assert agent._compile() is None
+        assert agent._fn_setup is not None
+        assert agent._fn_process is not None
+        assert agent._fn_handle_task is not None
+
+    def test_code_without_them_compiles_to_nothing_bound(self) -> None:
+        agent = _agent(code="x = 1")
+
+        assert agent._compile() is None
+        assert agent._fn_setup is None
+
+    def test_a_syntax_error_is_returned_not_raised(self) -> None:
+        agent = _agent(code="def broken(:\n")
+
+        error = agent._compile()
+
+        # Returned so the node can report it back over the broker; raising
+        # would take down the runner for one bad agent.
+        assert error is not None
+        assert "Compile error" in error
+
+    def test_the_error_carries_a_traceback_and_the_agent_name(self) -> None:
+        agent = _agent(code="raise ValueError('boom at import time')")
+
+        error = agent._compile() or ""
+
+        # Whoever reads this is debugging generated code they cannot see.
+        assert "boom at import time" in error
+        assert "edge-agent" in error

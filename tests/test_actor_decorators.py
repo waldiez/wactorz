@@ -10,7 +10,7 @@ import json
 import sys
 from collections.abc import Generator
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -20,10 +20,20 @@ from wactorz import ext
 from wactorz.web import api_actors, runtime
 
 
-def _purge_fake_submodules() -> None:
+def _purge_fake_submodules() -> dict[str, ModuleType]:
+    """Drop every ``wactorz.ext.*`` module, returning what was removed.
+
+    The prefix catches the *real* extensions too, not only the fakes a test
+    writes — so without putting them back, the next import builds a fresh module
+    object with fresh module state. `wactorz.ext.tts` keeps its availability
+    flag there, and a test that resolves one identity while the running app
+    holds the other sees a different answer than the app does.
+    """
+    removed: dict[str, ModuleType] = {}
     for name in list(sys.modules):
         if name.startswith("wactorz.ext."):
-            del sys.modules[name]
+            removed[name] = sys.modules.pop(name)
+    return removed
 
 
 @pytest.fixture(name="registry_and_ext")
@@ -39,7 +49,7 @@ def registry_and_ext_fixture(
         "    return decorate\n",
         encoding="utf-8",
     )
-    _purge_fake_submodules()
+    real_extensions = _purge_fake_submodules()
     monkeypatch.setattr(ext, "__path__", [str(tmp_path)])
 
     actor = SimpleNamespace(actor_id="main", name="main", protected=True, metrics=None)
@@ -47,6 +57,7 @@ def registry_and_ext_fixture(
     monkeypatch.setattr(runtime, "state", {"agents": {}})
     yield
     _purge_fake_submodules()
+    sys.modules.update(real_extensions)
 
 
 async def test_actors_handler_applies_registered_decorator(

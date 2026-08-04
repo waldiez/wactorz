@@ -10,7 +10,7 @@ fake extension modules — nothing touches the real extensions, and the fakes'
 import sys
 from collections.abc import Callable, Generator
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -18,10 +18,20 @@ import pytest
 from wactorz import ext
 
 
-def _purge_fake_submodules() -> None:
+def _purge_fake_submodules() -> dict[str, ModuleType]:
+    """Drop every ``wactorz.ext.*`` module, returning what was removed.
+
+    The prefix catches the *real* extensions too, not only the fakes a test
+    writes — so without putting them back, the next import builds a fresh module
+    object with fresh module state. `wactorz.ext.tts` keeps its availability
+    flag there, and a test that resolves one identity while the running app
+    holds the other sees a different answer than the app does.
+    """
+    removed: dict[str, ModuleType] = {}
     for name in list(sys.modules):
         if name.startswith("wactorz.ext."):
-            del sys.modules[name]
+            removed[name] = sys.modules.pop(name)
+    return removed
 
 
 @pytest.fixture(name="sandbox")
@@ -34,10 +44,11 @@ def sandbox_fixture(
     def write(name: str, body: str) -> None:
         (tmp_path / f"{name}.py").write_text(body, encoding="utf-8")
 
-    _purge_fake_submodules()
+    real_extensions = _purge_fake_submodules()
     monkeypatch.setattr(ext, "__path__", [str(tmp_path)])
     yield write
     _purge_fake_submodules()
+    sys.modules.update(real_extensions)
 
 
 def test_extension_with_only_setup_is_discovered(sandbox: Callable[..., None]) -> None:

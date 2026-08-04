@@ -1880,6 +1880,12 @@ class _RemoteRunner:
         try:
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
+            # Deliberately swallowed, unlike the other places that cancel a task
+            # they own. This is the top of the node — nothing awaits run(), it is
+            # driven by run_until_complete — and consuming the cancellation is
+            # what lets the cleanup below finish. Left pending, the first await
+            # in stop_all() would re-raise and the node would exit without
+            # stopping its agents.
             pass
         finally:
             await self.stop_all()

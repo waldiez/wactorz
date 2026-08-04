@@ -105,15 +105,16 @@ class Channel:
     async def close(self) -> None:
         """Stop the writer. Never raises into the caller's cleanup path."""
         self._writer.cancel()
-        try:
-            await self._writer
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
+        # gather rather than a bare await: it hands back the writer's own
+        # CancelledError as a value, so it can be ignored without also
+        # absorbing a cancellation aimed at whoever called close().
+        (outcome,) = await asyncio.gather(self._writer, return_exceptions=True)
+        # CancelledError is a BaseException, so this catches a real crash only.
+        if isinstance(outcome, Exception):
             # The writer had already died of something else. Report it rather
             # than re-raising from a caller's ``finally``, where it would mask
             # whatever actually brought the connection down.
-            logger.warning("[broadcast] writer task ended in error: %s", exc)
+            logger.warning("[broadcast] writer task ended in error: %s", outcome)
 
 
 async def broadcast(msg: dict[str, Any]) -> None:

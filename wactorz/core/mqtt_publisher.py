@@ -171,10 +171,17 @@ class MQTTPublisher:
         """Stop the drain loop and close the connection."""
         if self._task:
             self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+            # gather rather than a bare await: the drain loop's own
+            # CancelledError comes back as a value, so ignoring it cannot also
+            # swallow a cancellation aimed at the caller of disconnect().
+            (outcome,) = await asyncio.gather(self._task, return_exceptions=True)
+            # Reported, not dropped. gather *retrieves* the exception, which also
+            # suppresses asyncio's "never retrieved" warning — so a drain loop
+            # that died of something real would otherwise vanish at shutdown,
+            # exactly when someone is looking for why messages stopped going out.
+            # CancelledError is a BaseException, so this is a real crash only.
+            if isinstance(outcome, Exception):
+                logger.warning("[MQTT] Publisher drain loop ended in error: %s", outcome)
 
     @property
     def connected(self) -> bool:

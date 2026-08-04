@@ -573,10 +573,16 @@ class Supervisor:
             # flight would finish afterwards and register a fresh actor into a
             # system that has just been shut down.
             self._watch_task.cancel()
-            try:
-                await self._watch_task
-            except asyncio.CancelledError:
-                pass
+            # gather rather than a bare await: the watch loop's own
+            # CancelledError is returned as a value, so ignoring it cannot also
+            # swallow a cancellation aimed at the caller of stop().
+            (outcome,) = await asyncio.gather(self._watch_task, return_exceptions=True)
+            # Reported, not dropped. gather *retrieves* the exception, which also
+            # suppresses asyncio's "never retrieved" warning — so a watch loop
+            # that died of something real would vanish silently at shutdown.
+            # CancelledError is a BaseException, so this is a real crash only.
+            if isinstance(outcome, Exception):
+                logger.error("[Supervisor] watch loop ended in error: %s", outcome)
             self._watch_task = None
         async with self._lock:
             for name in reversed(self._order):

@@ -386,7 +386,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     "  /agents <keyword>       — filter agents by capability keyword",
                     "  /capabilities           — alias for /agents",
                     "  /delete <agent>         — stop an agent and remove it from the spawn registry",
-                    "  /stop <agent>           — alias of /delete",
+                    "  /stop <agent>           — stop an agent, keeping its state (reversible)",
+                    "  /start <agent>          — start a stopped agent back up",
                     "  /pause <agent>          — pause a local agent (remote not supported)",
                     "  /resume <agent>         — resume a paused local agent",
                     "  @agent-name <msg>       — send a message directly to a named agent",
@@ -740,6 +741,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # topics, so these only affect LOCAL agents. For remote agents we tell
         # the user honestly and suggest /stop instead.
         for _cmd, _verb, _new_state in (
+            ("/start ", "start", ActorState.RUNNING),
             ("/pause ", "pause", ActorState.PAUSED),
             ("/resume ", "resume", ActorState.RUNNING),
         ):
@@ -772,17 +774,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     return note_prefix + (
                         f"Agent '{agent_name}' is not paused (state: {target.state.name})."
                     )
+                if _verb == "start" and target.state != ActorState.STOPPED:
+                    return note_prefix + (
+                        f"Agent '{agent_name}' is not stopped (state: {target.state.name})."
+                    )
 
                 try:
-                    if _verb == "pause":
-                        await target.pause()
-                    else:
-                        await target.resume()
+                    # apply_command rather than target.pause()/resume(): it is the
+                    # one place the lifecycle rules live, including refusing to
+                    # pause a protected agent — which this path did not check —
+                    # and putting a started agent back under supervision.
+                    applied = await target.apply_command(_verb)
                 except Exception as exc:
                     logger.exception(f"[main] /{_verb} failed for '{agent_name}'")
                     return note_prefix + f"Failed to {_verb} '{agent_name}': {exc}"
 
-                return note_prefix + f"Agent '{agent_name}' {_verb}d."
+                if not applied:
+                    return note_prefix + f"'{agent_name}' refused {_verb} (it may be protected)."
+                _past = {"start": "started", "pause": "paused", "resume": "resumed"}[_verb]
+                return note_prefix + f"Agent '{agent_name}' {_past}."
 
         # ── /agents stop|delete|pause|remove <name> ─────────────────────────
         # NOTE: stop and pause are reversible (state preserved, spawn registry

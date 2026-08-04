@@ -33,6 +33,7 @@ import { IconName } from "./dashboard/icons";
 import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
+import type { AgentAction } from "./dashboard/cards";
 import { MetricsController } from "./dashboard/metrics";
 import { seedServerConfig } from "../config/serverConfig";
 import { emit, listen } from "../events";
@@ -468,11 +469,7 @@ export class CardDashboard {
         el.textContent = `${healthy}/${agents.length} wactorz healthy`;
     }
 
-    private _sendCommand(
-        id: string,
-        action: "pause" | "resume" | "stop" | "delete",
-        btn?: HTMLButtonElement,
-    ): void {
+    private _sendCommand(id: string, action: AgentAction, btn?: HTMLButtonElement): void {
         if (btn) {
             btn.disabled = true;
             btn.classList.add("sending");

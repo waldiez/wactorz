@@ -169,8 +169,41 @@ class TestTheLockIsNotHeldAcrossRestarts:
         # then produced joined a system that had already shut down.
         assert supervisor._watch_task is None
         assert len(spawned) == 1
-        assert all(a.state is not ActorState.RUNNING for a in spawned)
+        assert all(a.state != ActorState.RUNNING for a in spawned)
         release.set()
+
+
+class TestResupervise:
+    """The counterpart to release(): a deliberate stop can be undone."""
+
+    async def test_a_released_spec_is_watched_again(self, supervisor: Supervisor) -> None:
+        supervisor.supervise("w", lambda: _Worker(name="w"), restart_delay=0)
+        spec = supervisor._specs["w"]
+        supervisor.release("w")
+        assert await supervisor._detect_failures() == []
+
+        actor = _Worker(name="w")
+        supervisor.resupervise("w", actor)
+
+        assert spec.retired is False
+        assert spec.actor is actor
+
+    async def test_the_restart_budget_starts_fresh(self, supervisor: Supervisor) -> None:
+        supervisor.supervise("w", lambda: _Worker(name="w"), max_restarts=2, restart_delay=0)
+        spec = supervisor._specs["w"]
+        spec.record_restart()
+        spec.record_restart()
+        assert spec.exhausted is True
+
+        supervisor.resupervise("w", _Worker(name="w"))
+
+        # Crashes from before a deliberate stop are not this run's. Carrying
+        # them over would give a freshly started actor no budget at all.
+        assert spec.exhausted is False
+
+    async def test_an_unsupervised_name_is_ignored(self, supervisor: Supervisor) -> None:
+        supervisor.resupervise("never-registered", _Worker(name="x"))
+        assert supervisor._specs == {}
 
 
 class TestDetectionIsUnchanged:

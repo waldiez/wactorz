@@ -179,14 +179,14 @@ export function buildStatCards(container: HTMLElement, data: StatCardData): void
     });
 }
 
-export type AgentAction = "pause" | "resume" | "stop" | "delete";
+export type AgentAction = "start" | "pause" | "resume" | "stop" | "delete";
 
 export interface WactorCardCallbacks {
     onChat: (agent: AgentInfo) => void;
     onCommand: (agentId: string, action: AgentAction, btn: HTMLButtonElement) => void;
 }
 
-/** Append the pause/resume/stop/delete action buttons appropriate to the state. */
+/** Append the start/pause/resume/stop/delete action buttons appropriate to the state. */
 export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
     if (!canDirectMessage(agent)) {
         return;
@@ -199,6 +199,11 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
         b.dataset["action"] = action;
         controls.appendChild(b);
     };
+    if (status === "stopped") {
+        // Without this, delete was the only thing left to do with a stopped
+        // agent — stopping one was effectively irreversible.
+        add("Start", "start");
+    }
     if (status === "running") {
         add("Pause", "pause");
     }

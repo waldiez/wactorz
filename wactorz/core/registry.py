@@ -224,6 +224,26 @@ class Supervisor:
             spec.actor = None
             logger.info("[Supervisor] Released '%s' from supervision (intentional stop).", name)
 
+    def resupervise(self, name: str, actor: Actor) -> None:
+        """Put a released actor back under supervision — the 'link' to release().
+
+        A deliberate stop retires the spec, which is what keeps the watchdog from
+        undoing it. Starting the actor again therefore has to say so explicitly,
+        or it would run unsupervised: crashing without being restarted, and
+        without anyone being told.
+
+        A no-op for a name that is not supervised, matching release().
+        """
+        spec = self._specs.get(name)
+        if spec is None:
+            return
+        spec.retired = False
+        spec.actor = actor
+        # The old crashes are not this run's. Leaving them counted means an actor
+        # started after a rough patch gets a fraction of a restart budget.
+        spec._restart_times.clear()
+        logger.info("[Supervisor] '%s' is supervised again.", name)
+
     # ── Startup ───────────────────────────────────────────────────────────────
 
     async def start(self):

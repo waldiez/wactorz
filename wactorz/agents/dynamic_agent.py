@@ -64,11 +64,11 @@ class DynamicAgent(Actor):
         code: str,  # LLM-generated Python source
         poll_interval: float = 1.0,  # seconds between process() calls
         description: str = "",  # what this agent does
-        input_schema: dict = None,  # expected task payload fields
-        output_schema: dict = None,  # returned result fields
+        input_schema: dict[str, Any] | None = None,  # expected task payload fields
+        output_schema: dict[str, Any] | None = None,  # returned result fields
         llm_provider=None,  # optional LLM for agent.llm.chat()
         trusted: bool = False,  # True = catalog agent, skip safety validator
-        **kwargs,
+        **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self._code = code
@@ -2202,9 +2202,9 @@ class _AgentAPI:
         self,
         publishes=None,
         subscribes=None,
-        triggers_when: dict = None,
-        produces_schema: dict = None,
-        consumes_schema: dict = None,
+        triggers_when: dict | None = None,
+        produces_schema: dict | None = None,
+        consumes_schema: dict | None = None,
         **kwargs,
     ):
         """Declare this agent's topic contract — what it produces and consumes.

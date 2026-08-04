@@ -652,9 +652,9 @@ class _RemoteAgentAPI:
         self,
         publishes=None,
         subscribes=None,
-        triggers_when: dict = None,
-        produces_schema: dict = None,
-        consumes_schema: dict = None,
+        triggers_when: dict | None = None,
+        produces_schema: dict | None = None,
+        consumes_schema: dict | None = None,
         **kwargs,
     ):
         """Declare this agent's topic contract — what it produces and consumes.

@@ -723,8 +723,14 @@ class OpenAIProvider(LLMProvider):
     ):
         import openai
 
-        self.client = openai.AsyncOpenAI(
-            api_key=api_key, **({"base_url": base_url} if base_url else {})
+        # Two calls rather than a conditional `**{...}`: unpacking a dict of
+        # unknown keys means a type checker cannot tell which parameter each
+        # value lands on, so it reports the conflict against every one of them
+        # — eight errors for a line that was always correct.
+        self.client = (
+            openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+            if base_url
+            else openai.AsyncOpenAI(api_key=api_key)
         )
         self.model = model
         self.base_url = base_url or None

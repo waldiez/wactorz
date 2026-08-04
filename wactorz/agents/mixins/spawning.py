@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, MessageType
 
@@ -54,7 +55,17 @@ class SpawnPlaceholder:
         return f"<SpawnPlaceholder {self.name!r}>"
 
 
-class SpawnMixin:
+if TYPE_CHECKING:
+    from .host import SpawnHost
+
+    # Typing-only base: states what the host must provide, and is
+    # gone at runtime so the real MRO is exactly what it was.
+    _Host = SpawnHost
+else:
+    _Host = object
+
+
+class SpawnMixin(_Host):
     """Shared local-spawn behaviour. Mix into any ``Actor`` subclass."""
 
     # ── Public entry point ─────────────────────────────────────────────────
@@ -65,7 +76,7 @@ class SpawnMixin:
         *,
         register: bool = True,
         blocking_install: bool = False,
-    ) -> Actor | None:
+    ) -> Actor | SpawnPlaceholder | None:
         """Spawn one agent locally from a spawn-config dict.
 
         Parameters
@@ -246,7 +257,7 @@ class SpawnMixin:
 
     async def _spawn_dynamic_agent(
         self, config: dict, name: str, code: str, *, blocking_install: bool = False
-    ):
+    ) -> Actor | SpawnPlaceholder | None:
         """Spawn a DynamicAgent — sensors, pipelines, tools. If the config
         declares packages that aren't importable yet, either install in the
         background (default) and return a placeholder, or block until installed
@@ -533,14 +544,14 @@ class SpawnMixin:
         own_facts = getattr(self, "get_user_facts", None)
         if callable(own_facts):
             try:
-                return own_facts().get("pref_timezone")
+                return own_facts().get("pref_timezone")  # pyright: ignore[reportAttributeAccessIssue]
             except Exception:
                 return None
         if self._registry is not None:
             main = self._registry.find_by_name("main")
             if main is not None and hasattr(main, "get_user_facts"):
                 try:
-                    return main.get_user_facts().get("pref_timezone")
+                    return main.get_user_facts().get("pref_timezone")  # pyright: ignore[reportAttributeAccessIssue]
                 except Exception:
                     return None
         return None
@@ -561,7 +572,7 @@ class SpawnMixin:
             return
         main = self._registry.find_by_name("main")
         if main is not None and hasattr(main, "_save_to_spawn_registry"):
-            main._save_to_spawn_registry(config)
+            main._save_to_spawn_registry(config)  # pyright: ignore[reportAttributeAccessIssue]
             logger.info(
                 f"[{self.name}] Registered '{config.get('name')}' with main's spawn registry"
             )

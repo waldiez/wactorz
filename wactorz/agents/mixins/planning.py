@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from wactorz.llm_factory import provider_for
 
@@ -26,7 +26,17 @@ from ..helpers.main_actor_helpers import (
 logger = logging.getLogger(__name__)
 
 
-class PlanningMixin:
+if TYPE_CHECKING:
+    from .host import PlanningHost
+
+    # Typing-only base: states what the host must provide, and is
+    # gone at runtime so the real MRO is exactly what it was.
+    _Host = PlanningHost
+else:
+    _Host = object
+
+
+class PlanningMixin(_Host):
     """Plans, dry-run flow, and pipeline execution. Mix into an LLMAgent host."""
 
     def get_pipeline_rules(self) -> dict:

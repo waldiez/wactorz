@@ -10,8 +10,9 @@ Usage on the remote machine:
     pip install aiomqtt paho-mqtt psutil aiohttp --break-system-packages
     python3 remote_runner.py --broker 192.168.1.10 --name rpi-livingroom
 
-From the main Wactorz chat (automatic via devops-agent):
-    "deploy node rpi-livingroom to pi@192.168.1.50 with broker 192.168.1.10"
+From the main Wactorz chat (automatic, once the node is a configured deploy
+target — see DEPLOY_TARGETS in .env.template):
+    /deploy rpi-livingroom
 
 Or manually in the chat spawn block:
     <spawn>

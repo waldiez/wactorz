@@ -8,8 +8,19 @@ import importlib
 import logging
 import sys
 import time
+from pathlib import Path
 
+import asyncssh
+
+from ..config import (
+    CONFIG,
+    DeployTarget,
+    deploy_env_prefix,
+    deploy_target,
+    deploy_target_for_host,
+)
 from ..core.actor import Actor, Message, MessageType
+from ..core.paths import resolve_state_dir
 
 logger = logging.getLogger(__name__)
 
@@ -79,12 +90,16 @@ class InstallerAgent(Actor):
         super().__init__(**kwargs)
         self.protected = True
         self._install_log: list[dict] = []
+        # Serialises the read-then-append on the known-hosts file: two deploys
+        # to new hosts at once would otherwise both read "unknown" and race.
+        self._known_hosts_lock = asyncio.Lock()
 
     def _current_task_description(self) -> str:
         return "idle"
 
     async def on_start(self):
         logger.info(f"[{self.name}] Installer ready — using: {sys.executable}")
+        self._scrub_persisted_credentials()
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {
@@ -135,22 +150,22 @@ class InstallerAgent(Actor):
 
         if action == "node_install":
             # Install packages on a remote node via SSH
-            # payload: {host, user, packages, password (opt), key_path (opt)}
+            # payload: {host, packages}; SSH auth comes from the deploy target
             return await self._node_install(payload)
 
         if action == "node_deploy":
             # Full bootstrap: copy remote_runner.py + install deps + start runner
-            # payload: {host, user, node_name, broker, password (opt), key_path (opt)}
+            # payload: {host, node_name, broker}; SSH auth comes from the deploy target
             return await self._node_deploy(payload)
 
         if action == "node_install_for_agent":
             # Install packages needed by a specific agent on its remote node
-            # payload: {host, user, packages, agent_name, password (opt), key_path (opt)}
+            # payload: {host, packages, agent_name}; SSH auth comes from the deploy target
             return await self._node_install(payload)
 
         if action == "node_run":
             # Run an arbitrary command on a remote node via SSH
-            # payload: {host, user, command, password (opt), key_path (opt)}
+            # payload: {host, command}; SSH auth comes from the deploy target
             return await self._node_run(payload)
 
         return {"error": f"Unknown action: {action}"}
@@ -304,67 +319,150 @@ class InstallerAgent(Actor):
 
     # ── Remote node helpers (SSH via asyncssh) ──────────────────────────────
 
-    def _ssh_kwargs(self, payload: dict) -> dict:
-        """Build asyncssh connection kwargs from a task payload.
-        Falls back to persisted credentials from a previous node_deploy
-        so callers don't need to pass password/key_path every time.
+    def _resolve_ssh_target(self, payload: dict) -> DeployTarget | None:
+        """The configured deploy target a payload refers to, by node name or host.
+
+        ``node_install`` and ``node_run`` are handed a host rather than a node
+        name, so a host match is the fallback — otherwise every follow-up call
+        to an already-deployed node would have to repeat its credentials.
         """
-        host = payload["host"]
-        user = payload.get("user", "pi")
-        password = payload.get("password")
-        key_path = payload.get("key_path")
+        node_name = payload.get("node_name") or payload.get("node")
+        target = deploy_target(str(node_name)) if node_name else None
+        if target is None:
+            target = deploy_target_for_host(str(payload.get("host") or ""))
+        return target
 
-        # Fall back to persisted credentials if not in payload
-        # Try to find node_name from host
-        if not password and not key_path:
-            for _key in self._state.keys() if hasattr(self, "_state") else []:
-                pass
-            # Scan persisted node credentials by matching host
-            node_name = payload.get("node_name") or payload.get("node")
-            if not node_name:
-                # Try to find node by host
-                for k, v in (self.recall("_node_credentials") or {}).items():
-                    if v.get("host") == host:
-                        node_name = k
-                        break
-            if node_name:
-                creds = (self.recall("_node_credentials") or {}).get(node_name, {})
-                password = password or creds.get("password")
-                key_path = key_path or creds.get("key_path")
-                user = user or creds.get("user", "pi")
+    def _known_hosts_path(self) -> Path:
+        """Where learned SSH host keys live.
 
-        kwargs = {
+        Follows ``WACTORZ_STATE_DIR`` unless ``DEPLOY_KNOWN_HOSTS`` pins it, so
+        the add-on's ``/data/state`` keeps them across updates — a known-hosts
+        file that resets on every restart cannot detect a key change.
+        """
+        configured = CONFIG.deploy_known_hosts
+        if configured:
+            return Path(configured).expanduser()
+        return Path(resolve_state_dir()) / "known_hosts"
+
+    async def _known_hosts(self, host: str, port: int) -> str:
+        """Return the known-hosts path to verify ``host`` against, learning its key first.
+
+        Every SSH connection used to pass ``known_hosts=None``, which accepts
+        whatever key answers — so anything that could win the race for the
+        target's address on a LAN collected the SSH credentials.
+
+        Verification is now on. A host we have never seen has its key fetched
+        (``get_server_host_key`` does not authenticate, so no credential is at
+        risk) and recorded — trust on first use, as ssh(1) does interactively. A
+        host we *have* seen is never re-learned: the entry already there is what
+        asyncssh checks against, so a changed key fails the connection, which is
+        the case worth failing on. ``DEPLOY_STRICT_HOST_KEYS=1`` drops the
+        first-use step and requires the entry to be there already.
+        """
+        path = self._known_hosts_path()
+        async with self._known_hosts_lock:
+            try:
+                known = asyncssh.match_known_hosts(str(path), host, host, port)[0]
+            except FileNotFoundError:
+                known = []
+            if known:
+                return str(path)
+
+            if CONFIG.deploy_strict_host_keys:
+                raise PermissionError(
+                    f"Host key for {host}:{port} is not in {path} and "
+                    f"DEPLOY_STRICT_HOST_KEYS is set. Add the key with "
+                    f"`ssh-keyscan -p {port} {host} >> {path}` after verifying it."
+                )
+
+            key = await asyncssh.get_server_host_key(host, port)
+            if key is None:
+                raise PermissionError(f"{host}:{port} offered no SSH host key.")
+            entry = host if port == 22 else f"[{host}]:{port}"
+            line = f"{entry} {key.export_public_key('openssh').decode().strip()}\n"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+            # 0600: the file is the only record of which key we trust, so a
+            # writable-by-others copy would undo the check it exists to make.
+            path.chmod(0o600)
+            self._log_remote(
+                f"Learned SSH host key for {entry} ({key.get_fingerprint()}) — recorded in {path}"
+            )
+            return str(path)
+
+    async def _ssh_kwargs(self, payload: dict) -> dict:
+        """Build asyncssh connection kwargs for a task payload.
+
+        Credentials come from the configured deploy target and from nowhere
+        else. They used to be read out of the payload — which is message data,
+        so a chat line or an LLM-authored task could name a host and hand it a
+        password — and, failing that, out of ``_node_credentials`` in the
+        agent's persisted state, where the password sat in plaintext.
+        """
+        host = str(payload["host"])
+        target = self._resolve_ssh_target(payload)
+        if target is None:
+            raise PermissionError(
+                f"No deploy target configured for '{host}'. "
+                f"SSH credentials come from the environment (DEPLOY_TARGETS plus a "
+                f"DEPLOY_<NODE>_* block), not from the task payload."
+            )
+        if not target.key_path and not target.password:
+            raise PermissionError(
+                f"Deploy target '{target.name}' has no credentials. Set "
+                f"{deploy_env_prefix(target.name)}_KEY (preferred) or "
+                f"{deploy_env_prefix(target.name)}_PASSWORD."
+            )
+
+        kwargs: dict = {
             "host": host,
-            "username": user,
-            "known_hosts": None,  # disable host key checking for LAN deploys
+            "port": target.ssh_port,
+            "username": target.user,
+            "known_hosts": await self._known_hosts(host, target.ssh_port),
         }
-        if password:
-            kwargs["password"] = password
-        if key_path:
-            kwargs["client_keys"] = [key_path]
+        if target.key_path:
+            kwargs["client_keys"] = [target.key_path]
+        if target.password:
+            kwargs["password"] = target.password
         return kwargs
 
-    def _persist_node_credentials(
-        self,
-        node_name: str,
-        host: str,
-        user: str,
-        password: str | None = None,
-        key_path: str | None = None,
-    ):
-        """Store SSH credentials for a node so future connections don't need them passed explicitly."""
-        creds = self.recall("_node_credentials") or {}
-        creds[node_name] = {
-            "host": host,
-            "user": user,
-            "password": password or "",
-            "key_path": key_path or "",
-        }
-        self.persist("_node_credentials", creds)
-        # Also persist individually for backward compat with _spawn_remote lookups
+    def _persist_node_info(self, node_name: str, host: str, user: str) -> None:
+        """Remember where a deployed node lives — host and user, never a secret.
+
+        This used to store the SSH password alongside them so later connections
+        could reuse it, which put a live credential into the kv store (and into
+        every backup and reset dump of it). Credentials are resolved from the
+        environment at connect time instead, so there is nothing here worth
+        stealing.
+        """
+        nodes = self.recall("_node_credentials") or {}
+        nodes[node_name] = {"host": host, "user": user}
+        self.persist("_node_credentials", nodes)
+        # Kept for backward compat with _spawn_remote's lookups.
         self.persist(f"node_host_{node_name}", host)
         self.persist(f"node_user_{node_name}", user)
-        logger.info(f"[{self.name}] Persisted SSH credentials for node '{node_name}'")
+        logger.info(f"[{self.name}] Recorded node '{node_name}' at {user}@{host}")
+
+    def _scrub_persisted_credentials(self) -> None:
+        """Drop passwords and key paths written by earlier versions.
+
+        Upgrading is what removes the secret: nothing reads these fields any
+        more, so leaving them would keep a plaintext password in the kv store
+        for the life of the install.
+        """
+        nodes = self.recall("_node_credentials") or {}
+        cleaned = {
+            name: {"host": rec.get("host", ""), "user": rec.get("user", "pi")}
+            for name, rec in nodes.items()
+            if isinstance(rec, dict)
+        }
+        if cleaned != nodes:
+            self.persist("_node_credentials", cleaned)
+            logger.info(
+                f"[{self.name}] Removed stored SSH credentials for "
+                f"{len(cleaned)} node(s) — credentials now come from the environment"
+            )
 
     async def _ssh_run(self, conn, command: str) -> tuple[bool, str]:
         """Run a single command over an open SSH connection. Returns (ok, output)."""
@@ -386,16 +484,10 @@ class InstallerAgent(Actor):
 
         payload keys:
           host      — IP or hostname of the remote machine
-          user      — SSH username (default: "pi")
           packages  — list of package names to install
-          password  — SSH password (optional, prefer key auth)
-          key_path  — path to SSH private key (optional)
-        """
-        try:
-            import asyncssh
-        except ImportError:
-            return {"error": "asyncssh not installed. Run: pip install asyncssh"}
 
+        SSH auth is not a payload key — see _ssh_kwargs.
+        """
         host = payload.get("host")
         packages = payload.get("packages", [])
         if isinstance(packages, str):
@@ -409,7 +501,7 @@ class InstallerAgent(Actor):
         self._log_remote(f"Installing {pkg_str} on {host}...")
 
         try:
-            async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
+            async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
                 # Detect the right pip to use:
                 # 1. Venv at ~/wactorz/venv (created by node_deploy) — always prefer this
                 # 2. Fall back to python3 -m pip with --break-system-packages
@@ -465,26 +557,36 @@ class InstallerAgent(Actor):
 
         payload keys:
           host       — IP or hostname
-          user       — SSH username (default: "pi")
           node_name  — name this node will use (default: "remote-node")
           broker     — MQTT broker host reachable FROM the Pi (default: "localhost")
-          password   — SSH password (optional)
-          key_path   — path to SSH private key (optional)
           port       — MQTT broker port (default: 1883)
-        """
-        try:
-            import asyncssh
-        except ImportError:
-            return {"error": "asyncssh not installed. Run: pip install asyncssh"}
 
+        SSH auth is not a payload key: the user and credentials come from the
+        node's configured deploy target (see _ssh_kwargs).
+        """
         host = payload.get("host")
-        user = payload.get("user", "pi")
         node_name = payload.get("node_name", "remote-node")
         broker = payload.get("broker", "localhost")
         mqtt_port = payload.get("port", 1883)
 
         if not host:
             return {"error": "Missing 'host' in payload"}
+
+        target = self._resolve_ssh_target(payload)
+        if target is None:
+            return {
+                "success": False,
+                "node_name": node_name,
+                "host": host,
+                "error": (
+                    f"No deploy target configured for '{node_name}' ({host}). "
+                    f"Set DEPLOY_TARGETS and the {deploy_env_prefix(node_name)}_* block."
+                ),
+            }
+        # The target's user is authoritative — the remote paths below are built
+        # from it, so taking it from the payload would let a caller write the
+        # runner into a different account than the one it authenticates as.
+        user = target.user
 
         # Find remote_runner.py relative to this file
         import pathlib
@@ -501,7 +603,7 @@ class InstallerAgent(Actor):
         self._log_remote(f"Deploying node '{node_name}' to {user}@{host}...")
 
         try:
-            async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
+            async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
                 # 1. Create directory
                 await self._ssh_run(conn, "mkdir -p ~/wactorz")
                 self._log_remote(f"[{node_name}] Directory created.")
@@ -544,14 +646,8 @@ class InstallerAgent(Actor):
             self._log_remote(
                 f"[{node_name}] Deploy complete! Node will appear in /nodes within 15s."
             )
-            # Persist SSH credentials so future installs don't need them passed again
-            self._persist_node_credentials(
-                node_name=node_name,
-                host=host,
-                user=user,
-                password=payload.get("password"),
-                key_path=payload.get("key_path"),
-            )
+            # Record where the node lives; credentials stay in the environment.
+            self._persist_node_info(node_name=node_name, host=host, user=user)
             return {
                 "success": True,
                 "node_name": node_name,
@@ -573,15 +669,10 @@ class InstallerAgent(Actor):
 
         payload keys:
           host     — IP or hostname
-          user     — SSH username (default: "pi")
           command  — shell command to run
-          password / key_path — auth (optional)
-        """
-        try:
-            import asyncssh
-        except ImportError:
-            return {"error": "asyncssh not installed. Run: pip install asyncssh"}
 
+        SSH auth is not a payload key — see _ssh_kwargs.
+        """
         host = payload.get("host")
         command = payload.get("command", "echo hello")
         if not host:
@@ -589,7 +680,7 @@ class InstallerAgent(Actor):
 
         self._log_remote(f"Running on {host}: {command[:80]}")
         try:
-            async with asyncssh.connect(**self._ssh_kwargs(payload)) as conn:
+            async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
                 ok, output = await self._ssh_run(conn, command)
                 return {
                     "success": ok,

@@ -17,6 +17,7 @@ from aiohttp import web
 from aiohttp.web import Response
 
 from ..agents.main_actor import MainActor
+from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from . import runtime
@@ -157,72 +158,48 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
 # MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
 
 
-async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, reply_fn) -> None:
-    """Install and start a remote runner on ``host`` over SSH, streaming progress."""
+async def slash_deploy(node: str, reply_fn) -> None:
+    """Install and start a remote runner on the configured target for ``node``.
+
+    Everything about the target — host, user, SSH auth, broker — comes from the
+    environment (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). This used
+    to accept ``host``/``user``/``password`` as chat arguments and, when no host
+    was given, port-scan the local /24 for SSH. Both are gone: the scan turned a
+    chat message into a LAN sweep, and the password argument put a live
+    credential into the reply stream and the persisted conversation history.
+    """
+    target = deploy_target(node)
+    if target is None:
+        await reply_fn("[error] " + deploy_target_help(node))
+        return
+
+    host = target.host
     if not host:
-        await reply_fn(f"[discover] Searching for '{node}' on the network...")
-        discovered = None
-        for candidate in [f"{node}.local", "raspberrypi.local", f"{node.replace('-', '')}.local"]:
-            try:
-                ip = await asyncio.get_event_loop().run_in_executor(
-                    None, socket.gethostbyname, candidate
-                )
-                discovered = ip
-                await reply_fn(f"[discover] Found via mDNS: {candidate} → {ip}")
-                break
-            except socket.gaierror:
-                pass
-
-        if not discovered:
-            try:
-                local_ip = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: socket.gethostbyname(socket.gethostname())
-                )
-                subnet = ".".join(local_ip.split(".")[:3])
-            except Exception:
-                subnet = "192.168.1"
-            await reply_fn(f"[discover] mDNS not found. Scanning {subnet}.1-254 for SSH...")
-            found = await _scan_subnet_ssh(subnet)
-            if found:
-                hosts = "\n".join(f"  {ip}" for ip in found)
-                await reply_fn(
-                    f"[discover] Found {len(found)} host(s):\n{hosts}\n\n"
-                    f"Re-run with:\n  /deploy {node} <host> <user> <password> [broker]"
-                )
-            else:
-                await reply_fn(
-                    f"[discover] No SSH hosts found.\n"
-                    f"  /deploy {node} <host> <user> <password> [broker]"
-                )
-        else:
+        # No host configured — resolve <node>.local. A name lookup, not a sweep:
+        # it asks about one host and learns nothing about any other.
+        await reply_fn(f"[discover] No host configured for '{node}' — trying mDNS...")
+        host = await _resolve_mdns(node) or ""
+        if not host:
             await reply_fn(
-                f"[discover] Host: {discovered}\n"
-                f"Re-run with credentials:\n"
-                f"  /deploy {node} {discovered} <user> <password> [broker]"
+                f"[error] Could not resolve '{node}.local'.\n"
+                f"Set {deploy_env_prefix(node)}_HOST in your environment."
             )
-        return
-
-    if not user or not pw:
-        await reply_fn(
-            f"[deploy] Need SSH credentials:\n  /deploy {node} {host} <user> <password> [broker]"
-        )
-        return
+            return
+        await reply_fn(f"[discover] Found via mDNS: {node}.local → {host}")
 
     main_actor = find_main()
     if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
         await reply_fn("[error] Installer agent not available.")
         return
 
-    broker = broker or "localhost"
-    await reply_fn(f"[deploy] Deploying to {user}@{host} as '{node}'... (20-60s)")
+    await reply_fn(f"[deploy] Deploying to {target.user}@{host} as '{node}'... (20-60s)")
     result = await main_actor.delegate_to_installer(
         {
             "action": "node_deploy",
             "host": host,
-            "user": user,
-            "password": pw,
-            "node_name": node,
-            "broker": broker,
+            "node_name": target.name,
+            "broker": target.broker or "localhost",
+            "port": target.broker_port,
         },
         timeout=120.0,
     )
@@ -233,25 +210,14 @@ async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, re
         await reply_fn(f"[FAIL] {result.get('error', result)}")
 
 
-async def _scan_subnet_ssh(subnet: str) -> list:
-    found = []
-    sem = asyncio.Semaphore(60)
-
-    async def probe(ip):
-        async with sem:
-            try:
-                _, w = await asyncio.wait_for(asyncio.open_connection(ip, 22), timeout=0.4)
-                w.close()
-                try:
-                    await w.wait_closed()
-                except Exception:
-                    pass
-                found.append(ip)
-            except Exception:
-                pass
-
-    await asyncio.gather(*[probe(f"{subnet}.{i}") for i in range(1, 255)])
-    return sorted(found, key=lambda x: int(x.split(".")[-1]))
+async def _resolve_mdns(node: str) -> str | None:
+    """Resolve ``<node>.local``, or None. Off the loop — a miss blocks for the
+    resolver's full timeout, which would freeze every actor in the process.
+    """
+    try:
+        return await asyncio.to_thread(socket.gethostbyname, f"{node}.local")
+    except OSError:
+        return None
 
 
 async def handle_slash(text: str, reply_fn) -> bool:
@@ -314,19 +280,67 @@ async def handle_slash(text: str, reply_fn) -> bool:
 
     if cmd == "/deploy":
         if len(parts) < 2:
-            await reply_fn("[usage] /deploy <node-name> [host [user [password [broker]]]]")
+            names = deploy_target_names()
+            listing = "\n".join(f"  {n}" for n in names) or "  (none configured)"
+            await reply_fn(f"[usage] /deploy <node-name>\nConfigured targets:\n{listing}")
             return True
-        await slash_deploy(
-            node=parts[1],
-            host=parts[2] if len(parts) > 2 else "",
-            user=parts[3] if len(parts) > 3 else "",
-            pw=parts[4] if len(parts) > 4 else "",
-            broker=parts[5] if len(parts) > 5 else "",
-            reply_fn=reply_fn,
-        )
+        if len(parts) > 2:
+            # The old form took host/user/password/broker here. Refuse without
+            # echoing the extra words back — parts[3:] may be a live password,
+            # and the reply is persisted into conversation history.
+            await reply_fn(
+                "[error] /deploy takes a node name only — host and SSH credentials "
+                "now come from the environment, not from chat.\n\n" + deploy_target_help(parts[1])
+            )
+            return True
+        await slash_deploy(node=parts[1], reply_fn=reply_fn)
         return True
 
     return False
+
+
+#: Correlation id → the queue waiting for that request's RESULT. One entry per
+#: in-flight chat turn; the interceptor below routes by this rather than
+#: assuming there is only ever one.
+_PENDING_REPLIES: dict[str, asyncio.Queue] = {}
+
+
+def _install_reply_capture(target: Any) -> None:
+    """Teach an agent's ``send`` to hand RESULTs back to the waiting chat turn.
+
+    Agents reply to ``msg.reply_to or msg.sender_id``, and a chat turn is not a
+    real actor, so the reply has nowhere to go unless it is intercepted.
+
+    Installed **once per agent and never removed**. It used to be patched in and
+    restored around each turn, which broke under two concurrent turns to the
+    same agent: the second saved the first's interceptor as "the original", the
+    first restored the real method — so the second's replies stopped being
+    captured — and the second then restored the first's interceptor, leaving
+    the agent permanently sending its results into an abandoned queue.
+
+    Correlating by id also fixes the other half: the old interceptor captured
+    *any* RESULT, so a reply meant for one turn could be handed to another.
+    """
+    if getattr(target, "_io_gateway_capture_installed", False):
+        return
+    original_send = target.send
+
+    async def _capture_send(
+        target_id: str,
+        msg_type: MessageType,
+        payload: Any = None,
+        **kw: Any,
+    ) -> bool:
+        if msg_type == MessageType.RESULT:
+            queue = _PENDING_REPLIES.get(target_id)
+            if queue is not None:
+                await queue.put(payload)
+                return True
+            # Not for a chat turn — an ordinary actor-to-actor result.
+        return await original_send(target_id, msg_type, payload, **kw)
+
+    target.send = _capture_send
+    target._io_gateway_capture_installed = True
 
 
 async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None):
@@ -509,27 +523,19 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             await _end_fn()
             return
 
-        # All other message-passing agents: intercept send() to capture RESULT
-        reply_queue = asyncio.Queue()
-        original_send = target.send  # save so we can restore
-
-        async def _capture_send(
-            target_id: str,
-            msg_type: MessageType,
-            payload: Any = None,
-            **kw: Any,
-        ) -> bool:
-            if msg_type == MessageType.RESULT:
-                await reply_queue.put(payload)
-                return True
-            return await original_send(target_id, msg_type, payload, **kw)
-
-        target.send = _capture_send
+        # All other message-passing agents: intercept send() to capture the
+        # RESULT, since it is addressed to a correlation id rather than a real
+        # actor. The interceptor is installed once per agent and correlates by
+        # that id; it is never swapped back.
+        correlation_id = f"io-gateway:{uuid.uuid4().hex[:12]}"
+        reply_queue: asyncio.Queue = asyncio.Queue()
+        _install_reply_capture(target)
+        _PENDING_REPLIES[correlation_id] = reply_queue
         try:
             msg = Message(
                 type=MessageType.TASK,
-                sender_id="io-gateway",
-                reply_to="io-gateway",
+                sender_id=correlation_id,
+                reply_to=correlation_id,
                 payload={"text": text},
             )
             await target.handle_message(msg)
@@ -559,7 +565,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             logger.error(msg, exc_info=True)
             await reply_fn(f"[error] {target.name}: {exc}")
         finally:
-            target.send = original_send  # always restore
+            _PENDING_REPLIES.pop(correlation_id, None)
             await _end_fn()
 
 

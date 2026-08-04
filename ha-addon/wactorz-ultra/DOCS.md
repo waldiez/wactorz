@@ -40,6 +40,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `telegram_allowed_user_ids` | *(blank)* | **Required with the token** — comma-separated Telegram user IDs. Without it the bot only answers `/start` with your user ID, so you can fill this in and restart. |
 | `telegram_allowed_user_id` | `0` | Older single-ID form of the above; still honoured. `0` means unset. |
 | `social_rate_limit_per_min` | `12` | Max messages per minute per sender on the bots. `0` disables the limit. |
+| `deploy_targets` | *(empty)* | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects — see [Remote edge nodes](#remote-edge-nodes) below. |
 | `otel_endpoint` | *(blank)* | OTLP HTTP collector URL (e.g. `http://192.168.1.10:4318`). Leave blank to disable OpenTelemetry. |
 | `otel_service_name` | `wactorz` | Service name reported to the OTLP collector. |
 | `influx_url` | *(blank)* | InfluxDB 2.x base URL (e.g. `http://homeassistant:8086`). Leave blank to disable. `wactorz[influx]` is installed automatically when set. |
@@ -53,6 +54,36 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 > domains like `shell_command`, `python_script` or `hassio` — use the dashboard for those. The
 > allow-lists are required because a bot that answers strangers would let them control your home
 > and spend your LLM budget.
+
+## Remote edge nodes
+
+Wactorz can bootstrap a Raspberry Pi or other machine as an edge node over SSH, running agents there that appear in the dashboard alongside local ones. The machines it may connect to are listed in `deploy_targets`, and each entry carries its own credentials:
+
+```yaml
+deploy_targets:
+  - name: rpi-kitchen
+    host: 192.168.1.50
+    user: pi
+    key: /config/ssh/rpi_kitchen      # preferred over a password
+    broker: 192.168.1.10              # broker address as seen FROM the Pi
+  - name: rpi-garage
+    host: 192.168.1.51
+    user: pi
+    password: "…"                     # only if the node has no key auth
+    broker: 192.168.1.10
+```
+
+Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`) and `ssh_port` (default `22`).
+
+Private keys go under `/config` or `/share` — both are mapped into the addon — and the path is given as the addon sees it, e.g. `/config/ssh/rpi_kitchen`. Then, from the chat:
+
+```
+/deploy rpi-kitchen
+```
+
+> **Credentials never go through chat.** `/deploy` takes a node name and nothing else, and the installer ignores credentials supplied in a task payload. Anything typed into chat is written to the conversation history and the chat log, where it stays long after the deploy finished.
+
+SSH host keys are verified. A machine that has not been connected to before has its key recorded on first contact (stored under `/data/state/known_hosts`, which survives addon updates); a later change to that key fails the connection instead of being accepted silently.
 
 ## MQTT
 

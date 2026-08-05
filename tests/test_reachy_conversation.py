@@ -1257,5 +1257,83 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.state["_facing_body_yaw_deg"], 155.0)
 
 
+class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
+    """A reply is spoken as several says, so stopping has to span all of them."""
+
+    REPLY = (
+        "The kitchen light is now on and set to warm white. "
+        "I also turned off the lamp in the hallway for you. "
+        "Let me know if you want anything else changed today."
+    )
+
+    def setUp(self):
+        self.assertEqual(len(NS["_speech_chunks"](self.REPLY)), 3)
+
+    async def test_shutup_during_a_sentence_drops_the_rest_of_the_reply(self):
+        agent = FakeAgent()
+        agent.state["stop_speaking"] = False
+        said = []
+
+        async def fake_say(_agent, payload):
+            said.append(payload["text"])
+            if not payload.get("_continuation"):
+                # Mirrors _say: a fresh utterance clears a stale stop request.
+                _agent.state["stop_speaking"] = False
+            if len(said) == 1:
+                # The user says "shut up" while the first sentence is playing.
+                _agent.state["stop_speaking"] = True
+            return {
+                "said": payload["text"],
+                "interrupted": False,
+                "stopped": bool(_agent.state.get("stop_speaking")),
+            }
+
+        with mock.patch.dict(NS, {"_say": fake_say}):
+            result = await NS["_speak_reply"](agent, self.REPLY, await_playback=True)
+
+        # Only the sentence that was already playing — not the whole bubble.
+        self.assertEqual(len(said), 1)
+        self.assertTrue(result["stopped"])
+        self.assertFalse(result["interrupted"])
+
+    async def test_a_reply_is_not_silenced_by_a_stop_from_the_previous_turn(self):
+        # The stale-clear still has to happen once per reply, or a 'shutup' would
+        # leave the robot mute for the next thing it is asked to say.
+        agent = FakeAgent()
+        agent.state["stop_speaking"] = True
+        said = []
+
+        async def fake_say(_agent, payload):
+            said.append(payload["text"])
+            return {
+                "said": payload["text"],
+                "interrupted": False,
+                "stopped": bool(_agent.state.get("stop_speaking")),
+            }
+
+        with mock.patch.dict(NS, {"_say": fake_say}):
+            result = await NS["_speak_reply"](agent, self.REPLY, await_playback=True)
+
+        self.assertEqual(len(said), 3)
+        self.assertFalse(result["stopped"])
+
+    async def test_the_gap_between_sentences_is_shorter_than_between_replies(self):
+        agent = FakeAgent()
+        pads = []
+
+        async def fake_say(_agent, payload):
+            pads.append(payload.get("tail_pad"))
+            return {"said": payload["text"], "interrupted": False, "stopped": False}
+
+        with mock.patch.dict(NS, {"_say": fake_say}):
+            await NS["_speak_reply"](agent, self.REPLY, await_playback=True)
+
+        # Short gap mid-reply; the last chunk keeps _say's own default, which
+        # separates the answer from whatever comes next.
+        self.assertEqual(pads[:-1], [NS["_CHUNK_TAIL_PAD"]] * 2)
+        self.assertIsNone(pads[-1])
+        self.assertLess(NS["_CHUNK_TAIL_PAD"], 0.55)
+
+
 if __name__ == "__main__":
     unittest.main()

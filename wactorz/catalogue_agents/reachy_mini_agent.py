@@ -1714,6 +1714,13 @@ def _voice_friendly_reply(text, limit=None, user_text=""):
     return value[:cut + 1].rstrip() + " I've put the rest in Wactorz chat."
 
 
+# Gap between the sentences of one spoken reply. The wait before it already
+# covers the utterance's measured duration, so this is only margin for daemon
+# start/stop latency; the 0.55s used between separate utterances reads as a
+# stall when it lands between two sentences of the same answer.
+_CHUNK_TAIL_PAD = 0.15
+
+
 def _speech_chunks(text, max_chars=180):
     """Split spoken text at sentence boundaries for quicker TTS startup."""
     import re as _re
@@ -1740,20 +1747,35 @@ def _speech_chunks(text, max_chars=180):
 async def _speak_reply(agent, text, *, await_playback=False, session=None):
     """Speak a voice-friendly answer in chunks and preserve a barged-in turn."""
     chunks = _speech_chunks(text) if await_playback else [text]
-    spoken, interrupted = [], False
-    for chunk in chunks:
-        result = await _say(agent, {
+    # Once per reply, not once per sentence: a 'shutup' during any chunk has to
+    # survive into the next one, or it only silences the sentence in progress.
+    agent.state["stop_speaking"] = False
+    spoken, interrupted, stopped = [], False, False
+    for index, chunk in enumerate(chunks):
+        last = index == len(chunks) - 1
+        payload = {
             "text": chunk,
             "await_playback": await_playback,
             "_barge_in_session": session,
-        })
+            "_continuation": index > 0,
+        }
+        if not last:
+            # Mid-reply the gap is heard as a pause in one answer, so it only has
+            # to cover daemon latency. The full pad stays on the final chunk,
+            # where it separates the answer from whatever follows it.
+            payload["tail_pad"] = _CHUNK_TAIL_PAD
+        result = await _say(agent, payload)
         spoken.append(chunk)
         if result.get("interrupted"):
             interrupted = True
             break
+        if result.get("stopped"):
+            stopped = True
+            break
     return {
         "spoke": bool(spoken),
         "interrupted": interrupted,
+        "stopped": stopped,
         "spoken_result": " ".join(spoken).strip(),
     }
 
@@ -2945,7 +2967,11 @@ async def _say(agent, payload):
             play_path = boosted
 
     # Clear any stale 'shutup' request from a previous utterance before we start.
-    agent.state["stop_speaking"] = False
+    # NOT for a continuation chunk: the sentences of one reply are separate says,
+    # so clearing here let a 'shutup' silence the sentence being spoken and then
+    # play the rest of the reply anyway. _speak_reply clears once per reply.
+    if not payload.get("_continuation"):
+        agent.state["stop_speaking"] = False
 
     # -- Play through the robot's speaker (non-blocking GStreamer playbin) --
     await _do(media.play_sound, play_path)
@@ -2970,9 +2996,11 @@ async def _say(agent, payload):
             await agent.log(f"barge-in unavailable for this utterance: {e}",
                             level="warning")
     waited = 0.0
+    stopped = False
     try:
         while waited < pad:
             if agent.state.get("stop_speaking"):
+                stopped = True
                 break
             if monitor is not None and monitor[1].is_set():
                 interrupted = True
@@ -3003,6 +3031,9 @@ async def _say(agent, payload):
 
     return {"said": text, "voice": voice, "trim_db": trim_db,
             "interrupted": interrupted,
+            # Explicit 'shutup'/'stop', as opposed to `interrupted` (the user
+            # talking over Reachy). The caller must stop feeding it sentences.
+            "stopped": stopped,
             "duration_s": round(speech_seconds, 2),
             "volume_level": agent.state.get("volume_level", 100),
             "boosted": play_path != raw_path,
@@ -4524,7 +4555,8 @@ async def _conversation_embodied_bridge(
         )
     except Exception as e:
         speech_error = str(e)
-        speech = {"spoke": False, "interrupted": False, "spoken_result": ""}
+        speech = {"spoke": False, "interrupted": False, "stopped": False,
+                  "spoken_result": ""}
         await agent.log(f"local acknowledgement failed: {e}", level="warning")
     return {
         "ok": bool(action and action.get("ok")),

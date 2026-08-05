@@ -20,16 +20,30 @@
 import type { AgentInfo } from "../types/agent";
 import { safeStorage } from "../safeStorage";
 import type { FeedItem } from "../types/feed";
-import { buildHeader, buildBottomNav, setHaNavUrl } from "./dashboard/header";
+import {
+    buildHeader,
+    buildBottomNav,
+    setHaNavUrl,
+    releaseHeaderPopovers,
+    releaseBottomNav,
+} from "./dashboard/header";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
 import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
+import type { AgentAction } from "./dashboard/cards";
 import { MetricsController } from "./dashboard/metrics";
 import { seedServerConfig } from "../config/serverConfig";
 import { emit, listen } from "../events";
+
+/**
+ * How long a remote node may go unheard before it is forgotten entirely.
+ * Deliberately far beyond `STALE_MS`, which only decides whether the nodes panel
+ * draws a node as offline — that state is worth showing for a good while.
+ */
+export const NODE_EVICT_MS = STALE_MS * 10;
 
 export class CardDashboard {
     private root: HTMLElement;
@@ -145,6 +159,8 @@ export class CardDashboard {
     /** Hide and remove the dashboard from the DOM. */
     destroy(): void {
         this.hide();
+        releaseHeaderPopovers();
+        releaseBottomNav();
         this.root.remove();
     }
 
@@ -228,7 +244,17 @@ export class CardDashboard {
 
     /** Record a remote node's agent list and refresh the nodes panel. */
     updateRemoteNode(name: string, agents: string[]): void {
-        this._remoteNodes.set(name, { agents, lastSeen: Date.now() });
+        const now = Date.now();
+        this._remoteNodes.set(name, { agents, lastSeen: now });
+        // Nodes announce themselves and never say goodbye, so without this the
+        // map only ever grows. Going quiet is not enough to be dropped — the
+        // panel renders quiet nodes as offline, which is information — but a
+        // node absent this long is gone, not offline.
+        for (const [node, info] of this._remoteNodes) {
+            if (node !== name && now - info.lastSeen > NODE_EVICT_MS) {
+                this._remoteNodes.delete(node);
+            }
+        }
         if (this.view === "overview") {
             this._overview.renderNodes();
         }
@@ -443,11 +469,7 @@ export class CardDashboard {
         el.textContent = `${healthy}/${agents.length} wactorz healthy`;
     }
 
-    private _sendCommand(
-        id: string,
-        action: "pause" | "resume" | "stop" | "delete",
-        btn?: HTMLButtonElement,
-    ): void {
+    private _sendCommand(id: string, action: AgentAction, btn?: HTMLButtonElement): void {
         if (btn) {
             btn.disabled = true;
             btn.classList.add("sending");
@@ -496,6 +518,9 @@ export class CardDashboard {
         const haUrl = this.haUrl;
 
         if (oldHeader) {
+            // The header's popovers sit on document.body, so replacing the
+            // header does not remove them or their outside-click listeners.
+            releaseHeaderPopovers();
             const newHeader = buildHeader({
                 view: this.view,
                 connState: this.connState,

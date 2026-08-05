@@ -28,6 +28,7 @@ import { AgentStore } from "./agents/AgentStore";
 import { ServerEventRouter } from "./io/ServerEventRouter";
 import { IOManager } from "./io/IOManager";
 import { log } from "./io/logger";
+import { createOutageTracker } from "./io/outage";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
@@ -68,9 +69,8 @@ import { createDeletionGuard } from "./agents/deletionGuard";
 //   1. HA addon       — __WACTORZ_INGRESS_PATH is injected by the Python
 //                       server when the page is served behind HA's ingress
 //                       proxy (e.g. /api/hassio_ingress/<slug>).
-//   2. Direct browser / pywebview desktop — the monitor server serves this
-//                       page, so relative URLs resolve correctly. The desktop
-//                       shell loads http://127.0.0.1:<port>, i.e. same-origin.
+//   2. Direct browser — the monitor server serves this page itself, so
+//                       relative URLs resolve correctly.
 //
 // Never use window.location.host to build absolute URLs: inside the HAOS
 // webview that host is the HA instance itself, not the addon backend.
@@ -107,10 +107,20 @@ function reportGlobalError(context: string, detail: unknown): void {
         message: "Something went wrong — see the console for details.",
     });
 }
-window.addEventListener("error", e => reportGlobalError("uncaught", e.error ?? e.message));
+window.addEventListener("error", e => {
+    // Scripts injected from another origin (browser extensions, an embedding
+    // webview's JS bridge) report as an opaque "Script error." with no error
+    // object, filename or line — nothing anyone can act on. Toasting those
+    // blames the app for someone else's script, so only report real page errors.
+    if (!e.error && !e.filename) {
+        return;
+    }
+    reportGlobalError("uncaught", e.error ?? e.message);
+});
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
 const agentStore = new AgentStore();
+agentStore.mount();
 const router = new ServerEventRouter();
 const ioManager = new IOManager(router);
 const ws = new WSClient();
@@ -134,6 +144,7 @@ let _feedLive = false;
 let liveSyncInFlight = false;
 // Seed only once — reconnects must not re-add already-known agents.
 let seeded = false;
+const actorOutage = createOutageTracker();
 
 // ═══ 3 · Helpers ═════════════════════════════════════════════════════════════
 
@@ -153,13 +164,19 @@ function refreshLiveActors(): void {
     fetch(`${_apiBase}/api/actors`, { signal: ctrl.signal })
         .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
         .then((actors: AgentInfo[]) => {
+            actorOutage.recordSuccess();
             agentStore.reconcileAgents(reconcileActorList(actors, isDeleted));
             log.info(`[Dashboard] reconciled ${actors.length} live actors from REST`);
         })
         .catch(err => {
             // Dev mode without a running server is expected; log at debug so a
-            // genuine backend failure still leaves a trace.
+            // genuine backend failure still leaves a trace. A run of them is not
+            // routine, so say that once, at a level that survives a production
+            // build.
             log.debug("[Dashboard] live actor refresh failed:", err);
+            if (actorOutage.recordFailure()) {
+                log.warn("[Dashboard] backend unreachable — live actor list is stale");
+            }
         })
         .finally(() => {
             window.clearTimeout(timer);
@@ -392,6 +409,9 @@ router.on("raw", ({ topic, payload }) => {
 
 // Streaming reply finished — notify
 listen("af-stream-end", detail => {
+    if (!detail) {
+        return;
+    }
     const { text, from } = detail;
     if (!text) {
         return;
@@ -446,14 +466,19 @@ const _liveActorsTimer = window.setInterval(() => {
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).
 fetch(`${_apiBase}/api/feed`)
-    .then(r => (r.ok ? r.json() : []))
+    // Reject rather than substitute []: a 500 became "no history" indistinguishable
+    // from an empty log, silently and with nothing written anywhere.
+    .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
     .then(
         (items: { type: string; label: string; agentName: string; timestamp?: number; role?: string }[]) => {
             log.info("[feed] /api/feed seed:", items.length, "items");
             items.forEach(item => pushFeed(feedSeedItem(item)));
         },
     )
-    .catch(err => log.debug("[feed] /api/feed seed failed:", err));
+    // warn, not debug: this runs once, so there is no run of failures to
+    // escalate from, and the user-visible result is an empty feed with no
+    // explanation. debug is dropped in a production build.
+    .catch(err => log.warn("[feed] /api/feed seed failed — feed starts empty:", err));
 
 // The HA URL is seeded from /api/config at startup (see config/serverConfig.ts);
 // the Devices nav link reads it from safeStorage. No token ever reaches the
@@ -477,8 +502,26 @@ seedServerConfig()
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 
-window.addEventListener("beforeunload", () => {
+let _tornDown = false;
+
+function teardown(): void {
+    if (_tornDown) {
+        return;
+    }
+    _tornDown = true;
     window.clearInterval(_liveActorsTimer);
     ws.disconnect();
     agentStore.dispose();
+}
+
+// `beforeunload` does not fire reliably on mobile, where a page is more often
+// frozen than unloaded — so the socket was left for the server to time out.
+// `pagehide` does fire, and its `persisted` flag distinguishes the two: a
+// frozen page may be restored from the bfcache and must keep working, so only
+// a real unload tears down. Both paths land in the same idempotent function.
+window.addEventListener("pagehide", e => {
+    if (!e.persisted) {
+        teardown();
+    }
 });
+window.addEventListener("beforeunload", teardown);

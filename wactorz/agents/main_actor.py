@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import uuid
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
@@ -27,6 +27,7 @@ from .mixins import (
     SpawnMixin,
     SpawnPlaceholder,
 )
+from .one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from .prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
 )
@@ -568,7 +569,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     "  /agents <keyword>       — filter agents by capability keyword",
                     "  /capabilities           — alias for /agents",
                     "  /delete <agent>         — stop an agent and remove it from the spawn registry",
-                    "  /stop <agent>           — alias of /delete",
+                    "  /stop <agent>           — stop an agent, keeping its state (reversible)",
+                    "  /start <agent>          — start a stopped agent back up",
                     "  /pause <agent>          — pause a local agent (remote not supported)",
                     "  /resume <agent>         — resume a paused local agent",
                     "  @agent-name <msg>       — send a message directly to a named agent",
@@ -922,10 +924,14 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # topics, so these only affect LOCAL agents. For remote agents we tell
         # the user honestly and suggest /stop instead.
         for _cmd, _verb, _new_state in (
+            ("/start ", "start", ActorState.RUNNING),
             ("/pause ", "pause", ActorState.PAUSED),
             ("/resume ", "resume", ActorState.RUNNING),
         ):
-            if stripped.startswith(_cmd):
+            # Both spellings: `text` is already stripped, so a bare "/pause"
+            # never matched the prefix form and fell through to the LLM — the
+            # usage hint below could not be reached at all.
+            if stripped == _cmd.strip() or stripped.startswith(_cmd):
                 agent_name = stripped[len(_cmd) :].strip()
                 if not agent_name:
                     return note_prefix + f"Usage: {_cmd.strip()} <agent-name>"
@@ -954,17 +960,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     return note_prefix + (
                         f"Agent '{agent_name}' is not paused (state: {target.state.name})."
                     )
+                if _verb == "start" and target.state != ActorState.STOPPED:
+                    return note_prefix + (
+                        f"Agent '{agent_name}' is not stopped (state: {target.state.name})."
+                    )
 
                 try:
-                    if _verb == "pause":
-                        await target.pause()
-                    else:
-                        await target.resume()
+                    # apply_command rather than target.pause()/resume(): it is the
+                    # one place the lifecycle rules live, including refusing to
+                    # pause a protected agent — which this path did not check —
+                    # and putting a started agent back under supervision.
+                    applied = await target.apply_command(_verb)
                 except Exception as exc:
                     logger.exception(f"[main] /{_verb} failed for '{agent_name}'")
                     return note_prefix + f"Failed to {_verb} '{agent_name}': {exc}"
 
-                return note_prefix + f"Agent '{agent_name}' {_verb}d."
+                if not applied:
+                    return note_prefix + f"'{agent_name}' refused {_verb} (it may be protected)."
+                _past = {"start": "started", "pause": "paused", "resume": "resumed"}[_verb]
+                return note_prefix + f"Agent '{agent_name}' {_past}."
 
         # ── /agents stop|delete|pause|remove <name> ─────────────────────────
         # NOTE: stop and pause are reversible (state preserved, spawn registry
@@ -1018,9 +1032,17 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 if self._registry:
                     target = self._registry.find_by_name(agent_name)
                     if target:
-                        actor_id = target.actor_id
-                        await self._registry.unregister(actor_id)
-                        await target.stop()
+                        # apply_command, not stop(): this ran stop() for *both*
+                        # verbs, so `/agents pause` stopped the agent and then
+                        # reported it paused. It also skipped the supervision
+                        # release, which makes a deliberate stop look like a
+                        # crash to the watchdog, and unregistered before
+                        # stopping, leaving the actor unreachable while it was
+                        # still shutting down.
+                        if not await target.apply_command(verb):
+                            return note_prefix + (
+                                f"'{agent_name}' refused {verb} (it may be protected)."
+                            )
                         self._record_agent_deletion(
                             agent_name, reason=f"manually {past} via /agents"
                         )
@@ -1050,8 +1072,13 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             if self._registry:
                 target = self._registry.find_by_name(agent_name)
                 if target:
+                    # Release from supervision and stop *before* unregistering.
+                    # Stopping a still-supervised actor looks like a crash, and
+                    # unregistering first leaves it unreachable while it shuts
+                    # down. Unlike the stop path above, the actor really does go
+                    # here — a fresh one replaces it below.
+                    await target.apply_command("stop")
                     await self._registry.unregister(target.actor_id)
-                    await target.stop()
             new_config = dict(config)
             new_config["replace"] = True
             await self._spawn_from_config(new_config, save=True)
@@ -1179,7 +1206,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
             # ── Live registry ──
             lines.append("\U0001f7e2 **Live registry** (running NOW in this process):")
-            if live_user:
+            if live_user and self._registry:
                 for name in sorted(live_user):
                     actor = self._registry.find_by_name(name)
                     state = actor.state.name if actor else "?"
@@ -1369,7 +1396,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                             f"[main] '{target_name}' not running — auto-spawning via {catalog_name}..."
                         )
                         try:
-                            spawn_result = await catalog_actor._action_spawn(target_name, {})
+                            spawn_result = await catalog_actor._action_spawn(target_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                             if spawn_result and spawn_result.get("ok"):
                                 await asyncio.sleep(0.5)
                                 local_target = (
@@ -1583,6 +1610,103 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             clean += f"\n\n[System: {' | '.join(footer_parts)}]"
 
         return note_prefix + clean
+
+    # Delegation allow-list for social channels. A deny-list won't hold: any
+    # DynamicAgent or code-agent runs code, so delegating to one launders code
+    # execution. Allow only bounded native agents; fail closed.
+    _RESTRICTED_DELEGATION_ALLOW = frozenset({"weather-agent", "home-assistant-agent"})
+
+    @staticmethod
+    def _neutralize_action_blocks(response: str) -> tuple[str, bool]:
+        """Strip <spawn>/<delete> blocks without running them; return (cleaned, had_any)."""
+        had = bool(re.search(r"<(spawn|delete)>", response))
+        cleaned = re.sub(r"<spawn>.*?</spawn>", "", response, flags=re.DOTALL)
+        cleaned = re.sub(r"<delete>.*?</delete>", "", cleaned, flags=re.DOTALL)
+        return cleaned.strip(), had
+
+    async def process_user_input_restricted(self, text: str) -> str:
+        """Social-channel (Discord/Telegram) entry point — the untrusted-surface
+        counterpart of process_user_input.
+
+        Conversation, device control (ACTUATE), and HA queries only. Spawning,
+        deleting, code, pipelines, admin commands, and delegation to
+        non-allowlisted agents are blocked — at the action, not by classifying
+        the text, so it can't be talked around.
+        """
+        note_prefix = self._drain_notifications()
+        stripped = text.strip()
+
+        # Slash / pipeline! commands are the admin surface — not exposed here.
+        if stripped.startswith("/") or stripped.lower().startswith("pipeline!"):
+            reply = (
+                "Admin commands aren't available on this channel — just talk to me "
+                "normally. I can answer questions, tell you what's going on, and "
+                "control your devices. (Spawning, deleting, and running code stay "
+                "on the dashboard.)"
+            )
+            await self._record_external_exchange(text, reply)
+            return note_prefix + reply
+
+        # Reuse the main intent classifier; PIPELINE (creates rules/agents) is refused.
+        intent = await self._classify_intent(text)
+        logger.info(f"[{self.name}] Intent (restricted): {intent} — {text[:60]}")
+
+        if intent == "PIPELINE":
+            reply = (
+                "I can't create automations or new agents from a social channel — "
+                "set those up on the dashboard. I can still answer questions and "
+                "control your devices from here."
+            )
+            await self._record_external_exchange(text, reply)
+            return note_prefix + reply
+
+        if intent == "ACTUATE":
+            # Everyday devices only. The actuator executes the domain/service the
+            # LLM picked, so without this gate "control my devices" reaches
+            # shell_command/python_script/hassio and becomes code execution.
+            response = await self._handle_actuate_intent(
+                text, allowed_domains=SOCIAL_ACTUATE_DOMAINS
+            )
+            await self._record_external_exchange(text, response)
+            return note_prefix + response
+
+        if intent == "HA":
+            result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
+            if result and isinstance(result, dict) and result.get("result"):
+                response = str(result["result"])
+            elif not result:
+                response = "I could not reach the Home Assistant agent right now. Please retry."
+            else:
+                response = "The Home Assistant agent did not return a result. Please retry."
+            await self._record_external_exchange(text, response)
+            return note_prefix + response
+
+        # OTHER: converse, but run no action executors.
+        self._rebuild_system_prompt()
+        prefixed_text = self._prefix_with_live_context(text)
+        response = await self.chat(prefixed_text)
+        for i in range(len(self._conversation_history) - 1, -1, -1):
+            m = self._conversation_history[i]
+            if m.get("role") == "user" and m.get("content") == prefixed_text:
+                m["content"] = text
+                break
+        self.persist("conversation_history", self._conversation_history)
+
+        # The prose around a spawn/delete block asserts the action happened, so
+        # stripping the block would leave a false claim. Discard the whole reply.
+        clean, had_actions = self._neutralize_action_blocks(response)
+        if had_actions:
+            reply = (
+                "I can't create or delete agents from this channel — that's a "
+                "dashboard-only action. I'm happy to chat, answer questions, or "
+                "control your devices instead."
+            )
+            await self._record_external_exchange(text, reply)
+            return note_prefix + reply
+
+        # Structured delegation only (allow-listed, no spawn); skip loose @mentions.
+        clean, _ = await self._process_delegate_commands(clean, restricted=True)
+        return note_prefix + clean.strip()
 
     async def process_user_input_stream(self, text: str):
         """Streaming version of process_user_input().
@@ -1809,7 +1933,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             cat = self._registry.find_by_name("catalog")
             if cat and hasattr(cat, "list_recipes"):
                 try:
-                    for recipe_name in cat.list_recipes():
+                    for recipe_name in cat.list_recipes():  # pyright: ignore[reportAttributeAccessIssue]
                         if _normalize_agent_name(recipe_name) == want:
                             return recipe_name
                 except Exception:
@@ -1842,7 +1966,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
                     logger.info(f"[{self.name}] Auto-spawning '{agent_name}' via catalog...")
                     try:
-                        spawn_result = await catalog_actor._action_spawn(agent_name, {})
+                        spawn_result = await catalog_actor._action_spawn(agent_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                         if spawn_result and spawn_result.get("ok"):
                             await asyncio.sleep(0.5)
                             target = (
@@ -1882,7 +2006,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         except Exception as e:
             return f"[{agent_name} error: {e}]"
 
-    async def _process_delegate_commands(self, response: str):
+    async def _process_delegate_commands(self, response: str, restricted: bool = False):
         """Scan the LLM response for structured delegation blocks and execute them:
 
             <delegate>{"agent": "manual-agent", "task": "search for the Philips 2200 manual"}</delegate>
@@ -1938,7 +2062,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             else:
                 payload = {"text": str(cfg.get("task", "")).strip()}
 
-            target, _spawnable = await self._resolve_or_spawn(agent_name)
+            if restricted:
+                # Resolve-only (no spawn), allow-listed targets only.
+                if agent_name.lower() not in self._RESTRICTED_DELEGATION_ALLOW:
+                    result_str = f"[{agent_name} isn't available from this channel]"
+                    results.append(result_str)
+                    response = response.replace(m.group(0), result_str)
+                    continue
+                target = self._registry.find_by_name(agent_name) if self._registry else None
+            else:
+                target, _spawnable = await self._resolve_or_spawn(agent_name)
             if not target:
                 result_str = f"[Could not reach {agent_name}]"
             else:
@@ -2096,7 +2229,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                                 f"[{self.name}] LLM tried to write '{req_name}'; spawning catalog "
                                 f"recipe '{recipe_name}' instead"
                             )
-                            spawn_result = await catalog_actor._action_spawn(recipe_name, {})
+                            spawn_result = await catalog_actor._action_spawn(recipe_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                             if spawn_result and spawn_result.get("ok"):
                                 await asyncio.sleep(0.5)
                                 actor = (
@@ -2505,7 +2638,7 @@ async def handle_task(agent, payload):
         return
 
     async def _update_node_desired_state(
-        self, node: str, new_config: dict = None, remove_name: str = None
+        self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
     ) -> None:
         """Maintain nodes/{node}/desired_state as a retained MQTT message containing
         ALL agents that should run on this node. The runner reads this on startup
@@ -3346,7 +3479,7 @@ async def handle_task(agent, payload):
             #
             # We've already snapshotted `initial_state` above — that's the
             # authoritative copy now being shipped to the remote node. The
-            # local SQLite rows / pickle / Redis values are about to become
+            # local SQLite rows / pickle / in-memory values are about to become
             # stale ghosts. If the user later migrates the agent back here
             # without those being cleared, they'd merge with the freshly
             # arrived state and produce duplicate conversation entries.
@@ -3357,7 +3490,7 @@ async def handle_task(agent, payload):
                         await self._registry.unregister(local.actor_id)
                         await local.stop()
                         self._agent_manifests.pop(agent_name, None)
-                        # Wipe SQLite / Redis / pickle for this agent. Uses
+                        # Wipe SQLite / memory / pickle for this agent. Uses
                         # the same purge primitive as permanent delete — the
                         # difference is the agent is being re-created on the
                         # target node with the snapshot we already have.
@@ -3555,7 +3688,7 @@ async def handle_task(agent, payload):
                                                 f"wactorz.actor.{aname}",
                                             )
                                         )
-                                        mon._last_seen[remote_id] = _t.time()
+                                        mon._last_seen[remote_id] = _t.time()  # pyright: ignore[reportAttributeAccessIssue]
                         elif topic.endswith("/migrate_result"):
                             success = data.get("success", False)
                             agent = data.get("agent", "?")
@@ -4001,7 +4134,7 @@ async def handle_task(agent, payload):
             ``delete=True`` so the runner unlinks <name>_state.json on disk
             and purges this agent's retained MQTT topics from the broker.
           - For local agents: the underlying PersistenceAPI.purge() wipes
-            SQLite kv_store rows, Redis ephemeral keys, and the agent's
+            SQLite kv_store rows, in-memory ephemeral keys, and the agent's
             state.pkl directory.
           - Either way, main also publishes empty retained payloads on the
             per-agent MQTT topics as a defensive second pass — if the runner
@@ -4097,7 +4230,7 @@ async def handle_task(agent, payload):
 
     async def _purge_local_agent_persistence(self, actor, name: str) -> None:
         """For a local actor: hard-delete its persisted state across all
-        backends (SQLite kv_store rows, Redis ephemeral keys, pickle file).
+        backends (SQLite kv_store rows, in-memory ephemeral keys, pickle file).
 
         Uses the actor's own PersistenceAPI when available so the right
         databases are touched. Falls back to a best-effort filesystem cleanup

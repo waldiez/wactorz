@@ -15,8 +15,8 @@ function att(over: Partial<Attachment>): Attachment {
 }
 
 describe("buildChatEmptyState", () => {
-    it("uses the orchestrator copy for main-actor", () => {
-        expect(buildChatEmptyState("main-actor").textContent).toContain("orchestrator");
+    it("uses the orchestrator copy for main", () => {
+        expect(buildChatEmptyState("main").textContent).toContain("orchestrator");
     });
 
     it("names the target agent otherwise", () => {
@@ -98,6 +98,80 @@ describe("buildChatMessageEl", () => {
         expect(thumb.getAttribute("aria-label")).toContain("p");
         thumb.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
         expect(document.querySelector(".af-lightbox")).not.toBeNull();
+    });
+
+    it("opens the lightbox from the keyboard with Space as well as Enter", () => {
+        const el = buildChatMessageEl(
+            msg({ attachments: [att({ mime: "image/png", url: "http://x/p.png", name: "p" })] }),
+        );
+        const thumb = el.querySelector<HTMLImageElement>(".af-chat-attach-thumb")!;
+
+        thumb.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+
+        expect(document.querySelector(".af-lightbox")).not.toBeNull();
+    });
+
+    it("ignores other keys on the thumbnail", () => {
+        const el = buildChatMessageEl(
+            msg({ attachments: [att({ mime: "image/png", url: "http://x/p.png", name: "p" })] }),
+        );
+        const thumb = el.querySelector<HTMLImageElement>(".af-chat-attach-thumb")!;
+
+        thumb.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+
+        // Typing must not open a viewer over the thread.
+        expect(document.querySelector(".af-lightbox")).toBeNull();
+    });
+
+    it("renders an attachment with no url as an unlinked chip", () => {
+        // `att` has no url by default — omitted, not undefined (exactOptionalPropertyTypes).
+        const el = buildChatMessageEl(msg({ attachments: [att({ name: "f.pdf" })] }));
+
+        expect(el.querySelector("a.af-chat-attach-file")).toBeNull();
+        expect(el.querySelector("span.af-chat-attach-file")!.textContent).toContain("f.pdf");
+    });
+
+    it("falls back to a chip when an image's url is refused", () => {
+        const el = buildChatMessageEl(
+            msg({ attachments: [att({ mime: "image/png", url: "javascript:alert(1)", name: "x.png" })] }),
+        );
+
+        // No thumbnail, and no link either — the scheme is refused for both.
+        expect(el.querySelector(".af-chat-attach-thumb")).toBeNull();
+        expect(el.querySelector("a.af-chat-attach-file")).toBeNull();
+    });
+
+    it("renders an empty message without a bubble body", () => {
+        const el = buildChatMessageEl(msg({ content: "", from: "main" }));
+
+        expect(el.querySelector(".af-chat-msg-bubble")!.childNodes.length).toBe(0);
+    });
+
+    it("never links a non-image attachment through a data: url", () => {
+        // `data:text/html` in an href is a navigation context: following it runs
+        // script in this origin. The image path below still accepts data:,
+        // because rendering is not navigating.
+        const el = buildChatMessageEl(
+            msg({
+                attachments: [
+                    att({ mime: "text/html", url: "data:text/html,<script>x=1</script>", name: "n.html" }),
+                ],
+            }),
+        );
+        expect(el.querySelector("a.af-chat-attach-file")).toBeNull();
+        // Still shown, just not clickable — the name is information.
+        expect(el.querySelector("span.af-chat-attach-file")!.textContent).toContain("n.html");
+    });
+
+    it("still renders a data: image as a thumbnail", () => {
+        const el = buildChatMessageEl(
+            msg({
+                attachments: [
+                    att({ mime: "image/png", url: "data:image/png;base64,iVBORw0KGgo=", name: "s" }),
+                ],
+            }),
+        );
+        expect(el.querySelector(".af-chat-attach-thumb")).not.toBeNull();
     });
 
     it("renders a non-image attachment with a url as a download link", () => {

@@ -1,39 +1,24 @@
-"""Regression tests for the monitor's legacy MQTT chat fallback.
+"""Regression tests for the monitor's chat routing.
 
 The monitor was split into :mod:`wactorz.web.*`; the chat routing that used to
-live in ``monitor_server`` now lives in ``wactorz.web.chat`` (``route_chat`` /
-``handle_chat_mqtt``), ``wactorz.web.events`` (``parse_topic``), and
-``wactorz.web.runtime`` (shared ``registry`` / ``state``).
+live in ``monitor_server`` now lives in ``wactorz.web.chat`` (``route_chat``),
+``wactorz.web.events`` (``parse_topic``), and ``wactorz.web.runtime`` (shared
+``registry`` / ``state``).
 """
-
-from unittest import mock
 
 import pytest
 
 import wactorz.web.chat as chat
 import wactorz.web.events as events
 import wactorz.web.runtime as runtime
-
-
-@pytest.mark.asyncio
-async def test_mqtt_fallback_defers_to_running_io_agent(monkeypatch):
-    class Registry:
-        def find_by_name(self, name):
-            return object() if name == "io-agent" else None
-
-    route = mock.AsyncMock()
-    monkeypatch.setattr(runtime, "registry", Registry())
-    monkeypatch.setattr(chat, "route_chat", route)
-
-    await chat.handle_chat_mqtt({"content": "@reachy-mini hello"})
-
-    route.assert_not_awaited()
+from wactorz.core.actor import ActorState
 
 
 @pytest.mark.asyncio
 async def test_route_chat_without_stream_end_callback(monkeypatch):
     class Target:
         name = "target"
+        state = ActorState.RUNNING
 
         async def process_user_input(self, text):
             return f"handled: {text}"

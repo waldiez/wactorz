@@ -149,19 +149,19 @@ backend (Python) and frontend (TypeScript) layers. They follow a shared protocol
 so the core system never needs to know about individual extension names, routes,
 or config — there is no <code>if extension == "tts"</code> anywhere.</p>
 <h2 id="overview">Overview</h2>
-<div class="highlight"><pre><span></span><code><span class="n">wactorz</span><span class="o">/</span>
-<span class="err">├──</span><span class="w"> </span><span class="n">ext</span><span class="o">/</span><span class="w">                    </span><span class="p">#</span><span class="w"> </span><span class="n">Backend</span><span class="w"> </span><span class="n">extensions</span><span class="w"> </span><span class="p">(</span><span class="n">Python</span><span class="p">)</span>
-<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">__init__</span><span class="p">.</span><span class="n">py</span><span class="w">         </span><span class="p">#</span><span class="w">     </span><span class="n">discovery</span><span class="p">,</span><span class="w"> </span><span class="n">setup_all</span><span class="p">(),</span><span class="w"> </span><span class="n">collect_public_config</span><span class="p">(),</span>
-<span class="err">│</span><span class="w">   </span><span class="err">│</span><span class="w">                        </span><span class="p">#</span><span class="w">     </span><span class="n">collect_actor_decorators</span><span class="p">()</span>
-<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">tts</span><span class="o">/</span><span class="w">                </span><span class="p">#</span><span class="w">     </span><span class="n">TTS</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="k">edge</span><span class="o">-</span><span class="n">tts</span><span class="w"> </span><span class="n">voice</span><span class="w"> </span><span class="n">synthesis</span>
+<div class="highlight"><pre><span></span><code>wactorz/
+├── ext/                    # Backend extensions (Python)
+│   ├── __init__.py         #     discovery, setup_all(), collect_public_config(),
+│   │                        #     collect_actor_decorators()
+│   └── tts/                #     TTS — edge-tts voice synthesis
 
-<span class="n">frontend</span><span class="o">/</span><span class="n">src</span><span class="o">/</span>
-<span class="err">├──</span><span class="w"> </span><span class="n">ext</span><span class="o">/</span><span class="w">                    </span><span class="p">#</span><span class="w"> </span><span class="n">Frontend</span><span class="w"> </span><span class="n">extensions</span><span class="w"> </span><span class="p">(</span><span class="n">TypeScript</span><span class="p">)</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="n">mirror</span><span class="w"> </span><span class="n">backend</span>
-<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">tts</span><span class="o">/</span><span class="n">index</span><span class="p">.</span><span class="n">ts</span><span class="w">        </span><span class="p">#</span><span class="w">     </span><span class="n">register</span><span class="p">({</span><span class="w"> </span><span class="n">apiBase</span><span class="p">,</span><span class="w"> </span><span class="n">available</span><span class="w"> </span><span class="p">})</span>
-<span class="err">├──</span><span class="w"> </span><span class="n">ui</span><span class="o">/</span><span class="n">dashboard</span><span class="o">/</span>
-<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">icons</span><span class="p">.</span><span class="n">ts</span><span class="w">            </span><span class="p">#</span><span class="w">     </span><span class="n">Icon</span><span class="w"> </span><span class="n">registry</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="n">registerIcon</span><span class="p">(</span><span class="n">name</span><span class="p">,</span><span class="w"> </span><span class="n">svg</span><span class="p">)</span>
-<span class="err">├──</span><span class="w"> </span><span class="n">ui</span><span class="o">/</span><span class="n">CardDashboard</span><span class="p">.</span><span class="n">ts</span><span class="w">     </span><span class="p">#</span><span class="w">     </span><span class="n">View</span><span class="w"> </span><span class="n">registry</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="n">registerView</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">icon</span><span class="p">,</span><span class="w"> </span><span class="n">label</span><span class="p">,</span><span class="w"> </span><span class="n">builder</span><span class="p">)</span>
-<span class="err">└──</span><span class="w"> </span><span class="n">config</span><span class="o">/</span><span class="n">serverConfig</span><span class="p">.</span><span class="n">ts</span><span class="w">  </span><span class="p">#</span><span class="w">     </span><span class="n">Config</span><span class="o">-</span><span class="n">seeding</span><span class="w"> </span><span class="n">registry</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="n">registerConfigEntry</span><span class="p">(</span><span class="n">key</span><span class="p">,</span><span class="w"> </span><span class="n">extract</span><span class="p">)</span>
+frontend/src/
+├── ext/                    # Frontend extensions (TypeScript) — mirror backend
+│   └── tts/index.ts        #     register({ apiBase, available })
+├── ui/dashboard/
+│   └── icons.ts            #     Icon registry — registerIcon(name, svg)
+├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
+└── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
 </code></pre></div>
 
 <p>At startup the monitor calls <code>setup_all(app)</code>, which auto-discovers every module
@@ -248,11 +248,11 @@ in place:</p>
   or startup because an optional dependency is missing.</li>
 </ul>
 <h3 id="example-tts">Example: TTS</h3>
-<div class="highlight"><pre><span></span><code><span class="n">wactorz</span><span class="o">/</span><span class="n">ext</span><span class="o">/</span><span class="n">tts</span><span class="o">/</span>
-<span class="err">└──</span><span class="w"> </span><span class="n">__init__</span><span class="p">.</span><span class="n">py</span><span class="w">     </span><span class="p">#</span><span class="w"> </span><span class="n">setup</span><span class="p">()</span><span class="w"> </span><span class="n">registers</span><span class="w"> </span><span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">tts</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="o">/</span><span class="n">api</span><span class="o">/</span><span class="n">tts</span><span class="o">/</span><span class="n">voices</span><span class="p">,</span>
-<span class="w">                    </span><span class="p">#</span><span class="w"> </span><span class="n">public_config</span><span class="p">()</span><span class="w"> </span><span class="n">reports</span><span class="w"> </span><span class="n">availability</span><span class="p">,</span>
-<span class="w">                    </span><span class="p">#</span><span class="w"> </span><span class="n">on_startup</span><span class="w"> </span><span class="n">warms</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">voice</span><span class="w"> </span><span class="n">list</span><span class="p">.</span><span class="w"> </span><span class="k">edge</span><span class="o">-</span><span class="n">tts</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">imported</span>
-<span class="w">                    </span><span class="p">#</span><span class="w"> </span><span class="n">inside</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">handlers</span><span class="w"> </span><span class="n">so</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">ext</span><span class="w"> </span><span class="n">is</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="n">no</span><span class="o">-</span><span class="n">op</span><span class="w"> </span><span class="n">when</span><span class="w"> </span><span class="n">it</span><span class="p">&#39;</span><span class="n">s</span><span class="w"> </span><span class="n">absent</span><span class="p">.</span>
+<div class="highlight"><pre><span></span><code>wactorz/ext/tts/
+└── __init__.py     # setup() registers /api/tts + /api/tts/voices,
+                    # public_config() reports availability,
+                    # on_startup warms the voice list. edge-tts is imported
+                    # inside the handlers so the ext is a no-op when it&#39;s absent.
 </code></pre></div>
 
 <hr />

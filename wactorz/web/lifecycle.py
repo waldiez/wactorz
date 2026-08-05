@@ -10,9 +10,45 @@ import json
 import logging
 import time
 
-from . import chat, runtime
+from ..agents.lookup import find_main_actor
+from . import runtime
 
 logger = logging.getLogger(__name__)
+
+
+async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
+    """Run a lifecycle command against an agent. Returns how it was routed.
+
+    Local actors are driven in process. Publishing to the broker so an object we
+    already hold can rediscover itself over the network is left over from when the
+    dashboard ran as a separate process, and it meant the command was silently
+    dropped whenever the broker was down while the caller still reported success.
+
+    MQTT remains the route to agents on remote nodes, which have no local object.
+    Returns ``""`` when the command could not be delivered at all, and
+    ``"refused"`` when the actor declined it.
+    """
+    actor = None
+    if runtime.registry is not None:
+        actor = runtime.registry.get(agent_id) or runtime.registry.find_by_name(agent_id)
+
+    if actor is not None:
+        # apply_command, not stop()/pause() directly: it releases the actor from
+        # supervision first, without which the watchdog restarts it ~35s later.
+        return "local" if await actor.apply_command(command) else "refused"
+
+    if runtime.mqtt_client_ref is None:
+        logger.warning("[cmd] %s is not local and no broker is available", agent_id[:8])
+        return ""
+    try:
+        await runtime.mqtt_client_ref.publish(
+            f"agents/{agent_id}/commands",
+            json.dumps({"command": command, "sender": sender, "timestamp": time.time()}),
+        )
+    except Exception as exc:
+        logger.warning("[cmd] publish to %s failed: %s", agent_id[:8], exc)
+        return ""
+    return "broker"
 
 
 async def purge_agent_retained(agent_id: str) -> None:
@@ -77,9 +113,9 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
     """
-    main_actor = chat.find_main()
+    main_actor = find_main_actor(runtime.registry)
     reg = {}
-    if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
+    if main_actor is not None:
         reg = main_actor._get_spawn_registry() or {}
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
@@ -92,15 +128,11 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
             node_names.add(n)
 
     # Clear the live registry through the actor's own persistence.
-    if (
-        main_actor is not None
-        and hasattr(main_actor, "recall")
-        and main_actor.recall("_spawned_agents", None) is not None
-    ):
+    if main_actor is not None and main_actor.recall("_spawned_agents", None) is not None:
         kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
         main_actor.persist("_spawned_agents", kept)
 
-    if agent and main_actor is not None and hasattr(main_actor, "_update_node_desired_state"):
+    if agent and main_actor is not None:
         # Republish from the reduced registry so siblings on the node survive.
         await asyncio.gather(
             *[main_actor._update_node_desired_state(n) for n in node_names],
@@ -134,6 +166,15 @@ async def delete_agent(agent_id: str) -> str:
     name = record.get("name") or agent_id
     node = (record.get("node") or "").strip()
 
+    # REST refuses to delete a protected actor; this path did not, so the same
+    # request over the WebSocket deleted system agents the API 403s. The check
+    # reads the live actor rather than `record`, because the dashboard entry is
+    # built from heartbeats and a remote agent can claim whatever it likes.
+    actor = runtime.registry.find_by_name(name) if runtime.registry else None
+    if actor is not None and getattr(actor, "protected", False):
+        logger.warning("[lifecycle] Refusing to delete protected actor '%s'.", name)
+        return "refused-protected"
+
     runtime.mark_deleted(agent_id)
     runtime.state["agents"].pop(agent_id, None)
 
@@ -142,8 +183,8 @@ async def delete_agent(agent_id: str) -> str:
     if runtime.registry is not None:
         # In-process: delegate to main, which owns the spawn registry and
         # knows exactly how to clean up both local and remote agents.
-        main_actor = chat.find_main()
-        if main_actor is not None and hasattr(main_actor, "delete_spawned_agent"):
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor is not None:
             try:
                 await main_actor.delete_spawned_agent(name)
                 routed = f"via main.delete_spawned_agent({name!r})"
@@ -161,8 +202,12 @@ async def delete_agent(agent_id: str) -> str:
         # (race window during startup).
         if routed.startswith("via main") is False:
             actor = runtime.registry.get(agent_id) or runtime.registry.find_by_name(name)
-            if actor is not None and not getattr(actor, "protected", False):
-                asyncio.create_task(actor.stop())
+            # apply_command rather than stop(): a raw stop leaves the actor
+            # supervised, so the heartbeat watchdog restarts the agent that was
+            # just deleted. It also enforces `protected` itself, so this path no
+            # longer keeps its own copy of that rule. Awaited, because a delete
+            # that quietly failed is what this whole path exists to avoid.
+            if actor is not None and await actor.apply_command("delete"):
                 routed = "via local registry"
 
     if routed in ("unknown", "main path failed") and runtime.mqtt_client_ref:

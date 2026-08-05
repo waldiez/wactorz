@@ -45,7 +45,7 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
-| _(all)_ | mosquitto | `mosquitto:1883` / `:9001` | `:1883`, `:9001` |
+| _(all)_ | mosquitto | `mosquitto:1883` | `:1883` |
 | `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
 | `python` | monitor UI | `wactorz-python:8888` | `:8888` |
 | `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
@@ -87,6 +87,7 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `MQTT_PASSWORD` | _(blank)_ | Broker password |
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
+| `WACTORZ_STATE_DIR` | `./state` | Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins `/data/state`. `wactorz-reset` reads the same variable, so a wipe targets whatever the app is using |
 | `WACTORZ_TZ` | _(unset)_ | Override the timezone used in agents' date/time context (e.g. `Europe/Athens`). Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` > host local zone. Blank or unknown values fall through to the next candidate |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
@@ -126,7 +127,9 @@ rest_command:
     url: "http://wactorz-python:8000/api/chat"
     method: POST
     content_type: "application/json"
-    payload: '{"to":"main-actor","content":"{{ message }}"}'
+    # The endpoint reads `message`, plus an optional `agent_name` that defaults
+    # to the orchestrator. Add `"agent_name": "<name>"` to address one agent.
+    payload: '{"message":"{{ message }}"}'
 ```
 
 Set `HA_URL` and `HA_TOKEN` in `.env`.

@@ -201,11 +201,15 @@
 <tbody>
 <tr>
 <td><code>actor.py</code></td>
-<td><code>Actor</code> base class — message loop, heartbeat, persistence (SQLite / Redis / Pickle), supervisor strategy enum</td>
+<td><code>Actor</code> base class — message loop, heartbeat, persistence (SQLite / memory / Pickle), supervisor strategy enum</td>
 </tr>
 <tr>
 <td><code>registry.py</code></td>
-<td><code>ActorSystem</code>, <code>ActorRegistry</code>, <code>Supervisor</code>, <code>_MQTTPublisher</code> (shared aiomqtt connection)</td>
+<td><code>ActorSystem</code>, <code>ActorRegistry</code>, <code>Supervisor</code></td>
+</tr>
+<tr>
+<td><code>mqtt_publisher.py</code></td>
+<td><code>MQTTPublisher</code> — shared aiomqtt connection with a durable outbox</td>
 </tr>
 </tbody>
 </table>
@@ -283,7 +287,7 @@
 <p>The Supervisor wraps each actor with a <code>ONE_FOR_ONE</code> restart policy. If an actor crashes, only that actor is restarted — others keep running. <code>max_restarts</code> and <code>restart_delay</code> are configurable per actor.</p>
 <hr />
 <h2 id="persistence">Persistence</h2>
-<p>Wactorz uses a three-tier persistence layer (<code>wactorz/core/persistence.py</code>) that routes each key to the appropriate store:</p>
+<p>Wactorz uses a three-tier persistence layer (<code>wactorz/core/persistence/</code>) that routes each key to the appropriate store:</p>
 <table>
 <thead>
 <tr>
@@ -299,8 +303,8 @@
 <td>Durable structured data: spawn registry, pipeline rules, user facts, topic contracts, conversation history, time-series sensor/detection/HA-state data</td>
 </tr>
 <tr>
-<td><strong>Redis</strong></td>
-<td><code>redis://localhost:6379</code> (falls back to in-memory if Redis is unavailable)</td>
+<td><strong>Process memory</strong></td>
+<td>in-process, lost on restart</td>
 <td>Ephemeral fast-access data: observed topic samples, agent metrics, heartbeat state</td>
 </tr>
 <tr>
@@ -312,7 +316,7 @@
 </table>
 <p><code>Actor.persist(key, value)</code> and <code>Actor.recall(key)</code> route automatically to the correct store based on the key name. Existing agent code works without changes.</p>
 <p>The spawn registry (<code>_spawned_agents</code>) is stored in SQLite. On restart, MainActor re-spawns every entry so dynamic agents and catalog agents survive reboots.</p>
-<p>On first startup after upgrading from an older version, <code>migrate_from_pickle()</code> reads existing <code>.pkl</code> files and moves structured keys to SQLite/Redis. Pickle files are left in place for keys that remain in pickle.</p>
+<p>On first startup after upgrading from an older version, <code>migrate_from_pickle()</code> reads existing <code>.pkl</code> files and moves structured keys to their store. Pickle files are left in place for keys that remain in pickle.</p>
 <hr />
 <h2 id="mqtt-topics">MQTT Topics</h2>
 <table>
@@ -456,6 +460,53 @@ Discord channel
 </tbody>
 </table>
 <p>All providers implement <code>complete(messages, system) → (text, usage)</code> and <code>stream(messages, system) → AsyncGenerator</code>. Cost tracking (USD per 1M tokens) is built into every provider and accumulated in <code>LLMAgent.metrics</code>.</p>
+<h3 id="sampling-temperature">Sampling temperature</h3>
+<p><code>LLM_TEMPERATURE</code> sets the sampling temperature for every provider and every call (<code>0</code> for
+deterministic routing and actuation; unset keeps each provider's default — Anthropic, OpenAI and
+Gemini default to <code>1.0</code>, Ollama to <code>0.8</code>, so pinning it is what makes runs comparable across
+backends). Ollama receives it as <code>options.temperature</code>; the others take it as a top-level request
+parameter. An individual call site can still pass <code>temperature=</code> to <code>complete()</code> / <code>stream()</code>,
+which wins over the env setting. The resolved value is logged at startup.</p>
+<h3 id="per-call-site-overrides">Per-call-site overrides</h3>
+<p><code>LLM_OVERRIDES</code> routes individual call sites to different providers/models, falling back to the global <code>LLM_PROVIDER</code> for any site not listed (<code>wactorz/llm_factory.py</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="nv">LLM_OVERRIDES</span><span class="o">=</span><span class="s2">&quot;intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6&quot;</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Site</th>
+<th>Call it configures</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>main</code></td>
+<td>MainActor conversation + history summarization</td>
+</tr>
+<tr>
+<td><code>intent</code></td>
+<td>Intent classification (ACTUATE / HA / PIPELINE / OTHER)</td>
+</tr>
+<tr>
+<td><code>planner</code></td>
+<td>PlannerAgent planning and code generation</td>
+</tr>
+<tr>
+<td><code>actuator</code></td>
+<td>OneOffActuatorAgent direct device control</td>
+</tr>
+<tr>
+<td><code>ha</code></td>
+<td>HomeAssistantAgent internal classification</td>
+</tr>
+<tr>
+<td><code>dynamic</code></td>
+<td><code>get_llm()</code> shim inside generated DynamicAgent code</td>
+</tr>
+</tbody>
+</table>
+<p>The format is <code>&lt;site&gt;=&lt;provider&gt;[:&lt;model&gt;]</code>; only the first colon splits provider from model, so Ollama tags like <code>qwen3:4b</code> work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. <code>site=none</code> disables the LLM for that site.</p>
 <p>For Ollama, <code>system</code> is encoded as the first <code>{"role": "system"}</code> entry in the native <code>/api/chat</code> <code>messages</code> array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.</p>
 <hr />
 <h2 id="supervision-tree">Supervision Tree</h2>

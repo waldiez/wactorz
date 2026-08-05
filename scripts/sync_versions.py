@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-import sys
-import re
 import json
+import re
+import sys
 from pathlib import Path
 
 
@@ -18,7 +18,7 @@ def update_package_json(new_version):
     files = [Path("frontend/package.json")]
     for package_file in files:
         if package_file.exists():
-            with open(package_file, "r") as f:
+            with open(package_file) as f:
                 data = json.load(f, strict=False)
             data["version"] = new_version
             with open(package_file, "w") as f:
@@ -58,7 +58,7 @@ def update_docs_versions_json(new_version):
     v_file = Path("docs/versions.json")
     if v_file.exists():
         try:
-            with open(v_file, "r") as f:
+            with open(v_file) as f:
                 data = json.load(f)
             # Check if version already exists
             exists = any(v.get("version") == new_version for v in data)
@@ -78,8 +78,7 @@ def main():
         sys.exit(1)
 
     new_version = sys.argv[1]
-    if new_version.startswith("v"):
-        new_version = new_version[1:]
+    new_version = new_version.removeprefix("v")
 
     update_python_version(new_version)
     update_package_json(new_version)

@@ -105,14 +105,14 @@ Send a chat message to a named agent.
 
 **Request body**
 ```json
-{ "message": "what is the weather?", "agent_name": "main-actor" }
+{ "message": "what is the weather?", "agent_name": "main" }
 ```
 
-`agent_name` is optional and defaults to `main-actor`.
+`agent_name` is optional and defaults to `main`, the orchestrator.
 
 **Response** `200 OK`
 ```json
-{ "status": "sent", "agent": "main-actor" }
+{ "status": "sent", "agent": "main" }
 ```
 
 The reply is delivered asynchronously over MQTT (`agents/{id}/chat`) and via the `/ws` WebSocket bridge.
@@ -284,7 +284,7 @@ The dashboard also receives bespoke control frames (`delete_agent`, snapshot dif
 
 ## MQTT
 
-Broker: `mosquitto:1883` (TCP) / `ws://host:9001` (WebSocket). The dashboard does not use MQTT directly — the monitor relays broker activity to the browser over `/ws` (see above).
+Broker: `mosquitto:1883` (TCP). The dashboard does not use MQTT directly — the monitor relays broker activity to the browser over `/ws` (see above).
 
 All payloads are **snake_case JSON** with `timestamp` as a float (Unix seconds).
 

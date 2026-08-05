@@ -23,9 +23,75 @@ export type IconName = string;
 
 const _paths = new Map<string, string>();
 
-/** Register a custom icon so ``iconMarkup(name)`` renders it. */
+/** SVG shapes an icon may be built from. Anything else — `<script>`,
+ *  `<foreignObject>`, `<image>`, `<use>` — is dropped. */
+const SHAPE_TAGS = new Set(["g", "path", "circle", "ellipse", "rect", "line", "polyline", "polygon"]);
+
+/** Attributes those shapes may carry. Event handlers and every `href` variant
+ *  are absent by construction rather than by blocklist. */
+const SHAPE_ATTRS = new Set([
+    "d",
+    "cx",
+    "cy",
+    "r",
+    "rx",
+    "ry",
+    "x",
+    "y",
+    "x1",
+    "y1",
+    "x2",
+    "y2",
+    "width",
+    "height",
+    "points",
+    "transform",
+    "opacity",
+    "fill",
+    "fill-rule",
+    "clip-rule",
+    "stroke",
+    "stroke-width",
+    "stroke-linecap",
+    "stroke-linejoin",
+]);
+
+/** Drop every element and attribute outside the allow-lists, in place. */
+function prune(parent: Element): void {
+    for (const child of [...parent.children]) {
+        if (!SHAPE_TAGS.has(child.tagName.toLowerCase())) {
+            child.remove();
+            continue;
+        }
+        for (const attr of [...child.attributes]) {
+            if (!SHAPE_ATTRS.has(attr.name.toLowerCase())) {
+                child.removeAttribute(attr.name);
+            }
+        }
+        prune(child);
+    }
+}
+
+/** Register a custom icon so ``iconMarkup(name)`` renders it.
+ *
+ * The markup is reduced to shapes at registration, not at render: it is stored
+ * once and drawn many times, and `iconMarkup` interpolates it straight into
+ * `innerHTML`. Extensions supply this string, so without the reduction an icon
+ * could carry `<foreignObject><img src=x onerror=…>` and run script wherever
+ * the icon appears — which is the header, the nav and every card.
+ *
+ * Parsing happens inside a `<template>`, whose content is inert: nothing
+ * executes and no resource is fetched while the markup is being inspected.
+ */
 export function registerIcon(name: string, svgPaths: string): void {
-    _paths.set(name, svgPaths);
+    const tpl = document.createElement("template");
+    tpl.innerHTML = `<svg>${svgPaths}</svg>`;
+    const svg = tpl.content.querySelector("svg");
+    if (!svg) {
+        return;
+    }
+    prune(svg);
+    _paths.set(name, svg.innerHTML);
 }
 
 /** Markup for an inline icon at `size` px (default 16). Inherits `currentColor`. */

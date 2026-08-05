@@ -413,7 +413,7 @@ class SharedStateHub:
             await self._mqtt.publish(topic, payload, retain=retain, qos=1)
 
     async def publish_presence(
-        self, zone: str, present: bool, people: list[str] = None, source: str = ""
+        self, zone: str, present: bool, people: list[str] | None = None, source: str = ""
     ):
         """Publish occupancy state for a zone."""
         topic = self.PRESENCE_TOPIC.format(zone=zone)
@@ -441,7 +441,7 @@ class SharedStateHub:
         )
 
     async def publish_ha_state(
-        self, entity_id: str, state: str, domain: str = "", attributes: dict = None
+        self, entity_id: str, state: str, domain: str = "", attributes: dict[str, Any] | None = None
     ):
         """Mirror an HA entity state to a shared retained topic."""
         if not domain:
@@ -566,7 +566,9 @@ class StreamWindow:
             return True
         return (time.time() - latest["_ts"]) >= seconds
 
-    def event_count(self, key: str = None, value: Any = None, seconds: float = None) -> int:
+    def event_count(
+        self, key: str | None = None, value: Any = None, seconds: float | None = None
+    ) -> int:
         """Count events matching optional key=value in the last N seconds."""
         self._trim()
         cutoff = time.time() - (seconds or self.seconds)

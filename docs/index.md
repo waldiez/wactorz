@@ -31,6 +31,7 @@ pip install wactorz[all]
 - **[Remote Nodes](remote-nodes.md)** — Edge deployment via `remote_runner.py`
 - **[Extensions](extensions.md)** — How to write backend/frontend extensions
 - **[Python API](python-api.md)** — Core classes, supervision, persistence
+- **[Evaluation harness](evaluation.md)** — Compare models per LLM call site (accuracy, latency, cost)
 - **[Home Assistant Addon](../ha-addon/DOCS.md)** — Install and configure the HA Supervisor addon (requires HAOS or Supervised)
 <!-- - **[JS/TS Docs](https://waldiez.github.io/wactorz/api/js/)** — TypeDoc for the card-dashboard frontend -->
 

@@ -11,21 +11,20 @@ import logging
 import socket
 import time
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
 
-from ..agents.main_actor import MainActor
-from ..core.actor import Message, MessageType
+from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
+from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from . import runtime
 
 logger = logging.getLogger(__name__)
 
-# In-flight chat-generation tasks (direct_ws + REST paths) so POST /chat/stop can
-# cancel a turn mid-stream. The legacy MQTT path is handled separately by the
-# IOAgent via the io/chat/control topic.
+# In-flight chat-generation tasks (WebSocket + REST paths) so POST /chat/stop can
+# cancel a turn mid-stream.
 inflight_chat_tasks: set = set()
 
 
@@ -40,17 +39,13 @@ async def no_op_async() -> None:
     """No op. To use instead of lambdas."""
 
 
-def chat_mode() -> str:
-    """Which chat path is active: ``direct_ws`` when a registry is wired, else ``mqtt``."""
-    return "direct_ws" if runtime.registry is not None else "mqtt"
+async def discard_reply(_text: str) -> None:
+    """Drop a reply chunk, for fire-and-forget callers with nowhere to send it.
 
-
-def find_main() -> MainActor | None:
-    """Return the main actor from the registry, or ``None`` in legacy MQTT mode."""
-    actor = runtime.registry.find_by_name("main") if runtime.registry else None
-    if actor:
-        return cast(MainActor, actor)
-    return None
+    ``route_chat`` does ``await reply_fn(text)``, so this must be a coroutine
+    function taking one argument — a bare lambda raises TypeError on the first
+    chunk and silently abandons the stream after the tokens are paid for.
+    """
 
 
 def parse_mention(content: str) -> tuple[str, str]:
@@ -61,7 +56,90 @@ def parse_mention(content: str) -> tuple[str, str]:
     if content.startswith("@"):
         parts = content[1:].split(None, 1)
         return parts[0], (parts[1].strip() if len(parts) > 1 else "")
-    return "main", content
+    return MAIN_ACTOR_NAME, content
+
+
+# ── Catalog / experimental-agent presentation ──────────────────────────────
+
+
+def catalog_agent_line(agent: dict) -> str:
+    name = agent.get("name", "unknown")
+    description = agent.get("description", "")
+    return f"- `{name}` - {description}" if description else f"- `{name}`"
+
+
+def format_catalog_agents_response(payload: dict) -> str:
+    agents = payload.get("agents", [])
+    if not isinstance(agents, list):
+        return str(payload)
+
+    show_experimental = bool(payload.get("show_experimental", False))
+    recommended = [a for a in agents if isinstance(a, dict) and not a.get("experimental")]
+    experimental = [a for a in agents if isinstance(a, dict) and a.get("experimental")]
+    total = len(recommended) + len(experimental)
+
+    lines = [
+        "**Catalog agents**",
+        f"`{total}` total - `{len(recommended)}` recommended, "
+        f"`{len(experimental)}` experimental beta",
+    ]
+
+    if recommended:
+        lines.extend(
+            [
+                "",
+                "### Recommended",
+                *(catalog_agent_line(agent) for agent in recommended),
+            ]
+        )
+
+    if experimental:
+        if show_experimental:
+            lines.extend(
+                [
+                    "",
+                    "### Experimental / Beta",
+                    *(catalog_agent_line(agent) for agent in experimental),
+                ]
+            )
+        else:
+            # Hidden by default — nudge the user toward the opt-in instead of
+            # listing beta agents in the normal view.
+            lines.extend(
+                [
+                    "",
+                    f"_{len(experimental)} experimental/beta agent(s) hidden — "
+                    f"say `list experimental` to show them._",
+                ]
+            )
+
+    return "\n".join(lines)
+
+
+# Agents already warned in this process — so the beta banner shows on the first
+# user message to an experimental agent, not on every turn.
+beta_warned_agents: set = set()
+
+
+def experimental_first_use_banner(agent_name: str) -> str | None:
+    """One-time beta banner for the first user message to an experimental agent.
+
+    Returns the banner the first time ``agent_name`` is messaged in this process,
+    then None afterwards so the warning isn't repeated every turn. Non-experimental
+    or unknown agents always return None. The experimental flag and per-agent
+    warning come from main's manifest, populated by the catalog at startup.
+    """
+    if agent_name in beta_warned_agents:
+        return None
+    main = find_main_actor(runtime.registry)
+    manifest = main._agent_manifests.get(agent_name) if main else None
+    if not manifest or not manifest.get("experimental"):
+        return None
+    beta_warned_agents.add(agent_name)
+    from ..agents.catalog_agent import BETA_WARNING
+
+    warning = manifest.get("warning") or BETA_WARNING
+    return f"⚠️ **{agent_name}** is an experimental/beta agent. {warning}\n\n"
 
 
 # ── Slash commands ─────────────────────────────────────────────────────────
@@ -120,8 +198,8 @@ async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, re
         )
         return
 
-    main_actor = find_main()
-    if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
+    main_actor = find_main_actor(runtime.registry)
+    if main_actor is None:
         await reply_fn("[error] Installer agent not available.")
         return
 
@@ -174,8 +252,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
     cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
-        main_actor = find_main()
-        if main_actor and hasattr(main_actor, "persist"):
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor:
             main_actor.persist("_plan_cache", {})
         await reply_fn("[System: Plan cache cleared.]")
         return True
@@ -195,10 +273,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/nodes":
-        main_actor = find_main()
-        remote_nodes = (
-            main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
-        )
+        main_actor = find_main_actor(runtime.registry)
+        remote_nodes = main_actor.list_nodes() if (main_actor) else []
         local = [a.name for a in runtime.registry.all_actors()] if runtime.registry else []
         lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
         for nd in sorted(remote_nodes, key=lambda x: x["node"]):
@@ -214,8 +290,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 3:
             await reply_fn("[usage] /migrate <agent-name> <target-node>")
             return True
-        main_actor = find_main()
-        if main_actor is None or not hasattr(main_actor, "migrate_agent"):
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor is None:
             await reply_fn("[error] migrate_agent not available.")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
@@ -241,6 +317,50 @@ async def handle_slash(text: str, reply_fn) -> bool:
     return False
 
 
+#: Correlation id → the queue waiting for that request's RESULT. One entry per
+#: in-flight chat turn; the interceptor below routes by this rather than
+#: assuming there is only ever one.
+_PENDING_REPLIES: dict[str, asyncio.Queue] = {}
+
+
+def _install_reply_capture(target: Any) -> None:
+    """Teach an agent's ``send`` to hand RESULTs back to the waiting chat turn.
+
+    Agents reply to ``msg.reply_to or msg.sender_id``, and a chat turn is not a
+    real actor, so the reply has nowhere to go unless it is intercepted.
+
+    Installed **once per agent and never removed**. It used to be patched in and
+    restored around each turn, which broke under two concurrent turns to the
+    same agent: the second saved the first's interceptor as "the original", the
+    first restored the real method — so the second's replies stopped being
+    captured — and the second then restored the first's interceptor, leaving
+    the agent permanently sending its results into an abandoned queue.
+
+    Correlating by id also fixes the other half: the old interceptor captured
+    *any* RESULT, so a reply meant for one turn could be handed to another.
+    """
+    if getattr(target, "_io_gateway_capture_installed", False):
+        return
+    original_send = target.send
+
+    async def _capture_send(
+        target_id: str,
+        msg_type: MessageType,
+        payload: Any = None,
+        **kw: Any,
+    ) -> bool:
+        if msg_type == MessageType.RESULT:
+            queue = _PENDING_REPLIES.get(target_id)
+            if queue is not None:
+                await queue.put(payload)
+                return True
+            # Not for a chat turn — an ordinary actor-to-actor result.
+        return await original_send(target_id, msg_type, payload, **kw)
+
+    target.send = _capture_send
+    target._io_gateway_capture_installed = True
+
+
 async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None):
     """Core chat routing — slash commands, @mentions, or main-actor stream.
 
@@ -254,21 +374,16 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
         if not handled:
-            main_actor = find_main()
+            main_actor = find_main_actor(runtime.registry)
             # Forward unrecognized slash commands to main actor.
             # main_actor.process_user_input handles the full command set
             # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
-            if main_actor and hasattr(main_actor, "process_user_input_stream"):
+            if main_actor:
                 _chunk_fn = stream_fn or reply_fn
                 async for chunk in main_actor.process_user_input_stream(content):
                     if isinstance(chunk, dict):
                         continue
                     await _chunk_fn(str(chunk))
-                if stream_end_fn:
-                    await stream_end_fn()
-            elif main_actor and hasattr(main_actor, "process_user_input"):
-                result = await main_actor.process_user_input(content)
-                await reply_fn(str(result))
                 if stream_end_fn:
                     await stream_end_fn()
             else:
@@ -280,11 +395,11 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     target = runtime.registry.find_by_name(target_name) if runtime.registry else None
 
     if target is None:
-        main_actor = find_main()
+        main_actor = find_main_actor(runtime.registry)
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
-        if main_actor and hasattr(main_actor, "_known_nodes"):
+        if main_actor:
             remote_node = None
             for node_name, nd in main_actor._known_nodes.items():
                 if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
@@ -303,8 +418,8 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                 }
                 try:
                     async with mqtt_client(
-                        getattr(main_actor, "_mqtt_broker", "localhost"),
-                        getattr(main_actor, "_mqtt_port", 1883),
+                        main_actor._mqtt_broker,
+                        main_actor._mqtt_port,
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
@@ -355,8 +470,34 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
         await reply_fn(f"Agent @{target_name} not found.")
         return
 
+    # Every path below reaches into the agent directly rather than through its
+    # mailbox, so none of the states that suspend the mailbox stop it answering
+    # on their own: a paused agent replied as though nothing had happened, and a
+    # stopped one kept answering after its message loop had been cancelled.
+    #
+    # ``==`` not ``is``: ActorState is a str-enum compared by value everywhere
+    # else in the codebase, and identity is not safe here — the test suite has
+    # wactorz.core.actor loaded under two module identities, so the enum members
+    # are distinct objects with equal values.
+    _unavailable = {
+        ActorState.PAUSED.value: "is paused. Resume it to send messages.",
+        ActorState.STOPPED.value: "is stopped. Start it to send messages.",
+        ActorState.FAILED.value: "has failed. It should restart shortly.",
+    }
+    reason = _unavailable.get(getattr(target.state, "value", target.state))
+    if reason is not None:
+        await reply_fn(f"@{target.name} {reason}")
+        await _end_fn()
+        return
+
     msg = f"[io-gateway] → {target.name}: {text[:60]!r}"
     logger.info(msg)
+
+    # First user message to an experimental/beta agent gets a one-time warning
+    # banner, emitted through the same channel the reply will use.
+    banner = experimental_first_use_banner(target_name)
+    if banner:
+        await _chunk_fn(banner)
 
     gen_fn = getattr(target, "process_user_input_stream", None) or getattr(
         target, "chat_stream", None
@@ -395,27 +536,19 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             await _end_fn()
             return
 
-        # All other message-passing agents: intercept send() to capture RESULT
-        reply_queue = asyncio.Queue()
-        original_send = target.send  # save so we can restore
-
-        async def _capture_send(
-            target_id: str,
-            msg_type: MessageType,
-            payload: Any = None,
-            **kw: Any,
-        ) -> bool:
-            if msg_type == MessageType.RESULT:
-                await reply_queue.put(payload)
-                return True
-            return await original_send(target_id, msg_type, payload, **kw)
-
-        target.send = _capture_send
+        # All other message-passing agents: intercept send() to capture the
+        # RESULT, since it is addressed to a correlation id rather than a real
+        # actor. The interceptor is installed once per agent and correlates by
+        # that id; it is never swapped back.
+        correlation_id = f"io-gateway:{uuid.uuid4().hex[:12]}"
+        reply_queue: asyncio.Queue = asyncio.Queue()
+        _install_reply_capture(target)
+        _PENDING_REPLIES[correlation_id] = reply_queue
         try:
             msg = Message(
                 type=MessageType.TASK,
-                sender_id="io-gateway",
-                reply_to="io-gateway",
+                sender_id=correlation_id,
+                reply_to=correlation_id,
                 payload={"text": text},
             )
             await target.handle_message(msg)
@@ -432,10 +565,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                     or str(payload)
                 )
                 if "agents" in payload and isinstance(payload["agents"], list):
-                    lines = [payload.get("message", "Available agents:")]
-                    for a in payload["agents"]:
-                        lines.append(f"  • {a['name']}: {a.get('description', '')}")
-                    text_out = "\n".join(lines)
+                    text_out = format_catalog_agents_response(payload)
             else:
                 text_out = str(payload)
 
@@ -448,39 +578,8 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             logger.error(msg, exc_info=True)
             await reply_fn(f"[error] {target.name}: {exc}")
         finally:
-            target.send = original_send  # always restore
+            _PENDING_REPLIES.pop(correlation_id, None)
             await _end_fn()
-
-
-# ── MQTT chat handler (legacy / IOAgent-less fallback) ─────────────────────
-
-
-async def handle_chat_mqtt(data: dict):
-    """Called when io/chat arrives via MQTT and registry is wired in."""
-    if runtime.registry is None:
-        return  # IOAgent handles it
-    # This subscriber is a legacy fallback. The live IOAgent owns io/chat when present.
-    if runtime.registry.find_by_name("io-agent") is not None:
-        return
-    content = (data.get("content") or "").strip()
-    if not content:
-        return
-
-    async def mqtt_reply(text: str):
-        if runtime.mqtt_client_ref:
-            await runtime.mqtt_client_ref.publish(
-                f"agents/{runtime.IO_GATEWAY_ID}/chat",
-                json.dumps(
-                    {
-                        "from": runtime.IO_GATEWAY_ID,
-                        "to": "user",
-                        "content": text,
-                        "timestamp": time.time(),
-                    }
-                ),
-            )
-
-    await route_chat(content, mqtt_reply)  # MQTT path: no streaming, reply_fn used for all output
 
 
 # ── REST chat endpoints ────────────────────────────────────────────────────
@@ -495,7 +594,7 @@ async def rest_chat_handler(request: web.Request) -> Response:
     except Exception:
         return web.json_response({"error": "invalid JSON"}, status=400)
     message = data.get("message", "").strip()
-    agent_name = data.get("agent_name", "main-actor")
+    agent_name = data.get("agent_name", MAIN_ACTOR_NAME)
     if not message:
         return web.json_response({"error": "message required"}, status=400)
     target = runtime.registry.find_by_name(agent_name)
@@ -504,43 +603,24 @@ async def rest_chat_handler(request: web.Request) -> Response:
     # As above: route to the named agent, since route_chat would otherwise
     # default to main when the message carries no @mention.
     routed = message if message.startswith(("@", "/")) else f"@{target.name} {message}"
-    track_chat_task(asyncio.create_task(route_chat(routed, lambda t: None)))
+    track_chat_task(asyncio.create_task(route_chat(routed, discard_reply)))
     return web.json_response({"status": "sent", "agent": agent_name})
 
 
-async def rest_chat_stop_handler(request: web.Request) -> Response:
+async def rest_chat_stop_handler(request: web.Request | None) -> Response:
     """POST /chat/stop — cancel any in-flight generation. No request body needed.
 
-    Works in both runtime modes:
-      - direct_ws — cancels the in-process generation task(s) running here; the
-        cancelled stream finalizes and posts "⏹ Stopped." over the WebSocket.
-      - mqtt (legacy) — publishes {"action": "stop"} to io/chat/control so the
-        IOAgent cancels the turn it is streaming and replies on io/chat/response.
-    The user-facing confirmation rides the usual chat reply path, so the UI
-    needs no extra subscription.
+    Cancels the in-process generation task(s); the cancelled stream finalizes and
+    posts "⏹ Stopped." over the WebSocket. The user-facing confirmation rides the
+    usual chat reply path, so the UI needs no extra subscription.
     """
-    # direct_ws: cancel the in-process generation task(s).
     tasks = [t for t in inflight_chat_tasks if not t.done()]
     for t in tasks:
         t.cancel()
-
-    # legacy MQTT: tell the IOAgent to stop whatever it is generating.
-    published = False
-    if runtime.registry is None and runtime.mqtt_client_ref:
-        try:
-            await runtime.mqtt_client_ref.publish(
-                "io/chat/control",
-                json.dumps({"action": "stop"}),
-                qos=1,
-            )
-            published = True
-        except Exception as exc:
-            logger.warning("[chat/stop] io/chat/control publish failed: %s", exc)
 
     return web.json_response(
         {
             "status": "stopped",
             "cancelled": len(tasks),
-            "published": published,
         }
     )

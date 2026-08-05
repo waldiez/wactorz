@@ -3,7 +3,8 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { CardDashboard } from "../ui/CardDashboard";
+import { CardDashboard, NODE_EVICT_MS } from "../ui/CardDashboard";
+import { STALE_MS } from "../ui/dashboard/agentState";
 import type { AgentInfo } from "../types/agent";
 import type { FeedItem } from "../types/feed";
 
@@ -104,6 +105,43 @@ describe("CardDashboard behaviour", () => {
             cd._setView("feed");
             expect(() => cd.updateRemoteNode("edge-2", [])).not.toThrow();
             expect(cd._remoteNodes.has("edge-2")).toBe(true);
+        });
+
+        it("keeps a node that has merely gone quiet, so it can render as offline", () => {
+            cd.show([agent("main")]);
+            cd.updateRemoteNode("edge-1", ["alpha"]);
+            cd._remoteNodes.set("edge-1", { agents: ["alpha"], lastSeen: Date.now() - STALE_MS * 2 });
+
+            cd.updateRemoteNode("edge-2", ["beta"]);
+
+            expect(cd._remoteNodes.has("edge-1")).toBe(true);
+        });
+
+        it("drops a node that has been gone far longer than offline", () => {
+            cd.show([agent("main")]);
+            cd.updateRemoteNode("edge-1", ["alpha"]);
+            cd._remoteNodes.set("edge-1", {
+                agents: ["alpha"],
+                lastSeen: Date.now() - NODE_EVICT_MS - 1,
+            });
+
+            cd.updateRemoteNode("edge-2", ["beta"]);
+
+            // the map is fed by every node announcement and nothing else pruned it
+            expect(cd._remoteNodes.has("edge-1")).toBe(false);
+            expect(cd._remoteNodes.has("edge-2")).toBe(true);
+        });
+
+        it("never evicts the node currently being announced", () => {
+            cd.show([agent("main")]);
+            cd._remoteNodes.set("edge-1", {
+                agents: ["alpha"],
+                lastSeen: Date.now() - NODE_EVICT_MS - 1,
+            });
+
+            cd.updateRemoteNode("edge-1", ["alpha", "beta"]);
+
+            expect(cd._remoteNodes.get("edge-1")?.agents).toEqual(["alpha", "beta"]);
         });
     });
 

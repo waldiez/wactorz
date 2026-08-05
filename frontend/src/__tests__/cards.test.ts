@@ -54,6 +54,57 @@ describe("buildStatCards", () => {
         );
     });
 
+    it("colours the cost card by how close the spend is to the limit", () => {
+        const detailOf = (limit: Record<string, unknown>): { detail: string; accent: string } => {
+            const c = document.createElement("div");
+            buildStatCards(c, { ...base, agents: [], costLimit: limit as never });
+            const card = c.querySelectorAll(".af-stat-card")[2]!;
+            return {
+                detail: card.querySelector(".af-stat-detail")!.textContent!,
+                accent: (card as HTMLElement).style.borderColor,
+            };
+        };
+
+        const under = detailOf({ limit_usd: 10, spend_usd: 1, pct_used: 10, period: "monthly" });
+        const warn = detailOf({
+            limit_usd: 10,
+            spend_usd: 8,
+            pct_used: 80,
+            period: "monthly",
+            warning: true,
+        });
+        const over = detailOf({
+            limit_usd: 10,
+            spend_usd: 10,
+            pct_used: 100,
+            period: "monthly",
+            limit_reached: true,
+        });
+
+        // Reaching the limit is the only state that turns the card red; a
+        // warning is amber, and so is the under-limit card, so the bar inside
+        // is what distinguishes those two.
+        expect(over.accent).not.toBe(warn.accent);
+        expect(under.detail).toContain("$1.0000 / $10.00 this month");
+    });
+
+    it("names the period the limit applies to", () => {
+        const periodOf = (period: string): string => {
+            const c = document.createElement("div");
+            buildStatCards(c, {
+                ...base,
+                agents: [],
+                costLimit: { limit_usd: 5, spend_usd: 1, pct_used: 20, period } as never,
+            });
+            return c.querySelectorAll(".af-stat-card")[2]!.querySelector(".af-stat-detail")!.textContent!;
+        };
+
+        // The number means nothing without the window it accrued over.
+        expect(periodOf("daily")).toContain("today");
+        expect(periodOf("weekly")).toContain("this week");
+        expect(periodOf("monthly")).toContain("this month");
+    });
+
     it("falls back to summing per-agent metrics when totals are null", () => {
         const c = document.createElement("div");
         buildStatCards(c, {
@@ -94,15 +145,22 @@ describe("appendActionBtns", () => {
         expect(actions(c)).toEqual(["resume", "stop", "delete"]);
     });
 
-    it("stopped → Delete only (no Stop)", () => {
+    it("stopped → Start and Delete (no Stop)", () => {
         const c = document.createElement("div");
         appendActionBtns(c, agent("worker", { state: "stopped" }));
-        expect(actions(c)).toEqual(["delete"]);
+        // Start has to be offered here, or Stop is a one-way door.
+        expect(actions(c)).toEqual(["start", "delete"]);
+    });
+
+    it("running → no Start", () => {
+        const c = document.createElement("div");
+        appendActionBtns(c, agent("worker", { state: "running" }));
+        expect(actions(c)).not.toContain("start");
     });
 
     it("protected (but messageable) → Pause only, no Stop/Delete", () => {
         const c = document.createElement("div");
-        appendActionBtns(c, agent("main-actor", { protected: true }));
+        appendActionBtns(c, agent("main", { protected: true }));
         expect(actions(c)).toEqual(["pause"]);
     });
 
@@ -125,6 +183,43 @@ describe("buildWactorCard", () => {
         expect(cbs.onChat).toHaveBeenCalledWith(a);
     });
 
+    it("gives a system agent no Chat button", () => {
+        // io-agent is plumbing, not a correspondent — offering Chat would send
+        // messages nothing answers.
+        const card = buildWactorCard(agent("io-agent"), 0, cb());
+
+        expect(card.querySelector(".af-chat-btn")).toBeNull();
+    });
+
+    it("ignores clicks on a disabled action button", () => {
+        const cbs = cb();
+        const card = buildWactorCard(agent("worker"), 0, cbs);
+        const btn = card.querySelector<HTMLButtonElement>("[data-action]")!;
+        btn.disabled = true;
+
+        btn.click();
+
+        // A disabled button is how an in-flight command is shown; firing it
+        // again would send the same command twice.
+        expect(cbs.onCommand).not.toHaveBeenCalled();
+    });
+
+    it("shows cost only once there is some", () => {
+        const withCost = buildWactorCard(agent("a", { costUsd: 0.25 }), 0, cb());
+        const without = buildWactorCard(agent("b", { costUsd: 0 }), 0, cb());
+
+        expect(withCost.querySelector(".af-card-meta")!.textContent).toContain("$0.2500");
+        expect(without.querySelector(".af-card-meta")!.textContent).not.toContain("$");
+    });
+
+    it("abbreviates large token counts", () => {
+        const card = buildWactorCard(agent("a", { inputTokens: 2_400_000, outputTokens: 1_500 }), 0, cb());
+
+        const line = card.textContent!;
+        expect(line).toContain("2.4M");
+        expect(line).toContain("1.5k");
+    });
+
     it("routes action-button clicks through onCommand", () => {
         const cbs = cb();
         const card = buildWactorCard(agent("worker", { state: "running" }), 0, cbs);
@@ -133,7 +228,7 @@ describe("buildWactorCard", () => {
     });
 
     it("shows the protected shield and hides destructive actions for protected agents", () => {
-        const card = buildWactorCard(agent("main-actor", { protected: true }), 1000, cb());
+        const card = buildWactorCard(agent("main", { protected: true }), 1000, cb());
         expect(card.querySelector(".af-card-protected")).not.toBeNull();
         expect(actions(card)).not.toContain("delete");
     });

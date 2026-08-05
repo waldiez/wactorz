@@ -8,6 +8,7 @@
  * painting. Owns this telemetry state and routes re-renders back through the host.
  */
 import { buildSettingsView, type CostLimitInfo } from "./settings";
+import { postOrWarn } from "./mutate";
 import { hostBarValues } from "./cards";
 import type { View } from "./types";
 
@@ -138,18 +139,23 @@ export class MetricsController {
         }
     }
 
+    /** POST a spend change, then refetch either way — on success to pick up the
+     *  new value, on failure to show what the server still holds. */
+    private async _mutateCost(what: string, path: string, init: RequestInit): Promise<void> {
+        await postOrWarn(`${this._ingress}${path}`, init, what);
+        await this._fetchCostInfo();
+    }
+
     private async _saveCostLimit(limit_usd: number, period: string): Promise<void> {
-        await fetch(`${this._ingress}/api/cost/limit`, {
+        await this._mutateCost("save the limit", "/api/cost/limit", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ limit_usd, period }),
         });
-        await this._fetchCostInfo();
     }
 
     private async _resetCost(): Promise<void> {
-        await fetch(`${this._ingress}/api/cost/reset`, { method: "POST" });
-        await this._fetchCostInfo();
+        await this._mutateCost("reset spend", "/api/cost/reset", { method: "POST" });
     }
 
     /** Patch the host bar's CPU/mem fill + text in place, via the same

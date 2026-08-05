@@ -449,7 +449,7 @@ The core extensibility primitive. DynamicAgent compiles and runs a Python code s
 | `await agent.send_to(name, payload)` | async | Send a TASK message to another actor by name |
 | `await agent.log(message)` | async | Publish to the agent's log stream |
 | `await agent.alert(message, level)` | async | Publish an alert (`info`, `warning`, `error`) |
-| `agent.persist(key, value)` | **sync** | Write a value (routes to SQLite/Redis/Pickle based on key) |
+| `agent.persist(key, value)` | **sync** | Write a value (routes to SQLite/memory/Pickle based on key) |
 | `agent.recall(key)` | **sync** | Read a persisted value |
 | `agent.state` | — | In-memory dict (not persisted) |
 | `agent.window(topic, seconds)` | **sync** | Create a sliding time window over an MQTT topic stream |
@@ -617,14 +617,15 @@ class MyAgent(Actor):
             await asyncio.sleep(10)
 ```
 
-Then register it in `cli.py` inside `build_system()`:
+Then register it in `app.py` inside `build_system()`. `_sd` there is the state directory
+resolved at startup, and `_wire_persistence` attaches the persistence API:
 
 ```python
 from wactorz.agents.my_agent import MyAgent
 
 def make_my_agent():
     return _wire_persistence(
-        MyAgent(name="my-agent", persistence_dir="./state"))
+        MyAgent(name="my-agent", persistence_dir=_sd))
 
 system.supervisor.supervise(
     "my-agent", make_my_agent,

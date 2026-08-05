@@ -12,17 +12,33 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 from wactorz.config import CONFIG
+from wactorz.llm_factory import provider_for
 
 from ...core.actor import MessageType
 from ..prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT
 
+if TYPE_CHECKING:
+    from .host import RoutingHost
+
+    # Typing-only base: it states what the host must provide, and disappears at
+    # runtime so the real MRO is exactly what it was.
+    _Host = RoutingHost
+else:
+    _Host = object
+
 logger = logging.getLogger(__name__)
 
 
-class RoutingMixin:
-    """Intent classification + one-off actuation. Mix into an LLMAgent host."""
+class RoutingMixin(_Host):
+    """Intent classification + one-off actuation. Mix into an LLMAgent host.
+
+    The host contract is `RoutingHost` in `host.py`, declared rather than
+    described — this docstring used to list the attributes in prose and nothing
+    checked that the list was true.
+    """
 
     async def _classify_intent(self, text: str) -> str:
         """Classify user intent as ACTUATE, HA, PIPELINE, or OTHER using a single cheap LLM call.
@@ -30,7 +46,8 @@ class RoutingMixin:
         """
         if not text or text.startswith("/"):
             return "OTHER"
-        if self.llm is None:
+        llm = provider_for("intent", self.llm)
+        if llm is None:
             return "OTHER"
         classifier_text = text
         history = getattr(self, "_current_interface_history", lambda: ())()
@@ -50,7 +67,7 @@ class RoutingMixin:
             )
         try:
             decision, _usage = await asyncio.wait_for(
-                self.llm.complete(
+                llm.complete(
                     messages=[{"role": "user", "content": classifier_text}],
                     system=INTENT_CLASSIFIER_PROMPT,
                     max_tokens=10,
@@ -73,7 +90,15 @@ class RoutingMixin:
             logger.debug(f"[{self.name}] Intent classification failed: {e}")
             return "OTHER"
 
-    async def _handle_actuate_intent(self, text: str) -> str:
+    async def _handle_actuate_intent(
+        self, text: str, allowed_domains: frozenset[str] | set[str] | None = None
+    ) -> str:
+        """Resolve and execute a device-control request.
+
+        ``allowed_domains`` restricts which Home Assistant domains may be
+        actuated; None (the default, used by the dashboard and CLI) allows all.
+        Untrusted callers pass ``SOCIAL_ACTUATE_DOMAINS``.
+        """
         if not CONFIG.ha_url or not CONFIG.ha_token:
             return (
                 "Home Assistant is not configured. Set `HA_URL` and `HA_TOKEN` in your .env file."
@@ -151,9 +176,10 @@ class RoutingMixin:
                 conversation_context=list(
                     getattr(self, "_current_interface_history", lambda: ())()
                 ),
-                llm_provider=self.llm,
+                llm_provider=provider_for("actuator", self.llm),
                 task_id=task_id,
                 reply_to_id=self.actor_id,
+                allowed_domains=allowed_domains,
                 persistence_dir=str(self._persistence_dir.parent),
             )
             result = await asyncio.wait_for(future, timeout=120.0)

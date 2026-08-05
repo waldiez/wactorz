@@ -176,3 +176,133 @@ describe("renderMarkdown", () => {
         expect(el.querySelectorAll("em")).toHaveLength(n);
     });
 });
+
+describe("renderMarkdown images", () => {
+    const PNG = "data:image/png;base64,iVBORw0KGgo=";
+
+    it("renders an inline data image an agent replied with", () => {
+        const el = render(`![camera.front](${PNG})`);
+        const img = el.querySelector("img");
+        expect(img).not.toBeNull();
+        expect(img!.getAttribute("src")).toBe(PNG);
+        expect(img!.alt).toBe("camera.front");
+    });
+
+    it("accepts the jpeg a camera snapshot actually arrives as", () => {
+        const el = render("![shot](data:image/jpeg;base64,/9j/4AAQ)");
+        expect(el.querySelector("img")).not.toBeNull();
+    });
+
+    describe("accepts every raster type in the allow-list", () => {
+        // Pinned in full: with only png and jpeg covered, narrowing the pattern
+        // would leave the rest failing silently at runtime instead of here.
+        const accepted: [string, string][] = [
+            ["png", "data:image/png;base64,iVBORw0KGgo="],
+            ["jpeg", "data:image/jpeg;base64,/9j/4AAQ"],
+            ["jpg", "data:image/jpg;base64,/9j/4AAQ"],
+            ["gif", "data:image/gif;base64,R0lGODlhAQ=="],
+            ["webp", "data:image/webp;base64,UklGRh4AAABXRUJQ"],
+            ["avif", "data:image/avif;base64,AAAAIGZ0eXBhdmlm"],
+            ["blob", "blob:http://localhost:8888/9f1c-0e2a"],
+            ["http", "http://node-a.local/plot.png"],
+        ];
+
+        it.each(accepted)("accepts %s", (_label, src) => {
+            expect(render(`![x](${src})`).querySelector("img")).not.toBeNull();
+        });
+    });
+
+    it("accepts an https image, which is how a remote node returns one", () => {
+        const el = render("![chart](https://node-a.local/plot.png)");
+        expect(el.querySelector("img")!.getAttribute("src")).toBe("https://node-a.local/plot.png");
+    });
+
+    it("gives an unlabelled image a non-empty alt", () => {
+        // Screen readers announce nothing useful for alt="".
+        expect(render(`![](${PNG})`).querySelector("img")!.alt).toBe("image");
+    });
+
+    it("does not turn an image into a link", () => {
+        // The image rule runs first, so no stray "!" and no anchor.
+        const el = render(`![shot](${PNG})`);
+        expect(el.querySelector("a")).toBeNull();
+        expect(el.textContent).toBe("");
+    });
+
+    it("still renders an ordinary link", () => {
+        const el = render("[docs](https://example.com)");
+        expect(el.querySelector("a")!.getAttribute("href")).toBe("https://example.com");
+    });
+
+    describe("refuses anything that is not an image", () => {
+        const rejected: [string, string][] = [
+            ["javascript:", "javascript:alert(1)"],
+            ["an html data url", "data:text/html;base64,PHNjcmlwdD4="],
+            ["svg, which can carry script", "data:image/svg+xml;base64,PHN2Zz4="],
+            ["a non-base64 data url", "data:image/png,notbase64"],
+            ["a bare file path", "/tmp/snapshot.png"],
+        ];
+
+        it.each(rejected)("rejects %s", (_label, src) => {
+            const el = render(`![x](${src})`);
+            expect(el.querySelector("img")).toBeNull();
+            // Left as the text it was, so nothing vanishes without explanation.
+            expect(el.textContent).toContain("![x]");
+        });
+    });
+});
+
+describe("renderMarkdown bare urls", () => {
+    const html = (src: string): string => {
+        const d = document.createElement("div");
+        d.appendChild(renderMarkdown(src));
+        return d.innerHTML;
+    };
+
+    it("links a bare url", () => {
+        const d = document.createElement("div");
+        d.appendChild(renderMarkdown("see https://example.com now"));
+        const a = d.querySelector("a")!;
+
+        expect(a.getAttribute("href")).toBe("https://example.com");
+        expect(a.textContent).toBe("https://example.com");
+    });
+
+    it("leaves trailing sentence punctuation outside the link", () => {
+        const d = document.createElement("div");
+        d.appendChild(renderMarkdown("see https://example.com/page."));
+        const a = d.querySelector("a")!;
+
+        // The full stop ends the sentence, not the URL — including it would
+        // produce a link that 404s.
+        expect(a.getAttribute("href")).toBe("https://example.com/page");
+        expect(d.textContent).toContain("page.");
+    });
+
+    it("keeps text that follows an inline element", () => {
+        expect(html("**bold** and then some tail")).toContain("and then some tail");
+    });
+});
+
+describe("renderMarkdown tables", () => {
+    const table = (src: string): HTMLTableElement | null => {
+        const d = document.createElement("div");
+        d.appendChild(renderMarkdown(src));
+        return d.querySelector("table");
+    };
+
+    it("renders a header-only table without an empty body", () => {
+        const el = table("| a | b |\n| --- | --- |");
+
+        expect(el).not.toBeNull();
+        expect(el!.querySelector("tbody")).toBeNull();
+    });
+
+    it("accepts rows written without outer pipes", () => {
+        const el = table("a | b\n--- | ---\n1 | 2");
+
+        expect(el).not.toBeNull();
+        expect([...el!.querySelectorAll("th")].map(c => c.textContent)).toEqual(["a", "b"]);
+        expect([...el!.querySelectorAll("td")].map(c => c.textContent)).toEqual(["1", "2"]);
+    });
+});

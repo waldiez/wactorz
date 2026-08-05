@@ -21,6 +21,10 @@ from .llm_agent import LLMProvider, _accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
+# Import-time marker: appears once at startup so it is unambiguous which
+# version of this module the running process loaded.
+logger.info("one_off_actuator_agent loaded — resolver guard v2 active")
+
 _COLOR_RGB = {
     "cyan": [0, 255, 255],
     "blue": [0, 0, 255],
@@ -57,6 +61,29 @@ _ACCENT_LIGHT_HINTS = (
     "night light",
 )
 
+# Home Assistant domains an untrusted caller (Discord/Telegram/WhatsApp) may
+# actuate. Deliberately an allow-list: `domain`/`service` come out of the LLM's
+# JSON and are executed verbatim, so a deny-list would have to enumerate every
+# escape. `shell_command` and `python_script` run arbitrary code on the HA host;
+# `script`/`automation` run whatever the user wired into them, which can include
+# both; `hassio`/`homeassistant` can stop or restart the stack. None of those
+# belong on a social channel — they stay available on the dashboard.
+SOCIAL_ACTUATE_DOMAINS = frozenset(
+    {
+        "light",
+        "switch",
+        "fan",
+        "cover",
+        "climate",
+        "media_player",
+        "vacuum",
+        "humidifier",
+        "water_heater",
+        "input_boolean",
+        "scene",
+    }
+)
+
 _RESOLVER_PROMPT = """You are a Home Assistant service-call resolver.
 
 Your task:
@@ -74,11 +101,44 @@ Action schema:
   }
 ]
 
+Worked examples:
+
+Request: "dim the living room lamp to 50%" with light.living_room_lamp in the payload:
+[
+  {
+    "domain": "light",
+    "service": "turn_on",
+    "entity_id": "light.living_room_lamp",
+    "service_data": {"brightness_pct": 50}
+  }
+]
+
+Request: "turn off the TV" with media_player.living_room_tv in the payload:
+[
+  {
+    "domain": "media_player",
+    "service": "turn_off",
+    "entity_id": "media_player.living_room_tv"
+  }
+]
+
+Request: "turn off the TV" when NO tv/media_player entity exists in the payload
+(only lights, switches, etc.):
+[]
+
 Rules:
 - Return an array, never an object.
 - ``user_request`` is the only command to execute. ``conversation_context`` is
   reference context only; never repeat or execute an older request from it.
 - Use the most specific matching entity_id available.
+- The chosen entity MUST be the device the user named. NEVER substitute a
+  different device: if the user says "TV" and no TV-like entity exists in the
+  payload, return [] — do NOT act on a light, switch, or any other device
+  instead. Acting on the wrong device is far worse than doing nothing.
+- Return ONLY actions for the devices the user asked about in THIS request.
+  Do NOT add extra actions for other devices the user did not mention.
+  The worked examples above illustrate the output FORMAT only — never copy
+  their actions into your answer.
 - If the request is ambiguous or no device matches, return [].
 - For multiple commands in one request, return multiple actions.
 - Only include service_data keys that are needed.
@@ -100,6 +160,218 @@ Rules:
 """
 
 
+# ── Post-resolution guard ────────────────────────────────────────────────────
+# Small local models sometimes ignore the resolver rules: they substitute a
+# device the user never named, or append "bonus" actions copied from the
+# prompt's worked examples. Wrong actuation is strictly worse than none, so
+# every resolved action is checked against the request before execution.
+
+# Words that name a *kind* of device rather than a specific one. They justify
+# an action in the mapped domain but cannot single out one entity.
+_DEVICE_WORD_DOMAINS = {
+    "light": "light",
+    "lights": "light",
+    "lamp": "light",
+    "lamps": "light",
+    "bulb": "light",
+    "bulbs": "light",
+    "brightness": "light",
+    "dim": "light",
+    "tv": "media_player",
+    "television": "media_player",
+    "telly": "media_player",
+    "speaker": "media_player",
+    "speakers": "media_player",
+    "music": "media_player",
+    "volume": "media_player",
+    "radio": "media_player",
+    "thermostat": "climate",
+    "heating": "climate",
+    "heater": "climate",
+    "temperature": "climate",
+    "degrees": "climate",
+    "warmer": "climate",
+    "cooler": "climate",
+    "ac": "climate",
+    "aircon": "climate",
+    "lock": "lock",
+    "locks": "lock",
+    "unlock": "lock",
+    "blinds": "cover",
+    "curtain": "cover",
+    "curtains": "cover",
+    "cover": "cover",
+    "covers": "cover",
+    "shutter": "cover",
+    "shutters": "cover",
+    "garage": "cover",
+    "switch": "switch",
+    "plug": "switch",
+    "socket": "switch",
+    "outlet": "switch",
+    "kettle": "switch",
+    "fan": "fan",
+    "fans": "fan",
+    "vacuum": "vacuum",
+    "hoover": "vacuum",
+    "camera": "camera",
+    "cameras": "camera",
+}
+
+_REQUEST_STOPWORDS = {
+    "the",
+    "a",
+    "an",
+    "my",
+    "our",
+    "your",
+    "and",
+    "or",
+    "to",
+    "in",
+    "at",
+    "of",
+    "for",
+    "on",
+    "off",
+    "turn",
+    "set",
+    "put",
+    "make",
+    "please",
+    "now",
+    "then",
+    "it",
+    "is",
+    "with",
+    "all",
+    "some",
+    "me",
+    "can",
+    "you",
+    "could",
+    "open",
+    "close",
+    "start",
+    "stop",
+}
+
+
+def _request_tokens(request: str) -> tuple[set[str], set[str]]:
+    """Split a request into (specific_tokens, domain_hints).
+
+    Specific tokens are words that could name a particular device ("hue",
+    "office", "samsung"); domain hints are the domains implied by generic
+    device words ("lights" → light). Colors, digits, and stopwords carry no
+    device information and are excluded.
+    """
+    tokens: set[str] = set()
+    for raw in request.lower().replace("_", " ").replace("-", " ").split():
+        tok = raw.strip(".,!?()[]{}'\":;%")
+        if len(tok) < 2 or tok.isdigit() or tok in _REQUEST_STOPWORDS or tok in _COLOR_RGB:
+            continue
+        tokens.add(tok)
+    hints = {_DEVICE_WORD_DOMAINS[t] for t in tokens if t in _DEVICE_WORD_DOMAINS}
+    specific = {t for t in tokens if t not in _DEVICE_WORD_DOMAINS}
+    return specific, hints
+
+
+def _entity_haystacks(devices: Any) -> dict[str, str]:
+    """entity_id → searchable text (id suffix + names + area), lowercased."""
+    haystacks: dict[str, str] = {}
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            entity_id = str(node.get("entity_id") or "")
+            if entity_id:
+                attrs = node.get("attributes")
+                if not isinstance(attrs, dict):
+                    attrs = {}
+                state = node.get("state")
+                # Bound once: looked up twice, the check and the value were
+                # two separate calls, so nothing tied them together.
+                nested = state.get("attributes") if isinstance(state, dict) else None
+                state_attrs = nested if isinstance(nested, dict) else {}
+                parts = [
+                    entity_id.split(".", 1)[-1],
+                    node.get("name"),
+                    node.get("friendly_name"),
+                    attrs.get("friendly_name"),
+                    state_attrs.get("friendly_name"),
+                    node.get("area"),
+                    node.get("location"),
+                ]
+                text = " ".join(str(p) for p in parts if p)
+                haystacks[entity_id] = (
+                    haystacks.get(entity_id, "")
+                    + " "
+                    + text.lower().replace("_", " ").replace("-", " ")
+                )
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(devices)
+    return haystacks
+
+
+def filter_unrequested_actions(
+    request: str,
+    actions: list[ActuatorAction],
+    devices: Any,
+) -> tuple[list[ActuatorAction], list[ActuatorAction]]:
+    """Split resolved actions into (kept, dropped) based on the request.
+
+    An action is kept when its entity matches a specific token of the request
+    (e.g. "hue" → light.philips_hue_lct015), or when its domain is implied by a
+    generic device word ("lights" → light) and no other action already matched
+    that domain specifically. Everything else — actions on devices the user
+    never mentioned — is dropped.
+
+    If nothing survives: return ([], actions) when the request clearly named
+    a device kind or a specific device that none of the actions touch (the
+    substitution case), else pass everything through unchanged — a request
+    with no recognizable device reference cannot be adjudicated here.
+    """
+    if not actions:
+        return [], []
+    # Routing appends the discovered entity list to the request text before
+    # spawning the actuator. Only the user's own words may vouch for an action
+    # — tokenizing the injected list would make every entity "mentioned" and
+    # let any action through.
+    request = request.split("[AVAILABLE HA ENTITIES", 1)[0]
+    specific, hints = _request_tokens(request)
+    haystacks = _entity_haystacks(devices)
+
+    def entity_match(action: ActuatorAction) -> bool:
+        suffix = action.entity_id.split(".", 1)[-1].replace("_", " ").replace("-", " ").lower()
+        hay = f"{haystacks.get(action.entity_id, '')} {suffix}"
+        return any(tok in hay or tok.rstrip("s") in hay for tok in specific)
+
+    matched_ids = {id(a) for a in actions if entity_match(a)}
+    matched_domains = {a.domain for a in actions if id(a) in matched_ids}
+
+    kept: list[ActuatorAction] = []
+    dropped: list[ActuatorAction] = []
+    for action in actions:
+        if id(action) in matched_ids or (
+            action.domain in hints and action.domain not in matched_domains
+        ):
+            kept.append(action)
+        else:
+            dropped.append(action)
+
+    if kept:
+        return kept, dropped
+    # Nothing survived. Veto everything only when the request named a device
+    # (kind or specific) that none of the actions correspond to.
+    if hints or specific:
+        return [], actions
+    return actions, []
+
+
 class OneOffActuatorAgent(Actor):
     """Ephemeral actor that resolves and executes one-shot HA service calls."""
 
@@ -118,6 +390,7 @@ class OneOffActuatorAgent(Actor):
         task_id: str,
         reply_to_id: str,
         conversation_context: list[dict[str, Any]] | None = None,
+        allowed_domains: frozenset[str] | set[str] | None = None,
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("name", f"one-off-actuator-{task_id[-8:]}")
@@ -127,6 +400,9 @@ class OneOffActuatorAgent(Actor):
         self.llm = llm_provider
         self.task_id = task_id
         self.reply_to_id = reply_to_id
+        # None = trusted caller (dashboard/CLI), every domain allowed. A set
+        # restricts execution to those domains; see SOCIAL_ACTUATE_DOMAINS.
+        self.allowed_domains = frozenset(allowed_domains) if allowed_domains is not None else None
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost_usd = 0.0
@@ -203,8 +479,13 @@ class OneOffActuatorAgent(Actor):
             "conversation_context": self.conversation_context,
             "devices": devices,
         }
+        llm = self.llm
+        if llm is None:
+            # _execute_request checks before calling, but that guard does not
+            # carry into here; no provider means no actions to take.
+            return []
         raw, usage = await asyncio.wait_for(
-            self.llm.complete(
+            llm.complete(
                 messages=[{"role": "user", "content": json.dumps(prompt_input)}],
                 system=_RESOLVER_PROMPT,
                 max_tokens=1200,
@@ -214,7 +495,20 @@ class OneOffActuatorAgent(Actor):
         self._accumulate_usage(usage)
         parsed = self._parse_actions_json(raw)
         actions = [ActuatorAction.from_dict(item) for item in parsed]
-        return self._repair_color_actions(actions, devices)
+        actions = self._repair_color_actions(actions, devices)
+        kept, dropped = filter_unrequested_actions(self.request, actions, devices)
+        # Always log the verdict — an actuation with no "Guard:" line means the
+        # running process is not executing this module.
+        await self._log(
+            f"Guard: resolver returned {len(actions)} action(s), "
+            f"kept {len(kept)}, dropped {len(dropped)}"
+            + (
+                " — dropped: " + ", ".join(self._format_action(a) for a in dropped)
+                if dropped
+                else ""
+            )
+        )
+        return kept
 
     def _parse_actions_json(self, raw: str) -> list[dict[str, Any]]:
         cleaned = (raw or "").strip()
@@ -227,8 +521,13 @@ class OneOffActuatorAgent(Actor):
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError:
-            logger.warning("[%s] Actuator resolver returned invalid JSON", self.name)
-            return []
+            # Models occasionally wrap the array in prose despite the
+            # JSON-only instruction. Salvage the first [...] span rather than
+            # failing the whole actuation.
+            start, end = cleaned.find("["), cleaned.rfind("]")
+            if start == -1 or end <= start:
+                raise
+            data = json.loads(cleaned[start : end + 1])
         if not isinstance(data, list):
             return []
         return [item for item in data if isinstance(item, dict)]
@@ -395,9 +694,11 @@ class OneOffActuatorAgent(Actor):
         return ranked[0][2]
 
     def _requested_rgb(self) -> list[int] | None:
-        request = self._clean_request()
+        text = self._clean_request()
         for color, rgb in _COLOR_RGB.items():
-            if color in request:
+            # Whole-word match only: "infrared" must not count as "red",
+            # "bluetooth" must not count as "blue".
+            if re.search(rf"\b{color}\b", text):
                 return list(rgb)
         return None
 
@@ -624,10 +925,36 @@ class OneOffActuatorAgent(Actor):
                 attrs.update(entity[key])
         return attrs
 
+    def _is_allowed(self, action: ActuatorAction) -> bool:
+        """Whether this caller may execute ``action``. Trusted callers pass None."""
+        if self.allowed_domains is None:
+            return True
+        return str(action.domain or "").lower() in self.allowed_domains
+
     async def _execute_actions(self, actions: list[ActuatorAction]) -> str:
         ws_url = normalize_ha_ws_url(CONFIG.ha_url)
         successes: list[str] = []
         failures: list[str] = []
+
+        # Enforced here rather than in the resolver prompt: the prompt is a
+        # request, this is the gate. Blocked actions never reach call_service.
+        blocked = [a for a in actions if not self._is_allowed(a)]
+        actions = [a for a in actions if self._is_allowed(a)]
+        for action in blocked:
+            logger.warning(
+                "[%s] blocked out-of-policy service call %s.%s (allowed domains: %s)",
+                self.name,
+                action.domain,
+                action.service,
+                ", ".join(sorted(self.allowed_domains or [])),
+            )
+        if blocked and not actions:
+            names = ", ".join(sorted({str(a.domain) for a in blocked}))
+            return (
+                f"I can't control {names} from this channel — only everyday devices "
+                "(lights, switches, climate, media, covers) are available here. "
+                "Use the dashboard for anything else."
+            )
 
         async with HAWebSocketClient(ws_url, CONFIG.ha_token) as ha:
             for action in actions:
@@ -642,15 +969,24 @@ class OneOffActuatorAgent(Actor):
                 except Exception as exc:
                     failures.append(f"{self._format_action(action)} ({exc})")
 
+        # Say what was refused, so a partly-blocked request doesn't read as if
+        # everything the user asked for went through.
+        note = ""
+        if blocked:
+            note = " Skipped (not available on this channel): " + ", ".join(
+                sorted({f"{a.domain}.{a.service}" for a in blocked})
+            )
+
         if successes and not failures:
-            return f"Done: {', '.join(successes)}."
+            return f"Done: {', '.join(successes)}.{note}"
         if failures and not successes:
-            return "Nothing was executed successfully: " + "; ".join(failures)
+            return "Nothing was executed successfully: " + "; ".join(failures) + note
         return (
             "Partial success. Completed: "
             + ", ".join(successes)
             + ". Failed: "
             + "; ".join(failures)
+            + note
         )
 
     def _format_action(self, action: ActuatorAction) -> str:

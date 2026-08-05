@@ -30,8 +30,6 @@ cd wactorz
 
 ```
 listener 1883
-listener 9001
-protocol websockets
 allow_anonymous true
 persistence true
 persistence_location /mosquitto/data/
@@ -50,7 +48,6 @@ services:
     restart: unless-stopped
     ports:
       - "1883:1883"
-      - "9001:9001"
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
@@ -162,7 +159,7 @@ WS_PORT=8888
 ```powershell
 [System.IO.File]::WriteAllText(
   (Join-Path (Get-Location) "mosquitto.conf"),
-  "listener 1883`nlistener 9001`nprotocol websockets`nallow_anonymous true`npersistence true`npersistence_location /mosquitto/data/`nlog_dest stdout`n",
+  "listener 1883`nallow_anonymous true`npersistence true`npersistence_location /mosquitto/data/`nlog_dest stdout`n",
   [System.Text.UTF8Encoding]::new($false)
 )
 
@@ -170,7 +167,6 @@ docker network create wactorz-net
 docker run -d --name wactorz-mosquitto `
   --network wactorz-net `
   -p "1883:1883" `
-  -p "9001:9001" `
   -v "${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf" `
   eclipse-mosquitto:2.0
 ```

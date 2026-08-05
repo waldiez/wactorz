@@ -55,8 +55,9 @@ The framework is built on three ideas: every agent is an independent **actor** w
 
 | File | Responsibility |
 |------|----------------|
-| `actor.py` | `Actor` base class — message loop, heartbeat, persistence (SQLite / Redis / Pickle), supervisor strategy enum |
-| `registry.py` | `ActorSystem`, `ActorRegistry`, `Supervisor`, `_MQTTPublisher` (shared aiomqtt connection) |
+| `actor.py` | `Actor` base class — message loop, heartbeat, persistence (SQLite / memory / Pickle), supervisor strategy enum |
+| `registry.py` | `ActorSystem`, `ActorRegistry`, `Supervisor` |
+| `mqtt_publisher.py` | `MQTTPublisher` — shared aiomqtt connection with a durable outbox |
 
 ### Built-in Agents — `wactorz/agents/`
 
@@ -107,19 +108,19 @@ The Supervisor wraps each actor with a `ONE_FOR_ONE` restart policy. If an actor
 
 ## Persistence
 
-Wactorz uses a three-tier persistence layer (`wactorz/core/persistence.py`) that routes each key to the appropriate store:
+Wactorz uses a three-tier persistence layer (`wactorz/core/persistence/`) that routes each key to the appropriate store:
 
 | Store | Location | Used for |
 |-------|----------|----------|
 | **SQLite** | `state/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, topic contracts, conversation history, time-series sensor/detection/HA-state data |
-| **Redis** | `redis://localhost:6379` (falls back to in-memory if Redis is unavailable) | Ephemeral fast-access data: observed topic samples, agent metrics, heartbeat state |
+| **Process memory** | in-process, lost on restart | Ephemeral fast-access data: observed topic samples, agent metrics, heartbeat state |
 | **Pickle** | `state/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state dicts, ML models, numpy arrays, cv2 captures |
 
 `Actor.persist(key, value)` and `Actor.recall(key)` route automatically to the correct store based on the key name. Existing agent code works without changes.
 
 The spawn registry (`_spawned_agents`) is stored in SQLite. On restart, MainActor re-spawns every entry so dynamic agents and catalog agents survive reboots.
 
-On first startup after upgrading from an older version, `migrate_from_pickle()` reads existing `.pkl` files and moves structured keys to SQLite/Redis. Pickle files are left in place for keys that remain in pickle.
+On first startup after upgrading from an older version, `migrate_from_pickle()` reads existing `.pkl` files and moves structured keys to their store. Pickle files are left in place for keys that remain in pickle.
 
 ---
 
@@ -200,6 +201,34 @@ Discord channel
 | `GeminiProvider` | `--llm gemini --gemini-model gemini-2.5-flash` | `GEMINI_API_KEY` | `gemini-2.5-flash` (gemini-only fallback when `LLM_MODEL` is unset) |
 
 All providers implement `complete(messages, system) → (text, usage)` and `stream(messages, system) → AsyncGenerator`. Cost tracking (USD per 1M tokens) is built into every provider and accumulated in `LLMAgent.metrics`.
+
+### Sampling temperature
+
+`LLM_TEMPERATURE` sets the sampling temperature for every provider and every call (`0` for
+deterministic routing and actuation; unset keeps each provider's default — Anthropic, OpenAI and
+Gemini default to `1.0`, Ollama to `0.8`, so pinning it is what makes runs comparable across
+backends). Ollama receives it as `options.temperature`; the others take it as a top-level request
+parameter. An individual call site can still pass `temperature=` to `complete()` / `stream()`,
+which wins over the env setting. The resolved value is logged at startup.
+
+### Per-call-site overrides
+
+`LLM_OVERRIDES` routes individual call sites to different providers/models, falling back to the global `LLM_PROVIDER` for any site not listed (`wactorz/llm_factory.py`):
+
+```bash
+LLM_OVERRIDES="intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6"
+```
+
+| Site | Call it configures |
+|------|--------------------|
+| `main` | MainActor conversation + history summarization |
+| `intent` | Intent classification (ACTUATE / HA / PIPELINE / OTHER) |
+| `planner` | PlannerAgent planning and code generation |
+| `actuator` | OneOffActuatorAgent direct device control |
+| `ha` | HomeAssistantAgent internal classification |
+| `dynamic` | `get_llm()` shim inside generated DynamicAgent code |
+
+The format is `<site>=<provider>[:<model>]`; only the first colon splits provider from model, so Ollama tags like `qwen3:4b` work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. `site=none` disables the LLM for that site.
 
 For Ollama, `system` is encoded as the first `{"role": "system"}` entry in the native `/api/chat` `messages` array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.
 

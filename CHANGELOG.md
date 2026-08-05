@@ -160,6 +160,103 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `custom/reachy/camera` / `custom/reachy/audio`); the blobs never enter the retained state
   heartbeat. Plain English ("take a photo", "listen") and the NL planner both reach them.
 
+- **Images in an agent's reply are shown as images.** An agent answering with a camera snapshot or a generated chart sends it inline, and the chat rendered that as a wall of base64 text. Such images now appear in the message, bounded so a full-resolution frame cannot stretch the conversation, and clicking one opens it full size. Only real image formats are accepted — PNG, JPEG, GIF, WebP and AVIF, whether inline or fetched over http(s) — and anything else is left as the text it was rather than silently dropped. SVG is excluded on purpose, because it can carry scripts.
+- **A stopped agent can be started again.** Stopping one left deleting it as the only remaining action, so stopping was effectively permanent. Agent cards now offer **Start** for a stopped agent, `/start <agent>` does the same from chat, and the agent goes back under supervision — without that it would run unwatched, crashing and staying down. This is not the same as `/agents restart`, which re-creates an agent from its saved spawn configuration; Start resumes the one that is already there, including built-in agents that were never spawned from chat.
+
+### Changed
+
+- **Credentials are redacted from the log file and the console, and `wactorz.log` now rotates.** Broker URLs like `mqtt://user:password@host`, `Authorization` headers, `password=`/`api_key=` pairs and private keys were written verbatim to a file that grew without bound. Known patterns are replaced with `[redacted]`; the log rolls at 10 MB keeping 5 backups, and `wactorz-reset` deletes those backups. Known shapes only — not a guarantee that no secret ever reaches disk. Logging is now configured at startup rather than on import, so importing Wactorz as a library no longer overrides your own logging setup; call `wactorz.monitoring.log_setup.setup_logging()` for the old behaviour.
+- **The dashboard address is printed when startup finishes, rather than when the web server binds.** It used to appear early and scroll out of view under the agents starting up.
+- **The Home Assistant add-on no longer publishes its ports to your network.** The dashboard and REST API were mapped to host ports `8888`/`8000`, so anything on the network could reach them directly, bypassing the Home Assistant login that protects the add-on panel. Nothing is published by default now — open Wactorz from its panel, or assign a host port under the add-on's Network section if you deliberately want access from outside Home Assistant.
+- **The add-on asks for less authority over Home Assistant.** It requested the Supervisor `admin` role — full Supervisor API access, including every other add-on's configuration and secrets — and used none of it. It now runs with the default role; the Home Assistant core API it actually calls is unaffected.
+- **The add-on's embedded MQTT broker requires credentials and no longer runs as root.** It accepted anonymous connections from anything that could reach it on the Home Assistant container network, and stayed root in order to write its own persistence directory. It now generates a credential on first start, keeps it under `/data` so it survives restarts and updates, authenticates every connection, and runs as the unprivileged `mosquitto` user.
+- **The Docker image runs as an unprivileged user.** Previously everything ran as root. The container now drops to a dedicated user after preparing the state directory, gives up every Linux capability except the three that preparation needs, mounts its root filesystem read-only, and forbids acquiring new privileges. Packages that agents install at runtime now live in the state directory rather than inside the image, so they survive the container being recreated instead of vanishing with it.
+- **Stopping the container is graceful.** Nothing installed a signal handler, and the kernel does not deliver default signal actions to process 1, so every `docker stop` was ignored until the timeout expired and the process was killed outright — losing the agents' shutdown, a clean broker disconnect, and anything still to be written. An init process now runs at process 1, so agents shut down properly and stopping is immediate.
+- **Docker Compose binds the dashboard, REST API, Prometheus and InfluxDB to localhost.** They were published on every interface, so a development stack was reachable from the whole network by default; they are now reachable from the host only. Remove the `127.0.0.1:` prefix on any port you mean to expose deliberately. The MQTT broker is unchanged — remote nodes connect to it across the network by design.
+- **InfluxDB no longer ships with default credentials.** The compose service seeded a real admin account and API token from hardcoded values. Set `INFLUX_USERNAME`, `INFLUX_PASSWORD` and `INFLUX_TOKEN` in `.env` before enabling the `influx` profile; there are no fallbacks.
+- **The broker's configuration is mounted read-only.** The Mosquitto image chowns everything under its config directory at startup, which travelled back through the bind mount and rewrote the ownership of a file tracked in this repository — invisible to Git, which does not track ownership, and enough to break the broker under rootless Podman afterwards.
+- **The broker no longer logs every health check.** The compose health check reconnects every ten seconds, and each probe produced three lines that buried everything else.
+
+### Removed
+
+- **Redis support.** It held three values — observed samples, agent metrics, heartbeat state — each of which normal operation rebuilds, so nothing durable was stored there. It was also optional only at startup: connectivity was checked once, and a Redis that died mid-run turned every persistence call into an error that fed the agent-restart path. Those values now live in process memory, which is what every deployment was already using, since the default URL pointed at the application's own container. `REDIS_URL` is no longer read. **If you embed Wactorz:** `init_persistence()` no longer takes `redis_url` and returns `(db, pickle_store)`; `PersistenceAPI(db, pickle_store, name)` drops its middle argument; and hand-written migrations change from `migrate_state_N(db, redis, pickle_store)` to `migrate_state_N(db, pickle_store)`.
+- **The `wactorz-monitor` command.** It started the dashboard as a standalone process, separate from the agents, and chat then had to travel to them over MQTT and back. Every supported way of running Wactorz — `wactorz`, the container, the Home Assistant add-on — starts the dashboard in the same process as the agents, so that second path had no users and simply doubled the code every chat message could take. Run `wactorz` instead. As part of this, `POST /chat/stop` no longer returns the `published` field, which only ever reported whether the stop request had been forwarded over MQTT.
+- **The MQTT WebSocket listener, on both brokers, and the `mqtt_ws_port` add-on option.** The listener existed for a browser MQTT client the dashboard no longer has — real-time updates arrive over the monitor's own WebSocket — so it was an open endpoint with no consumer, and in the Compose stack it was published to every interface. The add-on's listener on `8083` and the Compose broker's on `9001` are both gone, along with the `mqtt_ws_port` option, `MQTT_WS_EXTERNAL_PORT`, and `--mqtt-ws-port` on `wactorz-monitor`. **If you connect anything else to the broker over WebSockets** — an MQTT client in a browser, Node-RED, a dashboard of your own — add the listener back to `infra/mosquitto/mosquitto.conf` and republish the port. Existing add-on installations may log a one-time "not in schema" notice for the removed option until their configuration is saved again.
+
+### Fixed
+
+- **A paused or stopped agent no longer answers chat.** Pausing and stopping suspend the agent's message queue, but messages sent from the chat view reach an agent directly rather than through that queue — so a paused agent kept replying as though nothing had happened, and a stopped one kept answering after it had been shut down. Both now decline, as does an agent that has failed and is waiting to be restarted. Pausing, resuming, stopping and deleting also behave the same whichever route they arrive by: the dashboard, chat commands, the REST interface, or another agent. Two of those routes previously skipped telling the supervisor that the stop was deliberate, so the agent was restarted moments later, and neither respected protected agents.
+- **Pause, resume, stop and delete reach the agent even when the broker is unreachable.** Commands from the dashboard were always sent over MQTT, including to agents running inside the same process — so with the broker down nothing happened, while the dashboard reported that it had and went on showing the agent in its old state until the next heartbeat. Agents running locally are now acted on directly; MQTT is still how agents on other nodes are reached, and a command that could not be delivered is reported as a failure instead of a success. Deleting an agent also releases it from supervision on this path, which it previously did not — the watchdog noticed the silence and restarted the agent that had just been deleted.
+- **The document-to-slides agent no longer freezes everything else while it builds.** Installing its Node dependency and running the slide builder were called in a way that stopped the whole process for as long as they took — up to three minutes between them — so no other agent ran, no broker messages were read, and the timeout meant to bound those very steps could not fire. They now run alongside everything else.
+- **An interrupted save no longer discards an agent's stored state.** State files were written in place, which empties the file before the new contents are written, so a crash or a full disk partway through left a file that could not be read back. An unreadable state file is treated as an absent one, so the agent restarted with nothing rather than with the previous save. State is now written alongside and swapped in once complete, leaving the last good version untouched if the write fails — and a save that fails is reported rather than noted in debug logs.
+- **The dashboard no longer slows the system down as agents are added.** Every message from the broker rebuilt the whole dashboard state and pushed it to each connected browser in turn — and rebuilding it queried the database once per agent, so the cost grew with the number of agents while sitting between the broker and everything waiting on it. A browser on a slow connection made it worse: the server waited for that one client before reading the next message, so one stalled tab held up the others and the agents' own traffic. Live updates now carry only what changed, each browser is served independently, and one that falls too far behind is resent the full picture rather than a partial one.
+- **Several defects in how state was stored.** Sensor readings written one at a time were never committed, so anything not going through the batch writer was silently lost. Database connections were opened and never closed, which left the file locked after a `wactorz-reset` and could block cleanup. An agent whose name contained `..` wrote its state file outside the state directory — those files are loaded back with `pickle`, so a name from an untrusted source could place executable content somewhere it would later be run. And agent state ignored a blank `WACTORZ_STATE_DIR`, landing in a directory literally named from the whitespace while the database and logs went elsewhere. Shutting the storage layer down now also discards its short-lived values, so an agent restarted under a name used earlier no longer recalls the previous run's metrics. The layer is split into one module per store, with everything process-wide in one place, so a change to one no longer means reading a thousand lines.
+- **Stopping Wactorz took three interrupts, and `docker stop` never worked at all.** The first interrupt did shut the agents down cleanly, but the command-line interface read your typing on a thread that could not be interrupted, and the interpreter then waited for that thread twice more on the way out. Separately nothing listened for the signal a service manager sends, and a process running as the container's first process is given no default handling for it — so `docker stop` and `systemctl stop` waited out their timeout and killed Wactorz mid-write, losing the agents' shutdown and anything not yet saved. One interrupt, or one stop, now shuts everything down in well under a second and reports success rather than failure.
+- **The log file assumed the working directory was writable.** `wactorz.log` was opened at a path relative to wherever the process happened to start, while the rest of the state resolved from `WACTORZ_STATE_DIR` — so a service started from a directory it could not write to failed immediately at startup, and clearing the logs could look for them somewhere the application never wrote. The log now sits with the rest of the durable state, and `wactorz-reset` truncates it there.
+- **A configured `WACTORZ_STATE_DIR` only moved part of the state.** The central stores honoured it, but every agent was still created with a working-directory-relative `./state`, so a deployment that pinned an absolute durable location — the Home Assistant add-on, or any container with a mounted volume — had agents writing beside the process instead, and the one-time migration of pre-upgrade pickle state looked in the wrong place. The path now resolves in exactly one place for the whole system: an explicit setting first, then `WACTORZ_STATE_DIR`, then `./state`. A blank `WACTORZ_STATE_DIR=` left in a `.env` file counts as unset rather than resolving to the working directory, and `wactorz-reset` still targets the same location the app writes to without creating it just by being imported.
+- **GitHub releases no longer paste the entire changelog into the release body.** The release
+  workflow used `CHANGELOG.md` verbatim, so every release page carried `[Unreleased]` plus every
+  past version — an endless scroll. It now extracts only the section matching the tag, and fails
+  the job if no section for that version exists rather than publishing empty notes.
+
+## [0.5.2] - 2026-07-30
+
+### Added
+- **Per-call-site LLM overrides (`LLM_OVERRIDES`).** Route individual call sites to different
+  providers/models — e.g. `LLM_OVERRIDES="intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6"`
+  runs intent classification on a local model while the planner stays on a hosted one. Sites:
+  `main`, `intent`, `planner`, `actuator`, `ha`, `dynamic`; unlisted sites keep the global
+  `LLM_PROVIDER`, and a malformed entry falls back to it with a warning instead of failing startup.
+- **`LLM_TEMPERATURE`.** Sets the sampling temperature for every LLM call across all five providers
+  (Anthropic, OpenAI, Ollama, NIM, Gemini) — `0` for deterministic classification and device
+  control. Unset keeps each provider's own default, so existing installs are unaffected.
+- **Call-site evaluation harness (`python -m wactorz.evalharness`).** Benchmarks any set of
+  `provider:model` specs across the framework's LLM call sites using the production system prompts,
+  with automatic scoring (label match, JSON action match, plan validity, codegen compile + required
+  functions), latency and cost capture, JSONL records and a CSV/console summary. Takes
+  `--temperature` and records it with every result.
+- **Startup line naming the active LLM.** Boot now logs `LLM: <provider>/<model> | temperature=…`
+  (plus any overrides), so the effective model configuration is visible without external dashboards.
+- **Social channels (Discord/Telegram) as capability-restricted companions.** They now run
+  *alongside* the primary interface (e.g. the HA add-on dashboard) whenever their token is set,
+  instead of only as a standalone `--interface`. Messages reach the main agent in a **restricted
+  mode**: full conversation, Home Assistant queries, and device control are allowed, but spawning
+  agents, deleting agents, running code, pipelines/automations, and admin (slash) commands are all
+  unreachable — enforced at the actions (intent routing, `<spawn>`/`<delete>` execution) rather than
+  by guessing intent from the text, so it can't be talked around. Delegation is limited to an
+  allow-list of safe native agents (fails closed), so it can't be used to launder code execution
+  through a running `DynamicAgent`/`code-agent`. These channels previously routed straight to the
+  unrestricted orchestrator. A channel whose token is set but whose
+  library is missing is now skipped with a clear warning naming the pip package, instead of failing
+  silently. Both `discord.py` and `python-telegram-bot` now ship in `wactorz[all]` (new `telegram`
+  extra), so the Home Assistant add-on includes them out of the box. The add-on now also exposes
+  `discord_bot_token`, `telegram_bot_token`, and `telegram_allowed_user_id` as configurable options
+  (both variants), so users can enter their tokens from the add-on UI.
+- **Device control from a social channel is limited to everyday domains.** The one-off actuator
+  executes the Home Assistant `domain.service` the model resolved, so "control my devices" used to
+  reach `shell_command` and `python_script` (arbitrary code on the HA host), `hassio`, and
+  `homeassistant.stop`. Restricted callers now pass an allow-list - lights, switches, fans, covers,
+  climate, media players, vacuums, humidifiers, water heaters, input booleans and scenes - enforced
+  at the call site, not in the resolver prompt. Out-of-policy calls are dropped, logged, and named
+  in the reply so a partly-blocked request never reads as if it all went through. The dashboard and
+  CLI are unaffected and keep full access.
+- **Sender allow-lists are required on every social channel.** `DISCORD_ALLOWED_USER_IDS`,
+  `TELEGRAM_ALLOWED_USER_IDS` and `WHATSAPP_ALLOWED_NUMBERS` (comma-separated) decide who may talk
+  to a bot at all. A channel with a token but no allow-list refuses to start rather than answering
+  whoever finds it - the exception being Telegram, which runs in **setup mode**: it answers `/start`
+  with the sender's user id and nothing else, so the id needed to fill the allow-list is still
+  discoverable without exposing the LLM or the user's home. `TELEGRAM_ALLOWED_USER_ID` (singular)
+  is still honored. WhatsApp, whose webhook is a public HTTP endpoint, now also runs in restricted
+  mode like the other two.
+- **Per-sender rate limit on social channels.** Each inbound message costs at least an intent
+  classification plus a completion, so `SOCIAL_RATE_LIMIT_PER_MIN` (default 12, `0` disables) caps
+  messages per sender per minute, and a sender's next message is refused while their previous turn
+  is still generating. Both limits reply with a short explanation instead of going quiet.
+- **Catalog recognises experimental/beta agents.** Catalog recipes can be tagged
+  `stability: beta` with a warning; `reachy-mini` is the first one. Beta agents are **hidden by
+  default** in `@catalog list` (shown behind a hint; reveal with `list experimental`), the catalog
+  warns before spawning one, and the first message to a running beta agent shows a one-time
+  instability warning.
 - **`ha_connection` add-on option** (`auto` / `supervisor` / `custom`) — explicit Home Assistant connection mode for both add-on variants. `auto` keeps the previous token-presence inference, so existing installs are unaffected. Startup now also logs one deterministic line with the resolved mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`).
 - **Extension seam (`wactorz/ext/`).** Optional features live in self-contained folders that expose a
   `setup(app)` hook; the monitor auto-discovers and wires them at startup, and each may contribute
@@ -173,12 +270,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **`--interface discord` / `--interface telegram` / `--interface whatsapp` are now restricted
+  too.** The guarantees above live in the interface classes, not in the companion wiring, so a
+  social channel is capability-restricted whether it runs alongside the dashboard or as the primary
+  interface. There is no longer a way to drive spawning, deletion or code execution from a chat bot;
+  that surface is the dashboard, the CLI and the authenticated REST interface. **Action required:**
+  a deployment that sets a bot token must now also set the matching allow-list, or that channel will
+  not start.
 - **Dashboard uses a single WebSocket transport.** Live agent/system/node data and Home Assistant
   activity now stream to the browser as server-push over `/ws`; the dashboard no longer opens its own
   MQTT connection to the broker, and the browser receives no broker credentials.
 - **Home Assistant add-on split into two variants.** The store now offers **Wactorz** (slim, Alpine,
   ~200 MB) and **Wactorz Ultra** (Debian + ML/`ultralytics`, ~3 GB) as separate cards; both share the
   same options and entrypoint. CI builds and pushes both variants across `aarch64`/`amd64`.
+
+### Removed
+
+- **`main.run_pipeline()`.** It imported a `task_manager` module that does not exist, so every call raised `ImportError` — while the orchestrator's prompt actively advertised it as a capability for multi-agent tasks. Both the method and the prompt section are gone; delegation to named agents is unaffected.
+- **`wactorz/experimental_agents/` package.** The ten scratch agents in it (`code`, `news`, `qa`,
+  `tick`, `wif`, `wiz`, `ml`, `nautilus`, `udx`, `weather`) were test scaffolding, were never
+  reachable from the catalog, and nothing outside the folder imported them. `reachy-mini` is now the
+  only agent carrying experimental/beta status, and it lives in `catalogue_agents/` like every other
+  recipe.
 
 ### Fixed
 
@@ -361,6 +474,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   length from the edge-tts word boundaries and waits it out before returning, so sequential
   says (and their volume changes) play fully and in order. Opt out with `await_playback: false`.
 
+- **The `mcp` extra now excludes the incompatible 2.x line (`mcp>=1.0.0,<2`).** `mcp` 2.0.0 removed
+  `mcp.server.fastmcp`, so a fresh `pip install wactorz[mcp]` picked up a release the MCP interface
+  cannot import. The pin restores installability while the 2.x migration is worked out separately.
+- **An unresponsive Ollama server hung the conversation indefinitely.** None of the three calls to it had a time limit, so a wedged or half-started server left the turn waiting with no error and no way out short of a restart. They are now bounded — generously, because a large prompt on a local machine legitimately takes minutes, and for streaming replies the limit applies to the gap between chunks rather than the whole reply, so a long answer is never cut short. HTTP errors from Ollama were also being read as an empty reply rather than raised, which turned a server-side failure into a silently blank answer.
+- **A task that failed never told whoever asked for it.** Only one specific kind of failure sent a reply; everything else — including a missing or misconfigured LLM provider — was logged locally and dropped, leaving the caller waiting out its own timeout with no idea what happened. Every outcome now answers, so a failed task reports the reason instead of looking like a slow one.
+- **A Gemini reply that stopped early looked like it had finished.** When the stream stalled, the partial answer was delivered with an ordinary completion marker, so nothing downstream — the chat log, the activity feed, or any retry logic — could distinguish half an answer from a whole one. The text that did arrive is still delivered, and the tokens are still billed, but the result now says the reply is incomplete, and the truncation is logged.
+- **Home Assistant commands could wait forever.** A Home Assistant instance that stays connected but stops answering left every command — turning on a light, reading a device's state, listing the registry — waiting indefinitely, since only a dropped connection was detected. Commands now give up after a generous interval and are retried by the agents that hold a connection open. Waiting for the next event from a subscription is deliberately still unlimited: silence there is normal.
+- **WhatsApp replies briefly froze the entire system.** Sending a reply used a blocking call, so every agent in the process stopped for the length of a network round-trip to Twilio, on every message received. Looking for a device on the local network did the same thing for several seconds per attempt. Both now run without holding everything else up.
+- **`run.sh` refused to start after copying `.env.template` to `.env`, as the setup instructions say to do.** The launcher loaded the file by word-splitting it, which chokes on the inline comments and quoted values the template itself ships — and because the script aborts on error, the launch died there. It now sources the file, so comments, quoted values and empty settings are all read the way a shell reads them.
+- **Clearing the logs could wedge all logging until restart.** If truncating a log file failed part-way, the lock protecting that file was never released. The failure was caught and reported as a warning, so the reset looked like it worked, while every subsequent log call blocked forever — and nothing appeared in the log to explain it, because logging was what had stopped.
+- **The documented chat API didn't work when copied.** The `POST /api/chat` examples named an agent that doesn't exist, so following them produced a 404, and the Home Assistant `rest_command` example sent fields the endpoint never reads (`to`/`content` rather than `message`), so that integration had never worked at all. Both now match the endpoint.
+- **Changelog housekeeping.** Two different releases were both labelled `0.4.2`; the later block also carried several hundred lines of engineering notes that were never release notes. Its actual entries have moved to `0.4.3`, where they shipped, and version headings now use one consistent date separator.
+- **Building a wheel could bundle a dashboard that didn't match its source.** The packaging hook decided whether to rebuild the frontend from the *age* of the built output, so an edit made within ten minutes of the last build was treated as already built and the wheel shipped the previous bundle. The same rule rebuilt after any idle period even when nothing had changed, rewriting the committed `static/app` and leaving a dirty working tree. It now compares a content hash of the frontend inputs, so a rebuild happens when — and only when — something that affects the bundle actually changed. Release builds, which force a rebuild unconditionally, were never affected.
+- **Clearing one agent's chat deleted your messages to every other agent.** The scoped reset dropped the named agent's replies *and* every message you had ever sent, across all threads — only the other agents' replies survived, leaving conversations that read as one-sided. It now removes just that thread: the agent's replies and the messages addressed to it.
+- **Two agents replying at once merged into a single bubble** attributed to whichever started first, because stream text accumulated in one shared buffer. Buffers are now kept per agent, so concurrent replies stay separate and attributed correctly.
+- **A message that failed to send stayed in the thread looking delivered.** The bubble is drawn before the send is attempted; when the send failed you got a warning but the bubble remained. It is now withdrawn. (The previous release fixed the same thing in the activity feed; the thread still lied.)
+- **A chat history that failed to load stayed empty for the rest of the session.** A network failure was indistinguishable from an agent with genuinely no history, and either way the agent was marked as loaded — so reopening the thread never retried. Only a successful fetch marks it loaded now.
+- **The bottom navigation and audio settings leaked listeners on every rebuild**, each one left holding a detached element. Rebuilds now retire the previous set. This is the same defect as the popover leak fixed in the previous release, in the two places that fix didn't reach.
+- **Header popovers and the mobile "More" sheet ignored Escape** and left focus stranded. Both now close on Escape and return focus to the button that opened them.
+- **The chat composer got stuck, or freed itself during someone else's turn.** The send/stop toggle reacted to any chat frame at all, so unrelated agent-to-agent traffic re-enabled Send and hid Stop while the user's own reply was still streaming. Conversely, the only ways out of the busy state were a stream-end or a reply frame, so if the backend went away mid-turn neither arrived: Send stayed disabled and Stop stayed visible but did nothing — its request went to the dead backend and the failure was discarded — leaving no working control until the backend came back or the page was reloaded. A turn now belongs to the agent it was sent to (keyed on the sender, since a genuine reply is addressed to the user just as a bystander's message may be), and it releases itself if the transport stops being live or the turn goes silent, without cutting off a slow model that is still sending. A stop that does not get through now says so.
+- **A message that failed to send still appeared in the feed** as though it had been delivered, then vanished on the next refresh because nothing had persisted it. Only messages the transport accepted are shown now. Repeated backend failures are also reported once at warning level instead of only at debug, which production builds discard.
+- **A rejected spend-limit change looked like it had worked.** Saving a limit or resetting spend ignored the response status and then re-rendered from the server, redisplaying the unchanged value as if it were the new one. Both now report a failure and leave the old value visible.
+- **The image lightbox was a keyboard trap in the wrong direction.** It announced itself as a modal dialog but never moved focus into itself, so Tab walked into the page behind it and a keyboard user had no way to reach the only control that dismissed it. It now takes focus, keeps Tab within it, returns focus to whatever opened it, and has a visible close button. Opening a second preview no longer leaves the first still listening for keystrokes.
+- **The header leaked a popover and a document listener on every rebuild.** The audio and reset popovers are attached to the page body rather than the header, so replacing the header (which happens whenever an extension registers a view) left the old ones behind, accumulating. Long-gone remote nodes are likewise no longer kept forever — nodes that merely went quiet are still shown as offline.
+- **`gpt-4o-mini` was billed at `gpt-4o` rates** — model pricing falls back to a table keyed by name prefix, and the shorter `gpt-4o` key matched first, so the cheaper model was costed ~17x too high whenever the live price catalogue was unavailable (notably at startup, and offline). The same number drives reported spend, the budget check and the spend cap, so a limit could fire early. The lookup now prefers the longest matching prefix, and `pricing_info()` — which carried its own copy of the same lookup — shares it, so the reported rate always matches the rate charged. Dated variants such as `gpt-4o-2024-08-06` still inherit their family's price.
+- **`POST /api/chat` was unusable** — the default agent name did not match the registered orchestrator, so a request without an explicit `agent_name` returned 404. Requests that did name a valid agent got further and then failed silently: the reply callback was a plain lambda where a coroutine was awaited, so the stream was abandoned after the tokens were billed and no reply was delivered.
+- **Gemini completions froze every agent** — `GeminiProvider.complete` and `complete_with_tools` called the *synchronous* google-genai surface from inside `async def`, blocking the single shared event loop for the entire model round-trip. With a Gemini provider configured, one agent's LLM call stalled every other actor, delayed MQTT keepalive, and could trip the 35 s heartbeat watchdog into force-restarting healthy agents as "presumed crashed". Both paths now `await client.aio.…` instead. Streaming was already off-loop and is unchanged.
 - **Silent HA misconfiguration in the add-on** — a custom `ha_url` with a blank `ha_token` (or a token set in supervisor mode) used to fail quietly: the Supervisor proxy only accepts the injected Supervisor token, so the custom URL was silently discarded. The add-on now logs a loud warning explaining what is ignored and why, in both `run.sh` variants.
 - **Devices nav link dead in add-on supervisor mode** — `/api/config` exposes the backend's HA URL verbatim, which in supervisor mode is the container-internal `http://supervisor/core`; the browser cannot resolve it. The dashboard now rewrites container-internal HA URLs to the page's own origin (which under ingress *is* the Home Assistant UI).
 - **Migration to a non-existent node made the agent disappear** — `migrate_agent` accepted any target name blindly: the source stopped the agent (deleting its state) and shipped it to a node topic nobody was listening on, so a typo'd or offline target destroyed the agent. The target node is now validated against live heartbeats before anything destructive happens; if it is unknown or offline the migration is refused with a message listing the nodes that are online, and the agent stays where it is.
@@ -624,6 +764,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [0.4.3] - 2026-06-01
 
+### Added
+
+- **LLM spend limit enforcement** - hard cap on LLM API spend per period (daily, weekly, or monthly). Set via `LLM_COST_LIMIT_USD` / `LLM_COST_LIMIT_PERIOD` env vars or at runtime from the dashboard Settings tab without restart. When the limit is reached, further LLM calls are blocked and a "limit reached" message is delivered as a chat reply. Spend accumulates into all three period keys simultaneously so switching periods always shows real data. New REST endpoints: `GET /api/cost`, `POST /api/cost/limit`, `POST /api/cost/reset`. Env-var values are the startup default; GUI override persists in SQLite and takes priority.
+
 ### Changed
 
 - **HomeAssistantAgent** — `create_automation` intent is temporarily disabled; requests are routed to `_recommend_hardware` instead.
@@ -635,452 +779,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **HomeAssistantAgent** — Non-dict LLM response no longer crashes the delete/edit path (guard ordering corrected).
 - **HomeAssistantAgent** — Stale `devices["devices"]` key corrected to `devices["data"]` throughout hardware recommendation and entity extraction helpers.
+- **`monitor_server` stdio wrapping under pytest** - `monitor_server` no longer re-wraps `sys.stdout` / `sys.stderr` at import time when they have already been replaced by a test capture harness. Prevents `ValueError: I/O operation on closed file` during pytest teardown on Python 3.13 + Windows.
 
 ### Tests
 
 - Comprehensive test suite added for `ha_helper` (`tests/test_ha_helper.py`) and `HomeAssistantAgent` (`tests/test_home_assistant_agent.py`).
-
-## [0.4.2] - 2026-05-21
-
-# Remote-Agent Consistency Fixes
-
-This changelog documents a series of fixes that close the gap between local and
-remote agent behaviour. Before these changes the framework worked well for local
-agents but broke in many ways for remote ones, with inconsistencies clustering
-around topic registration, agent API parity, migration, and LLM agent support.
-
-Each fix below is described with its symptom, root cause, and resolution.
-
-## Files touched
-
-- `main_actor.py`
-- `remote_runner.py`
-- `dynamic_agent.py`
-- `actor.py` (read-only in this pass; no edits)
-
----
-
-## Fix 1 — Manifest listener is the source of truth for remote contracts
-
-**Symptom.** The planner knew remote agents existed (they appeared in
-`list_capabilities`) but auto-wiring routed traffic to the wrong topics. Local
-agents wired correctly; remote ones did not.
-
-**Root cause.** Local agents register their `TopicContract` directly with the
-`TopicBus` whenever they `publish()`, `subscribe()`, or call
-`declare_contract()`. Remote agents have no local `TopicBus` — they advertise
-themselves via a retained MQTT manifest. Main's `_manifest_listener` was
-storing those manifests in `_agent_manifests` and `_topic_registry` but was
-**not** translating them into `TopicContract`s on the central bus. The planner
-read from the bus, so remote agents were invisible to wiring.
-
-**Fix.** `_manifest_listener` now builds a `TopicContract` from every incoming
-manifest and calls `bus.register_contract(...)`. `observed_samples` is folded
-into `produces_schema` so the real wire format wins over LLM-declared guesses.
-Tombstone payloads (empty retained messages) call `bus.unregister(name)` so
-deleted agents stop appearing as wiring candidates.
-
----
-
-## Fix 2 — Remote runner ships full contract data in its manifest
-
-**Symptom.** Even after Fix 1, remote contracts were missing `subscribes`,
-`triggers_when`, and accurate schemas.
-
-**Root cause.** `_RemoteAgentAPI._publish_manifest()` only shipped `publishes`.
-The local `_AgentAPI._publish_manifest()` ships the full TopicContract surface.
-
-**Fix.** `_RemoteAgentAPI._publish_manifest()` now ships `subscribes`,
-`triggers_when`, `produces_schema`, `consumes_schema`, and `observed_samples`,
-matching the local shape exactly. Pre-declared spawn-config topics are unioned
-into `publishes` so the planner sees them even before the first `publish()`
-call. Schemas are also auto-captured per publish — every `publish()` call
-records field names and types into `observed_samples`, and the manifest
-re-publishes on schema change.
-
----
-
-## Fix 3 — Heartbeat-driven contract refresh is strictly non-overwriting
-
-**Symptom.** Sometimes a freshly-arrived correct manifest would be replaced
-seconds later by a stale spawn-config-derived one.
-
-**Root cause.** A heartbeat handler in `main_actor.py` was rebuilding remote
-contracts from `from_spawn_config(...)` on every heartbeat, clobbering the
-manifest-derived contract.
-
-**Fix.** The heartbeat refresh now skips any agent that already has a contract
-on the bus or a manifest in main's cache, and only bootstraps from spawn config
-when the config declared real topics. The manifest path is the single source of
-truth.
-
----
-
-## Fix 4 — Full API parity between local and remote agents
-
-**Symptom.** Remote agents crashed in `setup()` with
-`'_RemoteAgentAPI' object has no attribute 'declare_contract'`. Migrating an
-agent that called `agent.subscribe(...)` made it stop listening. Code that used
-`agent.window(...)` or `agent.mqtt_get(...)` worked locally and silently broke
-remotely.
-
-**Root cause.** `_RemoteAgentAPI` was missing methods that `DynamicAgent._AgentAPI`
-exposes. Agent code written for the local API would crash on the remote.
-
-**Fix.** Added to `_RemoteAgentAPI`:
-
-- `subscribe(topic, callback)` — background MQTT listener with dedup, callback
-  validation, `await None` tolerance, auto-records the topic into the contract
-  and republishes the manifest.
-- `mqtt_get(topic, timeout)` — one-shot retained-state read.
-- `window(topic, seconds, max_size)` — sliding stream window with
-  `mean/min/max/rising/falling/stable/absent_for/event_count/latest/count/values`.
-  Idempotent per topic.
-- `declare_contract(...)` — full signature with all LLM kwarg aliases
-  (`schema`, `output_schema`, `topics`, `subscribe`, etc.), string-to-list
-  coercion, awaitable sentinel return.
-- `publish_world_state(key, data)` / `read_world_state(topic)`.
-- `wiring_opportunities()` — returns `[]` on remote (cluster-wide view lives on
-  main).
-- `nodes()` / `topics()` / `capabilities()` — local-scope introspection.
-- `logger` property exposing `info/warning/error/debug`.
-
-Added at module level:
-
-- `_AwaitableNone` / `_AWAITABLE_NONE` — sentinel mirroring `dynamic_agent`.
-- `_RemoteStreamWindow` — self-contained port of `core.topic_bus.StreamWindow`
-  so the remote runner stays single-file.
-
-Tightened existing methods:
-
-- `log()` now accepts `level="info"` to match the local signature.
-- `_RemoteAgent.stop()` now also cancels stream windows so background MQTT
-  listeners don't leak.
-
----
-
-## Fix 5 — Local→Remote migration captures the live contract
-
-**Symptom.** After a local→remote migration the agent's topic wiring was
-incomplete on the remote side.
-
-**Root cause.** The migration path was reading topics from the spawn registry,
-which is what was *requested* at spawn time — not what the local agent had
-wired up at runtime via `publish()`/`subscribe()`/`declare_contract()`.
-
-**Fix.** Just before stopping the local agent, migration now snapshots the live
-`TopicContract` from the `TopicBus` (`publishes`, `subscribes`, `triggers_when`,
-`produces_schema`, `consumes_schema`, `observed_samples`) and folds non-empty
-values into the spawn config that gets shipped to the remote node. The remote
-`_publish_manifest()` then advertises the right surface immediately.
-
-Also removed a stale double-save at the end of the local→remote branch —
-`_spawn_remote(save=True)` already saves the complete `new_config` (with
-initial state and live contract), but the post-branch code was overwriting that
-with the stale `config` dict.
-
----
-
-## Fix 6 — `migrate_agent` is resilient to missing registry entries
-
-**Symptom.** `[FAIL] Agent 'X' not in spawn registry` even when the agent was
-running and visible on the dashboard.
-
-**Root cause.** `migrate_agent` hard-failed if the spawn registry lookup
-missed. Several legitimate paths produce running agents that aren't in the
-registry — ad-hoc spawns, partial migrations, registry overwrites from earlier
-bugs.
-
-**Fix.** `migrate_agent` now consults sources in priority order:
-
-1. Spawn registry (has full config including code).
-2. Manifest cache (has node, schemas; no code).
-3. Live heartbeats (last resort — confirms which node hosts the agent).
-4. Local registry (confirms the agent is running on this node).
-
-Migration proceeds if any source finds the agent. The only "not found" case is
-when no source knows about the agent at all.
-
----
-
-## Fix 7 — Remote→Local migration without code on main
-
-**Symptom.** Remote→local migration failed when main had no spawn-registry
-entry for the agent.
-
-**Root cause.** The remote runner had a `@main` sentinel path that shipped the
-agent's state back over MQTT, but main had no listener for it — the feature was
-half-implemented.
-
-**Fix.** Added `_state_return_listener` on main. Migration flow:
-
-1. Main sends `nodes/{node}/migrate` with `target_node: "@main"` and a
-   one-time return token.
-2. Remote runner stops the agent, captures its full live config (the in-memory
-   `_config`, which includes everything the manifest exposed) plus its
-   persistent state, and publishes both to `nodes/{node}/state_return`.
-3. Main's `_state_return_listener` matches the token, builds a local spawn
-   config from the returned data, attaches the state as `_initial_state`, and
-   calls `_spawn_from_config(replace=True)`.
-
-Tokens are one-time, expire after 5 minutes, scoped to the agent/node
-combination so concurrent migrations can't collide.
-
----
-
-## Fix 8 — `_handle_spawn` phantom method
-
-**Symptom.** `[FAIL] Stopped on remote but failed to spawn locally: 'MainActor'
-object has no attribute '_handle_spawn'`.
-
-**Root cause.** `_handle_spawn` was referenced in three places in `main_actor.py`
-but never defined. The real method is `_spawn_from_config(config, save=True)`,
-which routes remote vs local, handles the `replace=True` flow, picks the right
-agent type, and saves to the spawn registry.
-
-**Fix.** Replaced all three call sites with `_spawn_from_config(...)`:
-
-1. Remote→local migration (the path users hit).
-2. State-return listener.
-3. `/nodes remove → re-spawn locally` (pre-existing latent bug at line 2312;
-   would have failed any time someone removed a node and had main re-spawn its
-   agents locally).
-
-Also updated stale comment references. Zero references to `_handle_spawn`
-remain in the codebase.
-
----
-
-## Fix 9 — Remote task dispatch matches local semantics
-
-**Symptom.** Migrated LLM agent crashed on @mention with
-`'str' object has no attribute 'get'` in `handle_task`.
-
-**Root cause.** Main's @mention forwarder sends
-`{"text": message, "payload": message, "_reply_topic": ...}`. The remote
-runner was extracting just `data["payload"]` (a bare string) and passing it to
-`handle_task`. Local actors pass the full envelope dict to `handle_task`, so
-`payload.get("text")` worked locally and crashed remotely.
-
-**Fix.** Remote runner now passes the full envelope to `handle_task`, stripped
-of transport-level keys (`_reply_topic`, `_remote_task`). Matches local
-semantics exactly.
-
-Compat note: if a caller sends `{"payload": 42}` (scalar wrapped in a `payload`
-field, nothing else), the runner unwraps the scalar — preserves the older
-convention for callers that send `{"payload": 42}` and expect `42`.
-
----
-
-## Fix 10 — `recall(key, default=None)` everywhere
-
-**Symptom.** Migrating an agent back to local crashed with
-`_AgentAPI.recall() takes 2 positional arguments but 3 were given`.
-
-**Root cause.** Local `recall(key)` was strict; remote `recall(key, default=None)`
-was permissive. Agents that learned to call `agent.recall("k", default)` on the
-remote side crashed when they came back local.
-
-**Fix.** Local now matches remote: `recall(key, default=None)`. The default is
-returned when the key is missing or the stored value is `None`, matching
-dict-`.get()` semantics.
-
----
-
-## Fix 11 — `send_to` and `delegate` timeouts align at 60s
-
-**Root cause.** Remote default 30s, local default 60s. Friendlier for LLM
-agents, which routinely take 10–40s per turn.
-
-**Fix.** Remote bumped to 60s. All shared method signatures between
-`_AgentAPI` and `_RemoteAgentAPI` now match.
-
----
-
-## Fix 12 — `agent.llm` namespace on the remote side
-
-**Symptom.** LLM agents crashed remotely with
-`'_RemoteAgentAPI' object has no attribute 'llm'`.
-
-**Root cause.** Local agents use `agent.llm.chat(prompt, system)` /
-`agent.llm.complete(messages, system)` / `agent.llm.converse(user_message, system)`.
-Remote agents had a flat `agent.ask_llm(prompt, system)` / `agent.chat(messages, system)`
-— different shape, different names. Worse, `chat` meant different things on the
-two sides (single-turn locally, multi-turn remotely).
-
-**Fix.** Added `_RemoteLLMInterface` exposed as `agent.llm` on the remote side
-with the same three methods the local side has, with the same call shapes:
-
-- `agent.llm.chat(prompt, system)` — single-turn.
-- `agent.llm.complete(messages, system)` — multi-turn.
-- `agent.llm.converse(user_message, system)` — stateful, maintains history in
-  `agent.state['_chat_history']`.
-
-The pre-existing flat `agent.ask_llm(...)` and `agent.chat(...)` stay as
-legacy aliases.
-
-**Known follow-up.** Local `agent.llm` increments the agent's token / cost
-counters from the provider's usage response. The remote LLM bridge currently
-returns only `{"text": ...}` — usage isn't propagated back, so remote LLM cost
-is attributed to main rather than to the agent that spent it. Small follow-up
-to ship `usage` in the reply.
-
----
-
-## Fix 13 — LLM bridge attribute/method/return-shape
-
-**Symptom.** LLM bridge error for remote agent:
-`'MainActor' object has no attribute '_llm'`.
-
-**Root cause.** Three bugs in two lines:
-
-1. `self._llm` doesn't exist; the correct attribute is `self.llm` (every other
-   site in `main_actor.py` uses that name).
-2. Wrong method — `self.llm.chat(...)` doesn't exist on `LLMProvider`; the
-   correct method is `complete(messages=, system=)`.
-3. Wrong return shape — `LLMProvider.complete()` returns `(text, usage)`, not
-   a string.
-
-**Fix.** Bridge now calls `self.llm.complete(messages=..., system=...)`, unpacks
-`(response, usage)`, guards against `self.llm is None` with a clear error
-string, and rolls bridge usage into main's token/cost counters (same pattern as
-other `complete()` call sites in `main_actor.py`).
-
----
-
-## Fix 14 — Head-of-line blocking deadlock in the remote subscriber
-
-**Symptom.** Remote agent timed out 60s after calling `agent.llm.chat()`, yet
-main logged a `200 OK` from Anthropic within 4s. Diagnostic warning showed
-`Reply arrived on nodes/rpi-n/reply/<uuid> but no agent had a matching pending
-future. Waiting keys: []`, firing 4ms after the timeout.
-
-**Root cause.** The runner's MQTT subscriber loop is structured as
-`async for msg in client.messages` — a strictly sequential consumer. The
-previous code did `await agent.handle_task(payload)` *inside* that loop. While
-`handle_task` ran (waiting on `agent.llm.chat`'s reply future), the subscriber
-could not dispatch any other message. The LLM reply sat queued behind the same
-consumer. 60s later, `ask_llm` timed out, popped the future in `finally`,
-returned `""`. The subscriber loop iterated, picked up the long-queued reply —
-no waiting future.
-
-**Fix.** Subscriber loop now wraps each `handle_task` invocation in
-`asyncio.create_task(...)`. The subscriber returns to its iterator immediately
-and remains free to dispatch incoming replies. Specifics:
-
-- Task tracked on `agent._tasks` so a clean shutdown cancels it.
-- `done_callback` removes it from the list when finished.
-- Reply publish moved inside the background task.
-- Exceptions caught, logged, and a `{"error": ..., "agent": ...}` dict goes
-  back to the reply topic.
-
-Same fix protects concurrent agents on the same node — two agents calling
-`agent.llm.chat()` concurrently no longer block each other.
-
-The diagnostic warning ("Reply arrived but no agent had a matching pending
-future") stays as a permanent canary for similar deadlocks or topic mismatches
-in the future.
-
----
-
-## Fix 15 — LLM agents are runnable on remote nodes
-
-**Symptom.** Migrated LLM agents forgot their conversation history. @mentions
-returned nothing useful.
-
-**Root cause.** A `type: "llm"` agent has no `code` — its behaviour lives
-inside the `LLMAgent` class, which exists only on main. The remote runner is
-DynamicAgent-shaped only; it has no `LLMAgent` equivalent. Spawn config with
-`system_prompt` but no `code` → remote compiles empty code → no `handle_task` →
-@mentions silently fail.
-
-**Fix.** Added a code synthesiser on `MainActor`. When `_spawn_remote` sees a
-`type: "llm"` config (or any spawn that has `system_prompt` but no `code`), it
-injects an auto-generated `code` field with a `setup` + `handle_task` that:
-
-- Restores `conversation_history` and `history_summary` via `agent.recall(...)`
-  on setup.
-- Maintains the rolling history in `agent.state['history']`.
-- Calls `agent.llm.complete(messages=history, system=system_prompt)` — routes
-  through the LLM bridge.
-- Persists after every exchange so a runner crash mid-conversation costs at
-  most one turn.
-- Returns `{"text": reply}` so the @mention reply path works.
-
-The synth tags the upgraded config with `_origin_type: "llm"`. When the agent
-migrates back to local, the state-return listener sees that tag, strips the
-synthesised `code`, restores `type: "llm"`, and the proper `LLMAgent` class
-takes over.
-
----
-
-## Fix 16 — `_initial_state` applied locally
-
-**Symptom.** Even non-LLM agents lost persisted state on remote→local
-migration.
-
-**Root cause.** `_initial_state` was consumed only by the remote runner — the
-local spawn path silently discarded it. Every remote→local migration started
-with a blank slate.
-
-**Fix.** Added `_apply_initial_state_locally`. After a local spawn following a
-migration, it writes the migrated state dict through the actor's
-`PersistenceAPI`, mirrors it into `_persistent_state`, and refreshes
-LLMAgent-specific in-memory caches (`_conversation_history`, `_history_summary`,
-token totals). The next `agent.recall(...)` returns the migrated value.
-
-Not LLM-specific — every agent benefits. A sensor agent that persisted
-thresholds and calibration counters now actually gets them back when migrated
-to local.
-
----
-
-## Fix 17 — Remote→Local always uses the `@main` sentinel
-
-**Symptom.** Remote→local migration silently lost state accumulated since the
-agent's original spawn (new conversation turns, observed schemas, calibration
-counters).
-
-**Root cause.** The `have_code` fast path used the spawn-registry config, which
-is the config sent at spawn time — not what the agent had learned since.
-
-**Fix.** Removed the `have_code` branch. Every remote→local migration now
-follows the same path:
-
-1. Main → `nodes/<node>/migrate {target_node: "@main"}`.
-2. Remote stops agent, snapshots LIVE config + state.
-3. Remote → `nodes/<node>/state_return`.
-4. Main applies `_origin_type` restoration, spawns locally, applies state.
-
-One round-trip instead of zero, live state every time.
-
----
-
-## Test plan
-
-- Spawn a `type: "llm"` agent locally, chat with it a few turns.
-- Migrate to remote: `/migrate <agent> <node>`. @mention it — should remember
-  earlier turns.
-- Chat a few more turns on remote.
-- Migrate back to local: `/migrate <agent> local`. @mention it — should
-  remember all turns, both the local-original ones and the remote-added ones.
-- Restart the remote runner (or reboot the Pi) while the agent is there. After
-  the runner comes back, the agent should still remember.
-- Spawn a DynamicAgent with `agent.subscribe(...)`, `agent.window(...)`, and
-  `agent.declare_contract(...)`. Migrate in both directions — wiring should be
-  preserved and the agent should keep functioning.
-- Verify `/agents` and the planner's auto-wiring see the same topics for
-  remote agents as for local ones.
-
-### Added
-
-- **LLM spend limit enforcement** - hard cap on LLM API spend per period (daily, weekly, or monthly). Set via `LLM_COST_LIMIT_USD` / `LLM_COST_LIMIT_PERIOD` env vars or at runtime from the dashboard Settings tab without restart. When the limit is reached, further LLM calls are blocked and a "limit reached" message is delivered as a chat reply. Spend accumulates into all three period keys simultaneously so switching periods always shows real data. New REST endpoints: `GET /api/cost`, `POST /api/cost/limit`, `POST /api/cost/reset`. Env-var values are the startup default; GUI override persists in SQLite and takes priority.
-
-### Fixed
-
-- **`monitor_server` stdio wrapping under pytest** - `monitor_server` no longer re-wraps `sys.stdout` / `sys.stderr` at import time when they have already been replaced by a test capture harness. Prevents `ValueError: I/O operation on closed file` during pytest teardown on Python 3.13 + Windows.
-
----
 
 ## [0.4.2] - 2026-05-14
 
@@ -1127,7 +830,7 @@ One round-trip instead of zero, live state every time.
 
 ---
 
-## [0.4.1] -- 2026-05-06
+## [0.4.1] - 2026-05-06
 
 ### Added
 
@@ -1182,7 +885,7 @@ One round-trip instead of zero, live state every time.
 
 ---
 
-## [0.4.0] -- 2026-04-25
+## [0.4.0] - 2026-04-25
 
 ### Added
 
@@ -1218,7 +921,7 @@ One round-trip instead of zero, live state every time.
 
 ---
 
-## [0.3.0] -- 2026-04-18
+## [0.3.0] - 2026-04-18
 
 ### Added
 
@@ -1237,7 +940,7 @@ One round-trip instead of zero, live state every time.
 
 ---
 
-## [0.2.0] -- 2026-03-13
+## [0.2.0] - 2026-03-13
 
 ### Added
 
@@ -1267,7 +970,7 @@ One round-trip instead of zero, live state every time.
 
 ---
 
-## [0.1.0] -- 2025-11-01
+## [0.1.0] - 2025-11-01
 
 ### Added
 

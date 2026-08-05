@@ -11,7 +11,7 @@ function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
 }
 
-function makeHost(agents: AgentInfo[] = [agent("main-actor"), agent("worker")]): OverviewHost {
+function makeHost(agents: AgentInfo[] = [agent("main"), agent("worker")]): OverviewHost {
     const map = new Map(agents.map(a => [a.id, a]));
     const statData = (): StatCardData => ({
         agents: [...map.values()],
@@ -127,12 +127,12 @@ describe("OverviewView.renderNodes", () => {
     });
 
     it("keeps remote-runner agents out of the local node's agent list", () => {
-        const host = makeHost([agent("main-actor"), agent("cpu-monitor", { node: "rpi-new" })]);
+        const host = makeHost([agent("main"), agent("cpu-monitor", { node: "rpi-new" })]);
         host.remoteNodes.set("rpi-new", { agents: ["cpu-monitor"], lastSeen: Date.now() });
         mount(host);
         const list = host.root.querySelector<HTMLElement>("#af-node-list")!;
         const localMeta = list.querySelector(".af-node-meta")!.textContent!;
-        expect(localMeta).toContain("main-actor");
+        expect(localMeta).toContain("main");
         expect(localMeta).not.toContain("cpu-monitor");
     });
 
@@ -166,5 +166,26 @@ describe("OverviewView.renderNodes", () => {
         const list = host.root.querySelector<HTMLElement>("#af-node-list")!;
         expect(list.querySelector("img")).toBeNull();
         expect(list.querySelector(".af-node-meta")!.textContent).toContain(payload);
+    });
+});
+
+/**
+ * The overview renders into elements that only exist once it is mounted. Live
+ * updates keep arriving while another view is open, so every painter has to be
+ * a no-op rather than throw when its target is not in the DOM.
+ */
+describe("OverviewView before it is mounted", () => {
+    it("renderStats does nothing without the stats grid", () => {
+        const host = makeHost();
+        const view = new OverviewView(host); // built, never mounted
+
+        expect(() => view.renderStats()).not.toThrow();
+        expect(host.root.querySelector("#af-stats-grid")).toBeNull();
+    });
+
+    it("renderNodes does nothing without a list or a container", () => {
+        const view = new OverviewView(makeHost());
+
+        expect(() => view.renderNodes()).not.toThrow();
     });
 });

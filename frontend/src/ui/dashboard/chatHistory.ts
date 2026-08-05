@@ -49,11 +49,12 @@ function stripInternalTurns<T extends { role: string; content: string }>(rows: T
     return out;
 }
 
-/** Primary source: chat_log table — carries real persisted timestamps. */
-async function fromChatLog(agentName: string): Promise<ChatMessage[]> {
+/** Primary source: chat_log table — carries real persisted timestamps.
+ *  Returns null on a failed request so callers can retry later. */
+async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
     const res = await fetch(`${ingressBase()}/api/chats?agent=${encodeURIComponent(agentName)}&limit=200`);
     if (!res.ok) {
-        return [];
+        return null;
     }
     const rows = (await res.json()) as { id: number; ts: number; role: string; content: string }[];
     return stripInternalTurns(rows.reverse()).map(r => ({
@@ -65,11 +66,12 @@ async function fromChatLog(agentName: string): Promise<ChatMessage[]> {
     }));
 }
 
-/** Fallback: actor kv_store history — no timestamps, so synthesise them. */
-async function fromKvStore(agentName: string): Promise<ChatMessage[]> {
+/** Fallback: actor kv_store history — no timestamps, so synthesise them.
+ *  Returns null on a failed request so callers can retry later. */
+async function fromKvStore(agentName: string): Promise<ChatMessage[] | null> {
     const res = await fetch(`${ingressBase()}/api/actors/${encodeURIComponent(agentName)}/history`);
     if (!res.ok) {
-        return [];
+        return null;
     }
     const rawAll = (await res.json()) as { role: string; content: string }[];
     const raw = stripInternalTurns(rawAll);
@@ -84,13 +86,20 @@ async function fromKvStore(agentName: string): Promise<ChatMessage[]> {
 }
 
 /** Fetch an agent's persisted chat history by NAME — history is keyed by agent
- *  name (the chat target), not the actor id (best-effort; [] on any failure). */
-export async function fetchChatHistory(agentName: string): Promise<ChatMessage[]> {
+ *  name (the chat target), not the actor id. Returns null on any failure (so
+ *  the caller can retry) and [] only when the agent genuinely has no history. */
+export async function fetchChatHistory(agentName: string): Promise<ChatMessage[] | null> {
     try {
         const primary = await fromChatLog(agentName);
-        return primary.length ? primary : await fromKvStore(agentName);
+        if (primary === null) {
+            return null;
+        }
+        if (primary.length) {
+            return primary;
+        }
+        return await fromKvStore(agentName);
     } catch {
-        return [];
+        return null;
     }
 }
 

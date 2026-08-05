@@ -4,7 +4,7 @@
  */
 /**
  * Deletion guard for the live agent grid — mirrors the backend's
- * `monitor_server._deleted_agent_ids`.
+ * `wactorz/web/runtime.py::deleted_agent_ids`.
  *
  * When the user deletes an agent there's a brief "stop-window" where trailing
  * MQTT events (heartbeat / status / spawn) can still arrive and blink the card

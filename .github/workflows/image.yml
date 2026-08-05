@@ -22,11 +22,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Pinned from package.json's "packageManager": this build's output is
+      # published, so it must match the assets CI verified against the tree.
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: frontend/package.json
 
       - name: Build frontend
         working-directory: frontend
-        run: bun install && bun run build
+        run: bun install --frozen-lockfile && bun run build
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

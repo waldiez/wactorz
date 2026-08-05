@@ -92,6 +92,8 @@ def build_app() -> web.Application:
     # Actor control — sub-routes must be registered before /{actor_id} catch-all
     app.router.add_post("/api/actors/{actor_id}/message", api_actors.send_message_handler)
     app.router.add_post("/actors/{actor_id}/message", api_actors.send_message_handler)
+    app.router.add_post("/api/actors/{actor_id}/start", api_actors.start_actor_handler)
+    app.router.add_post("/actors/{actor_id}/start", api_actors.start_actor_handler)
     app.router.add_post("/api/actors/{actor_id}/pause", api_actors.pause_actor_handler)
     app.router.add_post("/actors/{actor_id}/pause", api_actors.pause_actor_handler)
     app.router.add_post("/api/actors/{actor_id}/resume", api_actors.resume_actor_handler)
@@ -165,7 +167,7 @@ async def main(exit_on_failure: bool = False) -> None:
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", runtime.WS_PORT)
     await site.start()
-    msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/  [chat: {chat.chat_mode()}]"
+    msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/"
     logger.info(msg)
     if static_site.DOCS_SITE.is_dir():
         msg = f"Docs     → http://localhost:{runtime.WS_PORT}/docs/"

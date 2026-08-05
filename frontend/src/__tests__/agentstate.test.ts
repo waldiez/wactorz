@@ -10,8 +10,15 @@ import {
     stateLabel,
     sortAgents,
     relTime,
+    MESSAGEABLE_PRIORITY,
 } from "../ui/dashboard/agentState";
 import type { AgentState } from "../types/agent";
+
+describe("MESSAGEABLE_PRIORITY", () => {
+    it("is the single pinned-order list shared by the picker and the sorter", () => {
+        expect([...MESSAGEABLE_PRIORITY]).toEqual(["main", "home-assistant-agent", "catalog"]);
+    });
+});
 
 describe("canDirectMessage", () => {
     it("always allows the pinned/system-chat agents even if protected", () => {
@@ -61,9 +68,9 @@ describe("stateColor / stateLabel", () => {
 });
 
 describe("sortAgents", () => {
-    it("pins main-actor first, then sorts the rest alphabetically", () => {
-        const out = sortAgents([{ name: "zeta" }, { name: "main-actor" }, { name: "alpha" }]);
-        expect(out.map(a => a.name)).toEqual(["main-actor", "alpha", "zeta"]);
+    it("pins main first, then sorts the rest alphabetically", () => {
+        const out = sortAgents([{ name: "zeta" }, { name: "main" }, { name: "alpha" }]);
+        expect(out.map(a => a.name)).toEqual(["main", "alpha", "zeta"]);
     });
 });
 

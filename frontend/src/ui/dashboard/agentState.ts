@@ -7,6 +7,7 @@
  * colour/label mapping and relative-time formatting.
  */
 import type { AgentState } from "../../types/agent";
+import { MAIN_AGENT } from "../../agents/naming";
 
 /** Heartbeat age (ms) after which a remote node / agent is treated as stale. */
 export const STALE_MS = 180_000;
@@ -19,8 +20,13 @@ export const SYSTEM_AGENT_NAMES: Set<string> = new Set([
     "home-assistant-map-agent",
 ]);
 
+/** The pinned-first messageable agents, in display order. Single source for
+ *  both the target picker (DashboardChat) and the messageability check below —
+ *  two copies of this list used to live in two files and could drift. */
+export const MESSAGEABLE_PRIORITY: readonly string[] = [MAIN_AGENT, "home-assistant-agent", "catalog"];
+
 /** Agents that are always messageable even when flagged protected. */
-const ALWAYS_MESSAGEABLE = new Set(["main", "main-actor", "home-assistant-agent", "catalog"]);
+const ALWAYS_MESSAGEABLE: ReadonlySet<string> = new Set(MESSAGEABLE_PRIORITY);
 
 /** Whether the user may send chat messages directly to this agent. */
 export function canDirectMessage(agent: { name: string; protected?: boolean }): boolean {
@@ -72,13 +78,13 @@ export function stateLabel(state: AgentState): string {
     return state;
 }
 
-/** Agents sorted with main-actor pinned first, then alphabetical. */
+/** Agents sorted with main pinned first, then alphabetical. */
 export function sortAgents<T extends { name: string }>(agents: Iterable<T>): T[] {
     return [...agents].sort((a, b) => {
-        if (a.name === "main-actor") {
+        if (a.name === MAIN_AGENT) {
             return -1;
         }
-        if (b.name === "main-actor") {
+        if (b.name === MAIN_AGENT) {
             return 1;
         }
         return a.name.localeCompare(b.name);

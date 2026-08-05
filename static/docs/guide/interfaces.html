@@ -529,7 +529,8 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </tr>
 </tbody>
 </table>
-<p>Runs Wactorz as a Discord bot. The bot responds to messages in any channel it has access to, and supports DMs. All Wactorz commands and <code>@agent-name</code> routing work identically to the CLI.</p>
+<p>Runs Wactorz as a Discord bot. The bot replies when mentioned in a channel it has access to, and supports DMs.</p>
+<p>Discord is a <strong>restricted</strong> channel: conversation, Home Assistant queries and everyday device control work, but spawning agents, deleting agents, running code, pipelines and admin slash commands do not. Use the dashboard for those.</p>
 <div class="highlight"><pre><span></span><code>wactorz<span class="w"> </span>--interface<span class="w"> </span>discord<span class="w"> </span>--discord-token<span class="w"> </span><span class="nv">$DISCORD_BOT_TOKEN</span>
 </code></pre></div>
 
@@ -538,13 +539,16 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 <li>Go to <a href="https://discord.com/developers/applications">discord.com/developers</a> → New Application → Bot</li>
 <li>Enable <strong>Message Content Intent</strong> under Bot → Privileged Gateway Intents</li>
 <li>Copy the bot token and set it as <code>DISCORD_BOT_TOKEN</code> in your <code>.env</code></li>
+<li>Enable <strong>Developer Mode</strong> (Settings → Advanced), right-click your name → <strong>Copy User ID</strong>, and set it as <code>DISCORD_ALLOWED_USER_IDS</code></li>
 <li>Invite the bot to your server using the OAuth2 URL generator with <code>bot</code> scope and <code>Send Messages</code> + <code>Read Message History</code> permissions</li>
 </ol>
 <h4 id="configuration_1">Configuration</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">DISCORD_BOT_TOKEN</span><span class="o">=</span>MTI4...
+<span class="nv">DISCORD_ALLOWED_USER_IDS</span><span class="o">=</span><span class="m">123456789012345678</span><span class="w">   </span><span class="c1"># required — comma-separate for several people</span>
 </code></pre></div>
 
 <blockquote>
+<p><strong>The allow-list is required.</strong> Without it the bot logs an error and does not log in: anyone who could mention it would otherwise be able to control your devices and spend your LLM budget. Senders are also rate-limited (<code>SOCIAL_RATE_LIMIT_PER_MIN</code>, default 12/min).</p>
 <p><strong>💡 Webhook notifications</strong> — Pipelines can post to Discord independently of the bot using webhook URLs. Store a webhook with <code>/webhook discord https://discord.com/api/webhooks/...</code> and the planner will inject it into generated notification agents automatically.</p>
 </blockquote>
 <hr />
@@ -573,6 +577,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </tbody>
 </table>
 <p>Connects Wactorz to WhatsApp via the Twilio Messaging API. Incoming WhatsApp messages are forwarded to MainActor and replies are sent back to the user's number.</p>
+<p>Like Discord and Telegram this is a <strong>restricted</strong> channel — conversation, HA queries and everyday device control only.</p>
 <div class="highlight"><pre><span></span><code>wactorz<span class="w"> </span>--interface<span class="w"> </span>whatsapp
 </code></pre></div>
 
@@ -580,14 +585,18 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 <ol>
 <li>Create a <a href="https://www.twilio.com">Twilio</a> account and enable the WhatsApp sandbox (or a production number)</li>
 <li>Set the webhook URL in the Twilio console to your public endpoint (e.g. via ngrok during development): <code>https://your-host/whatsapp/incoming</code></li>
-<li>Add credentials to <code>.env</code></li>
+<li>Add credentials and the sender allow-list to <code>.env</code></li>
 </ol>
 <h4 id="configuration_2">Configuration</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">TWILIO_ACCOUNT_SID</span><span class="o">=</span>ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 <span class="nv">TWILIO_AUTH_TOKEN</span><span class="o">=</span>your_auth_token
 <span class="nv">TWILIO_WHATSAPP_NUMBER</span><span class="o">=</span>whatsapp:+14155238886
+<span class="nv">WHATSAPP_ALLOWED_NUMBERS</span><span class="o">=</span>+306912345678<span class="w">        </span><span class="c1"># required — comma-separate for several people</span>
 </code></pre></div>
 
+<blockquote>
+<p><strong>The allow-list is required.</strong> The webhook is a public HTTP endpoint, so without it the interface refuses to start. Messages from other numbers are dropped before reaching the LLM.</p>
+</blockquote>
 <hr />
 <h2 id="telegram-requires-package">Telegram <code>[requires package]</code></h2>
 <p><strong>Flag:</strong> <code>--interface telegram</code></p>
@@ -610,6 +619,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </tbody>
 </table>
 <p>Runs Wactorz as a Telegram bot using the Bot API in long-polling mode — no public webhook endpoint required. Works behind NAT and firewalls out of the box.</p>
+<p>Telegram is a <strong>restricted</strong> channel: conversation, Home Assistant queries and everyday device control only — no spawning, deleting, code, pipelines or admin commands.</p>
 <div class="highlight"><pre><span></span><code>wactorz<span class="w"> </span>--interface<span class="w"> </span>telegram<span class="w"> </span>--telegram-token<span class="w"> </span><span class="nv">$TELEGRAM_BOT_TOKEN</span>
 </code></pre></div>
 
@@ -617,13 +627,17 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 <ol>
 <li>Message <a href="https://t.me/BotFather">@BotFather</a> on Telegram → <code>/newbot</code></li>
 <li>Copy the token and set it as <code>TELEGRAM_BOT_TOKEN</code> in your <code>.env</code></li>
-<li>Start Wactorz — the bot is immediately reachable in any chat or group it's added to</li>
+<li>Start Wactorz and send <code>/start</code> to the bot. With no allow-list configured it runs in <strong>setup mode</strong> and answers only that one command, with your numeric user id</li>
+<li>Put that id in <code>TELEGRAM_ALLOWED_USER_IDS</code> and restart — the bot is now reachable, by you</li>
 </ol>
 <h4 id="configuration_3">Configuration</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">TELEGRAM_BOT_TOKEN</span><span class="o">=</span><span class="m">1234567890</span>:AAF...
-<span class="nv">TELEGRAM_ALLOWED_USER_ID</span><span class="o">=</span><span class="m">123456789</span><span class="w">   </span><span class="c1"># optional: restrict to a single user ID</span>
+<span class="nv">TELEGRAM_ALLOWED_USER_IDS</span><span class="o">=</span><span class="m">123456789</span><span class="w">   </span><span class="c1"># required — comma-separate for a household</span>
 </code></pre></div>
 
+<blockquote>
+<p><strong>The allow-list is required.</strong> Telegram bots are publicly discoverable by username, so an unrestricted bot is an open door to your home and your LLM budget. Until it is set the bot stays in setup mode. <code>TELEGRAM_ALLOWED_USER_ID</code> (singular) is still accepted and folded into the list.</p>
+</blockquote>
 <hr />
 <h2 id="web-ui-dashboard-built-in">Web UI Dashboard <code>[built-in]</code></h2>
 <p><strong>URL:</strong> <code>http://localhost:8888</code></p>

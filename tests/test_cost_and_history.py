@@ -9,19 +9,19 @@ Covers three recent features:
 
 import json
 import sqlite3
-import sys
 import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from wactorz.web import api_actors, cost, events, runtime
-
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
-# aiohttp is a hard dependency and monitor_server imports it fully at module
+# aiohttp is a hard dependency and the web app imports it fully at module
 # level (web, WSMsgType, …), so it must NOT be stubbed — handler responses are
 # real aiohttp Response objects, read via _payload() below.
-sys.modules.setdefault("openai", types.ModuleType("openai"))
+from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
+from wactorz.web import api_actors, cost, events, runtime
+
+ensure_importable("openai")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -31,11 +31,11 @@ sys.modules.setdefault("openai", types.ModuleType("openai"))
 
 class FinalCostRoutingTest(unittest.TestCase):
     def test_final_cost_key_is_in_sqlite_keys(self):
-        from wactorz.core.persistence import _SQLITE_KEYS
+        from wactorz.core.persistence import SQLITE_KEYS
 
         self.assertIn(
             "_final_cost",
-            _SQLITE_KEYS,
+            SQLITE_KEYS,
             "_final_cost must route to SQLite so it survives restarts "
             "and is queryable for deleted-agent cost accounting",
         )
@@ -90,6 +90,34 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.total_input_tokens, 0)
         self.assertEqual(agent.total_cost_usd, 0.0)
 
+    async def test_a_second_on_start_does_not_double_the_totals(self):
+        """The start command restarts the same instance; on_start runs again."""
+        saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0042}
+        agent = self._make_agent(saved)
+        await agent.on_start()
+
+        await agent.on_start()  # as a stop/start cycle on the same object does
+
+        # Adding the persisted totals to a live instance charged the agent's
+        # lifetime spend twice, and again on every later restart — reaching both
+        # the dashboard headline and the durable ledger.
+        self.assertEqual(agent.total_input_tokens, 100)
+        self.assertEqual(agent.total_output_tokens, 50)
+        self.assertAlmostEqual(agent.total_cost_usd, 0.0042, places=6)
+
+    async def test_tokens_do_not_double_when_the_model_is_free(self):
+        """A local model leaves cost at zero while tokens still accumulate."""
+        saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0}
+        agent = self._make_agent(saved)
+        await agent.on_start()
+
+        await agent.on_start()
+
+        # Guarding on cost alone would miss this: cost stays 0.0, so the guard
+        # opens every time and the tokens double.
+        self.assertEqual(agent.total_input_tokens, 100)
+        self.assertEqual(agent.total_output_tokens, 50)
+
     async def test_cost_accumulates_on_top_of_restored_baseline(self):
         """After restoring from persistence, new exchanges add to the running total."""
         saved = {"input_tokens": 200, "output_tokens": 80, "cost_usd": 0.01}
@@ -126,8 +154,8 @@ class PersistCostTest(unittest.TestCase):
         agent = self._make_agent()
         agent._persist_cost()
 
-        agent.persist.assert_called_once()
-        key, payload = agent.persist.call_args[0]
+        agent.persist.assert_called_once()  # pyright: ignore[reportAttributeAccessIssue]
+        key, payload = agent.persist.call_args[0]  # pyright: ignore[reportAttributeAccessIssue]
         self.assertEqual(key, "_final_cost")
         self.assertEqual(payload["input_tokens"], 300)
         self.assertEqual(payload["output_tokens"], 120)
@@ -139,13 +167,13 @@ class PersistCostTest(unittest.TestCase):
         agent.total_cost_usd = 1 / 3
         agent._persist_cost()
 
-        _, payload = agent.persist.call_args[0]
+        _, payload = agent.persist.call_args[0]  # pyright: ignore[reportAttributeAccessIssue]
         # round() to 6 places: 0.333333
         self.assertEqual(payload["cost_usd"], round(1 / 3, 6))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Historical cost accounting in monitor_server
+# 4. Historical cost accounting in the web app
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -247,11 +275,11 @@ class HistoricalCostTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4b. Durable lifetime cost ledger in monitor_server
+# 4b. Durable lifetime cost ledger in the web app
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class _KVStub:
+class _RoundTripKV:
     """Minimal kv_get/kv_set db stub with JSON round-trip, like WactorzDB."""
 
     def __init__(self, store=None):
@@ -273,7 +301,7 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         self._orig_loaded = cost.lifetime_loaded
         cost.lifetime_cost.clear()
         cost.lifetime_loaded = False
-        runtime.db = _KVStub()
+        runtime.db = _RoundTripKV()
 
     def tearDown(self):
         runtime.db = self._orig_db
@@ -517,7 +545,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
     async def test_returns_empty_list_when_registry_none(self):
         runtime.registry = None
 
-        resp = await api_actors.actor_history_handler(self._make_request("any"))
+        resp = await api_actors.actor_history_handler(self._make_request("any"))  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(_payload(resp), [])
         self.assertEqual(resp.status, 200)
@@ -527,7 +555,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = None
         runtime.registry = registry
 
-        resp = await api_actors.actor_history_handler(self._make_request("ghost"))
+        resp = await api_actors.actor_history_handler(self._make_request("ghost"))  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(_payload(resp), [])
 
@@ -544,7 +572,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         runtime.registry = registry
 
-        resp = await api_actors.actor_history_handler(self._make_request("test-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("test-agent"))  # pyright: ignore[reportArgumentType]
 
         payload = _payload(resp)
         self.assertEqual(len(payload), 2)
@@ -558,7 +586,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         runtime.registry = registry
 
-        resp = await api_actors.actor_history_handler(self._make_request("quiet-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("quiet-agent"))  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(_payload(resp), [])
 
@@ -569,7 +597,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
         registry.get.return_value = actor
         runtime.registry = registry
 
-        resp = await api_actors.actor_history_handler(self._make_request("dumb-agent"))
+        resp = await api_actors.actor_history_handler(self._make_request("dumb-agent"))  # pyright: ignore[reportArgumentType]
 
         self.assertEqual(_payload(resp), [])
 
@@ -579,7 +607,7 @@ class ActorHistoryHandlerTest(unittest.IsolatedAsyncioTestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class _KVStub:
+class _SerializedKV:
     """Minimal kv_get/kv_set store standing in for WactorzDB."""
 
     def __init__(self):
@@ -614,7 +642,7 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         import wactorz.agents.llm_agent as L
 
         self.L = L
-        self.db = _KVStub()
+        self.db = _SerializedKV()
         self._p_db = patch.object(L, "get_db", lambda: self.db)
         self._p_db.start()
 

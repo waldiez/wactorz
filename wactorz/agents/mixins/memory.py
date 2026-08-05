@@ -10,13 +10,24 @@ base (self.persist, self.recall, self._registry).
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from ..prompts.main_actor_prompts import FACTS_EXTRACT_PROMPT, ORCHESTRATOR_PROMPT
 
 logger = logging.getLogger(__name__)
 
 
-class MemoryMixin:
+if TYPE_CHECKING:
+    from .host import MemoryHost
+
+    # Typing-only base: states what the host must provide, and is
+    # gone at runtime so the real MRO is exactly what it was.
+    _Host = MemoryHost
+else:
+    _Host = object
+
+
+class MemoryMixin(_Host):
     """User facts + live system-prompt assembly. Mix into an LLMAgent host."""
 
     def get_user_facts(self) -> dict:

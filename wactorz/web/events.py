@@ -30,7 +30,19 @@ def update_agent(agent_id: str, key: str, data) -> None:
 
 
 def add_log(entry: dict) -> None:
-    """Append to the bounded log feed shared with connected browsers."""
+    """Append to the bounded log feed shared with connected browsers.
+
+    Stamps ``source`` here rather than at each of the call sites, so a later one
+    cannot forget it. The value is a constant telling the feed view which kind of
+    entry it is holding.
+
+    Assigned, not ``setdefault``: two call sites spread ``**data`` from the
+    broker payload into the entry, so a publisher could otherwise label its own
+    row ``app`` and have it render as an application log line. Everything
+    reaching this function is agent activity by definition — application log
+    records go to the in-memory buffer, never here.
+    """
+    entry["source"] = "agent"
     runtime.state["log_feed"].insert(0, entry)
     if len(runtime.state["log_feed"]) > 100:
         runtime.state["log_feed"].pop()
@@ -288,8 +300,20 @@ def node_online(last_seen: float, threshold: float = 45.0) -> bool:
     return (time.time() - last_seen) < threshold
 
 
-def snapshot() -> dict[str, Any]:
-    """Render the full dashboard state for a newly connected websocket client."""
+def snapshot(include_totals: bool = True) -> dict[str, Any]:
+    """Render the dashboard state for a websocket client.
+
+    Everything here reads from ``runtime.state`` — in memory, cheap — **except**
+    the two headline totals, which are the only part that touches the database.
+    Resolving them costs one query per agent whose cost is not in an MQTT frame
+    (``best_cost`` falls through to the ``_final_cost`` row), plus two full scans
+    of ``kv_store``.
+
+    ``include_totals=False`` omits them, for callers on a hot path. The browser
+    keeps whatever it last received: ``WSClient._applyStatePatch`` assigns each
+    total only when the key is present, so omitting them is not the same as
+    sending zero, and no protocol or frontend change is involved.
+    """
     if runtime.hard_resetting:
         return {
             "agents": [],
@@ -301,6 +325,15 @@ def snapshot() -> dict[str, Any]:
         }
     for nd in runtime.state["nodes"].values():
         nd["online"] = node_online(nd.get("last_seen", 0))
+
+    if not include_totals:
+        return {
+            "agents": list(runtime.state["agents"].values()),
+            "nodes": list(runtime.state["nodes"].values()),
+            "alerts": runtime.state["alerts"][:10],
+            "log_feed": runtime.state["log_feed"][:20],
+            "system_health": runtime.state["system_health"],
+        }
 
     # The headline totals must match what the dashboard actually shows on the
     # cards. Each card resolves its cost via _actor_cost() — MQTT state, then the

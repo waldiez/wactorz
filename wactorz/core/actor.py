@@ -2,6 +2,8 @@
 Every agent IS an actor. Actors communicate via message passing only.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -18,8 +20,11 @@ from typing import TYPE_CHECKING, Any
 
 import psutil
 
+from .atomic_io import write_pickle
+
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
+    from .persistence import PersistenceAPI
     from .registry import ActorRegistry
 
 
@@ -46,6 +51,8 @@ logger = logging.getLogger(__name__)
 
 
 class ActorState(str, Enum):
+    """Where an actor is in its lifecycle."""
+
     IDLE = "idle"
     RUNNING = "running"
     PAUSED = "paused"
@@ -54,6 +61,8 @@ class ActorState(str, Enum):
 
 
 class MessageType(str, Enum):
+    """What a message is asking of its recipient."""
+
     # Lifecycle
     START = "start"
     STOP = "stop"
@@ -73,6 +82,8 @@ class MessageType(str, Enum):
 
 @dataclass
 class Message:
+    """One unit of communication between actors."""
+
     type: MessageType
     sender_id: str
     payload: Any = None
@@ -81,6 +92,7 @@ class Message:
     timestamp: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
+        """A JSON-serialisable form, for MQTT and the dashboard."""
         return {
             "type": self.type.value,
             "sender_id": self.sender_id,
@@ -93,6 +105,8 @@ class Message:
 
 @dataclass
 class ActorMetrics:
+    """Running counters for one actor, reported in heartbeats."""
+
     messages_processed: int = 0
     errors: int = 0
     start_time: float = field(default_factory=time.time)
@@ -103,6 +117,7 @@ class ActorMetrics:
 
     @property
     def uptime(self) -> float:
+        """Seconds since the actor started."""
         return time.time() - self.start_time
 
 
@@ -149,7 +164,7 @@ class Actor(ABC):
 
         # Unified persistence API — set by ActorSystem if available,
         # otherwise falls back to legacy pickle behavior
-        self._persistence_api: Any | None = None
+        self._persistence_api: PersistenceAPI | None = None
 
         # Protection — if True, stop/delete/pause commands are ignored
         self.protected: bool = False
@@ -173,7 +188,7 @@ class Actor(ABC):
         except Exception:
             pass
 
-        logger.info(f"[{self.name}] Actor created with id={self.actor_id}")
+        logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
     # ─── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -182,22 +197,26 @@ class Actor(ABC):
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
         await self._load_persistent_state()
-        # Restore message count from previous session
-        saved_msgs = self.recall("_messages_processed", {})
-        if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
-            self.metrics.messages_processed += int(saved_msgs["count"])
+        # Restore the message count from a previous run — but only into a fresh
+        # instance. The supervisor restarts by building a new actor, whose count
+        # is zero; the start command restarts *this* object, whose count is
+        # already the live total. Adding the persisted value there counts every
+        # message twice, and again on each subsequent stop/start.
+        if self.metrics.messages_processed == 0:
+            saved_msgs = self.recall("_messages_processed", {})
+            if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
+                self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
         self._tasks.append(asyncio.create_task(self._message_loop()))
         self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
         self._tasks.append(asyncio.create_task(self._command_listener()))
         await self._publish_status()
-        logger.info(f"[{self.name}] Actor started.")
+        logger.info("[%s] Actor started.", self.name)
 
     async def stop(self):
         """Gracefully stop the actor."""
         self.state = ActorState.STOPPED
-        for task in self._tasks:
-            task.cancel()
+        await self._wind_down_tasks()
         # Shield cleanup from CancelledError — chat tasks run as fire-and-forget
         # asyncio tasks outside actor._tasks and get cancelled by asyncio.run()
         # cleanup BEFORE these awaits if we don't shield them.
@@ -223,7 +242,7 @@ class Actor(ABC):
                 {
                     "input_tokens": getattr(self, "total_input_tokens", 0),
                     "output_tokens": getattr(self, "total_output_tokens", 0),
-                    "cost_usd": round(self.total_cost_usd, 6),
+                    "cost_usd": round(getattr(self, "total_cost_usd", 0), 6),
                     "name": self.name,
                     "stopped_at": time.time(),
                 },
@@ -254,13 +273,58 @@ class Actor(ABC):
                 bus.unregister(self.name)
         except Exception:
             pass  # TopicBus not initialised or unavailable — not fatal
-        logger.info(f"[{self.name}] Actor stopped.")
+        logger.info("[%s] Actor stopped.", self.name)
+
+    #: How long stop() waits for a cancelled task before giving up on it.
+    TASK_SHUTDOWN_TIMEOUT = 5.0
+
+    async def _wind_down_tasks(self) -> None:
+        """Cancel the actor's own tasks and wait for them to actually finish.
+
+        ``cancel()`` only requests cancellation. Returning without awaiting left
+        a task that was part-way through a message to unwind after ``stop()``
+        had already reported the actor stopped — and since the task list was
+        never cleared, starting the actor again ran a second message loop, a
+        second heartbeat and a second command listener alongside the ones still
+        winding down, so every command was handled twice.
+
+        The task this runs in is left alone: a stop command arrives on the
+        command listener, and a task cannot wait for itself. Each loop is
+        written to exit once the state is STOPPED, which is already set.
+        """
+        current = asyncio.current_task()
+        others = [task for task in self._tasks if task is not current]
+        for task in others:
+            task.cancel()
+        try:
+            if others:
+                # Bounded: a task that will not unwind must not hold up shutdown.
+                await asyncio.wait_for(
+                    asyncio.shield(asyncio.gather(*others, return_exceptions=True)),
+                    timeout=self.TASK_SHUTDOWN_TIMEOUT,
+                )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[%s] %d task(s) did not stop within %gs.",
+                self.name,
+                sum(1 for task in others if not task.done()),
+                self.TASK_SHUTDOWN_TIMEOUT,
+            )
+        # CancelledError is deliberately not caught. Swallowing it consumes the
+        # caller's own cancellation: the supervisor's watch loop was cancelled
+        # here while stopping an actor, never saw the error, resumed its poll
+        # loop, and left Supervisor.stop() awaiting a task that could no longer
+        # finish. Clearing the task list still happens either way.
+        finally:
+            self._tasks.clear()
 
     async def pause(self):
+        """Stop processing messages, keeping the mailbox and registration."""
         self.state = ActorState.PAUSED
         await self._publish_status()
 
     async def resume(self):
+        """Start processing messages again after a pause."""
         self.state = ActorState.RUNNING
         await self._publish_status()
 
@@ -295,7 +359,7 @@ class Actor(ABC):
                 break
             except Exception as e:
                 self.metrics.errors += 1
-                logger.error(f"[{self.name}] Error in message loop: {e}", exc_info=True)
+                logger.error("[%s] Error in message loop: %s", self.name, e, exc_info=True)
 
     async def _dispatch(self, msg: Message):
         """Dispatch message to the appropriate handler."""
@@ -307,27 +371,23 @@ class Actor(ABC):
 
     def _setup_default_handlers(self):
         self._handlers = {
-            MessageType.STOP: self._handle_stop,
-            MessageType.PAUSE: self._handle_pause,
-            MessageType.RESUME: self._handle_resume,
+            MessageType.START: self._handle_lifecycle,
+            MessageType.STOP: self._handle_lifecycle,
+            MessageType.PAUSE: self._handle_lifecycle,
+            MessageType.RESUME: self._handle_lifecycle,
             MessageType.STATUS_REQUEST: self._handle_status_request,
             MessageType.HEARTBEAT: self._handle_heartbeat_msg,
         }
 
-    async def _handle_stop(self, msg: Message):
-        # Release from supervision before stopping so the heartbeat watchdog
-        # doesn't race to restart us after we go quiet.
-        if self._registry and hasattr(self._registry, "_supervisor_ref"):
-            sup = self._registry._supervisor_ref
-            if sup is not None:
-                sup.release(self.name)
-        await self.stop()
+    async def _handle_lifecycle(self, msg: Message):
+        """Apply a lifecycle message through the one implementation of it.
 
-    async def _handle_pause(self, msg: Message):
-        await self.pause()
-
-    async def _handle_resume(self, msg: Message):
-        await self.resume()
+        These used to be three separate handlers, one of which repeated the
+        supervision release by hand. Message-passing is another way to ask for
+        the same thing, not another set of rules — so a protected actor now
+        refuses a STOP message as it already refused the other routes.
+        """
+        await self.apply_command(msg.type.value)
 
     async def _handle_status_request(self, msg: Message):
         status = self.get_status()
@@ -357,7 +417,7 @@ class Actor(ABC):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"[{self.name}] Heartbeat error: {e}")
+                logger.warning("[%s] Heartbeat error: %s", self.name, e)
 
     def _estimate_memory_mb(self) -> float:
         """Bounded deep-size walk over this actor's own data structures.
@@ -417,10 +477,85 @@ class Actor(ABC):
             "restart_count": self.metrics.restart_count,
         }
 
+    LIFECYCLE_COMMANDS = ("start", "pause", "resume", "stop", "delete")
+
+    def _release_from_supervision(self) -> None:
+        """Tell the supervisor this actor is leaving deliberately.
+
+        The Erlang unlink. Stopping without it is indistinguishable from
+        crashing, so the heartbeat-silence watchdog fires ~35s later and
+        restarts the actor that was just deliberately stopped.
+        """
+        if self._registry and hasattr(self._registry, "_supervisor_ref"):
+            sup = self._registry._supervisor_ref
+            if sup is not None:
+                sup.release(self.name)
+
+    def _resume_supervision(self) -> None:
+        """Put this actor back under supervision after a deliberate stop.
+
+        The mirror of :meth:`_release_from_supervision`. Without it a restarted
+        actor runs unwatched — it would crash and stay down, which is exactly
+        what supervision exists to prevent.
+        """
+        if self._registry and hasattr(self._registry, "_supervisor_ref"):
+            sup = self._registry._supervisor_ref
+            if sup is not None:
+                sup.resupervise(self.name, self)
+
+    async def apply_command(self, command: str) -> bool:
+        """Run a lifecycle command on this actor. Returns whether it took effect.
+
+        These are not a dispatch table, which is why they live here rather than
+        in the transport below: ``stop`` must release from supervision first, and
+        ``delete`` also clears the spawn registry and unregisters. A caller that
+        holds the actor and simply awaits ``stop()`` gets it restarted half a
+        minute later by the watchdog.
+
+        Every entry point routes through this — the broker listener, and the web
+        layer when the actor is local — so the two cannot drift apart.
+
+        Returns ``False`` when the command was refused (protected actor) or
+        unknown, so a caller can report that rather than claim success.
+        """
+        if self.protected and command in ("stop", "pause", "delete"):
+            logger.warning("[%s] Ignoring %r — actor is protected.", self.name, command)
+            return False
+
+        if command == "start":
+            if self.state != ActorState.STOPPED:
+                logger.warning("[%s] Ignoring 'start' — actor is %s.", self.name, self.state.value)
+                return False
+            await self.start()
+            self._resume_supervision()
+        elif command == "pause":
+            await self.pause()
+        elif command == "resume":
+            await self.resume()
+        elif command == "stop":
+            self._release_from_supervision()
+            await self.stop()
+        elif command == "delete":
+            self._release_from_supervision()
+            if self._registry:
+                main = self._registry.find_by_name("main")
+                if main and hasattr(main, "_remove_from_spawn_registry"):
+                    main._remove_from_spawn_registry(self.name)  # pyright: ignore[reportAttributeAccessIssue]
+                await self._registry.unregister(self.actor_id)
+            await self.stop()
+        else:
+            logger.warning("[%s] Unknown command: %r", self.name, command)
+            return False
+        return True
+
     async def _command_listener(self):
-        """Listen for commands published to agents/{id}/commands via MQTT."""
+        """Carry commands from agents/{id}/commands to :meth:`apply_command`.
+
+        Transport only. Needed for actors a caller cannot reach in process —
+        after the direct-dispatch change that means agents on remote nodes.
+        """
         try:
-            import aiomqtt  # noqa: F401
+            import aiomqtt  # noqa: F401  # pylint: disable=unused-import
         except ImportError:
             return
         from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
@@ -430,47 +565,20 @@ class Actor(ABC):
             try:
                 async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
                     await client.subscribe(topic)
-                    logger.debug(f"[{self.name}] Subscribed to {topic}")
+                    logger.debug("[%s] Subscribed to %s", self.name, topic)
                     async for message in client.messages:
                         try:
                             data = json.loads(message.payload.decode())
                             command = data.get("command", "")
-                            logger.info(f"[{self.name}] Received command: {command}")
-                            if self.protected and command in ("stop", "pause", "delete"):
-                                logger.warning(
-                                    f"[{self.name}] Ignoring '{command}' — actor is protected."
-                                )
-                                continue
-                            if command == "stop":
-                                # ── Erlang unlink: release from supervision FIRST ──
-                                # If we just stop without releasing, the heartbeat-silence
-                                # watchdog will fire ~35s later and restart us anyway.
-                                if self._registry and hasattr(self._registry, "_supervisor_ref"):
-                                    sup = self._registry._supervisor_ref
-                                    if sup is not None:
-                                        sup.release(self.name)
-                                await self.stop()
+                            logger.info("[%s] Received command: %s", self.name, command)
+                            applied = await self.apply_command(command)
+                            # Only stop listening if it actually took effect: a
+                            # protected actor refuses stop/delete and must keep
+                            # receiving commands afterwards.
+                            if applied and command in ("stop", "delete"):
                                 return
-                            if command == "pause":
-                                await self.pause()
-                            elif command == "resume":
-                                await self.resume()
-                            elif command == "delete":
-                                # ── Erlang unlink: release from supervision FIRST ──
-                                if self._registry and hasattr(self._registry, "_supervisor_ref"):
-                                    sup = self._registry._supervisor_ref
-                                    if sup is not None:
-                                        sup.release(self.name)
-                                # If main actor knows about this agent, remove from spawn registry
-                                if self._registry:
-                                    main = self._registry.find_by_name("main")
-                                    if main and hasattr(main, "_remove_from_spawn_registry"):
-                                        main._remove_from_spawn_registry(self.name)
-                                    await self._registry.unregister(self.actor_id)
-                                await self.stop()
-                                return
-                        except Exception as e:
-                            logger.error(f"[{self.name}] Command parse error: {e}")
+                        except Exception as exc:
+                            logger.error("[%s] Command parse error: %s", self.name, exc)
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -485,7 +593,7 @@ class Actor(ABC):
     async def send(self, target_id: str, msg_type: MessageType, payload: Any = None) -> bool:
         """Send a message to another actor."""
         if self._registry is None:
-            logger.warning(f"[{self.name}] No registry attached, cannot send messages.")
+            logger.warning("[%s] No registry attached, cannot send messages.", self.name)
             return False
         msg = Message(type=msg_type, sender_id=self.actor_id, payload=payload)
         return await self._registry.deliver(target_id, msg)
@@ -501,12 +609,12 @@ class Actor(ABC):
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
-    async def spawn(self, actor_class: type, **kwargs) -> "Actor":
+    async def spawn(self, actor_class: type[Actor], **kwargs: Any) -> Actor:
         """Spawn a child actor. The child inherits:
         - MQTT client (so it can publish heartbeats/status)
         - Registry (so it can send/receive messages)
         - Persistence dir defaults to same root
-        - Persistence API (SQLite/Redis/Pickle routing)
+        - Persistence API (SQLite/memory/Pickle routing)
 
         Erlang/OTP supervision: if the owning ActorSystem has a Supervisor,
         the child is automatically registered under it with ONE_FOR_ONE so it
@@ -526,13 +634,12 @@ class Actor(ABC):
         # Inherit persistence API if available
         if self._persistence_api is not None:
             try:
-                from .persistence import PersistenceAPI, get_db, get_pickle_store, get_redis
+                from .persistence import PersistenceAPI, get_db, get_pickle_store
 
                 db = get_db()
-                redis = get_redis()
                 pkl = get_pickle_store()
-                if db and redis and pkl:
-                    child._persistence_api = PersistenceAPI(db, redis, pkl, child.name)
+                if db and pkl:
+                    child._persistence_api = PersistenceAPI(db, pkl, child.name)
             except ImportError:
                 pass
 
@@ -550,23 +657,18 @@ class Actor(ABC):
             if self._registry and hasattr(self._registry, "_supervisor_ref"):
                 supervisor = self._registry._supervisor_ref
                 if supervisor is not None and child.name not in supervisor._specs:
-                    # Capture child class + kwargs for the factory closure
-                    _child_class = actor_class
-                    _child_kwargs = dict(kwargs)
-                    _child_name = child.name
-                    _mqtt_client = self._mqtt_client
-                    _mqtt_broker = self._mqtt_broker
-                    _mqtt_port = self._mqtt_port
-                    _persistence_api = self._persistence_api
+                    # Snapshot what the child was built from. The factory runs
+                    # again on every restart, possibly much later, and must
+                    # rebuild the child as it was rather than from whatever this
+                    # actor's settings have become since.
+                    cls = actor_class
+                    kw = dict(kwargs)
+                    mc = self._mqtt_client
+                    mb = self._mqtt_broker
+                    mp = self._mqtt_port
+                    papi = self._persistence_api
 
-                    async def _child_factory(
-                        cls=_child_class,
-                        kw=_child_kwargs,
-                        mc=_mqtt_client,
-                        mb=_mqtt_broker,
-                        mp=_mqtt_port,
-                        papi=_persistence_api,
-                    ):
+                    async def _child_factory() -> Actor:
                         c = cls(**kw)
                         c._mqtt_client = mc
                         c._mqtt_broker = mb
@@ -577,14 +679,12 @@ class Actor(ABC):
                                     PersistenceAPI,
                                     get_db,
                                     get_pickle_store,
-                                    get_redis,
                                 )
 
                                 db = get_db()
-                                redis = get_redis()
                                 pkl = get_pickle_store()
-                                if db and redis and pkl:
-                                    c._persistence_api = PersistenceAPI(db, redis, pkl, c.name)
+                                if db and pkl:
+                                    c._persistence_api = PersistenceAPI(db, pkl, c.name)
                             except ImportError:
                                 pass
                         return c
@@ -602,14 +702,14 @@ class Actor(ABC):
                     supervisor._specs[child.name].actor = child
                     if child.name not in supervisor._order:
                         supervisor._order.append(child.name)
-                    child.supervisor_id = id(supervisor)
+                    child.supervisor_id = str(id(supervisor))
                     logger.info(
-                        f"[{self.name}] Child '{child.name}' auto-registered under Supervisor."
+                        "[%s] Child '%s' auto-registered under Supervisor.", self.name, child.name
                     )
         except Exception as _sup_err:
             # Never let supervision registration crash the spawn itself
             logger.warning(
-                f"[{self.name}] Could not auto-supervise child '{child.name}': {_sup_err}"
+                "[%s] Could not auto-supervise child '%s': %s", self.name, child.name, _sup_err
             )
 
         # Immediately announce to monitor - don't wait for heartbeat loop
@@ -628,7 +728,7 @@ class Actor(ABC):
             f"agents/{self.actor_id}/spawned",
             {"child_id": child.actor_id, "child_name": child.name, "timestamp": time.time()},
         )
-        logger.info(f"[{self.name}] Spawned: {child.name} ({child.actor_id[:8]})")
+        logger.info("[%s] Spawned: %s (%s)", self.name, child.name, child.actor_id[:8])
         return child
 
     # ─── Persistence ──────────────────────────────────────────────────────────
@@ -640,12 +740,10 @@ class Actor(ABC):
             # But keep pickle save for agent.state (arbitrary objects) backward compat.
             return
         # Legacy pickle path
-        path = self._persistence_dir / "state.pkl"
         try:
-            with open(path, "wb") as f:
-                pickle.dump(self._persistent_state, f)
+            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
         except Exception as e:
-            logger.error(f"[{self.name}] Failed to save state: {e}")
+            logger.error("[%s] Failed to save state: %s", self.name, e)
 
     async def _load_persistent_state(self):
         """Load state from disk. Called on start() before on_start()."""
@@ -658,10 +756,11 @@ class Actor(ABC):
                     with open(path, "rb") as f:
                         self._persistent_state = pickle.load(f)
                     logger.info(
-                        f"[{self.name}] Loaded legacy persistent state (will migrate on first persist)."
+                        "[%s] Loaded legacy persistent state (will migrate on first persist).",
+                        self.name,
                     )
                 except Exception as e:
-                    logger.error(f"[{self.name}] Failed to load legacy state: {e}")
+                    logger.error("[%s] Failed to load legacy state: %s", self.name, e)
             return
         # Legacy pickle path
         path = self._persistence_dir / "state.pkl"
@@ -669,14 +768,14 @@ class Actor(ABC):
             try:
                 with open(path, "rb") as f:
                     self._persistent_state = pickle.load(f)
-                logger.info(f"[{self.name}] Loaded persistent state.")
+                logger.info("[%s] Loaded persistent state.", self.name)
             except Exception as e:
-                logger.error(f"[{self.name}] Failed to load state: {e}")
+                logger.error("[%s] Failed to load state: %s", self.name, e)
 
     def persist(self, key: str, value: Any):
         """Persist a key-value pair. Routes to the correct backend:
           - Known structured keys → SQLite
-          - Known ephemeral keys → Redis
+          - Known ephemeral keys → process memory
           - Everything else → Pickle
 
         If the new PersistenceAPI is not available, falls back to legacy
@@ -686,14 +785,13 @@ class Actor(ABC):
             self._persistence_api.set(key, value)
             return
 
-        # Legacy pickle path — write to disk immediately
+        # Legacy pickle path — the whole dict goes to disk on every call, so an
+        # interrupted write here would lose every key, not just this one.
         self._persistent_state[key] = value
-        path = self._persistence_dir / "state.pkl"
         try:
-            with open(path, "wb") as f:
-                pickle.dump(self._persistent_state, f)
+            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
         except Exception as e:
-            logger.debug(f"[{self.name}] persist write failed: {e}")
+            logger.warning("[%s] persist write failed for %r: %s", self.name, key, e)
 
     def recall(self, key: str, default: Any = None) -> Any:
         """Recall a persisted value. Routes to the correct backend.
@@ -732,7 +830,7 @@ class Actor(ABC):
                     encoded = json.dumps(payload)
                 await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
             except Exception as e:
-                logger.debug(f"[{self.name}] MQTT publish failed: {e}")
+                logger.debug("[%s] MQTT publish failed: %s", self.name, e)
 
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
@@ -760,6 +858,7 @@ class Actor(ABC):
     # ─── Status ───────────────────────────────────────────────────────────────
 
     def get_status(self) -> dict:
+        """This actor's identity, state and counters, as the dashboard shows them."""
         return {
             "actor_id": self.actor_id,
             "name": self.name,
@@ -778,11 +877,11 @@ class Actor(ABC):
     async def publish_manifest(
         self,
         description: str = "",
-        publishes: list = None,
-        capabilities: list = None,
-        input_schema: dict = None,
-        output_schema: dict = None,
-    ):
+        publishes: list[str] | None = None,
+        capabilities: list[str] | None = None,
+        input_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None,
+    ) -> None:
         """Publish a capability manifest so main's topic registry can discover this actor.
         Call from on_start() in any actor that wants to be discoverable.
         Manifests are retained — main sees them immediately even after restart.
@@ -791,8 +890,6 @@ class Actor(ABC):
             input_schema  = {"city": "str — city name to fetch weather for"}
             output_schema = {"temp_c": "float", "condition": "str", "humidity": "int"}
         """
-        import time as _t
-
         manifest = {
             "name": self.name,
             "actor_id": self.actor_id,
@@ -801,7 +898,7 @@ class Actor(ABC):
             "capabilities": capabilities or [],
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},
-            "timestamp": _t.time(),
+            "timestamp": time.time(),
         }
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 

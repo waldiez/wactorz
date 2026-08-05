@@ -69,6 +69,33 @@ describe("IOManager.send", () => {
         await io.send("hi", null);
         expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
     });
+
+    it("shows a delivered message in the feed", async () => {
+        const io = new IOManager(makeRouter());
+        io.setWSClient(makeWS() as unknown as WSClient);
+        await io.send("hello", agentInfo);
+        expect(lastEvent("af-feed-push")?.detail.item).toMatchObject({
+            agentName: "user",
+            label: "@alpha hello",
+        });
+    });
+
+    it("keeps an undelivered message out of the feed", async () => {
+        const io = new IOManager(makeRouter());
+        io.setWSClient(makeWS(false) as unknown as WSClient);
+        await io.send("hi", null);
+        // An echo before the send attempt would leave a failed message in the
+        // feed, indistinguishable from one that actually went out.
+        expect(lastEvent("af-feed-push")).toBeUndefined();
+    });
+
+    it("emits af-send-failed when the transport rejects the send", async () => {
+        const io = new IOManager(makeRouter());
+        io.setWSClient(makeWS(false) as unknown as WSClient);
+        await io.send("hi", null);
+        // so the optimistic bubble rendered before the attempt can be rolled back
+        expect(lastEvent("af-send-failed")?.detail).toEqual({ content: "hi", target: "main" });
+    });
 });
 
 describe("IOManager streaming", () => {
@@ -92,7 +119,7 @@ describe("IOManager streaming", () => {
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         ws.endCb!();
-        expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "", from: "main-actor" });
+        expect(lastEvent("af-stream-end")?.detail).toEqual({ text: "", from: "main" });
         expect(tts.notify).not.toHaveBeenCalled();
         expect(lastEvent("af-feed-push")).toBeUndefined();
     });

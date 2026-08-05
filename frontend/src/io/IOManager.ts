@@ -8,9 +8,8 @@
  * `af-stream-end`) and the activity feed. The dashboard chat (DashboardChat)
  * renders from those events — IOManager owns no UI.
  *
- * Messages go to the IOAgent via the WebSocket (direct_ws mode) or the fixed
- * `io/chat` MQTT topic (legacy mode). The `@agent-name` prefix is preserved in
- * the content so IOAgent can route it.
+ * Messages go to the IOAgent via the WebSocket (direct_ws mode). The `@agent-name`
+ * prefix is preserved in the content so IOAgent can route it.
  */
 
 import type { AgentInfo, ChatMessage } from "../types/agent";
@@ -21,14 +20,13 @@ import { toast } from "../ui/ToastManager";
 import { emit } from "../events";
 import { uid } from "../ids";
 
-/** Ceiling on a single streamed reply's accumulated text, guarding against a
- *  runaway/looping stream growing this without bound. */
-const MAX_STREAM_CHARS = 200_000;
+import { AgentStreams } from "./agentStreams";
+import { MAIN_AGENT } from "../agents/naming";
 
 export class IOManager {
     private _lastStreamFrom = "";
-    /** Accumulates the current streamed reply so stream-end can emit the full text. */
-    private _streamText = "";
+    /** Per-agent stream accumulation (stream-end emits the full text per agent). */
+    private _streams = new AgentStreams();
     private _ws: WSClient | null = null;
 
     constructor(private readonly router: ServerEventRouter) {}
@@ -39,16 +37,16 @@ export class IOManager {
 
         ws.onStreamChunk((chunk, from) => {
             this._lastStreamFrom = from;
-            if (this._streamText.length < MAX_STREAM_CHARS) {
-                this._streamText += chunk;
-            }
+            this._streams.append(from, chunk);
             emit("af-stream-chunk", { chunk, from });
         });
 
         ws.onStreamEnd(() => {
-            const text = this._streamText;
-            const from = this._lastStreamFrom || "main-actor";
-            this._streamText = "";
+            // The end frame carries no agent — attribute by the most recent
+            // chunk (a protocol limit), but take only that agent's buffer so
+            // concurrent streams never merge.
+            const from = this._lastStreamFrom || MAIN_AGENT;
+            const text = this._streams.take(from);
             // A stream_end with no streamed text (e.g. agents that reply via a
             // single non-streamed `chat` frame) must NOT create a feed row —
             // that produced a phantom empty bubble attributed to the default name.
@@ -62,7 +60,8 @@ export class IOManager {
         });
     }
 
-    /** Send `text` to the appropriate agent (direct_ws if available, else io/chat). */
+    /** Send `text` to the appropriate agent over the WebSocket. Nothing reaches
+     *  the feed unless the transport accepted it. */
     // Async for the caller-facing contract; the transport calls (WS send / MQTT
     // publish) are fire-and-forget, so there's nothing to await.
     // eslint-disable-next-line @typescript-eslint/require-await
@@ -76,26 +75,32 @@ export class IOManager {
         const msg: ChatMessage = {
             id: uid(),
             from: "user",
-            to: agent?.name ?? "main-actor",
+            to: agent?.name ?? MAIN_AGENT,
             content, // routed form (`@agent …`), mirroring what goes on the wire
             timestampMs: Date.now(),
         };
 
-        // Echo the routed form so the live feed row matches the persisted one
-        // shown after a refresh — the feed renders the `@agent` mention.
-        emit("af-feed-push", {
-            item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
-        });
-
-        // direct_ws mode
-        const sent = this._ws?.send(content, agent?.name ?? "main-actor");
+        const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT);
         if (!sent) {
             toast.show({
                 type: "alert-error",
                 title: "Disconnected",
                 message: "WebSocket disconnected — reconnecting, please retry.",
             });
+            // The dashboard rendered an optimistic bubble before this attempt —
+            // tell it to roll that back (the pre-mention text matches the bubble).
+            emit("af-send-failed", { content: text, target: agent?.name ?? MAIN_AGENT });
+            return;
         }
+
+        // Echo only what actually went out. Echoing before the attempt left a
+        // failed message sitting in the feed looking exactly like a delivered
+        // one, and it would vanish on the next refresh since nothing persisted
+        // it. The routed form is used so the live row matches the persisted one
+        // — the feed renders the `@agent` mention.
+        emit("af-feed-push", {
+            item: { type: "chat", label: content, agentName: "user", timestamp: msg.timestampMs },
+        });
     }
 
     /**

@@ -483,7 +483,7 @@ describe("DashboardChat — stop, attachments, external events", () => {
 
         await dc._stopGeneration();
 
-        // clicking Stop against a dead backend used to do nothing at all
+        // Stop against a dead backend must say so rather than appear to work.
         expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" }));
         fetchSpy.mockRestore();
     });

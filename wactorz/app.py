@@ -12,8 +12,10 @@ import signal
 import sys
 from typing import cast
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform fixups
+import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
+from wactorz.agents.lookup import find_main_actor
 from wactorz.config import CONFIG
+from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
 from wactorz.monitoring.log_buffer import install as install_log_buffer
@@ -119,9 +121,7 @@ async def build_system(args: argparse.Namespace):
         state_dir=_sd,
     )
     # MQTT client must exist before factories run so injected actors can publish
-    system._mqtt_client = await __import__(
-        "wactorz.core.registry", fromlist=["_MQTTPublisher"]
-    )._MQTTPublisher.create(
+    system._mqtt_client = await MQTTPublisher.create(
         args.mqtt_broker or CONFIG.mqtt_host,
         args.mqtt_port or CONFIG.mqtt_port,
         db_path=os.path.join(_sd, "mqtt_outbox.db"),
@@ -289,13 +289,13 @@ async def build_system(args: argparse.Namespace):
 
     await system.supervisor.start()
 
-    main_actor = system.registry.find_by_name("main")
+    main_actor = find_main_actor(system.registry)
     if not main_actor:
         logger.error("Failed to find the main actor.")
         sys.exit(1)
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, cast(MainActor, main_actor), _db
+    return system, main_actor, _db
 
 
 def _install_signal_handlers() -> None:

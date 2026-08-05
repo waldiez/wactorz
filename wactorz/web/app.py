@@ -92,6 +92,8 @@ def build_app() -> web.Application:
     # Actor control — sub-routes must be registered before /{actor_id} catch-all
     app.router.add_post("/api/actors/{actor_id}/message", api_actors.send_message_handler)
     app.router.add_post("/actors/{actor_id}/message", api_actors.send_message_handler)
+    app.router.add_post("/api/actors/{actor_id}/start", api_actors.start_actor_handler)
+    app.router.add_post("/actors/{actor_id}/start", api_actors.start_actor_handler)
     app.router.add_post("/api/actors/{actor_id}/pause", api_actors.pause_actor_handler)
     app.router.add_post("/actors/{actor_id}/pause", api_actors.pause_actor_handler)
     app.router.add_post("/api/actors/{actor_id}/resume", api_actors.resume_actor_handler)

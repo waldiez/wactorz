@@ -29,3 +29,32 @@ describe("log", () => {
         expect(debug).toHaveBeenCalledWith("d");
     });
 });
+
+describe("log in a production build", () => {
+    afterEach(() => {
+        vi.unstubAllEnvs();
+        vi.restoreAllMocks();
+        vi.resetModules();
+    });
+
+    it("drops info and debug, but still forwards warn and error", async () => {
+        // DEV is read once at module load, so the module has to be re-imported
+        // after stubbing — spying on an already-loaded `log` would keep the
+        // dev-build behaviour and quietly test nothing.
+        vi.stubEnv("DEV", false);
+        vi.resetModules();
+        const { log: prodLog } = await import("../io/logger");
+
+        const info = vi.spyOn(console, "info").mockImplementation(() => {});
+        const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        prodLog.info("i");
+        prodLog.debug("d");
+        prodLog.warn("w");
+
+        expect(info).not.toHaveBeenCalled();
+        expect(debug).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith("w"); // real problems still surface
+    });
+});

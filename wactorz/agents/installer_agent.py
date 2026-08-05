@@ -345,7 +345,12 @@ class InstallerAgent(Actor):
         return kwargs
 
     def _persist_node_credentials(
-        self, node_name: str, host: str, user: str, password: str = None, key_path: str = None
+        self,
+        node_name: str,
+        host: str,
+        user: str,
+        password: str | None = None,
+        key_path: str | None = None,
     ):
         """Store SSH credentials for a node so future connections don't need them passed explicitly."""
         creds = self.recall("_node_credentials") or {}

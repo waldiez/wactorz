@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from wactorz.agents.main_actor import MainActor
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
 
 
@@ -106,15 +107,27 @@ class PeerHost(_BaseHost):
         super().__init__(registry, "planner-x")
 
 
-class FakeMain(FakeActor):
-    def __init__(self):
-        super().__init__("main")
-        self.registered = []
+class FakeMain(MainActor):
+    """A real MainActor by type, with the two methods the peer path calls recorded.
 
-    def _save_to_spawn_registry(self, config):
+    It has to be a real one: `find_main_actor` resolves main with `isinstance`,
+    so a stand-in that merely has the right attributes resolves to None and the
+    peer registration silently does nothing — which is the behaviour the check
+    exists to produce.
+    """
+
+    def __init__(self, persistence_dir: str) -> None:
+        super().__init__(llm_provider=None, name="main", persistence_dir=persistence_dir)
+        self.registered: list[dict] = []
+        self.stopped = False
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+    def _save_to_spawn_registry(self, config: dict) -> None:
         self.registered.append(config)
 
-    def get_user_facts(self):
+    def get_user_facts(self) -> dict:
         return {"pref_timezone": "Europe/Athens"}
 
 
@@ -124,9 +137,11 @@ def main_host():
 
 
 @pytest.fixture
-def peer_setup():
+def peer_setup(tmp_path: Path):
     reg = FakeRegistry()
-    main = FakeMain()
+    # tmp_path: Actor.__init__ creates its persistence directory, so a default
+    # one would write ./actor_state/main into the working copy.
+    main = FakeMain(str(tmp_path))
     reg.add(main)
     return PeerHost(reg), reg, main
 

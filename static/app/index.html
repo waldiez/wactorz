@@ -46,9 +46,9 @@
     <link rel="icon" href="./icon.png" type="image/png" sizes="512x512" />
     <!-- crossorigin: send the ingress auth cookie, else HA ingress 401s the manifest -->
     <link rel="manifest"         href="./site.webmanifest" crossorigin="use-credentials" />
-    <script type="module" crossorigin src="./assets/index-BzODffJ-.js"></script>
+    <script type="module" crossorigin src="./assets/index-CoR549pd.js"></script>
     <link rel="modulepreload" crossorigin href="./assets/vendor-DVCETZFR.js">
-    <link rel="stylesheet" crossorigin href="./assets/index-BTB0a_sn.css">
+    <link rel="stylesheet" crossorigin href="./assets/index-cbZjfBBV.css">
   </head>
   <body>
     <!-- CSP note: inline scripts are allowed only because the monitor server stamps
@@ -57,7 +57,7 @@
          window.__WACTORZ_INGRESS_PATH bootstrap into the document head. Keep inline
          scripts first-party — never inline remote or user-supplied content here. -->
     <script>
-      // Register the service worker only for the standalone / desktop deployment.
+      // Register the service worker only when served directly, not behind ingress.
       // Behind Home Assistant's ingress proxy the app is served under a rotating
       // /api/hassio_ingress/<slug>/… path; a cache there is useless (and would risk
       // caching assets under a dead token), so we deliberately skip it. The backend

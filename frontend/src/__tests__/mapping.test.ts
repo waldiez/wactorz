@@ -407,6 +407,39 @@ describe("rawFeedItem", () => {
         expect(item?.label).toContain("+1");
     });
 
+    it("falls back to a count when the payload carries no usable action", () => {
+        // The payload is raw MQTT JSON, so `actions` may be absent, the wrong
+        // type, or hold entries that are not objects. None of that should throw
+        // or produce an empty label.
+        const notArray = rawFeedItem("agents/abc/actuations", { actions: "nope" }, undefined, 1);
+        expect(notArray?.label).toContain("0 actions");
+
+        // A non-object entry coerces every field to "": formatting it anyway
+        // gives ".", which is truthy and would suppress this count.
+        const notObjects = rawFeedItem("agents/abc/actuations", { actions: [42] }, undefined, 1);
+        expect(notObjects?.label).toBe("actuated · 1 action");
+
+        // Partial data still beats a count — one known field is worth showing.
+        const partial = rawFeedItem(
+            "agents/abc/actuations",
+            { actions: [{ entity_id: "light.k" }] },
+            undefined,
+            1,
+        );
+        expect(partial?.label).toContain("light.k");
+    });
+
+    it("omits the automation prefix when the payload has none", () => {
+        const item = rawFeedItem(
+            "agents/abc/actuations",
+            { actions: [{ domain: "light", service: "turn_on", entity_id: "light.k" }] },
+            undefined,
+            1,
+        );
+        expect(item?.label).toBe("actuated · light.turn_on light.k");
+        expect(item?.label).not.toContain("+"); // a lone action has no remainder
+    });
+
     it("surfaces an anomaly only when anomaly === true", () => {
         expect(rawFeedItem("agents/abc/anomaly", { anomaly: false, value: 5 })).toBeNull();
         const item = rawFeedItem(

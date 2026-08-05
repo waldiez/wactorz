@@ -55,7 +55,7 @@
          window.__WACTORZ_INGRESS_PATH bootstrap into the document head. Keep inline
          scripts first-party — never inline remote or user-supplied content here. -->
     <script>
-      // Register the service worker only for the standalone / desktop deployment.
+      // Register the service worker only when served directly, not behind ingress.
       // Behind Home Assistant's ingress proxy the app is served under a rotating
       // /api/hassio_ingress/<slug>/… path; a cache there is useless (and would risk
       // caching assets under a dead token), so we deliberately skip it. The backend

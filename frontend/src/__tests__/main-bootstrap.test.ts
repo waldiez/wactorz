@@ -80,6 +80,7 @@ vi.mock("../io/IOManager", () => ({
 
 vi.mock("../agents/AgentStore", () => ({
     AgentStore: class {
+        mount = vi.fn();
         reconcileAgents = vi.fn();
         onChat = vi.fn();
         removeAgent = vi.fn();

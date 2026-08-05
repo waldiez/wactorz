@@ -507,6 +507,25 @@ def _build_js(outline, image_assignment, output_path):
     return "\n".join(L)
 
 
+
+async def _run_blocking(cmd, **kwargs) -> "subprocess.CompletedProcess":
+    """Run a command without stopping the event loop for its duration.
+
+    ``npm install`` here allows itself two minutes and ``node`` one, and calling
+    them inline meant nothing else in the process ran for that long — including
+    the framework's own task timeout, which therefore could never fire on the
+    very calls it exists to bound.
+
+    A thread rather than ``asyncio.create_subprocess_exec``, matching
+    ``installer_agent``: asyncio subprocesses are unavailable on Windows under
+    ``SelectorEventLoop``. The cost is that cancelling the awaiting task does not
+    kill the process — it runs on until its own ``timeout`` — but the rest of the
+    system is free in the meantime, which it was not before.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: subprocess.run(cmd, **kwargs))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. AGENT LIFECYCLE
 # ─────────────────────────────────────────────────────────────────────────────
@@ -522,8 +541,8 @@ async def setup(agent):
             errors.append(f"pip install {pkg}")
 
     # Check node is available (pptxgenjs is installed locally at runtime if needed)
-    r = subprocess.run(["node", "--version"], capture_output=True, text=True,
-                       shell=(os.name == "nt"))
+    r = await _run_blocking(["node", "--version"], capture_output=True, text=True,
+                            shell=(os.name == "nt"))
     if r.returncode != 0:
         errors.append("Node.js not found — install from nodejs.org")
 
@@ -648,7 +667,7 @@ async def handle_task(agent, payload):
         node_modules = os.path.join(work_dir, "node_modules", "pptxgenjs")
         if not os.path.exists(node_modules):
             await agent.log("Installing pptxgenjs locally...")
-            npm = subprocess.run(
+            npm = await _run_blocking(
                 ["npm", "install", "pptxgenjs", "--prefer-offline"],
                 capture_output=True, text=True, cwd=work_dir, timeout=120,
                 shell=(os.name == "nt"),
@@ -659,7 +678,7 @@ async def handle_task(agent, payload):
                         "images_extracted": n_extracted, "images_generated": n_generated,
                         "error": f"npm install pptxgenjs failed: {err[:300]}"}
 
-        result = subprocess.run(
+        result = await _run_blocking(
             ["node", js_path],
             capture_output=True, text=True, cwd=work_dir, timeout=60,
             shell=(os.name == "nt"),

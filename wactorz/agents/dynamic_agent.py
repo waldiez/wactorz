@@ -28,6 +28,7 @@ from typing import Any, ClassVar
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from .llm_agent import _accumulate_global_cost
+from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +65,11 @@ class DynamicAgent(Actor):
         code: str,  # LLM-generated Python source
         poll_interval: float = 1.0,  # seconds between process() calls
         description: str = "",  # what this agent does
-        input_schema: dict = None,  # expected task payload fields
-        output_schema: dict = None,  # returned result fields
+        input_schema: dict[str, Any] | None = None,  # expected task payload fields
+        output_schema: dict[str, Any] | None = None,  # returned result fields
         llm_provider=None,  # optional LLM for agent.llm.chat()
         trusted: bool = False,  # True = catalog agent, skip safety validator
-        **kwargs,
+        **kwargs: Any,
     ):
         super().__init__(**kwargs)
         self._code = code
@@ -1230,8 +1231,8 @@ class DynamicAgent(Actor):
         try:
             # ── 1. Persist to spawn registry (survives system restart) ─────
             if self._registry:
-                main = self._registry.find_by_name("main")
-                if main is not None and hasattr(main, "_get_spawn_registry"):
+                main = find_main_actor(self._registry)
+                if main is not None:
                     reg = main._get_spawn_registry()
                     if self.name in reg:
                         entry = dict(reg[self.name])
@@ -1673,13 +1674,17 @@ class _AgentAPI:
 
         # Deduplication guard — prevent double-subscription if setup() is called
         # more than once (e.g. on reconnect). Same topic+callback combo gets one listener.
+        # (topic, id(callback)) → callback. A dict rather than a set of keys:
+        # id() is unique only among *live* objects, so holding the callback is
+        # what stops its address being recycled by a later one and that
+        # subscription silently skipped as a duplicate.
         if not hasattr(actor, "_subscribed_topics"):
-            actor._subscribed_topics: set = set()
+            actor._subscribed_topics: dict = {}
         sub_key = (topic, id(callback))
         if sub_key in actor._subscribed_topics:
             logger.debug(f"[{actor.name}] Already subscribed to {topic} — skipping duplicate")
             return _AWAITABLE_NONE
-        actor._subscribed_topics.add(sub_key)
+        actor._subscribed_topics[sub_key] = callback
 
         task = asyncio.create_task(_listener())
         actor._tasks.append(task)
@@ -1886,8 +1891,8 @@ class _AgentAPI:
 
         # ── Remote path: find agent on a known node ───────────────────────────
         remote_node = None
-        main = registry.find_by_name("main") if registry else None
-        if main and hasattr(main, "_known_nodes"):
+        main = find_main_actor(registry)
+        if main:
             for node_name, nd in main._known_nodes.items():
                 if agent_name in nd.get("agents", []):
                     remote_node = node_name
@@ -2001,8 +2006,8 @@ class _AgentAPI:
                 )
 
         # ── Remote agents from live node heartbeats ───────────────────────────
-        main = registry.find_by_name("main") if registry else None
-        if main and hasattr(main, "_known_nodes"):
+        main = find_main_actor(registry)
+        if main:
             import time as _t
 
             for node_name, nd in main._known_nodes.items():
@@ -2012,11 +2017,7 @@ class _AgentAPI:
                     if aname in seen:
                         continue  # already in local registry (shouldn't happen but guard it)
                     seen.add(aname)
-                    # Try to get description from _agent_manifests
-                    desc = ""
-                    if hasattr(main, "_agent_manifests"):
-                        m = main._agent_manifests.get(aname, {})
-                        desc = m.get("description", "")
+                    desc = main._agent_manifests.get(aname, {}).get("description", "")
                     result.append(
                         {
                             "name": aname,
@@ -2039,8 +2040,8 @@ class _AgentAPI:
                 status = 'online' if nd['online'] else 'offline'
                 await agent.log(f"{nd['node']}: {status}, agents: {nd['agents']}")
         """
-        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
-        if main and hasattr(main, "list_nodes"):
+        main = find_main_actor(self._actor._registry)
+        if main:
             return main.list_nodes()
         return []
 
@@ -2054,8 +2055,8 @@ class _AgentAPI:
             for t in temp_topics:
                 data = await agent.mqtt_get(t["topic"])
         """
-        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
-        if main and hasattr(main, "list_topics"):
+        main = find_main_actor(self._actor._registry)
+        if main:
             return main.list_topics(keyword)
         return []
 
@@ -2069,8 +2070,8 @@ class _AgentAPI:
                 print(a["input_schema"])   # know exactly what to send
                 print(a["output_schema"])  # know exactly what to expect back
         """
-        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
-        if main and hasattr(main, "list_capabilities"):
+        main = find_main_actor(self._actor._registry)
+        if main:
             return main.list_capabilities(keyword)
         return []
 
@@ -2198,9 +2199,9 @@ class _AgentAPI:
         self,
         publishes=None,
         subscribes=None,
-        triggers_when: dict = None,
-        produces_schema: dict = None,
-        consumes_schema: dict = None,
+        triggers_when: dict | None = None,
+        produces_schema: dict | None = None,
+        consumes_schema: dict | None = None,
         **kwargs,
     ):
         """Declare this agent's topic contract — what it produces and consumes.

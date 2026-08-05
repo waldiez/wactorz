@@ -11,6 +11,7 @@ import type { View, ConnState } from "./types";
 import { BUILTIN_VIEWS, SETTINGS_VIEW } from "./types";
 import { uid } from "../../ids";
 import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
+import { escapeHtml } from "../escapeHtml";
 import { iconMarkup, type IconName } from "./icons";
 
 export interface HeaderOpts {
@@ -195,7 +196,8 @@ function buildHeaderRight(
         if (key === view) {
             btn.setAttribute("aria-current", "page");
         }
-        btn.innerHTML = `${iconMarkup(icon)}<span class="af-view-label">${label}</span>`;
+        // escapeHtml: `label` comes from `extraViews`, which extensions supply.
+        btn.innerHTML = `${iconMarkup(icon)}<span class="af-view-label">${escapeHtml(label)}</span>`;
         btn.addEventListener("click", () => onSetView(key));
         right.appendChild(btn);
     });

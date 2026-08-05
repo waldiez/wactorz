@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 from wactorz.config import CONFIG
 from wactorz.llm_factory import provider_for
@@ -19,11 +20,25 @@ from wactorz.llm_factory import provider_for
 from ...core.actor import MessageType
 from ..prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT
 
+if TYPE_CHECKING:
+    from .host import RoutingHost
+
+    # Typing-only base: it states what the host must provide, and disappears at
+    # runtime so the real MRO is exactly what it was.
+    _Host = RoutingHost
+else:
+    _Host = object
+
 logger = logging.getLogger(__name__)
 
 
-class RoutingMixin:
-    """Intent classification + one-off actuation. Mix into an LLMAgent host."""
+class RoutingMixin(_Host):
+    """Intent classification + one-off actuation. Mix into an LLMAgent host.
+
+    The host contract is `RoutingHost` in `host.py`, declared rather than
+    described — this docstring used to list the attributes in prose and nothing
+    checked that the list was true.
+    """
 
     async def _classify_intent(self, text: str) -> str:
         """Classify user intent as ACTUATE, HA, PIPELINE, or OTHER using a single cheap LLM call.

@@ -228,12 +228,13 @@ class CLIInterface:
             # Case 1: real LLMAgent — has self.llm and chat() backed by it
             # Detect by presence of _conversation_history (LLMAgent-specific)
             if hasattr(target, "_conversation_history") and hasattr(target, "chat"):
-                return await target.chat(message)
+                return await target.chat(message)  # pyright: ignore[reportAttributeAccessIssue]
 
             # Case 2: DynamicAgent with a handle_task function
-            if hasattr(target, "_fn_handle_task") and target._fn_handle_task:
-                result = await target._fn_handle_task(
-                    target._api, {"message": message, "text": message, "query": message}
+            if hasattr(target, "_fn_handle_task") and target._fn_handle_task:  # pyright: ignore[reportAttributeAccessIssue]
+                result = await target._fn_handle_task(  # pyright: ignore[reportAttributeAccessIssue]
+                    target._api,  # pyright: ignore[reportAttributeAccessIssue]
+                    {"message": message, "text": message, "query": message},
                 )
                 if isinstance(result, dict):
                     for key in ("reply", "answer", "result", "text", "response"):
@@ -243,12 +244,12 @@ class CLIInterface:
                 return str(result) if result else f"[{agent_name}] No response"
 
             # Case 3: DynamicAgent with llm but no handle_task — direct llm call
-            if hasattr(target, "_llm_provider") and target._llm_provider:
-                return await target._api.llm.chat(message)
+            if hasattr(target, "_llm_provider") and target._llm_provider:  # pyright: ignore[reportAttributeAccessIssue]
+                return await target._api.llm.chat(message)  # pyright: ignore[reportAttributeAccessIssue]
 
             # Case 4: any agent with a chat() method
             if hasattr(target, "chat"):
-                return await target.chat(message)
+                return await target.chat(message)  # pyright: ignore[reportAttributeAccessIssue]
 
         except Exception as e:
             return f"[error] {agent_name} failed: {e}"
@@ -663,7 +664,7 @@ class CLIInterface:
                     # Stream if target is an LLMAgent with chat_stream support
                     if target and hasattr(target, "chat_stream"):
                         print(f"\n@{agent_name}: ", end="", flush=True)
-                        async for chunk in target.chat_stream(message):
+                        async for chunk in target.chat_stream(message):  # pyright: ignore[reportAttributeAccessIssue]
                             if not isinstance(chunk, dict):
                                 print(chunk, end="", flush=True)
                         print("\n")
@@ -705,7 +706,7 @@ class DiscordInterface:
         self,
         main_actor: "MainActor",
         token: str,
-        channel_id: int = None,
+        channel_id: int | None = None,
         allowed_user_ids: frozenset[int] | set[int] | None = None,
     ):
         self.agent = main_actor
@@ -741,11 +742,16 @@ class DiscordInterface:
 
         @client.event
         async def on_message(message):
-            if message.author == client.user:
+            me = client.user
+            if me is None:
+                # None until the login handshake finishes; a message cannot be
+                # attributed to us before that, so there is nothing to answer.
+                return
+            if message.author == me:
                 return
             if self.channel_id and message.channel.id != self.channel_id:
                 return
-            if not client.user.mentioned_in(message):
+            if not me.mentioned_in(message):
                 return  # Only respond when the bot is mentioned
             if message.author.id not in self.allowed_user_ids:
                 logger.warning("[Discord] Rejected message from user %s", message.author.id)
@@ -757,11 +763,7 @@ class DiscordInterface:
                 await message.channel.send(throttled)
                 return
 
-            text = (
-                message.content.replace(f"<@{client.user.id}>", "")
-                .replace(f"<@!{client.user.id}>", "")
-                .strip()
-            )
+            text = message.content.replace(f"<@{me.id}>", "").replace(f"<@!{me.id}>", "").strip()
             # Restricted mode: converse + control devices, no spawn/delete/code.
             try:
                 async with message.channel.typing():
@@ -828,6 +830,8 @@ class TelegramInterface:
         async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user = update.effective_user
             uid = user.id if user else "unknown"
+            if not update.message:
+                return
             if setup_mode:
                 await update.message.reply_text(
                     f"Your Telegram user id is: {uid}\n\n"
@@ -873,6 +877,8 @@ class TelegramInterface:
                 return
 
             text = update.message.text.strip()
+            if not update.effective_chat:
+                return
             await context.bot.send_chat_action(
                 chat_id=update.effective_chat.id, action=ChatAction.TYPING
             )
@@ -895,7 +901,8 @@ class TelegramInterface:
         logger.info("[Telegram] Bot starting (polling)...")
         await app.initialize()
         await app.start()
-        await app.updater.start_polling()
+        if app.updater:
+            await app.updater.start_polling()
         await asyncio.Event().wait()
 
 
@@ -1009,7 +1016,7 @@ class RESTInterface:
     POST /chat with {"message": "..."} → returns {"response": "..."}
     """
 
-    def __init__(self, main_actor: "MainActor", port: int = 8000, api_key: str = None):
+    def __init__(self, main_actor: "MainActor", port: int = 8000, api_key: str | None = None):
         self.agent = main_actor
         self.port = port
         self.api_key = api_key
@@ -1106,6 +1113,7 @@ class RESTInterface:
             from ..core.actor import MessageType
 
             cmd_map = {
+                "start": MessageType.START,
                 "stop": MessageType.STOP,
                 "pause": MessageType.PAUSE,
                 "resume": MessageType.RESUME,
@@ -1136,34 +1144,41 @@ class RESTInterface:
             )
             return web.json_response({"status": "sent"})
 
-        async def stop_actor_endpoint(request):
+        async def _lifecycle_endpoint(request, command: str, status: str):
+            """Run a lifecycle command through the actor's own implementation.
+
+            These endpoints used to call ``actor.stop()``/``pause()``/``resume()``
+            directly. That skipped the supervision release, so an actor stopped
+            here looked to the watchdog exactly like one that had crashed and was
+            restarted moments later.
+            """
             actor = _lookup_actor(request.match_info["actor_id"])
             if actor is None:
-                return web.Response(status=404, text="actor not found")
+                return web.json_response({"error": "actor not found"}, status=404)
             if getattr(actor, "protected", False):
-                return web.Response(status=403, text="actor is protected")
-            await actor.stop()
-            if registry is not None:
-                await registry.unregister(actor.actor_id)
-            return web.Response(text="stopping")
+                return web.json_response({"error": "actor is protected"}, status=403)
+            if not await actor.apply_command(command):
+                return web.json_response({"error": f"{command} was refused"}, status=409)
+            return web.json_response({"status": status})
+
+        async def start_actor_endpoint(request):
+            return await _lifecycle_endpoint(request, "start", "starting")
+
+        async def stop_actor_endpoint(request):
+            # apply_command("stop") releases from supervision but leaves the
+            # actor registered; this endpoint has always removed it as well.
+            response = await _lifecycle_endpoint(request, "stop", "stopping")
+            if response.status == 200 and registry is not None:
+                actor = _lookup_actor(request.match_info["actor_id"])
+                if actor is not None:
+                    await registry.unregister(actor.actor_id)
+            return response
 
         async def pause_actor_endpoint(request):
-            actor = _lookup_actor(request.match_info["actor_id"])
-            if actor is None:
-                return web.Response(status=404, text="actor not found")
-            if getattr(actor, "protected", False):
-                return web.Response(status=403, text="actor is protected")
-            await actor.pause()
-            return web.json_response({"status": "pausing"})
+            return await _lifecycle_endpoint(request, "pause", "pausing")
 
         async def resume_actor_endpoint(request):
-            actor = _lookup_actor(request.match_info["actor_id"])
-            if actor is None:
-                return web.Response(status=404, text="actor not found")
-            if getattr(actor, "protected", False):
-                return web.Response(status=403, text="actor is protected")
-            await actor.resume()
-            return web.json_response({"status": "resuming"})
+            return await _lifecycle_endpoint(request, "resume", "resuming")
 
         async def metrics_endpoint(request):
             actor = _lookup_actor(request.match_info["actor_id"])
@@ -1193,6 +1208,7 @@ class RESTInterface:
         app.router.add_get("/actors/{actor_id}", actor_endpoint)
         app.router.add_post("/actors/{actor_id}/message", actor_message_endpoint)
         app.router.add_delete("/actors/{actor_id}", stop_actor_endpoint)
+        app.router.add_post("/actors/{actor_id}/start", start_actor_endpoint)
         app.router.add_post("/actors/{actor_id}/pause", pause_actor_endpoint)
         app.router.add_post("/actors/{actor_id}/resume", resume_actor_endpoint)
         app.router.add_get("/actors/{actor_id}/metrics", metrics_endpoint)

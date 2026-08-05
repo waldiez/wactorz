@@ -69,9 +69,8 @@ import { createDeletionGuard } from "./agents/deletionGuard";
 //   1. HA addon       — __WACTORZ_INGRESS_PATH is injected by the Python
 //                       server when the page is served behind HA's ingress
 //                       proxy (e.g. /api/hassio_ingress/<slug>).
-//   2. Direct browser / pywebview desktop — the monitor server serves this
-//                       page, so relative URLs resolve correctly. The desktop
-//                       shell loads http://127.0.0.1:<port>, i.e. same-origin.
+//   2. Direct browser — the monitor server serves this page itself, so
+//                       relative URLs resolve correctly.
 //
 // Never use window.location.host to build absolute URLs: inside the HAOS
 // webview that host is the HA instance itself, not the addon backend.
@@ -125,6 +124,7 @@ window.addEventListener("error", e => {
 window.addEventListener("unhandledrejection", e => reportGlobalError("unhandledrejection", e.reason));
 
 const agentStore = new AgentStore();
+agentStore.mount();
 const router = new ServerEventRouter();
 const ioManager = new IOManager(router);
 const ws = new WSClient();
@@ -464,14 +464,19 @@ const _liveActorsTimer = window.setInterval(() => {
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).
 fetch(`${_apiBase}/api/feed`)
-    .then(r => (r.ok ? r.json() : []))
+    // Reject rather than substitute []: a 500 became "no history" indistinguishable
+    // from an empty log, silently and with nothing written anywhere.
+    .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
     .then(
         (items: { type: string; label: string; agentName: string; timestamp?: number; role?: string }[]) => {
             log.info("[feed] /api/feed seed:", items.length, "items");
             items.forEach(item => pushFeed(feedSeedItem(item)));
         },
     )
-    .catch(err => log.debug("[feed] /api/feed seed failed:", err));
+    // warn, not debug: this runs once, so there is no run of failures to
+    // escalate from, and the user-visible result is an empty feed with no
+    // explanation. debug is dropped in a production build.
+    .catch(err => log.warn("[feed] /api/feed seed failed — feed starts empty:", err));
 
 // The HA URL is seeded from /api/config at startup (see config/serverConfig.ts);
 // the Devices nav link reads it from safeStorage. No token ever reaches the
@@ -495,8 +500,26 @@ seedServerConfig()
 
 // ═══ 8 · Teardown ════════════════════════════════════════════════════════════
 
-window.addEventListener("beforeunload", () => {
+let _tornDown = false;
+
+function teardown(): void {
+    if (_tornDown) {
+        return;
+    }
+    _tornDown = true;
     window.clearInterval(_liveActorsTimer);
     ws.disconnect();
     agentStore.dispose();
+}
+
+// `beforeunload` does not fire reliably on mobile, where a page is more often
+// frozen than unloaded — so the socket was left for the server to time out.
+// `pagehide` does fire, and its `persisted` flag distinguishes the two: a
+// frozen page may be restored from the bfcache and must keep working, so only
+// a real unload tears down. Both paths land in the same idempotent function.
+window.addEventListener("pagehide", e => {
+    if (!e.persisted) {
+        teardown();
+    }
 });
+window.addEventListener("beforeunload", teardown);

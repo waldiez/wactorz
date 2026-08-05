@@ -6,6 +6,7 @@ not the system Python.
 import asyncio
 import importlib
 import logging
+import socket
 import sys
 import time
 from pathlib import Path
@@ -333,6 +334,39 @@ class InstallerAgent(Actor):
             target = deploy_target_for_host(str(payload.get("host") or ""))
         return target
 
+    async def _resolve_target_host(self, target: DeployTarget, requested: str) -> str:
+        """The address to connect to — the target's, never the payload's.
+
+        Resolving credentials from configuration is not enough on its own: a
+        payload that names a configured node but a *different* host would have
+        sent that node's password to a machine of the caller's choosing. The
+        configured host wins, and a payload that disagrees is refused rather
+        than quietly ignored, because a mismatch means the caller believed it
+        was talking to somewhere else.
+
+        A target with no host is the deliberate "find it by name" case, and the
+        lookup happens here rather than being taken on trust from the payload —
+        a single mDNS query for one host, resolved by the component that is
+        about to authenticate to it.
+        """
+        if target.host:
+            if requested and requested.strip().lower() != target.host.strip().lower():
+                raise PermissionError(
+                    f"Refusing to connect: deploy target '{target.name}' is configured "
+                    f"as {target.host}, but the task asked for {requested}. Credentials "
+                    f"are bound to the configured host."
+                )
+            return target.host
+
+        mdns = f"{target.name}.local"
+        try:
+            return await asyncio.to_thread(socket.gethostbyname, mdns)
+        except OSError as exc:
+            raise PermissionError(
+                f"Deploy target '{target.name}' has no host configured and "
+                f"'{mdns}' does not resolve. Set {deploy_env_prefix(target.name)}_HOST."
+            ) from exc
+
     def _known_hosts_path(self) -> Path:
         """Where learned SSH host keys live.
 
@@ -401,14 +435,15 @@ class InstallerAgent(Actor):
         password — and, failing that, out of ``_node_credentials`` in the
         agent's persisted state, where the password sat in plaintext.
         """
-        host = str(payload["host"])
+        requested = str(payload.get("host") or "")
         target = self._resolve_ssh_target(payload)
         if target is None:
             raise PermissionError(
-                f"No deploy target configured for '{host}'. "
+                f"No deploy target configured for '{requested}'. "
                 f"SSH credentials come from the environment (DEPLOY_TARGETS plus a "
                 f"DEPLOY_<NODE>_* block), not from the task payload."
             )
+        host = await self._resolve_target_host(target, requested)
         if not target.key_path and not target.password:
             raise PermissionError(
                 f"Deploy target '{target.name}' has no credentials. Set "
@@ -565,13 +600,10 @@ class InstallerAgent(Actor):
         SSH auth is not a payload key: the user and credentials come from the
         node's configured deploy target (see _ssh_kwargs).
         """
-        host = payload.get("host")
+        requested_host = payload.get("host")
         node_name = payload.get("node_name", "remote-node")
         broker = payload.get("broker", "localhost")
         mqtt_port = payload.get("port", 1883)
-
-        if not host:
-            return {"error": "Missing 'host' in payload"}
 
         # Before anything reaches the network: a name that cannot be an MQTT
         # topic level yields a runner the broker refuses on every operation,
@@ -579,18 +611,32 @@ class InstallerAgent(Actor):
         name_problem = deploy_name_error(str(node_name))
         if name_problem:
             self._log_remote(f"Refusing deploy: {name_problem}")
-            return {"success": False, "node_name": node_name, "host": host, "error": name_problem}
+            return {
+                "success": False,
+                "node_name": node_name,
+                "host": requested_host,
+                "error": name_problem,
+            }
 
         target = self._resolve_ssh_target(payload)
         if target is None:
             return {
                 "success": False,
                 "node_name": node_name,
-                "host": host,
+                "host": requested_host,
                 "error": (
-                    f"No deploy target configured for '{node_name}' ({host}). "
+                    f"No deploy target configured for '{node_name}' ({requested_host}). "
                     f"Set DEPLOY_TARGETS and the {deploy_env_prefix(node_name)}_* block."
                 ),
+            }
+        try:
+            host = await self._resolve_target_host(target, str(requested_host or ""))
+        except PermissionError as exc:
+            return {
+                "success": False,
+                "node_name": node_name,
+                "host": requested_host,
+                "error": str(exc),
             }
         # The target's user is authoritative — the remote paths below are built
         # from it, so taking it from the payload would let a caller write the

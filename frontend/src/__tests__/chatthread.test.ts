@@ -74,6 +74,33 @@ describe("buildChatMessageEl", () => {
         expect(document.querySelector(".af-lightbox")).not.toBeNull();
     });
 
+    it("never links a non-image attachment through a data: url", () => {
+        // `data:text/html` in an href is a navigation context: following it runs
+        // script in this origin. The image path below still accepts data:,
+        // because rendering is not navigating.
+        const el = buildChatMessageEl(
+            msg({
+                attachments: [
+                    att({ mime: "text/html", url: "data:text/html,<script>x=1</script>", name: "n.html" }),
+                ],
+            }),
+        );
+        expect(el.querySelector("a.af-chat-attach-file")).toBeNull();
+        // Still shown, just not clickable — the name is information.
+        expect(el.querySelector("span.af-chat-attach-file")!.textContent).toContain("n.html");
+    });
+
+    it("still renders a data: image as a thumbnail", () => {
+        const el = buildChatMessageEl(
+            msg({
+                attachments: [
+                    att({ mime: "image/png", url: "data:image/png;base64,iVBORw0KGgo=", name: "s" }),
+                ],
+            }),
+        );
+        expect(el.querySelector(".af-chat-attach-thumb")).not.toBeNull();
+    });
+
     it("renders a non-image attachment with a url as a download link", () => {
         const el = buildChatMessageEl(msg({ attachments: [att({ url: "http://x/f.pdf", name: "f.pdf" })] }));
         const link = el.querySelector<HTMLAnchorElement>("a.af-chat-attach-file")!;

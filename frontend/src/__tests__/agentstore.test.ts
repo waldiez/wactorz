@@ -52,6 +52,9 @@ let store: AgentStore;
 beforeEach(() => {
     vi.clearAllMocks();
     store = new AgentStore();
+    // mount() is no longer implicit in the constructor — creating the store has
+    // no DOM side effect, so the dashboard is attached explicitly.
+    store.mount();
 });
 afterEach(() => {
     vi.restoreAllMocks();

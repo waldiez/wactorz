@@ -15,13 +15,25 @@ import { MAIN_AGENT } from "../../agents/naming";
 import { openLightbox } from "./lightbox";
 import { escapeHtml } from "../escapeHtml";
 
+/** Where a url is about to be used. The allow-list differs by destination, and
+ *  a single list for both is what let `data:` reach an anchor href. */
+type UrlContext = "media" | "link";
+
 /** Attachments are internally sourced (uploads → same-origin / blob: / data:),
  *  but guard the scheme anyway so a hostile url can't smuggle javascript: into
- *  a src or href. Returns "" for anything outside the allow-list. */
-function safeAttachmentUrl(url: string): string {
+ *  a src or href. Returns "" for anything outside the allow-list.
+ *
+ *  `data:` is allowed for `media` and never for `link`: an <img src> renders,
+ *  it does not navigate, whereas following a `data:text/html` href runs script
+ *  in this origin. Browsers block top-level `data:` navigation today, which is
+ *  the only reason this was latent — it is not a guarantee to build on, and
+ *  uploads will start putting server-supplied urls here. */
+function safeAttachmentUrl(url: string, context: UrlContext): string {
     try {
         const proto = new URL(url, window.location.origin).protocol;
-        return ["http:", "https:", "blob:", "data:"].includes(proto) ? url : "";
+        const allowed =
+            context === "media" ? ["http:", "https:", "blob:", "data:"] : ["http:", "https:", "blob:"];
+        return allowed.includes(proto) ? url : "";
     } catch {
         return "";
     }
@@ -85,10 +97,15 @@ export function renderAgentMarkdown(text: string): DocumentFragment {
 
 /** Image thumbnail (click → lightbox) or file chip for one attachment. */
 function buildAttachmentEl(att: Attachment): HTMLElement {
-    const url = att.url ? safeAttachmentUrl(att.url) : "";
-    if (isImage(att) && url) {
-        return buildImageThumb(url, att.name);
+    if (isImage(att)) {
+        const src = att.url ? safeAttachmentUrl(att.url, "media") : "";
+        if (src) {
+            return buildImageThumb(src, att.name);
+        }
     }
+    // Not an image (or not renderable): a chip, linked only if the url is safe
+    // to navigate to. Anything else degrades to an unlinked <span>.
+    const url = att.url ? safeAttachmentUrl(att.url, "link") : "";
     const el = url ? document.createElement("a") : document.createElement("span");
     el.className = "af-chat-attach-file";
     el.innerHTML = `${iconMarkup("file", 13)}<span>${escapeHtml(att.name)} · ${humanSize(att.size)}</span>`;

@@ -66,6 +66,23 @@ function makeZoomable(img: HTMLImageElement): void {
     });
 }
 
+/** Render agent markdown with its inline images wired to the lightbox.
+ *
+ * The markdown renderer emits inert images on purpose — the lightbox belongs to
+ * this layer, and importing it there would pull a dashboard dependency into a
+ * generic renderer. That only works if every caller comes through here: a
+ * screenshot arriving live is rendered by the streaming path and one by the
+ * history path, and for a while only the second one attached the behaviour, so
+ * a new image was dead until the page was reloaded.
+ */
+export function renderAgentMarkdown(text: string): DocumentFragment {
+    const rendered = renderMarkdown(text);
+    rendered.querySelectorAll("img.af-chat-md-img").forEach(el => {
+        makeZoomable(el as HTMLImageElement);
+    });
+    return rendered;
+}
+
 /** Image thumbnail (click → lightbox) or file chip for one attachment. */
 function buildAttachmentEl(att: Attachment): HTMLElement {
     const url = att.url ? safeAttachmentUrl(att.url) : "";
@@ -99,14 +116,7 @@ function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
     if (isUser) {
         bubble.textContent = msg.content;
     } else if (msg.content) {
-        const rendered = renderMarkdown(msg.content);
-        // Images the renderer produced are inert; the lightbox lives in this
-        // layer, so the click behaviour is attached here rather than pulling a
-        // dashboard import down into the markdown renderer.
-        rendered.querySelectorAll("img.af-chat-md-img").forEach(el => {
-            makeZoomable(el as HTMLImageElement);
-        });
-        bubble.appendChild(rendered);
+        bubble.appendChild(renderAgentMarkdown(msg.content));
     }
     if (msg.attachments?.length) {
         bubble.appendChild(buildAttachments(msg.attachments));

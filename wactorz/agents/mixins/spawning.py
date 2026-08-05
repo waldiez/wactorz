@@ -114,7 +114,7 @@ class SpawnMixin(_Host):
                 return None
             if not config.get("replace", False):
                 logger.info(
-                    "[%s]] '%s' already exists (use replace=true to update).", self.name, name
+                    "[%s] '%s' already exists (use replace=true to update).", self.name, name
                 )
                 return existing
             await self._stop_for_replace(existing, name)

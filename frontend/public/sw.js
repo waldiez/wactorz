@@ -20,6 +20,24 @@ const CACHE = "wactorz-v5";
 
 const NEVER_CACHE = ["/api/", "/ws"];
 
+/** Most entries to keep. The cache had no bound at all: every same-origin GET
+ *  was stored and nothing ever evicted, so a long-lived install grew until the
+ *  browser evicted the whole origin — losing the offline shell this exists for.
+ *  Content-hashed assets make that worse, since each deploy adds a new set of
+ *  filenames rather than replacing the old ones. */
+const MAX_ENTRIES = 60;
+
+/** Store a response, then trim the cache back to MAX_ENTRIES.
+ *  `cache.keys()` yields insertion order, so the head is the oldest. */
+async function putBounded(request, response) {
+    const cache = await caches.open(CACHE);
+    await cache.put(request, response);
+    const keys = await cache.keys();
+    for (const stale of keys.slice(0, Math.max(0, keys.length - MAX_ENTRIES))) {
+        await cache.delete(stale);
+    }
+}
+
 self.addEventListener("install", e => {
     self.skipWaiting();
     e.waitUntil(
@@ -49,6 +67,12 @@ self.addEventListener("fetch", e => {
         return;
     if (e.request.method !== "GET") return;
 
+    // Same-origin only. The checks above look at `pathname`, which says nothing
+    // about the host — so a request to any third party whose path happened not
+    // to match NEVER_CACHE was intercepted and its response stored in our cache.
+    // Returning without calling respondWith leaves the browser to handle it.
+    if (url.origin !== self.location.origin) return;
+
     // HTML entry points: network-first so the browser always gets the latest
     // index.html (which references the current content-hashed JS/CSS filenames).
     if (url.pathname === "/" || url.pathname === "/index.html") {
@@ -59,7 +83,7 @@ self.addEventListener("fetch", e => {
                         // Clone synchronously, before `res` is returned and its body read —
                         // cloning later (inside the async cache write) throws "body already used".
                         const copy = res.clone();
-                        caches.open(CACHE).then(c => c.put(e.request, copy));
+                        void putBounded(e.request, copy);
                     }
                     return res;
                 })
@@ -87,7 +111,7 @@ self.addEventListener("fetch", e => {
                     .then(res => {
                         if (res.ok) {
                             const copy = res.clone();
-                            caches.open(CACHE).then(c => c.put(e.request, copy));
+                            void putBounded(e.request, copy);
                         }
                         return res;
                     })
@@ -104,7 +128,7 @@ self.addEventListener("fetch", e => {
             .then(res => {
                 if (res.ok) {
                     const copy = res.clone();
-                    caches.open(CACHE).then(c => c.put(e.request, copy));
+                    void putBounded(e.request, copy);
                 }
                 return res;
             })

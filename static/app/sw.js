@@ -5,7 +5,7 @@
 /**
  * Wactorz Service Worker
  *
- * Registered only in the standalone / desktop deployment (see index.html): behind
+ * Registered only when the app is served directly (see index.html): behind
  * Home Assistant's ingress proxy the app lives under a rotating /api/… path where
  * caching is useless, so the SW is never installed there in the first place.
  *

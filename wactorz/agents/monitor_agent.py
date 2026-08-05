@@ -28,6 +28,7 @@ import time
 import psutil
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +236,7 @@ class MonitorActor(Actor):
 
         if not self._registry:
             return
-        main = self._registry.find_by_name("main")
+        main = find_main_actor(self._registry)
         if not main:
             return
 

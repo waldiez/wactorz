@@ -17,8 +17,18 @@ export class AgentStore {
     private cardDashboard: CardDashboard | null = null;
     private _remoteNodeLastSeen: Map<string, number> = new Map();
 
-    /** Create the store and mount an (initially empty) CardDashboard. */
-    constructor() {
+    /** Build and show the (initially empty) CardDashboard.
+     *
+     * Separate from the constructor so that creating the store has no DOM side
+     * effect: every method here already tolerates `cardDashboard === null`, so
+     * the field was designed to be optional and only construction forced it.
+     * Calling twice would strand the first dashboard, so it is a no-op after
+     * the first.
+     */
+    mount(): void {
+        if (this.cardDashboard) {
+            return;
+        }
         this.cardDashboard = new CardDashboard();
         this.cardDashboard.show([...this.agents.values()]);
     }

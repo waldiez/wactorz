@@ -11,12 +11,12 @@ import logging
 import socket
 import time
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
 
-from ..agents.main_actor import MainActor
+from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
@@ -27,8 +27,6 @@ logger = logging.getLogger(__name__)
 # In-flight chat-generation tasks (WebSocket + REST paths) so POST /chat/stop can
 # cancel a turn mid-stream.
 inflight_chat_tasks: set = set()
-
-MAIN_ACTOR_NAME = "main"
 
 
 def track_chat_task(task):
@@ -49,14 +47,6 @@ async def discard_reply(_text: str) -> None:
     function taking one argument — a bare lambda raises TypeError on the first
     chunk and silently abandons the stream after the tokens are paid for.
     """
-
-
-def find_main() -> MainActor | None:
-    """Return the main actor from the registry, or ``None`` in legacy MQTT mode."""
-    actor = runtime.registry.find_by_name(MAIN_ACTOR_NAME) if runtime.registry else None
-    if actor:
-        return cast(MainActor, actor)
-    return None
 
 
 def parse_mention(content: str) -> tuple[str, str]:
@@ -142,8 +132,8 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
     """
     if agent_name in beta_warned_agents:
         return None
-    main = find_main()
-    manifest = (getattr(main, "_agent_manifests", {}) or {}).get(agent_name) if main else None
+    main = find_main_actor(runtime.registry)
+    manifest = main._agent_manifests.get(agent_name) if main else None
     if not manifest or not manifest.get("experimental"):
         return None
     beta_warned_agents.add(agent_name)
@@ -187,8 +177,8 @@ async def slash_deploy(node: str, reply_fn) -> None:
             return
         await reply_fn(f"[discover] Found via mDNS: {node}.local → {host}")
 
-    main_actor = find_main()
-    if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
+    main_actor = find_main_actor(runtime.registry)
+    if main_actor is None:
         await reply_fn("[error] Installer agent not available.")
         return
 
@@ -228,8 +218,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
     cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
-        main_actor = find_main()
-        if main_actor and hasattr(main_actor, "persist"):
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor:
             main_actor.persist("_plan_cache", {})
         await reply_fn("[System: Plan cache cleared.]")
         return True
@@ -249,10 +239,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/nodes":
-        main_actor = find_main()
-        remote_nodes = (
-            main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
-        )
+        main_actor = find_main_actor(runtime.registry)
+        remote_nodes = main_actor.list_nodes() if (main_actor) else []
         local = [a.name for a in runtime.registry.all_actors()] if runtime.registry else []
         lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
         for nd in sorted(remote_nodes, key=lambda x: x["node"]):
@@ -268,8 +256,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 3:
             await reply_fn("[usage] /migrate <agent-name> <target-node>")
             return True
-        main_actor = find_main()
-        if main_actor is None or not hasattr(main_actor, "migrate_agent"):
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor is None:
             await reply_fn("[error] migrate_agent not available.")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
@@ -356,21 +344,16 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
         if not handled:
-            main_actor = find_main()
+            main_actor = find_main_actor(runtime.registry)
             # Forward unrecognized slash commands to main actor.
             # main_actor.process_user_input handles the full command set
             # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
-            if main_actor and hasattr(main_actor, "process_user_input_stream"):
+            if main_actor:
                 _chunk_fn = stream_fn or reply_fn
                 async for chunk in main_actor.process_user_input_stream(content):
                     if isinstance(chunk, dict):
                         continue
                     await _chunk_fn(str(chunk))
-                if stream_end_fn:
-                    await stream_end_fn()
-            elif main_actor and hasattr(main_actor, "process_user_input"):
-                result = await main_actor.process_user_input(content)
-                await reply_fn(str(result))
                 if stream_end_fn:
                     await stream_end_fn()
             else:
@@ -382,11 +365,11 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     target = runtime.registry.find_by_name(target_name) if runtime.registry else None
 
     if target is None:
-        main_actor = find_main()
+        main_actor = find_main_actor(runtime.registry)
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
-        if main_actor and hasattr(main_actor, "_known_nodes"):
+        if main_actor:
             remote_node = None
             for node_name, nd in main_actor._known_nodes.items():
                 if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
@@ -405,8 +388,8 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                 }
                 try:
                     async with mqtt_client(
-                        getattr(main_actor, "_mqtt_broker", "localhost"),
-                        getattr(main_actor, "_mqtt_port", 1883),
+                        main_actor._mqtt_broker,
+                        main_actor._mqtt_port,
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)

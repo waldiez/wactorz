@@ -24,6 +24,7 @@ import time
 from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt import mqtt_client
 from .llm_agent import LLMProvider, _accumulate_global_cost
+from .lookup import find_main_actor
 from .mixins.spawning import SpawnMixin
 
 logger = logging.getLogger(__name__)
@@ -161,8 +162,8 @@ class PlannerAgent(Actor, SpawnMixin):
         """
         user_tz = None
         if self._registry:
-            main = self._registry.find_by_name("main")
-            if main and hasattr(main, "get_user_facts"):
+            main = find_main_actor(self._registry)
+            if main:
                 try:
                     user_tz = main.get_user_facts().get("pref_timezone")
                 except Exception:
@@ -331,8 +332,8 @@ class PlannerAgent(Actor, SpawnMixin):
             if bus and self._registry:
                 live = {a.name for a in self._registry.all_actors()}
                 # Add remotely-running agents from main's known_nodes
-                main = self._registry.find_by_name("main")
-                if main and hasattr(main, "_known_nodes"):
+                main = find_main_actor(self._registry)
+                if main:
                     import time as _pt
 
                     for nd in main._known_nodes.values():
@@ -539,8 +540,8 @@ class PlannerAgent(Actor, SpawnMixin):
 
                 # Register in main's spawn registry for auto-restore on restart
                 if self._registry:
-                    main = self._registry.find_by_name("main")
-                    if main and hasattr(main, "_save_to_spawn_registry"):
+                    main = find_main_actor(self._registry)
+                    if main:
                         registry_cfg = dict(spawn_cfg)
                         registry_cfg["name"] = name
                         registry_cfg["_rule"] = True
@@ -578,8 +579,8 @@ class PlannerAgent(Actor, SpawnMixin):
             }
             # Save into main so it survives planner self-termination
             if self._registry:
-                main = self._registry.find_by_name("main")
-                if main and hasattr(main, "save_pipeline_rule"):
+                main = find_main_actor(self._registry)
+                if main:
                     main.save_pipeline_rule(rule)
                     logger.info(f"[{self.name}] Pipeline rule {rule_id} saved to main")
 
@@ -618,8 +619,8 @@ class PlannerAgent(Actor, SpawnMixin):
         # Existing rules live on main (the authoritative store).
         existing: list[dict] = []
         if self._registry:
-            main = self._registry.find_by_name("main")
-            if main and hasattr(main, "get_pipeline_rules"):
+            main = find_main_actor(self._registry)
+            if main:
                 try:
                     existing = list(main.get_pipeline_rules().values())
                 except Exception:
@@ -1276,8 +1277,8 @@ class PlannerAgent(Actor, SpawnMixin):
         # ── Fetch stored notification URLs from main ──────────────────────
         notification_urls: dict = {}
         if self._registry:
-            main = self._registry.find_by_name("main")
-            if main and hasattr(main, "get_notification_urls"):
+            main = find_main_actor(self._registry)
+            if main:
                 notification_urls = main.get_notification_urls()
 
         # Also extract any URL directly mentioned in the task
@@ -1949,9 +1950,9 @@ class PlannerAgent(Actor, SpawnMixin):
         if not self._registry:
             return []
         # Pull full manifests from main's capability registry (includes schemas)
-        main = self._registry.find_by_name("main")
+        main = find_main_actor(self._registry)
         manifest_map: dict = {}
-        if main and hasattr(main, "list_capabilities"):
+        if main:
             for cap in main.list_capabilities():
                 manifest_map[cap["name"]] = cap
 
@@ -1987,7 +1988,7 @@ class PlannerAgent(Actor, SpawnMixin):
             )
 
         # ── Remote agents from live node heartbeats ───────────────────────────
-        if main and hasattr(main, "_known_nodes"):
+        if main:
             import time as _dt
 
             for node_name, nd in main._known_nodes.items():

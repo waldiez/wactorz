@@ -10,7 +10,8 @@ import json
 import logging
 import time
 
-from . import chat, runtime
+from ..agents.lookup import find_main_actor
+from . import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -112,9 +113,9 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
     """
-    main_actor = chat.find_main()
+    main_actor = find_main_actor(runtime.registry)
     reg = {}
-    if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
+    if main_actor is not None:
         reg = main_actor._get_spawn_registry() or {}
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
@@ -127,15 +128,11 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
             node_names.add(n)
 
     # Clear the live registry through the actor's own persistence.
-    if (
-        main_actor is not None
-        and hasattr(main_actor, "recall")
-        and main_actor.recall("_spawned_agents", None) is not None
-    ):
+    if main_actor is not None and main_actor.recall("_spawned_agents", None) is not None:
         kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
         main_actor.persist("_spawned_agents", kept)
 
-    if agent and main_actor is not None and hasattr(main_actor, "_update_node_desired_state"):
+    if agent and main_actor is not None:
         # Republish from the reduced registry so siblings on the node survive.
         await asyncio.gather(
             *[main_actor._update_node_desired_state(n) for n in node_names],
@@ -169,6 +166,15 @@ async def delete_agent(agent_id: str) -> str:
     name = record.get("name") or agent_id
     node = (record.get("node") or "").strip()
 
+    # REST refuses to delete a protected actor; this path did not, so the same
+    # request over the WebSocket deleted system agents the API 403s. The check
+    # reads the live actor rather than `record`, because the dashboard entry is
+    # built from heartbeats and a remote agent can claim whatever it likes.
+    actor = runtime.registry.find_by_name(name) if runtime.registry else None
+    if actor is not None and getattr(actor, "protected", False):
+        logger.warning("[lifecycle] Refusing to delete protected actor '%s'.", name)
+        return "refused-protected"
+
     runtime.mark_deleted(agent_id)
     runtime.state["agents"].pop(agent_id, None)
 
@@ -177,8 +183,8 @@ async def delete_agent(agent_id: str) -> str:
     if runtime.registry is not None:
         # In-process: delegate to main, which owns the spawn registry and
         # knows exactly how to clean up both local and remote agents.
-        main_actor = chat.find_main()
-        if main_actor is not None and hasattr(main_actor, "delete_spawned_agent"):
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor is not None:
             try:
                 await main_actor.delete_spawned_agent(name)
                 routed = f"via main.delete_spawned_agent({name!r})"

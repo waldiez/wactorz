@@ -11,7 +11,7 @@ import type { ChatMessage } from "../../types/agent";
 import { uid } from "../../ids";
 import { AgentStreams } from "../../io/agentStreams";
 import { MAIN_AGENT } from "../../agents/naming";
-import { renderMarkdown } from "../markdown";
+import { renderAgentMarkdown } from "./chatThread";
 
 /** Everything the stream UI needs from the chat controller. */
 export interface StreamHost {
@@ -100,7 +100,7 @@ export class ChatStreamUI {
         this._targets.delete(from);
         if (this._body && text && this._rowFrom === from) {
             this._body.textContent = "";
-            this._body.appendChild(renderMarkdown(text));
+            this._body.appendChild(renderAgentMarkdown(text));
             this._row = this._body = this._rowFrom = null;
         }
     }

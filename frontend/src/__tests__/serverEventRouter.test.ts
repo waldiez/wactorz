@@ -339,3 +339,65 @@ describe("ServerEventRouter.route — topic dispatch", () => {
         expect(good).toHaveBeenCalledTimes(1);
     });
 });
+
+/**
+ * These payloads are raw MQTT JSON. A field that is absent, or arrives with the
+ * wrong type, must be left off the patch entirely rather than written as
+ * `undefined` — the dashboard merges patches onto what it already knows, so a
+ * present-but-undefined key erases a value the agent never meant to clear.
+ */
+describe("optional fields in normalised payloads", () => {
+    it("omits heartbeat fields the payload does not carry", () => {
+        const hb = normaliseHeartbeat({ agentId: "a", state: "running" });
+
+        expect("cpu" in hb).toBe(false);
+        expect("memory_mb" in hb).toBe(false);
+        expect("task" in hb).toBe(false);
+        expect("node" in hb).toBe(false);
+    });
+
+    it("keeps heartbeat fields that are present", () => {
+        const hb = normaliseHeartbeat({
+            agentId: "a",
+            state: "running",
+            cpu: 12.5,
+            memory_mb: 64,
+            task: "summarising",
+            node: "rpi-kitchen",
+        });
+
+        expect(hb).toMatchObject({ cpu: 12.5, memory_mb: 64, task: "summarising", node: "rpi-kitchen" });
+    });
+
+    it("drops numeric fields that arrive as the wrong type", () => {
+        const hb = normaliseHeartbeat({ agentId: "a", cpu: "high", memory_mb: null });
+
+        // "high" is not a reading; carrying it through would render as NaN.
+        expect("cpu" in hb).toBe(false);
+        expect("memory_mb" in hb).toBe(false);
+    });
+
+    it("treats a non-finite number as no reading at all", () => {
+        const hb = normaliseHeartbeat({ agentId: "a", cpu: Number.POSITIVE_INFINITY });
+
+        expect("cpu" in hb).toBe(false);
+    });
+
+    it("carries `protected` on status only when the payload states it", () => {
+        expect("protected" in normaliseStatus({ agentId: "a" })).toBe(false);
+        expect(normaliseStatus({ agentId: "a", protected: true })).toMatchObject({ protected: true });
+        // Explicit false is a statement, not an omission.
+        expect(normaliseStatus({ agentId: "a", protected: false })).toMatchObject({ protected: false });
+    });
+
+    it("ignores a non-boolean `protected`", () => {
+        // A remote agent could send "true"; treating that as truthy would let
+        // any agent mark itself undeletable.
+        expect("protected" in normaliseStatus({ agentId: "a", protected: "true" })).toBe(false);
+    });
+
+    it("carries `protected` on spawn under the same rule", () => {
+        expect("protected" in normaliseSpawn({ agentId: "a" })).toBe(false);
+        expect(normaliseSpawn({ agentId: "a", protected: true })).toMatchObject({ protected: true });
+    });
+});

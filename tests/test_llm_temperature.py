@@ -1,13 +1,17 @@
 """Tests for LLM_TEMPERATURE plumbing (config → providers)."""
 
-import sys
-import types
 from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
 
-sys.modules.setdefault("openai", types.ModuleType("openai"))
+from tests.optional_deps import ensure_importable
+
+# Not `sys.modules.setdefault`: that asks whether openai has been imported yet,
+# not whether it can be, so on a machine where it *is* installed the empty stub
+# won wherever this module was imported first — shadowing the real package for
+# the rest of the process.
+ensure_importable("openai")
 
 from wactorz.agents.llm_agent import (
     OllamaProvider,

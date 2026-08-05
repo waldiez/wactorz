@@ -37,6 +37,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, MessageType
+from ..lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,22 @@ class SpawnMixin(_Host):
         # ── Idempotency / replace ──────────────────────────────────────────
         existing = self._find_existing(name)
         if existing is not None:
+            if getattr(existing, "protected", False):
+                # `replace: true` would stop the system actor holding this name,
+                # and the orchestrator is the one most likely to be asked for by
+                # name. A spawn config is frequently LLM-authored, so this is
+                # reachable without anyone intending it.
+                logger.warning(
+                    "[%s] Refusing to spawn '%s' — a protected system actor already holds "
+                    "that name.",
+                    self.name,
+                    name,
+                )
+                return None
             if not config.get("replace", False):
-                logger.info(f"[{self.name}] '{name}' already exists (use replace=true to update).")
+                logger.info(
+                    "[%s] '%s' already exists (use replace=true to update).", self.name, name
+                )
                 return existing
             await self._stop_for_replace(existing, name)
 
@@ -548,8 +563,8 @@ class SpawnMixin(_Host):
             except Exception:
                 return None
         if self._registry is not None:
-            main = self._registry.find_by_name("main")
-            if main is not None and hasattr(main, "get_user_facts"):
+            main = find_main_actor(self._registry)
+            if main is not None:
                 try:
                     return main.get_user_facts().get("pref_timezone")  # pyright: ignore[reportAttributeAccessIssue]
                 except Exception:
@@ -570,8 +585,8 @@ class SpawnMixin(_Host):
             return
         if self._registry is None:
             return
-        main = self._registry.find_by_name("main")
-        if main is not None and hasattr(main, "_save_to_spawn_registry"):
+        main = find_main_actor(self._registry)
+        if main is not None:
             main._save_to_spawn_registry(config)  # pyright: ignore[reportAttributeAccessIssue]
             logger.info(
                 f"[{self.name}] Registered '{config.get('name')}' with main's spawn registry"

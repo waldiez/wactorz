@@ -5,7 +5,7 @@
 /**
  * Wactorz Service Worker
  *
- * Registered only in the standalone / desktop deployment (see index.html): behind
+ * Registered only when the app is served directly (see index.html): behind
  * Home Assistant's ingress proxy the app lives under a rotating /api/… path where
  * caching is useless, so the SW is never installed there in the first place.
  *
@@ -20,100 +20,118 @@ const CACHE = "wactorz-v5";
 
 const NEVER_CACHE = ["/api/", "/ws"];
 
-self.addEventListener("install", (e) => {
-  self.skipWaiting();
-  e.waitUntil(
-    caches.open(CACHE).then((c) =>
-      c.addAll([
-        "./site.webmanifest",
-        "./favicon.svg",
-      ]).catch(() => {}),
-    ),
-  );
+/** Most entries to keep. The cache had no bound at all: every same-origin GET
+ *  was stored and nothing ever evicted, so a long-lived install grew until the
+ *  browser evicted the whole origin — losing the offline shell this exists for.
+ *  Content-hashed assets make that worse, since each deploy adds a new set of
+ *  filenames rather than replacing the old ones. */
+const MAX_ENTRIES = 60;
+
+/** Store a response, then trim the cache back to MAX_ENTRIES.
+ *  `cache.keys()` yields insertion order, so the head is the oldest. */
+async function putBounded(request, response) {
+    const cache = await caches.open(CACHE);
+    await cache.put(request, response);
+    const keys = await cache.keys();
+    for (const stale of keys.slice(0, Math.max(0, keys.length - MAX_ENTRIES))) {
+        await cache.delete(stale);
+    }
+}
+
+self.addEventListener("install", e => {
+    self.skipWaiting();
+    e.waitUntil(
+        caches.open(CACHE).then(c => c.addAll(["./site.webmanifest", "./favicon.svg"]).catch(() => {})),
+    );
 });
 
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))),
-    ).then(() => self.clients.claim()),
-  );
+self.addEventListener("activate", e => {
+    e.waitUntil(
+        caches
+            .keys()
+            .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+            .then(() => self.clients.claim()),
+    );
 });
 
-self.addEventListener("fetch", (e) => {
-  const url = new URL(e.request.url);
+self.addEventListener("fetch", e => {
+    const url = new URL(e.request.url);
 
-  // Never intercept API / WebSocket upgrade requests. A trailing-slash entry
-  // (/api/) matches by prefix; a bare entry (/ws) matches only the exact
-  // path or a sub-path, never a sibling like /wsfoo.
-  const path = url.pathname;
-  if (
-    NEVER_CACHE.some((n) =>
-      n.endsWith("/") ? path.startsWith(n) : path === n || path.startsWith(n + "/"),
+    // Never intercept API / WebSocket upgrade requests. A trailing-slash entry
+    // (/api/) matches by prefix; a bare entry (/ws) matches only the exact
+    // path or a sub-path, never a sibling like /wsfoo.
+    const path = url.pathname;
+    if (
+        NEVER_CACHE.some(n => (n.endsWith("/") ? path.startsWith(n) : path === n || path.startsWith(n + "/")))
     )
-  )
-    return;
-  if (e.request.method !== "GET") return;
+        return;
+    if (e.request.method !== "GET") return;
 
-  // HTML entry points: network-first so the browser always gets the latest
-  // index.html (which references the current content-hashed JS/CSS filenames).
-  if (url.pathname === "/" || url.pathname === "/index.html") {
+    // Same-origin only. The checks above look at `pathname`, which says nothing
+    // about the host — so a request to any third party whose path happened not
+    // to match NEVER_CACHE was intercepted and its response stored in our cache.
+    // Returning without calling respondWith leaves the browser to handle it.
+    if (url.origin !== self.location.origin) return;
+
+    // HTML entry points: network-first so the browser always gets the latest
+    // index.html (which references the current content-hashed JS/CSS filenames).
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+        e.respondWith(
+            fetch(e.request)
+                .then(res => {
+                    if (res.ok) {
+                        // Clone synchronously, before `res` is returned and its body read —
+                        // cloning later (inside the async cache write) throws "body already used".
+                        const copy = res.clone();
+                        void putBounded(e.request, copy);
+                    }
+                    return res;
+                })
+                .catch(() => caches.match(e.request).then(c => c ?? Response.error())),
+        );
+        return;
+    }
+
+    // Hashed assets: cache-first (Vite content-hash ensures stale files are never reused)
+    if (
+        url.pathname.startsWith("/assets/") ||
+        url.pathname.endsWith(".js") ||
+        url.pathname.endsWith(".css") ||
+        url.pathname.endsWith(".svg") ||
+        url.pathname.endsWith(".ico") ||
+        url.pathname.endsWith(".webmanifest")
+    ) {
+        e.respondWith(
+            caches.match(e.request).then(cached => {
+                // Stale-while-revalidate: serve cache immediately, refresh in the background.
+                // The .catch is on the fetch chain itself (not gated behind `??`) so that on
+                // a cache hit the in-flight background fetch can't become an unhandled
+                // rejection when offline.
+                const fresh = fetch(e.request)
+                    .then(res => {
+                        if (res.ok) {
+                            const copy = res.clone();
+                            void putBounded(e.request, copy);
+                        }
+                        return res;
+                    })
+                    .catch(() => Response.error());
+                return cached ?? fresh;
+            }),
+        );
+        return;
+    }
+
+    // Everything else: network-first, cache fallback
     e.respondWith(
-      fetch(e.request)
-        .then((res) => {
-          if (res.ok) {
-            // Clone synchronously, before `res` is returned and its body read —
-            // cloning later (inside the async cache write) throws "body already used".
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, copy));
-          }
-          return res;
-        })
-        .catch(() => caches.match(e.request).then((c) => c ?? Response.error())),
+        fetch(e.request)
+            .then(res => {
+                if (res.ok) {
+                    const copy = res.clone();
+                    void putBounded(e.request, copy);
+                }
+                return res;
+            })
+            .catch(() => caches.match(e.request).then(c => c ?? Response.error())),
     );
-    return;
-  }
-
-  // Hashed assets: cache-first (Vite content-hash ensures stale files are never reused)
-  if (
-    url.pathname.startsWith("/assets/") ||
-    url.pathname.endsWith(".js") ||
-    url.pathname.endsWith(".css") ||
-    url.pathname.endsWith(".svg") ||
-    url.pathname.endsWith(".ico") ||
-    url.pathname.endsWith(".webmanifest")
-  ) {
-    e.respondWith(
-      caches.match(e.request).then((cached) => {
-        // Stale-while-revalidate: serve cache immediately, refresh in the background.
-        // The .catch is on the fetch chain itself (not gated behind `??`) so that on
-        // a cache hit the in-flight background fetch can't become an unhandled
-        // rejection when offline.
-        const fresh = fetch(e.request)
-          .then((res) => {
-            if (res.ok) {
-              const copy = res.clone();
-              caches.open(CACHE).then((c) => c.put(e.request, copy));
-            }
-            return res;
-          })
-          .catch(() => Response.error());
-        return cached ?? fresh;
-      }),
-    );
-    return;
-  }
-
-  // Everything else: network-first, cache fallback
-  e.respondWith(
-    fetch(e.request)
-      .then((res) => {
-        if (res.ok) {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
-        }
-        return res;
-      })
-      .catch(() => caches.match(e.request).then((c) => c ?? Response.error())),
-  );
 });

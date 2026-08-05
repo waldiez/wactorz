@@ -6,12 +6,14 @@ into tests that believe they are fully injected — and the failure mode is
 confusing rather than loud: the test looks wrong, not the environment.
 """
 
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
 from wactorz import llm_factory
 from wactorz.core import mqtt
+from wactorz.core.persistence.stores import Stores
 
 
 @pytest.fixture(autouse=True)
@@ -68,3 +70,29 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "real_mqtt_client: leave wactorz.core.mqtt.mqtt_client alone — for tests of the factory",
     )
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_stores() -> Iterator[None]:
+    """Put the process-wide stores back the way the test found them.
+
+    `Stores` is module state: `install_stores` sets it and only `close_stores`
+    unsets it, so a test that installs a database and does not close it leaves
+    that database installed for everything after it.
+
+    That is not theoretical. `events.snapshot()` reads **two** different database
+    globals — `runtime.db` for most of its figures, and `Stores.db` through
+    `get_global_alltime_cost()` for the all-time spend. A test that resets
+    `runtime.db` looks isolated and is not: a leaked `Stores.db` still carries
+    the previous test's spend into the headline total, so the snapshot reports a
+    number nothing in that test produced.
+
+    Restoring rather than clearing, so a test that installs stores on purpose
+    still sees them for its own duration.
+    """
+    saved = (Stores.db, Stores.pickle)
+    yield
+    if Stores.db is not None and Stores.db is not saved[0]:
+        Stores.db.close()  # don't leak the handle a test left installed
+    Stores.db, Stores.pickle = saved
+    Stores.memory.clear()

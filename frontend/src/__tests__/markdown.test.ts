@@ -251,3 +251,58 @@ describe("renderMarkdown images", () => {
         });
     });
 });
+
+describe("renderMarkdown bare urls", () => {
+    const html = (src: string): string => {
+        const d = document.createElement("div");
+        d.appendChild(renderMarkdown(src));
+        return d.innerHTML;
+    };
+
+    it("links a bare url", () => {
+        const d = document.createElement("div");
+        d.appendChild(renderMarkdown("see https://example.com now"));
+        const a = d.querySelector("a")!;
+
+        expect(a.getAttribute("href")).toBe("https://example.com");
+        expect(a.textContent).toBe("https://example.com");
+    });
+
+    it("leaves trailing sentence punctuation outside the link", () => {
+        const d = document.createElement("div");
+        d.appendChild(renderMarkdown("see https://example.com/page."));
+        const a = d.querySelector("a")!;
+
+        // The full stop ends the sentence, not the URL — including it would
+        // produce a link that 404s.
+        expect(a.getAttribute("href")).toBe("https://example.com/page");
+        expect(d.textContent).toContain("page.");
+    });
+
+    it("keeps text that follows an inline element", () => {
+        expect(html("**bold** and then some tail")).toContain("and then some tail");
+    });
+});
+
+describe("renderMarkdown tables", () => {
+    const table = (src: string): HTMLTableElement | null => {
+        const d = document.createElement("div");
+        d.appendChild(renderMarkdown(src));
+        return d.querySelector("table");
+    };
+
+    it("renders a header-only table without an empty body", () => {
+        const el = table("| a | b |\n| --- | --- |");
+
+        expect(el).not.toBeNull();
+        expect(el!.querySelector("tbody")).toBeNull();
+    });
+
+    it("accepts rows written without outer pipes", () => {
+        const el = table("a | b\n--- | ---\n1 | 2");
+
+        expect(el).not.toBeNull();
+        expect([...el!.querySelectorAll("th")].map(c => c.textContent)).toEqual(["a", "b"]);
+        expect([...el!.querySelectorAll("td")].map(c => c.textContent)).toEqual(["1", "2"]);
+    });
+});

@@ -2,5 +2,11 @@
 * text=auto
 *.sh text eol=lf
 
+# Vite copies this template through to static/app/index.html byte for byte, so
+# on a CRLF checkout a Windows build commits CRLF and CI's "static/app matches
+# the frontend source" check fails against its own LF rebuild. Pin both ends.
+frontend/index.html   text eol=lf
+static/app/index.html text eol=lf
+
 # Generated docs bundled into the wheel — collapse in GitHub PR diffs
 static/docs/**        linguist-generated=true

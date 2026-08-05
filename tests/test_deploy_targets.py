@@ -131,7 +131,7 @@ class _FakeMain:
 @pytest.fixture
 def fake_main(monkeypatch: pytest.MonkeyPatch) -> _FakeMain:
     main = _FakeMain()
-    monkeypatch.setattr(chat, "find_main", lambda: main)
+    monkeypatch.setattr(chat, "find_main_actor", lambda _registry: main)
     return main
 
 
@@ -350,6 +350,50 @@ async def test_ssh_ignores_credentials_supplied_in_the_payload(
 
     assert kwargs["password"] == "configured"
     assert kwargs["username"] == "pi"
+
+
+async def test_the_payload_cannot_redirect_a_target_to_another_host(
+    installer, targets, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Credentials are bound to the configured host, not just to the node name.
+
+    Resolving the password from configuration is only half of it. This used to
+    take the *host* from the payload, so a task naming a configured node and a
+    host of its own choosing had that node's password sent straight to it —
+    the credential relay this whole change exists to close, through a door left
+    open beside it.
+    """
+    targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5", user="pi", password=SECRET))
+    monkeypatch.setattr(installer, "_known_hosts", _fake_known_hosts(tmp_path))
+
+    with pytest.raises(PermissionError, match="Credentials are bound"):
+        await installer._ssh_kwargs({"host": "attacker.example.com", "node_name": "rpi-kitchen"})
+
+    # The configured host is still reachable, and case/whitespace do not matter.
+    kwargs = await installer._ssh_kwargs({"host": " 10.0.0.5 ", "node_name": "rpi-kitchen"})
+    assert kwargs["host"] == "10.0.0.5"
+
+
+async def test_a_hostless_target_is_resolved_here_not_taken_from_the_payload(
+    installer, targets, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The "find it by name" case must not become a way to supply a host."""
+    targets(DeployTarget(name="rpi-kitchen", password=SECRET))
+    monkeypatch.setattr(installer, "_known_hosts", _fake_known_hosts(tmp_path))
+    looked_up: list[str] = []
+
+    def _resolve(name: str) -> str:
+        looked_up.append(name)
+        return "10.0.0.9"
+
+    monkeypatch.setattr(installer_module.socket, "gethostbyname", _resolve)
+
+    kwargs = await installer._ssh_kwargs(
+        {"host": "attacker.example.com", "node_name": "rpi-kitchen"}
+    )
+
+    assert looked_up == ["rpi-kitchen.local"]
+    assert kwargs["host"] == "10.0.0.9"
 
 
 async def test_ssh_refuses_a_target_with_no_credentials(installer, targets) -> None:

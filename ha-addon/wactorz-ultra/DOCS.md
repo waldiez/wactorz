@@ -40,7 +40,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `telegram_allowed_user_ids` | *(blank)* | **Required with the token** — comma-separated Telegram user IDs. Without it the bot only answers `/start` with your user ID, so you can fill this in and restart. |
 | `telegram_allowed_user_id` | `0` | Older single-ID form of the above; still honoured. `0` means unset. |
 | `social_rate_limit_per_min` | `12` | Max messages per minute per sender on the bots. `0` disables the limit. |
-| `deploy_targets` | *(empty)* | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects — see [Remote edge nodes](#remote-edge-nodes) below. |
+| `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects, and it needs a broker the node can reach anonymously — see [Remote edge nodes](#remote-edge-nodes) below. |
 | `otel_endpoint` | *(blank)* | OTLP HTTP collector URL (e.g. `http://192.168.1.10:4318`). Leave blank to disable OpenTelemetry. |
 | `otel_service_name` | `wactorz` | Service name reported to the OTLP collector. |
 | `influx_url` | *(blank)* | InfluxDB 2.x base URL (e.g. `http://homeassistant:8086`). Leave blank to disable. `wactorz[influx]` is installed automatically when set. |
@@ -80,6 +80,23 @@ Private keys go under `/config` or `/share` — both are mapped into the addon �
 ```
 /deploy rpi-kitchen
 ```
+
+### The broker has to be reachable from the node
+
+A remote node is not inside the addon — it runs on its own machine and connects
+back over the network. It therefore needs an MQTT broker it can both **reach**
+and **connect to**, and not every setup provides one:
+
+| `mqtt_host` setting | Remote nodes |
+| --- | --- |
+| `mosquitto_embedded: true` | **Not supported.** The broker runs inside the addon container and its port is deliberately not published to your network, so nothing outside the addon can reach it. |
+| `core-mosquitto` (official Mosquitto addon) | **Not yet supported.** The node can reach the broker, but that addon disables anonymous access and the node is not given credentials. |
+| An external broker on your network that accepts anonymous connections | **Supported.** Set `mqtt_host` to its address, and set each target's `broker` to the address the *node* should use to reach it. |
+
+Delivering broker credentials to a remote node is not implemented yet, so a
+broker requiring a username and password cannot serve one. If you only need
+agents on the machine running Home Assistant, leave `deploy_targets` empty —
+everything else works unchanged.
 
 > **Credentials never go through chat.** `/deploy` takes a node name and nothing else, and the installer ignores credentials supplied in a task payload. Anything typed into chat is written to the conversation history and the chat log, where it stays long after the deploy finished.
 

@@ -13,7 +13,8 @@ import logging
 from aiohttp import web
 from aiohttp.web import Response
 
-from . import chat, cost, events, lifecycle, runtime, ws
+from ..agents.lookup import find_main_actor
+from . import cost, events, lifecycle, runtime, ws
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ async def reset_handler(request: web.Request) -> Response:
             # retained spawn directives that would otherwise replay on reconnect.
             # Harmless when there are no nodes.
             node_names = set(runtime.state["nodes"].keys())
-            main_actor = chat.find_main()
+            main_actor = find_main_actor(runtime.registry)
             if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
                 for cfg in (main_actor._get_spawn_registry() or {}).values():
                     n = (cfg.get("node") or "").strip()

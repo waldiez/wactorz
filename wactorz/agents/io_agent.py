@@ -15,6 +15,7 @@ import time
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
+from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,7 @@ class IOAgent(Actor):
             if target_name != "main-actor":
                 await self._reply(f"Agent @{target_name} not found.")
                 return
-            target = self._registry.find_by_name("main")
+            target = find_main_actor(self._registry)
             if target is None:
                 await self._reply("No main-actor is running.")
                 return
@@ -241,7 +242,7 @@ class IOAgent(Actor):
         """Return the main actor instance, or None."""
         if self._registry is None:
             return None
-        return self._registry.find_by_name("main")
+        return find_main_actor(self._registry)
 
     async def _handle_slash(self, text: str) -> bool:
         """Slash-command dispatch. The single source of truth lives in main_actor.py

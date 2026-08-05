@@ -28,6 +28,7 @@ from typing import Any, ClassVar
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from .llm_agent import _accumulate_global_cost
+from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -1230,7 +1231,7 @@ class DynamicAgent(Actor):
         try:
             # ── 1. Persist to spawn registry (survives system restart) ─────
             if self._registry:
-                main = self._registry.find_by_name("main")
+                main = find_main_actor(self._registry)
                 if main is not None and hasattr(main, "_get_spawn_registry"):
                     reg = main._get_spawn_registry()
                     if self.name in reg:
@@ -1890,7 +1891,7 @@ class _AgentAPI:
 
         # ── Remote path: find agent on a known node ───────────────────────────
         remote_node = None
-        main = registry.find_by_name("main") if registry else None
+        main = find_main_actor(registry)
         if main and hasattr(main, "_known_nodes"):
             for node_name, nd in main._known_nodes.items():
                 if agent_name in nd.get("agents", []):
@@ -2005,7 +2006,7 @@ class _AgentAPI:
                 )
 
         # ── Remote agents from live node heartbeats ───────────────────────────
-        main = registry.find_by_name("main") if registry else None
+        main = find_main_actor(registry)
         if main and hasattr(main, "_known_nodes"):
             import time as _t
 
@@ -2043,7 +2044,7 @@ class _AgentAPI:
                 status = 'online' if nd['online'] else 'offline'
                 await agent.log(f"{nd['node']}: {status}, agents: {nd['agents']}")
         """
-        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
+        main = find_main_actor(self._actor._registry)
         if main and hasattr(main, "list_nodes"):
             return main.list_nodes()
         return []
@@ -2058,7 +2059,7 @@ class _AgentAPI:
             for t in temp_topics:
                 data = await agent.mqtt_get(t["topic"])
         """
-        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
+        main = find_main_actor(self._actor._registry)
         if main and hasattr(main, "list_topics"):
             return main.list_topics(keyword)
         return []
@@ -2073,7 +2074,7 @@ class _AgentAPI:
                 print(a["input_schema"])   # know exactly what to send
                 print(a["output_schema"])  # know exactly what to expect back
         """
-        main = self._actor._registry.find_by_name("main") if self._actor._registry else None
+        main = find_main_actor(self._actor._registry)
         if main and hasattr(main, "list_capabilities"):
             return main.list_capabilities(keyword)
         return []

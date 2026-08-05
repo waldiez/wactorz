@@ -10,7 +10,8 @@ import json
 import logging
 import time
 
-from . import chat, runtime
+from ..agents.lookup import find_main_actor
+from . import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     Must run BEFORE reset_spawns()/reset_all() wipe the kv on disk — it reads the
     registry to learn which nodes are affected.
     """
-    main_actor = chat.find_main()
+    main_actor = find_main_actor(runtime.registry)
     reg = {}
     if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
         reg = main_actor._get_spawn_registry() or {}
@@ -177,7 +178,7 @@ async def delete_agent(agent_id: str) -> str:
     if runtime.registry is not None:
         # In-process: delegate to main, which owns the spawn registry and
         # knows exactly how to clean up both local and remote agents.
-        main_actor = chat.find_main()
+        main_actor = find_main_actor(runtime.registry)
         if main_actor is not None and hasattr(main_actor, "delete_spawned_agent"):
             try:
                 await main_actor.delete_spawned_agent(name)

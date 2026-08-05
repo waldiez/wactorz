@@ -11,12 +11,12 @@ import logging
 import socket
 import time
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
 
-from ..agents.main_actor import MainActor
+from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from . import runtime
@@ -26,8 +26,6 @@ logger = logging.getLogger(__name__)
 # In-flight chat-generation tasks (WebSocket + REST paths) so POST /chat/stop can
 # cancel a turn mid-stream.
 inflight_chat_tasks: set = set()
-
-MAIN_ACTOR_NAME = "main"
 
 
 def track_chat_task(task):
@@ -48,14 +46,6 @@ async def discard_reply(_text: str) -> None:
     function taking one argument — a bare lambda raises TypeError on the first
     chunk and silently abandons the stream after the tokens are paid for.
     """
-
-
-def find_main() -> MainActor | None:
-    """Return the main actor from the registry, or ``None`` in legacy MQTT mode."""
-    actor = runtime.registry.find_by_name(MAIN_ACTOR_NAME) if runtime.registry else None
-    if actor:
-        return cast(MainActor, actor)
-    return None
 
 
 def parse_mention(content: str) -> tuple[str, str]:
@@ -141,7 +131,7 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
     """
     if agent_name in beta_warned_agents:
         return None
-    main = find_main()
+    main = find_main_actor(runtime.registry)
     manifest = (getattr(main, "_agent_manifests", {}) or {}).get(agent_name) if main else None
     if not manifest or not manifest.get("experimental"):
         return None
@@ -208,7 +198,7 @@ async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, re
         )
         return
 
-    main_actor = find_main()
+    main_actor = find_main_actor(runtime.registry)
     if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
         await reply_fn("[error] Installer agent not available.")
         return
@@ -262,7 +252,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
     cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
-        main_actor = find_main()
+        main_actor = find_main_actor(runtime.registry)
         if main_actor and hasattr(main_actor, "persist"):
             main_actor.persist("_plan_cache", {})
         await reply_fn("[System: Plan cache cleared.]")
@@ -283,7 +273,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/nodes":
-        main_actor = find_main()
+        main_actor = find_main_actor(runtime.registry)
         remote_nodes = (
             main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
         )
@@ -302,7 +292,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 3:
             await reply_fn("[usage] /migrate <agent-name> <target-node>")
             return True
-        main_actor = find_main()
+        main_actor = find_main_actor(runtime.registry)
         if main_actor is None or not hasattr(main_actor, "migrate_agent"):
             await reply_fn("[error] migrate_agent not available.")
             return True
@@ -386,7 +376,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
         if not handled:
-            main_actor = find_main()
+            main_actor = find_main_actor(runtime.registry)
             # Forward unrecognized slash commands to main actor.
             # main_actor.process_user_input handles the full command set
             # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
@@ -412,7 +402,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     target = runtime.registry.find_by_name(target_name) if runtime.registry else None
 
     if target is None:
-        main_actor = find_main()
+        main_actor = find_main_actor(runtime.registry)
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.

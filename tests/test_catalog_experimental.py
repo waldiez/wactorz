@@ -155,7 +155,10 @@ def test_experimental_first_use_banner_warns_once(monkeypatch):
                 "weather-agent": {"experimental": False},
             }
 
-    monkeypatch.setattr(chat, "find_main", lambda: _FakeMain())
+    # Patch the lookup rather than the registry: this test is about the banner,
+    # not about how main is resolved, so the stand-in never has to be a real
+    # MainActor (which `find_main_actor` would otherwise require).
+    monkeypatch.setattr(chat, "find_main_actor", lambda _registry: _FakeMain())
     chat.beta_warned_agents.clear()
 
     first = chat.experimental_first_use_banner("reachy-mini")

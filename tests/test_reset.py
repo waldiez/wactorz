@@ -24,6 +24,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from wactorz.agents.main_actor import MainActor
 from wactorz.web import api_reset, cost, runtime
 
 
@@ -576,11 +577,13 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
 class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
     async def test_all_scope_clears_desired_state_for_all_nodes(self):
 
-        main = MagicMock()
+        # A real MainActor: the reset path resolves main with `find_main_actor`,
+        # which checks isinstance, so a mock resolves to None and n1 — which is
+        # only reachable through the spawn registry — never gets a desired_state
+        # publish. `recall` already answers None for an unset key.
+        main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
-        main.name = "main"
-        main._get_spawn_registry.return_value = {"agentX": {"node": "n1"}}
-        main.recall.return_value = None  # no in-memory registry attr to clear
+        main._get_spawn_registry = lambda: {"agentX": {"node": "n1"}}  # type: ignore[method-assign]
 
         fake_registry = MagicMock()
         fake_registry.all_actors.return_value = [main]
@@ -626,12 +629,13 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         # monitor / installer / catalog). The registry's protected flag is
         # authoritative and must shield them — no retained purge, no tombstone.
 
-        main = MagicMock()
+        # A real MainActor, not a mock: the reset path resolves main with
+        # `find_main_actor`, which checks isinstance, so a mock resolves to None
+        # and the node-purge sweep under test never runs. An empty one already
+        # answers `_get_spawn_registry()` with {} and `recall()` with None.
+        main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
-        main.name = "main"
         main.actor_id = "main-id"
-        main.recall.return_value = None
-        main._get_spawn_registry.return_value = {}
         io = MagicMock()
         io.protected = False
         io.name = "io-agent"

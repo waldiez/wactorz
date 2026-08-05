@@ -75,6 +75,7 @@ except ImportError:  # Python < 3.9 — should not happen in this codebase
     ZoneInfo = None  # type: ignore[assignment]
 
 from ..core.actor import Actor, Message, MessageType
+from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -504,7 +505,7 @@ class ScheduledAgent(Actor):
                 pass
         # Best-effort: ask main to drop us from the spawn registry too
         if self._registry:
-            main = self._registry.find_by_name("main")
+            main = find_main_actor(self._registry)
             if main and hasattr(main, "_remove_from_spawn_registry"):
                 try:
                     main._remove_from_spawn_registry(self.name)

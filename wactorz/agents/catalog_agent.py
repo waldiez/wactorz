@@ -25,10 +25,11 @@ import asyncio
 import logging
 import pathlib
 import time
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
+from .lookup import find_main_actor
 
 if TYPE_CHECKING:
     from .main_actor import MainActor
@@ -533,9 +534,7 @@ class CatalogAgent(Actor):
         # Inject recipe manifests directly into main's _agent_manifests dict
         main: MainActor | None = None
         for _ in range(20):
-            main = cast(
-                "MainActor | None", self._registry.find_by_name("main") if self._registry else None
-            )
+            main = find_main_actor(self._registry)
             if main and hasattr(main, "_agent_manifests"):
                 break
             await asyncio.sleep(0.5)
@@ -747,7 +746,7 @@ class CatalogAgent(Actor):
         )
 
         try:
-            main = cast("MainActor | None", self._registry.find_by_name("main"))
+            main = find_main_actor(self._registry)
             llm_provider = getattr(main, "llm", None) if main else None
             persistence_dir = (
                 str(getattr(main, "_persistence_dir", pathlib.Path("./state/main")).parent)
@@ -823,10 +822,7 @@ class CatalogAgent(Actor):
 
                         task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
                         future = asyncio.get_running_loop().create_future()
-                        main = cast(
-                            "MainActor | None",
-                            self._registry.find_by_name("main") if self._registry else None,
-                        )
+                        main = find_main_actor(self._registry)
                         if main:
                             main._result_futures[task_id] = future
                         # Send with reply_to=main.actor_id so the installer's RESULT goes

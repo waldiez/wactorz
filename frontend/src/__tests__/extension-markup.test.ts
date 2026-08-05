@@ -4,13 +4,11 @@
  */
 /**
  * Extensions supply two strings that reach `innerHTML`: an icon's SVG markup
- * (`registerIcon`) and a nav button's label (`extraViews`). Both were
- * interpolated raw, so an extension could put script into the header, the nav
- * and every card that draws its icon.
+ * (`registerIcon`) and a nav button's label (`extraViews`). Either would
+ * otherwise run script in the header, the nav, and every card drawing an icon.
  *
- * The icon markup cannot simply be escaped — it *is* markup, and the feature is
- * to render it — so it is reduced to allow-listed shapes instead. The label can
- * be escaped, and is.
+ * The label is escaped. The icon cannot be — rendering markup is the whole
+ * feature — so it is reduced to allow-listed shapes instead.
  */
 import { describe, it, expect } from "vitest";
 

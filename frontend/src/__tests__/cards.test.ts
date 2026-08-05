@@ -97,7 +97,7 @@ describe("appendActionBtns", () => {
     it("stopped → Start and Delete (no Stop)", () => {
         const c = document.createElement("div");
         appendActionBtns(c, agent("worker", { state: "stopped" }));
-        // Delete used to be the only thing left, which made Stop irreversible.
+        // Start has to be offered here, or Stop is a one-way door.
         expect(actions(c)).toEqual(["start", "delete"]);
     });
 

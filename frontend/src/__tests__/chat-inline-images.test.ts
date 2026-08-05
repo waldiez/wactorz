@@ -6,10 +6,9 @@
  * An inline image must open the lightbox however it arrived.
  *
  * The markdown renderer emits inert images by design, so the click behaviour is
- * attached by the dashboard layer. There are two render paths — a message
- * replayed from history and a stream finishing live — and the streaming one
- * skipped the attachment, so a camera snapshot was dead on arrival and only
- * became clickable after a page reload. These drive both paths.
+ * attached by the dashboard layer. Two render paths reach it — a message
+ * replayed from history, and a stream finishing live — and both must wire the
+ * image, or a snapshot is clickable only after a reload. These drive both.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 

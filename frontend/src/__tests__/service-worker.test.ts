@@ -3,16 +3,16 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * The service worker ships to users and nothing checked it: `public` was
- * ignored by eslint, every config block matched only .ts/.tsx, and there were
- * no tests. Two defects lived there as a result — it decided what to intercept
- * from `url.pathname` alone, so any third-party GET whose path did not match
- * `NEVER_CACHE` was intercepted and its response stored in our cache; and
- * nothing ever evicted, so the cache grew until the browser dropped the whole
- * origin, losing the offline shell the worker exists to provide.
+ * What the service worker intercepts, and what it keeps.
  *
- * `sw.js` is a plain script, not a module, so it is executed here against a
- * fake ServiceWorker scope and driven through the captured handlers.
+ * Two invariants: it must touch only its own origin, since a stored
+ * third-party response would afterwards be served back from this one; and the
+ * cache must stay bounded, or it grows until the browser evicts the origin
+ * wholesale, taking the offline shell with it.
+ *
+ * `sw.js` is a plain script rather than a module, so it is executed here
+ * against a fake ServiceWorker scope and driven through the handlers it
+ * registers.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 
@@ -101,8 +101,8 @@ beforeEach(() => {
 
 describe("what the worker refuses to intercept", () => {
     it("leaves another origin alone", () => {
-        // The bug: only `pathname` was inspected, so this was intercepted and
-        // the third party's response was written into our cache.
+        // `pathname` says nothing about the host, so the decision has to be
+        // made on origin.
         expect(sw.fetchEvent("https://evil.test/assets/app.js").respondWithCalled).toBe(false);
     });
 

@@ -137,6 +137,15 @@ The installer agent SSHes in, creates `~/wactorz/`, uploads `remote_runner.py`, 
 
 Leaving `DEPLOY_<NODE>_HOST` unset makes the deploy resolve `<node>.local` over mDNS instead. That is a single name lookup; earlier versions fell back to scanning the local `/24` for open SSH ports, which is gone.
 
+### The broker has to be reachable from the node
+
+A remote node connects back to the MQTT broker over the network, so `broker` in
+its target block is the address the **node** should dial — your main machine's
+LAN IP, not `localhost`. The node also connects anonymously: broker credentials
+are not delivered to it yet, so a broker with `allow_anonymous false` cannot
+serve a remote node. That includes the Home Assistant Mosquitto add-on, and the
+Wactorz add-on's own embedded broker, whose port is deliberately not published.
+
 ### Host key verification
 
 SSH host keys are checked on every connection. A machine that has not been connected to before has its key recorded on first contact — the same trust-on-first-use that interactive `ssh` does — and any later change to that key fails the connection instead of being accepted.

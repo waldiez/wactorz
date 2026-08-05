@@ -506,7 +506,7 @@ class ScheduledAgent(Actor):
         # Best-effort: ask main to drop us from the spawn registry too
         if self._registry:
             main = find_main_actor(self._registry)
-            if main and hasattr(main, "_remove_from_spawn_registry"):
+            if main:
                 try:
                     main._remove_from_spawn_registry(self.name)
                 except Exception:

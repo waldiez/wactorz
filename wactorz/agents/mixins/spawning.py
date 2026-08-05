@@ -550,7 +550,7 @@ class SpawnMixin(_Host):
                 return None
         if self._registry is not None:
             main = find_main_actor(self._registry)
-            if main is not None and hasattr(main, "get_user_facts"):
+            if main is not None:
                 try:
                     return main.get_user_facts().get("pref_timezone")  # pyright: ignore[reportAttributeAccessIssue]
                 except Exception:
@@ -572,7 +572,7 @@ class SpawnMixin(_Host):
         if self._registry is None:
             return
         main = find_main_actor(self._registry)
-        if main is not None and hasattr(main, "_save_to_spawn_registry"):
+        if main is not None:
             main._save_to_spawn_registry(config)  # pyright: ignore[reportAttributeAccessIssue]
             logger.info(
                 f"[{self.name}] Registered '{config.get('name')}' with main's spawn registry"

@@ -132,7 +132,7 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
     if agent_name in beta_warned_agents:
         return None
     main = find_main_actor(runtime.registry)
-    manifest = (getattr(main, "_agent_manifests", {}) or {}).get(agent_name) if main else None
+    manifest = main._agent_manifests.get(agent_name) if main else None
     if not manifest or not manifest.get("experimental"):
         return None
     beta_warned_agents.add(agent_name)
@@ -199,7 +199,7 @@ async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, re
         return
 
     main_actor = find_main_actor(runtime.registry)
-    if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
+    if main_actor is None:
         await reply_fn("[error] Installer agent not available.")
         return
 
@@ -253,7 +253,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
 
     if cmd == "/clear-plans":
         main_actor = find_main_actor(runtime.registry)
-        if main_actor and hasattr(main_actor, "persist"):
+        if main_actor:
             main_actor.persist("_plan_cache", {})
         await reply_fn("[System: Plan cache cleared.]")
         return True
@@ -274,9 +274,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
 
     if cmd == "/nodes":
         main_actor = find_main_actor(runtime.registry)
-        remote_nodes = (
-            main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
-        )
+        remote_nodes = main_actor.list_nodes() if (main_actor) else []
         local = [a.name for a in runtime.registry.all_actors()] if runtime.registry else []
         lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
         for nd in sorted(remote_nodes, key=lambda x: x["node"]):
@@ -293,7 +291,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
             await reply_fn("[usage] /migrate <agent-name> <target-node>")
             return True
         main_actor = find_main_actor(runtime.registry)
-        if main_actor is None or not hasattr(main_actor, "migrate_agent"):
+        if main_actor is None:
             await reply_fn("[error] migrate_agent not available.")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
@@ -380,17 +378,12 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             # Forward unrecognized slash commands to main actor.
             # main_actor.process_user_input handles the full command set
             # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
-            if main_actor and hasattr(main_actor, "process_user_input_stream"):
+            if main_actor:
                 _chunk_fn = stream_fn or reply_fn
                 async for chunk in main_actor.process_user_input_stream(content):
                     if isinstance(chunk, dict):
                         continue
                     await _chunk_fn(str(chunk))
-                if stream_end_fn:
-                    await stream_end_fn()
-            elif main_actor and hasattr(main_actor, "process_user_input"):
-                result = await main_actor.process_user_input(content)
-                await reply_fn(str(result))
                 if stream_end_fn:
                     await stream_end_fn()
             else:
@@ -406,7 +399,7 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
-        if main_actor and hasattr(main_actor, "_known_nodes"):
+        if main_actor:
             remote_node = None
             for node_name, nd in main_actor._known_nodes.items():
                 if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
@@ -425,8 +418,8 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                 }
                 try:
                     async with mqtt_client(
-                        getattr(main_actor, "_mqtt_broker", "localhost"),
-                        getattr(main_actor, "_mqtt_port", 1883),
+                        main_actor._mqtt_broker,
+                        main_actor._mqtt_port,
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)

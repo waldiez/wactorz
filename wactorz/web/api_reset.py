@@ -122,7 +122,7 @@ async def reset_handler(request: web.Request) -> Response:
             # Harmless when there are no nodes.
             node_names = set(runtime.state["nodes"].keys())
             main_actor = find_main_actor(runtime.registry)
-            if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
+            if main_actor is not None:
                 for cfg in (main_actor._get_spawn_registry() or {}).values():
                     n = (cfg.get("node") or "").strip()
                     if n:

@@ -1232,7 +1232,7 @@ class DynamicAgent(Actor):
             # ── 1. Persist to spawn registry (survives system restart) ─────
             if self._registry:
                 main = find_main_actor(self._registry)
-                if main is not None and hasattr(main, "_get_spawn_registry"):
+                if main is not None:
                     reg = main._get_spawn_registry()
                     if self.name in reg:
                         entry = dict(reg[self.name])
@@ -1892,7 +1892,7 @@ class _AgentAPI:
         # ── Remote path: find agent on a known node ───────────────────────────
         remote_node = None
         main = find_main_actor(registry)
-        if main and hasattr(main, "_known_nodes"):
+        if main:
             for node_name, nd in main._known_nodes.items():
                 if agent_name in nd.get("agents", []):
                     remote_node = node_name
@@ -2007,7 +2007,7 @@ class _AgentAPI:
 
         # ── Remote agents from live node heartbeats ───────────────────────────
         main = find_main_actor(registry)
-        if main and hasattr(main, "_known_nodes"):
+        if main:
             import time as _t
 
             for node_name, nd in main._known_nodes.items():
@@ -2017,11 +2017,7 @@ class _AgentAPI:
                     if aname in seen:
                         continue  # already in local registry (shouldn't happen but guard it)
                     seen.add(aname)
-                    # Try to get description from _agent_manifests
-                    desc = ""
-                    if hasattr(main, "_agent_manifests"):
-                        m = main._agent_manifests.get(aname, {})
-                        desc = m.get("description", "")
+                    desc = main._agent_manifests.get(aname, {}).get("description", "")
                     result.append(
                         {
                             "name": aname,
@@ -2045,7 +2041,7 @@ class _AgentAPI:
                 await agent.log(f"{nd['node']}: {status}, agents: {nd['agents']}")
         """
         main = find_main_actor(self._actor._registry)
-        if main and hasattr(main, "list_nodes"):
+        if main:
             return main.list_nodes()
         return []
 
@@ -2060,7 +2056,7 @@ class _AgentAPI:
                 data = await agent.mqtt_get(t["topic"])
         """
         main = find_main_actor(self._actor._registry)
-        if main and hasattr(main, "list_topics"):
+        if main:
             return main.list_topics(keyword)
         return []
 
@@ -2075,7 +2071,7 @@ class _AgentAPI:
                 print(a["output_schema"])  # know exactly what to expect back
         """
         main = find_main_actor(self._actor._registry)
-        if main and hasattr(main, "list_capabilities"):
+        if main:
             return main.list_capabilities(keyword)
         return []
 

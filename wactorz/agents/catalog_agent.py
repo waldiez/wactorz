@@ -535,7 +535,7 @@ class CatalogAgent(Actor):
         main: MainActor | None = None
         for _ in range(20):
             main = find_main_actor(self._registry)
-            if main and hasattr(main, "_agent_manifests"):
+            if main:
                 break
             await asyncio.sleep(0.5)
 
@@ -556,7 +556,7 @@ class CatalogAgent(Actor):
                 "timestamp": time.time(),
             }
 
-            if main and hasattr(main, "_agent_manifests"):
+            if main:
                 main._agent_manifests[name] = manifest
                 logger.info(f"[{self.name}] Injected manifest for '{name}' into main")
             else:
@@ -747,12 +747,8 @@ class CatalogAgent(Actor):
 
         try:
             main = find_main_actor(self._registry)
-            llm_provider = getattr(main, "llm", None) if main else None
-            persistence_dir = (
-                str(getattr(main, "_persistence_dir", pathlib.Path("./state/main")).parent)
-                if main
-                else resolve_state_dir()
-            )
+            llm_provider = main.llm if main else None
+            persistence_dir = str(main._persistence_dir.parent) if main else resolve_state_dir()
 
             if recipe.get("type") == "native":
                 factory = recipe.get("factory")
@@ -763,7 +759,7 @@ class CatalogAgent(Actor):
                     native_kwargs["llm_provider"] = llm_provider
                 actor = await self.spawn(factory, **native_kwargs)
                 if actor:
-                    if main and hasattr(main, "_save_to_spawn_registry"):
+                    if main:
                         # Persist a JSON-safe descriptor so the agent is restored
                         # after a process restart. The factory (a class object)
                         # is dropped — it is re-resolved by name via
@@ -868,7 +864,7 @@ class CatalogAgent(Actor):
             )
 
             if actor:
-                if main and hasattr(main, "_save_to_spawn_registry"):
+                if main:
                     # Mark as trusted so it bypasses safety validator on restore
                     save_config = dict(recipe)
                     save_config["trusted"] = True

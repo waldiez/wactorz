@@ -115,7 +115,7 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     """
     main_actor = find_main_actor(runtime.registry)
     reg = {}
-    if main_actor is not None and hasattr(main_actor, "_get_spawn_registry"):
+    if main_actor is not None:
         reg = main_actor._get_spawn_registry() or {}
 
     # Affected nodes: live heartbeats ∪ registry (covers offline nodes).
@@ -128,15 +128,11 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
             node_names.add(n)
 
     # Clear the live registry through the actor's own persistence.
-    if (
-        main_actor is not None
-        and hasattr(main_actor, "recall")
-        and main_actor.recall("_spawned_agents", None) is not None
-    ):
+    if main_actor is not None and main_actor.recall("_spawned_agents", None) is not None:
         kept = {k: v for k, v in reg.items() if k != agent} if agent else {}
         main_actor.persist("_spawned_agents", kept)
 
-    if agent and main_actor is not None and hasattr(main_actor, "_update_node_desired_state"):
+    if agent and main_actor is not None:
         # Republish from the reduced registry so siblings on the node survive.
         await asyncio.gather(
             *[main_actor._update_node_desired_state(n) for n in node_names],
@@ -179,7 +175,7 @@ async def delete_agent(agent_id: str) -> str:
         # In-process: delegate to main, which owns the spawn registry and
         # knows exactly how to clean up both local and remote agents.
         main_actor = find_main_actor(runtime.registry)
-        if main_actor is not None and hasattr(main_actor, "delete_spawned_agent"):
+        if main_actor is not None:
             try:
                 await main_actor.delete_spawned_agent(name)
                 routed = f"via main.delete_spawned_agent({name!r})"

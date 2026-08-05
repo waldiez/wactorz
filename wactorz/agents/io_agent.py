@@ -270,23 +270,12 @@ class IOAgent(Actor):
             await self._reply("[error] main-actor not available.")
             return
 
-        if hasattr(main, "process_user_input_stream"):
-            async for chunk in main.process_user_input_stream(slash_text):
-                if isinstance(chunk, dict):
-                    continue  # {"done": True, ...} system marker — skip
-                s = str(chunk)
-                if s:
-                    await self._reply(s)
-            return
-
-        # Fallback: non-streaming path (loses live progress for /deploy)
-        if hasattr(main, "process_user_input"):
-            reply = await main.process_user_input(slash_text)
-            if reply:
-                await self._reply(str(reply))
-            return
-
-        await self._reply("[error] main-actor has no input handler.")
+        async for chunk in main.process_user_input_stream(slash_text):
+            if isinstance(chunk, dict):
+                continue  # {"done": True, ...} system marker — skip
+            s = str(chunk)
+            if s:
+                await self._reply(s)
 
     # ── handle_message ─────────────────────────────────────────────────────
 

@@ -84,8 +84,8 @@ describe("IOManager.send", () => {
         const io = new IOManager(makeRouter());
         io.setWSClient(makeWS(false) as unknown as WSClient);
         await io.send("hi", null);
-        // it used to be echoed before the attempt and left sitting there,
-        // indistinguishable from a message that actually went out
+        // An echo before the send attempt would leave a failed message in the
+        // feed, indistinguishable from one that actually went out.
         expect(lastEvent("af-feed-push")).toBeUndefined();
     });
 

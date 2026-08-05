@@ -34,8 +34,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, MessageType
+from ..lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +56,17 @@ class SpawnPlaceholder:
         return f"<SpawnPlaceholder {self.name!r}>"
 
 
-class SpawnMixin:
+if TYPE_CHECKING:
+    from .host import SpawnHost
+
+    # Typing-only base: states what the host must provide, and is
+    # gone at runtime so the real MRO is exactly what it was.
+    _Host = SpawnHost
+else:
+    _Host = object
+
+
+class SpawnMixin(_Host):
     """Shared local-spawn behaviour. Mix into any ``Actor`` subclass."""
 
     # ── Public entry point ─────────────────────────────────────────────────
@@ -65,7 +77,7 @@ class SpawnMixin:
         *,
         register: bool = True,
         blocking_install: bool = False,
-    ) -> Actor | None:
+    ) -> Actor | SpawnPlaceholder | None:
         """Spawn one agent locally from a spawn-config dict.
 
         Parameters
@@ -88,8 +100,22 @@ class SpawnMixin:
         # ── Idempotency / replace ──────────────────────────────────────────
         existing = self._find_existing(name)
         if existing is not None:
+            if getattr(existing, "protected", False):
+                # `replace: true` would stop the system actor holding this name,
+                # and the orchestrator is the one most likely to be asked for by
+                # name. A spawn config is frequently LLM-authored, so this is
+                # reachable without anyone intending it.
+                logger.warning(
+                    "[%s] Refusing to spawn '%s' — a protected system actor already holds "
+                    "that name.",
+                    self.name,
+                    name,
+                )
+                return None
             if not config.get("replace", False):
-                logger.info(f"[{self.name}] '{name}' already exists (use replace=true to update).")
+                logger.info(
+                    "[%s] '%s' already exists (use replace=true to update).", self.name, name
+                )
                 return existing
             await self._stop_for_replace(existing, name)
 
@@ -246,7 +272,7 @@ class SpawnMixin:
 
     async def _spawn_dynamic_agent(
         self, config: dict, name: str, code: str, *, blocking_install: bool = False
-    ):
+    ) -> Actor | SpawnPlaceholder | None:
         """Spawn a DynamicAgent — sensors, pipelines, tools. If the config
         declares packages that aren't importable yet, either install in the
         background (default) and return a placeholder, or block until installed
@@ -533,14 +559,14 @@ class SpawnMixin:
         own_facts = getattr(self, "get_user_facts", None)
         if callable(own_facts):
             try:
-                return own_facts().get("pref_timezone")
+                return own_facts().get("pref_timezone")  # pyright: ignore[reportAttributeAccessIssue]
             except Exception:
                 return None
         if self._registry is not None:
-            main = self._registry.find_by_name("main")
-            if main is not None and hasattr(main, "get_user_facts"):
+            main = find_main_actor(self._registry)
+            if main is not None:
                 try:
-                    return main.get_user_facts().get("pref_timezone")
+                    return main.get_user_facts().get("pref_timezone")  # pyright: ignore[reportAttributeAccessIssue]
                 except Exception:
                     return None
         return None
@@ -559,9 +585,9 @@ class SpawnMixin:
             return
         if self._registry is None:
             return
-        main = self._registry.find_by_name("main")
-        if main is not None and hasattr(main, "_save_to_spawn_registry"):
-            main._save_to_spawn_registry(config)
+        main = find_main_actor(self._registry)
+        if main is not None:
+            main._save_to_spawn_registry(config)  # pyright: ignore[reportAttributeAccessIssue]
             logger.info(
                 f"[{self.name}] Registered '{config.get('name')}' with main's spawn registry"
             )

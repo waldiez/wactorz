@@ -90,6 +90,34 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(agent.total_input_tokens, 0)
         self.assertEqual(agent.total_cost_usd, 0.0)
 
+    async def test_a_second_on_start_does_not_double_the_totals(self):
+        """The start command restarts the same instance; on_start runs again."""
+        saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0042}
+        agent = self._make_agent(saved)
+        await agent.on_start()
+
+        await agent.on_start()  # as a stop/start cycle on the same object does
+
+        # Adding the persisted totals to a live instance charged the agent's
+        # lifetime spend twice, and again on every later restart — reaching both
+        # the dashboard headline and the durable ledger.
+        self.assertEqual(agent.total_input_tokens, 100)
+        self.assertEqual(agent.total_output_tokens, 50)
+        self.assertAlmostEqual(agent.total_cost_usd, 0.0042, places=6)
+
+    async def test_tokens_do_not_double_when_the_model_is_free(self):
+        """A local model leaves cost at zero while tokens still accumulate."""
+        saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0}
+        agent = self._make_agent(saved)
+        await agent.on_start()
+
+        await agent.on_start()
+
+        # Guarding on cost alone would miss this: cost stays 0.0, so the guard
+        # opens every time and the tokens double.
+        self.assertEqual(agent.total_input_tokens, 100)
+        self.assertEqual(agent.total_output_tokens, 50)
+
     async def test_cost_accumulates_on_top_of_restored_baseline(self):
         """After restoring from persistence, new exchanges add to the running total."""
         saved = {"input_tokens": 200, "output_tokens": 80, "cost_usd": 0.01}

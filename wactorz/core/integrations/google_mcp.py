@@ -180,6 +180,9 @@ class _GoogleTokenStorage(TokenStorage):
 
     async def get_tokens(self) -> OAuthToken | None:
         raw = self._read().get("tokens")
+        if OAuthToken is None:
+            # mcp is optional; without it there is nothing to validate against.
+            return None
         return OAuthToken.model_validate(raw) if raw else None
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
@@ -204,6 +207,8 @@ class _GoogleTokenStorage(TokenStorage):
                 redirect_uris=[self.config.redirect_uri()],
             )
         raw = self._read().get("client_info")
+        if OAuthClientInformationFull is None:
+            return None
         return OAuthClientInformationFull.model_validate(raw) if raw else None
 
     async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:

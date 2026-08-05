@@ -94,7 +94,7 @@ const defaultConfig = defineConfig({
 
 export default [
     {
-        ignores: ["node_modules", "public", "dist", "coverage", "**/assets/**"],
+        ignores: ["node_modules", "dist", "coverage", "**/assets/**"],
     },
     ...defaultConfig.map(config => ({
         ...config,
@@ -122,5 +122,33 @@ export default [
         // them so type-aware linting covers src/ only.
         files: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
         ...tseslint.configs.disableTypeChecked,
+    },
+    {
+        // The service worker ships to users but was linted by nothing: `public`
+        // was ignored above, and every block below matches only .ts/.tsx — so
+        // lifting the ignore alone still left it unchecked. It is plain script
+        // (no bundler, no imports), and its globals come from the ServiceWorker
+        // scope rather than the DOM, so it needs its own block.
+        files: ["public/**/*.js"],
+        languageOptions: {
+            ecmaVersion: "latest",
+            sourceType: "script",
+            globals: {
+                self: "readonly",
+                caches: "readonly",
+                clients: "readonly",
+                fetch: "readonly",
+                console: "readonly",
+                Response: "readonly",
+                Request: "readonly",
+                URL: "readonly",
+            },
+        },
+        plugins: eslintPluginPrettierRecommended.plugins,
+        rules: {
+            ...eslintPluginPrettierRecommended.rules,
+            "no-undef": "error",
+            "no-unused-vars": "error",
+        },
     },
 ];

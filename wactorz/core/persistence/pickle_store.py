@@ -5,6 +5,7 @@ import pickle
 from pathlib import Path
 from typing import Any
 
+from ..atomic_io import write_pickle
 from ..paths import resolve_state_dir
 
 logger = logging.getLogger(__name__)
@@ -41,19 +42,21 @@ class PickleStore:
         p.mkdir(parents=True, exist_ok=True)
         return p / "state.pkl"
 
-    def save(self, agent_name: str, state: dict[str, Any]) -> None:
-        """Write an agent's state, or log and carry on if it cannot be written.
+    def save(self, agent_name: str, state: dict[str, Any]) -> bool:
+        """Write an agent's state, replacing any previous one. True if it landed.
 
-        **A failed save is not reported to the caller** — an unpicklable object
-        in the state dict, or an unwritable directory, is logged at debug and
-        the agent keeps running with state that will not survive a restart.
+        The agent keeps running either way — an unpicklable object in the state
+        dict should not take it down — but a caller that cares whether its state
+        will survive a restart can now find out, and a lost save is reported at
+        warning rather than left for someone reading debug logs.
         """
         path = self._path(agent_name)
         try:
-            with open(path, "wb") as f:
-                pickle.dump(state, f)
+            write_pickle(path, state)
         except Exception as e:
-            logger.debug(f"[Persistence] Pickle save failed for {agent_name}: {e}")
+            logger.warning("[Persistence] Pickle save failed for %s: %s", agent_name, e)
+            return False
+        return True
 
     def load(self, agent_name: str) -> dict[str, Any]:
         """An agent's stored state, or an empty dict if there is none to read.
@@ -68,7 +71,7 @@ class PickleStore:
                 with open(path, "rb") as f:
                     return pickle.load(f)
             except Exception as e:
-                logger.warning(f"[Persistence] Pickle load failed for {agent_name}: {e}")
+                logger.warning("[Persistence] Pickle load failed for %s: %s", agent_name, e)
         return {}
 
     def delete(self, agent_name: str) -> None:
@@ -83,7 +86,7 @@ class PickleStore:
             try:
                 path.unlink()
             except Exception as e:
-                logger.warning(f"[Persistence] Pickle unlink failed for {agent_name}: {e}")
+                logger.warning("[Persistence] Pickle unlink failed for %s: %s", agent_name, e)
                 return
         # Try to drop the parent directory too. rmdir only succeeds if empty,
         # which is what we want — never remove a folder a user populated.
@@ -92,4 +95,4 @@ class PickleStore:
             if parent.exists() and not any(parent.iterdir()):
                 parent.rmdir()
         except Exception as e:
-            logger.debug(f"[Persistence] Pickle rmdir skipped for {parent}: {e}")
+            logger.debug("[Persistence] Pickle rmdir skipped for %s: %s", parent, e)

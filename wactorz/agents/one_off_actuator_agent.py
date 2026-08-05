@@ -263,13 +263,14 @@ def _entity_haystacks(devices: Any) -> dict[str, str]:
         if isinstance(node, dict):
             entity_id = str(node.get("entity_id") or "")
             if entity_id:
-                attrs = node.get("attributes") if isinstance(node.get("attributes"), dict) else {}
+                attrs = node.get("attributes")
+                if not isinstance(attrs, dict):
+                    attrs = {}
                 state = node.get("state")
-                state_attrs = (
-                    state.get("attributes")
-                    if isinstance(state, dict) and isinstance(state.get("attributes"), dict)
-                    else {}
-                )
+                # Bound once: looked up twice, the check and the value were
+                # two separate calls, so nothing tied them together.
+                nested = state.get("attributes") if isinstance(state, dict) else None
+                state_attrs = nested if isinstance(nested, dict) else {}
                 parts = [
                     entity_id.split(".", 1)[-1],
                     node.get("name"),
@@ -451,8 +452,13 @@ class OneOffActuatorAgent(Actor):
             "user_request": self.request,
             "devices": devices,
         }
+        llm = self.llm
+        if llm is None:
+            # _execute_request checks before calling, but that guard does not
+            # carry into here; no provider means no actions to take.
+            return []
         raw, usage = await asyncio.wait_for(
-            self.llm.complete(
+            llm.complete(
                 messages=[{"role": "user", "content": json.dumps(prompt_input)}],
                 system=_RESOLVER_PROMPT,
                 max_tokens=1200,

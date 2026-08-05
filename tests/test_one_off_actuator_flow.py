@@ -1,5 +1,4 @@
 import asyncio
-import json
 import tempfile
 import types
 import unittest
@@ -322,21 +321,23 @@ class OneOffActuatorAgentTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(actions[0].entity_id, "light.main_light")
             llm.complete.assert_not_awaited()
 
-    def test_empty_or_invalid_resolver_output_is_a_safe_no_match(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            agent = OneOffActuatorAgent(
-                request="turn on the mystery light",
-                llm_provider=_FakeLLM(""),
-                task_id="actuate_test",
-                reply_to_id="main-actor",
-                persistence_dir=tmpdir,
-            )
-            self.assertEqual(agent._parse_actions_json(""), [])
-            # Prose-wrapped output is salvaged, but output with no array in it at
-            # all raises so the turn is reported as failed rather than silently
-            # actuating nothing (see test_parse_actions_garbage_still_raises).
-            with self.assertRaises(json.JSONDecodeError):
-                agent._parse_actions_json("not json")
+    async def test_empty_or_invalid_resolver_output_is_a_safe_no_match(self):
+        # The parser itself raises on output with no array in it, so the bad
+        # output is never silently accepted (test_parse_actions_garbage_still_
+        # raises covers that). The agent must still turn it into a no-match:
+        # the voice path speaks whatever comes back, and a raw JSONDecodeError
+        # is not something Reachy should read aloud.
+        devices = [{"entity_id": "light.mystery", "name": "Mystery"}]
+        for raw in ("", "not json"):
+            with self.subTest(raw=raw), tempfile.TemporaryDirectory() as tmpdir:
+                agent = OneOffActuatorAgent(
+                    request="do the thing with the widget",
+                    llm_provider=_FakeLLM(raw),  # pyright: ignore[reportArgumentType]
+                    task_id="actuate_test",
+                    reply_to_id="main-actor",
+                    persistence_dir=tmpdir,
+                )
+                self.assertEqual(await agent._resolve_actions(devices), [])
 
     async def test_execute_request_runs_service_calls(self):
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -493,7 +493,17 @@ class OneOffActuatorAgent(Actor):
             timeout=120.0,
         )
         self._accumulate_usage(usage)
-        parsed = self._parse_actions_json(raw)
+        try:
+            parsed = self._parse_actions_json(raw)
+        except json.JSONDecodeError:
+            # Output with no array in it at all. Letting this propagate would
+            # surface a raw JSONDecodeError as the reply, which the voice path
+            # then reads aloud; a no-match is the same outcome said properly.
+            # Logged rather than swallowed so the bad output is still traceable.
+            logger.warning(
+                "[%s] Actuator resolver returned unparseable output: %r", self.name, raw[:200]
+            )
+            return []
         actions = [ActuatorAction.from_dict(item) for item in parsed]
         actions = self._repair_color_actions(actions, devices)
         kept, dropped = filter_unrequested_actions(self.request, actions, devices)

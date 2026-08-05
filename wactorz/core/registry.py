@@ -23,6 +23,15 @@ from .paths import resolve_state_dir
 logger = logging.getLogger(__name__)
 
 
+class ProtectedActorCollision(RuntimeError):
+    """Registering an actor would have evicted a running protected one.
+
+    Raised rather than logged and skipped: the caller has already built the
+    actor and must not go on to start it, and a spawn that quietly did nothing
+    would be indistinguishable from one that worked.
+    """
+
+
 # ── Supervision spec ──────────────────────────────────────────────────────────
 
 
@@ -86,6 +95,18 @@ class ActorRegistry:
         async with self._lock:
             existing = self._actors.get(actor.actor_id)
             if existing is not None and existing is not actor:
+                if getattr(existing, "protected", False):
+                    # Because actor_id is a uuid5 of the name, an actor named
+                    # after a system agent does not collide with it — it lands
+                    # on the same id and the replacement below would stop the
+                    # original. The orchestrator would go down and the spawn
+                    # would report success. Callers reach this by any route, so
+                    # the refusal belongs here rather than only at the spawn path.
+                    raise ProtectedActorCollision(
+                        f"'{actor.name}' resolves to the same actor id as the running "
+                        f"protected actor '{existing.name}' ({actor.actor_id[:8]}); "
+                        f"registering it would stop the original. Use a different name."
+                    )
                 # Same deterministic actor_id (uuid5 of name) is being re-registered.
                 # The old instance's tasks (message loop, heartbeat loop, aiomqtt
                 # subscribe listeners spawned from setup()) are STILL RUNNING.

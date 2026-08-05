@@ -100,8 +100,22 @@ class SpawnMixin(_Host):
         # ── Idempotency / replace ──────────────────────────────────────────
         existing = self._find_existing(name)
         if existing is not None:
+            if getattr(existing, "protected", False):
+                # `replace: true` would stop the system actor holding this name,
+                # and the orchestrator is the one most likely to be asked for by
+                # name. A spawn config is frequently LLM-authored, so this is
+                # reachable without anyone intending it.
+                logger.warning(
+                    "[%s] Refusing to spawn '%s' — a protected system actor already holds "
+                    "that name.",
+                    self.name,
+                    name,
+                )
+                return None
             if not config.get("replace", False):
-                logger.info(f"[{self.name}] '{name}' already exists (use replace=true to update).")
+                logger.info(
+                    "[%s]] '%s' already exists (use replace=true to update).", self.name, name
+                )
                 return existing
             await self._stop_for_replace(existing, name)
 

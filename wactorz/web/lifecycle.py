@@ -166,6 +166,15 @@ async def delete_agent(agent_id: str) -> str:
     name = record.get("name") or agent_id
     node = (record.get("node") or "").strip()
 
+    # REST refuses to delete a protected actor; this path did not, so the same
+    # request over the WebSocket deleted system agents the API 403s. The check
+    # reads the live actor rather than `record`, because the dashboard entry is
+    # built from heartbeats and a remote agent can claim whatever it likes.
+    actor = runtime.registry.find_by_name(name) if runtime.registry else None
+    if actor is not None and getattr(actor, "protected", False):
+        logger.warning("[lifecycle] Refusing to delete protected actor '%s'.", name)
+        return "refused-protected"
+
     runtime.mark_deleted(agent_id)
     runtime.state["agents"].pop(agent_id, None)
 

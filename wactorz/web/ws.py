@@ -318,7 +318,11 @@ async def handle_command(cmd: dict[str, Any]) -> None:
         if command == "delete":
             # delete_agent has its own routing: main's spawn registry, then the
             # local actor, then the broker for agents on other nodes.
-            await lifecycle.delete_agent(agent_id)
+            if await lifecycle.delete_agent(agent_id) == "refused-protected":
+                # Broadcasting anyway would remove the agent from every open
+                # dashboard while it is still running, with nothing to correct
+                # the view until the next heartbeat.
+                return
             events.add_log(
                 {
                     "type": "command",

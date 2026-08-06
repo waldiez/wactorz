@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import socket
+import time
 import uuid
 from typing import Any, ClassVar
 
@@ -1078,7 +1079,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             online_nodes = {
                 n
                 for n, info in self._known_nodes.items()
-                if (__import__("time").time() - info.get("last_seen", 0)) < 30
+                if (time.time() - info.get("last_seen", 0)) < 30
             }
             for name, cfg in spawn_reg.items():
                 node = cfg.get("node", "").strip()
@@ -1165,7 +1166,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     pid = p.get("plan_id", "?")
                     task = p.get("task", "?")[:60]
                     n_agents = len(p.get("envelope", {}).get("plan", []))
-                    age_s = int(__import__("time").time() - p.get("created_at", 0))
+                    age_s = int(time.time() - p.get("created_at", 0))
                     lines.append(f"  `{pid}` ({n_agents} agent(s), {age_s}s ago) — {task}")
                 lines.append("\n  /plans show <id>      — see full plan with code")
                 lines.append("  /plans approve <id>   — execute the plan")
@@ -2403,7 +2404,7 @@ async def handle_task(agent, payload):
                 "message": f"Spawned '{name}' on node '{node}'",
                 "child_name": name,
                 "node": node,
-                "timestamp": __import__("time").time(),
+                "timestamp": time.time(),
             },
         )
 
@@ -2443,7 +2444,7 @@ async def handle_task(agent, payload):
 
         await self._mqtt_publish(
             f"nodes/{node}/desired_state",
-            {"node": node, "agents": wire_agents, "timestamp": __import__("time").time()},
+            {"node": node, "agents": wire_agents, "timestamp": time.time()},
             retain=True,
             qos=1,
         )
@@ -3379,8 +3380,8 @@ async def handle_task(agent, payload):
                                                 **cfg,
                                                 "node": node_name,
                                                 "actor_id": str(
-                                                    __import__("uuid").uuid5(
-                                                        __import__("uuid").NAMESPACE_DNS,
+                                                    uuid.uuid5(
+                                                        uuid.NAMESPACE_DNS,
                                                         f"wactorz.actor.{aname}",
                                                     )
                                                 ),
@@ -3402,8 +3403,8 @@ async def handle_task(agent, payload):
                                     for aname in new_agents:
                                         # Build the same deterministic actor_id used by _RemoteAgent
                                         remote_id = str(
-                                            __import__("uuid").uuid5(
-                                                __import__("uuid").NAMESPACE_DNS,
+                                            uuid.uuid5(
+                                                uuid.NAMESPACE_DNS,
                                                 f"wactorz.actor.{aname}",
                                             )
                                         )
@@ -3422,7 +3423,7 @@ async def handle_task(agent, payload):
                                         else f"Migration of '{agent}' failed: {data.get('error', '?')}"
                                     ),
                                     "severity": sev,
-                                    "timestamp": __import__("time").time(),
+                                    "timestamp": time.time(),
                                 }
                             )
 

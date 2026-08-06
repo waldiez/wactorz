@@ -193,6 +193,13 @@ def test_score_dynamic_strict_rejects_stub():
     assert not score_dynamic(stub, _STRICT)  # strict form does not
 
 
+def test_score_dynamic_strict_allows_unrequired_stubs():
+    # A model that emits the whole lifecycle with `pass` in unused slots is fine
+    # as long as the REQUIRED entry points do real work.
+    with_stubs = _GOOD + "\nasync def handle_task(agent, payload):\n    pass\n"
+    assert score_dynamic(with_stubs, _STRICT)
+
+
 def test_score_dynamic_strict_rejects_missing_topic():
     wrong = _GOOD.replace("custom/home/heartbeat", "custom/home/pulse")
     assert not score_dynamic(wrong, _STRICT)

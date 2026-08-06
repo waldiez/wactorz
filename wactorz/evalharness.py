@@ -66,12 +66,34 @@ _MAX_TOKENS = {"intent": 10, "ha": 10, "actuator": 500, "planner": 800, "dynamic
 _PLANNER_SYSTEM = (
     "You are designing reactive automation pipelines for a multi-agent IoT system.\n"
     "Output ONLY a valid JSON array - no explanation, no markdown, no code fences.\n"
-    "Each array item is a spawn config dict with at least:\n"
-    '  "name": "<kebab-case-agent-name>"\n'
-    '  "type": one of "ha_actuator" | "scheduled" | "dynamic"\n'
-    '  "description": "<what this agent does>"\n'
-    'Use "ha_actuator" to call Home Assistant services on an MQTT trigger,\n'
-    '"scheduled" for time-based triggers, and "dynamic" for custom logic.\n'
+    "Each array item is a COMPLETE spawn config: it must contain the concrete\n"
+    "entity ids, MQTT topics and schedules needed to run, not just a description.\n"
+    "\n"
+    'TYPE 1 - "ha_actuator": call a Home Assistant service when an MQTT message arrives\n'
+    '  {"name": "<kebab-case>", "type": "ha_actuator", "description": "<what it does>",\n'
+    '   "mqtt_topics": ["<trigger-topic>"],\n'
+    '   "actions": [{"domain": "<ha-domain>", "service": "<ha-service>",\n'
+    '                "entity_id": "<entity_id from the entity list>", "service_data": {}}],\n'
+    '   "detection_filter": {"<payload-key>": <value>} or null,\n'
+    '   "cooldown_seconds": <number>}\n'
+    "\n"
+    'TYPE 2 - "scheduled": fire at a time or interval\n'
+    '  {"name": "<kebab-case>", "type": "scheduled", "description": "<what it fires>",\n'
+    '   "schedule": {"type": "daily", "at": "17:00"} | {"type": "weekly", "at": "07:30",\n'
+    '                "days": ["mon"]} | {"type": "interval", "seconds": 1800},\n'
+    '   "publish_topic": "schedule/<name>/fired"}\n'
+    "\n"
+    'TYPE 3 - "dynamic": custom logic in Python\n'
+    '  {"name": "<kebab-case>", "type": "dynamic", "description": "<what it does>",\n'
+    '   "poll_interval": <seconds>, "code": "<async setup/process/handle_task>"}\n'
+    "\n"
+    "Rules:\n"
+    "- Use entity ids EXACTLY as they appear in the AVAILABLE HA ENTITIES list.\n"
+    "- Reuse a topic already published by an agent in AVAILABLE AGENTS rather than\n"
+    "  inventing a new one, and use that topic's exact payload field names.\n"
+    "- Delegate to an existing agent by name when one already does the job.\n"
+    "- HA state changes arrive on homeassistant/state_changes/#; filter by entity_id\n"
+    "  inside the payload (state is nested: payload['new_state']['state']).\n"
 )
 
 _CODEGEN_SYSTEM = (
@@ -402,8 +424,17 @@ def score_dynamic(output: str, expected: list[str] | dict) -> bool:
 
     if structural:
         findings = _structural_findings(tree, code)
-        if allow_empty:
-            findings = {f for f in findings if not f.startswith("empty_body:")}
+        # Only the entry points the task actually requires must have a body.
+        # Models routinely emit the full lifecycle with `pass` in the slots they
+        # do not need (setup/cleanup stubs alongside a real handle_task); that is
+        # idiomatic, not a failure.
+        required = set(functions)
+        findings = {
+            f
+            for f in findings
+            if not f.startswith("empty_body:")
+            or (not allow_empty and f.split(":", 1)[1] in required)
+        }
         if findings:
             return False
     return True

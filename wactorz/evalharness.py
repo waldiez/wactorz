@@ -25,8 +25,10 @@ Benchmark file format (JSONL, one case per line)::
               action array must contain exactly these actions (extra keys
               inside an action are fine, extra ACTIONS are a failure).
               An empty list means the model must refuse with []
-    planner   list of allowed agent "type" values; the returned JSON plan must
-              be a non-empty array whose items all use those types
+    planner   list of allowed agent "type" values (shape only), or a dict
+              {"types": [...], "must_contain": [...], "must_not_contain": [...]}
+              to also require that the plan references specific entity ids or
+              topics — i.e. that the planner resolved them itself
     dynamic   list of function names the generated Python must define
               (checked by parsing the code — it must also compile)
 
@@ -262,14 +264,32 @@ def score_actuator(output: str, expected: list[dict]) -> bool:
     return all(any(matches(exp, got) for got in actions) for exp in expected)
 
 
-def score_planner(output: str, expected: list[str]) -> bool:
+def score_planner(output: str, expected: list[str] | dict) -> bool:
     """Plan must be a non-empty JSON array of dicts whose "type" values are all
-    in the allowed list and which all carry a name/description.
+    allowed and which all carry a name/description.
+
+    ``expected`` is either a list of allowed agent types (shape only), or a dict
+    for grounded cases::
+
+        {"types": ["ha_actuator", "dynamic"],
+         "must_contain": ["light.philips_hue_lct015"],
+         "must_not_contain": ["light.wiz_rgbw_tunable_351b6e"]}
+
+    ``must_contain`` / ``must_not_contain`` are matched against the serialized
+    plan, so they check that the planner resolved references to the right entity
+    ids and topics — not just that the plan has the right shape.
     """
+    if isinstance(expected, dict):
+        allowed_types = expected.get("types") or []
+        must_contain = expected.get("must_contain") or []
+        must_not_contain = expected.get("must_not_contain") or []
+    else:
+        allowed_types, must_contain, must_not_contain = expected, [], []
+
     plan = extract_json(output)
     if not isinstance(plan, list) or not plan:
         return False
-    allowed = {str(t) for t in expected}
+    allowed = {str(t) for t in allowed_types}
     for item in plan:
         if not isinstance(item, dict):
             return False
@@ -277,7 +297,11 @@ def score_planner(output: str, expected: list[str]) -> bool:
             return False
         if not item.get("name") or not item.get("description"):
             return False
-    return True
+
+    serialized = json.dumps(plan).lower()
+    if any(str(token).lower() not in serialized for token in must_contain):
+        return False
+    return all(str(token).lower() not in serialized for token in must_not_contain)
 
 
 def score_dynamic(output: str, expected: list[str]) -> bool:

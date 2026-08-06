@@ -105,6 +105,38 @@ def test_score_planner_disallowed_type_fails():
     assert not score_planner(json.dumps(plan), ["dynamic"])
 
 
+def test_score_planner_grounded_requires_entity_reference():
+    spec = {
+        "types": ["ha_actuator"],
+        "must_contain": ["light.philips_hue_lct015"],
+        "must_not_contain": ["light.wiz_rgbw_tunable_351b6e"],
+    }
+    good = [
+        {
+            "name": "door-light",
+            "type": "ha_actuator",
+            "description": "office light on door open",
+            "actions": [
+                {"domain": "light", "service": "turn_on", "entity_id": "light.philips_hue_lct015"}
+            ],
+        }
+    ]
+    assert score_planner(json.dumps(good), spec)
+
+    # right shape, wrong device — must fail
+    wrong = json.loads(json.dumps(good).replace("philips_hue_lct015", "wiz_rgbw_tunable_351b6e"))
+    assert not score_planner(json.dumps(wrong), spec)
+
+    # right shape, no entity resolved at all — must fail
+    vague = [{"name": "door-light", "type": "ha_actuator", "description": "turn on the light"}]
+    assert not score_planner(json.dumps(vague), spec)
+
+
+def test_score_planner_list_form_still_shape_only():
+    plan = [{"name": "x", "type": "dynamic", "description": "y"}]
+    assert score_planner(json.dumps(plan), ["dynamic"])
+
+
 def test_score_planner_missing_fields_or_empty_fails():
     assert not score_planner(json.dumps([{"type": "dynamic"}]), ["dynamic"])
     assert not score_planner("[]", ["dynamic"])

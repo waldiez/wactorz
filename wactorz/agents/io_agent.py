@@ -1,7 +1,7 @@
 """IOAgent - UI gateway actor.
 
 Listens on MQTT topic `io/chat` and routes messages to actors by `@agent-name`
-prefix. Messages with no `@` prefix are forwarded to `main-actor`. Replies are
+prefix. Messages with no `@` prefix are forwarded to the orchestrator. Replies are
 published back to `agents/{actor_id}/chat` so the frontend chat panel displays them.
 
 Slash commands are handled here so both the web UI and any other MQTT-connected
@@ -12,10 +12,11 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
-from .lookup import find_main_actor
+from .lookup import MAIN_ACTOR_NAME, find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,19 @@ class IOAgent(Actor):
     a TASK message. Replies from target actors are forwarded to the frontend.
     """
 
+    #: How long a request waits for its reply before the pending entry is
+    #: dropped. Generous: a long LLM turn behind a slow provider is normal, and
+    #: forgetting early would strand a reply that was still coming.
+    PENDING_REPLY_TTL = 300.0
+
     def __init__(self, **kwargs):
         kwargs.setdefault("name", "io-agent")
         super().__init__(**kwargs)
         # The io-agent is core infrastructure (the chat/IO gateway) — it must
         # survive a "Wipe everything" reset like the other system actors.
         self.protected = True
+        #: task id → (requester, sent-at). Entries are removed when the reply
+        #: arrives, or expired by _expire_pending when it never does.
         self._pending_replies: dict[str, tuple[str, float]] = {}
         # In-flight chat turns, so a stop command can cancel them mid-generation.
         self._active_generations: set[asyncio.Task] = set()
@@ -129,21 +137,20 @@ class IOAgent(Actor):
             await self._reply("System not ready — no actor registry available.")
             return
 
-        target = self._registry.find_by_name(target_name)
+        target = (
+            find_main_actor(self._registry)
+            if target_name == MAIN_ACTOR_NAME
+            else self._registry.find_by_name(target_name)
+        )
         if target is None:
-            if target_name != "main-actor":
-                await self._reply(f"Agent @{target_name} not found.")
-                return
-            target = find_main_actor(self._registry)
-            if target is None:
-                await self._reply("No main-actor is running.")
-                return
+            await self._reply(f"Agent @{target_name} not found.")
+            return
 
         logger.info(f"[{self.name}] routing from '{from_id}' → '{target.name}': {text[:60]!r}")
 
         # Call streaming methods directly (same as CLI) if available — gives
         # chunk-by-chunk responses instead of waiting for the full reply.
-        if target_name in ("main-actor", "main") and hasattr(target, "process_user_input_stream"):
+        if target_name == MAIN_ACTOR_NAME and hasattr(target, "process_user_input_stream"):
             buf = []
             try:
                 async for chunk in target.process_user_input_stream(text):
@@ -177,12 +184,23 @@ class IOAgent(Actor):
             return
 
         # Fallback: actor message passing (no streaming)
+        # `_task_id` is the codebase's result-correlation convention: agents
+        # echo it back on the RESULT (see LLMAgent._reply_to_task), which is how
+        # a reply is matched to the request that caused it rather than to
+        # whichever request happens to be first in the pending map.
+        task_id = f"io-chat:{uuid.uuid4().hex[:12]}"
         msg = Message(
             type=MessageType.TASK,
             sender_id=self.actor_id,
-            payload={"text": text, "from": from_id, "reply_to": self.actor_id},
+            payload={
+                "text": text,
+                "from": from_id,
+                "reply_to": self.actor_id,
+                "_task_id": task_id,
+            },
         )
-        self._pending_replies[msg.message_id] = (from_id, time.time())
+        self._pending_replies[task_id] = (from_id, time.time())
+        self._expire_pending()
         await target.receive(msg)
 
     # ── Generation control (stop button) ───────────────────────────────────
@@ -223,18 +241,20 @@ class IOAgent(Actor):
             name = parts[0]
             text = parts[1].strip() if len(parts) > 1 else ""
             return name, text
-        return "main-actor", content
+        return MAIN_ACTOR_NAME, content
 
-    async def _reply(self, content: str):
-        await self._mqtt_publish(
-            IO_CHAT_REPLY_TOPIC,
-            {"from": self.name, "to": "user", "content": content, "timestamp": time.time()},
-        )
+    async def _reply(self, content: str, to: str | None = None):
+        """Publish a reply, addressed to the sender whose request produced it.
+
+        `to` defaults to "user" because most replies are for the single browser
+        client, and every existing subscriber matches on that. A correlated
+        reply names its own requester instead, so a second sender's answer is
+        distinguishable rather than looking like everyone's.
+        """
+        body = {"from": self.name, "to": to or "user", "content": content, "timestamp": time.time()}
+        await self._mqtt_publish(IO_CHAT_REPLY_TOPIC, body)
         # Also publish to the actor_id topic for any legacy subscribers
-        await self._mqtt_publish(
-            f"agents/{self.actor_id}/chat",
-            {"from": self.name, "to": "user", "content": content, "timestamp": time.time()},
-        )
+        await self._mqtt_publish(f"agents/{self.actor_id}/chat", dict(body))
 
     # ── Slash commands ─────────────────────────────────────────────────────
 
@@ -267,7 +287,7 @@ class IOAgent(Actor):
         """
         main = self._main_actor()
         if main is None:
-            await self._reply("[error] main-actor not available.")
+            await self._reply("[error] orchestrator not available.")
             return
 
         async for chunk in main.process_user_input_stream(slash_text):
@@ -301,8 +321,30 @@ class IOAgent(Actor):
                 )
             else:
                 reply_text = str(payload)
-            self._pending_replies.pop(next(iter(self._pending_replies), None), None)
-            await self._reply(reply_text)
+            # Match the reply to its own request. Position is not a match: with
+            # two requests in flight, the order replies arrive in says nothing
+            # about which request each one answers.
+            task_id = payload.get("_task_id") if isinstance(payload, dict) else None
+            pending = self._pending_replies.pop(task_id, None) if task_id else None
+            await self._reply(reply_text, to=pending[0] if pending else None)
+
+    def _expire_pending(self) -> None:
+        """Drop pending entries whose reply is never coming.
+
+        An agent that fails without replying would otherwise hold its entry for
+        the life of the process — a slow leak whose only symptom is the
+        `pending=` count climbing in the status line.
+        """
+        cutoff = time.time() - self.PENDING_REPLY_TTL
+        for key in [k for k, (_, ts) in self._pending_replies.items() if ts < cutoff]:
+            sender, _ = self._pending_replies.pop(key)
+            logger.warning(
+                "[%s] No reply for %s (from %s) within %gs — forgetting it.",
+                self.name,
+                key,
+                sender,
+                self.PENDING_REPLY_TTL,
+            )
 
     def _current_task_description(self) -> str:
         return f"routing io/chat (pending={len(self._pending_replies)})"

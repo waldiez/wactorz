@@ -332,7 +332,7 @@ def _install_reply_capture(target: Any) -> None:
 
 
 async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None):
-    """Core chat routing — slash commands, @mentions, or main-actor stream.
+    """Core chat routing — slash commands, @mentions, or the orchestrator's stream.
 
     reply_fn(text)        — send a complete message (slash commands, errors)
     stream_fn(chunk)      — send one streaming chunk (optional; falls back to reply_fn)

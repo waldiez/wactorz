@@ -276,17 +276,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 return
             await self._handle_task(msg)
 
-        elif msg.type == MessageType.RESULT:
-            if isinstance(msg.payload, dict):
-                # Support both key names: "_task_id" (new) and "task" (legacy)
-                fid = msg.payload.get("_task_id") or msg.payload.get("task")
-                if fid and fid in self._result_futures:
-                    fut = self._result_futures[fid]
-                    if not fut.done():
-                        fut.set_result(msg.payload)
-
-    # ── Home Automation intent detection ───────────────────────────────────
-
     # ── User input ─────────────────────────────────────────────────────────
 
     async def chat(self, user_message: str) -> str:

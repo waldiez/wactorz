@@ -195,14 +195,6 @@ class PlannerAgent(Actor, SpawnMixin):
                     reply["spawned"] = self._spawned_by_planner
                 await self.send(self._reply_to_id, MessageType.RESULT, reply)
 
-        elif msg.type == MessageType.RESULT:
-            payload = msg.payload if isinstance(msg.payload, dict) else {}
-            task_id = payload.get("_task_id")
-            if task_id and task_id in self._result_futures:
-                fut = self._result_futures[task_id]
-                if not fut.done():
-                    fut.set_result(payload)
-
     # ── Report wrapper (on_start path) ────────────────────────────────────
 
     async def _report_plan(self, task: str):

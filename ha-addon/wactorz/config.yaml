@@ -72,6 +72,17 @@ options:
   mqtt_username: ""
   mqtt_password: ""
 
+  # Remote edge nodes reachable over SSH. `/deploy <name>` bootstraps the node
+  # named here; the credentials never travel through chat. Prefer `key` — put
+  # the private key under /config or /share (both mapped into the addon) and
+  # give the path as seen from inside the addon, e.g. /config/ssh/rpi_kitchen.
+  #
+  # A remote node connects back to the MQTT broker over the network, so it needs
+  # one it can reach and connect to anonymously. See "Remote edge nodes" in the
+  # documentation before adding entries here — mosquitto_embedded cannot serve
+  # remote nodes, and a broker requiring credentials is not yet supported.
+  deploy_targets: []
+
   # Home Assistant connection (used by HA agents inside Wactorz)
   # auto (default): supervisor proxy when ha_token is blank, custom URL otherwise.
   ha_connection: auto
@@ -140,6 +151,15 @@ schema:
   telegram_allowed_user_ids: str?
   telegram_allowed_user_id: int
   social_rate_limit_per_min: int
+  deploy_targets:
+    - name: str
+      host: str?
+      user: str?
+      key: str?
+      password: password?
+      broker: str?
+      broker_port: port?
+      ssh_port: port?
   #otel_endpoint: str?
   #otel_service_name: str?
   #influx_url: str?

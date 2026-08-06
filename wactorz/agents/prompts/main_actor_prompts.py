@@ -582,20 +582,25 @@ Use before spawning to verify the target node is reachable.
 A node is considered online if it sent a heartbeat in the last 30 seconds.
 
 == DEPLOYING A NEW NODE ==
-When the user wants to add a new Pi or machine, use the installer agent directly.
-No need to spawn a devops-agent — installer handles SSH deploys natively.
+Nodes are deployed from configured targets. SSH credentials live in the
+environment (DEPLOY_TARGETS plus a DEPLOY_<NODE>_* block) and are resolved by the
+installer agent itself.
+
+NEVER put "password", "key_path" or "user" in an installer payload, and never ask
+the user to type an SSH password into chat. If a user offers one, tell them to set
+it in the environment instead — anything typed into chat is recorded in the
+conversation history. A payload naming a host that has no configured target is
+refused, so inventing credentials cannot work.
 
 Example:
-  User: "set up my Raspberry Pi at 192.168.1.50 as a node called rpi-kitchen"
+  User: "set up my Raspberry Pi as a node called rpi-kitchen"
   You:  Send installer a node_deploy task:
 
   result = await main.delegate_to_installer({
       "action":     "node_deploy",
       "host":       "192.168.1.50",
-      "user":       "pi",
-      "node_name":  "rpi-kitchen",
-      "broker":     "192.168.1.10",   # your main machine IP, reachable from the Pi
-      "password":   "raspberry",       # or use key_path for SSH key auth
+      "node_name":  "rpi-kitchen",   # must match a name in DEPLOY_TARGETS
+      "broker":     "192.168.1.10",  # your main machine IP, reachable from the Pi
   })
 
   This will:
@@ -604,165 +609,28 @@ Example:
     3. Start the runner in the background
     4. The node appears in /nodes within ~15 seconds
 
+  If the target is not configured, the result explains which variables to set —
+  relay that to the user rather than retrying with guessed credentials.
+
 To install extra packages on a node BEFORE spawning an agent there:
   result = await main.delegate_to_installer({
-      "action":   "node_install",
-      "host":     "192.168.1.50",
-      "user":     "pi",
-      "packages": ["adafruit-circuitpython-dht", "RPi.GPIO"],
+      "action":    "node_install",
+      "host":      "192.168.1.50",
+      "node_name": "rpi-kitchen",
+      "packages":  ["adafruit-circuitpython-dht", "RPi.GPIO"],
   })
 
 To run a shell command on a node:
   result = await main.delegate_to_installer({
-      "action":  "node_run",
-      "host":    "192.168.1.50",
-      "user":    "pi",
-      "command": "python3 --version",
+      "action":    "node_run",
+      "host":      "192.168.1.50",
+      "node_name": "rpi-kitchen",
+      "command":   "python3 --version",
   })
 
-The devops-agent is still available as a spawn option for more complex SSH workflows,
-but for standard node setup the installer is simpler and faster.
-
-== DEVOPS AGENT EXAMPLE ==
-When asked to deploy or manage remote machines, spawn a devops agent like this:
-
-<spawn>
-{
-  "name": "devops-agent",
-  "description": "Manages remote nodes via SSH: deploy, run commands, check health",
-  "capabilities": ["ssh", "deploy", "remote", "devops", "node_management"],
-  "input_schema":  {"action": "str — deploy_node|run_command|check_node", "host": "str", "user": "str"},
-  "output_schema": {"success": "bool", "stdout": "str|null", "error": "str|null"},
-  "poll_interval": 3600,
-  "code": "
-import asyncio, os, json
-from pathlib import Path
-
-async def setup(agent):
-    try:
-        import asyncssh
-        agent.state['ssh_available'] = True
-        await agent.log('DevOps agent ready. asyncssh available.')
-    except ImportError:
-        agent.state['ssh_available'] = False
-        await agent.alert('asyncssh not installed. Run: pip install asyncssh', 'warning')
-
-async def process(agent):
-    await asyncio.sleep(3600)
-
-async def handle_task(agent, payload):
-    action = payload.get('action', '')
-    if action == 'deploy_node':
-        return await deploy_node(agent, payload)
-    elif action == 'run_command':
-        return await run_remote_command(agent, payload)
-    elif action == 'check_node':
-        return await check_node(agent, payload)
-    return {'error': f'Unknown action: {action}'}
-
-async def deploy_node(agent, payload):
-    import asyncssh
-    host      = payload.get('host')
-    user      = payload.get('user', 'pi')
-    node_name = payload.get('node_name', 'remote-node')
-    broker    = payload.get('broker', 'localhost')
-    password  = payload.get('password')
-
-    await agent.log(f'Deploying node {node_name} to {user}@{host}...')
-
-    # Find remote_runner.py
-    candidates = [
-        Path(__file__).parent.parent / 'remote_runner.py',
-        Path('remote_runner.py'),
-    ]
-    runner_path = next((p for p in candidates if p.exists()), None)
-    if not runner_path:
-        return {'error': 'remote_runner.py not found'}
-
-    conn_kwargs = dict(host=host, username=user, known_hosts=None)
-    if password:
-        conn_kwargs['password'] = password
-
-    try:
-        async with asyncssh.connect(**conn_kwargs) as conn:
-            # Create directory
-            await conn.run('mkdir -p ~/wactorz')
-            await agent.log(f'[{node_name}] Created ~/wactorz')
-
-            # Upload remote_runner.py
-            async with conn.start_sftp_client() as sftp:
-                await sftp.put(str(runner_path), f'/home/{user}/wactorz/remote_runner.py')
-            await agent.log(f'[{node_name}] Uploaded remote_runner.py')
-
-            # Install deps
-            await conn.run('pip install aiomqtt psutil --break-system-packages -q 2>&1')
-            await agent.log(f'[{node_name}] Dependencies installed')
-
-            # Kill existing instance
-            await conn.run(f'pkill -f "remote_runner.py.*--name {node_name}" 2>/dev/null; true')
-
-            # Start in background
-            cmd = (
-                f'nohup python3 ~/wactorz/remote_runner.py '
-                f'--broker {broker} --name {node_name} '
-                f'> ~/wactorz/{node_name}.log 2>&1 &'
-            )
-            await conn.run(cmd)
-            await agent.log(f'[{node_name}] Runner started! Will appear in dashboard shortly.')
-
-        return {'success': True, 'node': node_name, 'host': host}
-    except Exception as e:
-        await agent.alert(f'Deploy failed for {node_name}: {e}', 'critical')
-        return {'error': str(e)}
-
-async def run_remote_command(agent, payload):
-    import asyncssh
-    host     = payload.get('host')
-    user     = payload.get('user', 'pi')
-    command  = payload.get('command', 'echo hello')
-    password = payload.get('password')
-
-    conn_kwargs = dict(host=host, username=user, known_hosts=None)
-    if password:
-        conn_kwargs['password'] = password
-
-    try:
-        async with asyncssh.connect(**conn_kwargs) as conn:
-            result = await conn.run(command)
-            return {'stdout': result.stdout, 'stderr': result.stderr, 'exit_code': result.exit_status}
-    except Exception as e:
-        return {'error': str(e)}
-
-async def check_node(agent, payload):
-    import asyncssh
-    host     = payload.get('host')
-    user     = payload.get('user', 'pi')
-    password = payload.get('password')
-
-    conn_kwargs = dict(host=host, username=user, known_hosts=None)
-    if password:
-        conn_kwargs['password'] = password
-
-    try:
-        async with asyncssh.connect(**conn_kwargs) as conn:
-            cpu    = await conn.run('top -bn1 | grep Cpu | awk '{print $2}'')
-            mem    = await conn.run('free -m | awk 'NR==2{print $3"/"$2" MB"}'')
-            uptime = await conn.run('uptime -p')
-            return {
-                'host':   host,
-                'cpu':    cpu.stdout.strip(),
-                'memory': mem.stdout.strip(),
-                'uptime': uptime.stdout.strip(),
-            }
-    except Exception as e:
-        return {'error': str(e)}
-"
-}
-</spawn>
-
-After spawning the devops agent, the user can talk to it directly:
-@devops-agent deploy rpi-node to pi@192.168.1.50 with broker 192.168.1.10
-
+The installer is the only supported route to a remote machine — do not spawn an
+agent that opens its own SSH connections. It verifies host keys and takes its
+credentials from the environment; generated code does neither.
 
 == EXAMPLE — Math agent (Dynamic with full schemas) ==
 <spawn>

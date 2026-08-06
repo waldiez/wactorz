@@ -17,6 +17,7 @@ from aiohttp import web
 from aiohttp.web import Response
 
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
+from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from . import runtime
@@ -147,72 +148,48 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
 # MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
 
 
-async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, reply_fn) -> None:
-    """Install and start a remote runner on ``host`` over SSH, streaming progress."""
+async def slash_deploy(node: str, reply_fn) -> None:
+    """Install and start a remote runner on the configured target for ``node``.
+
+    Everything about the target — host, user, SSH auth, broker — comes from the
+    environment (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). This used
+    to accept ``host``/``user``/``password`` as chat arguments and, when no host
+    was given, port-scan the local /24 for SSH. Both are gone: the scan turned a
+    chat message into a LAN sweep, and the password argument put a live
+    credential into the reply stream and the persisted conversation history.
+    """
+    target = deploy_target(node)
+    if target is None:
+        await reply_fn("[error] " + deploy_target_help(node))
+        return
+
+    host = target.host
     if not host:
-        await reply_fn(f"[discover] Searching for '{node}' on the network...")
-        discovered = None
-        for candidate in [f"{node}.local", "raspberrypi.local", f"{node.replace('-', '')}.local"]:
-            try:
-                ip = await asyncio.get_event_loop().run_in_executor(
-                    None, socket.gethostbyname, candidate
-                )
-                discovered = ip
-                await reply_fn(f"[discover] Found via mDNS: {candidate} → {ip}")
-                break
-            except socket.gaierror:
-                pass
-
-        if not discovered:
-            try:
-                local_ip = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: socket.gethostbyname(socket.gethostname())
-                )
-                subnet = ".".join(local_ip.split(".")[:3])
-            except Exception:
-                subnet = "192.168.1"
-            await reply_fn(f"[discover] mDNS not found. Scanning {subnet}.1-254 for SSH...")
-            found = await _scan_subnet_ssh(subnet)
-            if found:
-                hosts = "\n".join(f"  {ip}" for ip in found)
-                await reply_fn(
-                    f"[discover] Found {len(found)} host(s):\n{hosts}\n\n"
-                    f"Re-run with:\n  /deploy {node} <host> <user> <password> [broker]"
-                )
-            else:
-                await reply_fn(
-                    f"[discover] No SSH hosts found.\n"
-                    f"  /deploy {node} <host> <user> <password> [broker]"
-                )
-        else:
+        # No host configured — resolve <node>.local. A name lookup, not a sweep:
+        # it asks about one host and learns nothing about any other.
+        await reply_fn(f"[discover] No host configured for '{node}' — trying mDNS...")
+        host = await _resolve_mdns(node) or ""
+        if not host:
             await reply_fn(
-                f"[discover] Host: {discovered}\n"
-                f"Re-run with credentials:\n"
-                f"  /deploy {node} {discovered} <user> <password> [broker]"
+                f"[error] Could not resolve '{node}.local'.\n"
+                f"Set {deploy_env_prefix(node)}_HOST in your environment."
             )
-        return
-
-    if not user or not pw:
-        await reply_fn(
-            f"[deploy] Need SSH credentials:\n  /deploy {node} {host} <user> <password> [broker]"
-        )
-        return
+            return
+        await reply_fn(f"[discover] Found via mDNS: {node}.local → {host}")
 
     main_actor = find_main_actor(runtime.registry)
     if main_actor is None:
         await reply_fn("[error] Installer agent not available.")
         return
 
-    broker = broker or "localhost"
-    await reply_fn(f"[deploy] Deploying to {user}@{host} as '{node}'... (20-60s)")
+    await reply_fn(f"[deploy] Deploying to {target.user}@{host} as '{node}'... (20-60s)")
     result = await main_actor.delegate_to_installer(
         {
             "action": "node_deploy",
             "host": host,
-            "user": user,
-            "password": pw,
-            "node_name": node,
-            "broker": broker,
+            "node_name": target.name,
+            "broker": target.broker or "localhost",
+            "port": target.broker_port,
         },
         timeout=120.0,
     )
@@ -223,25 +200,14 @@ async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, re
         await reply_fn(f"[FAIL] {result.get('error', result)}")
 
 
-async def _scan_subnet_ssh(subnet: str) -> list:
-    found = []
-    sem = asyncio.Semaphore(60)
-
-    async def probe(ip):
-        async with sem:
-            try:
-                _, w = await asyncio.wait_for(asyncio.open_connection(ip, 22), timeout=0.4)
-                w.close()
-                try:
-                    await w.wait_closed()
-                except Exception:
-                    pass
-                found.append(ip)
-            except Exception:
-                pass
-
-    await asyncio.gather(*[probe(f"{subnet}.{i}") for i in range(1, 255)])
-    return sorted(found, key=lambda x: int(x.split(".")[-1]))
+async def _resolve_mdns(node: str) -> str | None:
+    """Resolve ``<node>.local``, or None. Off the loop — a miss blocks for the
+    resolver's full timeout, which would freeze every actor in the process.
+    """
+    try:
+        return await asyncio.to_thread(socket.gethostbyname, f"{node}.local")
+    except OSError:
+        return None
 
 
 async def handle_slash(text: str, reply_fn) -> bool:
@@ -302,16 +268,20 @@ async def handle_slash(text: str, reply_fn) -> bool:
 
     if cmd == "/deploy":
         if len(parts) < 2:
-            await reply_fn("[usage] /deploy <node-name> [host [user [password [broker]]]]")
+            names = deploy_target_names()
+            listing = "\n".join(f"  {n}" for n in names) or "  (none configured)"
+            await reply_fn(f"[usage] /deploy <node-name>\nConfigured targets:\n{listing}")
             return True
-        await slash_deploy(
-            node=parts[1],
-            host=parts[2] if len(parts) > 2 else "",
-            user=parts[3] if len(parts) > 3 else "",
-            pw=parts[4] if len(parts) > 4 else "",
-            broker=parts[5] if len(parts) > 5 else "",
-            reply_fn=reply_fn,
-        )
+        if len(parts) > 2:
+            # The old form took host/user/password/broker here. Refuse without
+            # echoing the extra words back — parts[3:] may be a live password,
+            # and the reply is persisted into conversation history.
+            await reply_fn(
+                "[error] /deploy takes a node name only — host and SSH credentials "
+                "now come from the environment, not from chat.\n\n" + deploy_target_help(parts[1])
+            )
+            return True
+        await slash_deploy(node=parts[1], reply_fn=reply_fn)
         return True
 
     return False

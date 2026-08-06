@@ -156,9 +156,11 @@ PowerShell can run Docker and npm commands directly, but it does not execute
 
 ---
 
-## SSH Keys for NautilusAgent
+## SSH Keys for Remote Nodes
 
-Windows 10 and 11 include OpenSSH Client. Generate a dedicated key:
+Deploying an edge node with `/deploy` connects over SSH, and key auth is
+preferred over a password. Windows 10 and 11 include OpenSSH Client, so generate
+a dedicated key:
 
 ```powershell
 ssh-keygen -t ed25519 -C "wactorz-deploy" -f "$env:USERPROFILE\.ssh\wactorz_deploy" -N '""'
@@ -167,18 +169,20 @@ ssh-keygen -t ed25519 -C "wactorz-deploy" -f "$env:USERPROFILE\.ssh\wactorz_depl
 Copy the public key to the remote host:
 
 ```powershell
-type "$env:USERPROFILE\.ssh\wactorz_deploy.pub" | ssh user@host "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+type "$env:USERPROFILE\.ssh\wactorz_deploy.pub" | ssh pi@192.168.1.50 "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
 ```
 
-Set the key path in `.env`:
+Point the node's deploy target at it in `.env`:
 
 ```env
-NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
+DEPLOY_TARGETS=rpi-kitchen
+DEPLOY_RPI_KITCHEN_HOST=192.168.1.50
+DEPLOY_RPI_KITCHEN_USER=pi
+DEPLOY_RPI_KITCHEN_KEY=~/.ssh/wactorz_deploy
+DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
 ```
 
-`rsync` is not available natively on Windows. For NautilusAgent file sync, use
-WSL2, install `rsync` with Chocolatey, or point `NAUTILUS_RSYNC_PATH` at Git for
-Windows' rsync binary if installed.
+See [Remote nodes](remote-nodes.md) for the rest of the setup.
 
 ---
 
@@ -189,14 +193,14 @@ Save `.env` as UTF-8 without BOM. VS Code and modern Notepad are usually fine.
 Use forward slashes or escaped backslashes for paths:
 
 ```env
-NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy
-NAUTILUS_SSH_KEY=C:/Users/alice/.ssh/wactorz_deploy
+DEPLOY_RPI_KITCHEN_KEY=~/.ssh/wactorz_deploy
+DEPLOY_RPI_KITCHEN_KEY=C:/Users/alice/.ssh/wactorz_deploy
 ```
 
 Avoid unescaped Windows backslashes:
 
 ```env
-NAUTILUS_SSH_KEY=C:\Users\alice\.ssh\wactorz_deploy
+DEPLOY_RPI_KITCHEN_KEY=C:\Users\alice\.ssh\wactorz_deploy
 ```
 
 If a shell script reads `.env`, LF line endings are safest. In VS Code, click the

@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
+import wactorz.agents.llm.cost as cost
 import wactorz.agents.llm_agent as llm
 from wactorz.agents.llm_agent import LLMProvider
 
@@ -68,13 +69,15 @@ class _CompleteOnly(LLMProvider):
 def provider_fixture() -> Any:
     """A provider wired to an isolated cost store."""
     store = _KV()
-    with patch.object(llm, "get_db", lambda: store):
+    # Patched on `llm.cost`, which is where the spend functions resolve it —
+    # `llm_agent` re-exports the name, but that binding is not the one they use.
+    with patch.object(cost, "get_db", lambda: store):
         yield _Provider()
 
 
 def _spend(amount: float, limit: float) -> None:
-    llm.set_cost_limit(limit, "monthly")
-    llm._accumulate_global_cost(amount)
+    cost.set_cost_limit(limit, "monthly")
+    cost.accumulate_global_cost(amount)
 
 
 class TestTheCapBlocks:
@@ -117,7 +120,7 @@ class TestTheCapDoesNotGetInTheWay:
     async def test_no_configured_cap_means_no_limit(self, provider: _Provider) -> None:
         # The default is 0.0 = disabled, so an install that never set a limit
         # must be unaffected by any of this.
-        llm._accumulate_global_cost(1_000.0)
+        cost.accumulate_global_cost(1_000.0)
 
         text, _usage = await provider.complete([{"role": "user", "content": "hi"}])
 

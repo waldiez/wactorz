@@ -27,7 +27,7 @@ from typing import Any, ClassVar
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
-from .llm_agent import _accumulate_global_cost
+from .llm_agent import accumulate_global_cost
 from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
@@ -1306,7 +1306,7 @@ class DynamicAgent(Actor):
         self.total_cost_usd += usage.get("cost_usd", 0.0)
         delta = self.total_cost_usd - self._last_period_cost_usd
         if delta > 0:
-            _accumulate_global_cost(delta)
+            accumulate_global_cost(delta)
             self._last_period_cost_usd = self.total_cost_usd
 
 

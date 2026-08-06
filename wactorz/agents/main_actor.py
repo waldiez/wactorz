@@ -57,12 +57,19 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         "orchestration",
     ]
 
+    #: Most queued system notices to carry. They are prepended to the next chat
+    #: reply, so the newest are what matter and a long backlog would bury the
+    #: answer itself. Oldest are dropped first.
+    MAX_PENDING_NOTIFICATIONS = 50
+
     def __init__(self, llm_provider: LLMProvider | None = None, **kwargs):
         kwargs.setdefault("name", "main")
         kwargs.setdefault("system_prompt", ORCHESTRATOR_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
         self._result_futures: dict[str, asyncio.Future] = {}
-        # Queued monitor notifications — prepended to next user response
+        # Queued monitor notifications — prepended to next user response, and
+        # capped at MAX_PENDING_NOTIFICATIONS: they drain only when someone
+        # chats, so on an idle system with a failing agent nothing empties them.
         self._pending_notifications: list[dict] = []
         self.protected = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
@@ -270,7 +277,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if msg.type == MessageType.TASK:
             # Intercept monitor notifications BEFORE passing to LLM _handle_task
             if isinstance(msg.payload, dict) and msg.payload.get("_monitor_notification"):
-                self._pending_notifications.append(msg.payload)
+                self._queue_notification(msg.payload)
                 logger.info(
                     f"[{self.name}] Monitor alert queued: {msg.payload.get('message', '')[:80]}"
                 )
@@ -329,6 +336,18 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             logger.warning(f"[{self.name}] Failed to record external exchange: {e}")
         # Fire-and-forget fact extraction — same as chat()
         asyncio.create_task(self._extract_and_save_facts(user_message, str(assistant_response)))
+
+    def _queue_notification(self, notice: dict) -> None:
+        """Queue a system notice for the next chat reply, keeping the newest.
+
+        The queue drains only when someone chats, so an idle system with a
+        failing agent has nothing emptying it. Dropping from the front keeps
+        the most recent notices, which are the ones still worth reading.
+        """
+        self._pending_notifications.append(notice)
+        excess = len(self._pending_notifications) - self.MAX_PENDING_NOTIFICATIONS
+        if excess > 0:
+            del self._pending_notifications[:excess]
 
     def _drain_notifications(self) -> str:
         """Pop queued monitor notifications as a formatted prefix string."""
@@ -2822,7 +2841,7 @@ async def handle_task(agent, payload):
                         )
                         try:
                             await self._spawn_from_config(local_cfg, save=True)
-                            self._pending_notifications.append(
+                            self._queue_notification(
                                 {
                                     "_monitor_notification": True,
                                     "message": (
@@ -2838,7 +2857,7 @@ async def handle_task(agent, payload):
                                 f"[main] Local re-spawn after state_return failed "
                                 f"for '{agent_name}': {exc}"
                             )
-                            self._pending_notifications.append(
+                            self._queue_notification(
                                 {
                                     "_monitor_notification": True,
                                     "message": (
@@ -3414,7 +3433,7 @@ async def handle_task(agent, payload):
                             agent = data.get("agent", "?")
                             to_node = data.get("to_node", "?")
                             sev = "info" if success else "warning"
-                            self._pending_notifications.append(
+                            self._queue_notification(
                                 {
                                     "_monitor_notification": True,
                                     "message": (
@@ -3492,7 +3511,7 @@ async def handle_task(agent, payload):
                     # heartbeat listener will re-add it as a fresh entry.
                     self._known_nodes.pop(node_name, None)
                     if lost:
-                        self._pending_notifications.append(
+                        self._queue_notification(
                             {
                                 "_monitor_notification": True,
                                 "message": (

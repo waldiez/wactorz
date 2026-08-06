@@ -15,6 +15,36 @@ from . import cost, runtime
 logger = logging.getLogger(__name__)
 
 
+#: Most agents tracked in live state at once. Entries are created on any
+#: `agents/<id>/…` publish, and only an explicit delete or reset removes them —
+#: so a client publishing under fresh ids grows this map for as long as it keeps
+#: publishing. Well above any real deployment; it is a ceiling, not a budget.
+MAX_TRACKED_AGENTS = 500
+
+
+def _evict_stalest() -> None:
+    """Drop the least recently updated agents once the map is over its ceiling.
+
+    Eviction is by staleness rather than insertion order because a real agent
+    heartbeats: it keeps refreshing `last_update` and so is never the oldest,
+    while entries invented by a flood go stale immediately and are dropped
+    first. Evicting by age alone would let the flood push out live agents.
+    """
+    agents = runtime.state["agents"]
+    overflow = len(agents) - MAX_TRACKED_AGENTS
+    if overflow <= 0:
+        return
+    stalest = sorted(agents, key=lambda aid: agents[aid].get("last_update", 0))[:overflow]
+    for aid in stalest:
+        agents.pop(aid, None)
+    logger.warning(
+        "[events] Live agent map hit %d; dropped the %d stalest. "
+        "Expected only under a flood of unknown agent ids.",
+        MAX_TRACKED_AGENTS,
+        overflow,
+    )
+
+
 def update_agent(agent_id: str, key: str, data) -> None:
     """Merge one field of an agent's live state, re-admitting it if respawned."""
     if runtime.hard_resetting or runtime.is_deleted(agent_id):
@@ -24,7 +54,12 @@ def update_agent(agent_id: str, key: str, data) -> None:
             "agent_id": agent_id,
             "name": agent_id[:8],
             "first_seen": time.time(),
+            # Set here as well as below: eviction ranks on it, and an entry
+            # without one sorts as infinitely stale — so a new arrival would be
+            # the first thing dropped, including itself.
+            "last_update": time.time(),
         }
+        _evict_stalest()
     runtime.state["agents"][agent_id][key] = data
     runtime.state["agents"][agent_id]["last_update"] = time.time()
 

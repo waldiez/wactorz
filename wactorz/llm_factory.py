@@ -29,7 +29,13 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 
+from .agents.llm.providers.anthropic import AnthropicProvider
+from .agents.llm.providers.gemini import GeminiProvider
+from .agents.llm.providers.nim import NIMProvider
+from .agents.llm.providers.ollama import OllamaProvider
+from .agents.llm.providers.openai import OpenAIProvider
 from .agents.llm_agent import LLMProvider
 from .config import CONFIG
 
@@ -59,43 +65,67 @@ def parse_overrides(raw: str) -> dict[str, str]:
     return table
 
 
+def _build_anthropic(model: str | None) -> LLMProvider:
+    return AnthropicProvider(
+        model=model or CONFIG.llm_model,
+        api_key=os.getenv("ANTHROPIC_API_KEY") or CONFIG.llm_api_key,
+    )
+
+
+def _build_openai(model: str | None) -> LLMProvider:
+    return OpenAIProvider(
+        model=model or CONFIG.llm_model,
+        api_key=os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key,
+        # Empty means "the public API"; the client rejects an empty string.
+        base_url=CONFIG.openai_url or None,
+    )
+
+
+def _build_ollama(model: str | None) -> LLMProvider:
+    return OllamaProvider(model=model or CONFIG.llm_model, base_url=CONFIG.ollama_url)
+
+
+def _build_nim(model: str | None) -> LLMProvider:
+    return NIMProvider(
+        model=model or CONFIG.llm_model,
+        api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key or CONFIG.llm_api_key,
+    )
+
+
+def _build_gemini(model: str | None) -> LLMProvider:
+    return GeminiProvider(
+        # Gemini is the one provider with a usable default: the shared
+        # LLM_MODEL is often set to another provider's model name.
+        model=model or CONFIG.llm_model or "gemini-2.5-flash",
+        api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key,
+    )
+
+
+# Provider name → constructor. Adding a backend means adding its module under
+# ``agents/llm/providers/`` and one entry here; nothing else selects on name.
+_PROVIDERS: dict[str, Callable[[str | None], LLMProvider]] = {
+    "anthropic": _build_anthropic,
+    "openai": _build_openai,
+    "ollama": _build_ollama,
+    "nim": _build_nim,
+    "gemini": _build_gemini,
+}
+
+
 def create_provider(provider_name: str, model: str | None = None) -> LLMProvider | None:
     """Construct an LLM provider by name, using the same env-var fallbacks as
     the global provider in ``build_system``. Returns None for ``none``/empty.
     Raises ValueError for an unknown provider name.
     """
-    from .agents.llm_agent import (
-        AnthropicProvider,
-        GeminiProvider,
-        NIMProvider,
-        OllamaProvider,
-        OpenAIProvider,
-    )
-
     name = (provider_name or "").strip().lower()
     if name in ("", "none"):
         return None
-    if name == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY") or CONFIG.llm_api_key
-        return AnthropicProvider(model=model or CONFIG.llm_model, api_key=api_key)
-    if name == "openai":
-        api_key = os.getenv("OPENAI_API_KEY") or CONFIG.llm_api_key
-        return OpenAIProvider(
-            model=model or CONFIG.llm_model, api_key=api_key, base_url=CONFIG.openai_url or None
+    build = _PROVIDERS.get(name)
+    if build is None:
+        raise ValueError(
+            f"Unknown LLM provider: {provider_name!r} (known: {', '.join(sorted(_PROVIDERS))})"
         )
-    if name == "ollama":
-        return OllamaProvider(model=model or CONFIG.llm_model, base_url=CONFIG.ollama_url)
-    if name == "nim":
-        return NIMProvider(
-            model=model or CONFIG.llm_model,
-            api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key or CONFIG.llm_api_key,
-        )
-    if name == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key
-        return GeminiProvider(
-            model=model or CONFIG.llm_model or "gemini-2.5-flash", api_key=api_key
-        )
-    raise ValueError(f"Unknown LLM provider: {provider_name!r}")
+    return build(model)
 
 
 def _provider_from_spec(spec: str) -> LLMProvider | None:

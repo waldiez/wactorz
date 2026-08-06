@@ -52,7 +52,7 @@ except ImportError:
 def setup(app: web.Application) -> None:
     """Register TTS routes and warm-start the voice cache."""
     app.router.add_get("/api/tts/voices", tts_voices_handler)
-    app.router.add_get("/api/tts", tts_handler)
+    app.router.add_post("/api/tts", tts_handler)
     app.on_startup.append(_warm_tts_voices)
 
 
@@ -93,10 +93,17 @@ async def tts_voices_handler(_request: web.Request) -> web.Response:
 
 
 async def tts_handler(request: web.Request) -> web.Response:
-    """GET /api/tts?text=...&voice=... — synthesize speech via edge-tts.
+    """POST /api/tts {"text": ..., "voice": ...} — synthesize speech via edge-tts.
 
     Returns audio/mpeg. 503 if edge-tts is not installed so the frontend
     falls back to the Web Speech API transparently.
+
+    POST rather than GET because this route does work: each call synthesizes
+    audio through an outbound service. A GET is assumed to be a read, and any
+    page can fire one cross-origin with no `Origin` header at all — `<img
+    src="…/api/tts?text=…">` is enough — which is exactly the assumption an
+    Origin check relies on. A POST carries a body, so it cannot be triggered
+    that way.
     """
     if not _tts_state.available:
         return web.Response(
@@ -104,15 +111,22 @@ async def tts_handler(request: web.Request) -> web.Response:
             text="edge-tts not installed — pip install 'wactorz[tts]'",
         )
 
-    text = (request.rel_url.query.get("text", "") or "").strip()
+    try:
+        body = await request.json()
+    except Exception:
+        return web.Response(status=400, text="expected a JSON body")
+    if not isinstance(body, dict):
+        return web.Response(status=400, text="expected a JSON object")
+
+    text = str(body.get("text") or "").strip()
     if not text:
-        return web.Response(status=400, text="text param required")
+        return web.Response(status=400, text="text is required")
 
     # Mirror TTSManager.ts: strip code blocks, cap at 300 chars.
     text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
 
     default_voice = os.environ.get("TTS_VOICE", _tts_state.default_voice)
-    voice = request.rel_url.query.get("voice", default_voice) or default_voice
+    voice = str(body.get("voice") or "") or default_voice
 
     try:
         communicate = edge_tts.Communicate(text, voice)

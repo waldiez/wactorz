@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 from ..core.mqtt import mqtt_client
+from ..monitoring.log_redaction import redact
 from . import events, runtime, ws
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,9 @@ async def handle_message(topic: str, payload: str) -> None:
                     ts=push.get("timestamp", time.time()),
                     agent_name=push.get("from", "agent"),
                     role="assistant",
-                    content=push["content"],
+                    # Same treatment as the WS path: an agent can quote back
+                    # something a user typed, and this row outlives the turn.
+                    content=redact(push["content"]),
                 )
         except Exception as exc:
             logger.debug("[chat-bridge] persist failed: %s", exc)

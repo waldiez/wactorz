@@ -72,6 +72,12 @@ def _env_opt_float(name: str) -> float | None:
 
 DEV_MODE = _env_truthy("WACTORZ_DEV_MODE")
 
+#: Largest request body any HTTP endpoint accepts. Nothing here uploads — the
+#: biggest legitimate body is a chat message or a spawn config, both far under
+#: this. aiohttp defaults to 1 MiB, which is generous for an API with no upload
+#: route, and it applies per request on a surface that has no authentication.
+MAX_REQUEST_BYTES = 256 * 1024
+
 
 @dataclass(frozen=True)
 class DeployTarget:

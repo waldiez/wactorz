@@ -14,6 +14,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from ..monitoring.log_redaction import redact
 from . import chat, events, lifecycle, runtime
 
 logger = logging.getLogger(__name__)
@@ -168,7 +169,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 ts=time.time(),
                 agent_name=agent_name,
                 role=role,
-                content=content,
+                # The log outlives the conversation and is readable through the
+                # API, so it gets the same treatment as the log file: a user can
+                # still type a credential even where no command accepts one.
+                content=redact(content),
             )
         except Exception as exc:
             logger.warning("[ws] chat_log write failed: %s", exc)

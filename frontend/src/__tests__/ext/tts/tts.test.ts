@@ -404,7 +404,7 @@ describe("TTSManager", () => {
         globalThis.fetch = origFetch;
     });
 
-    it("_speakServer with selected voice includes voice in params", async () => {
+    it("_speakServer sends the selected voice in the request body", async () => {
         const origFetch = globalThis.fetch;
         globalThis.fetch = vi.fn().mockResolvedValue({
             ok: true,
@@ -418,8 +418,15 @@ describe("TTSManager", () => {
         const m = new TTSManager();
         m.notify("test voice param");
         await new Promise(r => setTimeout(r, 50));
-        const url: string = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] ?? "";
-        expect(url).toContain("voice=en-US-AriaNeural");
+        const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
+        expect(url).toBe("/api/tts");
+        // The voice rides in the body, not the query string: synthesis is a
+        // POST so it cannot be triggered by a cross-origin GET.
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(init?.body as string)).toEqual({
+            text: "test voice param",
+            voice: "en-US-AriaNeural",
+        });
         globalThis.fetch = origFetch;
     });
 

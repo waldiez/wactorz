@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..config import (
     CONFIG,
+    MAX_REQUEST_BYTES,
     deploy_env_prefix,
     deploy_target,
     deploy_target_for_host,
@@ -939,7 +940,7 @@ class WhatsAppInterface:
             await self._send_message(twilio, response_text, from_number)
             return web.Response(text="OK")
 
-        app = web.Application()
+        app = web.Application(client_max_size=MAX_REQUEST_BYTES)
         app.router.add_post("/webhook/whatsapp", webhook)
         runner = web.AppRunner(app)
         await runner.setup()
@@ -1141,7 +1142,9 @@ class RESTInterface:
                 )
             return web.json_response(payload)
 
-        app = web.Application(middlewares=[self._monitor.middleware])
+        app = web.Application(
+            middlewares=[self._monitor.middleware], client_max_size=MAX_REQUEST_BYTES
+        )
         app.router.add_get("/health", health_endpoint)
         app.router.add_get("/metrics", prometheus_metrics_endpoint)
         app.router.add_get("/ha-map", ha_map_latest_endpoint)

@@ -2,11 +2,25 @@
 * text=auto
 *.sh text eol=lf
 
-# Vite copies this template through to static/app/index.html byte for byte, so
-# on a CRLF checkout a Windows build commits CRLF and CI's "static/app matches
-# the frontend source" check fails against its own LF rebuild. Pin both ends.
-frontend/index.html   text eol=lf
-static/app/index.html text eol=lf
+# CI rebuilds the bundle on Linux and fails if it differs from what is committed,
+# so every generated file in it has to be LF whoever ran the build. `text=auto`
+# alone is not enough: it normalises on `git add`, but resolving a merge conflict
+# writes the file without that conversion, which is how a CRLF index.html reached
+# a commit. eol=lf also keeps the working tree LF, so vite — which copies
+# frontend/index.html through byte for byte — has no CRLF to propagate.
+# Extensions, not `static/app/**`: the bundle also carries png/webp/ico, and
+# forcing eol on those would corrupt them.
+frontend/index.html      text eol=lf
+frontend/public/**/*.js  text eol=lf
+frontend/public/**/*.txt text eol=lf
+frontend/public/**/*.svg text eol=lf
+frontend/public/**/*.webmanifest text eol=lf
+static/app/**/*.html     text eol=lf
+static/app/**/*.svg      text eol=lf
+static/app/**/*.js       text eol=lf
+static/app/**/*.css      text eol=lf
+static/app/**/*.txt      text eol=lf
+static/app/**/*.webmanifest text eol=lf
 
 # Generated docs bundled into the wheel — collapse in GitHub PR diffs
 static/docs/**        linguist-generated=true

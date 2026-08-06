@@ -13,12 +13,8 @@ from tests.optional_deps import ensure_importable
 # the rest of the process.
 ensure_importable("openai")
 
-from wactorz.agents.llm_agent import (
-    OllamaProvider,
-    _ollama_options,
-    _resolve_temperature,
-    _temp_params,
-)
+from wactorz.agents.llm.base import _ollama_options, _resolve_temperature, _temp_params
+from wactorz.agents.llm_agent import OllamaProvider
 from wactorz.config import CONFIG, _env_opt_float
 
 

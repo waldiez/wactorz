@@ -13,6 +13,7 @@ import sys
 from aiohttp import web
 from aiohttp.typedefs import Handler
 
+from ..config import MAX_REQUEST_BYTES
 from . import (
     api_actors,
     api_reset,
@@ -68,7 +69,7 @@ def build_app() -> web.Application:
             pass
         return response
 
-    app = web.Application(middlewares=[cors_middleware])
+    app = web.Application(middlewares=[cors_middleware], client_max_size=MAX_REQUEST_BYTES)
     # Expose the registry to extensions (via app.get) before setup_all() runs.
     # None in standalone/legacy MQTT mode — consumers handle that.
     from ..core import contract

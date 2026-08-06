@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import TYPE_CHECKING, ClassVar
 
@@ -387,7 +388,7 @@ class PlanningMixin(_Host):
             {
                 "type": "log",
                 "message": f"Complex task detected — spawning planner ({mode})...",
-                "timestamp": __import__("time").time(),
+                "timestamp": time.time(),
             },
         )
 

@@ -96,8 +96,17 @@ _PEM_TRAILING = re.compile(
 _PEM_PLACEHOLDER = f"{REDACTED} private key"
 
 
+#: `/deploy <node>` is the whole supported form. The older one put SSH
+#: credentials in positional arguments, so anything past the node name may be
+#: one — and unlike `password=…` it carries no marker to key off. The negative
+#: lookahead keeps `/deploy-pkg <node> <packages…>` out of it: package names are
+#: not secrets and redacting them would hide what was installed.
+_DEPLOY_POSITIONAL = re.compile(r"(?im)^(\s*/deploy(?![-\w])\s+\S+\s+)\S.*$")
+
+
 def redact(text: str) -> str:
     """Replace known secret shapes in ``text``. Order matters where noted."""
+    text = _DEPLOY_POSITIONAL.sub(rf"\1{REDACTED}", text)
     text = _PEM_BLOCK.sub(_PEM_PLACEHOLDER, text)
     text = _PEM_TRAILING.sub(_PEM_PLACEHOLDER, text)
     text = _URL_USERINFO.sub(rf"\1\2\3{REDACTED}\5", text)

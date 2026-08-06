@@ -174,6 +174,10 @@ class Actor(ABC):
 
         # Handlers
         self._handlers: dict[MessageType, Callable] = {}
+        #: Correlation id → the future waiting on that request's RESULT.
+        #: Populated by whoever sends a TASK carrying `_task_id`; drained by
+        #: `_resolve_pending_result` before the message reaches a handler.
+        self._result_futures: dict[str, asyncio.Future] = {}
         self._setup_default_handlers()
 
         # Background tasks
@@ -361,8 +365,34 @@ class Actor(ABC):
                 self.metrics.errors += 1
                 logger.error("[%s] Error in message loop: %s", self.name, e, exc_info=True)
 
+    def _resolve_pending_result(self, msg: Message) -> bool:
+        """Settle a waiting future from a RESULT's correlation id.
+
+        Request/reply is a convention rather than a framework feature: the
+        sender tags a TASK with `_task_id` and blocks on a future keyed by it,
+        and the recipient echoes that id back.
+
+        It belongs here, ahead of every handler, so that any actor can receive a
+        reply without opting in — a per-agent implementation makes the ability
+        depend on which agent is receiving. Returns True when the message was a
+        reply someone was waiting for, in which case there is nothing left to
+        dispatch: the caller already has it.
+        """
+        if msg.type != MessageType.RESULT or not isinstance(msg.payload, dict):
+            return False
+        # "task" is the older spelling and still on the wire from some agents.
+        fid = msg.payload.get("_task_id") or msg.payload.get("task")
+        future = self._result_futures.get(fid) if fid else None
+        if future is None:
+            return False
+        if not future.done():
+            future.set_result(msg.payload)
+        return True
+
     async def _dispatch(self, msg: Message):
         """Dispatch message to the appropriate handler."""
+        if self._resolve_pending_result(msg):
+            return
         handler = self._handlers.get(msg.type)
         if handler:
             await handler(msg)
@@ -382,10 +412,11 @@ class Actor(ABC):
     async def _handle_lifecycle(self, msg: Message):
         """Apply a lifecycle message through the one implementation of it.
 
-        These used to be three separate handlers, one of which repeated the
-        supervision release by hand. Message-passing is another way to ask for
-        the same thing, not another set of rules — so a protected actor now
-        refuses a STOP message as it already refused the other routes.
+        Message-passing is another way to ask for the same thing, not another
+        set of rules: START/STOP/PAUSE/RESUME all route through `apply_command`,
+        so a protected actor refuses a STOP message exactly as it refuses the
+        REST and dashboard routes, and the supervision release happens once
+        rather than per entry point.
         """
         await self.apply_command(msg.type.value)
 

@@ -11,7 +11,15 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from ..config import CONFIG
+from ..config import (
+    CONFIG,
+    MAX_REQUEST_BYTES,
+    deploy_env_prefix,
+    deploy_target,
+    deploy_target_for_host,
+    deploy_target_help,
+    deploy_target_names,
+)
 from ..core.mqtt import mqtt_client
 from ..monitoring import PrometheusMonitor
 
@@ -340,110 +348,37 @@ class CLIInterface:
                 return str(result[key])
         return str(result)
 
-    # ── Node discovery ─────────────────────────────────────────────────────
-
-    async def _discover_host(self, node_name: str) -> str:
-        """Find a remote host automatically:
-        1. mDNS  — try {node_name}.local and raspberrypi.local
-        2. Scan  — scan local subnet for SSH (port 22)
-        3. Manual — ask user
-        """
-        print(f"\n[discover] Searching for '{node_name}' on the network...")
-
-        # 1. mDNS
-        candidates = [
-            f"{node_name}.local",
-            "raspberrypi.local",
-            f"{node_name.replace('-', '')}.local",
-        ]
-        for hostname in candidates:
-            ip = await _resolve_host(hostname)
-            if ip:
-                print(f"[discover] Found via mDNS: {hostname} → {ip}")
-                ans = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda h=hostname, i=ip: input(f"  Use {h} ({i})? [Y/n]: ").strip().lower(),
-                )
-                if ans in ("", "y", "yes"):
-                    return hostname
-
-        # 2. Network scan
-        local_ip = await _resolve_host(socket.gethostname())
-        subnet = ".".join(local_ip.split(".")[:3]) if local_ip else "192.168.1"
-
-        print(f"[discover] mDNS not found. Scanning {subnet}.1-254 for SSH (~10s)...")
-        found = await self._scan_subnet_ssh(subnet)
-
-        if found:
-            print(f"[discover] Found {len(found)} SSH-accessible host(s):")
-            for i, ip in enumerate(found):
-                print(f"  [{i + 1}] {ip}")
-            ans = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: input(f"  Pick [1-{len(found)}] or type IP manually: ").strip()
-            )
-            # Accept "3", "[3]", or "[ 3 ]" — all mean pick item 3
-            ans_stripped = ans.strip("[] \t")
-            if ans_stripped.isdigit() and 1 <= int(ans_stripped) <= len(found):
-                return found[int(ans_stripped) - 1]
-            if ans:
-                return ans  # treat as a literal IP/hostname
-        else:
-            print("[discover] No SSH hosts found on local network.")
-
-        # 3. Manual
-        return await asyncio.get_event_loop().run_in_executor(
-            None, lambda: input("  Enter host IP or hostname: ").strip()
-        )
-
-    async def _scan_subnet_ssh(self, subnet: str) -> list:
-        """Async port-22 scan of an entire /24 subnet."""
-        found = []
-        sem = asyncio.Semaphore(60)
-
-        async def probe(ip):
-            async with sem:
-                try:
-                    _, w = await asyncio.wait_for(asyncio.open_connection(ip, 22), timeout=0.4)
-                    w.close()
-                    try:
-                        await w.wait_closed()
-                    except Exception:
-                        pass
-                    found.append(ip)
-                except Exception:
-                    pass
-
-        await asyncio.gather(*[probe(f"{subnet}.{i}") for i in range(1, 255)])
-        return sorted(found, key=lambda x: int(x.split(".")[-1]))
-
     # ── Deploy ─────────────────────────────────────────────────────────────
 
-    async def _deploy(self, node_name: str, host: str = ""):
-        """Deploy an Wactorz edge node to a remote machine.
-        Discovers the host, prompts for credentials, then delegates the
-        actual SSH work to the installer agent (node_deploy action).
+    async def _deploy(self, node_name: str):
+        """Deploy a Wactorz edge node to a configured remote machine.
+
+        The target — host, user, SSH auth, broker — comes from the environment
+        (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). This used to
+        prompt for an SSH password at the terminal and, with no host, port-scan
+        the local /24 for open SSH ports; both are gone. The scan told anyone
+        who could reach this command where every SSH server on the LAN was, and
+        the typed password was handed straight to the installer as message data.
         """
-        # Discover host
-        if not host:
-            host = await self._discover_host(node_name)
-        if not host:
-            print("[error] No host found. Aborting.")
+        target = deploy_target(node_name)
+        if target is None:
+            print("[error] " + deploy_target_help(node_name))
             return
 
-        # Credentials
-        loop = asyncio.get_event_loop()
-        user = await loop.run_in_executor(
-            None, lambda: input("\n  SSH user [pi]: ").strip() or "pi"
-        )
-        password = await loop.run_in_executor(
-            None,
-            lambda: __import__("getpass").getpass("  SSH password (leave blank for key auth): "),
-        )
-        broker = await loop.run_in_executor(
-            None, lambda: input("  MQTT broker IP (this machine's LAN IP): ").strip() or "localhost"
-        )
+        host = target.host
+        if not host:
+            # One name lookup for one host — no sweep of the network.
+            print(f"[discover] No host configured for '{node_name}' — trying mDNS...")
+            host = await _resolve_host(f"{node_name}.local") or ""
+            if not host:
+                print(
+                    f"[error] Could not resolve '{node_name}.local'. "
+                    f"Set {deploy_env_prefix(node_name)}_HOST in your environment."
+                )
+                return
+            print(f"[discover] Found via mDNS: {node_name}.local → {host}")
 
-        print(f"\n  Deploying to {user}@{host} as node '{node_name}'...")
+        print(f"\n  Deploying to {target.user}@{host} as node '{node_name}'...")
         print("  (This may take 20-60s while packages install on the remote machine)")
 
         if not hasattr(self.agent, "delegate_to_installer"):
@@ -454,10 +389,9 @@ class CLIInterface:
             {
                 "action": "node_deploy",
                 "host": host,
-                "user": user,
-                "password": password,
-                "node_name": node_name,
-                "broker": broker,
+                "node_name": target.name,
+                "broker": target.broker or "localhost",
+                "port": target.broker_port,
             },
             timeout=120.0,
         )
@@ -587,33 +521,33 @@ class CLIInterface:
                     continue
 
                 if text.lower().startswith("/deploy-pkg"):
-                    # /deploy-pkg <host-ip> <pkg1> [pkg2 ...]
+                    # /deploy-pkg <node-name|host> <pkg1> [pkg2 ...]
                     parts = text.split()
                     if len(parts) < 3:
-                        print("[usage] /deploy-pkg <host-ip> <package> [package2 ...]")
-                        print(
-                            "        e.g.  /deploy-pkg 192.168.1.50 adafruit-circuitpython-dht RPi.GPIO"
-                        )
+                        print("[usage] /deploy-pkg <node-name> <package> [package2 ...]")
+                        print("        e.g.  /deploy-pkg rpi-kitchen adafruit-circuitpython-dht")
                         print()
                     elif not hasattr(self.agent, "delegate_to_installer"):
                         print("[error] installer not available\n")
                     else:
-                        host = parts[1]
+                        # Accept either the node name or its address; both resolve
+                        # to the same configured target. This used to prompt for
+                        # an SSH password at the terminal and put it in the task
+                        # payload — the installer now reads credentials from the
+                        # environment and ignores any a payload carries.
+                        node = parts[1]
                         packages = parts[2:]
-                        loop = asyncio.get_event_loop()
-                        user = await loop.run_in_executor(
-                            None, lambda: input("  SSH user [pi]: ").strip() or "pi"
-                        )
-                        password = await loop.run_in_executor(
-                            None, lambda: __import__("getpass").getpass("  SSH password: ")
-                        )
+                        pkg_target = deploy_target(node) or deploy_target_for_host(node)
+                        if pkg_target is None:
+                            print("[error] " + deploy_target_help(node) + "\n")
+                            continue
+                        host = pkg_target.host or node
                         print(f"  Installing {packages} on {host}...")
                         result = await self.agent.delegate_to_installer(
                             {
                                 "action": "node_install",
                                 "host": host,
-                                "user": user,
-                                "password": password,
+                                "node_name": pkg_target.name,
                                 "packages": packages,
                             },
                             timeout=120.0,
@@ -628,10 +562,18 @@ class CLIInterface:
                 if text.lower().startswith("/deploy"):
                     parts = text.split()
                     if len(parts) < 2:
-                        print("[usage] /deploy <node-name> [host]\n")
+                        listing = "\n".join(f"  {n}" for n in deploy_target_names())
+                        print(
+                            f"[usage] /deploy <node-name>\nConfigured targets:\n{listing or '  (none configured)'}\n"
+                        )
+                    elif len(parts) > 2:
+                        # The old form took a host override here, which would aim
+                        # one target's credentials at a machine of the caller's
+                        # choosing. Targets are whole, or they are not used.
+                        print("[error] /deploy takes a node name only.\n")
+                        print(deploy_target_help(parts[1]) + "\n")
                     else:
-                        host = parts[2] if len(parts) >= 3 else ""
-                        await self._deploy(parts[1], host)
+                        await self._deploy(parts[1])
                     continue
 
                 if text.startswith("@"):
@@ -998,7 +940,7 @@ class WhatsAppInterface:
             await self._send_message(twilio, response_text, from_number)
             return web.Response(text="OK")
 
-        app = web.Application()
+        app = web.Application(client_max_size=MAX_REQUEST_BYTES)
         app.router.add_post("/webhook/whatsapp", webhook)
         runner = web.AppRunner(app)
         await runner.setup()
@@ -1200,7 +1142,9 @@ class RESTInterface:
                 )
             return web.json_response(payload)
 
-        app = web.Application(middlewares=[self._monitor.middleware])
+        app = web.Application(
+            middlewares=[self._monitor.middleware], client_max_size=MAX_REQUEST_BYTES
+        )
         app.router.add_get("/health", health_endpoint)
         app.router.add_get("/metrics", prometheus_metrics_endpoint)
         app.router.add_get("/ha-map", ha_map_latest_endpoint)

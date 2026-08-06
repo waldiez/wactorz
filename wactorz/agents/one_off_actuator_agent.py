@@ -17,7 +17,7 @@ from ..core.integrations.home_assistant.ha_helper import (
 )
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 from .home_assistant_actuator_agent import ActuatorAction
-from .llm_agent import LLMProvider, _accumulate_global_cost
+from .llm_agent import LLMProvider, accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
@@ -1019,7 +1019,7 @@ class OneOffActuatorAgent(Actor):
         self.total_cost_usd += usage.get("cost_usd", 0.0)
         delta = self.total_cost_usd - self._last_period_cost_usd
         if delta > 0:
-            _accumulate_global_cost(delta)
+            accumulate_global_cost(delta)
             self._last_period_cost_usd = self.total_cost_usd
 
     async def _deferred_stop(self) -> None:

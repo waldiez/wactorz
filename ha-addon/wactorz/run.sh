@@ -149,6 +149,43 @@ export TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID}"
 SOCIAL_RATE_LIMIT_PER_MIN=$(get_config_safe 'social_rate_limit_per_min' '12')
 export SOCIAL_RATE_LIMIT_PER_MIN="${SOCIAL_RATE_LIMIT_PER_MIN}"
 
+# ── Remote deploy targets ─────────────────────────────────────────────────────
+# A list of objects in options.json, flattened into the DEPLOY_TARGETS +
+# DEPLOY_<NAME>_* variables wactorz/config.py reads. SSH credentials are
+# deliberately configuration and not chat input: anything typed into chat is
+# recorded in the conversation history. Absent or empty leaves DEPLOY_TARGETS
+# unset, which simply means `/deploy` has nothing to offer.
+DEPLOY_TARGETS=""
+if [ -f /data/options.json ]; then
+    deploy_count=$(jq -r '(.deploy_targets // []) | length' /data/options.json 2>/dev/null || echo 0)
+    deploy_i=0
+    while [ "$deploy_i" -lt "$deploy_count" ]; do
+        deploy_name=$(jq -r ".deploy_targets[$deploy_i].name // \"\"" /data/options.json)
+        if [ -n "$deploy_name" ]; then
+            # Same slug rule as config.py's _env_slug: upper-case, and every run
+            # of non-alphanumerics becomes a single underscore.
+            deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
+                | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
+            for deploy_field in host user key password broker broker_port ssh_port; do
+                deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" /data/options.json)
+                if [ -n "$deploy_value" ]; then
+                    deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"
+                    export "$deploy_var=$deploy_value"
+                fi
+            done
+            if [ -z "$DEPLOY_TARGETS" ]; then
+                DEPLOY_TARGETS="$deploy_name"
+            else
+                DEPLOY_TARGETS="$DEPLOY_TARGETS,$deploy_name"
+            fi
+        fi
+        deploy_i=$((deploy_i + 1))
+    done
+fi
+export DEPLOY_TARGETS
+if [ -n "$DEPLOY_TARGETS" ]; then
+    bashio::log.info "Deploy targets configured: ${DEPLOY_TARGETS}"
+fi
 OTEL_ENDPOINT=$(get_config_safe 'otel_endpoint' '')
 if [ -n "$OTEL_ENDPOINT" ]; then
     export OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_ENDPOINT"

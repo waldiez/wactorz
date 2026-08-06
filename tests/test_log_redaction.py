@@ -358,3 +358,32 @@ class TestNoCatastrophicBacktracking:
         started = time.perf_counter()
         scrub(hostile)
         assert time.perf_counter() - started < 1.0, "pattern backtracks on hostile input"
+
+
+class TestDeployPositional:
+    """`/deploy <node>` is the whole supported form.
+
+    The older one put SSH credentials in positional arguments, so anything past
+    the node name may be one — and unlike `password=…` it carries no marker to
+    key off, which is why it needs a rule of its own.
+    """
+
+    def test_arguments_after_the_node_are_redacted(self) -> None:
+        assert scrub("/deploy rpi-kitchen 10.0.0.5 pi hunter2") == f"/deploy rpi-kitchen {REDACTED}"
+
+    def test_the_supported_form_is_left_alone(self) -> None:
+        assert scrub("/deploy rpi-kitchen") == "/deploy rpi-kitchen"
+
+    def test_deploy_pkg_keeps_its_package_names(self) -> None:
+        # Package names are not secrets, and hiding them would hide what was
+        # installed on a node.
+        assert scrub("/deploy-pkg rpi numpy scipy") == "/deploy-pkg rpi numpy scipy"
+
+    def test_the_word_deploy_in_prose_is_left_alone(self) -> None:
+        assert scrub("can you /deploy something for me") == "can you /deploy something for me"
+
+    def test_only_the_offending_line_is_touched(self) -> None:
+        out = scrub("hello\n/deploy rpi 10.0.0.5 pi hunter2\nbye")
+
+        assert "hunter2" not in out
+        assert out.startswith("hello\n") and out.endswith("\nbye")

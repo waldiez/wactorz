@@ -163,6 +163,56 @@ def test_score_dynamic_syntax_error_fails():
     assert not score_dynamic("async def setup(agent:\n    pass", ["setup"])
 
 
+# ── dynamic: strict (dict) form ──────────────────────────────────────────────
+
+_STRICT = {
+    "functions": ["setup", "process"],
+    "must_contain": ["custom/home/heartbeat", "agent.subscribe"],
+}
+
+_GOOD = (
+    "async def setup(agent):\n"
+    "    async def on_beat(payload):\n"
+    "        agent.state['last'] = payload\n"
+    "    agent.subscribe('custom/home/heartbeat', on_beat)\n"
+    "\n"
+    "async def process(agent):\n"
+    "    import time\n"
+    "    if time.time() - agent.state.get('last', 0) > 60:\n"
+    "        await agent.alert('silent')\n"
+)
+
+
+def test_score_dynamic_strict_accepts_real_agent():
+    assert score_dynamic(_GOOD, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_stub():
+    stub = "async def setup(agent):\n    pass\n\nasync def process(agent):\n    pass\n"
+    assert score_dynamic(stub, ["setup", "process"])  # lenient list form passes
+    assert not score_dynamic(stub, _STRICT)  # strict form does not
+
+
+def test_score_dynamic_strict_rejects_missing_topic():
+    wrong = _GOOD.replace("custom/home/heartbeat", "custom/home/pulse")
+    assert not score_dynamic(wrong, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_awaited_subscribe():
+    bad = _GOOD.replace("    agent.subscribe(", "    await agent.subscribe(")
+    assert not score_dynamic(bad, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_module_level_import():
+    bad = "import time\n" + _GOOD
+    assert not score_dynamic(bad, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_own_llm_client():
+    bad = _GOOD.replace("    import time\n", "    import openai\n    import time\n")
+    assert not score_dynamic(bad, _STRICT)
+
+
 # ── case loading / summary ───────────────────────────────────────────────────
 
 

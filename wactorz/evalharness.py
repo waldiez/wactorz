@@ -304,15 +304,109 @@ def score_planner(output: str, expected: list[str] | dict) -> bool:
     return all(str(token).lower() not in serialized for token in must_not_contain)
 
 
-def score_dynamic(output: str, expected: list[str]) -> bool:
-    """Generated code must parse and define every expected function as async."""
+def _structural_findings(tree: ast.AST, code: str) -> set[str]:
+    """Framework rules the generated code must not break.
+
+    These are the mistakes the orchestrator prompt explicitly warns about, and
+    each one breaks a real DynamicAgent at runtime — so a benchmark that ignores
+    them scores broken agents as successes.
+    """
+    findings: set[str] = set()
+
+    # Imports must live inside functions: module-level imports run before the
+    # installer has had a chance to pip-install anything.
+    for node in tree.body if isinstance(tree, ast.Module) else []:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            findings.add("module_level_import")
+
+    for node in ast.walk(tree):
+        # agent.subscribe() is not awaitable and needs a callback.
+        if isinstance(node, ast.Await):
+            call = node.value
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "subscribe"
+            ):
+                findings.add("awaited_subscribe")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "subscribe" and len(node.args) < 2:
+                findings.add("subscribe_without_callback")
+            # agent.window() is synchronous; awaiting it raises TypeError.
+            if node.func.attr == "window" and isinstance(getattr(node, "parent", None), ast.Await):
+                findings.add("awaited_window")
+        # Generated agents must use agent.llm, never their own client.
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [a.name for a in getattr(node, "names", [])] + [
+                getattr(node, "module", "") or ""
+            ]
+            if any(n.split(".")[0] in {"openai", "anthropic", "ollama"} for n in names if n):
+                findings.add("own_llm_client")
+
+    # A body that is nothing but `pass` / docstring is a stub, not an agent.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef):
+            meaningful = [
+                s
+                for s in node.body
+                if not isinstance(s, ast.Pass)
+                and not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))
+            ]
+            if not meaningful:
+                findings.add(f"empty_body:{node.name}")
+    return findings
+
+
+def score_dynamic(output: str, expected: list[str] | dict) -> bool:
+    """Generated agent code must parse, define the required async entry points,
+    reference what the task requires, and not break the framework's rules.
+
+    ``expected`` is either a list of required function names (compile + entry
+    points only), or a dict::
+
+        {"functions": ["setup", "process"],
+         "must_contain": ["custom/home/heartbeat", "agent.subscribe"],
+         "must_not_contain": ["requests.get"],
+         "allow_empty_bodies": false}
+
+    Structural checks always run for the dict form: module-level imports,
+    ``await agent.subscribe(...)``, ``subscribe`` without a callback, importing
+    an LLM client instead of using ``agent.llm``, and stub function bodies.
+    """
+    if isinstance(expected, dict):
+        functions = expected.get("functions") or []
+        must_contain = expected.get("must_contain") or []
+        must_not_contain = expected.get("must_not_contain") or []
+        structural = True
+        allow_empty = bool(expected.get("allow_empty_bodies"))
+    else:
+        functions, must_contain, must_not_contain = expected, [], []
+        structural = False
+        allow_empty = True
+
     code = _strip_fences(output)
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return False
+
     async_defs = {n.name for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)}
-    return all(name in async_defs for name in expected)
+    if not all(name in async_defs for name in functions):
+        return False
+
+    lowered = code.lower()
+    if any(str(token).lower() not in lowered for token in must_contain):
+        return False
+    if any(str(token).lower() in lowered for token in must_not_contain):
+        return False
+
+    if structural:
+        findings = _structural_findings(tree, code)
+        if allow_empty:
+            findings = {f for f in findings if not f.startswith("empty_body:")}
+        if findings:
+            return False
+    return True
 
 
 _SCORERS = {

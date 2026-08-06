@@ -205,6 +205,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   workflow used `CHANGELOG.md` verbatim, so every release page carried `[Unreleased]` plus every
   past version — an endless scroll. It now extracts only the section matching the tag, and fails
   the job if no section for that version exists rather than publishing empty notes.
+- **Telling Reachy to shut up now ends the whole answer, not one sentence of it.** A spoken reply
+  is delivered as one utterance per sentence, and only the sentence already playing was cut: the
+  next one started immediately and cleared the stop request on its way in, so the rest of the
+  answer played out and "shut up" looked like it had barely worked. The stop is now carried across
+  the sentences of a reply and reported separately from someone talking over Reachy, which keeps
+  the barge-in behaviour it already had.
+- **The pause between Reachy's sentences is no longer long enough to sound like a stall.** Every
+  sentence was followed by the same gap used between separate utterances, on top of waiting out the
+  sentence's own measured length — so a three-sentence answer carried well over a second of dead
+  air in the middle of it. Mid-reply the gap now only covers the delay in starting the next
+  sentence; the full pause remains at the end, where it separates the answer from what follows.
+- **A device request Reachy could not resolve is spoken as an answer rather than an error.** When
+  the resolver returned something with no usable JSON in it, the failure travelled back as the
+  reply text — so the robot read out a raw parser error. It now says it could not identify a
+  matching device, the same as any other unmatched request, and the unusable output is logged
+  instead of voiced.
 
 ## [0.5.2] - 2026-07-30
 

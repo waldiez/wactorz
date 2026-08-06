@@ -447,11 +447,22 @@ def _ollama_options(kwargs: dict) -> dict:
 
 
 class LLMProvider:
-    """Base class for LLM providers."""
+    """Base class for LLM providers.
+
+    Every route to a paid model goes through one of the three public methods
+    here, and each checks the spend limit before delegating to the provider's
+    own ``_``-prefixed implementation. Subclasses implement those and inherit
+    the check, so a new provider — or a new call site — cannot reach the model
+    without it. The limit previously guarded three call sites in this class
+    while the providers were reachable directly, which most callers did.
+    """
+
+    # ── Public surface: guarded, and not meant to be overridden ─────────────
 
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         """Returns (text, usage) where usage = {input_tokens, output_tokens, cost_usd}"""
-        raise NotImplementedError
+        _check_cost_limit()
+        return await self._complete(messages, system, **kwargs)
 
     async def complete_with_tools(
         self,
@@ -460,7 +471,47 @@ class LLMProvider:
         system: str = "",
         **kwargs: Any,
     ) -> "ToolCompletion":
+        _check_cost_limit()
+        return await self._complete_with_tools(messages, tools, system, **kwargs)
+
+    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+        """Yield response chunks as they arrive.
+
+        The check runs on first iteration rather than at call time, because
+        that is when the request is actually made — and it is where a caller
+        that builds the generator early still gets an honest answer.
+        """
+        _check_cost_limit()
+        async for chunk in self._stream(messages, system, **kwargs):
+            yield chunk
+
+    @classmethod
+    def supports_streaming(cls) -> bool:
+        """Whether this provider implements streaming.
+
+        `hasattr(provider, "stream")` cannot answer this any more: `stream` is
+        defined here, so every provider has one. What varies is whether
+        `_stream` was overridden.
+        """
+        return cls._stream is not LLMProvider._stream
+
+    # ── Provider implementations ────────────────────────────────────────────
+
+    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+        raise NotImplementedError
+
+    async def _complete_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict[str, Any]],
+        system: str = "",
+        **kwargs: Any,
+    ) -> "ToolCompletion":
         raise NotImplementedError(f"{self.__class__.__name__} does not support tool calls")
+
+    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
+        raise NotImplementedError(f"{self.__class__.__name__} does not support streaming")
+        yield ""  # pragma: no cover - unreachable, makes this an async generator
 
 
 @dataclass
@@ -583,7 +634,7 @@ class AnthropicProvider(LLMProvider):
                 parts.append(getattr(block, "text", "") or "")
         return "".join(parts).strip()
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         response = await self.client.messages.create(  # pyright: ignore[reportCallIssue]
             model=self.model,
             max_tokens=kwargs.get("max_tokens", 16384),
@@ -601,7 +652,7 @@ class AnthropicProvider(LLMProvider):
         }
         return text, usage
 
-    async def complete_with_tools(
+    async def _complete_with_tools(
         self,
         messages: list[dict],
         tools: list[dict[str, Any]],
@@ -694,7 +745,7 @@ class AnthropicProvider(LLMProvider):
             )
         return converted
 
-    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         input_tokens = output_tokens = 0
         async with self.client.messages.stream(
@@ -735,7 +786,7 @@ class OpenAIProvider(LLMProvider):
         self.model = model
         self.base_url = base_url or None
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         params = {
             "model": self.model,
@@ -770,7 +821,7 @@ class OpenAIProvider(LLMProvider):
         }
         return text, usage
 
-    async def complete_with_tools(
+    async def _complete_with_tools(
         self,
         messages: list[dict],
         tools: list[dict[str, Any]],
@@ -823,7 +874,7 @@ class OpenAIProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         input_tokens = output_tokens = 0
@@ -889,7 +940,7 @@ class OllamaProvider(LLMProvider):
             return list(messages)
         return [{"role": "system", "content": system}, *list(messages)]
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         payload = {
             "model": self.model,
             "messages": self._chat_messages(messages, system),
@@ -908,7 +959,7 @@ class OllamaProvider(LLMProvider):
         usage = {"input_tokens": prompt_eval, "output_tokens": eval_count, "cost_usd": 0.0}
         return text, usage
 
-    async def complete_with_tools(
+    async def _complete_with_tools(
         self,
         messages: list[dict],
         tools: list[dict[str, Any]],
@@ -973,7 +1024,7 @@ class OllamaProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         payload = {
             "model": self.model,
@@ -1060,7 +1111,7 @@ class NIMProvider(LLMProvider):
                 return await self.client.chat.completions.create(**params)
             raise
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         params: dict[str, Any] = {
             "model": self.model,
@@ -1080,7 +1131,7 @@ class NIMProvider(LLMProvider):
         }
         return text, usage
 
-    async def complete_with_tools(
+    async def _complete_with_tools(
         self,
         messages: list[dict],
         tools: list[dict[str, Any]],
@@ -1138,7 +1189,7 @@ class NIMProvider(LLMProvider):
             assistant_message=assistant_message,
         )
 
-    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         full_messages = ([{"role": "system", "content": system}] if system else []) + messages
         input_tokens = output_tokens = 0
@@ -1202,7 +1253,7 @@ class GeminiProvider(LLMProvider):
         self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
         self._types = genai_types
 
-    async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
+    async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
             system_instruction=system or None,
@@ -1231,7 +1282,7 @@ class GeminiProvider(LLMProvider):
         }
         return text, usage
 
-    async def complete_with_tools(
+    async def _complete_with_tools(
         self,
         messages: list[dict],
         tools: list[dict[str, Any]],
@@ -1303,7 +1354,7 @@ class GeminiProvider(LLMProvider):
             parameters=tool.get("parameters", {"type": "object", "properties": {}}),
         )
 
-    async def stream(self, messages: list[dict], system: str = "", **kwargs):
+    async def _stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
         contents = self._to_gemini_contents(messages)
         config = self._types.GenerateContentConfig(
@@ -1757,7 +1808,9 @@ class LLMAgent(Actor):
             yield str(e)
             return
 
-        if self.llm is None or not hasattr(self.llm, "stream"):
+        # Not hasattr: `stream` is defined on the base, so every provider has
+        # one. What varies is whether the provider implemented it.
+        if self.llm is None or not self.llm.supports_streaming():
             # Fallback: non-streaming — yield whole response as single chunk
             response = await self.chat(user_message)
             yield response

@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 #: publishing. Well above any real deployment; it is a ceiling, not a budget.
 MAX_TRACKED_AGENTS = 500
 
+#: Frame type announcing that an agent is gone. The dashboard matches this
+#: string exactly to drop the card and tombstone the id; a state snapshot alone
+#: will not remove it, because a patch only adds and updates. Kept here so the
+#: REST and WebSocket delete paths cannot spell it differently.
+DELETE_AGENT_FRAME = "delete_agent"
+
 
 def _evict_stalest() -> None:
     """Drop the least recently updated agents once the map is over its ceiling.

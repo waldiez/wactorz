@@ -10,6 +10,24 @@ system rather than a toy entity list.
     python make_bench_actuator.py --mode enriched      # entity list only (smaller)
     python make_bench_actuator.py --limit 40 --out actuator.jsonl
 
+A SECOND SITE (held-out set). Point it at another Home Assistant without
+touching .env, and cache the payload so you only need access once::
+
+    python make_bench_actuator.py --ha-url http://other:8123 --ha-token <tok> \
+        --site b --save-devices office_b_devices.json --out actuator_b.jsonl
+
+    # later, offline — regenerate as often as you like
+    python make_bench_actuator.py --devices-file office_b_devices.json \
+        --site b --out actuator_b.jsonl
+
+If you cannot run this at the other site, one curl there is enough::
+
+    curl -H "Authorization: Bearer <TOKEN>" http://<host>:8123/api/states > b.json
+
+then use --devices-file b.json. That dump has entity ids and friendly names but
+no area registry, so location-based phrasings ("the meeting room light") cannot
+be grounded from it — name-based and refusal cases are unaffected.
+
 Then merge with the rest:
 
     Get-Content bench.jsonl, actuator.jsonl | Set-Content bench_full.jsonl   # PowerShell
@@ -107,22 +125,55 @@ async def main() -> int:
     )
     ap.add_argument("--limit", type=int, default=24, help="max generated control cases")
     ap.add_argument("--out", default="actuator.jsonl")
+    ap.add_argument(
+        "--site",
+        default="a",
+        help="site tag baked into case ids (actuator-<site>_control-001), so results "
+        "from two homes stay distinguishable in one results.jsonl",
+    )
+    ap.add_argument("--ha-url", help="override HA_URL (target another Home Assistant)")
+    ap.add_argument("--ha-token", help="override HA_TOKEN")
+    ap.add_argument(
+        "--devices-file",
+        help="skip the live fetch and read the payload from JSON — either a cached "
+        "--save-devices file or a raw /api/states dump",
+    )
+    ap.add_argument(
+        "--save-devices",
+        help="write the fetched payload here so cases can be regenerated offline",
+    )
     args = ap.parse_args()
 
-    from wactorz.config import CONFIG
-    from wactorz.core.integrations.home_assistant.ha_helper import (
-        fetch_devices_entities_with_location,
-    )
+    if args.devices_file:
+        devices = json.loads(Path(args.devices_file).read_text(encoding="utf-8"))
+        source = args.devices_file
+    else:
+        from wactorz.config import CONFIG
+        from wactorz.core.integrations.home_assistant.ha_helper import (
+            fetch_devices_entities_with_location,
+        )
 
-    if not CONFIG.ha_url or not CONFIG.ha_token:
-        print("HA_URL / HA_TOKEN not set — run this where wactorz talks to Home Assistant.")
-        return 1
+        url = args.ha_url or CONFIG.ha_url
+        token = args.ha_token or CONFIG.ha_token
+        if not url or not token:
+            print(
+                "No Home Assistant to read. Set HA_URL / HA_TOKEN, or pass "
+                "--ha-url/--ha-token, or supply --devices-file."
+            )
+            return 1
+        devices = await fetch_devices_entities_with_location(url, token, include_states=True)
+        source = url
+        if args.save_devices:
+            Path(args.save_devices).write_text(
+                json.dumps(devices, ensure_ascii=False), encoding="utf-8"
+            )
+            print(f"cached payload -> {args.save_devices} (regenerate offline with --devices-file)")
 
-    devices = await fetch_devices_entities_with_location(
-        CONFIG.ha_url, CONFIG.ha_token, include_states=True
-    )
     pairs = list(iter_entities(devices))
-    print(f"fetched {len(pairs)} entities from {CONFIG.ha_url}")
+    print(f"{len(pairs)} entities from {source}")
+    if not pairs:
+        print("No entity_id found in that payload — wrong file?")
+        return 1
 
     block = entity_block(pairs)
     all_ids = " ".join(f"{e} {n}" for e, n in pairs).lower()
@@ -150,7 +201,7 @@ async def main() -> int:
             n += 1
             cases.append(
                 {
-                    "id": f"actuator-live-{n:03d}",
+                    "id": f"actuator-{args.site}_control-{n:03d}",
                     "category": "actuator",
                     "prompt": build_prompt(phrasing.format(name=f"the {label}")),
                     "expected": [
@@ -167,7 +218,7 @@ async def main() -> int:
         n += 1
         cases.append(
             {
-                "id": f"actuator-live-{n:03d}",
+                "id": f"actuator-{args.site}_refusal-{n:03d}",
                 "category": "actuator",
                 "prompt": build_prompt(request),
                 "expected": [],

@@ -219,10 +219,11 @@ async def fetch_devices_entities_with_location(
         for area_id, ents_raw in by_area.items():
             area_name = area_name_by_id.get(area_id) if area_id else None
             pseudo_id = f"no-device:{area_id or 'unassigned'}"
+            pseudo_name = f"{area_name} (no device)" if area_name else "Entities without a device"
             output.append(
                 {
                     "device_id": pseudo_id,
-                    "name": f"{area_name} (no device)" if area_name else "Entities without a device",
+                    "name": pseudo_name,
                     "swid": generate_swid(pseudo_id, name="no-device", area=area_name),
                     "manufacturer": None,
                     "model": None,
@@ -235,6 +236,63 @@ async def fetch_devices_entities_with_location(
             )
 
         return sorted(output, key=lambda x: x["name"] or "")
+
+
+# Attributes a model can actually use to pick an entity. Everything else in a
+# Home Assistant state object — icons, entity pictures, supported_features
+# bitmasks, per-integration bookkeeping — is noise that pushes the real answer
+# further down a long prompt.
+_USEFUL_ATTRS = frozenset(
+    {
+        "friendly_name",
+        "device_class",
+        "unit_of_measurement",
+        # The resolver prompt reasons about colour capability, and
+        # _entity_id_supports_color() reads these directly.
+        "supported_color_modes",
+        "color_mode",
+    }
+)
+
+
+def compact_devices_for_prompt(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strip a device payload down to what an LLM needs to resolve an entity.
+
+    The full payload from :func:`fetch_devices_entities_with_location` is built
+    for the dashboard: it carries ``unique_id``, ``platform``, ``swid`` and every
+    state attribute. A real home reaches ~24k tokens, of which ``unique_id``
+    alone is the largest single field — and no prompt in this codebase mentions
+    it. Small models pay for that twice: attention is spread across thousands of
+    irrelevant tokens, and a 24k prompt may not fit their context window at all.
+
+    Keeps entity_id, the names and area used for matching, current state, the
+    device's name/area/model, and the colour attributes the actuator needs.
+    Roughly a third of the original size, with nothing referenced by a prompt or
+    by post-processing removed.
+    """
+    compact: list[dict[str, Any]] = []
+    for device in devices:
+        entities = []
+        for entity in device.get("entities") or []:
+            attrs = entity.get("attributes")
+            kept_attrs = (
+                {k: v for k, v in attrs.items() if k in _USEFUL_ATTRS}
+                if isinstance(attrs, dict)
+                else {}
+            )
+            trimmed: dict[str, Any] = {"entity_id": entity.get("entity_id")}
+            for key in ("name", "original_name", "area", "state"):
+                if entity.get(key) is not None:
+                    trimmed[key] = entity[key]
+            if kept_attrs:
+                trimmed["attributes"] = kept_attrs
+            entities.append(trimmed)
+        entry: dict[str, Any] = {"name": device.get("name"), "entities": entities}
+        for key in ("area", "model"):
+            if device.get(key) is not None:
+                entry[key] = device[key]
+        compact.append(entry)
+    return compact
 
 
 async def _get_floors_safe(ha: HAWebSocketClient) -> list[dict[str, Any]]:

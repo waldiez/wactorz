@@ -9,7 +9,7 @@ import os
 import socket
 import threading
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from ..config import (
     CONFIG,
@@ -21,7 +21,7 @@ from ..config import (
     deploy_target_names,
 )
 from ..core.mqtt import mqtt_client
-from ..monitoring import PrometheusMonitor
+from .chat.rest import RESTInterface
 
 if TYPE_CHECKING:
     from ..agents.main_actor import MainActor
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def _resolve_host(hostname: str) -> str | None:
+async def resolve_host(hostname: str) -> str | None:
     """Resolve `hostname`, or None if it does not resolve.
 
     Off the event loop: `gethostbyname` blocks the calling thread, and a name
@@ -369,7 +369,7 @@ class CLIInterface:
         if not host:
             # One name lookup for one host — no sweep of the network.
             print(f"[discover] No host configured for '{node_name}' — trying mDNS...")
-            host = await _resolve_host(f"{node_name}.local") or ""
+            host = await resolve_host(f"{node_name}.local") or ""
             if not host:
                 print(
                     f"[error] Could not resolve '{node_name}.local'. "
@@ -950,219 +950,17 @@ class WhatsAppInterface:
         await asyncio.Event().wait()  # Run forever
 
 
-# ─── OpenClaw / Generic REST Interface ────────────────────────────────────
-
-
-class RESTInterface:
-    """Generic REST API interface. Connect any chat platform via webhooks.
-    POST /chat with {"message": "..."} → returns {"response": "..."}
-    """
-
-    def __init__(self, main_actor: "MainActor", port: int = 8000, api_key: str | None = None):
-        self.agent = main_actor
-        self.port = port
-        self.api_key = api_key
-        self._monitor = PrometheusMonitor(lambda: getattr(self.agent, "_registry", None))
-
-    @staticmethod
-    def _normalize_state(state: str) -> str:
-        if state == "idle":
-            return "initializing"
-        return state
-
-    def _actor_payload(self, actor: Any) -> dict:
-        status = actor.get_status()
-        return {
-            "id": actor.actor_id,
-            "name": actor.name,
-            "state": self._normalize_state(status.get("state", "unknown")),
-            "protected": bool(getattr(actor, "protected", False)),
-        }
-
-    def _metrics_payload(self, actor: Any) -> dict:
-        return {
-            "messages_received": 0,
-            "messages_processed": actor.metrics.messages_processed,
-            "messages_failed": actor.metrics.errors,
-            "heartbeats": 0,
-            "last_message_at": int(actor.metrics.last_heartbeat),
-            "restart_count": actor.metrics.restart_count,
-            "llm_input_tokens": 0,
-            "llm_output_tokens": 0,
-            "llm_cost_usd": 0.0,
-        }
-
-    def _latest_ha_map_payload(self) -> dict | None:
-        registry = getattr(self.agent, "_registry", None)
-        if registry is None:
-            return None
-        actor = registry.find_by_name("home-assistant-map-agent")
-        if actor is None:
-            return None
-        if hasattr(actor, "get_latest_map_payload"):
-            payload = actor.get_latest_map_payload()
-        elif hasattr(actor, "recall"):
-            payload = actor.recall("latest_map_payload", None)
-        else:
-            payload = None
-        return payload if isinstance(payload, dict) else None
-
-    async def run(self):
-        try:
-            from aiohttp import web
-        except ImportError:
-            logger.error("aiohttp not installed. Run: pip install aiohttp")
-            return
-
-        registry = self.agent._registry
-
-        def _lookup_actor(actor_id: str):
-            if registry is None:
-                return None
-            return registry.get(actor_id)
-
-        async def chat_endpoint(request):
-            if self.api_key:
-                auth = request.headers.get("X-API-Key")
-                if auth != self.api_key:
-                    return web.json_response({"error": "Unauthorized"}, status=401)
-
-            body = await request.json()
-            message = body.get("message", "")
-            agent_name = body.get("agent_name") or "main"
-            if not message:
-                return web.json_response({"error": "No message provided"}, status=400)
-
-            response = await self.agent.process_user_input(message)
-            return web.json_response(
-                {
-                    "status": "sent",
-                    "agent": agent_name,
-                    "response": response,
-                }
-            )
-
-        async def agents_endpoint(request):
-            if registry is None:
-                return web.json_response([])
-            actors = [self._actor_payload(actor) for actor in registry.all_actors()]
-            return web.json_response(actors)
-
-        async def command_endpoint(request):
-            body = await request.json()
-            target = body.get("target")
-            command = body.get("command")
-            from ..core.actor import MessageType
-
-            cmd_map = {
-                "start": MessageType.START,
-                "stop": MessageType.STOP,
-                "pause": MessageType.PAUSE,
-                "resume": MessageType.RESUME,
-            }
-            if command in cmd_map and target:
-                await self.agent.send_command(target, cmd_map[command])
-                return web.json_response({"ok": True})
-            return web.json_response({"error": "Invalid command"}, status=400)
-
-        async def actor_endpoint(request):
-            actor = _lookup_actor(request.match_info["actor_id"])
-            if actor is None:
-                return web.Response(status=404, text="actor not found")
-            return web.json_response(self._actor_payload(actor))
-
-        async def actor_message_endpoint(request):
-            actor = _lookup_actor(request.match_info["actor_id"])
-            if actor is None:
-                return web.Response(status=404, text="actor not found")
-            body = await request.json()
-            content = body.get("content", "")
-            if not content:
-                return web.json_response({"error": "No content provided"}, status=400)
-            from ..core.actor import MessageType
-
-            await self.agent.send(
-                actor.actor_id, MessageType.TASK, {"text": content, "content": content}
-            )
-            return web.json_response({"status": "sent"})
-
-        async def _lifecycle_endpoint(request, command: str, status: str):
-            """Run a lifecycle command through the actor's own implementation.
-
-            These endpoints used to call ``actor.stop()``/``pause()``/``resume()``
-            directly. That skipped the supervision release, so an actor stopped
-            here looked to the watchdog exactly like one that had crashed and was
-            restarted moments later.
-            """
-            actor = _lookup_actor(request.match_info["actor_id"])
-            if actor is None:
-                return web.json_response({"error": "actor not found"}, status=404)
-            if getattr(actor, "protected", False):
-                return web.json_response({"error": "actor is protected"}, status=403)
-            if not await actor.apply_command(command):
-                return web.json_response({"error": f"{command} was refused"}, status=409)
-            return web.json_response({"status": status})
-
-        async def start_actor_endpoint(request):
-            return await _lifecycle_endpoint(request, "start", "starting")
-
-        async def stop_actor_endpoint(request):
-            # apply_command("stop") releases from supervision but leaves the
-            # actor registered; this endpoint has always removed it as well.
-            response = await _lifecycle_endpoint(request, "stop", "stopping")
-            if response.status == 200 and registry is not None:
-                actor = _lookup_actor(request.match_info["actor_id"])
-                if actor is not None:
-                    await registry.unregister(actor.actor_id)
-            return response
-
-        async def pause_actor_endpoint(request):
-            return await _lifecycle_endpoint(request, "pause", "pausing")
-
-        async def resume_actor_endpoint(request):
-            return await _lifecycle_endpoint(request, "resume", "resuming")
-
-        async def metrics_endpoint(request):
-            actor = _lookup_actor(request.match_info["actor_id"])
-            if actor is None:
-                return web.Response(status=404, text="actor not found")
-            return web.json_response(self._metrics_payload(actor))
-
-        async def health_endpoint(request):
-            return web.json_response({"status": "ok"})
-
-        async def prometheus_metrics_endpoint(request):
-            return self._monitor.metrics_response()
-
-        async def ha_map_latest_endpoint(request):
-            payload = self._latest_ha_map_payload()
-            if payload is None:
-                return web.json_response(
-                    {"error": "Home Assistant map snapshot not available"}, status=404
-                )
-            return web.json_response(payload)
-
-        app = web.Application(
-            middlewares=[self._monitor.middleware], client_max_size=MAX_REQUEST_BYTES
-        )
-        app.router.add_get("/health", health_endpoint)
-        app.router.add_get("/metrics", prometheus_metrics_endpoint)
-        app.router.add_get("/ha-map", ha_map_latest_endpoint)
-        app.router.add_get("/actors", agents_endpoint)
-        app.router.add_get("/actors/{actor_id}", actor_endpoint)
-        app.router.add_post("/actors/{actor_id}/message", actor_message_endpoint)
-        app.router.add_delete("/actors/{actor_id}", stop_actor_endpoint)
-        app.router.add_post("/actors/{actor_id}/start", start_actor_endpoint)
-        app.router.add_post("/actors/{actor_id}/pause", pause_actor_endpoint)
-        app.router.add_post("/actors/{actor_id}/resume", resume_actor_endpoint)
-        app.router.add_get("/actors/{actor_id}/metrics", metrics_endpoint)
-        app.router.add_post("/chat", chat_endpoint)
-        app.router.add_get("/agents", agents_endpoint)
-        app.router.add_post("/agents/command", command_endpoint)
-
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", self.port)
-        await site.start()
-        logger.info(f"[REST] API running at http://0.0.0.0:{self.port}")
-        await asyncio.Event().wait()
+__all__ = [
+    "REMOTE_RUNNER_PATH",
+    "CLIInterface",
+    "DiscordInterface",
+    "RESTInterface",
+    "SocialRateLimiter",
+    "TelegramInterface",
+    "WhatsAppInterface",
+    "build_social_companions",
+    "missing_dependency",
+    "resolve_host",
+    "run_all_interfaces",
+    "social_channel_blocked",
+]

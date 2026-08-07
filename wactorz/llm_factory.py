@@ -13,6 +13,11 @@ pass through intact. A site without an override keeps the default (global)
 provider, as does an entry whose provider fails to construct — an override must
 never take the system down.
 
+Surrounding quotes are stripped from the value and from each site and spec, so
+a value quoted as a whole behaves the same however it was set. An entry naming
+a site not in the table below is skipped with a warning: nothing would read it,
+and a silent no-op is indistinguishable from an override that did not work.
+
 Known sites:
 
 | Site       | Call it configures                                          |
@@ -37,13 +42,18 @@ from .agents.llm.providers.nim import NIMProvider
 from .agents.llm.providers.ollama import OllamaProvider
 from .agents.llm.providers.openai import OpenAIProvider
 from .agents.llm_agent import LLMProvider
-from .config import CONFIG
+from .config import CONFIG, _unquote
 
 logger = logging.getLogger(__name__)
 
 # Provider instances cached per spec string so repeated spawns (planner,
 # actuator) reuse one client instead of re-constructing it per request.
 _provider_cache: dict[str, LLMProvider] = {}
+
+# Every site `provider_for` is called with. An override naming anything else
+# configures nothing, so it is worth saying so at startup rather than leaving
+# the operator to wonder why their model never took effect.
+KNOWN_SITES: frozenset[str] = frozenset({"main", "intent", "planner", "actuator", "ha", "dynamic"})
 
 
 def parse_overrides(raw: str) -> dict[str, str]:
@@ -52,14 +62,22 @@ def parse_overrides(raw: str) -> dict[str, str]:
     not disable the others.
     """
     table: dict[str, str] = {}
-    for entry in (raw or "").split(","):
+    for entry in _unquote(raw or "").split(","):
         entry = entry.strip()
         if not entry:
             continue
         site, sep, spec = entry.partition("=")
-        site, spec = site.strip(), spec.strip()
+        site, spec = _unquote(site), _unquote(spec)
         if not sep or not site or not spec:
             logger.warning("[llm-overrides] Skipping malformed entry %r", entry)
+            continue
+        if site not in KNOWN_SITES:
+            logger.warning(
+                "[llm-overrides] Ignoring entry for unknown site %r — nothing reads it "
+                "(known sites: %s)",
+                site,
+                ", ".join(sorted(KNOWN_SITES)),
+            )
             continue
         table[site] = spec
     return table

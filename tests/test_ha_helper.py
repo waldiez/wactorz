@@ -451,16 +451,51 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(
-            [device["name"] for device in result], ["Kitchen Light", "Temperature Sensor"]
+            [device["name"] for device in result],
+            ["Kitchen (no device)", "Kitchen Light", "Temperature Sensor"],
         )
-        kitchen = result[0]
+        kitchen = result[1]
         self.assertEqual(kitchen["area"], "Kitchen")
         self.assertEqual(kitchen["entities"][0]["entity_id"], "light.kitchen")
         self.assertEqual(kitchen["entities"][0]["area"], "Living Room")
         self.assertNotIn("state", kitchen["entities"][0])
         self.assertTrue(kitchen["swid"].startswith("did:swid:home:kitchen:kitchen-light-"))
-        self.assertEqual(len(result[1]["entities"]), 2)
-        self.assertNotIn("switch.orphan", {e["entity_id"] for d in result for e in d["entities"]})
+        self.assertEqual(len(result[2]["entities"]), 2)
+
+        # An entity with no device registry entry (SmartIR / template / manually
+        # configured Tuya climate) is still real and controllable, so it must
+        # reach the actuator and the planner — grouped under a pseudo-device that
+        # keeps its area.
+        orphan_device = result[0]
+        self.assertIsNone(orphan_device["manufacturer"])
+        self.assertEqual(orphan_device["area"], "Kitchen")
+        self.assertEqual([e["entity_id"] for e in orphan_device["entities"]], ["switch.orphan"])
+        self.assertEqual(orphan_device["entities"][0]["area"], "Kitchen")
+
+    async def test_fetch_devices_entities_with_location_skips_disabled_entities(self):
+        _floors, _areas, _devices, entities, _states = self._set_fixture_responses()
+        entities.append(
+            {
+                "entity_id": "switch.disabled_thing",
+                "unique_id": "disabled-1",
+                "platform": "mqtt",
+                "device_id": "dev-light",
+                "area_id": "kitchen",
+                "original_name": "Disabled Thing",
+                "name": None,
+                "disabled_by": "user",
+            }
+        )
+
+        result = await ha_helper.fetch_devices_entities_with_location(
+            "http://ha.local:8123", "token"
+        )
+
+        # A disabled entity has no state and cannot be actuated; offering it to
+        # the model can only produce service calls that silently fail.
+        seen = {e["entity_id"] for d in result for e in d["entities"]}
+        self.assertNotIn("switch.disabled_thing", seen)
+        self.assertIn("light.kitchen", seen)
 
     async def test_fetch_devices_entities_with_location_with_states(self):
         self._set_fixture_responses()
@@ -1457,3 +1492,84 @@ class HomeAssistantHelperHistoryTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CompactDevicesForPromptTest(unittest.TestCase):
+    """The actuator sends this payload to the model on every request."""
+
+    def _payload(self):
+        return [
+            {
+                "device_id": "dev-1",
+                "name": "Hue Lamp",
+                "swid": "did:swid:home:office:hue-lamp-abcd",
+                "manufacturer": "Signify",
+                "model": "LCT015",
+                "area": "Office",
+                "entities": [
+                    {
+                        "entity_id": "light.hue",
+                        "unique_id": "00:17:88:01:02:ab:cd:ef-0b",
+                        "platform": "hue",
+                        "area": "Office",
+                        "original_name": "Hue Lamp",
+                        "name": None,
+                        "state": "on",
+                        "attributes": {
+                            "friendly_name": "Hue Lamp",
+                            "supported_color_modes": ["xy"],
+                            "color_mode": "xy",
+                            "icon": "mdi:lightbulb",
+                            "entity_picture": "/pic.png",
+                            "supported_features": 44,
+                        },
+                    }
+                ],
+            }
+        ]
+
+    def test_keeps_everything_the_prompt_and_repair_need(self):
+        (device,) = ha_helper.compact_devices_for_prompt(self._payload())
+        self.assertEqual(device["name"], "Hue Lamp")
+        self.assertEqual(device["area"], "Office")
+        self.assertEqual(device["model"], "LCT015")
+        (entity,) = device["entities"]
+        self.assertEqual(entity["entity_id"], "light.hue")
+        self.assertEqual(entity["original_name"], "Hue Lamp")
+        self.assertEqual(entity["area"], "Office")
+        self.assertEqual(entity["state"], "on")
+        # _entity_id_supports_color() reads these; dropping them would break the
+        # "make the light blue" path.
+        self.assertEqual(entity["attributes"]["supported_color_modes"], ["xy"])
+        self.assertEqual(entity["attributes"]["color_mode"], "xy")
+        self.assertEqual(entity["attributes"]["friendly_name"], "Hue Lamp")
+
+    def test_drops_fields_no_prompt_references(self):
+        (device,) = ha_helper.compact_devices_for_prompt(self._payload())
+        (entity,) = device["entities"]
+        for gone in ("unique_id", "platform"):
+            self.assertNotIn(gone, entity)
+        for gone in ("icon", "entity_picture", "supported_features"):
+            self.assertNotIn(gone, entity["attributes"])
+        for gone in ("swid", "device_id", "manufacturer"):
+            self.assertNotIn(gone, device)
+
+    def test_handles_missing_and_malformed_fields(self):
+        payload = [
+            {"name": None, "entities": [{"entity_id": "switch.x"}]},
+            {"name": "No entities"},
+            {"name": "Bad attrs", "entities": [{"entity_id": "switch.y", "attributes": "nope"}]},
+        ]
+        result = ha_helper.compact_devices_for_prompt(payload)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[0]["entities"][0], {"entity_id": "switch.x"})
+        self.assertEqual(result[1]["entities"], [])
+        self.assertNotIn("attributes", result[2]["entities"][0])
+
+    def test_is_substantially_smaller(self):
+        import json as _json
+
+        payload = self._payload()
+        before = len(_json.dumps(payload))
+        after = len(_json.dumps(ha_helper.compact_devices_for_prompt(payload)))
+        self.assertLess(after, before * 0.6)

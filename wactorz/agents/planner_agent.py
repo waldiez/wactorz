@@ -47,6 +47,11 @@ _CACHE_TTL_S = 86400  # 24 hours
 class PlannerAgent(Actor, SpawnMixin):
     """On-demand orchestrator. Spawned per complex task, self-terminates when done."""
 
+    #: Hard cap on a planner's life. A caller awaiting its reply must not wait
+    #: longer than this plus delivery: once the cap fires the planner is gone
+    #: and no reply can follow, so any remaining wait is spent on nothing.
+    DEFAULT_MAX_LIFETIME_S = 90.0
+
     def __init__(
         self,
         llm_provider: LLMProvider | None = None,
@@ -56,7 +61,7 @@ class PlannerAgent(Actor, SpawnMixin):
         auto_terminate: bool = True,
         plan_only: bool = False,
         approved_plan: dict | None = None,
-        max_lifetime_s: float = 90.0,
+        max_lifetime_s: float = DEFAULT_MAX_LIFETIME_S,
         **kwargs,
     ):
         kwargs.setdefault("name", "planner")

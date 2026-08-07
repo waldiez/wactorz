@@ -823,5 +823,3 @@ class PlanningMixin(_Host):
             f"To bypass this check for one-off requests, prefix with `pipeline!` "
             f"(e.g. `pipeline! {text[:40]}...`)."
         )
-
-        # ── Spawn ──────────────────────────────────────────────────────────────

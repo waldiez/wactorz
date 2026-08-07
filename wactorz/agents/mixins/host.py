@@ -73,9 +73,15 @@ class MemoryHost(LLMHost, Protocol):
     """
 
 
-class SpawnHost(LLMHost, Protocol):
-    """What `SpawnMixin` needs: the LLM host plus in-flight task futures."""
+class SpawnHost(ActorHost, Protocol):
+    """What `SpawnMixin` needs: a provider to give the agents it creates, plus
+    in-flight task futures.
 
+    The provider is handed on rather than called through, so a spawning host
+    owes no cost tracking and need not be an `LLMAgent`.
+    """
+
+    llm: LLMProvider | None
     _result_futures: dict[str, asyncio.Future]
 
 

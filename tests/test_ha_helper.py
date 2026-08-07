@@ -451,16 +451,53 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(
-            [device["name"] for device in result], ["Kitchen Light", "Temperature Sensor"]
+            [device["name"] for device in result],
+            ["Kitchen (no device)", "Kitchen Light", "Temperature Sensor"],
         )
-        kitchen = result[0]
+        kitchen = result[1]
         self.assertEqual(kitchen["area"], "Kitchen")
         self.assertEqual(kitchen["entities"][0]["entity_id"], "light.kitchen")
         self.assertEqual(kitchen["entities"][0]["area"], "Living Room")
         self.assertNotIn("state", kitchen["entities"][0])
         self.assertTrue(kitchen["swid"].startswith("did:swid:home:kitchen:kitchen-light-"))
-        self.assertEqual(len(result[1]["entities"]), 2)
-        self.assertNotIn("switch.orphan", {e["entity_id"] for d in result for e in d["entities"]})
+        self.assertEqual(len(result[2]["entities"]), 2)
+
+        # An entity with no device registry entry (SmartIR / template / manually
+        # configured Tuya climate) is still real and controllable, so it must
+        # reach the actuator and the planner — grouped under a pseudo-device that
+        # keeps its area.
+        orphan_device = result[0]
+        self.assertIsNone(orphan_device["manufacturer"])
+        self.assertEqual(orphan_device["area"], "Kitchen")
+        self.assertEqual(
+            [e["entity_id"] for e in orphan_device["entities"]], ["switch.orphan"]
+        )
+        self.assertEqual(orphan_device["entities"][0]["area"], "Kitchen")
+
+    async def test_fetch_devices_entities_with_location_skips_disabled_entities(self):
+        _floors, _areas, _devices, entities, _states = self._set_fixture_responses()
+        entities.append(
+            {
+                "entity_id": "switch.disabled_thing",
+                "unique_id": "disabled-1",
+                "platform": "mqtt",
+                "device_id": "dev-light",
+                "area_id": "kitchen",
+                "original_name": "Disabled Thing",
+                "name": None,
+                "disabled_by": "user",
+            }
+        )
+
+        result = await ha_helper.fetch_devices_entities_with_location(
+            "http://ha.local:8123", "token"
+        )
+
+        # A disabled entity has no state and cannot be actuated; offering it to
+        # the model can only produce service calls that silently fail.
+        seen = {e["entity_id"] for d in result for e in d["entities"]}
+        self.assertNotIn("switch.disabled_thing", seen)
+        self.assertIn("light.kitchen", seen)
 
     async def test_fetch_devices_entities_with_location_with_states(self):
         self._set_fixture_responses()

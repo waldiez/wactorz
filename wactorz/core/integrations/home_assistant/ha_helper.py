@@ -145,13 +145,47 @@ async def fetch_devices_entities_with_location(
             {s["entity_id"]: s for s in states} if include_states else {}
         )
 
-        # Group entities by device_id
+        # Group entities by device_id. Entities with no device registry entry
+        # (SmartIR / template / manually configured Tuya climate, helpers, …) are
+        # real and controllable — the user sees them on their dashboard — so they
+        # are collected here and emitted below as area-grouped pseudo-devices
+        # rather than dropped. Dropping them made them invisible to the actuator
+        # and the planner, which both build their entity list from this function.
         entities_by_device: dict[str, list[dict[str, Any]]] = {}
+        orphans: list[dict[str, Any]] = []
         for e in entities:
+            # A disabled entity has no state and cannot be actuated; offering it
+            # to the model can only produce service calls that silently fail.
+            if e.get("disabled_by"):
+                continue
             device_id = e.get("device_id")
             if not device_id:
+                orphans.append(e)
                 continue
             entities_by_device.setdefault(device_id, []).append(e)
+
+        def build_entity(e: dict[str, Any], fallback_area_id: str | None) -> dict[str, Any]:
+            # entity can also have its own area_id in the entity registry
+            entity_area_id = e.get("area_id") or fallback_area_id
+            entity_area_name = area_name_by_id.get(entity_area_id) if entity_area_id else None
+
+            entity_entry: dict[str, Any] = {
+                "entity_id": e.get("entity_id"),
+                "unique_id": e.get("unique_id"),
+                "platform": e.get("platform"),
+                "area": entity_area_name,
+                # "disabled_by": e.get("disabled_by"),
+                # "hidden_by": e.get("hidden_by"),
+                "original_name": e.get("original_name"),
+                "name": e.get("name"),
+            }
+
+            if include_states:
+                state_data = states_by_entity_id.get(e.get("entity_id", ""), {})
+                entity_entry["state"] = state_data.get("state")
+                entity_entry["attributes"] = state_data.get("attributes", {})
+
+            return entity_entry
 
         output: list[dict[str, Any]] = []
         for d in devices:
@@ -160,29 +194,7 @@ async def fetch_devices_entities_with_location(
             device_area_id: str | None = d.get("area_id")
             device_area_name = area_name_by_id.get(device_area_id) if device_area_id else None
 
-            ents = []
-            for e in entities_by_device.get(device_id, []):
-                # entity can also have its own area_id in the entity registry
-                entity_area_id = e.get("area_id") or device_area_id
-                entity_area_name = area_name_by_id.get(entity_area_id) if entity_area_id else None
-
-                entity_entry: dict[str, Any] = {
-                    "entity_id": e.get("entity_id"),
-                    "unique_id": e.get("unique_id"),
-                    "platform": e.get("platform"),
-                    "area": entity_area_name,
-                    # "disabled_by": e.get("disabled_by"),
-                    # "hidden_by": e.get("hidden_by"),
-                    "original_name": e.get("original_name"),
-                    "name": e.get("name"),
-                }
-
-                if include_states:
-                    state_data = states_by_entity_id.get(e.get("entity_id", ""), {})
-                    entity_entry["state"] = state_data.get("state")
-                    entity_entry["attributes"] = state_data.get("attributes", {})
-
-                ents.append(entity_entry)
+            ents = [build_entity(e, device_area_id) for e in entities_by_device.get(device_id, [])]
 
             device_name = d.get("name_by_user") or d.get("name")
             output.append(
@@ -196,6 +208,29 @@ async def fetch_devices_entities_with_location(
                     # "hw_version": d.get("hw_version"),
                     "area": device_area_name,
                     "entities": sorted(ents, key=lambda x: x["entity_id"] or ""),
+                }
+            )
+
+        # Device-less entities, grouped by their own area so location-based
+        # phrasing ("the office air conditioner") still resolves.
+        by_area: dict[str | None, list[dict[str, Any]]] = {}
+        for e in orphans:
+            by_area.setdefault(e.get("area_id"), []).append(e)
+        for area_id, ents_raw in by_area.items():
+            area_name = area_name_by_id.get(area_id) if area_id else None
+            pseudo_id = f"no-device:{area_id or 'unassigned'}"
+            output.append(
+                {
+                    "device_id": pseudo_id,
+                    "name": f"{area_name} (no device)" if area_name else "Entities without a device",
+                    "swid": generate_swid(pseudo_id, name="no-device", area=area_name),
+                    "manufacturer": None,
+                    "model": None,
+                    "area": area_name,
+                    "entities": sorted(
+                        (build_entity(e, area_id) for e in ents_raw),
+                        key=lambda x: x["entity_id"] or "",
+                    ),
                 }
             )
 

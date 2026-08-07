@@ -59,6 +59,34 @@ def _env_float(name: str, default: float) -> float:
     return float(value)
 
 
+_QUOTES = ('"', "'")
+
+
+def _unquote(value: str) -> str:
+    """Strip surrounding quotes, whether or not they are matched.
+
+    Quoting the whole value is a reasonable thing to write, and several ways of
+    setting one keep the quotes as part of the value — Windows `set VAR="…"`,
+    Docker's `env_file`, an unbalanced quote in a hand-edited `.env`. For a
+    model or provider name that quote travels all the way to the API, which
+    answers `404 … model: claude-sonnet-4-6"` for a name that all but exists.
+    A quote is never legitimate in those values, so removing it costs nothing.
+    """
+    value = value.strip()
+    # `startswith`, not `value[:1] in _QUOTES`: an empty slice is "in" every
+    # string, so the slice form spins forever once the value is exhausted.
+    while value.startswith(_QUOTES):
+        value = value[1:].strip()
+    while value.endswith(_QUOTES):
+        value = value[:-1].strip()
+    return value
+
+
+def _env_name(name: str, default: str) -> str:
+    """Identifier-shaped env var (provider, model) — unquoted and trimmed."""
+    return _unquote(os.getenv(name, "") or "") or default
+
+
 def _env_opt_float(name: str) -> float | None:
     """Float env var where unset/empty means None (no override)."""
     value = os.getenv(name)
@@ -231,8 +259,8 @@ class AppConfig:
 CONFIG = AppConfig(
     interface=os.getenv("INTERFACE", "rest" if DEV_MODE else "cli"),
     port=_env_int("PORT", 8080 if DEV_MODE else 8000),
-    llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
-    llm_model=os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
+    llm_provider=_env_name("LLM_PROVIDER", "anthropic"),
+    llm_model=_env_name("LLM_MODEL", "claude-sonnet-4-6"),
     llm_api_key=os.getenv("LLM_API_KEY", ""),
     # Per-call-site model overrides, e.g. "intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6".
     # See wactorz/llm_factory.py for the site list and format.

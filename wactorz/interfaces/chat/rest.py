@@ -26,6 +26,19 @@ logger = logging.getLogger(__name__)
 UNGUARDED_PATHS = frozenset({"/health"})
 
 
+async def _json_object(request: Request) -> dict[str, Any] | None:
+    """The body as a JSON object, or None if it is anything else.
+
+    Handlers read named fields off the body, so a list or a bare string has no
+    field to read and is a client mistake — 400 — rather than a server fault.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return None
+    return body if isinstance(body, dict) else None
+
+
 class RESTInterface:
     """Generic REST API interface. Connect any chat platform via webhooks.
     POST /chat with {"message": "..."} → returns {"response": "..."}
@@ -111,7 +124,9 @@ class RESTInterface:
             return registry.get(actor_id)
 
         async def chat_endpoint(request) -> Response:
-            body = await request.json()
+            body = await _json_object(request)
+            if body is None:
+                return web.json_response({"error": "Expected a JSON object"}, status=400)
             message = body.get("message", "")
             agent_name = body.get("agent_name") or "main"
             if not message:
@@ -133,7 +148,9 @@ class RESTInterface:
             return web.json_response(actors)
 
         async def command_endpoint(request: Request) -> Response:
-            body = await request.json()
+            body = await _json_object(request)
+            if body is None:
+                return web.json_response({"error": "Expected a JSON object"}, status=400)
             target = body.get("target")
             command = body.get("command")
             from ...core.actor import MessageType
@@ -159,7 +176,9 @@ class RESTInterface:
             actor = _lookup_actor(request.match_info["actor_id"])
             if actor is None:
                 return web.Response(status=404, text="actor not found")
-            body = await request.json()
+            body = await _json_object(request)
+            if body is None:
+                return web.json_response({"error": "Expected a JSON object"}, status=400)
             content = body.get("content", "")
             if not content:
                 return web.json_response({"error": "No content provided"}, status=400)

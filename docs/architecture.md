@@ -211,6 +211,13 @@ backends). Ollama receives it as `options.temperature`; the others take it as a 
 parameter. An individual call site can still pass `temperature=` to `complete()` / `stream()`,
 which wins over the env setting. The resolved value is logged at startup.
 
+One exception, and it is not configurable: Anthropic removed the sampling parameters with Claude
+Opus 4.7, and a request that carries `temperature` to one of those models is refused rather than
+ignored. `AnthropicProvider` therefore leaves the parameter off for the models known to have
+dropped it, and learns the rest the first time one refuses — that request is retried without the
+parameter, and it is omitted for the remainder of the process. Those models are effectively pinned
+to their own default, so pinning a temperature no longer makes runs comparable against them.
+
 ### Per-call-site overrides
 
 `LLM_OVERRIDES` routes individual call sites to different providers/models, falling back to the global `LLM_PROVIDER` for any site not listed (`wactorz/llm_factory.py`):

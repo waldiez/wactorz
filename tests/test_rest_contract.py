@@ -7,8 +7,10 @@ from wactorz.interfaces.chat_interfaces import RESTInterface
 
 
 class _FakeMetrics:
+    messages_received = 9
     messages_processed = 7
     errors = 2
+    heartbeats = 4
     last_heartbeat = 123
     restart_count = 1
 
@@ -62,6 +64,31 @@ class RestContractTest(unittest.TestCase):
         self.assertEqual(payload["messages_failed"], 2)
         self.assertEqual(payload["restart_count"], 1)
         self.assertIn("llm_cost_usd", payload)
+
+    def test_metrics_payload_reports_the_actors_counters(self):
+        iface = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)
+        payload = iface._metrics_payload(_FakeActor())
+        self.assertEqual(payload["messages_received"], 9)
+        self.assertEqual(payload["heartbeats"], 4)
+
+    def test_metrics_payload_reports_llm_spend_when_the_actor_tracks_it(self):
+        actor = _FakeActor()
+        actor.total_input_tokens = 11
+        actor.total_output_tokens = 22
+        actor.total_cost_usd = 0.5
+        payload = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)._metrics_payload(
+            actor
+        )
+        self.assertEqual(payload["llm_input_tokens"], 11)
+        self.assertEqual(payload["llm_output_tokens"], 22)
+        self.assertEqual(payload["llm_cost_usd"], 0.5)
+
+    def test_metrics_payload_reports_zero_spend_for_a_non_llm_actor(self):
+        payload = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)._metrics_payload(
+            _FakeActor()
+        )
+        self.assertEqual(payload["llm_input_tokens"], 0)
+        self.assertEqual(payload["llm_cost_usd"], 0.0)
 
     def test_latest_ha_map_payload_reads_from_running_map_agent(self):
         expected = {"type": "home_assistant_map_update", "devices": [{"device_id": "one"}]}

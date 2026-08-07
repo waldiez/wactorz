@@ -85,7 +85,7 @@ class SpawnHost(ActorHost, Protocol):
     _result_futures: dict[str, asyncio.Future]
 
 
-class PlanningHost(LLMHost, Protocol):
+class PlanningHost(ActorHost, Protocol):
     """What `PlanningMixin` needs — and it is the widest of the four.
 
     Two things fall out of this list and neither is incidental:
@@ -98,6 +98,7 @@ class PlanningHost(LLMHost, Protocol):
       specifically, which is why it cannot be reused elsewhere as written.
     """
 
+    llm: LLMProvider | None
     _result_futures: dict[str, asyncio.Future]
     _conversation_history: list[dict]
 

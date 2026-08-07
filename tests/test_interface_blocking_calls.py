@@ -105,7 +105,7 @@ class TestHostLookup:
 
         monkeypatch.setattr(socket, "gethostbyname", _slow)
 
-        ticks = await _loop_ticks_during(chat_interfaces._resolve_host("nowhere.local"))
+        ticks = await _loop_ticks_during(chat_interfaces.resolve_host("nowhere.local"))
 
         assert ticks > 5, f"loop starved during the lookup ({ticks} ticks)"
 
@@ -118,7 +118,7 @@ class TestHostLookup:
 
         from wactorz.interfaces import chat_interfaces
 
-        assert await chat_interfaces._resolve_host("nowhere.local") is None
+        assert await chat_interfaces.resolve_host("nowhere.local") is None
 
     @pytest.mark.asyncio
     async def test_a_successful_lookup_returns_the_address(self, monkeypatch):
@@ -126,4 +126,4 @@ class TestHostLookup:
 
         from wactorz.interfaces import chat_interfaces
 
-        assert await chat_interfaces._resolve_host("pi.local") == "192.168.1.7"
+        assert await chat_interfaces.resolve_host("pi.local") == "192.168.1.7"

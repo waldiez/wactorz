@@ -26,6 +26,10 @@ from ..helpers.main_actor_helpers import (
 
 logger = logging.getLogger(__name__)
 
+#: Head-room over the planner's lifetime cap for a reply produced just before it
+#: to reach us. Not time for the planner to keep working — it has already gone.
+PLANNER_REPLY_GRACE_S = 15.0
+
 
 if TYPE_CHECKING:
     from .host import PlanningHost
@@ -397,6 +401,12 @@ class PlanningMixin(_Host):
         self._result_futures[task_id] = future
 
         try:
+            # One value feeds both the planner's cap and our wait, so the two
+            # cannot drift apart. The planner self-terminates at the cap without
+            # answering, so waiting past it is waiting for a reply that can no
+            # longer be sent; the grace only covers delivery of one produced
+            # just before the cap.
+            lifetime_s = PlannerAgent.DEFAULT_MAX_LIFETIME_S
             planner = await self.spawn(
                 PlannerAgent,
                 name=planner_name,
@@ -407,12 +417,15 @@ class PlanningMixin(_Host):
                 auto_terminate=True,
                 plan_only=plan_only,
                 approved_plan=approved_plan,
+                max_lifetime_s=lifetime_s,
                 persistence_dir=str(self._persistence_dir.parent),
             )
             if not planner:
                 return None
 
-            result_payload = await asyncio.wait_for(future, timeout=180.0)
+            result_payload = await asyncio.wait_for(
+                future, timeout=lifetime_s + PLANNER_REPLY_GRACE_S
+            )
             answer = result_payload.get("result") or result_payload.get("text") or ""
             spawned_names = result_payload.get("spawned", [])
             if spawned_names:
@@ -823,5 +836,3 @@ class PlanningMixin(_Host):
             f"To bypass this check for one-off requests, prefix with `pipeline!` "
             f"(e.g. `pipeline! {text[:40]}...`)."
         )
-
-        # ── Spawn ──────────────────────────────────────────────────────────────

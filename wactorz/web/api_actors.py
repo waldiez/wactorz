@@ -77,7 +77,7 @@ async def delete_actor_handler(request: web.Request) -> Response:
         return web.json_response({"error": "actor is protected"}, status=403)
     routed = await lifecycle.delete_agent(actor_id)
     await ws.broadcast(
-        {"type": "lifecycle.delete_agent", "agent_id": actor_id, "state": events.snapshot()}
+        {"type": events.DELETE_AGENT_FRAME, "agent_id": actor_id, "state": events.snapshot()}
     )
     return web.Response(status=200, text=f"stopping ({routed})")
 

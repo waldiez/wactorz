@@ -105,8 +105,13 @@ class Message:
 
 @dataclass
 class ActorMetrics:
-    """Running counters for one actor, reported in heartbeats."""
+    """Running counters for one actor, reported in heartbeats.
 
+    `messages_received` and `heartbeats` count the current process only; unlike
+    `messages_processed` they are not restored after a restart.
+    """
+
+    messages_received: int = 0
     messages_processed: int = 0
     errors: int = 0
     start_time: float = field(default_factory=time.time)
@@ -114,6 +119,7 @@ class ActorMetrics:
     tasks_completed: int = 0
     tasks_failed: int = 0
     restart_count: int = 0  # incremented by Supervisor on each restart
+    heartbeats: int = 0
 
     @property
     def uptime(self) -> float:
@@ -343,6 +349,7 @@ class Actor(ABC):
                     continue
 
                 msg = await asyncio.wait_for(self._mailbox.get(), timeout=1.0)
+                self.metrics.messages_received += 1
                 # Only count meaningful messages — not heartbeats, status pings, lifecycle
                 _noise = {
                     MessageType.HEARTBEAT,
@@ -436,12 +443,14 @@ class Actor(ABC):
         """Periodically publish heartbeat via MQTT."""
         # Publish immediately on start so monitor sees agent right away
         await asyncio.sleep(0.5)
+        self.metrics.heartbeats += 1
         await self._mqtt_publish(f"agents/{self.actor_id}/heartbeat", self._build_heartbeat())
         await self._mqtt_publish(f"agents/{self.actor_id}/metrics", self._build_metrics())
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 await asyncio.sleep(interval)
                 hb = self._build_heartbeat()
+                self.metrics.heartbeats += 1
                 self.metrics.last_heartbeat = time.time()
                 await self._mqtt_publish(f"agents/{self.actor_id}/heartbeat", hb)
                 await self._mqtt_publish(f"agents/{self.actor_id}/metrics", self._build_metrics())

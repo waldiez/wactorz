@@ -336,7 +336,11 @@ async def handle_command(cmd: dict[str, Any]) -> None:
                 }
             )
             await broadcast(
-                {"type": "lifecycle.delete_agent", "agent_id": agent_id, "state": events.snapshot()}
+                {
+                    "type": events.DELETE_AGENT_FRAME,
+                    "agent_id": agent_id,
+                    "state": events.snapshot(),
+                }
             )
             return
 

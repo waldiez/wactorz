@@ -53,15 +53,18 @@ async def handle_message(topic: str, payload: str) -> None:
 
     metric = event.get("metric", "")
     log_event = None if metric == "heartbeat" else event
-    # Without the totals: this runs for every broker message, and they are the
-    # only part of a snapshot that queries the database. The browser keeps the
-    # figures it already has — a full snapshot on connect, and the lifecycle
-    # events elsewhere, carry the current ones.
+    # Totals are the only part of a snapshot that queries the database, so they
+    # are not rebuilt for every broker message. `chat` is the exception: it is
+    # the frame that follows an agent spending money, it is driven by user
+    # activity rather than a timer, and it is what someone watching the cost is
+    # waiting to see. `heartbeat` and `metrics` both fire on the heartbeat loop,
+    # so triggering on those would scale the query with agent count — which is
+    # what taking totals off this path was for.
     await ws.broadcast(
         {
             "type": "patch",
             "event": log_event,
-            "state": events.snapshot(include_totals=False),
+            "state": events.snapshot(include_totals=metric == "chat"),
         }
     )
 

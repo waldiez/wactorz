@@ -379,6 +379,12 @@ class Supervisor:
     # ── Strategy application ─────────────────────────────────────────────────
 
     async def _apply_strategy(self, crashed_name: str, crashed_spec: SupervisedSpec):
+        """Restart the siblings the strategy calls for, skipping retired specs.
+
+        A retired spec is one that was deliberately released — stopped, deleted,
+        or given up on after exhausting its budget. Restarting it because a
+        *different* actor crashed would undo a decision someone made on purpose.
+        """
         if crashed_spec.strategy == SupervisorStrategy.ONE_FOR_ONE:
             await self._restart_one(crashed_name, crashed_spec)
 
@@ -390,7 +396,10 @@ class Supervisor:
                 if spec.actor and name != crashed_name:
                     await self._stop_actor(name, spec)
             for name in self._order:
-                await self._restart_one(name, self._specs[name])
+                spec = self._specs[name]
+                if spec.retired:
+                    continue
+                await self._restart_one(name, spec)
 
         elif crashed_spec.strategy == SupervisorStrategy.REST_FOR_ONE:
             idx = self._order.index(crashed_name)
@@ -401,7 +410,10 @@ class Supervisor:
                 if spec.actor and name != crashed_name:
                     await self._stop_actor(name, spec)
             for name in affected:
-                await self._restart_one(name, self._specs[name])
+                spec = self._specs[name]
+                if spec.retired:
+                    continue
+                await self._restart_one(name, spec)
 
     # ── Individual restart ────────────────────────────────────────────────────
 

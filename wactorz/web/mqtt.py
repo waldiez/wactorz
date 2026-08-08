@@ -13,6 +13,7 @@ import time
 from typing import Any
 
 from ..core.mqtt import mqtt_client
+from ..monitoring.log_redaction import redact
 from . import events, runtime, ws
 
 logger = logging.getLogger(__name__)
@@ -52,15 +53,18 @@ async def handle_message(topic: str, payload: str) -> None:
 
     metric = event.get("metric", "")
     log_event = None if metric == "heartbeat" else event
-    # Without the totals: this runs for every broker message, and they are the
-    # only part of a snapshot that queries the database. The browser keeps the
-    # figures it already has — a full snapshot on connect, and the lifecycle
-    # events elsewhere, carry the current ones.
+    # Totals are the only part of a snapshot that queries the database, so they
+    # are not rebuilt for every broker message. `chat` is the exception: it is
+    # the frame that follows an agent spending money, it is driven by user
+    # activity rather than a timer, and it is what someone watching the cost is
+    # waiting to see. `heartbeat` and `metrics` both fire on the heartbeat loop,
+    # so triggering on those would scale the query with agent count — which is
+    # what taking totals off this path was for.
     await ws.broadcast(
         {
             "type": "patch",
             "event": log_event,
-            "state": events.snapshot(include_totals=False),
+            "state": events.snapshot(include_totals=metric == "chat"),
         }
     )
 
@@ -75,7 +79,9 @@ async def handle_message(topic: str, payload: str) -> None:
                     ts=push.get("timestamp", time.time()),
                     agent_name=push.get("from", "agent"),
                     role="assistant",
-                    content=push["content"],
+                    # Same treatment as the WS path: an agent can quote back
+                    # something a user typed, and this row outlives the turn.
+                    content=redact(push["content"]),
                 )
         except Exception as exc:
             logger.debug("[chat-bridge] persist failed: %s", exc)

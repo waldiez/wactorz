@@ -193,8 +193,11 @@ precommit-run: ## Run all configured pre-commit hooks across the repo
 
 test: test-py test-frontend ## Run all tests (Python + frontend)
 
-test-py: ## Run Python tests (pytest)
+test-py: ## Run Python tests (pytest) + the remote runner's own self-test
 	$(PYTHON) -m pytest tests
+	@# remote_runner.py ships to nodes without pytest or the wactorz package, so
+	@# it carries its own tests. Nothing ran them and they had rotted silently.
+	$(PYTHON) wactorz/remote_runner.py --test
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test

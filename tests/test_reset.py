@@ -351,7 +351,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             req = _make_request({"scope": "metrics"})
             with (
                 patch("wactorz.reset.reset_metrics"),
-                patch("wactorz.agents.llm_agent.reset_global_cost"),
+                patch("wactorz.agents.llm.cost.reset_global_cost"),
                 patch("wactorz.web.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.web.events.snapshot", return_value={}),
             ):

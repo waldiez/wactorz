@@ -115,13 +115,46 @@ The main machine publishes this config to `nodes/rpi-livingroom/spawn`. The runn
 
 ## Automated deploy from chat
 
-MainActor can deploy `remote_runner.py` to a new machine automatically via a devops agent that uses SSH. From the chat:
+MainActor can deploy `remote_runner.py` to a new machine over SSH, but only to a machine you have configured as a **deploy target**. Add the node to your environment first:
+
+```bash
+DEPLOY_TARGETS=rpi-bedroom
+DEPLOY_RPI_BEDROOM_HOST=192.168.1.52
+DEPLOY_RPI_BEDROOM_USER=pi
+DEPLOY_RPI_BEDROOM_KEY=/path/to/id_ed25519    # preferred; or _PASSWORD
+DEPLOY_RPI_BEDROOM_BROKER=192.168.1.10        # broker as seen FROM the Pi
+```
+
+The block is keyed by the node name upper-cased, with every run of non-alphanumerics collapsed to one underscore — `rpi-bedroom` → `DEPLOY_RPI_BEDROOM_*`. Restart Wactorz, then from the chat:
 
 ```
-"deploy node rpi-bedroom to pi@192.168.1.52 with broker 192.168.1.10"
+/deploy rpi-bedroom
 ```
 
-This spawns a devops agent that SSHes into the target machine, creates `~/agentflow/`, uploads `remote_runner.py`, installs the dependencies, and starts the runner as a background process. After that, the node is immediately available for agent spawning.
+The installer agent SSHes in, creates `~/wactorz/`, uploads `remote_runner.py`, installs the dependencies into a venv, and starts the runner in the background. After that, the node is available for agent spawning.
+
+> **⚠ Credentials never go through chat.** `/deploy` takes a node name and nothing else. The older `/deploy <node> <host> <user> <password>` form is refused: chat messages are written to the conversation history and the chat log, so a password typed there stays on disk long after the deploy. For the same reason, don't ask an agent to SSH somewhere with a password in the request — the installer reads credentials from the environment and ignores any supplied in a task payload.
+
+Leaving `DEPLOY_<NODE>_HOST` unset makes the deploy resolve `<node>.local` over mDNS instead. That is a single name lookup; earlier versions fell back to scanning the local `/24` for open SSH ports, which is gone.
+
+### The broker has to be reachable from the node
+
+A remote node connects back to the MQTT broker over the network, so `broker` in
+its target block is the address the **node** should dial — your main machine's
+LAN IP, not `localhost`. The node also connects anonymously: broker credentials
+are not delivered to it yet, so a broker with `allow_anonymous false` cannot
+serve a remote node. That includes the Home Assistant Mosquitto add-on, and the
+Wactorz add-on's own embedded broker, whose port is deliberately not published.
+
+### Host key verification
+
+SSH host keys are checked on every connection. A machine that has not been connected to before has its key recorded on first contact — the same trust-on-first-use that interactive `ssh` does — and any later change to that key fails the connection instead of being accepted.
+
+Learned keys live in `<WACTORZ_STATE_DIR>/known_hosts`, or wherever `DEPLOY_KNOWN_HOSTS` points. Set `DEPLOY_STRICT_HOST_KEYS=1` to turn off first-use learning entirely; every target's key must then already be in the file:
+
+```bash
+ssh-keyscan 192.168.1.52 >> "$DEPLOY_KNOWN_HOSTS"   # after verifying the fingerprint
+```
 
 ---
 

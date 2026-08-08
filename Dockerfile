@@ -52,5 +52,12 @@ ENV INTERFACE=rest
 
 EXPOSE 8000 8888
 
+# Liveness only: 200 means the server is accepting requests, not that MQTT, a
+# provider or any agent is healthy. A deeper probe would turn a broker blip into
+# a restart loop. PORT is honoured because it is configurable (and defaults to
+# 8080 under DEV_MODE); the start period covers agents and providers coming up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/health" || exit 1
+
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["wactorz"]

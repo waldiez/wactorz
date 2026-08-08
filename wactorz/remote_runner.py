@@ -10,8 +10,9 @@ Usage on the remote machine:
     pip install aiomqtt paho-mqtt psutil aiohttp --break-system-packages
     python3 remote_runner.py --broker 192.168.1.10 --name rpi-livingroom
 
-From the main Wactorz chat (automatic via devops-agent):
-    "deploy node rpi-livingroom to pi@192.168.1.50 with broker 192.168.1.10"
+From the main Wactorz chat (automatic, once the node is a configured deploy
+target — see DEPLOY_TARGETS in .env.template):
+    /deploy rpi-livingroom
 
 Or manually in the chat spawn block:
     <spawn>
@@ -54,9 +55,12 @@ consecutive failures the agent is marked failed and removed from the registry.
 Compile errors and setup() fatals are never retried — broken code won't fix itself.
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import importlib
+import inspect
 import json
 import logging
 import os
@@ -66,10 +70,17 @@ import sys
 import time
 import traceback
 import uuid
+from collections import deque
+from collections.abc import Awaitable, Callable, Generator
+from pathlib import Path
 from typing import Any
 
+# aiomqtt, psutil and paho stay imported inside the functions that use them:
+# _bootstrap_deps_async pip-installs them at runtime, so a node starting before
+# that finishes must still be able to import this module.
 
-def _missing_deps() -> list:
+
+def _missing_deps() -> list[str]:
     needed = []
     for module, pkg in [
         ("aiomqtt", "aiomqtt"),
@@ -83,17 +94,15 @@ def _missing_deps() -> list:
     return needed
 
 
-async def _bootstrap_deps_async(ready: "asyncio.Event") -> None:
+async def _bootstrap_deps_async(ready: asyncio.Event) -> None:
     """Install missing deps in a thread pool, then signal the event."""
-    import importlib as _il
-
     needed = _missing_deps()
     if not needed:
         ready.set()
         return
     print(f"[remote_runner] auto-installing {needed} via {sys.executable}...", flush=True)
 
-    def _pip() -> tuple:
+    def _pip() -> tuple[int, str]:
         cmd = [sys.executable, "-m", "pip", "install", *needed, "-q"]
         if sys.platform != "win32":
             cmd.append("--break-system-packages")
@@ -106,7 +115,7 @@ async def _bootstrap_deps_async(ready: "asyncio.Event") -> None:
         print(f"[remote_runner] pip warning: {err}", flush=True)
     else:
         print("[remote_runner] deps installed.", flush=True)
-    _il.invalidate_caches()
+    importlib.invalidate_caches()
     ready.set()
 
 
@@ -120,13 +129,15 @@ logger = logging.getLogger("remote_runner")
 
 
 class _AwaitableNone:
-    def __await__(self):
-        return iter([])  # completes immediately, yields None
+    def __await__(self) -> Generator[Any, None, None]:
+        # Completes immediately with None; a generator rather than
+        # `iter([])` so this actually types as Awaitable.
+        yield from ()
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return False
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "None"
 
 
@@ -146,8 +157,7 @@ class _RemoteStreamWindow:
 
     def __init__(
         self, topic: str, broker: str, port: int, seconds: float = 300, max_size: int = 1000
-    ):
-        from collections import deque
+    ) -> None:
 
         self.topic = topic
         self.seconds = float(seconds)
@@ -157,16 +167,16 @@ class _RemoteStreamWindow:
         self._buffer: deque[dict] = deque(maxlen=self.max_size)
         self._task: asyncio.Task | None = None
 
-    def start(self) -> "_RemoteStreamWindow":
+    def start(self) -> _RemoteStreamWindow:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._listen())
         return self
 
-    def stop(self):
+    def stop(self) -> None:
         if self._task and not self._task.done():
             self._task.cancel()
 
-    async def _listen(self):
+    async def _listen(self) -> None:
         try:
             import aiomqtt
         except ImportError:
@@ -188,7 +198,7 @@ class _RemoteStreamWindow:
                             payload = {"value": msg.payload.decode()}
                         if not isinstance(payload, dict):
                             payload = {"value": payload}
-                        payload["_ts"] = time.time()
+                        payload["_ts"] = time.time()  # pyright: ignore[reportArgumentType]
                         self._buffer.append(payload)
             except asyncio.CancelledError:
                 break
@@ -196,12 +206,12 @@ class _RemoteStreamWindow:
                 await asyncio.sleep(5)
 
     # ── Trimming + queries ────────────────────────────────────────────────────
-    def _trim(self):
+    def _trim(self) -> None:
         cutoff = time.time() - self.seconds
         while self._buffer and self._buffer[0].get("_ts", 0) < cutoff:
             self._buffer.popleft()
 
-    def values(self, key: str = "value") -> list:
+    def values(self, key: str = "value") -> list[Any]:
         self._trim()
         return [e[key] for e in self._buffer if key in e]
 
@@ -209,22 +219,22 @@ class _RemoteStreamWindow:
         self._trim()
         return len(self._buffer)
 
-    def latest(self, key: str = "value"):
+    def latest(self, key: str = "value") -> Any:
         self._trim()
         for e in reversed(self._buffer):
             if key in e:
                 return e[key]
         return None
 
-    def mean(self, key: str = "value"):
+    def mean(self, key: str = "value") -> float | None:
         vs = [v for v in self.values(key) if isinstance(v, (int, float))]
         return sum(vs) / len(vs) if vs else None
 
-    def min(self, key: str = "value"):
+    def min(self, key: str = "value") -> int | float | None:
         vs = [v for v in self.values(key) if isinstance(v, (int, float))]
         return min(vs) if vs else None
 
-    def max(self, key: str = "value"):
+    def max(self, key: str = "value") -> int | float | None:
         vs = [v for v in self.values(key) if isinstance(v, (int, float))]
         return max(vs) if vs else None
 
@@ -278,7 +288,7 @@ class _RemoteStreamWindow:
 class _RemoteLLMInterface:
     """Drop-in equivalent of _AgentAPI.llm on the remote side."""
 
-    def __init__(self, api: "_RemoteAgentAPI"):
+    def __init__(self, api: _RemoteAgentAPI) -> None:
         self._api = api
 
     async def chat(self, prompt: str, system: str = "", timeout: float = 60.0) -> str:
@@ -313,7 +323,7 @@ class _RemoteAgentAPI:
     All methods that touch MQTT go through the shared client.
     """
 
-    def __init__(self, agent: "_RemoteAgent"):
+    def __init__(self, agent: _RemoteAgent) -> None:
         self._agent = agent
         self._published_topics: set = set()
         # Observed payload schemas captured from real publish() calls. Maps
@@ -326,17 +336,17 @@ class _RemoteAgentAPI:
         # A dict rather than a set of keys: id() is unique only among *live*
         # objects, so holding the callback is what stops its address being
         # recycled by a later one and that subscription silently skipped.
-        self._subscribed_topics: dict = {}
+        self._subscribed_topics: dict[str | tuple[str, int], Any] = {}
         # Background subscriber tasks, kept so they can be cancelled on stop()
         # and not garbage-collected while running.
         self._subscriber_tasks: list[asyncio.Task] = []
         # Declared contract surface (subscribes / triggers_when / schemas)
         # populated by declare_contract(). Folded into the manifest by
         # _publish_manifest() so main can register a complete TopicContract.
-        self._declared_subscribes: list = []
-        self._declared_triggers_when: dict = {}
-        self._declared_produces_schema: dict = {}
-        self._declared_consumes_schema: dict = {}
+        self._declared_subscribes: list[str] = []
+        self._declared_triggers_when: dict[str, Any] = {}
+        self._declared_produces_schema: dict[str, Any] = {}
+        self._declared_consumes_schema: dict[str, Any] = {}
         # Active stream windows by topic, so window() is idempotent per topic
         # and tasks are reachable for shutdown.
         self._windows: dict[str, _RemoteStreamWindow] = {}
@@ -366,7 +376,7 @@ class _RemoteAgentAPI:
         return self._agent.node_name
 
     # ── MQTT ──────────────────────────────────────────────────────────────────
-    async def publish(self, topic: str, data: Any):
+    async def publish(self, topic: str, data: Any) -> None:
         await self._agent._publish(topic, data)
         is_new_topic = topic not in self._published_topics
         # Capture observed payload schema (field names + Python type names) so
@@ -387,7 +397,7 @@ class _RemoteAgentAPI:
         if is_new_topic or schema_changed:
             await self._publish_manifest()
 
-    async def _publish_manifest(self):
+    async def _publish_manifest(self) -> None:
         """Advertise this agent's full topic contract so main can register it
         with the TopicBus and the planner can auto-wire it correctly.
 
@@ -431,14 +441,14 @@ class _RemoteAgentAPI:
         }
         await self._agent._runner.publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 
-    async def publish_result(self, data: Any):
+    async def publish_result(self, data: Any) -> None:
         """Publish agent result to agents/{id}/results — mirrors DynamicAgent API."""
         await self._agent._publish(
             f"agents/{self.actor_id}/results",
             {"agent": self.name, "node": self.node, "result": data, "timestamp": time.time()},
         )
 
-    async def publish_detection(self, data: Any):
+    async def publish_detection(self, data: Any) -> None:
         """Publish detection results to agents/{id}/detections — mirrors DynamicAgent API."""
         await self._agent._publish(
             f"agents/{self.actor_id}/detections",
@@ -448,7 +458,9 @@ class _RemoteAgentAPI:
         await self.publish(f"{self.node}/{self.name}/detections", data)
 
     # ── Subscriptions ─────────────────────────────────────────────────────────
-    def subscribe(self, topic: str, callback):
+    def subscribe(
+        self, topic: str, callback: Callable[..., Awaitable[Any]] | None
+    ) -> _AwaitableNone:
         """Subscribe to an MQTT topic and call callback(payload_dict) for each
         message. Runs as a background task — setup() returns immediately.
 
@@ -470,7 +482,6 @@ class _RemoteAgentAPI:
             )
 
         # Validate callback accepts at least one argument (the payload)
-        import inspect
 
         try:
             sig = inspect.signature(callback)
@@ -505,7 +516,7 @@ class _RemoteAgentAPI:
         # then suppress so we don't spam logs.
         _await_warned = False
 
-        async def _safe_invoke(cb, payload):
+        async def _safe_invoke(cb: Callable[..., Awaitable[None]], payload: Any) -> None:
             nonlocal _await_warned
             try:
                 await cb(payload)
@@ -520,7 +531,7 @@ class _RemoteAgentAPI:
                 else:
                     raise
 
-        async def _listener():
+        async def _listener() -> None:
             try:
                 import aiomqtt
             except ImportError:
@@ -573,7 +584,7 @@ class _RemoteAgentAPI:
         return _AWAITABLE_NONE
 
     # ── One-shot reads / time windows / world state ──────────────────────────
-    async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any | None:
+    async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any:
         """Wait for one MQTT message on topic and return its parsed payload.
         Useful for reading retained world-state topics or one-off queries.
         Returns None on timeout.
@@ -586,7 +597,7 @@ class _RemoteAgentAPI:
         port = self._agent._runner.port
         result: list = []
 
-        async def _fetch():
+        async def _fetch() -> None:
             try:
                 async with aiomqtt.Client(
                     broker,
@@ -610,9 +621,7 @@ class _RemoteAgentAPI:
             pass
         return result[0] if result else None
 
-    def window(
-        self, topic: str, seconds: float = 300, max_size: int = 1000
-    ) -> "_RemoteStreamWindow":
+    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> _RemoteStreamWindow:
         """Create a sliding time window over an MQTT topic stream.
 
         IMPORTANT: window() is synchronous — do NOT use await.
@@ -633,7 +642,7 @@ class _RemoteAgentAPI:
         self._windows[topic] = w
         return w
 
-    async def publish_world_state(self, key: str, data: Any, retain: bool = True):
+    async def publish_world_state(self, key: str, data: Any, retain: bool = True) -> None:
         """Publish a piece of world state to the shared retained state hub.
         Other agents can read this without making a request — it's always there.
 
@@ -650,13 +659,13 @@ class _RemoteAgentAPI:
     # ── Topic contract declaration ────────────────────────────────────────────
     def declare_contract(
         self,
-        publishes=None,
-        subscribes=None,
-        triggers_when: dict | None = None,
-        produces_schema: dict | None = None,
-        consumes_schema: dict | None = None,
-        **kwargs,
-    ):
+        publishes: str | list[str] | None = None,
+        subscribes: str | list[str] | None = None,
+        triggers_when: dict[str, Any] | None = None,
+        produces_schema: dict[str, Any] | None = None,
+        consumes_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> _AwaitableNone:
         """Declare this agent's topic contract — what it produces and consumes.
 
         Call from setup() to make this agent discoverable by the planner and
@@ -707,7 +716,7 @@ class _RemoteAgentAPI:
         # writes `await agent.declare_contract(...)`.
         return _AWAITABLE_NONE
 
-    def wiring_opportunities(self) -> list:
+    def wiring_opportunities(self) -> list[dict[str, Any]]:
         """Remote agents can't query the central TopicBus directly — that runs in
         the main process. Returns an empty list. Use `/agents` from main or
         ask the planner if you need wiring info.
@@ -719,7 +728,7 @@ class _RemoteAgentAPI:
     # this remote node. Cross-cluster introspection lives on main; remote code
     # that needs the global view should send a task there.
 
-    def nodes(self) -> list:
+    def nodes(self) -> list[dict[str, Any]]:
         """List of nodes visible to this remote runner — only itself."""
         return [
             {
@@ -729,7 +738,7 @@ class _RemoteAgentAPI:
             }
         ]
 
-    def topics(self, keyword: str = "") -> list:
+    def topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Topics this remote node has observed locally — built from its own
         published topics and the topics it actively subscribes to. The
         cluster-wide view lives on main; this is the best a remote node can
@@ -744,7 +753,7 @@ class _RemoteAgentAPI:
             out.append({"topic": t, "agents": [{"name": self.name, "node": self.node}]})
         return out
 
-    def capabilities(self, keyword: str = "") -> list:
+    def capabilities(self, keyword: str = "") -> list[dict[str, Any]]:
         """Single-element list describing this agent's own capability profile.
         Cluster-wide capability search lives on main.
         """
@@ -765,33 +774,33 @@ class _RemoteAgentAPI:
 
     # ── Logger shim ───────────────────────────────────────────────────────────
     @property
-    def logger(self):
+    def logger(self) -> Any:
         """Compatibility shim — allows agent.logger.info/warning/error in
         generated code, mirroring DynamicAgent._AgentAPI.logger.
         """
         api = self
 
         class _LoggerShim:
-            def info(self, msg):
+            def info(self, msg: str) -> None:
                 asyncio.ensure_future(api.log(msg, "info"))
 
-            def warning(self, msg):
+            def warning(self, msg: str) -> None:
                 asyncio.ensure_future(api.log(msg, "warning"))
 
-            def error(self, msg):
+            def error(self, msg: str) -> None:
                 asyncio.ensure_future(api.log(msg, "error"))
 
-            def debug(self, msg):
+            def debug(self, msg: str) -> None:
                 asyncio.ensure_future(api.log(msg, "debug"))
 
         return _LoggerShim()
 
-    async def set_status(self, status: str):
+    async def set_status(self, status: str) -> None:
         """Update agent task status string visible in dashboard."""
         self._agent._status = status
 
     # ── Logging ───────────────────────────────────────────────────────────────
-    async def log(self, message: str, level: str = "info"):
+    async def log(self, message: str, level: str = "info") -> None:
         """Add a message to the event log. Signature mirrors DynamicAgent.log()
         so generated code that passes `level=` works on both local and remote.
         """
@@ -809,7 +818,7 @@ class _RemoteAgentAPI:
             },
         )
 
-    async def alert(self, message: str, severity: str = "warning"):
+    async def alert(self, message: str, severity: str = "warning") -> None:
         logger.warning(f"[{self.name}] ALERT({severity}): {message}")
         await self._agent._publish(
             f"agents/{self.actor_id}/alert",
@@ -822,7 +831,7 @@ class _RemoteAgentAPI:
         )
 
     # ── Persistence ───────────────────────────────────────────────────────────
-    def persist(self, key: str, value: Any):
+    def persist(self, key: str, value: Any) -> None:
         self._agent._persistent_state[key] = value
         self._agent._save_state()
 
@@ -918,7 +927,7 @@ class _RemoteAgentAPI:
     async def delegate(self, agent_name: str, payload: Any, timeout: float = 60.0) -> Any:
         return await self.send_to(agent_name, payload, timeout)
 
-    def agents(self) -> list:
+    def agents(self) -> list[dict[str, Any]]:
         """Return list of known agents on this node."""
         return [
             {"name": a.name, "actor_id": a.actor_id, "node": a.node_name}
@@ -934,7 +943,7 @@ class _RemoteAgent:
     Holds compiled user code and drives setup/process/handle_task.
     """
 
-    def __init__(self, config: dict, runner: "_RemoteRunner", state_dir: str = "/tmp"):
+    def __init__(self, config: dict, runner: _RemoteRunner, state_dir: str | None = None) -> None:
         self.name = config.get("name", f"remote-agent-{uuid.uuid4().hex[:6]}")
         self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{self.name}"))
         self.node_name = runner.node_name
@@ -948,15 +957,19 @@ class _RemoteAgent:
         # P3: use the runner's persistent state directory (~/wactorz/state/) so
         #     state survives Pi reboots rather than being wiped from /tmp.
         safe_name = self.name.replace("/", "_").replace("\\", "_")
+        if not state_dir:
+            state_path = Path.home() / "wactorz" / "state"
+            state_dir = str(state_path)
         self._state_path = os.path.join(state_dir, f"{safe_name}_state.json")
         self._pending_replies: dict[str, asyncio.Future] = {}
         self._api = _RemoteAgentAPI(self)
         self._tasks: list[asyncio.Task] = []
         self._running = False
+        self._status = ""
 
-        self._fn_setup = None
-        self._fn_process = None
-        self._fn_handle_task = None
+        self._fn_setup: Callable[..., Awaitable[None]] | None = None
+        self._fn_process: Callable[..., Awaitable[None]] | None = None
+        self._fn_handle_task: Callable[..., Awaitable[None]] | None = None
 
         # ── Supervisor state ──────────────────────────────────────────────────
         self._max_restarts = int(config.get("max_restarts", 5))
@@ -1013,14 +1026,14 @@ class _RemoteAgent:
 
     # ── State persistence (JSON, not pickle — portable across Python versions) ─
 
-    def _save_state(self):
+    def _save_state(self) -> None:
         try:
             with open(self._state_path, "w", encoding="utf-8") as f:
                 json.dump(self._persistent_state, f)
         except Exception as e:
             logger.warning(f"[{self.name}] State save failed: {e}")
 
-    def _load_state(self):
+    def _load_state(self) -> None:
         if os.path.exists(self._state_path):
             try:
                 with open(self._state_path, encoding="utf-8") as f:
@@ -1055,7 +1068,7 @@ class _RemoteAgent:
 
     # ── MQTT publish helper ───────────────────────────────────────────────────
 
-    async def _publish(self, topic: str, data: Any):
+    async def _publish(self, topic: str, data: Any) -> None:
         await self._runner.publish(topic, data)
 
     # ── Code compilation ──────────────────────────────────────────────────────
@@ -1073,7 +1086,7 @@ class _RemoteAgent:
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
-    async def start(self):
+    async def start(self) -> None:
         """Start the agent under a supervision loop.
         The supervisor restarts the agent on unexpected crashes up to
         max_restarts times, with exponential back-off between attempts.
@@ -1082,7 +1095,7 @@ class _RemoteAgent:
         self._running = True
         asyncio.create_task(self._supervisor_loop())
 
-    async def _supervisor_loop(self):
+    async def _supervisor_loop(self) -> None:
         """Supervisor that mirrors the local OTP ONE_FOR_ONE strategy.
         Runs _run_lifecycle() in a loop; on crash, waits and retries.
         """
@@ -1144,7 +1157,7 @@ class _RemoteAgent:
                 # Re-compile fresh (code doesn't change, but namespace must be clean)
                 self._ns = {}
 
-    async def _run_lifecycle(self):
+    async def _run_lifecycle(self) -> None:
         """One full agent lifecycle: compile → setup → process loop + heartbeat loop.
         Raises on unhandled exceptions so _supervisor_loop can catch and restart.
         Compile errors and setup fatals publish an error event then return cleanly
@@ -1152,7 +1165,9 @@ class _RemoteAgent:
         """
         # Reset per-run namespace and function pointers
         self._ns = {}
-        self._fn_setup = self._fn_process = self._fn_handle_task = None
+        self._fn_setup = None
+        self._fn_process = None
+        self._fn_handle_task = None
 
         err = self._compile()
         if err:
@@ -1174,7 +1189,7 @@ class _RemoteAgent:
 
         if self._fn_setup:
             try:
-                await self._fn_setup(self._api)
+                await self._fn_setup(self._api)  # pyright: ignore[reportGeneralTypeIssues]  # _compile() populates this
                 logger.info(f"[{self.name}] setup() completed.")
             except Exception as e:
                 err_str = traceback.format_exc()
@@ -1217,7 +1232,7 @@ class _RemoteAgent:
             if exc is not None and not isinstance(exc, asyncio.CancelledError):
                 raise exc
 
-    async def stop(self):
+    async def stop(self) -> None:
         self._running = False
         for t in self._tasks:
             t.cancel()
@@ -1238,9 +1253,9 @@ class _RemoteAgent:
     # ── Loops ─────────────────────────────────────────────────────────────────
 
     # After this many consecutive process() errors, raise to trigger a supervisor restart
-    _PROCESS_ESCALATE_AFTER = 5
+    _PROCESS_ESCALATE_AFTER: int = 5
 
-    async def _process_loop(self):
+    async def _process_loop(self) -> None:
         """Run process() in a loop with per-error backoff.
         After _PROCESS_ESCALATE_AFTER consecutive errors, raises RuntimeError
         so the supervisor loop gets a clean restart (fresh namespace, reset state).
@@ -1249,6 +1264,8 @@ class _RemoteAgent:
         consecutive_errors = 0
         successful_runs = 0
         while self._running:
+            if self._fn_process is None:
+                continue
             try:
                 await self._fn_process(self._api)
                 consecutive_errors = 0
@@ -1291,7 +1308,7 @@ class _RemoteAgent:
             except asyncio.CancelledError:
                 break
 
-    async def _heartbeat_loop(self, interval: float = 10.0):
+    async def _heartbeat_loop(self, interval: float = 10.0) -> None:
         while self._running:
             try:
                 await asyncio.sleep(interval)
@@ -1301,7 +1318,7 @@ class _RemoteAgent:
             except Exception:
                 pass
 
-    async def _publish_heartbeat(self, state: str):
+    async def _publish_heartbeat(self, state: str) -> None:
         await self._publish(
             f"agents/{self.actor_id}/heartbeat",
             {
@@ -1319,7 +1336,7 @@ class _RemoteAgent:
 
     # ── Task handling ─────────────────────────────────────────────────────────
 
-    async def handle_task(self, payload: dict) -> Any:
+    async def handle_task(self, payload: dict[str, Any]) -> Any:
         if not self._fn_handle_task:
             return {"error": f"Agent '{self.name}' has no handle_task function."}
         try:
@@ -1360,22 +1377,27 @@ class _RemoteRunner:
     Connects to the MQTT broker, listens for spawn commands, manages agents.
     """
 
-    def __init__(self, broker: str, port: int, node_name: str):
+    def __init__(self, broker: str, port: int, node_name: str) -> None:
         self.broker = broker
         self.port = port
         self.node_name = node_name
         self._agents: dict[str, _RemoteAgent] = {}  # name → agent
-        self._pub_queue: asyncio.Queue = None  # created in run() inside the event loop
+        self._pub_queue: asyncio.Queue[tuple[str, bytes, bool]] | None = (
+            None  # created in run() inside the event loop
+        )
         self._running = False
-        self._deps_ready: asyncio.Event = None  # set once aiomqtt/paho are importable
+        self._deps_ready: asyncio.Event | None = None  # set once aiomqtt/paho are importable
         self._start_time: float = time.time()  # for uptime reporting in heartbeat
         # Persistent state directory — survives reboots unlike /tmp
-        self._state_dir = os.path.join(os.path.expanduser("~"), "wactorz", "state")
-        os.makedirs(self._state_dir, exist_ok=True)
+        _state_path = Path.home() / "wactorz" / "state"
+        _state_path.mkdir(parents=True, exist_ok=True)
+        self._state_dir = str(_state_path)
 
     # ── MQTT publish (queue-based, reconnect-safe) ────────────────────────────
 
-    async def publish(self, topic: str, data: Any, retain: bool = False):
+    async def publish(self, topic: str, data: Any, retain: bool = False) -> None:
+        if self._pub_queue is None:
+            return
         payload = json.dumps(data) if not isinstance(data, (str, bytes)) else data
         if isinstance(payload, str):
             payload = payload.encode()
@@ -1383,7 +1405,7 @@ class _RemoteRunner:
 
     # ── Spawn / stop agents ───────────────────────────────────────────────────
 
-    async def spawn_agent(self, config: dict):
+    async def spawn_agent(self, config: Any) -> None:
         if not isinstance(config, dict):
             logger.warning(f"[runner] spawn_agent: invalid config type {type(config)}, ignoring.")
             return
@@ -1431,7 +1453,7 @@ class _RemoteRunner:
             },
         )
 
-    async def stop_agent(self, name: str, delete: bool = False):
+    async def stop_agent(self, name: str, delete: bool = False) -> None:
         """Stop an agent. When `delete=True`, also wipe everything that would
         otherwise survive the stop:
           - the JSON state file on disk (~/wactorz/state/<name>_state.json)
@@ -1490,11 +1512,11 @@ class _RemoteRunner:
             except Exception as e:
                 logger.debug(f"[runner] Failed to clear retained agents/{actor_id}/{metric}: {e}")
 
-    async def stop_all(self):
+    async def stop_all(self) -> None:
         for name in list(self._agents):
             await self.stop_agent(name)
 
-    async def _install_packages(self, packages: list):
+    async def _install_packages(self, packages: list[str]) -> None:
         """Install pip packages on the edge node."""
         pkgs = " ".join(packages)
         logger.info(f"[runner] Installing: {pkgs}")
@@ -1509,7 +1531,7 @@ class _RemoteRunner:
 
     # ── Status heartbeat for the node itself ──────────────────────────────────
 
-    async def _node_heartbeat_loop(self, interval: float = 10.0):
+    async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
         """Publish a heartbeat for the runner process itself so it appears in dashboard."""
         node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.node.{self.node_name}"))
         while self._running:
@@ -1548,18 +1570,20 @@ class _RemoteRunner:
 
     # ── MQTT publisher task (paho-mqtt direct — aiomqtt v2.x doesn't flush reliably) ──
 
-    async def _publisher_loop(self):
+    async def _publisher_loop(self) -> None:
         """Uses paho-mqtt directly for reliable fire-and-forget publishing.
         aiomqtt v2.x wraps paho but its internal network loop doesn't get CPU
         time when we block on queue.get(), causing silent message loss.
         paho.loop_start() runs a background thread that handles ACKs/keepalives.
         """
+        if self._deps_ready is None:
+            return
         await self._deps_ready.wait()
         import paho.mqtt.client as paho_mqtt
 
         loop = asyncio.get_event_loop()
 
-        def _connect():
+        def _connect() -> paho_mqtt.Client:
             c = paho_mqtt.Client(client_id=f"runner-pub-{self.node_name}-{uuid.uuid4().hex[:6]}")
             _user = os.environ.get("MQTT_USERNAME") or None
             if _user:
@@ -1570,6 +1594,8 @@ class _RemoteRunner:
 
         client = None
         while self._running:
+            if self._pub_queue is None:
+                return
             try:
                 if client is None:
                     client = await loop.run_in_executor(None, _connect)
@@ -1603,7 +1629,7 @@ class _RemoteRunner:
 
     # ── MQTT subscriber task ──────────────────────────────────────────────────
 
-    async def _subscriber_loop(self):
+    async def _subscriber_loop(self) -> None:
         """Subscribes to:
         nodes/{node_name}/spawn          — spawn a new agent
         nodes/{node_name}/stop           — stop a named agent
@@ -1612,7 +1638,8 @@ class _RemoteRunner:
         nodes/{node_name}/reply/#        — route replies back to waiting agents
         agents/by-name/+/task           — task addressed to a named agent
         """
-        await self._deps_ready.wait()
+        if self._deps_ready is not None:
+            await self._deps_ready.wait()
         import aiomqtt
 
         topics = [
@@ -1668,7 +1695,7 @@ class _RemoteRunner:
                                         f"[runner] Reconcile: starting missing agent '{aname}'"
                                     )
 
-                                    def _log_exc(t):
+                                    def _log_exc(t: asyncio.Task) -> None:
                                         if not t.cancelled() and t.exception():
                                             logger.error(
                                                 f"[runner] reconcile task failed: {t.exception()}"
@@ -1681,7 +1708,7 @@ class _RemoteRunner:
                             if not msg.payload:  # empty = retain-clear message, ignore
                                 continue
 
-                            def _log_task_exc(t):
+                            def _log_task_exc(t: asyncio.Task) -> None:
                                 if not t.cancelled() and t.exception():
                                     logger.error(
                                         f"[runner] spawn_agent task failed: {t.exception()}"
@@ -1711,7 +1738,8 @@ class _RemoteRunner:
                         elif topic_str == f"nodes/{self.node_name}/migrate":
                             # Migrate a running agent to another node
                             # payload: {"name": "agent-name", "target_node": "rpi-bedroom"}
-                            asyncio.create_task(self._migrate_agent(data))
+                            if isinstance(data, dict):
+                                asyncio.create_task(self._migrate_agent(data))
 
                         elif topic_str == f"nodes/{self.node_name}/stop_all":
                             logger.info("[runner] stop_all received — shutting down.")
@@ -1728,6 +1756,8 @@ class _RemoteRunner:
                             # Restart a single named agent without losing its config.
                             # Equivalent to stop + spawn with replace=true.
                             name = data.get("name") if isinstance(data, dict) else str(data)
+                            if not isinstance(name, str):
+                                name = str(name)
                             asyncio.create_task(self._restart_agent(name))
 
                         elif topic_str == f"nodes/{self.node_name}/list":
@@ -1814,7 +1844,9 @@ class _RemoteRunner:
                                     # responded in ms. By offloading to a task,
                                     # the subscriber returns to the loop and is
                                     # free to deliver subsequent replies.
-                                    async def _run_task(a, p, rt, an):
+                                    async def _run_task(
+                                        a: _RemoteAgent, p: Any, rt: str | None, an: str
+                                    ) -> None:
                                         try:
                                             result = await a.handle_task(p)
                                         except Exception as e:
@@ -1859,7 +1891,7 @@ class _RemoteRunner:
 
     # ── Main run loop ─────────────────────────────────────────────────────────
 
-    async def run(self):
+    async def run(self) -> None:
         self._running = True
         self._pub_queue = asyncio.Queue()  # must be created inside the running event loop
         self._deps_ready = asyncio.Event()
@@ -1892,7 +1924,7 @@ class _RemoteRunner:
             for t in tasks:
                 t.cancel()
 
-    async def _restart_agent(self, name: str):
+    async def _restart_agent(self, name: str) -> None:
         """Restart a single agent without losing its config or persisted state.
         The agent's state file is left on disk — the fresh instance picks it up
         via _load_state() on startup, so no state is lost.
@@ -1915,7 +1947,7 @@ class _RemoteRunner:
         logger.info(f"[runner] Restarting agent '{name}'")
         await self.spawn_agent(config)
 
-    async def _restart(self):
+    async def _restart(self) -> None:
         """Gracefully restart the runner process in-place using os.execv.
         - Stops all agents (their state files are flushed to disk by stop())
         - Publishes a "restarting" heartbeat so main sees the transition
@@ -1934,7 +1966,7 @@ class _RemoteRunner:
         await asyncio.sleep(0.5)
         os.execv(sys.executable, [sys.executable, *sys.argv])
 
-    async def _shutdown(self):
+    async def _shutdown(self) -> None:
         self._running = False
         await self.stop_all()
         await self.publish(
@@ -1945,7 +1977,7 @@ class _RemoteRunner:
         await asyncio.sleep(0.3)
         sys.exit(0)
 
-    async def _migrate_agent(self, payload: dict):
+    async def _migrate_agent(self, payload: dict[str, Any]) -> None:
         """Move a running agent to a different node.
 
         P0 fix: agent._persistent_state is serialised into the spawn config
@@ -2087,7 +2119,7 @@ class _RemoteRunner:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Wactorz edge node runner — deploy on Raspberry Pi or any remote machine"
     )
@@ -2113,13 +2145,30 @@ def main():
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    # The node name becomes one level of every topic this runner uses
+    # (nodes/<name>/heartbeat to publish, nodes/<name>/spawn to subscribe), so
+    # an MQTT wildcard or separator in it makes the broker refuse every publish
+    # and every subscribe. Without this check the runner connects, fails each
+    # operation, and reconnects every 3s forever — filling its log and never
+    # appearing on the dashboard. Duplicated from wactorz/config.py's
+    # deploy_name_error rather than imported: this file is deployed to the edge
+    # node on its own, with no wactorz package alongside it.
+    bad = [c for c in ("#", "+", "/") if c in node_name]
+    if bad or not node_name.strip():
+        problem = f"contains {' and '.join(repr(c) for c in bad)}" if bad else "is empty"
+        logger.error(
+            f"[runner] Refusing to start: node name {node_name!r} {problem}, which "
+            f"cannot appear in an MQTT topic. Rename the node and redeploy."
+        )
+        raise SystemExit(2)
+
     runner = _RemoteRunner(broker=args.broker, port=args.port, node_name=node_name)
 
     # Graceful shutdown on SIGINT / SIGTERM
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    def _signal_handler():
+    def _signal_handler() -> None:
         logger.info("[runner] Shutdown signal received.")
         loop.create_task(runner._shutdown())
 
@@ -2138,7 +2187,7 @@ def main():
 # ── Self-test (python3 remote_runner.py --test) ───────────────────────────────
 
 
-async def _run_supervisor_tests():
+async def _run_supervisor_tests() -> bool:
     """Standalone tests. No MQTT broker required."""
     passed = 0
     failed = 0
@@ -2146,14 +2195,23 @@ async def _run_supervisor_tests():
     class _StubRunner:
         node_name = "test-node"
 
-        def __init__(self):
+        def __init__(self) -> None:
             self._agents = {}
             self.events = []
 
-        async def publish(self, topic, data):
+        async def publish(self, topic: str, data: Any, retain: bool = False) -> None:
+            # Mirrors _RemoteRunner.publish, `retain` included — without it
+            # every lifecycle raised TypeError and the supervisor restarted
+            # a healthy agent.
             self.events.append((topic, data))
 
-    def make_agent(code, max_restarts=3, restart_delay=0.01, poll_interval=0.01, escalate_after=5):
+    def make_agent(
+        code: str,
+        max_restarts: int = 3,
+        restart_delay: float = 0.01,
+        poll_interval: float = 0.01,
+        escalate_after: int = 5,
+    ) -> tuple[_RemoteAgent, _StubRunner]:
         runner = _StubRunner()
         config = {
             "name": "test-agent",
@@ -2162,13 +2220,13 @@ async def _run_supervisor_tests():
             "restart_delay": restart_delay,
             "poll_interval": poll_interval,
         }
-        agent = _RemoteAgent(config, runner)
+        agent = _RemoteAgent(config, runner)  # pyright: ignore[reportArgumentType]
         agent._PROCESS_ESCALATE_AFTER = escalate_after
         agent._running = True  # start() sets this; we call _supervisor_loop directly in tests
         runner._agents["test-agent"] = agent
         return agent, runner
 
-    def check(name, condition, detail=""):
+    def check(name: str, condition: bool, detail: str = "") -> None:
         nonlocal passed, failed
         if condition:
             print(f"  PASS  {name}")

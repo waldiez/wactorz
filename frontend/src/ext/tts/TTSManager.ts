@@ -9,7 +9,7 @@
  *   beep  — short AudioContext tone on each incoming message
  *   tts   — speech synthesis (server edge-tts when available, Web Speech API fallback)
  *
- * Server TTS: GET /api/tts?text=...&voice=...  returns audio/mpeg.
+ * Server TTS: POST /api/tts {text, voice} → audio/mpeg.
  * If the endpoint returns 503 (edge-tts not installed) the manager falls back
  * to window.speechSynthesis for the rest of the session.
  *
@@ -212,13 +212,16 @@ export class TTSManager {
         // audio-end or ambient stays ducked.
         emit("tts-audio-start");
         const unduck = () => emit("tts-audio-end");
-        const params = new URLSearchParams({ text });
         const voice = this.selectedVoice;
-        if (voice) {
-            params.set("voice", voice);
-        }
 
-        fetch(`${this._apiBase}/api/tts?${params}`)
+        // POST, not GET: synthesis is work, not a read. A GET can be fired
+        // cross-origin with no Origin header at all (`<img src>`), which is the
+        // assumption the server's Origin check rests on.
+        fetch(`${this._apiBase}/api/tts`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(voice ? { text, voice } : { text }),
+        })
             .then(res => {
                 if (res.status === 503 || res.status === 404) {
                     this._serverAvailable = false;

@@ -210,9 +210,23 @@ def test_score_dynamic_strict_rejects_awaited_subscribe():
     assert not score_dynamic(bad, _STRICT)
 
 
-def test_score_dynamic_strict_rejects_module_level_import():
-    bad = "import time\n" + _GOOD
-    assert not score_dynamic(bad, _STRICT)
+def test_score_dynamic_stdlib_module_level_import_is_not_fatal():
+    # DynamicAgent execs the module body, so a module-level import of a package
+    # the installer has not fetched yet kills the spawn. `import asyncio` cannot
+    # fail, so it is house-style, not breakage — and failing it scored a working
+    # 4B agent at 12% when it would really have run 80% of the time.
+    assert score_dynamic("import asyncio\n" + _GOOD, _STRICT)
+
+
+def test_score_dynamic_thirdparty_module_level_import_is_fatal():
+    assert not score_dynamic("import psutil\n" + _GOOD, _STRICT)
+    assert not score_dynamic("from cv2 import VideoCapture\n" + _GOOD, _STRICT)
+
+
+def test_score_dynamic_strict_imports_opts_back_in():
+    strict = {**_STRICT, "strict_imports": True}
+    assert not score_dynamic("import asyncio\n" + _GOOD, strict)
+    assert score_dynamic(_GOOD, strict)
 
 
 def test_score_dynamic_strict_rejects_own_llm_client():

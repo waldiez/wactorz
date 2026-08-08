@@ -51,6 +51,7 @@ import asyncio
 import csv
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -376,11 +377,27 @@ def _structural_findings(tree: ast.AST, code: str) -> set[str]:
     """
     findings: set[str] = set()
 
-    # Imports must live inside functions: module-level imports run before the
-    # installer has had a chance to pip-install anything.
+    # Imports must live inside functions: DynamicAgent runs the module body via
+    # exec(compile(...)), so a module-level import of a package the installer has
+    # not fetched yet raises ImportError and the spawn fails outright.
+    #
+    # Only third-party imports can do that. `import asyncio` at module level is
+    # against the framework's house style but cannot fail, and flagging it scored
+    # a working agent as broken — one 4B model put `import asyncio` at the top of
+    # 42 of 50 answers and scored 12% instead of 80%. Style adherence and "would
+    # this actually run" are different questions; this measures the second.
+    # Pass "strict_imports": true in a case to fail any module-level import.
     for node in tree.body if isinstance(tree, ast.Module) else []:
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            findings.add("module_level_import")
+        if isinstance(node, ast.Import):
+            modules = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            modules = [node.module or ""]
+        else:
+            continue
+        roots = [m.split(".")[0] for m in modules if m]
+        findings.add("module_level_import")
+        if any(r not in sys.stdlib_module_names for r in roots):
+            findings.add("module_level_thirdparty_import")
 
     for node in ast.walk(tree):
         # agent.subscribe() is not awaitable and needs a callback.
@@ -476,6 +493,8 @@ def score_dynamic(output: str, expected: list[str] | dict) -> bool:
             if not f.startswith("empty_body:")
             or (not allow_empty and f.split(":", 1)[1] in required)
         }
+        if not expected.get("strict_imports"):
+            findings.discard("module_level_import")
         if findings:
             return False
     return True

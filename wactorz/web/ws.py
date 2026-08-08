@@ -14,6 +14,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from ..monitoring.log_redaction import redact
 from . import chat, events, lifecycle, runtime
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,37 @@ class Channel:
             logger.warning("[broadcast] writer task ended in error: %s", outcome)
 
 
+#: Backstop interval for the headline totals. Long, because the `chat` frame
+#: carries them as soon as an agent replies; this only covers spend that
+#: produces no chat — a planner run, intent classification, a background agent.
+TOTALS_INTERVAL_S = 15.0
+
+
+async def totals_broadcaster(interval: float = TOTALS_INTERVAL_S) -> None:
+    """Re-send the dashboard totals periodically, as a backstop.
+
+    Totals are the one part of a snapshot that queries the database, so they
+    are not rebuilt per broker message. The `chat` frame carries them, which
+    covers the case someone is actually watching — ask a question, see the
+    cost move. Not every expense produces a chat frame though, so this keeps
+    the figure honest for spend that happens out of sight.
+
+    One query per interval, independent of message rate and agent count.
+    """
+    while True:
+        await asyncio.sleep(interval)
+        # Check before building: the snapshot is the expensive half, and
+        # `broadcast` would discard it anyway with nobody listening.
+        if not runtime.ws_clients or runtime.hard_resetting:
+            continue
+        try:
+            await broadcast({"type": "patch", "state": events.snapshot()})
+        except Exception as exc:
+            # A failed tick must not end the loop, or totals stop updating for
+            # the life of the process with nothing to say why.
+            logger.warning("[totals] periodic broadcast failed: %s", exc)
+
+
 async def broadcast(msg: dict[str, Any]) -> None:
     """Hand a message to every connected client's queue.
 
@@ -168,7 +200,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 ts=time.time(),
                 agent_name=agent_name,
                 role=role,
-                content=content,
+                # The log outlives the conversation and is readable through the
+                # API, so it gets the same treatment as the log file: a user can
+                # still type a credential even where no command accepts one.
+                content=redact(content),
             )
         except Exception as exc:
             logger.warning("[ws] chat_log write failed: %s", exc)
@@ -332,7 +367,11 @@ async def handle_command(cmd: dict[str, Any]) -> None:
                 }
             )
             await broadcast(
-                {"type": "lifecycle.delete_agent", "agent_id": agent_id, "state": events.snapshot()}
+                {
+                    "type": events.DELETE_AGENT_FRAME,
+                    "agent_id": agent_id,
+                    "state": events.snapshot(),
+                }
             )
             return
 

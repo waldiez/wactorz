@@ -110,6 +110,7 @@ class MonitorActor(Actor):
                 await self._ping_all_actors()
                 await self._check_all_actors()
                 await self._check_error_registry()
+                self._forget_departed()
                 await self._publish_system_health()
                 await self._publish_host_stats()
             except asyncio.CancelledError:
@@ -203,6 +204,37 @@ class MonitorActor(Actor):
             await self._notify_main(actor_id, name, msg, severity="critical")
 
         # severity == "warning" -> just the MQTT alert, no user notification
+
+    def _forget_departed(self) -> None:
+        """Drop tracking for actors that are gone.
+
+        Every message counts as a liveness signal, so `_last_seen` takes an
+        entry for any sender — including ids that were never local actors. None
+        of these maps had a removal path, so they grew with agent churn and with
+        anything publishing under a fresh id.
+
+        An actor still in the registry is kept regardless of age; one that has
+        left is kept only while its last signal is recent, which is the window a
+        restart needs to re-register without losing its history.
+
+        `_error_registry` is swept here too. Its own cleanup only fires when a
+        live actor reports zero consecutive errors, so an agent that departs
+        while degraded is never cleared by it — recovery cannot arrive for an
+        actor that is gone. That entry also counts toward the `degraded` figure
+        in system health, so leaving it behind reports trouble in an agent that
+        no longer exists.
+        """
+        live = {a.actor_id for a in self._registry.all_actors()} if self._registry else set()
+        grace = time.time() - self.heartbeat_timeout * 2
+        keep = live | {aid for aid, seen in self._last_seen.items() if seen > grace}
+        for tracked in (
+            self._last_seen,
+            self._alert_state,
+            self._last_notified,
+            self._error_registry,
+        ):
+            for actor_id in [k for k in tracked if k not in keep]:
+                tracked.pop(actor_id, None)
 
     async def _check_error_registry(self):
         """Notify user when a previously degraded agent has recovered."""

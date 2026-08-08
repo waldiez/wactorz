@@ -5,12 +5,16 @@ site (``static/docs``), plus the CSP policy and Home Assistant ingress-path
 injection the dashboard needs.
 """
 
+import logging
+import re
 import secrets
 from pathlib import Path
 
 from aiohttp import web
 
 from . import runtime
+
+logger = logging.getLogger(__name__)
 
 Response = web.Response | web.FileResponse | web.StreamResponse
 
@@ -39,6 +43,33 @@ def _with_no_cache(response: Response) -> Response:
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+#: An ingress path is a URL path the Supervisor proxy prefixes us with, e.g.
+#: `/api/hassio_ingress/<token>`. Anything outside this shape is not one.
+_INGRESS_PATH_RE = re.compile(r"^/[A-Za-z0-9_\-./]*$")
+
+
+def ingress_path_of(request: web.Request) -> str:
+    """The request's validated `X-Ingress-Path`, or "" if it is not one.
+
+    The header is attacker-suppliable — any peer on the docker network can set
+    it — and the value is interpolated into a `<base href>` and into a **nonced**
+    `<script>`. A quote in it closes the string literal, so whatever follows
+    executes carrying the page's own CSP nonce: the policy permits it because
+    the server vouched for it.
+
+    Validating the shape here is not the whole answer — accepting the header
+    only from the Supervisor's own address range is (see C-10 in the security
+    plan) — but it removes the injection while that lands.
+    """
+    raw = request.headers.get("X-Ingress-Path", "").rstrip("/")
+    if not raw:
+        return ""
+    if ".." in raw or not _INGRESS_PATH_RE.match(raw):
+        logger.warning("[static] Ignoring malformed X-Ingress-Path: %r", raw[:80])
+        return ""
+    return raw
 
 
 def csp_policy(nonce: str) -> str:
@@ -82,7 +113,7 @@ async def index_handler(request: web.Request) -> Response:
         _find_dir("frontend") / "index.html",
     ]:
         if candidate.exists():
-            ingress_path = request.headers.get("X-Ingress-Path", "").rstrip("/")
+            ingress_path = ingress_path_of(request)
             # Per-request nonce for the injected bootstrap script below so the CSP
             # can allow it without 'unsafe-inline'.
             nonce = secrets.token_urlsafe(16)
@@ -116,7 +147,7 @@ async def static_handler(request: web.Request) -> Response:
             if candidate.exists():
                 return _with_no_cache(web.FileResponse(candidate))
 
-    ingress_path = request.headers.get("X-Ingress-Path", "").rstrip("/")
+    ingress_path = ingress_path_of(request)
 
     for base in [FRONTEND_DIST, FRONTEND_PUBLIC]:
         candidate = base / rel

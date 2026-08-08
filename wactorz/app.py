@@ -83,7 +83,7 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.monitor_agent import MonitorActor
     from wactorz.core.actor import Actor, SupervisorStrategy
     from wactorz.core.registry import ActorSystem
-    from wactorz.llm_factory import create_provider, provider_for
+    from wactorz.llm_factory import create_provider, parse_overrides, provider_for
 
     llm = args.llm or CONFIG.llm_provider
     model_flag = {
@@ -103,12 +103,21 @@ async def build_system(args: argparse.Namespace):
         temperature = (
             "provider default" if CONFIG.llm_temperature is None else CONFIG.llm_temperature
         )
+        # The parsed table rather than the raw string: what a site resolves to
+        # is the thing worth seeing, and an entry that was dropped as malformed
+        # or unknown is visible by its absence.
+        overrides = parse_overrides(CONFIG.llm_overrides)
         logger.info(
             "LLM: %s/%s | temperature=%s%s",
             llm,
             getattr(provider, "model", None) or getattr(provider, "model_name", "?"),
             temperature,
-            f" | overrides: {CONFIG.llm_overrides}" if CONFIG.llm_overrides else "",
+            (
+                " | overrides: "
+                + ", ".join(f"{site}={spec}" for site, spec in sorted(overrides.items()))
+                if overrides
+                else ""
+            ),
         )
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────

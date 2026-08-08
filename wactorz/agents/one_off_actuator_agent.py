@@ -11,12 +11,13 @@ from wactorz.config import CONFIG
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import (
+    compact_devices_for_prompt,
     fetch_devices_entities_with_location,
     normalize_ha_ws_url,
 )
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 from .home_assistant_actuator_agent import ActuatorAction
-from .llm_agent import LLMProvider, _accumulate_global_cost
+from .llm_agent import LLMProvider, accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
@@ -448,9 +449,13 @@ class OneOffActuatorAgent(Actor):
         return await self._execute_actions(actions)
 
     async def _resolve_actions(self, devices: list[dict[str, Any]]) -> list[ActuatorAction]:
+        # Send the model only the fields it can act on. The dashboard payload is
+        # ~3x larger, and the bulk of it (unique_id, platform, icons, feature
+        # bitmasks) is never mentioned by the resolver prompt. Post-processing
+        # below still reads the FULL payload, so colour repair keeps working.
         prompt_input = {
             "user_request": self.request,
-            "devices": devices,
+            "devices": compact_devices_for_prompt(devices),
         }
         llm = self.llm
         if llm is None:
@@ -727,7 +732,7 @@ class OneOffActuatorAgent(Actor):
         self.total_cost_usd += usage.get("cost_usd", 0.0)
         delta = self.total_cost_usd - self._last_period_cost_usd
         if delta > 0:
-            _accumulate_global_cost(delta)
+            accumulate_global_cost(delta)
             self._last_period_cost_usd = self.total_cost_usd
 
     async def _deferred_stop(self) -> None:

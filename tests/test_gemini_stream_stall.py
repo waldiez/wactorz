@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents import llm_agent
+from wactorz.agents.llm.providers import gemini
 from wactorz.agents.llm_agent import GeminiProvider
 
 
@@ -76,7 +76,7 @@ async def _drain(provider: GeminiProvider) -> tuple[list[str], dict]:
 
 @pytest.mark.asyncio
 async def test_a_stalled_stream_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_agent, "_GEMINI_STREAM_STALL_TIMEOUT", 0.1)
+    monkeypatch.setattr(gemini, "_GEMINI_STREAM_STALL_TIMEOUT", 0.1)
     models = _StreamModels([_chunk("half an ")], then_hang=True)
     try:
         text, final = await _drain(_provider(models))
@@ -90,7 +90,7 @@ async def test_a_stalled_stream_is_reported(monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.mark.asyncio
 async def test_a_healthy_stream_reports_no_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_agent, "_GEMINI_STREAM_STALL_TIMEOUT", 5)
+    monkeypatch.setattr(gemini, "_GEMINI_STREAM_STALL_TIMEOUT", 5)
     models = _StreamModels([_chunk("all "), _chunk("done"), _chunk(usage=_USAGE)])
 
     text, final = await _drain(_provider(models))
@@ -103,7 +103,7 @@ async def test_a_healthy_stream_reports_no_error(monkeypatch: pytest.MonkeyPatch
 
 @pytest.mark.asyncio
 async def test_a_provider_error_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_agent, "_GEMINI_STREAM_STALL_TIMEOUT", 5)
+    monkeypatch.setattr(gemini, "_GEMINI_STREAM_STALL_TIMEOUT", 5)
 
     class _Exploding(_StreamModels):
         def generate_content_stream(self, **_kwargs: Any):
@@ -120,7 +120,7 @@ async def test_a_provider_error_is_reported(monkeypatch: pytest.MonkeyPatch) -> 
 @pytest.mark.asyncio
 async def test_usage_survives_a_stall(monkeypatch: pytest.MonkeyPatch) -> None:
     """Tokens already spent must still be billed, stall or not."""
-    monkeypatch.setattr(llm_agent, "_GEMINI_STREAM_STALL_TIMEOUT", 0.1)
+    monkeypatch.setattr(gemini, "_GEMINI_STREAM_STALL_TIMEOUT", 0.1)
     models = _StreamModels([_chunk("x"), _chunk(usage=_USAGE)], then_hang=True)
     try:
         _text, final = await _drain(_provider(models))

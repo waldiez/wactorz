@@ -27,7 +27,7 @@ from typing import Any, ClassVar
 
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
-from .llm_agent import _accumulate_global_cost
+from .llm_agent import accumulate_global_cost
 from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
@@ -1306,7 +1306,7 @@ class DynamicAgent(Actor):
         self.total_cost_usd += usage.get("cost_usd", 0.0)
         delta = self.total_cost_usd - self._last_period_cost_usd
         if delta > 0:
-            _accumulate_global_cost(delta)
+            accumulate_global_cost(delta)
             self._last_period_cost_usd = self.total_cost_usd
 
 
@@ -1367,36 +1367,6 @@ class _LLMInterface:
         reply = await self.complete(messages=history, system=system)
         history.append({"role": "assistant", "content": reply})
         return reply
-
-
-def _ensure_result_handler(actor):
-    """Patch handle_message once so that RESULT messages carrying _task_id
-    resolve the corresponding future. Safe to call multiple times.
-    """
-    if getattr(actor, "_result_handler_patched", False):
-        return
-    actor._result_handler_patched = True
-    if not hasattr(actor, "_result_futures"):
-        actor._result_futures = {}
-    original = actor.handle_message.__func__ if hasattr(actor.handle_message, "__func__") else None
-
-    import types
-
-    async def _patched_handle_message(self, msg: Message):
-        if msg.type == MessageType.RESULT:
-            payload = msg.payload if isinstance(msg.payload, dict) else {}
-            task_id = payload.get("_task_id")
-            if task_id and task_id in self._result_futures:
-                if not self._result_futures[task_id].done():
-                    self._result_futures[task_id].set_result(payload)
-                return
-        # Fall through to original handle_message
-        if original:
-            await original(self, msg)
-        else:
-            pass  # base class has no-op handle_message
-
-    actor.handle_message = types.MethodType(_patched_handle_message, actor)
 
 
 class _AgentAPI:
@@ -1870,11 +1840,8 @@ class _AgentAPI:
             import uuid as _uuid
 
             task_id = str(_uuid.uuid4())[:8]
-            if not hasattr(self._actor, "_result_futures"):
-                self._actor._result_futures = {}
             future = asyncio.get_event_loop().create_future()
             self._actor._result_futures[task_id] = future
-            _ensure_result_handler(self._actor)
             if not isinstance(payload, dict):
                 payload = {"message": payload, "text": str(payload)}
             payload = dict(payload)

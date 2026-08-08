@@ -20,6 +20,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from aiohttp.web import Application
 
+from wactorz.config import MAX_REQUEST_BYTES
 from wactorz.web import runtime
 from wactorz.web.app import build_app
 
@@ -94,7 +95,7 @@ async def test_an_uninstalled_optional_feature_degrades_instead_of_crashing(clie
     The client fixture pins TTS off, so this is the real dep-free behaviour
     regardless of what is installed on the machine running the suite.
     """
-    resp = await client.get("/api/tts?text=hi")
+    resp = await client.post("/api/tts", json={"text": "hi"})
     assert resp.status == _FEATURE_UNAVAILABLE
     assert "pip install" in await resp.text()
 
@@ -136,3 +137,18 @@ async def test_registry_none_is_the_default(client: TestClient) -> None:
     """Guard the assumption this module rests on: these routes are exercised
     with no registry injected, which is the standalone/legacy path."""
     assert runtime.registry is None
+
+
+def test_the_served_app_caps_request_bodies() -> None:
+    """The app we actually serve carries the body limit.
+
+    Driving an oversized request through a route would test aiohttp, not us —
+    and only the routes that *read* a body would show anything, since that is
+    when the limit applies. What can regress here is someone adding an
+    `Application` without passing the cap, which this catches directly.
+    """
+    app = build_app()
+
+    # aiohttp keeps it private; there is no accessor, and asserting on the
+    # constructor argument is the whole point of the test.
+    assert app._client_max_size == MAX_REQUEST_BYTES

@@ -1,5 +1,6 @@
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
@@ -58,6 +59,34 @@ def _env_float(name: str, default: float) -> float:
     return float(value)
 
 
+_QUOTES = ('"', "'")
+
+
+def _unquote(value: str) -> str:
+    """Strip surrounding quotes, whether or not they are matched.
+
+    Quoting the whole value is a reasonable thing to write, and several ways of
+    setting one keep the quotes as part of the value — Windows `set VAR="…"`,
+    Docker's `env_file`, an unbalanced quote in a hand-edited `.env`. For a
+    model or provider name that quote travels all the way to the API, which
+    answers `404 … model: claude-sonnet-4-6"` for a name that all but exists.
+    A quote is never legitimate in those values, so removing it costs nothing.
+    """
+    value = value.strip()
+    # `startswith`, not `value[:1] in _QUOTES`: an empty slice is "in" every
+    # string, so the slice form spins forever once the value is exhausted.
+    while value.startswith(_QUOTES):
+        value = value[1:].strip()
+    while value.endswith(_QUOTES):
+        value = value[:-1].strip()
+    return value
+
+
+def _env_name(name: str, default: str) -> str:
+    """Identifier-shaped env var (provider, model) — unquoted and trimmed."""
+    return _unquote(os.getenv(name, "") or "") or default
+
+
 def _env_opt_float(name: str) -> float | None:
     """Float env var where unset/empty means None (no override)."""
     value = os.getenv(name)
@@ -70,6 +99,107 @@ def _env_opt_float(name: str) -> float | None:
 
 
 DEV_MODE = _env_truthy("WACTORZ_DEV_MODE")
+
+#: Largest request body any HTTP endpoint accepts. Nothing here uploads — the
+#: biggest legitimate body is a chat message or a spawn config, both far under
+#: this. aiohttp defaults to 1 MiB, which is generous for an API with no upload
+#: route, and it applies per request on a surface that has no authentication.
+MAX_REQUEST_BYTES = 256 * 1024
+
+
+@dataclass(frozen=True)
+class DeployTarget:
+    """One SSH deploy target — a remote machine ``/deploy <name>`` can bootstrap.
+
+    Targets come from the environment and nowhere else. SSH credentials used to
+    be typed into chat as ``/deploy <node> <host> <user> <password>``, which put
+    the password into the reply stream, the persisted conversation history and
+    every chat log that history feeds. A target read from the environment never
+    travels through a message.
+
+    ``password`` is ``repr=False``: a target that ends up in a log line, an
+    exception message or a debugger dump must not render its own secret. Prefer
+    ``key_path`` — password auth is supported because most Pi images ship with
+    it, not because it is the better option.
+    """
+
+    name: str
+    host: str = ""
+    user: str = "pi"
+    key_path: str = ""
+    password: str = field(default="", repr=False)
+    broker: str = ""
+    broker_port: int = 1883
+    ssh_port: int = 22
+
+
+def _env_slug(name: str) -> str:
+    """Node name → the env-var infix it is configured under (``rpi-kitchen`` → ``RPI_KITCHEN``)."""
+    return re.sub(r"[^A-Z0-9]+", "_", name.strip().upper()).strip("_")
+
+
+#: Characters a node name may not contain, because it becomes one level of an
+#: MQTT topic: ``#`` and ``+`` are the wildcards, ``/`` is the level separator.
+_NODE_NAME_FORBIDDEN = ("#", "+", "/")
+
+
+def deploy_name_error(node_name: str) -> str | None:
+    """Why ``node_name`` cannot name a node, or None if it can.
+
+    The name is interpolated straight into the runner's MQTT topics
+    (``nodes/<name>/heartbeat`` to publish, ``nodes/<name>/spawn`` to
+    subscribe), so a wildcard or a separator in it produces a runner that
+    connects to the broker and is then refused on every publish and every
+    subscribe. It retries forever, never appears in ``/nodes``, and fills its
+    log — while the deploy that started it reports success. Catching the name
+    up front is the difference between an error and a silent non-working node.
+    """
+    name = (node_name or "").strip()
+    if not name:
+        return "Node name is empty."
+    bad = [c for c in _NODE_NAME_FORBIDDEN if c in name]
+    if bad:
+        return (
+            f"Node name {name!r} contains {' and '.join(repr(c) for c in bad)}, which "
+            f"cannot appear in an MQTT topic — the runner would be refused by the "
+            f"broker on every publish and subscribe. Rename the node without it.\n"
+            f"Note: '#' with no space before it does not start a comment in a .env "
+            f"file, so `DEPLOY_TARGETS=rpi-kitchen#,rpi-garage` names a node "
+            f"'rpi-kitchen#'."
+        )
+    if name != node_name:
+        return f"Node name {node_name!r} has leading or trailing whitespace."
+    return None
+
+
+def _deploy_targets() -> tuple[DeployTarget, ...]:
+    """Parse ``DEPLOY_TARGETS`` plus the ``DEPLOY_<NODE>_*`` block for each entry."""
+    raw = (os.getenv("DEPLOY_TARGETS") or "").replace(";", ",")
+    targets: list[DeployTarget] = []
+    seen: set[str] = set()
+    for entry in raw.split(","):
+        node = entry.strip()
+        slug = _env_slug(node)
+        # A name that slugs to nothing ("---") has no env block to read, and a
+        # duplicate would silently shadow the first — skip both rather than
+        # build a target whose credentials come from somewhere unexpected.
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        targets.append(
+            DeployTarget(
+                name=node,
+                host=os.getenv(f"DEPLOY_{slug}_HOST", "").strip(),
+                user=os.getenv(f"DEPLOY_{slug}_USER", "").strip() or "pi",
+                key_path=os.getenv(f"DEPLOY_{slug}_KEY", "").strip(),
+                password=os.getenv(f"DEPLOY_{slug}_PASSWORD", ""),
+                broker=os.getenv(f"DEPLOY_{slug}_BROKER", "").strip(),
+                broker_port=_env_int(f"DEPLOY_{slug}_BROKER_PORT", 1883),
+                ssh_port=_env_int(f"DEPLOY_{slug}_SSH_PORT", 22),
+            )
+        )
+    return tuple(targets)
+
 
 _env_file = Path(__file__).parent / ".env"
 if _env_file.exists():
@@ -107,8 +237,11 @@ class AppConfig:
     twilio_auth_token: str
     twilio_whatsapp_number: str
     api_key: str
-    nautilus_ssh_key: str
-    nautilus_strict_host_keys: bool
+    # Remote-node deployment. Targets are environment-only (see DeployTarget);
+    # the host-key settings govern every SSH connection the installer makes.
+    deploy_targets: tuple[DeployTarget, ...]
+    deploy_known_hosts: str
+    deploy_strict_host_keys: bool
     weather_default_location: str
     llm_cost_limit_usd: float
     llm_cost_limit_period: str
@@ -126,8 +259,8 @@ class AppConfig:
 CONFIG = AppConfig(
     interface=os.getenv("INTERFACE", "rest" if DEV_MODE else "cli"),
     port=_env_int("PORT", 8080 if DEV_MODE else 8000),
-    llm_provider=os.getenv("LLM_PROVIDER", "anthropic"),
-    llm_model=os.getenv("LLM_MODEL", "claude-sonnet-4-6"),
+    llm_provider=_env_name("LLM_PROVIDER", "anthropic"),
+    llm_model=_env_name("LLM_MODEL", "claude-sonnet-4-6"),
     llm_api_key=os.getenv("LLM_API_KEY", ""),
     # Per-call-site model overrides, e.g. "intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6".
     # See wactorz/llm_factory.py for the site list and format.
@@ -159,8 +292,15 @@ CONFIG = AppConfig(
     twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
     twilio_whatsapp_number=os.getenv("TWILIO_WHATSAPP_NUMBER", ""),
     api_key=os.getenv("API_KEY", ""),
-    nautilus_ssh_key=os.getenv("NAUTILUS_SSH_KEY", ""),
-    nautilus_strict_host_keys=_env_truthy("NAUTILUS_STRICT_HOST_KEYS"),
+    deploy_targets=_deploy_targets(),
+    # Empty means "<state dir>/known_hosts", resolved at connect time so the
+    # path follows WACTORZ_STATE_DIR instead of freezing the import-time value.
+    deploy_known_hosts=os.getenv("DEPLOY_KNOWN_HOSTS", "").strip(),
+    # Off by default: turning it on makes the first deploy to any machine fail
+    # until its key is in the known-hosts file, which would break every existing
+    # install. Off still verifies — it just learns an unknown key on first
+    # contact instead of refusing it. See installer_agent._ssh_kwargs.
+    deploy_strict_host_keys=_env_truthy("DEPLOY_STRICT_HOST_KEYS"),
     weather_default_location=os.getenv("WEATHER_DEFAULT_LOCATION", "London"),
     llm_cost_limit_usd=_env_float("LLM_COST_LIMIT_USD", 0.0),
     llm_cost_limit_period=os.getenv("LLM_COST_LIMIT_PERIOD", "monthly"),
@@ -177,3 +317,63 @@ CONFIG = AppConfig(
     ),
     social_rate_limit_per_min=_env_int("SOCIAL_RATE_LIMIT_PER_MIN", 12),
 )
+
+
+def deploy_target(node_name: str) -> DeployTarget | None:
+    """The configured target for ``node_name``, or None if it isn't configured.
+
+    Matching is on the slug, so ``/deploy rpi-kitchen`` and ``/deploy RPi Kitchen``
+    both find the target configured under ``DEPLOY_RPI_KITCHEN_*``.
+    """
+    slug = _env_slug(node_name)
+    if not slug:
+        return None
+    return next((t for t in CONFIG.deploy_targets if _env_slug(t.name) == slug), None)
+
+
+def deploy_target_for_host(host: str) -> DeployTarget | None:
+    """The configured target whose ``host`` matches, or None.
+
+    Lets the installer re-authenticate to a node it only knows by address —
+    ``node_install`` and ``node_run`` are given a host, not a node name.
+    """
+    host = (host or "").strip().lower()
+    if not host:
+        return None
+    return next((t for t in CONFIG.deploy_targets if t.host.strip().lower() == host), None)
+
+
+def deploy_target_names() -> list[str]:
+    """Configured target names, for usage/error messages."""
+    return [t.name for t in CONFIG.deploy_targets]
+
+
+def deploy_env_prefix(node_name: str) -> str:
+    """The env-var prefix a target for ``node_name`` is read from.
+
+    ``deploy_env_prefix("rpi-kitchen")`` → ``"DEPLOY_RPI_KITCHEN"``, so the
+    "not configured" messages can name the exact variables to set.
+    """
+    return f"DEPLOY_{_env_slug(node_name)}"
+
+
+def deploy_target_help(node_name: str) -> str:
+    """Why ``node_name`` was refused, and the env block that would configure it.
+
+    Lives here rather than in a chat module because every surface that offers
+    ``/deploy`` — web chat, the main actor's stream, the CLI — has to say the
+    same thing, and what it says is a list of environment variable names.
+    """
+    configured = deploy_target_names()
+    known = ", ".join(configured) if configured else "(none configured)"
+    prefix = deploy_env_prefix(node_name)
+    return (
+        f"'{node_name}' is not a configured deploy target.\n"
+        f"Configured targets: {known}\n\n"
+        f"Deploy targets are set in the environment, not in chat:\n"
+        f"  DEPLOY_TARGETS={node_name}\n"
+        f"  {prefix}_HOST=192.168.1.50\n"
+        f"  {prefix}_USER=pi\n"
+        f"  {prefix}_KEY=/path/to/private_key   # or {prefix}_PASSWORD\n"
+        f"  {prefix}_BROKER=192.168.1.10"
+    )

@@ -6,8 +6,12 @@ These tests check the selection logic without touching the network: the
 interface objects only construct a client on ``.run()``.
 """
 
+import logging
 from types import SimpleNamespace
 
+import pytest
+
+import wactorz.interfaces.chat.social as social
 import wactorz.interfaces.chat_interfaces as ci
 from wactorz.interfaces.chat_interfaces import (
     DiscordInterface,
@@ -22,14 +26,14 @@ class _DummyMain:
 
 
 def _set_tokens(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     *,
-    discord="",
-    telegram="",
-    discord_allowed=(7,),
-    telegram_allowed=(42,),
-    deps_present=True,
-):
+    discord: str = "",
+    telegram: str = "",
+    discord_allowed: tuple[int] = (7,),
+    telegram_allowed: tuple[int] = (42,),
+    deps_present: bool = True,
+) -> None:
     # CONFIG is a frozen dataclass, so swap the whole module reference for a fake.
     # Both channels get an allow-list by default — without one they refuse to
     # start, which is its own test below.
@@ -45,15 +49,21 @@ def _set_tokens(
         ),
     )
     # Default to "libraries installed" so selection tests don't depend on which
-    # optional deps happen to be present in the test environment.
+    # optional deps happen to be present in the test environment. Patched on
+    # `chat.social`, which is where `social_channel_blocked` resolves it —
+    # `chat_interfaces` re-exports the name, but that binding is not the one
+    # it uses.
     if deps_present:
-        monkeypatch.setattr(ci, "missing_dependency", lambda channel: None)
+        monkeypatch.setattr(social, "missing_dependency", lambda channel: None)
 
 
-def test_both_tokens_start_alongside_rest(monkeypatch):
+def test_both_tokens_start_alongside_rest(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_tokens(monkeypatch, discord="d-tok", telegram="t-tok")
 
-    companions = build_social_companions(_DummyMain(), primary="rest")
+    companions = build_social_companions(
+        _DummyMain(),  # pyright: ignore[reportArgumentType]
+        primary="rest",
+    )
 
     kinds = {type(c) for c in companions}
     assert kinds == {DiscordInterface, TelegramInterface}
@@ -63,21 +73,24 @@ def test_both_tokens_start_alongside_rest(monkeypatch):
     assert discord.allowed_user_ids == frozenset({7})
 
 
-def test_channel_without_allow_list_refuses_to_start(monkeypatch, caplog):
+def test_channel_without_allow_list_refuses_to_start(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """A token with no allow-list would answer anyone who finds the bot, which
     means spending the user's LLM budget and controlling their home."""
-    import logging
-
     _set_tokens(
         monkeypatch,
         discord="d-tok",
         telegram="t-tok",
-        discord_allowed=(),
-        telegram_allowed=(),
+        discord_allowed=(),  # pyright: ignore[reportArgumentType]
+        telegram_allowed=(),  # pyright: ignore[reportArgumentType]
     )
 
     with caplog.at_level(logging.WARNING):
-        companions = build_social_companions(_DummyMain(), primary="rest")
+        companions = build_social_companions(
+            _DummyMain(),  # pyright: ignore[reportArgumentType]
+            primary="rest",
+        )
 
     assert companions == []
     messages = " ".join(r.getMessage() for r in caplog.records)
@@ -87,47 +100,65 @@ def test_channel_without_allow_list_refuses_to_start(monkeypatch, caplog):
     assert "TELEGRAM_ALLOWED_USER_IDS" in messages
 
 
-def test_no_tokens_no_companions(monkeypatch):
+def test_no_tokens_no_companions(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_tokens(monkeypatch)
-    assert build_social_companions(_DummyMain(), primary="rest") == []
+    assert (
+        build_social_companions(
+            _DummyMain(),  # pyright: ignore[reportArgumentType]
+            primary="rest",
+        )
+        == []
+    )
 
 
-def test_primary_channel_is_not_duplicated(monkeypatch):
+def test_primary_channel_is_not_duplicated(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_tokens(monkeypatch, discord="d-tok", telegram="t-tok")
 
     # Discord is the primary → only Telegram rides along (no double Discord login).
-    companions = build_social_companions(_DummyMain(), primary="discord")
+    companions = build_social_companions(
+        _DummyMain(),  # pyright: ignore[reportArgumentType]
+        primary="discord",
+    )
     assert [type(c) for c in companions] == [TelegramInterface]
 
     # …and vice-versa.
-    companions = build_social_companions(_DummyMain(), primary="telegram")
+    companions = build_social_companions(
+        _DummyMain(),  # pyright: ignore[reportArgumentType]
+        primary="telegram",
+    )
     assert [type(c) for c in companions] == [DiscordInterface]
 
 
-def test_run_all_returns_coroutines(monkeypatch):
+def test_run_all_returns_coroutines(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_tokens(monkeypatch, telegram="t-tok")
-    companions = build_social_companions(_DummyMain(), primary="rest")
+    companions = build_social_companions(
+        _DummyMain(),  # pyright: ignore[reportArgumentType]
+        primary="rest",
+    )
     coros = run_all_interfaces(companions)
     assert len(coros) == 1
     # Close the coroutine so it doesn't warn about never being awaited.
     coros[0].close()
 
 
-def test_missing_library_is_skipped_with_loud_warning(monkeypatch, caplog):
-    import logging
-
+def test_missing_library_is_skipped_with_loud_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
     _set_tokens(monkeypatch, telegram="t-tok")
     # Simulate python-telegram-bot not installed (the exact silent-failure trap).
     monkeypatch.setattr(
-        ci,
+        social,
         "missing_dependency",
         lambda channel: "python-telegram-bot" if channel == "telegram" else None,
     )
 
     with caplog.at_level(logging.WARNING):
-        companions = build_social_companions(_DummyMain(), primary="rest")
+        companions = build_social_companions(
+            _DummyMain(),  # pyright: ignore[reportArgumentType]
+            primary="rest",
+        )
 
-    assert companions == []  # not started — but loudly, not silently
+    assert not companions  # not started — but loudly, not silently
     assert any(
         "Telegram companion NOT started" in r.message and "python-telegram-bot" in r.message
         for r in caplog.records

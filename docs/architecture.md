@@ -211,6 +211,13 @@ backends). Ollama receives it as `options.temperature`; the others take it as a 
 parameter. An individual call site can still pass `temperature=` to `complete()` / `stream()`,
 which wins over the env setting. The resolved value is logged at startup.
 
+One exception, and it is not configurable: Anthropic removed the sampling parameters with Claude
+Opus 4.7, and a request that carries `temperature` to one of those models is refused rather than
+ignored. `AnthropicProvider` therefore leaves the parameter off for the models known to have
+dropped it, and learns the rest the first time one refuses — that request is retried without the
+parameter, and it is omitted for the remainder of the process. Those models are effectively pinned
+to their own default, so pinning a temperature no longer makes runs comparable against them.
+
 ### Per-call-site overrides
 
 `LLM_OVERRIDES` routes individual call sites to different providers/models, falling back to the global `LLM_PROVIDER` for any site not listed (`wactorz/llm_factory.py`):
@@ -228,7 +235,9 @@ LLM_OVERRIDES="intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6"
 | `ha` | HomeAssistantAgent internal classification |
 | `dynamic` | `get_llm()` shim inside generated DynamicAgent code |
 
-The format is `<site>=<provider>[:<model>]`; only the first colon splits provider from model, so Ollama tags like `qwen3:4b` work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. `site=none` disables the LLM for that site.
+The format is `<site>=<provider>[:<model>]`; only the first colon splits provider from model, so Ollama tags like `qwen3:4b` work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. An entry naming a site not in the table above is skipped with a warning too — nothing would read it, and a silent no-op looks exactly like an override that did not work. `site=none` disables the LLM for that site.
+
+Surrounding quotes are stripped, from the value as a whole and from each site and model, as they are from `LLM_PROVIDER` and `LLM_MODEL`. Several ways of setting an environment variable keep the quotes as part of the value — Windows `set VAR="…"`, Docker's `env_file`, an unbalanced quote in a hand-edited `.env` — and split on `,` and `=` afterwards, those quotes land on the first site name and the last model name. The site then matches nothing and the model is one character away from real, which the API answers with `404 … model: claude-sonnet-4-6"`. The startup line logs the parsed table rather than the raw string, so an entry that was dropped is visible by its absence.
 
 For Ollama, `system` is encoded as the first `{"role": "system"}` entry in the native `/api/chat` `messages` array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.
 

@@ -20,12 +20,13 @@ import hashlib
 import json
 import logging
 import time
+from typing import Any
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt import mqtt_client
-from .llm_agent import LLMProvider, _accumulate_global_cost
+from .llm_agent import LLMProvider, accumulate_global_cost
 from .lookup import find_main_actor
-from .mixins.spawning import SpawnMixin
+from .mixins.spawning import SpawnMixin, SpawnPlaceholder
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,11 @@ _CACHE_TTL_S = 86400  # 24 hours
 class PlannerAgent(Actor, SpawnMixin):
     """On-demand orchestrator. Spawned per complex task, self-terminates when done."""
 
+    #: Hard cap on a planner's life. A caller awaiting its reply must not wait
+    #: longer than this plus delivery: once the cap fires the planner is gone
+    #: and no reply can follow, so any remaining wait is spent on nothing.
+    DEFAULT_MAX_LIFETIME_S = 90.0
+
     def __init__(
         self,
         llm_provider: LLMProvider | None = None,
@@ -55,7 +61,7 @@ class PlannerAgent(Actor, SpawnMixin):
         auto_terminate: bool = True,
         plan_only: bool = False,
         approved_plan: dict | None = None,
-        max_lifetime_s: float = 90.0,
+        max_lifetime_s: float = DEFAULT_MAX_LIFETIME_S,
         **kwargs,
     ):
         kwargs.setdefault("name", "planner")
@@ -152,7 +158,7 @@ class PlannerAgent(Actor, SpawnMixin):
         self.total_cost_usd += usage.get("cost_usd", 0.0)
         delta = self.total_cost_usd - self._last_period_cost_usd
         if delta > 0:
-            _accumulate_global_cost(delta)
+            accumulate_global_cost(delta)
             self._last_period_cost_usd = self.total_cost_usd
 
     def _now_context(self) -> str:
@@ -188,20 +194,12 @@ class PlannerAgent(Actor, SpawnMixin):
                 # Use the initiating task_id (from main) so the future resolves,
                 # falling back to the message-level task_id if present
                 resolve_id = self._reply_task_id or task_id
-                reply = {"result": result, "text": result}
+                reply: dict[str, Any] = {"result": result, "text": result}
                 if resolve_id:
                     reply["_task_id"] = resolve_id
                 if self._spawned_by_planner:
                     reply["spawned"] = self._spawned_by_planner
                 await self.send(self._reply_to_id, MessageType.RESULT, reply)
-
-        elif msg.type == MessageType.RESULT:
-            payload = msg.payload if isinstance(msg.payload, dict) else {}
-            task_id = payload.get("_task_id")
-            if task_id and task_id in self._result_futures:
-                fut = self._result_futures[task_id]
-                if not fut.done():
-                    fut.set_result(payload)
 
     # ── Report wrapper (on_start path) ────────────────────────────────────
 
@@ -2253,6 +2251,8 @@ Example:
                 continue
 
             agent_name = spawn_config.get("name") or step.get("agent")
+            if not agent_name:
+                continue
             existing = self._registry.find_by_name(agent_name)
 
             if existing:
@@ -2311,7 +2311,7 @@ Example:
 
         return plan
 
-    async def _spawn_agent(self, config: dict) -> Actor | None:
+    async def _spawn_agent(self, config: dict) -> Actor | SpawnPlaceholder | None:
         """Spawn an agent for a plan step. Delegates to the shared SpawnMixin.
 
         Uses the BLOCKING install path: a pipeline's next step may depend on
@@ -2322,10 +2322,10 @@ Example:
 
     # ── Execution ──────────────────────────────────────────────────────────
 
-    async def _execute(self, plan: list[dict]) -> dict:
+    async def _execute(self, plan: list[dict[str, Any]]) -> dict[str, Any]:
         results: dict = {}
-        completed: set[int] = set()
-        remaining: list[dict] = list(plan)
+        completed: set[int | str] = set()
+        remaining: list[dict[str, Any]] = list(plan)
 
         # ── Validate dependency references up front ────────────────────────
         # A step whose depends_on points at a step number not in the plan can
@@ -2336,12 +2336,14 @@ Example:
         for s in list(remaining):
             bad = [d for d in (s.get("depends_on") or []) if d not in valid_ids]
             if bad:
+                step = s.get("step")
+                if not isinstance(step, (int, str)):
+                    step = str(step)
                 logger.error(
-                    f"[{self.name}] Step {s.get('step')} depends on missing "
-                    f"step(s) {bad} — marking failed"
+                    f"[{self.name}] Step {step} depends on missing step(s) {bad} — marking failed"
                 )
-                results[s.get("step")] = {"error": f"unsatisfiable dependency on step(s) {bad}"}
-                completed.add(s.get("step"))
+                results[step] = {"error": f"unsatisfiable dependency on step(s) {bad}"}
+                completed.add(step)
                 remaining.remove(s)
 
         while remaining:

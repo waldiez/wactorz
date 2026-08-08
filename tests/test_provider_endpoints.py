@@ -98,14 +98,14 @@ def test_ollama_keeps_the_base_url_it_was_given() -> None:
 class _CompleteOnly(LLMProvider):  # pylint: disable=abstract-method
     """A custom provider that implements only the non-streaming path."""
 
-    async def complete(self, messages, system="", **kwargs):
+    async def _complete(self, messages, system="", **kwargs):
         return "whole answer", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
 
 
 class _Streaming(LLMProvider):  # pylint: disable=abstract-method
     """A custom provider that really streams."""
 
-    async def stream(self, messages, system="", **kwargs):
+    async def _stream(self, messages, system="", **kwargs):
         yield "a"
         yield "b"
 
@@ -113,8 +113,9 @@ class _Streaming(LLMProvider):  # pylint: disable=abstract-method
 async def test_a_complete_only_provider_falls_back_instead_of_raising() -> None:
     """A provider implementing only complete() must degrade, not raise.
 
-    Guarded by hasattr(llm, "stream") — this fails the day someone declares
-    stream() on LLMProvider without replacing that check.
+    Support is declared by implementing `_stream`, which `supports_streaming()`
+    detects — `hasattr(llm, "stream")` cannot, since the base defines one for
+    every provider.
     """
     agent = LLMAgent(llm_provider=_CompleteOnly(), name="fallback-agent")
     chunks = [c async for c in agent.chat_stream("hello")]

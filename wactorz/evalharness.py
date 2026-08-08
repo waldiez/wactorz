@@ -25,8 +25,10 @@ Benchmark file format (JSONL, one case per line)::
               action array must contain exactly these actions (extra keys
               inside an action are fine, extra ACTIONS are a failure).
               An empty list means the model must refuse with []
-    planner   list of allowed agent "type" values; the returned JSON plan must
-              be a non-empty array whose items all use those types
+    planner   list of allowed agent "type" values (shape only), or a dict
+              {"types": [...], "must_contain": [...], "must_not_contain": [...]}
+              to also require that the plan references specific entity ids or
+              topics — i.e. that the planner resolved them itself
     dynamic   list of function names the generated Python must define
               (checked by parsing the code — it must also compile)
 
@@ -64,12 +66,34 @@ _MAX_TOKENS = {"intent": 10, "ha": 10, "actuator": 500, "planner": 800, "dynamic
 _PLANNER_SYSTEM = (
     "You are designing reactive automation pipelines for a multi-agent IoT system.\n"
     "Output ONLY a valid JSON array - no explanation, no markdown, no code fences.\n"
-    "Each array item is a spawn config dict with at least:\n"
-    '  "name": "<kebab-case-agent-name>"\n'
-    '  "type": one of "ha_actuator" | "scheduled" | "dynamic"\n'
-    '  "description": "<what this agent does>"\n'
-    'Use "ha_actuator" to call Home Assistant services on an MQTT trigger,\n'
-    '"scheduled" for time-based triggers, and "dynamic" for custom logic.\n'
+    "Each array item is a COMPLETE spawn config: it must contain the concrete\n"
+    "entity ids, MQTT topics and schedules needed to run, not just a description.\n"
+    "\n"
+    'TYPE 1 - "ha_actuator": call a Home Assistant service when an MQTT message arrives\n'
+    '  {"name": "<kebab-case>", "type": "ha_actuator", "description": "<what it does>",\n'
+    '   "mqtt_topics": ["<trigger-topic>"],\n'
+    '   "actions": [{"domain": "<ha-domain>", "service": "<ha-service>",\n'
+    '                "entity_id": "<entity_id from the entity list>", "service_data": {}}],\n'
+    '   "detection_filter": {"<payload-key>": <value>} or null,\n'
+    '   "cooldown_seconds": <number>}\n'
+    "\n"
+    'TYPE 2 - "scheduled": fire at a time or interval\n'
+    '  {"name": "<kebab-case>", "type": "scheduled", "description": "<what it fires>",\n'
+    '   "schedule": {"type": "daily", "at": "17:00"} | {"type": "weekly", "at": "07:30",\n'
+    '                "days": ["mon"]} | {"type": "interval", "seconds": 1800},\n'
+    '   "publish_topic": "schedule/<name>/fired"}\n'
+    "\n"
+    'TYPE 3 - "dynamic": custom logic in Python\n'
+    '  {"name": "<kebab-case>", "type": "dynamic", "description": "<what it does>",\n'
+    '   "poll_interval": <seconds>, "code": "<async setup/process/handle_task>"}\n'
+    "\n"
+    "Rules:\n"
+    "- Use entity ids EXACTLY as they appear in the AVAILABLE HA ENTITIES list.\n"
+    "- Reuse a topic already published by an agent in AVAILABLE AGENTS rather than\n"
+    "  inventing a new one, and use that topic's exact payload field names.\n"
+    "- Delegate to an existing agent by name when one already does the job.\n"
+    "- HA state changes arrive on homeassistant/state_changes/#; filter by entity_id\n"
+    "  inside the payload (state is nested: payload['new_state']['state']).\n"
 )
 
 _CODEGEN_SYSTEM = (
@@ -77,11 +101,36 @@ _CODEGEN_SYSTEM = (
     "Output ONLY Python code - no explanation, no markdown fences.\n"
     "Define async functions among: setup(agent), process(agent),\n"
     "handle_task(agent, payload), cleanup(agent).\n"
-    "The agent API: agent.state (dict), await agent.publish(topic, data),\n"
-    "agent.subscribe(topic, async_callback), await agent.mqtt_get(topic),\n"
-    "await agent.log(msg), agent.persist(key, value), agent.recall(key),\n"
-    "await agent.llm.chat(prompt).\n"
-    "Import libraries inside functions, never at module level.\n"
+    "\n"
+    "AGENT API\n"
+    "  agent.state                        dict, persists across process() calls\n"
+    "  await agent.publish(topic, data)   publish to MQTT\n"
+    "  await agent.mqtt_get(topic)        ONE-SHOT read, returns one payload\n"
+    "  await agent.log(msg)               dashboard log\n"
+    "  await agent.alert(msg, severity)   dashboard alert\n"
+    "  agent.persist(key, value)          save to disk (NOT awaitable)\n"
+    "  agent.recall(key)                  load from disk (NOT awaitable)\n"
+    "  agent.subscribe(topic, callback)   continuous subscription (NOT awaitable)\n"
+    "  agent.window(topic, seconds=N)     sliding window object (NOT awaitable)\n"
+    "  agent.declare_contract(publishes=[...], subscribes=[...])\n"
+    "  await agent.llm.chat(prompt)       the framework's LLM - never import your own\n"
+    "\n"
+    "CRITICAL RULES\n"
+    "- agent.subscribe() is NOT awaitable and REQUIRES a callback. It runs as a\n"
+    "  background task; the callback must be an async function taking exactly one\n"
+    "  argument (the payload).\n"
+    "    CORRECT:  async def on_msg(payload): ...\n"
+    "              agent.subscribe('some/topic', on_msg)\n"
+    "    WRONG:    await agent.subscribe('some/topic', on_msg)   # not awaitable\n"
+    "    WRONG:    agent.subscribe('some/topic')                 # no callback\n"
+    "    WRONG:    async def on_msg(topic, payload): ...         # too many args\n"
+    "- agent.window() is synchronous: `w = agent.window(t, seconds=300)`, never await.\n"
+    "- agent.persist() / agent.recall() are synchronous - do not await them.\n"
+    "- process() is called repeatedly on a poll interval. Do NOT write `while True`\n"
+    "  loops inside it; just do one iteration of work and return.\n"
+    "- Import libraries INSIDE functions, never at module level.\n"
+    "- Wrap blocking calls (cv2, torch, psutil-heavy work) in\n"
+    "  `await asyncio.get_event_loop().run_in_executor(None, fn)`.\n"
 )
 
 # Three seed cases per category so the harness runs out of the box.
@@ -247,6 +296,17 @@ def score_actuator(output: str, expected: list[dict]) -> bool:
     action, like service_data, are fine) AND the array must contain no extra
     actions — an unrequested actuation is a failure, not a bonus. An empty
     ``expected`` means the model must refuse: only ``[]`` passes.
+
+    An expected action may carry ``entity_id_any`` instead of ``entity_id`` when
+    a device is exposed under several entity ids and any of them is correct::
+
+        {"domain": "media_player", "service": "turn_off",
+         "entity_id_any": ["media_player.samsung_7_series_55_ue55nu7023",
+                           "media_player.tv_samsung_7_series_55"]}
+
+    Home Assistant really does register one TV twice (integration + cast, say),
+    and marking the model wrong for picking the other valid id measures our
+    ground truth, not the model.
     """
     actions = extract_json(output)
     if not isinstance(actions, list):
@@ -257,19 +317,42 @@ def score_actuator(output: str, expected: list[dict]) -> bool:
         return False
 
     def matches(exp: dict, got: Any) -> bool:
-        return isinstance(got, dict) and all(got.get(k) == v for k, v in exp.items())
+        if not isinstance(got, dict):
+            return False
+        alternatives = exp.get("entity_id_any")
+        if alternatives is not None and got.get("entity_id") not in alternatives:
+            return False
+        return all(got.get(k) == v for k, v in exp.items() if k != "entity_id_any")
 
     return all(any(matches(exp, got) for got in actions) for exp in expected)
 
 
-def score_planner(output: str, expected: list[str]) -> bool:
+def score_planner(output: str, expected: list[str] | dict) -> bool:
     """Plan must be a non-empty JSON array of dicts whose "type" values are all
-    in the allowed list and which all carry a name/description.
+    allowed and which all carry a name/description.
+
+    ``expected`` is either a list of allowed agent types (shape only), or a dict
+    for grounded cases::
+
+        {"types": ["ha_actuator", "dynamic"],
+         "must_contain": ["light.philips_hue_lct015"],
+         "must_not_contain": ["light.wiz_rgbw_tunable_351b6e"]}
+
+    ``must_contain`` / ``must_not_contain`` are matched against the serialized
+    plan, so they check that the planner resolved references to the right entity
+    ids and topics — not just that the plan has the right shape.
     """
+    if isinstance(expected, dict):
+        allowed_types = expected.get("types") or []
+        must_contain = expected.get("must_contain") or []
+        must_not_contain = expected.get("must_not_contain") or []
+    else:
+        allowed_types, must_contain, must_not_contain = expected, [], []
+
     plan = extract_json(output)
     if not isinstance(plan, list) or not plan:
         return False
-    allowed = {str(t) for t in expected}
+    allowed = {str(t) for t in allowed_types}
     for item in plan:
         if not isinstance(item, dict):
             return False
@@ -277,18 +360,125 @@ def score_planner(output: str, expected: list[str]) -> bool:
             return False
         if not item.get("name") or not item.get("description"):
             return False
-    return True
+
+    serialized = json.dumps(plan).lower()
+    if any(str(token).lower() not in serialized for token in must_contain):
+        return False
+    return all(str(token).lower() not in serialized for token in must_not_contain)
 
 
-def score_dynamic(output: str, expected: list[str]) -> bool:
-    """Generated code must parse and define every expected function as async."""
+def _structural_findings(tree: ast.AST, code: str) -> set[str]:
+    """Framework rules the generated code must not break.
+
+    These are the mistakes the orchestrator prompt explicitly warns about, and
+    each one breaks a real DynamicAgent at runtime — so a benchmark that ignores
+    them scores broken agents as successes.
+    """
+    findings: set[str] = set()
+
+    # Imports must live inside functions: module-level imports run before the
+    # installer has had a chance to pip-install anything.
+    for node in tree.body if isinstance(tree, ast.Module) else []:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            findings.add("module_level_import")
+
+    for node in ast.walk(tree):
+        # agent.subscribe() is not awaitable and needs a callback.
+        if isinstance(node, ast.Await):
+            call = node.value
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "subscribe"
+            ):
+                findings.add("awaited_subscribe")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "subscribe" and len(node.args) < 2:
+                findings.add("subscribe_without_callback")
+            # agent.window() is synchronous; awaiting it raises TypeError.
+            if node.func.attr == "window" and isinstance(getattr(node, "parent", None), ast.Await):
+                findings.add("awaited_window")
+        # Generated agents must use agent.llm, never their own client.
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [a.name for a in getattr(node, "names", [])] + [
+                getattr(node, "module", "") or ""
+            ]
+            if any(n.split(".")[0] in {"openai", "anthropic", "ollama"} for n in names if n):
+                findings.add("own_llm_client")
+
+    # A body that is nothing but `pass` / docstring is a stub, not an agent.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef):
+            meaningful = [
+                s
+                for s in node.body
+                if not isinstance(s, ast.Pass)
+                and not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant))
+            ]
+            if not meaningful:
+                findings.add(f"empty_body:{node.name}")
+    return findings
+
+
+def score_dynamic(output: str, expected: list[str] | dict) -> bool:
+    """Generated agent code must parse, define the required async entry points,
+    reference what the task requires, and not break the framework's rules.
+
+    ``expected`` is either a list of required function names (compile + entry
+    points only), or a dict::
+
+        {"functions": ["setup", "process"],
+         "must_contain": ["custom/home/heartbeat", "agent.subscribe"],
+         "must_not_contain": ["requests.get"],
+         "allow_empty_bodies": false}
+
+    Structural checks always run for the dict form: module-level imports,
+    ``await agent.subscribe(...)``, ``subscribe`` without a callback, importing
+    an LLM client instead of using ``agent.llm``, and stub function bodies.
+    """
+    if isinstance(expected, dict):
+        functions = expected.get("functions") or []
+        must_contain = expected.get("must_contain") or []
+        must_not_contain = expected.get("must_not_contain") or []
+        structural = True
+        allow_empty = bool(expected.get("allow_empty_bodies"))
+    else:
+        functions, must_contain, must_not_contain = expected, [], []
+        structural = False
+        allow_empty = True
+
     code = _strip_fences(output)
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return False
+
     async_defs = {n.name for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef)}
-    return all(name in async_defs for name in expected)
+    if not all(name in async_defs for name in functions):
+        return False
+
+    lowered = code.lower()
+    if any(str(token).lower() not in lowered for token in must_contain):
+        return False
+    if any(str(token).lower() in lowered for token in must_not_contain):
+        return False
+
+    if structural:
+        findings = _structural_findings(tree, code)
+        # Only the entry points the task actually requires must have a body.
+        # Models routinely emit the full lifecycle with `pass` in the slots they
+        # do not need (setup/cleanup stubs alongside a real handle_task); that is
+        # idiomatic, not a failure.
+        required = set(functions)
+        findings = {
+            f
+            for f in findings
+            if not f.startswith("empty_body:")
+            or (not allow_empty and f.split(":", 1)[1] in required)
+        }
+        if findings:
+            return False
+    return True
 
 
 _SCORERS = {

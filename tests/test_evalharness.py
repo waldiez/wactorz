@@ -105,6 +105,38 @@ def test_score_planner_disallowed_type_fails():
     assert not score_planner(json.dumps(plan), ["dynamic"])
 
 
+def test_score_planner_grounded_requires_entity_reference():
+    spec = {
+        "types": ["ha_actuator"],
+        "must_contain": ["light.philips_hue_lct015"],
+        "must_not_contain": ["light.wiz_rgbw_tunable_351b6e"],
+    }
+    good = [
+        {
+            "name": "door-light",
+            "type": "ha_actuator",
+            "description": "office light on door open",
+            "actions": [
+                {"domain": "light", "service": "turn_on", "entity_id": "light.philips_hue_lct015"}
+            ],
+        }
+    ]
+    assert score_planner(json.dumps(good), spec)
+
+    # right shape, wrong device — must fail
+    wrong = json.loads(json.dumps(good).replace("philips_hue_lct015", "wiz_rgbw_tunable_351b6e"))
+    assert not score_planner(json.dumps(wrong), spec)
+
+    # right shape, no entity resolved at all — must fail
+    vague = [{"name": "door-light", "type": "ha_actuator", "description": "turn on the light"}]
+    assert not score_planner(json.dumps(vague), spec)
+
+
+def test_score_planner_list_form_still_shape_only():
+    plan = [{"name": "x", "type": "dynamic", "description": "y"}]
+    assert score_planner(json.dumps(plan), ["dynamic"])
+
+
 def test_score_planner_missing_fields_or_empty_fails():
     assert not score_planner(json.dumps([{"type": "dynamic"}]), ["dynamic"])
     assert not score_planner("[]", ["dynamic"])
@@ -129,6 +161,63 @@ def test_score_dynamic_sync_def_fails():
 
 def test_score_dynamic_syntax_error_fails():
     assert not score_dynamic("async def setup(agent:\n    pass", ["setup"])
+
+
+# ── dynamic: strict (dict) form ──────────────────────────────────────────────
+
+_STRICT = {
+    "functions": ["setup", "process"],
+    "must_contain": ["custom/home/heartbeat", "agent.subscribe"],
+}
+
+_GOOD = (
+    "async def setup(agent):\n"
+    "    async def on_beat(payload):\n"
+    "        agent.state['last'] = payload\n"
+    "    agent.subscribe('custom/home/heartbeat', on_beat)\n"
+    "\n"
+    "async def process(agent):\n"
+    "    import time\n"
+    "    if time.time() - agent.state.get('last', 0) > 60:\n"
+    "        await agent.alert('silent')\n"
+)
+
+
+def test_score_dynamic_strict_accepts_real_agent():
+    assert score_dynamic(_GOOD, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_stub():
+    stub = "async def setup(agent):\n    pass\n\nasync def process(agent):\n    pass\n"
+    assert score_dynamic(stub, ["setup", "process"])  # lenient list form passes
+    assert not score_dynamic(stub, _STRICT)  # strict form does not
+
+
+def test_score_dynamic_strict_allows_unrequired_stubs():
+    # A model that emits the whole lifecycle with `pass` in unused slots is fine
+    # as long as the REQUIRED entry points do real work.
+    with_stubs = _GOOD + "\nasync def handle_task(agent, payload):\n    pass\n"
+    assert score_dynamic(with_stubs, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_missing_topic():
+    wrong = _GOOD.replace("custom/home/heartbeat", "custom/home/pulse")
+    assert not score_dynamic(wrong, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_awaited_subscribe():
+    bad = _GOOD.replace("    agent.subscribe(", "    await agent.subscribe(")
+    assert not score_dynamic(bad, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_module_level_import():
+    bad = "import time\n" + _GOOD
+    assert not score_dynamic(bad, _STRICT)
+
+
+def test_score_dynamic_strict_rejects_own_llm_client():
+    bad = _GOOD.replace("    import time\n", "    import openai\n    import time\n")
+    assert not score_dynamic(bad, _STRICT)
 
 
 # ── case loading / summary ───────────────────────────────────────────────────
@@ -184,3 +273,42 @@ def test_summarize_accuracy_latency_cost():
     assert row["accuracy"] == round(1 / 3, 4)
     assert row["mean_latency_s"] == 2.0
     assert row["total_cost_usd"] == 0.02
+
+
+# ── actuator: entity aliases ─────────────────────────────────────────────────
+
+
+_TV_ANY = {
+    "domain": "media_player",
+    "service": "turn_off",
+    "entity_id_any": [
+        "media_player.samsung_7_series_55_ue55nu7023",
+        "media_player.tv_samsung_7_series_55",
+    ],
+}
+
+
+def test_score_actuator_accepts_either_alias():
+    for eid in _TV_ANY["entity_id_any"]:
+        out = json.dumps([{"domain": "media_player", "service": "turn_off", "entity_id": eid}])
+        assert score_actuator(out, [_TV_ANY])
+
+
+def test_score_actuator_alias_still_rejects_other_entity():
+    out = json.dumps(
+        [{"domain": "media_player", "service": "turn_off", "entity_id": "media_player.other"}]
+    )
+    assert not score_actuator(out, [_TV_ANY])
+
+
+def test_score_actuator_alias_still_checks_domain_and_service():
+    out = json.dumps(
+        [
+            {
+                "domain": "media_player",
+                "service": "turn_on",
+                "entity_id": "media_player.tv_samsung_7_series_55",
+            }
+        ]
+    )
+    assert not score_actuator(out, [_TV_ANY])

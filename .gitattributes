@@ -1,26 +1,16 @@
 # .gitattributes
-* text=auto
-*.sh text eol=lf
 
-# CI rebuilds the bundle on Linux and fails if it differs from what is committed,
-# so every generated file in it has to be LF whoever ran the build. `text=auto`
-# alone is not enough: it normalises on `git add`, but resolving a merge conflict
-# writes the file without that conversion, which is how a CRLF index.html reached
-# a commit. eol=lf also keeps the working tree LF, so vite — which copies
-# frontend/index.html through byte for byte — has no CRLF to propagate.
-# Extensions, not `static/app/**`: the bundle also carries png/webp/ico, and
-# forcing eol on those would corrupt them.
-frontend/index.html      text eol=lf
-frontend/public/**/*.js  text eol=lf
-frontend/public/**/*.txt text eol=lf
-frontend/public/**/*.svg text eol=lf
-frontend/public/**/*.webmanifest text eol=lf
-static/app/**/*.html     text eol=lf
-static/app/**/*.svg      text eol=lf
-static/app/**/*.js       text eol=lf
-static/app/**/*.css      text eol=lf
-static/app/**/*.txt      text eol=lf
-static/app/**/*.webmanifest text eol=lf
+# LF everywhere, in the repository *and* in the working tree.
+#
+# `text=auto` on its own only normalises on the way in, so a Windows checkout
+# still gets CRLF working files. Two things then break on that machine and only
+# on that machine: prettier is configured `endOfLine: "lf"`, so `make lint`
+# reports every frontend file as unformatted; and vite copies templates through
+# byte for byte, so a local `make build-frontend` commits CRLF into static/app
+# and CI's "bundle matches the frontend source" check fails against its own LF
+# rebuild. Pinning eol here fixes both at the source. Binary files are still
+# detected by `text=auto` and left alone.
+* text=auto eol=lf
 
 # Generated docs bundled into the wheel — collapse in GitHub PR diffs
 static/docs/**        linguist-generated=true

@@ -174,7 +174,17 @@ async def main(exit_on_failure: bool = False) -> None:
         msg = f"Docs     → http://localhost:{runtime.WS_PORT}/docs/"
         logger.info(msg)
 
-    await mqtt.mqtt_listener()
+    # Held in a local so the task is not garbage-collected mid-flight, and
+    # cancelled below so shutdown does not leave it running.
+    totals_task = asyncio.create_task(ws.totals_broadcaster())
+    try:
+        await mqtt.mqtt_listener()
+    finally:
+        # cancel() only requests it; awaiting is what makes shutdown mean the
+        # task has actually unwound. No timeout needed here — unlike an actor's
+        # tasks, this one is a sleep and a broadcast, so it stops immediately.
+        totals_task.cancel()
+        await asyncio.gather(totals_task, return_exceptions=True)
 
 
 def cli_main() -> None:

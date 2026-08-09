@@ -174,6 +174,7 @@ LLM_API_KEY=your-key-here
 # Optional — sampling temperature for every LLM call.
 # 0 = deterministic (recommended for device control and classification);
 # leave unset/empty to keep each provider's own default.
+# Ignored on Claude models from Opus 4.7 onward, which no longer accept it.
 LLM_TEMPERATURE=0
 ```
 

@@ -3,6 +3,7 @@
 import pytest
 
 from wactorz.agents.llm_agent import OllamaProvider
+from wactorz.config import _env_name
 from wactorz.llm_factory import (
     create_provider,
     parse_overrides,
@@ -47,6 +48,84 @@ def test_parse_skips_malformed_entries():
     assert parse_overrides("intent=ollama:llama3,garbage,=x,planner=") == {
         "intent": "ollama:llama3"
     }
+
+
+def test_parse_strips_quotes_that_survived_the_shell():
+    """`set LLM_OVERRIDES="a,b"` keeps the quotes in the value; split on `,`
+    and `=`, they land on the first site and the last model — where the site
+    matches nothing and the model 404s one character away from real."""
+    raw = '"intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6"'
+    assert parse_overrides(raw) == {
+        "intent": "ollama:qwen3:4b",
+        "planner": "anthropic:claude-sonnet-4-6",
+    }
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        'planner="anthropic:claude-sonnet-4-6"',
+        "planner='anthropic:claude-sonnet-4-6'",
+        'planner=anthropic:claude-sonnet-4-6"',
+        '"planner"="anthropic:claude-sonnet-4-6"',
+    ],
+)
+def test_parse_strips_quotes_wherever_they_land(raw):
+    assert parse_overrides(raw) == {"planner": "anthropic:claude-sonnet-4-6"}
+
+
+def test_parse_survives_a_value_that_is_only_quotes():
+    """Regression: stripping by slice looped forever once the value ran out."""
+    assert parse_overrides('""') == {}
+    assert parse_overrides('"') == {}
+
+
+def test_parse_skips_unknown_site_with_a_warning(caplog):
+    """An override nothing reads is a typo, and silence makes it look applied."""
+    with caplog.at_level("WARNING"):
+        assert parse_overrides("plannr=anthropic:claude-sonnet-4-6") == {}
+    assert "plannr" in caplog.text
+
+
+def test_parse_keeps_good_entries_beside_an_unknown_site():
+    raw = "intent=ollama:llama3,plannr=anthropic:claude-sonnet-4-6"
+    assert parse_overrides(raw) == {"intent": "ollama:llama3"}
+
+
+# ── the same quoting hazard on LLM_PROVIDER / LLM_MODEL ─────────────────────
+
+
+def test_env_name_strips_quotes(monkeypatch):
+    """A quoted LLM_MODEL reaches the API verbatim and 404s, with a blast
+    radius of every call rather than one site."""
+    monkeypatch.setenv("LLM_MODEL", '"claude-sonnet-4-6"')
+    assert _env_name("LLM_MODEL", "fallback") == "claude-sonnet-4-6"
+    monkeypatch.setenv("LLM_MODEL", 'claude-sonnet-4-6"')
+    assert _env_name("LLM_MODEL", "fallback") == "claude-sonnet-4-6"
+
+
+def test_env_name_falls_back_when_unset_or_empty(monkeypatch):
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    assert _env_name("LLM_MODEL", "fallback") == "fallback"
+    monkeypatch.setenv("LLM_MODEL", '  ""  ')
+    assert _env_name("LLM_MODEL", "fallback") == "fallback"
+
+
+def test_known_sites_matches_the_sites_actually_read():
+    """The list is hand-maintained; this is what catches a site added to the
+    code and forgotten here, which would reject a legitimate override."""
+    import re
+    from pathlib import Path
+
+    from wactorz.llm_factory import KNOWN_SITES
+
+    root = Path(__file__).resolve().parent.parent / "wactorz"
+    called = {
+        match
+        for path in root.rglob("*.py")
+        for match in re.findall(r'provider_for\(\s*"([^"]+)"', path.read_text(encoding="utf-8"))
+    }
+    assert called == set(KNOWN_SITES)
 
 
 # ── create_provider ──────────────────────────────────────────────────────────

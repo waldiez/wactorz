@@ -12,6 +12,7 @@ from wactorz.config import CONFIG
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import (
+    compact_devices_for_prompt,
     fetch_devices_entities_with_location,
     normalize_ha_ws_url,
 )
@@ -474,10 +475,14 @@ class OneOffActuatorAgent(Actor):
         common = self._resolve_simple_light_actions(devices)
         if common is not None:
             return common
+        # Send the model only the fields it can act on. The dashboard payload is
+        # ~3x larger, and the bulk of it (unique_id, platform, icons, feature
+        # bitmasks) is never mentioned by the resolver prompt. Post-processing
+        # below still reads the FULL payload, so colour repair keeps working.
         prompt_input = {
             "user_request": self.request,
             "conversation_context": self.conversation_context,
-            "devices": devices,
+            "devices": compact_devices_for_prompt(devices),
         }
         llm = self.llm
         if llm is None:

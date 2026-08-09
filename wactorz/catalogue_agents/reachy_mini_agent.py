@@ -3081,14 +3081,23 @@ async def _boost_audio(agent, src_path, attenuation_db=0.0):
     out_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
 
     def _run():
+        # Generous rather than tight: this is a few seconds of speech, so 60s
+        # only ever fires on a wedged ffmpeg. Without it a hung process holds an
+        # executor thread for the life of the agent, and `say` never returns.
         return subprocess.run(
             [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", src_path,
              "-af", af, out_path],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=60,
         )
     try:
         proc = await _do(_run)
     except Exception as e:
+        # A timeout or a crash can still have created the output file; the
+        # success path renames it away, this one has to clear it up itself.
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
         await agent.log(f"ffmpeg boost failed ({e}) — playing raw TTS", level="warning")
         return None
     if proc.returncode != 0 or not os.path.exists(out_path):

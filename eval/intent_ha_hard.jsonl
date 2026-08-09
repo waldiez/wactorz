@@ -1,0 +1,64 @@
+{"id": "intent-mixed-001", "category": "intent", "prompt": "turn off the tv and write me a python function that reverses a string", "expected": "OTHER"}
+{"id": "intent-mixed-002", "category": "intent", "prompt": "lock the front door and then summarise this article for me", "expected": "OTHER"}
+{"id": "intent-mixed-003", "category": "intent", "prompt": "dim the office light and remind me what the capital of Greece is", "expected": "OTHER"}
+{"id": "intent-mixed-004", "category": "intent", "prompt": "set the thermostat to 21 and help me debug this stack trace", "expected": "OTHER"}
+{"id": "intent-sched-005", "category": "intent", "prompt": "turn off all the lights at midnight", "expected": "PIPELINE"}
+{"id": "intent-sched-006", "category": "intent", "prompt": "start the coffee machine every morning at seven", "expected": "PIPELINE"}
+{"id": "intent-sched-007", "category": "intent", "prompt": "turn on the porch light at sunset every day", "expected": "PIPELINE"}
+{"id": "intent-sched-008", "category": "intent", "prompt": "close the blinds every evening when the sun goes down", "expected": "PIPELINE"}
+{"id": "intent-sched-009", "category": "intent", "prompt": "turn off all the lights", "expected": "ACTUATE"}
+{"id": "intent-sched-010", "category": "intent", "prompt": "close the blinds", "expected": "ACTUATE"}
+{"id": "intent-crud-011", "category": "intent", "prompt": "create an automation that turns on the office light when the front door opens", "expected": "HA"}
+{"id": "intent-crud-012", "category": "intent", "prompt": "add an automation to send me a notification when the temperature goes above 28", "expected": "HA"}
+{"id": "intent-crud-013", "category": "intent", "prompt": "set up a home assistant automation for the blinds at sunset", "expected": "HA"}
+{"id": "intent-crud-014", "category": "intent", "prompt": "delete the automation that turns the lights off at midnight", "expected": "HA"}
+{"id": "intent-crud-015", "category": "intent", "prompt": "when the front door opens turn on the office light", "expected": "PIPELINE"}
+{"id": "intent-crud-016", "category": "intent", "prompt": "if the temperature goes above 28 send me a notification", "expected": "PIPELINE"}
+{"id": "intent-query-017", "category": "intent", "prompt": "what's the state of the living room thermostat?", "expected": "HA"}
+{"id": "intent-query-018", "category": "intent", "prompt": "is the office light on right now?", "expected": "HA"}
+{"id": "intent-query-019", "category": "intent", "prompt": "how many lights do I have?", "expected": "HA"}
+{"id": "intent-query-020", "category": "intent", "prompt": "what motion sensor should I buy for the hallway?", "expected": "HA"}
+{"id": "intent-lexical-021", "category": "intent", "prompt": "write me a python function that parses MQTT messages", "expected": "OTHER"}
+{"id": "intent-lexical-022", "category": "intent", "prompt": "explain how home assistant automations work", "expected": "OTHER"}
+{"id": "intent-lexical-023", "category": "intent", "prompt": "what's the difference between zigbee and z-wave?", "expected": "OTHER"}
+{"id": "intent-lexical-024", "category": "intent", "prompt": "review this yaml snippet and tell me why it fails to parse", "expected": "OTHER"}
+{"id": "intent-verbose-025", "category": "intent", "prompt": "hey so I'm heading to bed, can you kill the tv please", "expected": "ACTUATE"}
+{"id": "intent-verbose-026", "category": "intent", "prompt": "it's freezing in here, bump the thermostat up to 23 would you", "expected": "ACTUATE"}
+{"id": "intent-verbose-027", "category": "intent", "prompt": "I keep forgetting to lock up — if the front door is still unlocked at 11pm just lock it and ping me on telegram", "expected": "PIPELINE"}
+{"id": "intent-verbose-028", "category": "intent", "prompt": "could you please, whenever my phone battery drops under 20 percent, send me a discord message about it", "expected": "PIPELINE"}
+{"id": "intent-multi-029", "category": "intent", "prompt": "turn off the tv, lock the front door and dim the office light", "expected": "ACTUATE"}
+{"id": "intent-multi-030", "category": "intent", "prompt": "close the blinds and switch on the living room lamp", "expected": "ACTUATE"}
+{"id": "intent-delegate-031", "category": "intent", "prompt": "look up the manual for my Philips 2200 and tell me how to descale it", "expected": "OTHER"}
+{"id": "intent-delegate-032", "category": "intent", "prompt": "what's the weather in Athens right now?", "expected": "OTHER"}
+{"id": "intent-delegate-033", "category": "intent", "prompt": "send a discord message saying I'm home", "expected": "OTHER"}
+{"id": "intent-delegate-034", "category": "intent", "prompt": "what agents are running?", "expected": "OTHER"}
+{"id": "intent-delegate-035", "category": "intent", "prompt": "install pdfplumber on the raspberry pi node", "expected": "OTHER"}
+{"id": "intent-delegate-036", "category": "intent", "prompt": "convert C:/docs/report.pdf to a presentation", "expected": "OTHER"}
+{"id": "ha-create-001", "category": "ha", "prompt": "which of my sensors should I use to build an automation that turns on the light when someone walks in?", "expected": "create_automation"}
+{"id": "ha-create-002", "category": "ha", "prompt": "I want an automation for the blinds — is sunset or a light sensor the better trigger?", "expected": "create_automation"}
+{"id": "ha-create-003", "category": "ha", "prompt": "build me something that starts the coffee machine when my alarm goes off", "expected": "create_automation"}
+{"id": "ha-hardware-004", "category": "ha", "prompt": "what motion sensor works best with home assistant?", "expected": "recommend_hardware"}
+{"id": "ha-hardware-005", "category": "ha", "prompt": "can my hue bulbs do colour temperature or just rgb?", "expected": "recommend_hardware"}
+{"id": "ha-hardware-006", "category": "ha", "prompt": "would a zigbee door sensor work with my current setup?", "expected": "recommend_hardware"}
+{"id": "ha-existence-007", "category": "ha", "prompt": "do I have any thermometers?", "expected": "other"}
+{"id": "ha-existence-008", "category": "ha", "prompt": "how many lights are in the office?", "expected": "other"}
+{"id": "ha-existence-009", "category": "ha", "prompt": "is there a camera in the living room?", "expected": "other"}
+{"id": "ha-existence-010", "category": "ha", "prompt": "do I have anything that measures humidity?", "expected": "other"}
+{"id": "ha-state-011", "category": "ha", "prompt": "what is the state of my living room thermostat?", "expected": "other"}
+{"id": "ha-state-012", "category": "ha", "prompt": "what's the current temperature in the office?", "expected": "other"}
+{"id": "ha-state-013", "category": "ha", "prompt": "was the front door open at 5pm yesterday?", "expected": "other"}
+{"id": "ha-camera-014", "category": "ha", "prompt": "show me the kitchen camera", "expected": "other"}
+{"id": "ha-camera-015", "category": "ha", "prompt": "take a snapshot of the front door", "expected": "other"}
+{"id": "ha-camera-016", "category": "ha", "prompt": "give me the stream url for camera.backyard", "expected": "other"}
+{"id": "ha-disable-017", "category": "ha", "prompt": "turn off the automation called night mode", "expected": "delete_automation"}
+{"id": "ha-disable-018", "category": "ha", "prompt": "disable my sunset blinds automation", "expected": "delete_automation"}
+{"id": "ha-disable-019", "category": "ha", "prompt": "stop the midnight lights automation from running", "expected": "delete_automation"}
+{"id": "ha-edit-020", "category": "ha", "prompt": "change the morning coffee automation to fire at 8am instead", "expected": "edit_automation"}
+{"id": "ha-edit-021", "category": "ha", "prompt": "rename my bedtime automation to night mode", "expected": "edit_automation"}
+{"id": "ha-edit-022", "category": "ha", "prompt": "make the sunset blinds automation close the office blinds as well", "expected": "edit_automation"}
+{"id": "ha-list-023", "category": "ha", "prompt": "give me a rundown of every automation currently configured", "expected": "list_automations"}
+{"id": "ha-list-024", "category": "ha", "prompt": "dump every entity id you know about", "expected": "list_entities"}
+{"id": "ha-list-025", "category": "ha", "prompt": "what areas are set up in home assistant?", "expected": "list_areas"}
+{"id": "ha-list-026", "category": "ha", "prompt": "I'd like an inventory of all my devices", "expected": "list_devices"}
+{"id": "ha-unknown-027", "category": "ha", "prompt": "what's the capital of Greece?", "expected": "unknown"}
+{"id": "ha-unknown-028", "category": "ha", "prompt": "write me a bash script that tails a log file", "expected": "unknown"}

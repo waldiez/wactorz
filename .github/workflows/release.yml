@@ -48,9 +48,25 @@ jobs:
         with:
           skip-existing: true
 
+      # Only this version's section — the whole CHANGELOG makes the release
+      # page an endless scroll of every past version.
+      - name: Extract release notes for this tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v hdr="## [$version]" '
+            index($0, hdr) == 1 { found = 1; next }
+            found && /^## \[/   { exit }
+            found               { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::No CHANGELOG.md section found for $version" >&2
+            exit 1
+          fi
+          cat release-notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: CHANGELOG.md
+          body_path: release-notes.md
           files: dist/*
           generate_release_notes: false

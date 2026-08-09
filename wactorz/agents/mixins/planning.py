@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from wactorz.llm_factory import provider_for
 
@@ -25,8 +26,22 @@ from ..helpers.main_actor_helpers import (
 
 logger = logging.getLogger(__name__)
 
+#: Head-room over the planner's lifetime cap for a reply produced just before it
+#: to reach us. Not time for the planner to keep working — it has already gone.
+PLANNER_REPLY_GRACE_S = 15.0
 
-class PlanningMixin:
+
+if TYPE_CHECKING:
+    from .host import PlanningHost
+
+    # Typing-only base: states what the host must provide, and is
+    # gone at runtime so the real MRO is exactly what it was.
+    _Host = PlanningHost
+else:
+    _Host = object
+
+
+class PlanningMixin(_Host):
     """Plans, dry-run flow, and pipeline execution. Mix into an LLMAgent host."""
 
     def get_pipeline_rules(self) -> dict:
@@ -377,7 +392,7 @@ class PlanningMixin:
             {
                 "type": "log",
                 "message": f"Complex task detected — spawning planner ({mode})...",
-                "timestamp": __import__("time").time(),
+                "timestamp": time.time(),
             },
         )
 
@@ -386,6 +401,12 @@ class PlanningMixin:
         self._result_futures[task_id] = future
 
         try:
+            # One value feeds both the planner's cap and our wait, so the two
+            # cannot drift apart. The planner self-terminates at the cap without
+            # answering, so waiting past it is waiting for a reply that can no
+            # longer be sent; the grace only covers delivery of one produced
+            # just before the cap.
+            lifetime_s = PlannerAgent.DEFAULT_MAX_LIFETIME_S
             planner = await self.spawn(
                 PlannerAgent,
                 name=planner_name,
@@ -396,12 +417,15 @@ class PlanningMixin:
                 auto_terminate=True,
                 plan_only=plan_only,
                 approved_plan=approved_plan,
+                max_lifetime_s=lifetime_s,
                 persistence_dir=str(self._persistence_dir.parent),
             )
             if not planner:
                 return None
 
-            result_payload = await asyncio.wait_for(future, timeout=180.0)
+            result_payload = await asyncio.wait_for(
+                future, timeout=lifetime_s + PLANNER_REPLY_GRACE_S
+            )
             answer = result_payload.get("result") or result_payload.get("text") or ""
             spawned_names = result_payload.get("spawned", [])
             if spawned_names:
@@ -812,5 +836,3 @@ class PlanningMixin:
             f"To bypass this check for one-off requests, prefix with `pipeline!` "
             f"(e.g. `pipeline! {text[:40]}...`)."
         )
-
-        # ── Spawn ──────────────────────────────────────────────────────────────

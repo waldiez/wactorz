@@ -11,12 +11,13 @@ from wactorz.config import CONFIG
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import (
+    compact_devices_for_prompt,
     fetch_devices_entities_with_location,
     normalize_ha_ws_url,
 )
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 from .home_assistant_actuator_agent import ActuatorAction
-from .llm_agent import LLMProvider, _accumulate_global_cost
+from .llm_agent import LLMProvider, accumulate_global_cost
 
 logger = logging.getLogger(__name__)
 
@@ -263,13 +264,14 @@ def _entity_haystacks(devices: Any) -> dict[str, str]:
         if isinstance(node, dict):
             entity_id = str(node.get("entity_id") or "")
             if entity_id:
-                attrs = node.get("attributes") if isinstance(node.get("attributes"), dict) else {}
+                attrs = node.get("attributes")
+                if not isinstance(attrs, dict):
+                    attrs = {}
                 state = node.get("state")
-                state_attrs = (
-                    state.get("attributes")
-                    if isinstance(state, dict) and isinstance(state.get("attributes"), dict)
-                    else {}
-                )
+                # Bound once: looked up twice, the check and the value were
+                # two separate calls, so nothing tied them together.
+                nested = state.get("attributes") if isinstance(state, dict) else None
+                state_attrs = nested if isinstance(nested, dict) else {}
                 parts = [
                     entity_id.split(".", 1)[-1],
                     node.get("name"),
@@ -447,12 +449,21 @@ class OneOffActuatorAgent(Actor):
         return await self._execute_actions(actions)
 
     async def _resolve_actions(self, devices: list[dict[str, Any]]) -> list[ActuatorAction]:
+        # Send the model only the fields it can act on. The dashboard payload is
+        # ~3x larger, and the bulk of it (unique_id, platform, icons, feature
+        # bitmasks) is never mentioned by the resolver prompt. Post-processing
+        # below still reads the FULL payload, so colour repair keeps working.
         prompt_input = {
             "user_request": self.request,
-            "devices": devices,
+            "devices": compact_devices_for_prompt(devices),
         }
+        llm = self.llm
+        if llm is None:
+            # _execute_request checks before calling, but that guard does not
+            # carry into here; no provider means no actions to take.
+            return []
         raw, usage = await asyncio.wait_for(
-            self.llm.complete(
+            llm.complete(
                 messages=[{"role": "user", "content": json.dumps(prompt_input)}],
                 system=_RESOLVER_PROMPT,
                 max_tokens=1200,
@@ -721,7 +732,7 @@ class OneOffActuatorAgent(Actor):
         self.total_cost_usd += usage.get("cost_usd", 0.0)
         delta = self.total_cost_usd - self._last_period_cost_usd
         if delta > 0:
-            _accumulate_global_cost(delta)
+            accumulate_global_cost(delta)
             self._last_period_cost_usd = self.total_cost_usd
 
     async def _deferred_stop(self) -> None:

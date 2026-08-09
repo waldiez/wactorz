@@ -15,6 +15,42 @@ from . import cost, runtime
 logger = logging.getLogger(__name__)
 
 
+#: Most agents tracked in live state at once. Entries are created on any
+#: `agents/<id>/…` publish, and only an explicit delete or reset removes them —
+#: so a client publishing under fresh ids grows this map for as long as it keeps
+#: publishing. Well above any real deployment; it is a ceiling, not a budget.
+MAX_TRACKED_AGENTS = 500
+
+#: Frame type announcing that an agent is gone. The dashboard matches this
+#: string exactly to drop the card and tombstone the id; a state snapshot alone
+#: will not remove it, because a patch only adds and updates. Kept here so the
+#: REST and WebSocket delete paths cannot spell it differently.
+DELETE_AGENT_FRAME = "delete_agent"
+
+
+def _evict_stalest() -> None:
+    """Drop the least recently updated agents once the map is over its ceiling.
+
+    Eviction is by staleness rather than insertion order because a real agent
+    heartbeats: it keeps refreshing `last_update` and so is never the oldest,
+    while entries invented by a flood go stale immediately and are dropped
+    first. Evicting by age alone would let the flood push out live agents.
+    """
+    agents = runtime.state["agents"]
+    overflow = len(agents) - MAX_TRACKED_AGENTS
+    if overflow <= 0:
+        return
+    stalest = sorted(agents, key=lambda aid: agents[aid].get("last_update", 0))[:overflow]
+    for aid in stalest:
+        agents.pop(aid, None)
+    logger.warning(
+        "[events] Live agent map hit %d; dropped the %d stalest. "
+        "Expected only under a flood of unknown agent ids.",
+        MAX_TRACKED_AGENTS,
+        overflow,
+    )
+
+
 def update_agent(agent_id: str, key: str, data) -> None:
     """Merge one field of an agent's live state, re-admitting it if respawned."""
     if runtime.hard_resetting or runtime.is_deleted(agent_id):
@@ -24,13 +60,30 @@ def update_agent(agent_id: str, key: str, data) -> None:
             "agent_id": agent_id,
             "name": agent_id[:8],
             "first_seen": time.time(),
+            # Set here as well as below: eviction ranks on it, and an entry
+            # without one sorts as infinitely stale — so a new arrival would be
+            # the first thing dropped, including itself.
+            "last_update": time.time(),
         }
+        _evict_stalest()
     runtime.state["agents"][agent_id][key] = data
     runtime.state["agents"][agent_id]["last_update"] = time.time()
 
 
 def add_log(entry: dict) -> None:
-    """Append to the bounded log feed shared with connected browsers."""
+    """Append to the bounded log feed shared with connected browsers.
+
+    Stamps ``source`` here rather than at each of the call sites, so a later one
+    cannot forget it. The value is a constant telling the feed view which kind of
+    entry it is holding.
+
+    Assigned, not ``setdefault``: two call sites spread ``**data`` from the
+    broker payload into the entry, so a publisher could otherwise label its own
+    row ``app`` and have it render as an application log line. Everything
+    reaching this function is agent activity by definition — application log
+    records go to the in-memory buffer, never here.
+    """
+    entry["source"] = "agent"
     runtime.state["log_feed"].insert(0, entry)
     if len(runtime.state["log_feed"]) > 100:
         runtime.state["log_feed"].pop()
@@ -263,8 +316,20 @@ def node_online(last_seen: float, threshold: float = 45.0) -> bool:
     return (time.time() - last_seen) < threshold
 
 
-def snapshot() -> dict[str, Any]:
-    """Render the full dashboard state for a newly connected websocket client."""
+def snapshot(include_totals: bool = True) -> dict[str, Any]:
+    """Render the dashboard state for a websocket client.
+
+    Everything here reads from ``runtime.state`` — in memory, cheap — **except**
+    the two headline totals, which are the only part that touches the database.
+    Resolving them costs one query per agent whose cost is not in an MQTT frame
+    (``best_cost`` falls through to the ``_final_cost`` row), plus two full scans
+    of ``kv_store``.
+
+    ``include_totals=False`` omits them, for callers on a hot path. The browser
+    keeps whatever it last received: ``WSClient._applyStatePatch`` assigns each
+    total only when the key is present, so omitting them is not the same as
+    sending zero, and no protocol or frontend change is involved.
+    """
     if runtime.hard_resetting:
         return {
             "agents": [],
@@ -276,6 +341,15 @@ def snapshot() -> dict[str, Any]:
         }
     for nd in runtime.state["nodes"].values():
         nd["online"] = node_online(nd.get("last_seen", 0))
+
+    if not include_totals:
+        return {
+            "agents": list(runtime.state["agents"].values()),
+            "nodes": list(runtime.state["nodes"].values()),
+            "alerts": runtime.state["alerts"][:10],
+            "log_feed": runtime.state["log_feed"][:20],
+            "system_health": runtime.state["system_health"],
+        }
 
     # The headline totals must match what the dashboard actually shows on the
     # cards. Each card resolves its cost via _actor_cost() — MQTT state, then the

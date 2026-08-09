@@ -69,7 +69,6 @@ cat > /tmp/options.json <<'EOF'
   "llm_api_key": "sk-ant-...",
   "mqtt_host": "localhost",
   "mqtt_port": 1883,
-  "mqtt_ws_port": 8083,
   "ha_url": "http://homeassistant.local:8123",
   "ha_token": "",
   "mosquitto_embedded": true,

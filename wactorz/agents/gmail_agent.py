@@ -202,13 +202,19 @@ class GmailAgent(LLMAgent):
 
     async def _answer_from_email(self, email_text: str, question: str) -> str:
         """Use the LLM to answer the user's question about a single email, or summarize it."""
+        llm = self.llm
+        if llm is None:
+            # The caller checks this too, but a guard there does not survive
+            # into here — and a bound local cannot be swapped out from under
+            # the await the way the attribute can.
+            return "No LLM provider is configured, so this email cannot be summarised."
         try:
             system = (
                 "You are shown ONE email (headers + body). Answer the user's question about it "
                 "concisely (1-3 sentences), quoting key facts — amounts, dates, names — exactly. "
                 "If there is no specific question, give a 1-2 sentence summary. Do not invent details."
             )
-            response, usage = await self.llm.complete(
+            response, usage = await llm.complete(
                 messages=[
                     {
                         "role": "user",

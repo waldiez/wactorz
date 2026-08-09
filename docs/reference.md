@@ -104,7 +104,6 @@ This replaces all previous keyword heuristics with a single LLM classification s
 | `agents/home_assistant_actuator_agent.py` | Agent | Reactive MQTT→HA actuator — subscribes to topics, calls HA services |
 | `interfaces/chat_interfaces.py` | I/O | CLI (streaming), REST, Discord, WhatsApp, Telegram — all call `process_user_input[_stream]` |
 | `interfaces/mcp_server.py` | I/O | MCP server exposing Wactorz and Home Assistant tools to MCP-compatible clients |
-| `monitor_server.py` | I/O | MQTT→WebSocket bridge that feeds the live dashboard (also serves the SPA from `static/app/`) |
 
 ---
 
@@ -717,8 +716,8 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/cost` | Show per-agent token usage and cost breakdown |
 | `/clear` | Clear the main agent's conversation history |
 | `/clear-plans` | Wipe the planner's plan cache |
-| `/deploy <node-name>` | Bootstrap a new remote node via SSH |
-| `/deploy-pkg <host> <pkg...>` | Install pip packages on a remote node |
+| `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
+| `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node |
 | `/migrate <agent> <node>` | Move a running agent to a different node |
 | `/help` | Show all available commands |
 | `@agent-name` | Route your next message directly to a specific agent |
@@ -1092,22 +1091,34 @@ The installer agent handles SSH deployment — no manual file copying needed.
 /deploy rpi-kitchen
 ```
 
-This will:
+`rpi-kitchen` must be a configured deploy target. Set it up in your environment first (see [Remote nodes](remote-nodes.md)):
 
-1. Discover the Pi on your LAN (mDNS first, then port-22 scan)
-2. Prompt for SSH user, password, and your MQTT broker IP
+```bash
+DEPLOY_TARGETS=rpi-kitchen
+DEPLOY_RPI_KITCHEN_HOST=192.168.1.50
+DEPLOY_RPI_KITCHEN_USER=pi
+DEPLOY_RPI_KITCHEN_KEY=/path/to/id_ed25519
+DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
+```
+
+`/deploy` will then:
+
+1. Use the configured host (or resolve `rpi-kitchen.local` over mDNS if no host is set)
+2. Verify the SSH host key, recording it on first contact
 3. Upload `remote_runner.py` via SFTP
-4. Install `aiomqtt` on the Pi
+4. Install `aiomqtt` into a venv on the Pi
 5. Start the runner in the background
 6. The node appears in `/nodes` within ~15 seconds
 
 **From the chat:**
 
 ```
-set up my Raspberry Pi at 192.168.1.50 as a node called rpi-kitchen
+set up my Raspberry Pi as a node called rpi-kitchen
 ```
 
-The LLM will call `delegate_to_installer` with a `node_deploy` action automatically.
+The LLM will call `delegate_to_installer` with a `node_deploy` action automatically. It cannot supply credentials — the installer resolves them from the configured target, and refuses a host that has none.
+
+> **⚠** `/deploy` takes a node name only. SSH credentials passed in chat are refused: chat is persisted to the conversation history and the chat log.
 
 ### Spawning Agents on a Remote Node
 
@@ -1141,8 +1152,10 @@ Or just ask in chat: _"spawn a temperature sensor agent on rpi-kitchen"_
 Before spawning an agent that needs hardware libraries:
 
 ```
-/deploy-pkg 192.168.1.50 adafruit-circuitpython-dht RPi.GPIO
+/deploy-pkg rpi-kitchen adafruit-circuitpython-dht RPi.GPIO
 ```
+
+The node name (or its configured address) identifies the target; the SSH credentials come from its `DEPLOY_<NODE>_*` block.
 
 Or include `"install"` in the spawn block — the remote runner will pip-install them before starting the agent.
 
@@ -1199,7 +1212,7 @@ The installer agent handles three actions for node management:
 | `node_install` | Install pip packages on a running node via SSH |
 | `node_run` | Run any shell command on a remote node via SSH |
 
-All three accept `host`, `user`, and either `password` or `key_path` for SSH auth.
+All three take `host` and, where relevant, `node_name`. **None of them accept SSH credentials in the payload** — the installer resolves the user, key or password from the node's configured deploy target (`DEPLOY_TARGETS` and the `DEPLOY_<NODE>_*` block) and refuses a host that has no target. A payload naming a credential is ignored, so neither a chat message nor LLM-authored code can direct an SSH connection with credentials of its own.
 
 ---
 
@@ -1271,6 +1284,15 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `WHATSAPP_ALLOWED_NUMBERS` | **Required with WhatsApp** — comma-separated numbers allowed to message the webhook |
 | `WACTORZ_URL` | Wactorz REST base URL used by the MCP server (default `http://localhost:8000`) |
 | `WACTORZ_API_KEY` | Optional MCP-to-REST API key; should match `API_KEY` when REST auth is enabled |
+| `DEPLOY_TARGETS` | Comma-separated node names `/deploy` may bootstrap; each needs a `DEPLOY_<NODE>_*` block |
+| `DEPLOY_<NODE>_HOST` | Target address; omit to resolve `<node>.local` over mDNS |
+| `DEPLOY_<NODE>_USER` | SSH user (default `pi`) |
+| `DEPLOY_<NODE>_KEY` | Path to the SSH private key — preferred over a password |
+| `DEPLOY_<NODE>_PASSWORD` | SSH password, for nodes without key auth |
+| `DEPLOY_<NODE>_BROKER` / `_BROKER_PORT` | MQTT broker as seen **from** the node (default port `1883`) |
+| `DEPLOY_<NODE>_SSH_PORT` | SSH port (default `22`) |
+| `DEPLOY_KNOWN_HOSTS` | Where learned SSH host keys are stored (default `<WACTORZ_STATE_DIR>/known_hosts`) |
+| `DEPLOY_STRICT_HOST_KEYS` | `1` = never learn a host key on first contact; unknown hosts are refused |
 
 ---
 
@@ -1321,14 +1343,13 @@ wactorz/
 ├── cli.py                                     argparse, supervision tree wiring, interface dispatch
 ├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, …)
 ├── remote_runner.py                           Self-contained edge node runner — deploy to any Pi or machine
-├── monitor_server.py                          aiohttp dashboard + MQTT↔WS bridge (serves `static/app/`)
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
 │
 ├── core/
 │   ├── actor.py                               Base Actor — mailbox, lifecycle, heartbeat, spawn, supervisor
 │   ├── registry.py                            ActorSystem, ActorRegistry, Supervisor — routing & OTP restarts
 │   ├── topic_bus.py                           TopicBus — TopicContract / TopicRegistry, schema introspection
-│   └── persistence.py                         SQLite + Redis + Pickle three-tier persistence
+│   └── persistence/                           SQLite + memory + Pickle three-tier persistence
 │
 ├── agents/
 │   ├── llm_agent.py                           LLMAgent — 5 providers, rolling summarization, cost tracking

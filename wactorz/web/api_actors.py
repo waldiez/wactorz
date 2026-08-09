@@ -8,7 +8,6 @@ message to it.
 import asyncio
 import json
 import logging
-import time
 
 from aiohttp import web
 from aiohttp.web import Response
@@ -78,13 +77,19 @@ async def delete_actor_handler(request: web.Request) -> Response:
         return web.json_response({"error": "actor is protected"}, status=403)
     routed = await lifecycle.delete_agent(actor_id)
     await ws.broadcast(
-        {"type": "lifecycle.delete_agent", "agent_id": actor_id, "state": events.snapshot()}
+        {"type": events.DELETE_AGENT_FRAME, "agent_id": actor_id, "state": events.snapshot()}
     )
     return web.Response(status=200, text=f"stopping ({routed})")
 
 
-async def pause_actor_handler(request: web.Request) -> Response:
-    """Suspend an actor's message processing, leaving it in the registry."""
+async def _lifecycle_handler(request: web.Request, command: str, status: str) -> Response:
+    """Run a lifecycle command on a local actor and report what happened.
+
+    The actor is driven in process. This used to publish to the broker so the
+    actor could receive its own command back over the network, which meant that
+    with the broker down nothing happened at all while the response still said it
+    had — the dashboard would show an agent running that the user had just paused.
+    """
     actor_id = request.match_info["actor_id"]
     if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
@@ -93,30 +98,24 @@ async def pause_actor_handler(request: web.Request) -> Response:
         return web.json_response({"error": "actor not found"}, status=404)
     if getattr(actor, "protected", False):
         return web.json_response({"error": "actor is protected"}, status=403)
-    if runtime.mqtt_client_ref:
-        await runtime.mqtt_client_ref.publish(
-            f"agents/{actor_id}/commands",
-            json.dumps({"command": "pause", "sender": "api", "timestamp": time.time()}),
-        )
-    return web.json_response({"status": "pausing"})
+    if not await actor.apply_command(command):
+        return web.json_response({"error": f"{command} was refused"}, status=409)
+    return web.json_response({"status": status})
+
+
+async def start_actor_handler(request: web.Request) -> Response:
+    """Bring a stopped actor back up, under supervision again."""
+    return await _lifecycle_handler(request, "start", "starting")
+
+
+async def pause_actor_handler(request: web.Request) -> Response:
+    """Suspend an actor's message processing, leaving it in the registry."""
+    return await _lifecycle_handler(request, "pause", "pausing")
 
 
 async def resume_actor_handler(request: web.Request) -> Response:
     """Resume a paused actor."""
-    actor_id = request.match_info["actor_id"]
-    if runtime.registry is None:
-        return web.json_response({"error": "registry not available"}, status=503)
-    actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
-    if actor is None:
-        return web.json_response({"error": "actor not found"}, status=404)
-    if getattr(actor, "protected", False):
-        return web.json_response({"error": "actor is protected"}, status=403)
-    if runtime.mqtt_client_ref:
-        await runtime.mqtt_client_ref.publish(
-            f"agents/{actor_id}/commands",
-            json.dumps({"command": "resume", "sender": "api", "timestamp": time.time()}),
-        )
-    return web.json_response({"status": "resuming"})
+    return await _lifecycle_handler(request, "resume", "resuming")
 
 
 async def actor_metrics_handler(request: web.Request) -> Response:

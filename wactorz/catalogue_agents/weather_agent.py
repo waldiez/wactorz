@@ -745,8 +745,14 @@ class WeatherAgent(Actor):
 
     async def _llm_location(self, message: str) -> str | None:
         """Ask the LLM only for a location string; validate via geocoding."""
+        llm = self._llm
+        if llm is None:
+            # The caller checks before reaching here, but that guard does not
+            # carry into this method, and returning None is what it already
+            # does when no location can be found.
+            return None
         try:
-            reply, _ = await self._llm.complete(
+            reply, _ = await llm.complete(
                 [{"role": "user", "content": message}],
                 system=(
                     "Extract ONLY the place/city name the user is asking about. "

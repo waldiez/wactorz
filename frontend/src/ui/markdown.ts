@@ -21,11 +21,21 @@
  *   - paragraphs (single newlines become <br>)
  *   - inline: **bold** *italic* ~~strikethrough~~ `code` [text](url), bare URLs
  *
- * Intentionally NOT supported: raw HTML, images, reference links. Such input
+ * Intentionally NOT supported: raw HTML, reference links. Such input
  * degrades to readable plain text.
  */
 
 const URL_SAFE = /^(https?:|mailto:)/i;
+
+/** Schemes allowed as an <img src>. Wider than URL_SAFE on purpose: an image is
+ *  a media context, which does not navigate, so `data:` here cannot become the
+ *  click-through XSS it would be in an anchor href — and agents answer with
+ *  inline `data:image/...;base64` frames (a camera snapshot, a rendered chart).
+ *
+ *  Raster types only. `image/svg+xml` is excluded deliberately: SVG can carry
+ *  script, and while browsers do not run it from an <img>, there is no reason to
+ *  stand on that. */
+const IMG_SRC_SAFE = /^(https?:\/\/|blob:|data:image\/(png|jpe?g|gif|webp|avif);base64,)/i;
 
 /**
  * A block handler inspects `lines[i]`; if it owns that block it appends nodes
@@ -332,6 +342,24 @@ const INLINE_RULES: InlineRule[] = [
             const code = document.createElement("code");
             code.textContent = m[1]!;
             return code;
+        },
+    },
+    {
+        // Before the link rule, so `![alt](src)` is taken as an image rather
+        // than a literal "!" followed by a link.
+        re: /!\[([^\]]*)\]\(([^)\s]+)\)/,
+        build: m => {
+            const src = m[2]!;
+            if (!IMG_SRC_SAFE.test(src)) {
+                // Shown as the text it was, so nothing silently disappears.
+                return document.createTextNode(m[0]);
+            }
+            const img = document.createElement("img");
+            img.className = "af-chat-md-img";
+            img.src = src;
+            img.alt = m[1] || "image";
+            img.loading = "lazy";
+            return img;
         },
     },
     {

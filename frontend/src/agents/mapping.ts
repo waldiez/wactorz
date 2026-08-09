@@ -360,9 +360,12 @@ const RAW_AGENT_FEED_MAPPERS: Record<
         const actions = Array.isArray(p["actions"]) ? (p["actions"] as unknown[]) : [];
         const first = asObj(actions[0]);
         const auto = asStr(p["automation_id"]);
-        const what = actions.length
-            ? `${asStr(first["domain"])}.${asStr(first["service"])} ${asStr(first["entity_id"])}`.trim()
-            : "";
+        // Tested for content, not just length: this is raw agent JSON, so an
+        // entry may not be an object at all, and every field then coerces to "".
+        // Formatting those anyway yields "." — which is truthy, so it would
+        // suppress the count fallback below and label the row `actuated · .`.
+        const parts = [asStr(first["domain"]), asStr(first["service"]), asStr(first["entity_id"])];
+        const what = parts.some(Boolean) ? `${parts[0]}.${parts[1]} ${parts[2]}`.trim() : "";
         const more = actions.length > 1 ? ` (+${actions.length - 1})` : "";
         const detail = what || `${actions.length} action${actions.length !== 1 ? "s" : ""}`;
         return {

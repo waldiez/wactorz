@@ -1384,8 +1384,11 @@ class HomeAssistantAgent(LLMAgent):
     ) -> tuple[str, str]:
         """Identify which automation the user wants to edit based on their request and the list of automations."""
         ident_payload = {"user_request": text, "automations": automations}
+        llm = self.llm
+        if llm is None:
+            return "", "No LLM provider is configured, so the automation cannot be identified."
         try:
-            ident_response, usage = await self.llm.complete(
+            ident_response, usage = await llm.complete(
                 messages=[{"role": "user", "content": json.dumps(ident_payload)}],
                 system=HA_IDENTIFY_AUTOMATION_PROMPT,
             )
@@ -1443,8 +1446,11 @@ class HomeAssistantAgent(LLMAgent):
             "existing_automation": existing_config,
             "available_entities": entity_ids[:100],
         }
+        llm = self.llm
+        if llm is None:
+            return {"error": "No LLM provider is configured, so the edit cannot be generated."}
         try:
-            edit_response, usage = await self.llm.complete(
+            edit_response, usage = await llm.complete(
                 messages=[{"role": "user", "content": json.dumps(edit_payload)}],
                 system=HA_EDIT_AUTOMATION_PROMPT,
             )

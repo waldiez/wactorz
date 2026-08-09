@@ -7,11 +7,13 @@ in-flight guard so a user can't stack concurrent generations by sending faster
 than the model answers.
 """
 
-import wactorz.interfaces.chat_interfaces as ci
+import pytest
+
+import wactorz.interfaces.chat.social as social
 from wactorz.interfaces.chat_interfaces import SocialRateLimiter, social_channel_blocked
 
 
-def test_allows_up_to_the_limit_then_refuses():
+def test_allows_up_to_the_limit_then_refuses() -> None:
     limiter = SocialRateLimiter(per_minute=3)
 
     for _ in range(3):
@@ -23,7 +25,7 @@ def test_allows_up_to_the_limit_then_refuses():
     assert "3 messages in a minute" in refusal
 
 
-def test_limit_is_per_sender():
+def test_limit_is_per_sender() -> None:
     limiter = SocialRateLimiter(per_minute=1)
 
     assert limiter.check("user-1") is None
@@ -33,7 +35,7 @@ def test_limit_is_per_sender():
     assert limiter.check("user-2") is None
 
 
-def test_second_message_while_first_is_running_is_refused():
+def test_second_message_while_first_is_running_is_refused() -> None:
     limiter = SocialRateLimiter(per_minute=10)
 
     assert limiter.check("user-1") is None  # turn starts, never released
@@ -43,7 +45,7 @@ def test_second_message_while_first_is_running_is_refused():
     assert "one at a time" in busy
 
 
-def test_in_flight_slot_is_released_and_reusable():
+def test_in_flight_slot_is_released_and_reusable() -> None:
     limiter = SocialRateLimiter(per_minute=10)
 
     assert limiter.check("user-1") is None
@@ -51,10 +53,10 @@ def test_in_flight_slot_is_released_and_reusable():
     assert limiter.check("user-1") is None
 
 
-def test_window_expires(monkeypatch):
+def test_window_expires(monkeypatch: pytest.MonkeyPatch) -> None:
     limiter = SocialRateLimiter(per_minute=1)
     clock = {"t": 1000.0}
-    monkeypatch.setattr(ci.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(social.time, "monotonic", lambda: clock["t"])
 
     assert limiter.check("user-1") is None
     limiter.done("user-1")
@@ -64,7 +66,7 @@ def test_window_expires(monkeypatch):
     assert limiter.check("user-1") is None
 
 
-def test_zero_disables_the_limit():
+def test_zero_disables_the_limit() -> None:
     limiter = SocialRateLimiter(per_minute=0)
     for _ in range(50):
         assert limiter.check("user-1") is None
@@ -73,12 +75,12 @@ def test_zero_disables_the_limit():
 # ── Startup gate ────────────────────────────────────────────────────────────
 
 
-def test_no_token_means_nothing_to_block():
+def test_no_token_means_nothing_to_block() -> None:
     assert social_channel_blocked("discord", "", frozenset()) is None
 
 
-def test_token_without_allow_list_is_blocked(monkeypatch):
-    monkeypatch.setattr(ci, "missing_dependency", lambda _c: None)
+def test_token_without_allow_list_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(social, "missing_dependency", lambda _c: None)
 
     reason = social_channel_blocked("telegram", "t-tok", frozenset())
 
@@ -86,14 +88,14 @@ def test_token_without_allow_list_is_blocked(monkeypatch):
     assert "TELEGRAM_ALLOWED_USER_IDS" in reason
 
 
-def test_token_with_allow_list_is_permitted(monkeypatch):
-    monkeypatch.setattr(ci, "missing_dependency", lambda _c: None)
+def test_token_with_allow_list_is_permitted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(social, "missing_dependency", lambda _c: None)
     assert social_channel_blocked("telegram", "t-tok", frozenset({42})) is None
 
 
-def test_missing_library_is_reported_before_the_allow_list(monkeypatch):
-    monkeypatch.setattr(ci, "missing_dependency", lambda _c: "python-telegram-bot")
+def test_missing_library_is_reported_before_the_allow_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(social, "missing_dependency", lambda _c: "python-telegram-bot")
 
     reason = social_channel_blocked("telegram", "t-tok", frozenset())
-
+    assert reason
     assert "python-telegram-bot" in reason

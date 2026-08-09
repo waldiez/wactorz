@@ -13,6 +13,7 @@ import sys
 from aiohttp import web
 from aiohttp.typedefs import Handler
 
+from ..config import MAX_REQUEST_BYTES
 from . import (
     api_actors,
     api_reset,
@@ -68,7 +69,7 @@ def build_app() -> web.Application:
             pass
         return response
 
-    app = web.Application(middlewares=[cors_middleware])
+    app = web.Application(middlewares=[cors_middleware], client_max_size=MAX_REQUEST_BYTES)
     # Expose the registry to extensions (via app.get) before setup_all() runs.
     # None in standalone/legacy MQTT mode — consumers handle that.
     from ..core import contract
@@ -92,6 +93,8 @@ def build_app() -> web.Application:
     # Actor control — sub-routes must be registered before /{actor_id} catch-all
     app.router.add_post("/api/actors/{actor_id}/message", api_actors.send_message_handler)
     app.router.add_post("/actors/{actor_id}/message", api_actors.send_message_handler)
+    app.router.add_post("/api/actors/{actor_id}/start", api_actors.start_actor_handler)
+    app.router.add_post("/actors/{actor_id}/start", api_actors.start_actor_handler)
     app.router.add_post("/api/actors/{actor_id}/pause", api_actors.pause_actor_handler)
     app.router.add_post("/actors/{actor_id}/pause", api_actors.pause_actor_handler)
     app.router.add_post("/api/actors/{actor_id}/resume", api_actors.resume_actor_handler)
@@ -165,13 +168,23 @@ async def main(exit_on_failure: bool = False) -> None:
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", runtime.WS_PORT)
     await site.start()
-    msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/  [chat: {chat.chat_mode()}]"
+    msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/"
     logger.info(msg)
     if static_site.DOCS_SITE.is_dir():
         msg = f"Docs     → http://localhost:{runtime.WS_PORT}/docs/"
         logger.info(msg)
 
-    await mqtt.mqtt_listener()
+    # Held in a local so the task is not garbage-collected mid-flight, and
+    # cancelled below so shutdown does not leave it running.
+    totals_task = asyncio.create_task(ws.totals_broadcaster())
+    try:
+        await mqtt.mqtt_listener()
+    finally:
+        # cancel() only requests it; awaiting is what makes shutdown mean the
+        # task has actually unwound. No timeout needed here — unlike an actor's
+        # tasks, this one is a sleep and a broadcast, so it stops immediately.
+        totals_task.cancel()
+        await asyncio.gather(totals_task, return_exceptions=True)
 
 
 def cli_main() -> None:

@@ -209,3 +209,82 @@ describe("ChatInput history & ghost suggestion", () => {
         expect(grew).toHaveBeenCalled();
     });
 });
+
+describe("ChatInput history edges", () => {
+    let h: Harness;
+    beforeEach(() => {
+        h = setup();
+    });
+
+    it("does nothing on ArrowUp with an empty history", () => {
+        h.input.value = "typed";
+
+        h.ci.onKeydown(key("ArrowUp"), h.input, h.select, h.ghost, h.panel);
+
+        // Recalling from nothing must leave what the user was typing alone.
+        expect(h.input.value).toBe("typed");
+    });
+
+    it("ignores ArrowDown before any recall has started", () => {
+        h.ci.recordSent("earlier", h.input);
+        h.input.value = "draft";
+
+        h.ci.onKeydown(key("ArrowDown"), h.input, h.select, h.ghost, h.panel);
+
+        expect(h.input.value).toBe("draft");
+    });
+
+    it("restores the draft when walking back down past the newest entry", () => {
+        h.ci.recordSent("earlier", h.input);
+        h.input.value = "half-typed";
+
+        h.ci.onKeydown(key("ArrowUp"), h.input, h.select, h.ghost, h.panel);
+        expect(h.input.value).toBe("earlier");
+
+        h.ci.onKeydown(key("ArrowDown"), h.input, h.select, h.ghost, h.panel);
+
+        // The half-typed message is not lost by browsing history past it.
+        expect(h.input.value).toBe("half-typed");
+    });
+
+    it("caps the history so a long session cannot grow it without bound", () => {
+        for (let i = 0; i < 60; i++) {
+            h.ci.recordSent(`msg-${i}`, h.input);
+        }
+
+        // `history` is private, so the cap is observed through recall: walking
+        // up 50 times reaches the oldest kept entry, and further presses stay
+        // there rather than reaching msg-9 and below.
+        h.input.value = "";
+        for (let i = 0; i < 60; i++) {
+            h.ci.onKeydown(key("ArrowUp"), h.input, h.select, h.ghost, h.panel);
+        }
+
+        expect(h.input.value).toBe("msg-10"); // 50 kept: msg-59 … msg-10
+    });
+
+    it("resets the history cursor when the user types anything else", () => {
+        h.ci.recordSent("earlier", h.input);
+        h.ci.onKeydown(key("ArrowUp"), h.input, h.select, h.ghost, h.panel);
+
+        h.ci.onKeydown(key("a"), h.input, h.select, h.ghost, h.panel);
+        h.input.value = "";
+        h.ci.onKeydown(key("ArrowUp"), h.input, h.select, h.ghost, h.panel);
+
+        // Editing after a recall starts browsing again from the top rather
+        // than continuing from where the last walk left off.
+        expect(h.input.value).toBe("earlier");
+    });
+
+    it("clears the ghost when the input is emptied", () => {
+        h.ci.recordSent("status report", h.input);
+        h.input.value = "sta";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+        expect(h.ghost.textContent).not.toBe("");
+
+        h.input.value = "   ";
+        h.ci.onChange(h.input, h.select, h.ghost, h.panel);
+
+        expect(h.ghost.textContent).toBe("");
+    });
+});

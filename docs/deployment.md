@@ -45,7 +45,7 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
-| _(all)_ | mosquitto | `mosquitto:1883` / `:9001` | `:1883`, `:9001` |
+| _(all)_ | mosquitto | `mosquitto:1883` | `:1883` |
 | `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
 | `python` | monitor UI | `wactorz-python:8888` | `:8888` |
 | `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
@@ -87,31 +87,44 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `MQTT_PASSWORD` | _(blank)_ | Broker password |
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
+| `WACTORZ_STATE_DIR` | `./state` | Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins `/data/state`. `wactorz-reset` reads the same variable, so a wipe targets whatever the app is using |
 | `WACTORZ_TZ` | _(unset)_ | Override the timezone used in agents' date/time context (e.g. `Europe/Athens`). Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` > host local zone. Blank or unknown values fall through to the next candidate |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
-| `NAUTILUS_SSH_KEY` | _(default key)_ | Path to SSH private key |
-| `NAUTILUS_STRICT_HOST_KEYS` | `0` | `1` = enforce strict host-key checking |
-| `NAUTILUS_CONNECT_TIMEOUT` | `10` | SSH timeout in seconds |
+| `DEPLOY_TARGETS` | _(unset)_ | Comma-separated remote node names `/deploy` may bootstrap; each needs a `DEPLOY_<NODE>_*` block — see [Remote nodes](remote-nodes.md) |
+| `DEPLOY_KNOWN_HOSTS` | `<WACTORZ_STATE_DIR>/known_hosts` | Where learned SSH host keys are stored |
+| `DEPLOY_STRICT_HOST_KEYS` | `0` | `1` = never learn a host key on first contact; unknown hosts are refused |
 
 ---
 
 ## SSH key management
 
-Generate a dedicated deploy key (recommended):
+Wactorz reaches remote machines over SSH when bootstrapping an edge node with
+`/deploy`. Key auth is preferred over a password — generate a dedicated deploy
+key:
 
 ```bash
 ssh-keygen -t ed25519 -C "wactorz-deploy" -f ~/.ssh/wactorz_deploy -N ""
 
 # Authorise on the target host
-ssh-copy-id -i ~/.ssh/wactorz_deploy.pub -p 22 user@host
-
-# Add to .env
-echo "NAUTILUS_SSH_KEY=~/.ssh/wactorz_deploy" >> .env
+ssh-copy-id -i ~/.ssh/wactorz_deploy.pub -p 22 pi@192.168.1.50
 ```
 
-Use `NAUTILUS_SSH_KEY` when NautilusAgent needs to reach remote hosts over SSH.
+Then point the node's deploy target at it in `.env`:
+
+```env
+DEPLOY_TARGETS=rpi-kitchen
+DEPLOY_RPI_KITCHEN_HOST=192.168.1.50
+DEPLOY_RPI_KITCHEN_USER=pi
+DEPLOY_RPI_KITCHEN_KEY=~/.ssh/wactorz_deploy
+DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
+```
+
+Credentials are read from here and never from chat — `/deploy` takes a node name
+and nothing else. Host keys are verified on every connection, learned on first
+contact unless `DEPLOY_STRICT_HOST_KEYS=1`. Full details in
+[Remote nodes](remote-nodes.md).
 
 ---
 

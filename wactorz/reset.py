@@ -21,15 +21,17 @@ import os
 import sys
 from pathlib import Path
 
+from wactorz.core.paths import resolve_state_dir
+
 logger = logging.getLogger(__name__)
 
 _CHAT_KV_KEYS = ("conversation_history", "history_summary")
 _METRIC_KV_KEYS = ("_final_cost", "_messages_processed")
 
 
-# Honour WACTORZ_STATE_DIR so a wipe targets the same durable location the app
-# writes to (the HA addon pins it to /data/state). Falls back to ./state.
-_DEFAULT_STATE = os.environ.get("WACTORZ_STATE_DIR", "./state")
+# Resolved, not ensured: a wipe must target the same durable location the app
+# writes to without creating it as an import side effect.
+_DEFAULT_STATE = resolve_state_dir()
 _DEFAULT_DB = os.path.join(_DEFAULT_STATE, "wactorz.db")
 
 
@@ -50,16 +52,18 @@ def _pickle_store(state_dir: str | None = None):
 
 def reset_chat(agent_name: str | None = None, db_path: str | None = None) -> None:
     """Clear chat_log and conversation kv entries (optionally for one agent)."""
-    db = _db(db_path)
-    rows = db.clear_chat_log(agent_name)
-    logger.info(
-        "[reset] chat_log: deleted %d rows%s", rows, f" for {agent_name!r}" if agent_name else ""
-    )
+    with _db(db_path) as db:
+        rows = db.clear_chat_log(agent_name)
+        logger.info(
+            "[reset] chat_log: deleted %d rows%s",
+            rows,
+            f" for {agent_name!r}" if agent_name else "",
+        )
 
-    agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
-    for agent in agents:
-        for key in _CHAT_KV_KEYS:
-            db.kv_delete(agent, key)
+        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        for agent in agents:
+            for key in _CHAT_KV_KEYS:
+                db.kv_delete(agent, key)
     logger.info(
         "[reset] conversation kv cleared%s",
         f" for {agent_name!r}" if agent_name else " (all agents)",
@@ -75,17 +79,18 @@ def reset_agent_state(agent_name: str, state_dir: str | None = None) -> None:
 
 def reset_metrics(agent_name: str | None = None, db_path: str | None = None) -> None:
     """Clear cost and message-count kv entries (optionally for one agent)."""
-    db = _db(db_path)
-    agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
-    for agent in agents:
-        for key in _METRIC_KV_KEYS:
-            db.kv_delete(agent, key)
-    # The monitor's durable lifetime cost ledger (keyed by actor_id under the
-    # _system agent) is monotonic and outlives individual agents, so a full
-    # metrics reset must clear it too or the headline total never zeroes. A
-    # single-agent reset can't map name->actor_id here, so it's left intact.
-    if not agent_name:
-        db.kv_delete("_system", "_lifetime_cost_ledger")
+    with _db(db_path) as db:
+        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        for agent in agents:
+            for key in _METRIC_KV_KEYS:
+                db.kv_delete(agent, key)
+        # The monitor's durable lifetime cost ledger (keyed by actor_id under
+        # the _system agent) is monotonic and outlives individual agents, so a
+        # full metrics reset must clear it too or the headline total never
+        # zeroes. A single-agent reset can't map name->actor_id here, so it's
+        # left intact.
+        if not agent_name:
+            db.kv_delete("_system", "_lifetime_cost_ledger")
     logger.info(
         "[reset] metrics kv cleared%s", f" for {agent_name!r}" if agent_name else " (all agents)"
     )
@@ -107,27 +112,31 @@ def reset_spawns(agent_name: str | None = None, db_path: str | None = None) -> N
     "deleted" agent on the next restart. ``agent_name`` here is the *spawned*
     agent's name; the registry is keyed by that name inside the owner's entry.
     """
-    db = _db(db_path)
-    rows = db.clear_spawn_registry(agent_name)
-    logger.info(
-        "[reset] spawn_registry table: deleted %d rows%s",
-        rows,
-        f" for {agent_name!r}" if agent_name else "",
-    )
+    with _db(db_path) as db:
+        rows = db.clear_spawn_registry(agent_name)
+        logger.info(
+            "[reset] spawn_registry table: deleted %d rows%s",
+            rows,
+            f" for {agent_name!r}" if agent_name else "",
+        )
 
-    cleared = 0
-    for owner in _all_kv_agents(db):
-        reg = db.kv_get(owner, _SPAWN_REGISTRY_KV_KEY, None)
-        if not isinstance(reg, dict):
-            continue
-        if agent_name:
-            if agent_name in reg:
-                reg.pop(agent_name, None)
-                db.kv_set(owner, _SPAWN_REGISTRY_KV_KEY, reg)
-                cleared += 1
-        else:
-            db.kv_delete(owner, _SPAWN_REGISTRY_KV_KEY)
-            cleared += 1
+        cleared = 0
+        # One transaction: each owner's entry is read, edited and written back,
+        # and an agent persisting its own registry between the read and the
+        # write would otherwise have that write clobbered — or clobber this one.
+        with db.transaction():
+            for owner in _all_kv_agents(db):
+                reg = db.kv_get(owner, _SPAWN_REGISTRY_KV_KEY, None)
+                if not isinstance(reg, dict):
+                    continue
+                if agent_name:
+                    if agent_name in reg:
+                        reg.pop(agent_name, None)
+                        db.kv_set(owner, _SPAWN_REGISTRY_KV_KEY, reg)
+                        cleared += 1
+                else:
+                    db.kv_delete(owner, _SPAWN_REGISTRY_KV_KEY)
+                    cleared += 1
     logger.info(
         "[reset] kv spawn registry cleared for %d owner(s)%s",
         cleared,
@@ -161,8 +170,10 @@ def reset_logs(log_dir: str | None = None) -> None:
                     "[reset] could not truncate handler %s: %s", handler.baseFilename, exc
                 )
 
-    # Also handle files by path (supports offline use)
-    base = Path(log_dir or ".")
+    # Also handle files by path (supports offline use). Defaults to the resolved
+    # state directory, which is where log_setup writes the log — a cwd default
+    # would truncate nothing whenever the wipe runs from a different directory.
+    base = Path(log_dir or _DEFAULT_STATE)
     for name in ("wactorz.log", "monitor.log"):
         p = (base / name).resolve()
         if p.exists() and str(p) not in truncated:
@@ -171,6 +182,18 @@ def reset_logs(log_dir: str | None = None) -> None:
                 logger.info("[reset] truncated log file: %s", p)
             except Exception as exc:
                 logger.warning("[reset] could not truncate %s: %s", p, exc)
+
+        # Rotated backups (wactorz.log.1, .2, …). Deleted rather than truncated:
+        # nothing holds them open, and an empty backup is only clutter. Without
+        # this a wipe leaves every earlier generation of the log in place, which
+        # is the opposite of what "reset" promises — redaction covers known
+        # secret shapes, so the ones it misses are exactly what stays behind.
+        for backup in sorted(base.glob(f"{name}.*")):
+            try:
+                backup.unlink()
+                logger.info("[reset] removed rotated log: %s", backup)
+            except Exception as exc:
+                logger.warning("[reset] could not remove %s: %s", backup, exc)
 
     logger.info("[reset] logs cleared")
 

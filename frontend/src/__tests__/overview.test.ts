@@ -168,3 +168,24 @@ describe("OverviewView.renderNodes", () => {
         expect(list.querySelector(".af-node-meta")!.textContent).toContain(payload);
     });
 });
+
+/**
+ * The overview renders into elements that only exist once it is mounted. Live
+ * updates keep arriving while another view is open, so every painter has to be
+ * a no-op rather than throw when its target is not in the DOM.
+ */
+describe("OverviewView before it is mounted", () => {
+    it("renderStats does nothing without the stats grid", () => {
+        const host = makeHost();
+        const view = new OverviewView(host); // built, never mounted
+
+        expect(() => view.renderStats()).not.toThrow();
+        expect(host.root.querySelector("#af-stats-grid")).toBeNull();
+    });
+
+    it("renderNodes does nothing without a list or a container", () => {
+        const view = new OverviewView(makeHost());
+
+        expect(() => view.renderNodes()).not.toThrow();
+    });
+});

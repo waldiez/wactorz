@@ -1,0 +1,187 @@
+"""Cancelling a task you own must not absorb a cancellation aimed at you.
+
+Three shutdown helpers cancel a task they started and then wait for it. Catching
+``CancelledError`` from that wait is right for the task's *own* cancellation and
+wrong for the caller's — the two are indistinguishable at the ``except``. When
+``Actor.stop`` got this wrong, the supervisor's watch loop consumed its own
+cancellation, resumed its poll loop, and left ``Supervisor.stop()`` waiting on a
+task that could never finish.
+
+``asyncio.gather(task, return_exceptions=True)`` draws the distinction: the
+inner task's ``CancelledError`` comes back as a value, while one aimed at the
+awaiting task still propagates.
+
+**What is not tested here, and why.** That the *caller's* cancellation now
+survives is the point of the change, and it has no test: it needs the caller to
+be cancelled while blocked on the inner task, and the inner task finishes
+cancelling in the same loop turn, so the window cannot be hit deterministically.
+An attempt at one passed against the old swallowing code as well, which is worse
+than no test. What is pinned below is the surrounding behaviour — the task is
+stopped, the reference cleared, and calling twice is harmless — plus the asyncio
+property the change relies on.
+"""
+
+import asyncio
+import logging
+from pathlib import Path
+
+import pytest
+
+from wactorz.core.mqtt_publisher import MQTTPublisher
+from wactorz.core.registry import ActorRegistry, Supervisor
+from wactorz.web import ws
+
+
+class _SilentSocket:
+    """A socket that accepts everything, so the writer never retires itself."""
+
+    async def send_str(self, _payload: str) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+class TestChannelClose:
+    async def test_the_writer_is_stopped(self) -> None:
+        channel = ws.Channel(_SilentSocket())  # type: ignore[arg-type]
+
+        await channel.close()
+
+        assert channel._writer.done()
+
+    async def test_closing_twice_is_harmless(self) -> None:
+        channel = ws.Channel(_SilentSocket())  # type: ignore[arg-type]
+
+        await channel.close()
+        await channel.close()
+
+
+class TestPublisherDisconnect:
+    async def test_the_drain_loop_is_stopped(self, tmp_path: Path) -> None:
+        pub = MQTTPublisher(db_path=str(tmp_path / "outbox.db"))
+        pub._task = asyncio.create_task(asyncio.Event().wait())
+
+        await pub.disconnect()
+
+        assert pub._task.done()
+
+    async def test_disconnecting_without_a_task_is_harmless(self, tmp_path: Path) -> None:
+        await MQTTPublisher(db_path=str(tmp_path / "outbox.db")).disconnect()
+
+
+class TestSupervisorStop:
+    @staticmethod
+    def _supervisor() -> Supervisor:
+        return Supervisor(ActorRegistry(), lambda _actor: None, poll_interval=0.01)
+
+    async def test_the_watch_task_is_stopped_and_forgotten(self) -> None:
+        supervisor = self._supervisor()
+        await supervisor.start()
+        watch = supervisor._watch_task
+
+        await supervisor.stop()
+
+        assert watch is not None and watch.done()
+        # Cleared as well as stopped, so a later start() cannot find a dead one.
+        assert supervisor._watch_task is None
+
+    async def test_stopping_without_starting_is_harmless(self) -> None:
+        await self._supervisor().stop()
+
+
+async def _dies_with(error: Exception) -> None:
+    """A loop that crashes rather than being cancelled."""
+    raise error
+
+
+class TestACrashedLoopIsReported:
+    """`gather` retrieves the exception, so nothing else will report it.
+
+    A bare `await task` re-raised a real error into the caller, and anything not
+    retrieved got asyncio's "never retrieved" warning. `return_exceptions=True`
+    ends both, so each site has to say something itself or the crash disappears
+    at exactly the moment someone is asking why the thing stopped working.
+    """
+
+    async def test_the_channel_writer_crash_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        channel = ws.Channel(_SilentSocket())  # type: ignore[arg-type]
+        channel._writer.cancel()
+        await asyncio.gather(channel._writer, return_exceptions=True)
+        channel._writer = asyncio.create_task(_dies_with(RuntimeError("writer blew up")))
+        await asyncio.sleep(0)
+
+        with caplog.at_level(logging.WARNING, logger="wactorz.web.ws"):
+            await channel.close()
+
+        assert "writer blew up" in caplog.text
+
+    async def test_the_publisher_drain_crash_is_logged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pub = MQTTPublisher(db_path=str(tmp_path / "outbox.db"))
+        pub._task = asyncio.create_task(_dies_with(RuntimeError("drain blew up")))
+        await asyncio.sleep(0)
+
+        with caplog.at_level(logging.WARNING, logger="wactorz.core.mqtt_publisher"):
+            await pub.disconnect()
+
+        assert "drain blew up" in caplog.text
+
+    async def test_the_watch_loop_crash_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
+        supervisor = Supervisor(ActorRegistry(), lambda _actor: None, poll_interval=0.01)
+        supervisor._watch_task = asyncio.create_task(_dies_with(RuntimeError("watch blew up")))
+        await asyncio.sleep(0)
+
+        with caplog.at_level(logging.ERROR, logger="wactorz.core.registry"):
+            await supervisor.stop()
+
+        assert "watch blew up" in caplog.text
+
+    async def test_an_ordinary_cancellation_is_not_reported_as_a_crash(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        pub = MQTTPublisher(db_path=str(tmp_path / "outbox.db"))
+        pub._task = asyncio.create_task(asyncio.Event().wait())
+
+        with caplog.at_level(logging.WARNING, logger="wactorz.core.mqtt_publisher"):
+            await pub.disconnect()
+
+        # Every shutdown cancels this task. Reporting that as an error would
+        # put a warning in the log on every clean exit.
+        assert caplog.text == ""
+
+
+class TestTheDistinctionItself:
+    """The asyncio property the three sites rely on.
+
+    This exercises the standard library, not this codebase — it is here so the
+    reasoning behind ``return_exceptions=True`` is checkable rather than folklore.
+    """
+
+    async def test_gather_returns_the_inner_cancellation_as_a_value(self) -> None:
+        inner = asyncio.create_task(asyncio.Event().wait())
+        await asyncio.sleep(0)
+        inner.cancel()
+
+        (outcome,) = await asyncio.gather(inner, return_exceptions=True)
+
+        assert isinstance(outcome, asyncio.CancelledError)
+
+    async def test_gather_still_propagates_the_callers_cancellation(self) -> None:
+        inner = asyncio.create_task(asyncio.Event().wait())
+        await asyncio.sleep(0)
+
+        async def _waits() -> None:
+            inner.cancel()
+            await asyncio.gather(inner, return_exceptions=True)
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(_waits())
+        await asyncio.sleep(0.01)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task

@@ -3,16 +3,65 @@
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
+# ── Windows shell setup ──────────────────────────────────────────────────────
+# Recipes below use POSIX shell syntax (grep/awk/mkdir -p/rm -rf/source/trap/
+# &&/||/subshells). GNU Make only picks a POSIX shell automatically when
+# sh.exe is already on PATH (true inside Git Bash, false from a plain
+# PowerShell or cmd prompt) — otherwise it silently falls back to cmd.exe and
+# every recipe below breaks. Point SHELL at Git for Windows' bash.exe
+# explicitly so `make` behaves the same from any Windows shell. The `*` in
+# each pattern below matches the literal space in "Program Files" — it's a
+# workaround for $(wildcard) treating spaces as pattern separators, not a
+# real glob. Skip the WSL bash.exe shim in System32: it runs inside a WSL
+# distro, not against this checkout.
+ifeq ($(OS),Windows_NT)
+  # $(firstword) splits on whitespace, which mangles a path containing a
+  # literal space (e.g. "Program Files") — so candidates are assigned as
+  # plain text once $(wildcard) confirms they exist, never extracted from
+  # a wildcard/firstword result.
+  ifneq ($(wildcard C:/Program*Files/Git/bin/bash.exe),)
+    GIT_BASH := C:/Program Files/Git/bin/bash.exe
+  else ifneq ($(wildcard C:/Program*Files*(x86)/Git/bin/bash.exe),)
+    GIT_BASH := C:/Program Files (x86)/Git/bin/bash.exe
+  else
+    WHERE_BASH := $(filter-out %/System32/bash.exe,$(subst \,/,$(shell where bash 2>NUL)))
+    ifneq ($(WHERE_BASH),)
+      GIT_BASH := $(firstword $(WHERE_BASH))
+    endif
+  endif
+  ifneq ($(GIT_BASH),)
+    SHELL := $(GIT_BASH)
+    .SHELLFLAGS := -c
+    # For recipe lines with no shell metacharacters, Make skips SHELL
+    # entirely and launches the command directly via CreateProcess against
+    # the native Windows PATH — which coreutils like rm/mkdir/grep/awk never
+    # sit on. Prepend Git's bin dirs there too so both paths find them.
+    GIT_ROOT := $(patsubst %/bin/bash.exe,%,$(GIT_BASH))
+    export PATH := $(GIT_ROOT)/usr/bin;$(GIT_ROOT)/bin;$(PATH)
+  endif
+endif
+
+# ── Python / virtualenv detection ────────────────────────────────────────────
+# Prefer a local .venv over the system interpreter. Windows venvs put the
+# interpreter under Scripts/, POSIX ones under bin/; Windows also has no
+# python3.exe by default, so fall back to plain `python` there.
+ifeq ($(OS),Windows_NT)
+  VENV_PYTHON   := .venv/Scripts/python.exe
+  SYSTEM_PYTHON := python
+else
+  VENV_PYTHON   := .venv/bin/python
+  SYSTEM_PYTHON := python3
+endif
+PYTHON := $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),$(SYSTEM_PYTHON))
+
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
 FRONTEND_DIR := frontend
 PKG_MGR      := $(shell command -v bun >/dev/null 2>&1 && echo bun || (command -v pnpm >/dev/null 2>&1 && echo pnpm || echo npm))
-PYTHON       := python3
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' | sort
-	@echo $(PKG_MGR)
 
 # ── Runtime ─────────────────────────────────────────────────────────────────
 
@@ -27,7 +76,7 @@ dev-backend: ## Start the backend in dev mode (Python REST on :8080)
 
 # ── Development ─────────────────────────────────────────────────────────────
 
-dev: ## Start the MQTT broker only (mosquitto on 1883/9001)
+dev: ## Start the MQTT broker only (mosquitto on 1883)
 	$(COMPOSE_DEV) up
 
 dev-down: ## Stop the dev compose stack (all profiles)
@@ -141,8 +190,11 @@ precommit-run: ## Run all configured pre-commit hooks across the repo
 
 test: test-py test-frontend ## Run all tests (Python + frontend)
 
-test-py: ## Run Python tests (pytest)
+test-py: ## Run Python tests (pytest) + the remote runner's own self-test
 	$(PYTHON) -m pytest tests
+	@# remote_runner.py ships to nodes without pytest or the wactorz package, so
+	@# it carries its own tests. Nothing ran them and they had rotted silently.
+	$(PYTHON) wactorz/remote_runner.py --test
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test

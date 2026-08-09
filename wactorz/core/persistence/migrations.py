@@ -1,4 +1,4 @@
-"""wactorz.core.migrations — Schema & State Migration Framework
+"""wactorz.core.persistence.migrations — Schema & State Migration Framework
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Handles version upgrades when users update wactorz (e.g. 0.3 → 0.4).
 
@@ -14,7 +14,7 @@ ADDING A NEW MIGRATION
 ──────────────────────
 1. Increment FRAMEWORK_VERSION at the top of this file
 2. Add a function: def migrate_sql_N(conn): ...
-   and/or:         def migrate_state_N(db, redis, pickle_store): ...
+   and/or:         def migrate_state_N(db, pickle_store): ...
 3. Register it in _SQL_MIGRATIONS and/or _STATE_MIGRATIONS dicts
 4. That's it — run_migrations() picks it up automatically
 
@@ -35,6 +35,7 @@ import pickle
 import sqlite3
 import time
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +98,12 @@ _SQL_MIGRATIONS = {
 # ══════════════════════════════════════════════════════════════════════════════
 # 2. PERSISTENT STATE MIGRATIONS
 # ══════════════════════════════════════════════════════════════════════════════
-# Upgrade stored data structures (in SQLite kv_store, Redis, or pickle).
-# Each function receives (db, redis, pickle_store) and handles its own
+# Upgrade stored data structures (in SQLite kv_store or pickle).
+# Each function receives (db, pickle_store) and handles its own
 # error recovery per-agent.
 
 
-def migrate_state_2(db, redis, pickle_store):
+def migrate_state_2(db, pickle_store):
     """v1 → v2: Upgrade persisted state structures.
 
     - EntityBaseline: add missing fields (is_binary, transition_freq, ready)
@@ -188,8 +189,11 @@ def _upgrade_baselines(db, pickle_store):
                 with open(pkl_path, "wb") as f:
                     pickle.dump(state, f)
                 logger.info(f"[Migration] Upgraded pickle baselines for '{agent_dir.name}'")
-        except Exception:
-            pass
+        except Exception as exc:
+            # One agent's unreadable pickle must not abort the whole migration —
+            # but it is logged rather than dropped. A silent pass here is how a
+            # migration appears to succeed while having done nothing.
+            logger.warning(f"[Migration] Skipped pickle baselines for '{agent_dir.name}': {exc}")
 
 
 def _upgrade_conversation_history(db, pickle_store):
@@ -215,7 +219,7 @@ def _upgrade_conversation_history(db, pickle_store):
                     if not isinstance(content, str):
                         content = str(content)
                     if content.strip():
-                        entry = {"role": role, "content": content}
+                        entry: dict[str, Any] = {"role": role, "content": content}
                         if "ts" in m and isinstance(m["ts"], (int, float)):
                             entry["ts"] = m["ts"]
                         clean.append(entry)
@@ -493,7 +497,7 @@ def get_current_version(db) -> int:
     return 0  # fresh database
 
 
-def run_migrations(db, redis=None, pickle_store=None) -> dict:
+def run_migrations(db, pickle_store=None) -> dict:
     """Run all pending migrations from current version to FRAMEWORK_VERSION.
 
     Called automatically by init_persistence(). Safe to call multiple times.
@@ -571,7 +575,7 @@ def run_migrations(db, redis=None, pickle_store=None) -> dict:
 
         t0 = time.time()
         try:
-            migrate_fn(db, redis, pickle_store)
+            migrate_fn(db, pickle_store)
             result["state_migrations"] += 1
             logger.info(f"[Migration] State v{version} applied ({(time.time() - t0) * 1000:.0f}ms)")
 

@@ -1,5 +1,5 @@
 name: Wactorz
-version: "0.5.2"
+version: "0.5.3"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz
@@ -12,8 +12,12 @@ startup: application
 boot: auto
 init: false
 homeassistant_api: true
+# hassio_api is needed to read this add-on's own options; the default role is
+# enough for that. Nothing here calls the Supervisor's own endpoints (/addons,
+# /backups, /host, /store), and `admin` would additionally expose every other
+# add-on's configuration and secrets.
 hassio_api: true
-hassio_role: admin
+hassio_role: default
 ingress: true
 ingress_port: 8888
 ingress_stream: true
@@ -22,13 +26,17 @@ panel_title: Wactorz
 webui: http://[HOST]:[PORT:8888]
 
 # ── Ports ──────────────────────────────────────────────────────────────────────
+# Nothing is published to the host by default: the dashboard is reached through
+# the Wactorz panel (ingress), which goes through Home Assistant's own login.
+# Assign a host port below only if you need to reach these from outside Home
+# Assistant, and note that doing so puts them on your network directly.
 ports:
-  8000/tcp: 8000
-  8888/tcp: 8888
+  8000/tcp: null
+  8888/tcp: null
   1883/tcp: null
 ports_description:
-  8000/tcp: Wactorz REST + WebSocket API
-  8888/tcp: Wactorz Monitor UI
+  8000/tcp: Wactorz REST + WebSocket API — not published by default
+  8888/tcp: Wactorz Monitor UI — not published by default; use the Wactorz panel
   1883/tcp: MQTT TCP broker (only active when mosquitto_embedded is true)
 
 # ── Persistent state ───────────────────────────────────────────────────────────
@@ -58,12 +66,22 @@ options:
   # MQTT broker — set to the Mosquitto addon host if using the official addon
   mqtt_host: core-mosquitto
   mqtt_port: 1883
-  mqtt_ws_port: 8083
   # Broker credentials (optional) — leave blank for an anonymous broker.
   # The official Mosquitto addon disables anonymous access, so set these to a
   # Home Assistant user/password (or a broker-specific login) when not embedded.
   mqtt_username: ""
   mqtt_password: ""
+
+  # Remote edge nodes reachable over SSH. `/deploy <name>` bootstraps the node
+  # named here; the credentials never travel through chat. Prefer `key` — put
+  # the private key under /config or /share (both mapped into the addon) and
+  # give the path as seen from inside the addon, e.g. /config/ssh/rpi_kitchen.
+  #
+  # A remote node connects back to the MQTT broker over the network, so it needs
+  # one it can reach and connect to anonymously. See "Remote edge nodes" in the
+  # documentation before adding entries here — mosquitto_embedded cannot serve
+  # remote nodes, and a broker requiring credentials is not yet supported.
+  deploy_targets: []
 
   # Home Assistant connection (used by HA agents inside Wactorz)
   # auto (default): supervisor proxy when ha_token is blank, custom URL otherwise.
@@ -121,7 +139,6 @@ schema:
   openai_url: str?
   mqtt_host: str
   mqtt_port: port
-  mqtt_ws_port: port
   mqtt_username: str?
   mqtt_password: str?
   ha_connection: list(auto|supervisor|custom)?
@@ -134,6 +151,15 @@ schema:
   telegram_allowed_user_ids: str?
   telegram_allowed_user_id: int
   social_rate_limit_per_min: int
+  deploy_targets:
+    - name: str
+      host: str?
+      user: str?
+      key: str?
+      password: password?
+      broker: str?
+      broker_port: port?
+      ssh_port: port?
   #otel_endpoint: str?
   #otel_service_name: str?
   #influx_url: str?

@@ -215,4 +215,55 @@ describe("MetricsController", () => {
             expect(toast.show).not.toHaveBeenCalled();
         });
     });
+
+    it("skips the stat re-render when another view is open", () => {
+        const host = makeHost("cards");
+        const m = new MetricsController(host);
+
+        m.setTotalMessages(42);
+        m.setTotalCostUsd(1.25);
+
+        // The value is still stored — switching to the overview must show it —
+        // but repainting a view nobody is looking at is wasted work.
+        expect(m.totalMessages).toBe(42);
+        expect(host.renderStats).not.toHaveBeenCalled();
+    });
+
+    it("stores host stats even when the host bar is not mounted", () => {
+        // The bar only exists on the overview; a heartbeat arriving on another
+        // view must not be dropped, or the bar is empty until the next one.
+        const host = makeHost("cards", document.createElement("div"));
+        const m = new MetricsController(host);
+
+        expect(() => m.setHostStats(50, 1024, 2048)).not.toThrow();
+    });
+
+    it("keeps the last known memory total when a heartbeat omits it", () => {
+        const host = makeHost("overview");
+        const m = new MetricsController(host);
+
+        m.setHostStats(10, 512, 2048);
+        m.setHostStats(20, 1024); // no total this time
+
+        // Without the guard the bar would divide by an undefined total and
+        // render an empty or NaN width.
+        const memFill = host.root.querySelector<HTMLElement>(".af-host-bar-fill-mem")!;
+        expect(memFill.style.width).toBe("50.0%");
+    });
+
+    it("re-renders the settings view after saving a limit from it", async () => {
+        const host = makeHost("settings");
+        const m = new MetricsController(host);
+        vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+
+        const view = m.buildSettingsView();
+        document.body.appendChild(view);
+        const save = [...view.querySelectorAll("button")].find(b => b.textContent === "Save limit")!;
+        const limit = view.querySelector<HTMLInputElement>("input")!;
+        limit.value = "5";
+
+        save.click();
+
+        await vi.waitFor(() => expect(host.renderView).toHaveBeenCalled());
+    });
 });

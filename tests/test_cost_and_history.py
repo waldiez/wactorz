@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # ── Minimal stubs so heavy optional deps don't need to be installed ──────────
-# aiohttp is a hard dependency and monitor_server imports it fully at module
+# aiohttp is a hard dependency and the web app imports it fully at module
 # level (web, WSMsgType, …), so it must NOT be stubbed — handler responses are
 # real aiohttp Response objects, read via _payload() below.
 from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissingImports]
@@ -31,11 +31,11 @@ ensure_importable("openai")
 
 class FinalCostRoutingTest(unittest.TestCase):
     def test_final_cost_key_is_in_sqlite_keys(self):
-        from wactorz.core.persistence import _SQLITE_KEYS
+        from wactorz.core.persistence import SQLITE_KEYS
 
         self.assertIn(
             "_final_cost",
-            _SQLITE_KEYS,
+            SQLITE_KEYS,
             "_final_cost must route to SQLite so it survives restarts "
             "and is queryable for deleted-agent cost accounting",
         )
@@ -89,6 +89,34 @@ class LLMAgentCostRestoreTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(agent.total_input_tokens, 0)
         self.assertEqual(agent.total_cost_usd, 0.0)
+
+    async def test_a_second_on_start_does_not_double_the_totals(self):
+        """The start command restarts the same instance; on_start runs again."""
+        saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0042}
+        agent = self._make_agent(saved)
+        await agent.on_start()
+
+        await agent.on_start()  # as a stop/start cycle on the same object does
+
+        # Adding the persisted totals to a live instance charged the agent's
+        # lifetime spend twice, and again on every later restart — reaching both
+        # the dashboard headline and the durable ledger.
+        self.assertEqual(agent.total_input_tokens, 100)
+        self.assertEqual(agent.total_output_tokens, 50)
+        self.assertAlmostEqual(agent.total_cost_usd, 0.0042, places=6)
+
+    async def test_tokens_do_not_double_when_the_model_is_free(self):
+        """A local model leaves cost at zero while tokens still accumulate."""
+        saved = {"input_tokens": 100, "output_tokens": 50, "cost_usd": 0.0}
+        agent = self._make_agent(saved)
+        await agent.on_start()
+
+        await agent.on_start()
+
+        # Guarding on cost alone would miss this: cost stays 0.0, so the guard
+        # opens every time and the tokens double.
+        self.assertEqual(agent.total_input_tokens, 100)
+        self.assertEqual(agent.total_output_tokens, 50)
 
     async def test_cost_accumulates_on_top_of_restored_baseline(self):
         """After restoring from persistence, new exchanges add to the running total."""
@@ -145,7 +173,7 @@ class PersistCostTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Historical cost accounting in monitor_server
+# 4. Historical cost accounting in the web app
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -247,7 +275,7 @@ class HistoricalCostTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4b. Durable lifetime cost ledger in monitor_server
+# 4b. Durable lifetime cost ledger in the web app
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -611,7 +639,10 @@ def _fixed_datetime(y, mo, d):
 
 class GlobalCostAccumulationTest(unittest.TestCase):
     def setUp(self):
-        import wactorz.agents.llm_agent as L
+        # The cost functions live in `llm.cost` and resolve `get_db` and
+        # `datetime` there; stubbing them on `llm_agent` would bind a different
+        # name and silently miss.
+        import wactorz.agents.llm.cost as L
 
         self.L = L
         self.db = _SerializedKV()
@@ -624,14 +655,14 @@ class GlobalCostAccumulationTest(unittest.TestCase):
     def test_accumulates_without_a_limit(self):
         """Regression: period spend must accrue even when no cap is configured."""
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
-            self.L._accumulate_global_cost(0.50)
+            self.L.accumulate_global_cost(0.50)
             info = self.L.get_global_cost_info()
         self.assertAlmostEqual(info["spend_usd"], 0.50, places=6)
 
     def test_cap_set_mid_period_sees_prior_spend(self):
         """Spend before a cap exists is still counted, so the cap can't be silently overshot."""
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 7, 1)):
-            self.L._accumulate_global_cost(20.0)  # no cap yet
+            self.L.accumulate_global_cost(20.0)  # no cap yet
             self.L.set_cost_limit(5.0, "monthly")  # now add a $5 cap
             info = self.L.get_global_cost_info()
         self.assertAlmostEqual(info["spend_usd"], 20.0, places=6)
@@ -640,7 +671,7 @@ class GlobalCostAccumulationTest(unittest.TestCase):
     def test_day_rollover_starts_fresh(self):
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.L.set_cost_limit(10.0, "daily")
-            self.L._accumulate_global_cost(3.0)
+            self.L.accumulate_global_cost(3.0)
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 3.0, places=6)
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 4)):
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 0.0, places=6)
@@ -651,17 +682,17 @@ class GlobalCostAccumulationTest(unittest.TestCase):
     def test_reset_zeroes_current_period(self):
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
             self.L.set_cost_limit(10.0, "daily")
-            self.L._accumulate_global_cost(3.0)
+            self.L.accumulate_global_cost(3.0)
             self.L.reset_global_cost()
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 0.0, places=6)
 
     def test_alltime_counter_survives_period_rollover(self):
         """All-time spend keeps accruing across months while the monthly bucket resets."""
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
-            self.L._accumulate_global_cost(2.0)
+            self.L.accumulate_global_cost(2.0)
             self.assertAlmostEqual(self.L.get_global_alltime_cost(), 2.0, places=6)
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 7, 1)):
-            self.L._accumulate_global_cost(1.5)
+            self.L.accumulate_global_cost(1.5)
             # New month: "this period" resets, but all-time keeps both months.
             self.assertAlmostEqual(self.L.get_global_cost_info()["spend_usd"], 1.5, places=6)
             self.assertAlmostEqual(self.L.get_global_alltime_cost(), 3.5, places=6)
@@ -669,13 +700,13 @@ class GlobalCostAccumulationTest(unittest.TestCase):
     def test_alltime_counter_never_below_period_spend(self):
         """Invariant the dashboard relies on: all-time floor >= this-period spend."""
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
-            self.L._accumulate_global_cost(0.2157)
+            self.L.accumulate_global_cost(0.2157)
             info = self.L.get_global_cost_info()
         self.assertGreaterEqual(self.L.get_global_alltime_cost(), info["spend_usd"])
 
     def test_reset_zeroes_alltime_too(self):
         with patch.object(self.L, "datetime", _fixed_datetime(2026, 6, 3)):
-            self.L._accumulate_global_cost(3.0)
+            self.L.accumulate_global_cost(3.0)
             self.L.reset_global_cost()
             self.assertAlmostEqual(self.L.get_global_alltime_cost(), 0.0, places=6)
 
@@ -691,7 +722,7 @@ class GlobalCostAccumulationTest(unittest.TestCase):
         from wactorz.agents.planner_agent import PlannerAgent
 
         agent = PlannerAgent(llm_provider=None)
-        with patch("wactorz.agents.planner_agent._accumulate_global_cost") as accrue:
+        with patch("wactorz.agents.planner_agent.accumulate_global_cost") as accrue:
             agent._accrue_usage({"input_tokens": 2, "output_tokens": 3, "cost_usd": 0.0123})
             agent._accrue_usage({"input_tokens": 4, "output_tokens": 5, "cost_usd": 0.004})
 
@@ -709,7 +740,7 @@ class GlobalCostAccumulationTest(unittest.TestCase):
             task_id="task-12345678",
             reply_to_id="main",
         )
-        with patch("wactorz.agents.one_off_actuator_agent._accumulate_global_cost") as accrue:
+        with patch("wactorz.agents.one_off_actuator_agent.accumulate_global_cost") as accrue:
             agent._accumulate_usage({"input_tokens": 7, "output_tokens": 8, "cost_usd": 0.0395})
 
         self.assertAlmostEqual(agent.total_cost_usd, 0.0395, places=6)

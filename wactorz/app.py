@@ -8,40 +8,32 @@ import argparse
 import asyncio
 import logging
 import os
+import signal
 import sys
 from typing import cast
 
-import wactorz._bootstrap  # noqa: F401  side effects: import path, platform, root logging
+import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
+from wactorz.agents.lookup import find_main_actor
 from wactorz.config import CONFIG
+from wactorz.core.mqtt_publisher import MQTTPublisher
+from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
+from wactorz.monitoring.log_buffer import install as install_log_buffer
+from wactorz.monitoring.log_setup import setup_logging
 
 logger = logging.getLogger(__name__)
-
-
-def _state_dir() -> str:
-    """Resolve the persistent state directory.
-
-    Honours ``WACTORZ_STATE_DIR`` so deployments can pin an absolute,
-    durable location (the HA addon sets it to ``/data/state`` so chat /
-    pickle / SQLite state survives addon updates). Falls back to ``./state``
-    for local/dev runs. The directory is created if missing.
-    """
-    base = os.environ.get("WACTORZ_STATE_DIR", "./state")
-    os.makedirs(base, exist_ok=True)
-    return base
 
 
 async def _start_web_ui(
     port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None
 ) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
-    from wactorz.web import runtime, static_site
+    from wactorz.web import runtime
     from wactorz.web.app import main as run_server
 
     runtime.MQTT_BROKER = mqtt_broker
     runtime.MQTT_PORT = mqtt_port
     runtime.WS_PORT = port
-    runtime.MQTT_WS_PORT = int(os.getenv("MQTT_WS_PORT", "9001"))
 
     # Wire the registry in so chat is routed directly — no IOAgent needed
     if actor_registry is not None:
@@ -53,9 +45,30 @@ async def _start_web_ui(
         logging.getLogger(_name).setLevel(logging.WARNING)
 
     asyncio.create_task(run_server())
-    logger.info("Web UI →  http://localhost:%d", port)
+
+
+def _print_ready_banner(port: int) -> None:
+    """Print where to point a browser, once everything is up.
+
+    Last, not first: the web server binds before the agents start, so logging the
+    URL at bind time buried it under the whole supervision tree coming up. A
+    reader wants the address at the point the thing is actually usable.
+
+    ``print`` rather than ``logger``: this is the one line a person is meant to
+    act on, and when the login ceremony lands it gains a one-time link — which
+    must reach the terminal without also being written to the unrotated log file
+    or shipped onward by a metrics exporter.
+    """
+    from wactorz.web import static_site
+
+    lines = [f"Dashboard   http://localhost:{port}/"]
     if static_site.DOCS_SITE.is_dir():
-        logger.info("Docs   →  http://localhost:%d/docs/", port)
+        lines.append(f"Docs        http://localhost:{port}/docs/")
+    width = max(len(line) for line in lines) + 4
+    print("\n    ┌" + "─" * width + "┐")
+    for line in lines:
+        print(f"    │  {line.ljust(width - 4)}  │")
+    print("    └" + "─" * width + "┘\n", flush=True)
 
 
 async def build_system(args: argparse.Namespace):
@@ -70,7 +83,7 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.monitor_agent import MonitorActor
     from wactorz.core.actor import Actor, SupervisorStrategy
     from wactorz.core.registry import ActorSystem
-    from wactorz.llm_factory import create_provider, provider_for
+    from wactorz.llm_factory import create_provider, parse_overrides, provider_for
 
     llm = args.llm or CONFIG.llm_provider
     model_flag = {
@@ -90,16 +103,25 @@ async def build_system(args: argparse.Namespace):
         temperature = (
             "provider default" if CONFIG.llm_temperature is None else CONFIG.llm_temperature
         )
+        # The parsed table rather than the raw string: what a site resolves to
+        # is the thing worth seeing, and an entry that was dropped as malformed
+        # or unknown is visible by its absence.
+        overrides = parse_overrides(CONFIG.llm_overrides)
         logger.info(
             "LLM: %s/%s | temperature=%s%s",
             llm,
             getattr(provider, "model", None) or getattr(provider, "model_name", "?"),
             temperature,
-            f" | overrides: {CONFIG.llm_overrides}" if CONFIG.llm_overrides else "",
+            (
+                " | overrides: "
+                + ", ".join(f"{site}={spec}" for site, spec in sorted(overrides.items()))
+                if overrides
+                else ""
+            ),
         )
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
-    _sd = _state_dir()
+    _sd = ensure_state_dir()
 
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
@@ -108,9 +130,7 @@ async def build_system(args: argparse.Namespace):
         state_dir=_sd,
     )
     # MQTT client must exist before factories run so injected actors can publish
-    system._mqtt_client = await __import__(
-        "wactorz.core.registry", fromlist=["_MQTTPublisher"]
-    )._MQTTPublisher.create(
+    system._mqtt_client = await MQTTPublisher.create(
         args.mqtt_broker or CONFIG.mqtt_host,
         args.mqtt_port or CONFIG.mqtt_port,
         db_path=os.path.join(_sd, "mqtt_outbox.db"),
@@ -128,27 +148,20 @@ async def build_system(args: argparse.Namespace):
     )
     logger.info("TopicBus initialised")
 
-    # ── Initialise persistence layer (SQLite + Redis + Pickle) ──────────────
-    # Replaces pickle-only storage. Redis is optional — falls back to
-    # in-memory dict if not running. Run migration once to move existing
-    # .pkl data to the new stores.
+    # ── Initialise persistence layer (SQLite + Pickle) ──────────────────────
     from wactorz.core.persistence import PersistenceAPI, init_persistence
 
-    _db, _redis, _pickle_store = init_persistence(
+    _db, _pickle_store = init_persistence(
         db_path=os.path.join(_sd, "wactorz.db"),
-        redis_url=os.environ.get("REDIS_URL", "redis://localhost:6379"),
         state_dir=_sd,
         run_migration=True,
     )
-    logger.info(
-        "Persistence layer initialised (SQLite + %s + Pickle)",
-        "Redis" if not _redis._using_fallback else "in-memory fallback",
-    )
+    logger.info("Persistence layer initialised (SQLite + Pickle)")
 
     # ── Factory helpers (called fresh on each (re)start by the Supervisor) ────
     def _wire_persistence(actor: Actor) -> Actor:
         """Attach the unified persistence API to an actor."""
-        actor._persistence_api = PersistenceAPI(_db, _redis, _pickle_store, actor.name)
+        actor._persistence_api = PersistenceAPI(_db, _pickle_store, actor.name)
         return actor
 
     def make_provider() -> LLMProvider | None:
@@ -159,54 +172,54 @@ async def build_system(args: argparse.Namespace):
             MainActor(
                 llm_provider=provider_for("main", make_provider()),
                 name="main",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
         return cast(MainActor, main_actor)
 
-    def make_monitor():
+    def make_monitor() -> Actor:
         return _wire_persistence(
             MonitorActor(
                 check_interval=15.0,
                 heartbeat_timeout=60.0,
                 auto_restart=False,
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_installer():
-        return _wire_persistence(InstallerAgent(name="installer", persistence_dir="./state"))
+    def make_installer() -> Actor:
+        return _wire_persistence(InstallerAgent(name="installer", persistence_dir=_sd))
 
-    def make_ha_agent():
+    def make_ha_agent() -> Actor:
         return _wire_persistence(
             HomeAssistantAgent(
                 llm_provider=provider_for("ha", make_provider()),
                 name="home-assistant-agent",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_ha_map_agent():
+    def make_ha_map_agent() -> Actor:
         return _wire_persistence(
             HomeAssistantMapAgent(
                 name="home-assistant-map-agent",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_ha_state_bridge():
+    def make_ha_state_bridge() -> Actor:
         return _wire_persistence(
             HomeAssistantStateBridgeAgent(
                 name="home-assistant-state-bridge",
-                persistence_dir="./state",
+                persistence_dir=_sd,
             )
         )
 
-    def make_io_agent():
-        return _wire_persistence(IOAgent(name="io-agent", persistence_dir="./state"))
+    def make_io_agent() -> Actor:
+        return _wire_persistence(IOAgent(name="io-agent", persistence_dir=_sd))
 
-    def make_catalog():
-        return _wire_persistence(CatalogAgent(name="catalog", persistence_dir="./state"))
+    def make_catalog() -> Actor:
+        return _wire_persistence(CatalogAgent(name="catalog", persistence_dir=_sd))
 
     (
         system.supervisor.supervise(
@@ -285,26 +298,73 @@ async def build_system(args: argparse.Namespace):
 
     await system.supervisor.start()
 
-    main_actor = system.registry.find_by_name("main")
+    main_actor = find_main_actor(system.registry)
     if not main_actor:
         logger.error("Failed to find the main actor.")
         sys.exit(1)
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, cast(MainActor, main_actor), _db
+    return system, main_actor, _db
+
+
+def _install_signal_handlers() -> None:
+    """Make SIGTERM shut down the way Ctrl-C already does.
+
+    Cancelling this task unwinds into the ``finally`` below, which stops the
+    supervisor, the actors and the broker connection. Without a handler SIGTERM
+    does nothing at all when the process is PID 1 — the kernel applies no default
+    action there — so ``docker stop`` and ``systemctl stop`` waited out their
+    timeout and killed the process mid-write instead.
+
+    ``add_signal_handler`` is POSIX-only; Windows gets ``signal.signal``, which
+    runs the callback in the main thread between bytecodes rather than on the
+    loop, hence ``call_soon_threadsafe``.
+    """
+    task = asyncio.current_task()
+    if task is None:  # pragma: no cover - app() is always run as a task
+        return
+    loop = asyncio.get_running_loop()
+    stopping = False
+
+    def _request_stop(*_: object) -> None:
+        nonlocal stopping
+        if stopping:
+            logger.warning("Shutdown already in progress — waiting for actors to stop.")
+            return
+        stopping = True
+        logger.info("Shutdown signal received — stopping actors.")
+        loop.call_soon_threadsafe(task.cancel)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _request_stop)
+        except (NotImplementedError, AttributeError):
+            signal.signal(sig, _request_stop)
 
 
 async def app(args: argparse.Namespace):
+    # First, so both cover startup as well as steady state. setup_logging builds
+    # the handlers with redaction already attached, so no record reaches an
+    # unfiltered console or log file.
+    setup_logging()
+    install_log_buffer()
+
     if args.reload:
         start_reloader(logger)
 
+    _install_signal_handlers()
+
     system, main_actor, _db = await build_system(args)
 
+    from wactorz.core.persistence import close_persistence
     from wactorz.monitoring.influx import setup_influx, shutdown_influx
     from wactorz.monitoring.otel import setup_otel, shutdown_otel
 
     setup_otel(lambda: system.registry)
     setup_influx()
+
+    if not getattr(args, "no_monitor", False):
+        _print_ready_banner(args.monitor_port)
 
     # NOTE: the monitor web UI is now started inside build_system(), before the
     # supervisor, so it binds even if the broker stalls agent startup.
@@ -384,3 +444,7 @@ async def app(args: argparse.Namespace):
         shutdown_otel()
         shutdown_influx()
         await system.stop_all()
+        # Last: actors write state as they stop, so the connection has to outlive
+        # them. Closing checkpoints the WAL rather than leaving -wal/-shm behind
+        # for the next start to recover.
+        close_persistence()

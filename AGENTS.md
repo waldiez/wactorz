@@ -14,7 +14,6 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 - `wactorz/` — the Python package: `agents/`, `core/`, `interfaces/`, `web/` (the aiohttp
   server: `app` routes + `runtime` shared state + a module per concern — named `web` to avoid
   colliding with `monitoring/`), `ext/` (optional features), `cli.py`, `config.py`.
-  `monitor_server.py` is a thin back-compat shim.
 - `frontend/` — Vite + TypeScript dashboard. **Read `frontend/CONTRIBUTING.md` before touching it.**
 - `tests/` — the pytest suite.
 - `ha-addon/` — Home Assistant add-on packaging (bundles the built frontend).

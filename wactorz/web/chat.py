@@ -11,24 +11,22 @@ import logging
 import socket
 import time
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
 
-from ..agents.main_actor import MainActor
-from ..core.actor import Message, MessageType
+from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
+from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
+from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from . import runtime
 
 logger = logging.getLogger(__name__)
 
-# In-flight chat-generation tasks (direct_ws + REST paths) so POST /chat/stop can
-# cancel a turn mid-stream. The legacy MQTT path is handled separately by the
-# IOAgent via the io/chat/control topic.
+# In-flight chat-generation tasks (WebSocket + REST paths) so POST /chat/stop can
+# cancel a turn mid-stream.
 inflight_chat_tasks: set = set()
-
-MAIN_ACTOR_NAME = "main"
 
 
 def track_chat_task(task):
@@ -49,19 +47,6 @@ async def discard_reply(_text: str) -> None:
     function taking one argument — a bare lambda raises TypeError on the first
     chunk and silently abandons the stream after the tokens are paid for.
     """
-
-
-def chat_mode() -> str:
-    """Which chat path is active: ``direct_ws`` when a registry is wired, else ``mqtt``."""
-    return "direct_ws" if runtime.registry is not None else "mqtt"
-
-
-def find_main() -> MainActor | None:
-    """Return the main actor from the registry, or ``None`` in legacy MQTT mode."""
-    actor = runtime.registry.find_by_name(MAIN_ACTOR_NAME) if runtime.registry else None
-    if actor:
-        return cast(MainActor, actor)
-    return None
 
 
 def parse_mention(content: str) -> tuple[str, str]:
@@ -147,8 +132,8 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
     """
     if agent_name in beta_warned_agents:
         return None
-    main = find_main()
-    manifest = (getattr(main, "_agent_manifests", {}) or {}).get(agent_name) if main else None
+    main = find_main_actor(runtime.registry)
+    manifest = main._agent_manifests.get(agent_name) if main else None
     if not manifest or not manifest.get("experimental"):
         return None
     beta_warned_agents.add(agent_name)
@@ -163,72 +148,48 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
 # MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
 
 
-async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, reply_fn) -> None:
-    """Install and start a remote runner on ``host`` over SSH, streaming progress."""
+async def slash_deploy(node: str, reply_fn) -> None:
+    """Install and start a remote runner on the configured target for ``node``.
+
+    Everything about the target — host, user, SSH auth, broker — comes from the
+    environment (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). This used
+    to accept ``host``/``user``/``password`` as chat arguments and, when no host
+    was given, port-scan the local /24 for SSH. Both are gone: the scan turned a
+    chat message into a LAN sweep, and the password argument put a live
+    credential into the reply stream and the persisted conversation history.
+    """
+    target = deploy_target(node)
+    if target is None:
+        await reply_fn("[error] " + deploy_target_help(node))
+        return
+
+    host = target.host
     if not host:
-        await reply_fn(f"[discover] Searching for '{node}' on the network...")
-        discovered = None
-        for candidate in [f"{node}.local", "raspberrypi.local", f"{node.replace('-', '')}.local"]:
-            try:
-                ip = await asyncio.get_event_loop().run_in_executor(
-                    None, socket.gethostbyname, candidate
-                )
-                discovered = ip
-                await reply_fn(f"[discover] Found via mDNS: {candidate} → {ip}")
-                break
-            except socket.gaierror:
-                pass
-
-        if not discovered:
-            try:
-                local_ip = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: socket.gethostbyname(socket.gethostname())
-                )
-                subnet = ".".join(local_ip.split(".")[:3])
-            except Exception:
-                subnet = "192.168.1"
-            await reply_fn(f"[discover] mDNS not found. Scanning {subnet}.1-254 for SSH...")
-            found = await _scan_subnet_ssh(subnet)
-            if found:
-                hosts = "\n".join(f"  {ip}" for ip in found)
-                await reply_fn(
-                    f"[discover] Found {len(found)} host(s):\n{hosts}\n\n"
-                    f"Re-run with:\n  /deploy {node} <host> <user> <password> [broker]"
-                )
-            else:
-                await reply_fn(
-                    f"[discover] No SSH hosts found.\n"
-                    f"  /deploy {node} <host> <user> <password> [broker]"
-                )
-        else:
+        # No host configured — resolve <node>.local. A name lookup, not a sweep:
+        # it asks about one host and learns nothing about any other.
+        await reply_fn(f"[discover] No host configured for '{node}' — trying mDNS...")
+        host = await _resolve_mdns(node) or ""
+        if not host:
             await reply_fn(
-                f"[discover] Host: {discovered}\n"
-                f"Re-run with credentials:\n"
-                f"  /deploy {node} {discovered} <user> <password> [broker]"
+                f"[error] Could not resolve '{node}.local'.\n"
+                f"Set {deploy_env_prefix(node)}_HOST in your environment."
             )
-        return
+            return
+        await reply_fn(f"[discover] Found via mDNS: {node}.local → {host}")
 
-    if not user or not pw:
-        await reply_fn(
-            f"[deploy] Need SSH credentials:\n  /deploy {node} {host} <user> <password> [broker]"
-        )
-        return
-
-    main_actor = find_main()
-    if main_actor is None or not hasattr(main_actor, "delegate_to_installer"):
+    main_actor = find_main_actor(runtime.registry)
+    if main_actor is None:
         await reply_fn("[error] Installer agent not available.")
         return
 
-    broker = broker or "localhost"
-    await reply_fn(f"[deploy] Deploying to {user}@{host} as '{node}'... (20-60s)")
+    await reply_fn(f"[deploy] Deploying to {target.user}@{host} as '{node}'... (20-60s)")
     result = await main_actor.delegate_to_installer(
         {
             "action": "node_deploy",
             "host": host,
-            "user": user,
-            "password": pw,
-            "node_name": node,
-            "broker": broker,
+            "node_name": target.name,
+            "broker": target.broker or "localhost",
+            "port": target.broker_port,
         },
         timeout=120.0,
     )
@@ -239,25 +200,14 @@ async def slash_deploy(node: str, host: str, user: str, pw: str, broker: str, re
         await reply_fn(f"[FAIL] {result.get('error', result)}")
 
 
-async def _scan_subnet_ssh(subnet: str) -> list:
-    found = []
-    sem = asyncio.Semaphore(60)
-
-    async def probe(ip):
-        async with sem:
-            try:
-                _, w = await asyncio.wait_for(asyncio.open_connection(ip, 22), timeout=0.4)
-                w.close()
-                try:
-                    await w.wait_closed()
-                except Exception:
-                    pass
-                found.append(ip)
-            except Exception:
-                pass
-
-    await asyncio.gather(*[probe(f"{subnet}.{i}") for i in range(1, 255)])
-    return sorted(found, key=lambda x: int(x.split(".")[-1]))
+async def _resolve_mdns(node: str) -> str | None:
+    """Resolve ``<node>.local``, or None. Off the loop — a miss blocks for the
+    resolver's full timeout, which would freeze every actor in the process.
+    """
+    try:
+        return await asyncio.to_thread(socket.gethostbyname, f"{node}.local")
+    except OSError:
+        return None
 
 
 async def handle_slash(text: str, reply_fn) -> bool:
@@ -268,8 +218,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
     cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
-        main_actor = find_main()
-        if main_actor and hasattr(main_actor, "persist"):
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor:
             main_actor.persist("_plan_cache", {})
         await reply_fn("[System: Plan cache cleared.]")
         return True
@@ -289,10 +239,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/nodes":
-        main_actor = find_main()
-        remote_nodes = (
-            main_actor.list_nodes() if (main_actor and hasattr(main_actor, "list_nodes")) else []
-        )
+        main_actor = find_main_actor(runtime.registry)
+        remote_nodes = main_actor.list_nodes() if (main_actor) else []
         local = [a.name for a in runtime.registry.all_actors()] if runtime.registry else []
         lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
         for nd in sorted(remote_nodes, key=lambda x: x["node"]):
@@ -308,8 +256,8 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 3:
             await reply_fn("[usage] /migrate <agent-name> <target-node>")
             return True
-        main_actor = find_main()
-        if main_actor is None or not hasattr(main_actor, "migrate_agent"):
+        main_actor = find_main_actor(runtime.registry)
+        if main_actor is None:
             await reply_fn("[error] migrate_agent not available.")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
@@ -320,23 +268,71 @@ async def handle_slash(text: str, reply_fn) -> bool:
 
     if cmd == "/deploy":
         if len(parts) < 2:
-            await reply_fn("[usage] /deploy <node-name> [host [user [password [broker]]]]")
+            names = deploy_target_names()
+            listing = "\n".join(f"  {n}" for n in names) or "  (none configured)"
+            await reply_fn(f"[usage] /deploy <node-name>\nConfigured targets:\n{listing}")
             return True
-        await slash_deploy(
-            node=parts[1],
-            host=parts[2] if len(parts) > 2 else "",
-            user=parts[3] if len(parts) > 3 else "",
-            pw=parts[4] if len(parts) > 4 else "",
-            broker=parts[5] if len(parts) > 5 else "",
-            reply_fn=reply_fn,
-        )
+        if len(parts) > 2:
+            # The old form took host/user/password/broker here. Refuse without
+            # echoing the extra words back — parts[3:] may be a live password,
+            # and the reply is persisted into conversation history.
+            await reply_fn(
+                "[error] /deploy takes a node name only — host and SSH credentials "
+                "now come from the environment, not from chat.\n\n" + deploy_target_help(parts[1])
+            )
+            return True
+        await slash_deploy(node=parts[1], reply_fn=reply_fn)
         return True
 
     return False
 
 
+#: Correlation id → the queue waiting for that request's RESULT. One entry per
+#: in-flight chat turn; the interceptor below routes by this rather than
+#: assuming there is only ever one.
+_PENDING_REPLIES: dict[str, asyncio.Queue] = {}
+
+
+def _install_reply_capture(target: Any) -> None:
+    """Teach an agent's ``send`` to hand RESULTs back to the waiting chat turn.
+
+    Agents reply to ``msg.reply_to or msg.sender_id``, and a chat turn is not a
+    real actor, so the reply has nowhere to go unless it is intercepted.
+
+    Installed **once per agent and never removed**. It used to be patched in and
+    restored around each turn, which broke under two concurrent turns to the
+    same agent: the second saved the first's interceptor as "the original", the
+    first restored the real method — so the second's replies stopped being
+    captured — and the second then restored the first's interceptor, leaving
+    the agent permanently sending its results into an abandoned queue.
+
+    Correlating by id also fixes the other half: the old interceptor captured
+    *any* RESULT, so a reply meant for one turn could be handed to another.
+    """
+    if getattr(target, "_io_gateway_capture_installed", False):
+        return
+    original_send = target.send
+
+    async def _capture_send(
+        target_id: str,
+        msg_type: MessageType,
+        payload: Any = None,
+        **kw: Any,
+    ) -> bool:
+        if msg_type == MessageType.RESULT:
+            queue = _PENDING_REPLIES.get(target_id)
+            if queue is not None:
+                await queue.put(payload)
+                return True
+            # Not for a chat turn — an ordinary actor-to-actor result.
+        return await original_send(target_id, msg_type, payload, **kw)
+
+    target.send = _capture_send
+    target._io_gateway_capture_installed = True
+
+
 async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None):
-    """Core chat routing — slash commands, @mentions, or main-actor stream.
+    """Core chat routing — slash commands, @mentions, or the orchestrator's stream.
 
     reply_fn(text)        — send a complete message (slash commands, errors)
     stream_fn(chunk)      — send one streaming chunk (optional; falls back to reply_fn)
@@ -348,21 +344,16 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     if content.startswith("/"):
         handled = await handle_slash(content, reply_fn)
         if not handled:
-            main_actor = find_main()
+            main_actor = find_main_actor(runtime.registry)
             # Forward unrecognized slash commands to main actor.
             # main_actor.process_user_input handles the full command set
             # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
-            if main_actor and hasattr(main_actor, "process_user_input_stream"):
+            if main_actor:
                 _chunk_fn = stream_fn or reply_fn
                 async for chunk in main_actor.process_user_input_stream(content):
                     if isinstance(chunk, dict):
                         continue
                     await _chunk_fn(str(chunk))
-                if stream_end_fn:
-                    await stream_end_fn()
-            elif main_actor and hasattr(main_actor, "process_user_input"):
-                result = await main_actor.process_user_input(content)
-                await reply_fn(str(result))
                 if stream_end_fn:
                     await stream_end_fn()
             else:
@@ -374,11 +365,11 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
     target = runtime.registry.find_by_name(target_name) if runtime.registry else None
 
     if target is None:
-        main_actor = find_main()
+        main_actor = find_main_actor(runtime.registry)
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
-        if main_actor and hasattr(main_actor, "_known_nodes"):
+        if main_actor:
             remote_node = None
             for node_name, nd in main_actor._known_nodes.items():
                 if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
@@ -397,8 +388,8 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                 }
                 try:
                     async with mqtt_client(
-                        getattr(main_actor, "_mqtt_broker", "localhost"),
-                        getattr(main_actor, "_mqtt_port", 1883),
+                        main_actor._mqtt_broker,
+                        main_actor._mqtt_port,
                     ) as client:
                         # Subscribe first, then publish — avoids race condition
                         await client.subscribe(reply_topic)
@@ -449,6 +440,26 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
         await reply_fn(f"Agent @{target_name} not found.")
         return
 
+    # Every path below reaches into the agent directly rather than through its
+    # mailbox, so none of the states that suspend the mailbox stop it answering
+    # on their own: a paused agent replied as though nothing had happened, and a
+    # stopped one kept answering after its message loop had been cancelled.
+    #
+    # ``==`` not ``is``: ActorState is a str-enum compared by value everywhere
+    # else in the codebase, and identity is not safe here — the test suite has
+    # wactorz.core.actor loaded under two module identities, so the enum members
+    # are distinct objects with equal values.
+    _unavailable = {
+        ActorState.PAUSED.value: "is paused. Resume it to send messages.",
+        ActorState.STOPPED.value: "is stopped. Start it to send messages.",
+        ActorState.FAILED.value: "has failed. It should restart shortly.",
+    }
+    reason = _unavailable.get(getattr(target.state, "value", target.state))
+    if reason is not None:
+        await reply_fn(f"@{target.name} {reason}")
+        await _end_fn()
+        return
+
     msg = f"[io-gateway] → {target.name}: {text[:60]!r}"
     logger.info(msg)
 
@@ -495,27 +506,19 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             await _end_fn()
             return
 
-        # All other message-passing agents: intercept send() to capture RESULT
-        reply_queue = asyncio.Queue()
-        original_send = target.send  # save so we can restore
-
-        async def _capture_send(
-            target_id: str,
-            msg_type: MessageType,
-            payload: Any = None,
-            **kw: Any,
-        ) -> bool:
-            if msg_type == MessageType.RESULT:
-                await reply_queue.put(payload)
-                return True
-            return await original_send(target_id, msg_type, payload, **kw)
-
-        target.send = _capture_send
+        # All other message-passing agents: intercept send() to capture the
+        # RESULT, since it is addressed to a correlation id rather than a real
+        # actor. The interceptor is installed once per agent and correlates by
+        # that id; it is never swapped back.
+        correlation_id = f"io-gateway:{uuid.uuid4().hex[:12]}"
+        reply_queue: asyncio.Queue = asyncio.Queue()
+        _install_reply_capture(target)
+        _PENDING_REPLIES[correlation_id] = reply_queue
         try:
             msg = Message(
                 type=MessageType.TASK,
-                sender_id="io-gateway",
-                reply_to="io-gateway",
+                sender_id=correlation_id,
+                reply_to=correlation_id,
                 payload={"text": text},
             )
             await target.handle_message(msg)
@@ -545,36 +548,8 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
             logger.error(msg, exc_info=True)
             await reply_fn(f"[error] {target.name}: {exc}")
         finally:
-            target.send = original_send  # always restore
+            _PENDING_REPLIES.pop(correlation_id, None)
             await _end_fn()
-
-
-# ── MQTT chat handler (legacy / IOAgent-less fallback) ─────────────────────
-
-
-async def handle_chat_mqtt(data: dict):
-    """Called when io/chat arrives via MQTT and registry is wired in."""
-    if runtime.registry is None:
-        return  # IOAgent handles it
-    content = (data.get("content") or "").strip()
-    if not content:
-        return
-
-    async def mqtt_reply(text: str):
-        if runtime.mqtt_client_ref:
-            await runtime.mqtt_client_ref.publish(
-                f"agents/{runtime.IO_GATEWAY_ID}/chat",
-                json.dumps(
-                    {
-                        "from": runtime.IO_GATEWAY_ID,
-                        "to": "user",
-                        "content": text,
-                        "timestamp": time.time(),
-                    }
-                ),
-            )
-
-    await route_chat(content, mqtt_reply)  # MQTT path: no streaming, reply_fn used for all output
 
 
 # ── REST chat endpoints ────────────────────────────────────────────────────
@@ -602,39 +577,20 @@ async def rest_chat_handler(request: web.Request) -> Response:
     return web.json_response({"status": "sent", "agent": agent_name})
 
 
-async def rest_chat_stop_handler(request: web.Request) -> Response:
+async def rest_chat_stop_handler(request: web.Request | None) -> Response:
     """POST /chat/stop — cancel any in-flight generation. No request body needed.
 
-    Works in both runtime modes:
-      - direct_ws — cancels the in-process generation task(s) running here; the
-        cancelled stream finalizes and posts "⏹ Stopped." over the WebSocket.
-      - mqtt (legacy) — publishes {"action": "stop"} to io/chat/control so the
-        IOAgent cancels the turn it is streaming and replies on io/chat/response.
-    The user-facing confirmation rides the usual chat reply path, so the UI
-    needs no extra subscription.
+    Cancels the in-process generation task(s); the cancelled stream finalizes and
+    posts "⏹ Stopped." over the WebSocket. The user-facing confirmation rides the
+    usual chat reply path, so the UI needs no extra subscription.
     """
-    # direct_ws: cancel the in-process generation task(s).
     tasks = [t for t in inflight_chat_tasks if not t.done()]
     for t in tasks:
         t.cancel()
-
-    # legacy MQTT: tell the IOAgent to stop whatever it is generating.
-    published = False
-    if runtime.registry is None and runtime.mqtt_client_ref:
-        try:
-            await runtime.mqtt_client_ref.publish(
-                "io/chat/control",
-                json.dumps({"action": "stop"}),
-                qos=1,
-            )
-            published = True
-        except Exception as exc:
-            logger.warning("[chat/stop] io/chat/control publish failed: %s", exc)
 
     return web.json_response(
         {
             "status": "stopped",
             "cancelled": len(tasks),
-            "published": published,
         }
     )

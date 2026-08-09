@@ -1507,14 +1507,13 @@ def _ha_delegate_for_request(request):
 async def _ha_actuate(agent, request):
     """Run the same one-off Home Assistant actuator used by main chat actuation."""
     import uuid as _uuid
-    from wactorz.agents.dynamic_agent import _ensure_result_handler
     from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
 
     actor = agent._actor
-    if not hasattr(actor, "_result_futures"):
-        actor._result_futures = {}
-    _ensure_result_handler(actor)
 
+    # Keying the future is the whole setup: `_result_futures` is on Actor, and
+    # `Actor._dispatch` settles it from the RESULT's `_task_id` before any
+    # handler runs. No correlation handler to install here.
     task_id = f"reachy_ha_{_uuid.uuid4().hex[:8]}"
     future = asyncio.get_running_loop().create_future()
     actor._result_futures[task_id] = future

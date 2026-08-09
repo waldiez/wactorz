@@ -41,4 +41,19 @@ describe("AgentStreams", () => {
         s.append("alpha", "x".repeat(MAX_STREAM_CHARS + 10));
         expect(s.text("alpha").length).toBeLessThanOrEqual(MAX_STREAM_CHARS);
     });
+
+    it("clear() drops every buffer, abandoning streams in flight", () => {
+        const s = new AgentStreams();
+        s.append("a", "one");
+        s.append("b", "two");
+
+        s.clear();
+
+        // A full chat wipe: nothing survives, and no agent is still "active",
+        // so a later chunk starts a fresh buffer rather than appending to a
+        // stream the user already cleared away.
+        expect(s.has("a")).toBe(false);
+        expect(s.has("b")).toBe(false);
+        expect(s.activeFrom).toBeNull();
+    });
 });

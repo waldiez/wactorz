@@ -6,11 +6,11 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { CardDashboard } from "../ui/CardDashboard";
 import type { AgentInfo } from "../types/agent";
 
-// Regression tests for the chat-target <select> never rendering blank.
-// The bug: chatTarget defaulted to "main" but if the live agent is named
-// "main" (or main is absent), select.value matched no option and the
-// control rendered with nothing selected. _populateSelect now re-syncs the
-// target to a messageable agent and falls back to the first option.
+// The chat-target <select> must never render blank. If the stored target
+// matches no option — main absent, or an agent that itself is named "main" —
+// `select.value` selects nothing and the control comes up empty, so
+// _populateSelect re-syncs to a messageable agent and falls back to the first
+// option.
 
 function agent(name: string, protectedFlag = false): AgentInfo {
     return { id: name, name, state: "running", protected: protectedFlag };

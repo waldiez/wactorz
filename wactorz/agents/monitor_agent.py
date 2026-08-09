@@ -28,6 +28,7 @@ import time
 import psutil
 
 from ..core.actor import Actor, ActorState, Message, MessageType
+from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +72,13 @@ class MonitorActor(Actor):
 
         # Prime the baseline on the cached instance so the first real reading
         # is meaningful (cpu_percent needs two samples on the same object).
-        try:
-            self._proc.cpu_percent(interval=None)
-        except Exception:
-            pass
+        if self._proc is not None:
+            # Declared Any | None on Actor, where psutil.Process() is built
+            # inside a try — it can fail, and this agent reads it every cycle.
+            try:
+                self._proc.cpu_percent(interval=None)
+            except Exception:
+                pass
 
         self._tasks.append(asyncio.create_task(self._monitor_loop()))
         logger.info(f"[{self.name}] Monitor started. check_interval={self.check_interval}s")
@@ -106,6 +110,7 @@ class MonitorActor(Actor):
                 await self._ping_all_actors()
                 await self._check_all_actors()
                 await self._check_error_registry()
+                self._forget_departed()
                 await self._publish_system_health()
                 await self._publish_host_stats()
             except asyncio.CancelledError:
@@ -200,12 +205,43 @@ class MonitorActor(Actor):
 
         # severity == "warning" -> just the MQTT alert, no user notification
 
+    def _forget_departed(self) -> None:
+        """Drop tracking for actors that are gone.
+
+        Every message counts as a liveness signal, so `_last_seen` takes an
+        entry for any sender — including ids that were never local actors. None
+        of these maps had a removal path, so they grew with agent churn and with
+        anything publishing under a fresh id.
+
+        An actor still in the registry is kept regardless of age; one that has
+        left is kept only while its last signal is recent, which is the window a
+        restart needs to re-register without losing its history.
+
+        `_error_registry` is swept here too. Its own cleanup only fires when a
+        live actor reports zero consecutive errors, so an agent that departs
+        while degraded is never cleared by it — recovery cannot arrive for an
+        actor that is gone. That entry also counts toward the `degraded` figure
+        in system health, so leaving it behind reports trouble in an agent that
+        no longer exists.
+        """
+        live = {a.actor_id for a in self._registry.all_actors()} if self._registry else set()
+        grace = time.time() - self.heartbeat_timeout * 2
+        keep = live | {aid for aid, seen in self._last_seen.items() if seen > grace}
+        for tracked in (
+            self._last_seen,
+            self._alert_state,
+            self._last_notified,
+            self._error_registry,
+        ):
+            for actor_id in [k for k in tracked if k not in keep]:
+                tracked.pop(actor_id, None)
+
     async def _check_error_registry(self):
         """Notify user when a previously degraded agent has recovered."""
         for actor_id, event in list(self._error_registry.items()):
             actor = self._find_actor(actor_id)
             name = event.get("name", actor_id[:8])
-            if actor and hasattr(actor, "_consecutive_errors") and actor._consecutive_errors == 0:
+            if actor and hasattr(actor, "_consecutive_errors") and actor._consecutive_errors == 0:  # pyright: ignore[reportAttributeAccessIssue]
                 del self._error_registry[actor_id]
                 await self._notify_main(
                     actor_id,
@@ -232,7 +268,7 @@ class MonitorActor(Actor):
 
         if not self._registry:
             return
-        main = self._registry.find_by_name("main")
+        main = find_main_actor(self._registry)
         if not main:
             return
 
@@ -332,9 +368,14 @@ class MonitorActor(Actor):
         await self._mqtt_publish("system/health", health)
 
     async def _publish_host_stats(self):
+        proc = self._proc
+        if proc is None:
+            # No process handle means no host stats; the rest of the monitor's
+            # reporting is unaffected, so this is a skip rather than a failure.
+            return
         try:
-            cpu_pct = self._proc.cpu_percent(interval=None)
-            mem_info = self._proc.memory_info()
+            cpu_pct = proc.cpu_percent(interval=None)
+            mem_info = proc.memory_info()
             mem_used_mb = mem_info.rss / 1024 / 1024
             mem_total_mb = psutil.virtual_memory().total / 1024 / 1024
             stats = {

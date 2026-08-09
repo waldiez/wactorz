@@ -13,7 +13,8 @@ import time
 from typing import Any
 
 from ..core.mqtt import mqtt_client
-from . import chat, events, runtime, ws
+from ..monitoring.log_redaction import redact
+from . import events, runtime, ws
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,53 @@ async def set_mqtt_status(connected: bool) -> None:
         return
     runtime.mqtt_connected = connected
     await ws.broadcast({"type": "mqtt_status", "connected": connected})
+
+
+async def handle_message(topic: str, payload: str) -> None:
+    """Dispatch one broker message: update state, then tell the browsers.
+
+    Extracted from the listener loop so it can be exercised without a broker —
+    the loop around it is connection management, this is the part with rules.
+    """
+    event: dict[str, Any] | None = events.parse_topic(topic, payload)
+    await broadcast_mqtt_msg(topic, payload)
+    if not event or runtime.hard_resetting:
+        return
+
+    metric = event.get("metric", "")
+    log_event = None if metric == "heartbeat" else event
+    # Totals are the only part of a snapshot that queries the database, so they
+    # are not rebuilt for every broker message. `chat` is the exception: it is
+    # the frame that follows an agent spending money, it is driven by user
+    # activity rather than a timer, and it is what someone watching the cost is
+    # waiting to see. `heartbeat` and `metrics` both fire on the heartbeat loop,
+    # so triggering on those would scale the query with agent count — which is
+    # what taking totals off this path was for.
+    await ws.broadcast(
+        {
+            "type": "patch",
+            "event": log_event,
+            "state": events.snapshot(include_totals=metric == "chat"),
+        }
+    )
+
+    # Agent-originated user-facing message. The browser already renders it from
+    # agents/{id}/chat (the broadcast above), so no second frame is sent here —
+    # this only persists it so it survives a reload like any other turn.
+    push = event.get("_push_chat")
+    if push:
+        try:
+            if runtime.db is not None and push.get("content"):
+                runtime.db.write_chat_log(
+                    ts=push.get("timestamp", time.time()),
+                    agent_name=push.get("from", "agent"),
+                    role="assistant",
+                    # Same treatment as the WS path: an agent can quote back
+                    # something a user typed, and this row outlives the turn.
+                    content=redact(push["content"]),
+                )
+        except Exception as exc:
+            logger.debug("[chat-bridge] persist failed: %s", exc)
 
 
 async def mqtt_listener() -> None:
@@ -68,41 +116,9 @@ async def mqtt_listener() -> None:
                     await set_mqtt_status(True)
 
                     async for message in client.messages:
-                        topic = str(message.topic)
-                        payload = message.payload.decode(errors="replace")
-
-                        if topic == "io/chat":
-                            if runtime.registry is not None:
-                                try:
-                                    asyncio.create_task(chat.handle_chat_mqtt(json.loads(payload)))
-                                except Exception as exc:
-                                    logger.error("[io/chat] error: %s", exc)
-                            continue
-
-                        event: dict[str, Any] | None = events.parse_topic(topic, payload)
-                        await broadcast_mqtt_msg(topic, payload)
-                        if event and not runtime.hard_resetting:
-                            metric = event.get("metric", "")
-                            log_event = None if metric == "heartbeat" else event
-                            await ws.broadcast(
-                                {"type": "patch", "event": log_event, "state": events.snapshot()}
-                            )
-                            # Agent-originated user-facing message. The browser already
-                            # renders it from the agents/{id}/chat (the ws.broadcast above)
-                            # so we do NOT ws.broadcast a second frame here. We only persist
-                            # it so it survives a browser reload like any other turn.
-                            push = event.get("_push_chat")
-                            if push:
-                                try:
-                                    if runtime.db is not None and push.get("content"):
-                                        runtime.db.write_chat_log(
-                                            ts=push.get("timestamp", time.time()),
-                                            agent_name=push.get("from", "agent"),
-                                            role="assistant",
-                                            content=push["content"],
-                                        )
-                                except Exception as _exc:
-                                    logger.debug("[chat-bridge] persist failed: %s", _exc)
+                        await handle_message(
+                            str(message.topic), message.payload.decode(errors="replace")
+                        )
 
             except Exception as e:
                 runtime.mqtt_client_ref = None

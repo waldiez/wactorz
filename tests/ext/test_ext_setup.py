@@ -19,9 +19,22 @@ from wactorz import ext
 
 
 def _purge_fake_submodules() -> None:
-    for name in list(sys.modules):
-        if name.startswith("wactorz.ext."):
-            del sys.modules[name]
+    """Drop fake (test-written) extension modules, never the real ones.
+
+    Purging every ``wactorz.ext.*`` module and restoring the real ones at
+    teardown is not enough: putting ``sys.modules`` back does not restore the
+    package *attributes*, so ``wactorz.ext.tts`` can end up one object in
+    ``sys.modules`` and another on the package — and which one a caller gets
+    then depends on its import style. Filter by file location instead: real
+    extensions live in the package and stay put; fakes live in a tmp dir.
+    """
+    real_dir = str(Path(ext.__file__).parent)
+    for name, mod in list(sys.modules.items()):
+        if not name.startswith("wactorz.ext."):
+            continue
+        mod_file = getattr(mod, "__file__", None)
+        if mod_file is None or not str(mod_file).startswith(real_dir):
+            sys.modules.pop(name, None)
 
 
 @pytest.fixture(name="sandbox")

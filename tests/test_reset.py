@@ -24,13 +24,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from wactorz.agents.main_actor import MainActor
 from wactorz.web import api_reset, cost, runtime
 
 
 def _payload(resp):
     """Decode the JSON body of a real aiohttp ``web.json_response``.
 
-    monitor_server binds ``web`` at import (real aiohttp), so its handlers always
+    the web app binds ``web`` at import (real aiohttp), so its handlers always
     return a real Response no matter what other tests do to ``sys.modules`` — read
     the body directly instead of faking ``json_response`` (which cannot reach the
     handler's already-bound ``web`` reference anyway).
@@ -61,6 +62,35 @@ class ResetLogsTest(unittest.TestCase):
             log.write_text("monitor output\n")
             reset_logs(log_dir=tmp)
             self.assertEqual(log.read_text(), "")
+
+    def test_removes_rotated_backups(self):
+        """Truncating only the active file leaves every earlier generation in
+        place — the opposite of what a reset promises, and redaction covers
+        known secret shapes, so the ones it misses are what would stay behind."""
+        from wactorz.reset import reset_logs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "wactorz.log"
+            log.write_text("current\n")
+            backups = [Path(tmp) / f"wactorz.log.{i}" for i in (1, 2, 3)]
+            for backup in backups:
+                backup.write_text("older content\n")
+
+            reset_logs(log_dir=tmp)
+
+            self.assertEqual(log.read_text(), "")
+            self.assertTrue(log.exists(), "the active file is truncated, not removed")
+            for backup in backups:
+                self.assertFalse(backup.exists(), f"{backup.name} survived the reset")
+
+    def test_leaves_unrelated_files_alone(self):
+        from wactorz.reset import reset_logs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            keep = Path(tmp) / "wactorz.db"
+            keep.write_text("not a log\n")
+            reset_logs(log_dir=tmp)
+            self.assertEqual(keep.read_text(), "not a log\n")
 
     def test_skips_missing_files_silently(self):
         from wactorz.reset import reset_logs
@@ -136,6 +166,7 @@ class ResetLogsTest(unittest.TestCase):
                     # Acquire and release on the same thread: an RLock may only
                     # be released by its owner, and releasing from elsewhere
                     # raises while leaving the lock held for good.
+                    assert handler.lock
                     got = handler.lock.acquire(timeout=2)
                     acquired.append(got)
                     if got:
@@ -320,7 +351,7 @@ class ResetHandlerValidScopesTest(unittest.IsolatedAsyncioTestCase):
             req = _make_request({"scope": "metrics"})
             with (
                 patch("wactorz.reset.reset_metrics"),
-                patch("wactorz.agents.llm_agent.reset_global_cost"),
+                patch("wactorz.agents.llm.cost.reset_global_cost"),
                 patch("wactorz.web.ws.broadcast", new=AsyncMock()),
                 patch("wactorz.web.events.snapshot", return_value={}),
             ):
@@ -496,21 +527,21 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
-            db = self._db(tmp)
-            db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
-            reset_spawns(db_path=db_path)
-            self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
+            with self._db(tmp) as db:
+                db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
+                reset_spawns(db_path=db_path)
+                self.assertIsNone(db.kv_get("main", "_spawned_agents", None))
 
     def test_single_agent_pops_only_that_entry(self):
         from wactorz.reset import reset_spawns
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
-            db = self._db(tmp)
-            db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
-            reset_spawns(agent_name="a", db_path=db_path)
-            reg = db.kv_get("main", "_spawned_agents", None)
-            self.assertEqual(reg, {"b": {"node": "n1"}})
+            with self._db(tmp) as db:
+                db.kv_set("main", "_spawned_agents", {"a": {"node": ""}, "b": {"node": "n1"}})
+                reset_spawns(agent_name="a", db_path=db_path)
+                reg = db.kv_get("main", "_spawned_agents", None)
+                self.assertEqual(reg, {"b": {"node": "n1"}})
 
     def test_restart_read_sees_empty_registry_after_wipe(self):
         """End-to-end of the actual symptom: after a wipe, the registry read
@@ -518,24 +549,23 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
         return empty — i.e. recall("_spawned_agents") via a fresh PersistenceAPI
         bound to the same db file sees nothing, so nothing is re-spawned.
         """
-        from wactorz.core.persistence import (
-            PersistenceAPI,
-            PickleStore,
-            RedisStore,
-        )
+        from wactorz.core.persistence import PersistenceAPI, PickleStore
         from wactorz.reset import reset_all
 
         with tempfile.TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "wactorz.db")
-            db = self._db(tmp)
-            api = PersistenceAPI(db, RedisStore(), PickleStore(tmp), "main")
-            api.set("_spawned_agents", {"ghost1": {"node": ""}, "ghost2": {"node": "n1"}})
-            self.assertTrue(api.get("_spawned_agents"))  # sanity
+            with self._db(tmp) as db:
+                api = PersistenceAPI(db, PickleStore(tmp), "main")
+                api.set("_spawned_agents", {"ghost1": {"node": ""}, "ghost2": {"node": "n1"}})
+                self.assertTrue(api.get("_spawned_agents"))  # sanity
 
-            reset_all(db_path=db_path, state_dir=tmp)
+                reset_all(db_path=db_path, state_dir=tmp)
 
-            fresh = PersistenceAPI(self._db(tmp), RedisStore(), PickleStore(tmp), "main")
-            self.assertFalse(fresh.get("_spawned_agents") or {})
+            # A second connection, closed too: Windows refuses to remove the
+            # temp directory while any handle on the database is open.
+            with self._db(tmp) as reopened:
+                fresh = PersistenceAPI(reopened, PickleStore(tmp), "main")
+                self.assertFalse(fresh.get("_spawned_agents") or {})
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -547,11 +577,13 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
 class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
     async def test_all_scope_clears_desired_state_for_all_nodes(self):
 
-        main = MagicMock()
+        # A real MainActor: the reset path resolves main with `find_main_actor`,
+        # which checks isinstance, so a mock resolves to None and n1 — which is
+        # only reachable through the spawn registry — never gets a desired_state
+        # publish. `recall` already answers None for an unset key.
+        main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
-        main.name = "main"
-        main._get_spawn_registry.return_value = {"agentX": {"node": "n1"}}
-        main.recall.return_value = None  # no in-memory registry attr to clear
+        main._get_spawn_registry = lambda: {"agentX": {"node": "n1"}}  # type: ignore[method-assign]
 
         fake_registry = MagicMock()
         fake_registry.all_actors.return_value = [main]
@@ -597,12 +629,13 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         # monitor / installer / catalog). The registry's protected flag is
         # authoritative and must shield them — no retained purge, no tombstone.
 
-        main = MagicMock()
+        # A real MainActor, not a mock: the reset path resolves main with
+        # `find_main_actor`, which checks isinstance, so a mock resolves to None
+        # and the node-purge sweep under test never runs. An empty one already
+        # answers `_get_spawn_registry()` with {} and `recall()` with None.
+        main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
-        main.name = "main"
         main.actor_id = "main-id"
-        main.recall.return_value = None
-        main._get_spawn_registry.return_value = {}
         io = MagicMock()
         io.protected = False
         io.name = "io-agent"
@@ -674,7 +707,8 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         import re
 
         app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
-        supervised = re.findall(r'supervise\(\s*"([^"]+)"', app_src.read_text())
+        src_txt = app_src.read_text(encoding="utf-8", errors="ignore")
+        supervised = re.findall(r'supervise\(\s*"([^"]+)"', src_txt)
         self.assertGreaterEqual(len(supervised), 8, "app.py supervise chain not found")
         # Protection lives on the actor class; treat the known protected names as
         # protected here so the guard checks name-coverage, not the flag itself.

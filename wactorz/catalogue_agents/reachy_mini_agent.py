@@ -1814,6 +1814,13 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
                 "capabilities": {
                     "gesture": list(_REACHY_INTERFACE_GESTURES),
                 },
+                # Goes into main's system prompt verbatim (sanitized there). This
+                # robot's name and the ways STT mishears it are ours to state —
+                # main has no business knowing them.
+                "prompt_note": (
+                    "The robot's name is Reachy. Likely transcript spellings Richie, "
+                    "Riti, Ritzy, and Lizzy refer to Reachy, never to the user."
+                ),
             },
         }
         if voice_input:

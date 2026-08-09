@@ -317,7 +317,9 @@ class IOAgent(Actor):
             task_id = payload.get("_task_id") if isinstance(payload, dict) else None
             pending = self._pending_replies.pop(task_id, None) if task_id else None
             if isinstance(payload, dict) and payload.get("_suppress_reply"):
-                # Reachy already spoke this turn, so there is nothing to send on.
+                # The agent already delivered this turn on its own surface (a
+                # voice interface speaking it aloud), so there is nothing to
+                # send on.
                 # Cleared above rather than left for _expire_pending, or every
                 # suppressed reply would sit in the map until its TTL.
                 return

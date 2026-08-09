@@ -111,6 +111,11 @@ class MemoryMixin(_Host):
                     f'<interface_action>{{"cmd":"{example_command}",'
                     f'"name":"{example_options[0]}"}}</interface_action>'
                 )
+                # Anything specific to one robot — its name, how speech
+                # recognition tends to mangle it — belongs to that agent, not
+                # here. It travels as `prompt_note` on the interface context and
+                # is sanitized before it reaches this string.
+                note = context.get("prompt_note") or ""
                 interface_note = (
                     f"[EMBODIED INTERFACE: the user is speaking to the physical robot "
                     f"{display_name} through {source}. You are its conversational brain: "
@@ -119,11 +124,10 @@ class MemoryMixin(_Host):
                     "action, include one exact block such as "
                     f"{example}. "
                     "The interface executes validated blocks and removes them from speech/chat. "
-                    "The robot's name is Reachy. Likely transcript spellings Richie, Riti, Ritzy, "
-                    "and Lizzy refer to Reachy, never to the user. Address the user by name only "
-                    "when a clear current naming statement or durable USER FACTS provides it. "
-                    "Keep ordinary voice replies to one or two short, natural sentences; do not "
-                    "recite capability menus unless the user asks for one. "
+                    "Address the user by name only when a clear current naming statement or "
+                    "durable USER FACTS provides it. Keep ordinary voice replies to one or two "
+                    "short, natural sentences; do not recite capability menus unless the user "
+                    f"asks for one. {note}"
                     f"Do not delegate back to {source}; return interface actions instead.]\n"
                 )
             else:

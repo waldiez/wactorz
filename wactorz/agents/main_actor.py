@@ -47,12 +47,6 @@ logger = logging.getLogger(__name__)
 # on it drops a live agent from the registry (breaking delete + node-reboot recovery).
 VANISH_MISS_THRESHOLD = 3
 
-SOCIAL_SPAWN_REFUSAL = (
-    "I can only start curated catalog agents from this chat. "
-    "Open the Wactorz dashboard to create custom agents."
-)
-
-
 _INTERFACE_SOURCE = contextvars.ContextVar("wactorz_interface_source", default="")
 _INTERFACE_HISTORY = contextvars.ContextVar("wactorz_interface_history", default=())
 _INTERFACE_VOICE = contextvars.ContextVar("wactorz_interface_voice", default=False)
@@ -139,10 +133,19 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                         options.append(option)
                 if options:
                     capabilities[command] = tuple(dict.fromkeys(options))
+        # Free text an interface contributes to Main's system prompt, so that
+        # what is specific to one device (its name, how STT mangles it) lives
+        # with that agent instead of in this package. Bounded and stripped of
+        # newlines for the same reason as the fields above: it is reaching a
+        # prompt from another actor, and must not be able to inject structure.
+        prompt_note = " ".join(str(raw_context.get("prompt_note") or "").split())[:400]
+        if prompt_note and not prompt_note.endswith(" "):
+            prompt_note += " "
         return {
             "display_name": display_name,
             "kind": kind,
             "capabilities": capabilities,
+            "prompt_note": prompt_note,
         }
 
     def _extract_interface_actions(self, response: str) -> tuple[str, list[dict]]:
@@ -544,7 +547,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._pending_notifications.clear()
         return "\n".join(lines) + "\n\n---\n\n"
 
-    async def process_user_input(self, text: str, *, allow_spawn: bool = True) -> str:
+    async def process_user_input(self, text: str) -> str:
         note_prefix = self._drain_notifications()
 
         # ── Pending-plan response detection ─────────────────────────────────
@@ -1585,7 +1588,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 "Output ONLY the <spawn>...</spawn> block, nothing else."
             )
 
-        clean, spawned = await self._process_spawn_commands(response, allow_spawn=allow_spawn)
+        clean, spawned = await self._process_spawn_commands(response)
 
         # Process any <delete>{"name": "..."}</delete> blocks the LLM produced.
         # This is the orchestrator-side counterpart of <spawn> — lets the LLM
@@ -2205,9 +2208,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         return response
 
-    async def _process_spawn_commands(self, response: str, *, allow_spawn: bool = True):
+    async def _process_spawn_commands(self, response: str):
         spawned = []
-        custom_spawn_refused = False
         pattern = r"<spawn>(.*?)</spawn>"
 
         for match in re.findall(pattern, response, re.DOTALL):
@@ -2262,13 +2264,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                                 f"({spawn_result}); falling back to LLM code"
                             )
 
-                if not allow_spawn:
-                    custom_spawn_refused = True
-                    logger.warning(
-                        f"[{self.name}] Refusing custom spawn '{req_name}' from a social interface"
-                    )
-                    continue
-
                 # LLM agents have no "code" — only check for code if type is dynamic
                 agent_type = config.get("type", "dynamic")
                 has_code = bool(config.get("code", "").strip())
@@ -2287,8 +2282,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 logger.error(f"[{self.name}] Spawn failed: {e}\nRaw block:\n{match[:500]}")
 
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
-        if custom_spawn_refused:
-            clean = SOCIAL_SPAWN_REFUSAL
         return clean, spawned
 
     async def _process_delete_commands(self, response: str):

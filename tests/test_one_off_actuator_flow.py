@@ -142,6 +142,13 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
                     "display_name": "Reachy",
                     "kind": "embodied_robot",
                     "capabilities": {"gesture": ["dance", "turn_around"]},
+                    # Device-specific wording belongs to the interface, not to
+                    # main — this asserts it survives sanitising into the prompt.
+                    "prompt_note": (
+                        "The robot's name is Reachy. Likely transcript spellings "
+                        "Richie, Riti, Ritzy, and Lizzy refer to Reachy, never to "
+                        "the user."
+                    ),
                 },
                 "_interface_history": [{"transcript": "hello", "response": "Hi there."}],
                 "_task_id": "abc",

@@ -3,8 +3,7 @@ FROM $BUILD_FROM
 
 RUN apk add --no-cache \
     curl git jq gcc musl-dev linux-headers libffi-dev openssl-dev \
-    mosquitto mosquitto-clients \
-    ffmpeg
+    mosquitto mosquitto-clients
 
 # Git ref of wactorz to install.
 ARG WACTORZ_REF=main

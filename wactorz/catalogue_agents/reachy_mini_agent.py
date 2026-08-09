@@ -40,8 +40,9 @@ Outside wactorz:
 
     ffmpeg (OPTIONAL system binary) — only used to boost the TTS loudness
            (~3-4x). If it is missing or fails, `say` still works: it just plays
-           the raw, quieter edge-tts audio and logs a warning. Install it on the
-           host if room/audience-level speech is too quiet.
+           the raw, quieter edge-tts audio and says so once. Install it on the
+           host if room/audience-level speech is too quiet; the Home Assistant
+           add-on image does not carry it.
 
 SPAWN
 ─────

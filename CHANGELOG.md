@@ -498,11 +498,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `warning` reading `ffmpeg not found - playing raw (quieter) TTS` on *every*
   utterance, which led a tester to think speech had failed. Reachy speaks fine
   without `ffmpeg` - just quieter. The notice is now an `info` that states this
-  plainly and logs only once per session. The Home Assistant add-on image now
-  bundles `ffmpeg` so add-on installs get the louder speech automatically and
-  never see the notice. The reachy-mini recipe and its catalogue doc also now
-  list `edge-tts` (required for `say`) and `ffmpeg` (optional, loudness only) so
-  a fresh host knows what is and isn't needed.
+  plainly and logs only once per session. It stays a host-side install rather
+  than something the add-on image carries: it exists for one optional catalogue
+  agent, and every add-on user would otherwise pay for it. The reachy-mini
+  recipe and its catalogue doc also now list `edge-tts` (required for `say`) and
+  `ffmpeg` (optional, loudness only) so a fresh host knows what is and isn't
+  needed.
 - **Reachy `say` no longer stomps itself in a sequence** — `play_sound` is fire-and-forget, so a
   multi-step plan like "whisper X, then normally say Y, then shout Z" cut every utterance off
   except the last (while the volume changes all flew by). `say` now measures each utterance's

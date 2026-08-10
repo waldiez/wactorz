@@ -102,7 +102,9 @@ below mirrors it); add new events to that map so dispatch and handlers stay type
 | `af-stream-end` | IOManager → DashboardChat | `{ text, from }` |
 | `af-connection-status` | main.ts (WSClient) → CardDashboard | `{ status: "live" \| "connecting" \| "demo" }` |
 | `af-attachment-added` | DropZone / chatIobar → DashboardChat | `{ attachment }` |
+| `af-send-failed` | IOManager → DashboardChat | `{ content, target }` |
 | `af-reset-chat` | WSClient → DashboardChat | `{ agent: string \| null }` |
+| `af-agents-settled` | WSClient → CardDashboard | `{ reason: "reset" \| "deleted" }` |
 | `af-clear-feed` | WSClient / main.ts → CardDashboard | _(none)_ |
 | `af-wipe-all` | WSClient / main.ts → CardDashboard | _(none)_ |
 | `tts-voices-loaded` | TTSManager → popovers | `{ voices }` |

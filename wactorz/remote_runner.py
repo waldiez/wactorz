@@ -1034,13 +1034,32 @@ class _RemoteAgent:
             logger.warning(f"[{self.name}] State save failed: {e}")
 
     def _load_state(self) -> None:
-        if os.path.exists(self._state_path):
+        """Read the agent's state, or start empty if it cannot be read.
+
+        A file that will not parse is moved aside rather than left in place: the
+        next _save_state would write straight over it, so the only copy of
+        whatever the agent remembered would be gone. This used to swallow the
+        exception entirely, leaving no record anywhere that anything was lost.
+
+        Deliberately not shared with wactorz.core.atomic_io — this module runs
+        standalone on a remote node with nothing but the stdlib.
+        """
+        if not os.path.exists(self._state_path):
+            return
+        try:
+            with open(self._state_path, encoding="utf-8") as f:
+                self._persistent_state = json.load(f)
+            logger.info(f"[{self.name}] Loaded persistent state.")
+        except Exception as e:
+            kept = f"{self._state_path}.corrupt.{int(time.time())}"
             try:
-                with open(self._state_path, encoding="utf-8") as f:
-                    self._persistent_state = json.load(f)
-                logger.info(f"[{self.name}] Loaded persistent state.")
+                os.replace(self._state_path, kept)
             except Exception:
-                pass
+                kept = ""
+            logger.error(
+                f"[{self.name}] State load failed: {e} — "
+                + (f"kept at {kept}" if kept else "the file could not be preserved")
+            )
 
     def _delete_state(self) -> bool:
         """Permanently remove the agent's on-disk JSON state file.

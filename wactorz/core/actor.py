@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import psutil
 
-from .atomic_io import write_pickle
+from .atomic_io import quarantine_unreadable, write_pickle
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
@@ -800,7 +800,7 @@ class Actor(ABC):
                         self.name,
                     )
                 except Exception as e:
-                    logger.error("[%s] Failed to load legacy state: %s", self.name, e)
+                    self._keep_unreadable_state(path, e)
             return
         # Legacy pickle path
         path = self._persistence_dir / "state.pkl"
@@ -810,7 +810,22 @@ class Actor(ABC):
                     self._persistent_state = pickle.load(f)
                 logger.info("[%s] Loaded persistent state.", self.name)
             except Exception as e:
-                logger.error("[%s] Failed to load state: %s", self.name, e)
+                self._keep_unreadable_state(path, e)
+
+    def _keep_unreadable_state(self, path: Path, exc: Exception) -> None:
+        """Move a state file we could not read out of the next save's way.
+
+        Starting empty is the right call — the agent must come up — but the very
+        next `persist` would write over the file, so the only record of what was
+        lost has to be taken out of that path first.
+        """
+        kept = quarantine_unreadable(path)
+        logger.error(
+            "[%s] Failed to load state: %s — %s",
+            self.name,
+            exc,
+            f"kept at {kept}" if kept else "the file could not be preserved",
+        )
 
     def persist(self, key: str, value: Any):
         """Persist a key-value pair. Routes to the correct backend:

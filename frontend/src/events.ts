@@ -29,6 +29,9 @@ export interface AppEventMap {
     "af-stream-end": { text: string | null; from: string } | null;
     "af-reset-chat": { agent: string | null };
     "af-wipe-all": void;
+    /** A reset finished and its survivors have been applied — the agent list
+     *  is settled, so a stale chat target can now be judged. */
+    "af-agents-settled": void;
     "af-clear-feed": void;
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;

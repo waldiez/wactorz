@@ -8,6 +8,7 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { toast } from "../ui/ToastManager";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
+import { withoutAttachment } from "../ui/dashboard/attachTray";
 import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "../ui/dashboard/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { View } from "../ui/dashboard/types";
@@ -542,9 +543,9 @@ describe("DashboardChat — stop, attachments, external events", () => {
         const remote = att({ id: "a2", url: "https://x/y.png" });
         dc._pendingAttachments = [blob, remote];
 
-        dc._removeAttachment(remote); // non-blob → no revoke
-        expect(revoke).not.toHaveBeenCalled();
-        dc._removeAttachment(blob); // blob → revoke
+        dc._pendingAttachments = withoutAttachment(dc._pendingAttachments, remote);
+        expect(revoke).not.toHaveBeenCalled(); // non-blob → nothing to release
+        dc._pendingAttachments = withoutAttachment(dc._pendingAttachments, blob);
         expect(revoke).toHaveBeenCalledWith("blob:abc");
         expect(dc._pendingAttachments).toEqual([]);
         revoke.mockRestore();

@@ -76,6 +76,7 @@ export class CardDashboard {
     private _evFeed: ((e: Event) => void) | null = null;
     private _evConn: ((e: Event) => void) | null = null;
     private _wipeAll: ((e: Event) => void) | null = null;
+    private _agentsSettled: ((e: Event) => void) | null = null;
     private _clearFeed: ((e: Event) => void) | null = null;
 
     /** HA base URL (seeded from /api/config) — the Devices nav button links to it. */
@@ -347,6 +348,13 @@ export class CardDashboard {
             this._renderView();
         });
 
+        // Fires once the reset's survivors have been applied, so the list is
+        // settled — the only point at which "the chat target is gone" is a fact
+        // rather than a race with agents re-registering.
+        this._agentsSettled = listen("af-agents-settled", () => {
+            this._chat.dropTargetIfResetRemovedIt();
+        });
+
         // A metrics/logs reset cleared the server-side activity log — drop this
         // dashboard's own in-card feed too.
         this._clearFeed = listen("af-clear-feed", () => {
@@ -362,6 +370,7 @@ export class CardDashboard {
             ["af-feed-push", this._evFeed],
             ["af-connection-status", this._evConn],
             ["af-wipe-all", this._wipeAll],
+            ["af-agents-settled", this._agentsSettled],
             ["af-clear-feed", this._clearFeed],
         ];
         pairs.forEach(([name, fn]) => {
@@ -370,6 +379,7 @@ export class CardDashboard {
             }
         });
         this._evFeed = this._evConn = this._wipeAll = this._clearFeed = null;
+        this._agentsSettled = null;
     }
 
     renderView(): void {

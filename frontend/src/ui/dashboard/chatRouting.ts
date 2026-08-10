@@ -68,3 +68,17 @@ export function stripLeadingMention(content: string, target: string): string {
     const escaped = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return content.replace(new RegExp(`^@${escaped}\\b\\s*`, "i"), "");
 }
+
+/**
+ * The agent to move to when a reset destroyed the current one, or null to stay.
+ *
+ * Null when the target survived, and null when nothing is messageable — during
+ * the churn an empty list means "not back yet", never "yours is gone".
+ */
+export function replacementAfterReset(agents: AgentInfo[], current: string): string | null {
+    const messageable = agents.filter(canDirectMessage);
+    if (!messageable.length || messageable.some(a => a.name === current)) {
+        return null;
+    }
+    return messageable.find(a => a.name === MAIN_AGENT)?.name ?? messageable[0]!.name;
+}

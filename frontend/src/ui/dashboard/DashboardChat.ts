@@ -22,13 +22,14 @@ import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar } from "./chatIobar";
 import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
-import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "./chatRouting";
+import { pickChatTarget, replacementAfterReset, resolveSendTarget, stripLeadingMention } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
 import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";
 import { MAIN_AGENT } from "../../agents/naming";
+import { toast } from "../ToastManager";
 import { UPLOADS_ENABLED } from "./uploads";
-import { renderAttachTray } from "./attachTray";
+import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, listen } from "../../events";
 
 /** What the chat controller needs from its host (CardDashboard). */
@@ -114,7 +115,7 @@ export class DashboardChat {
     clearAll(): void {
         this.chatMessages = [];
         this._historyLoaded.clear();
-        this._dropPendingAttachments();
+        this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
 
     /** Forget that an agent's history was loaded (so it re-fetches if re-added). */
@@ -146,25 +147,10 @@ export class DashboardChat {
 
     /** Render the pending-attachment chips into the iobar tray. */
     private _renderAttachTray(): void {
-        renderAttachTray(this.root, this._pendingAttachments, att => this._removeAttachment(att));
-    }
-
-    private _removeAttachment(att: Attachment): void {
-        this._pendingAttachments = this._pendingAttachments.filter(a => a !== att);
-        if (att.url?.startsWith("blob:")) {
-            URL.revokeObjectURL(att.url);
-        }
-        this._renderAttachTray();
-    }
-
-    /** Discard all pending attachments (send/wipe), revoking dev-stub blob URLs. */
-    private _dropPendingAttachments(): void {
-        this._pendingAttachments.forEach(a => {
-            if (a.url?.startsWith("blob:")) {
-                URL.revokeObjectURL(a.url);
-            }
+        renderAttachTray(this.root, this._pendingAttachments, att => {
+            this._pendingAttachments = withoutAttachment(this._pendingAttachments, att);
+            this._renderAttachTray();
         });
-        this._pendingAttachments = [];
     }
 
     private _buildChatSidebar(): HTMLElement {
@@ -242,6 +228,14 @@ export class DashboardChat {
         this._listVisible = false;
     }
 
+    /** Re-render everything that names the current target, together. */
+    private _refreshForTarget(): void {
+        this.renderSidebar();
+        this.renderChatPaneHeader();
+        this.renderChatThread();
+        this._updateComposerPlaceholder();
+    }
+
     /** Show the chat pane, or the agent list when the user asked for it. */
     private _syncPaneVisibility(): void {
         const open = !this._listVisible && Boolean(this.chatTarget);
@@ -267,9 +261,7 @@ export class DashboardChat {
         }
         this.chatTarget = name;
         this._userPicked = true;
-        this.renderSidebar();
-        this.renderChatPaneHeader();
-        this.renderChatThread();
+        this._refreshForTarget();
         void this.loadHistory(name);
         this.updateTargetSelect();
         this._listVisible = false;
@@ -427,14 +419,16 @@ export class DashboardChat {
                 opt.textContent = `@${agent.name}`;
                 select.appendChild(opt);
             });
-        // Keep chatTarget a live, messageable agent and guarantee a selection.
-        this.syncChatTarget();
+        // Render only. This used to call `syncChatTarget()` and fall back to the
+        // first option, so drawing the dropdown decided who the next message went
+        // to — and it runs on every agent-list change, including each individual
+        // removal during a reset. Once the chosen agent was momentarily absent the
+        // target moved to `main`, while the pane header and thread went on naming
+        // the agent the user picked. The select shows a fallback when the target
+        // is not in the list; the target itself is the user's, and only a user
+        // action changes it.
         const hasTarget = [...select.options].some(o => o.value === this.chatTarget);
-        const first = select.options[0];
-        if (!hasTarget && first) {
-            this.chatTarget = first.value;
-        }
-        select.value = this.chatTarget;
+        select.value = hasTarget ? this.chatTarget : (select.options[0]?.value ?? "");
     }
 
     /** Rebuild the target-agent `<select>` options from the current agent list. */
@@ -452,6 +446,30 @@ export class DashboardChat {
         if (input) {
             input.placeholder = `Message @${this.chatTarget}…`;
         }
+    }
+
+    /**
+     * After a reset, move off an agent that did not survive it — and say so.
+     *
+     * Safe only here: the reset frame carries the settled list, so "gone" means
+     * gone rather than "not back yet". A spawned agent is destroyed by a reset;
+     * a system agent returns.
+     */
+    dropTargetIfResetRemovedIt(): void {
+        const next = replacementAfterReset([...this.host.agents.values()], this.chatTarget);
+        if (next === null) {
+            return;
+        }
+        const lost = this.chatTarget;
+        this.chatTarget = next;
+        this._userPicked = false;
+        this._refreshForTarget();
+        this.updateTargetSelect();
+        toast.show({
+            type: "system",
+            title: "Chat moved",
+            message: `@${lost} did not survive the reset — now messaging @${this.chatTarget}.`,
+        });
     }
 
     /** Keep chatTarget on a live messageable agent (prefers main; never an id). */
@@ -493,7 +511,7 @@ export class DashboardChat {
             ...(attachments.length ? { attachments: [...attachments] } : {}),
         };
         this.chatMessages.push(msg);
-        this._dropPendingAttachments();
+        this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
         this._renderAttachTray();
         this._showSentMessage(msg, prevTarget !== target);
         input.value = "";

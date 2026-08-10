@@ -255,6 +255,13 @@ export class WSClient {
         const scope = asStr(data["scope"]);
         if (scope === "all") {
             emit("af-wipe-all");
+            // The reset frame carries the survivors itself — the server rebuilds
+            // from the registry before broadcasting — so apply it rather than
+            // sitting on an empty list until the next heartbeat.
+            this._applyStatePatch(data["state"] as StatePatch | undefined);
+            // The list is now whatever survived, in one frame — the only moment
+            // a stale chat target can be judged without racing the churn.
+            emit("af-agents-settled");
             return;
         }
         this._applyStatePatch(data["state"] as StatePatch | undefined);

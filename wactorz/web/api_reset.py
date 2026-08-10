@@ -195,23 +195,26 @@ async def reset_handler(request: web.Request) -> Response:
             runtime.state["nodes"].clear()
             runtime.state["alerts"].clear()
             runtime.state["log_feed"].clear()
-            await ws.broadcast(
-                {
-                    "type": "reset",
-                    "scope": "all",
-                    "agent": None,
-                    "state": {
-                        "agents": [],
-                        "nodes": [],
-                        "alerts": [],
-                        "log_feed": [],
-                        "total_cost_usd": 0,
-                        "total_messages": 0,
-                    },
-                }
-            )
         finally:
             runtime.hard_resetting = False
+
+        # The kept agents were never stopped — only forgotten, because the state
+        # above was cleared. The registry knows them all, in memory, now — so
+        # rebuild from it and send ONE frame whose state already carries the
+        # survivors. Both calls must follow the flag clearing: `update_agent`
+        # drops writes and `snapshot` returns empty lists while a hard reset is
+        # in progress.
+        restored = events.rebuild_from_registry(runtime.registry)
+        if restored:
+            logger.info("[reset] restored %d running agent(s) to the dashboard", restored)
+        await ws.broadcast(
+            {
+                "type": "reset",
+                "scope": "all",
+                "agent": None,
+                "state": events.snapshot(),
+            }
+        )
         return web.json_response({"status": "ok", "scope": "all", "agent": None})
     if scope == "chat":
         _reset.reset_chat(agent)

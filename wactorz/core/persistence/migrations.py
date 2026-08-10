@@ -283,6 +283,12 @@ _STATE_MIGRATIONS = {
     # 3: migrate_state_3,
 }
 
+# migration_history rows are only ever written on success, which makes the table
+# the record of what is actually done. These prefixes are how a row's kind is
+# recognised when reading it back, so they are written in exactly one place.
+_SQL_HISTORY_PREFIX = "SQL schema migration v"
+_STATE_HISTORY_PREFIX = "State data migration v"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. SPAWN REGISTRY VALIDATION
@@ -497,6 +503,28 @@ def get_current_version(db) -> int:
     return 0  # fresh database
 
 
+def _pending_state_versions(db) -> list[int]:
+    """Registered state migrations with no success recorded in the history table.
+
+    State work is tracked here rather than derived from ``framework_version``
+    because the two can legitimately disagree. A SQL migration is not idempotent,
+    so its version must be stamped once applied; its paired state migration may
+    still be owed. One number meaning both is what let a failed state migration
+    be stamped as done and never retried.
+    """
+    done: set[int] = set()
+    try:
+        rows = db.conn.execute(
+            "SELECT version FROM migration_history WHERE description LIKE ?",
+            (f"{_STATE_HISTORY_PREFIX}%",),
+        ).fetchall()
+        done = {int(row[0]) for row in rows}
+    except sqlite3.OperationalError:
+        # No history table yet (a v1 database) — nothing can have been recorded.
+        pass
+    return sorted(v for v in _STATE_MIGRATIONS if v <= FRAMEWORK_VERSION and v not in done)
+
+
 def run_migrations(db, pickle_store=None) -> dict:
     """Run all pending migrations from current version to FRAMEWORK_VERSION.
 
@@ -524,21 +552,30 @@ def run_migrations(db, pickle_store=None) -> dict:
         "errors": [],
     }
 
-    if current >= FRAMEWORK_VERSION:
+    pending_state = _pending_state_versions(db)
+
+    if current >= FRAMEWORK_VERSION and not pending_state:
         logger.info(f"[Migration] Framework v{FRAMEWORK_VERSION} — no migrations needed")
         # Still validate spawn registry even if no version change
         result["spawn_issues"] = validate_spawn_registry(db)
         return result
 
-    logger.info(
-        f"[Migration] Upgrading framework v{current} → v{FRAMEWORK_VERSION} "
-        f"({FRAMEWORK_VERSION - current} migration(s) to apply)"
-    )
+    if current < FRAMEWORK_VERSION:
+        logger.info(
+            f"[Migration] Upgrading framework v{current} → v{FRAMEWORK_VERSION} "
+            f"({FRAMEWORK_VERSION - current} migration(s) to apply)"
+        )
+    else:
+        logger.info(
+            f"[Migration] Framework v{current} — retrying state migration(s) {pending_state}"
+        )
 
     # ── SQL schema migrations ──────────────────────────────────────────────
+    schema_ok_through = current
     for version in range(current + 1, FRAMEWORK_VERSION + 1):
         migrate_fn = _SQL_MIGRATIONS.get(version)
         if not migrate_fn:
+            schema_ok_through = version  # nothing owed at this version
             continue
 
         t0 = time.time()
@@ -552,12 +589,13 @@ def run_migrations(db, pickle_store=None) -> dict:
                     db.conn.execute(
                         "INSERT INTO migration_history (version, applied_at, description, duration_ms) "
                         "VALUES (?, ?, ?, ?)",
-                        (version, time.time(), f"SQL schema migration v{version}", duration_ms),
+                        (version, time.time(), f"{_SQL_HISTORY_PREFIX}{version}", duration_ms),
                     )
                 except sqlite3.OperationalError:
                     pass  # migration_history table might not exist yet (v1→v2)
 
             result["sql_migrations"] += 1
+            schema_ok_through = version
             logger.info(f"[Migration] SQL v{version} applied ({(time.time() - t0) * 1000:.0f}ms)")
 
         except Exception as e:
@@ -568,10 +606,8 @@ def run_migrations(db, pickle_store=None) -> dict:
             break
 
     # ── State data migrations ──────────────────────────────────────────────
-    for version in range(current + 1, FRAMEWORK_VERSION + 1):
-        migrate_fn = _STATE_MIGRATIONS.get(version)
-        if not migrate_fn:
-            continue
+    for version in pending_state:
+        migrate_fn = _STATE_MIGRATIONS[version]
 
         t0 = time.time()
         try:
@@ -584,7 +620,7 @@ def run_migrations(db, pickle_store=None) -> dict:
                 db.conn.execute(
                     "INSERT INTO migration_history (version, applied_at, description, duration_ms) "
                     "VALUES (?, ?, ?, ?)",
-                    (version, time.time(), f"State data migration v{version}", duration_ms),
+                    (version, time.time(), f"{_STATE_HISTORY_PREFIX}{version}", duration_ms),
                 )
                 db.conn.commit()
             except sqlite3.OperationalError:
@@ -597,11 +633,15 @@ def run_migrations(db, pickle_store=None) -> dict:
             # State migrations are best-effort — continue with next version
 
     # ── Update stored version ──────────────────────────────────────────────
-    if not result["errors"] or result["sql_migrations"] > 0:
+    # The highest version the schema actually reached — not FRAMEWORK_VERSION,
+    # which would skip a SQL migration that failed part-way through the run. A
+    # state migration that failed no longer holds this back: it is retried from
+    # the history table instead.
+    if schema_ok_through > current:
         try:
             db.conn.execute(
                 "UPDATE schema_version SET framework_version=?",
-                (FRAMEWORK_VERSION,),
+                (schema_ok_through,),
             )
             db.conn.commit()
         except sqlite3.OperationalError:

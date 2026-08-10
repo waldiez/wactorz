@@ -10,8 +10,9 @@
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
 import type { View } from "./types";
-import { canDirectMessage, messageableNames, stateColor, stateLabel } from "./agentState";
+import { canDirectMessage, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
+import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
 import { renderTargetSelect } from "./targetSelect";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
@@ -143,7 +144,13 @@ export class DashboardChat {
         this.resolveDefaultTarget();
         const chat = document.createElement("div");
         chat.className = "af-chat";
-        chat.append(this._buildChatSidebar(), this._buildChatPane());
+        chat.append(
+            buildChatSidebar(this.sidebarFilter, value => {
+                this.sidebarFilter = value;
+                this.renderSidebar();
+            }),
+            buildChatPane(),
+        );
 
         this.renderSidebar();
         this.renderChatPaneHeader();
@@ -167,50 +174,6 @@ export class DashboardChat {
             this._pendingAttachments = withoutAttachment(this._pendingAttachments, att);
             this._renderAttachTray();
         });
-    }
-
-    private _buildChatSidebar(): HTMLElement {
-        const sidebar = document.createElement("div");
-        sidebar.className = "af-chat-sidebar";
-
-        const searchWrap = document.createElement("div");
-        searchWrap.className = "af-chat-sidebar-search";
-        const searchInput = document.createElement("input");
-        // Keep the default text type — `type="search"` adds browser chrome (a
-        // clear button / WebKit rounding) that would change this field's look.
-        searchInput.id = "af-agent-filter";
-        searchInput.name = "agent-filter";
-        searchInput.placeholder = "Filter agents…";
-        searchInput.setAttribute("aria-label", "Filter agents");
-        searchInput.value = this.sidebarFilter;
-        searchInput.addEventListener("input", () => {
-            this.sidebarFilter = searchInput.value.toLowerCase();
-            this.renderSidebar();
-        });
-        searchWrap.appendChild(searchInput);
-        sidebar.appendChild(searchWrap);
-
-        const agentList = document.createElement("div");
-        agentList.className = "af-chat-agent-list";
-        agentList.id = "af-chat-agent-list";
-        sidebar.appendChild(agentList);
-        return sidebar;
-    }
-
-    private _buildChatPane(): HTMLElement {
-        const pane = document.createElement("div");
-        pane.className = "af-chat-pane";
-
-        const paneHdr = document.createElement("div");
-        paneHdr.className = "af-chat-pane-header";
-        paneHdr.id = "af-chat-pane-header";
-
-        const thread = document.createElement("div");
-        thread.className = "af-chat-thread";
-        thread.id = "af-chat-thread";
-
-        pane.append(paneHdr, thread);
-        return pane;
     }
 
     /**
@@ -284,37 +247,11 @@ export class DashboardChat {
         if (!hdr) {
             return;
         }
-        hdr.innerHTML = "";
-        hdr.appendChild(this._buildChatBackBtn());
-
         const agent = [...this.host.agents.values()].find(a => a.name === this.chatTarget);
-        if (agent) {
-            const dot = document.createElement("span");
-            dot.className = "af-chat-agent-dot";
-            dot.style.background = stateColor(agent.state);
-            hdr.appendChild(dot);
-        }
-        const title = document.createElement("span");
-        title.className = "af-chat-pane-title";
-        title.textContent = `@${this.chatTarget}`;
-        hdr.appendChild(title);
-        if (agent) {
-            const st = document.createElement("span");
-            st.className = "af-chat-pane-state";
-            st.textContent = stateLabel(agent.state);
-            hdr.appendChild(st);
-        }
-    }
-
-    private _buildChatBackBtn(): HTMLButtonElement {
-        const backBtn = document.createElement("button");
-        backBtn.className = "af-chat-back-btn";
-        backBtn.textContent = "‹ Back";
-        backBtn.addEventListener("click", () => {
+        renderPaneHeader(hdr, this.chatTarget, agent, () => {
             this._listVisible = true;
             this._syncPaneVisibility();
         });
-        return backBtn;
     }
 
     /** True when `msg` belongs to the currently open agent thread. */

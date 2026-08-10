@@ -742,6 +742,23 @@ describe("mobile master–detail: which pane is showing", () => {
         expect(input.placeholder).toBe("Message @catalog…");
     });
 
+    it("opens the conversation when sending while the list is showing", () => {
+        // Already in the chat view, list showing: nothing mounts, so clearing
+        // the flag is not enough on its own — the send path has to apply it.
+        const { host, chat, el } = mount([agent("main"), agent("catalog")]);
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+
+        chat.wire();
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "@catalog spawn weather-agent", target: "catalog", attachments: [] },
+            }),
+        );
+
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
     it("keeps the list showing across a re-render", () => {
         // Deriving purely from "has a target" would re-open the pane here,
         // making Back appear to do nothing the moment anything re-rendered.

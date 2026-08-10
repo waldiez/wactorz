@@ -517,6 +517,10 @@ export class DashboardChat {
             this.host.setView("chat");
             return;
         }
+        // Already in the chat view: `_focusConversation` cleared the list, but
+        // only a mount applies that. Sending from the agent list otherwise left
+        // the user on the list, with the reply arriving out of sight.
+        this._syncPaneVisibility();
         if (targetSwitched) {
             this.renderSidebar();
             this.renderChatPaneHeader();

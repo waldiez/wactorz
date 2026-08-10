@@ -29,9 +29,11 @@ export interface AppEventMap {
     "af-stream-end": { text: string | null; from: string } | null;
     "af-reset-chat": { agent: string | null };
     "af-wipe-all": void;
-    /** A reset finished and its survivors have been applied — the agent list
-     *  is settled, so a stale chat target can now be judged. */
-    "af-agents-settled": void;
+    /** The agent list is settled and can be trusted: a reset's survivors have
+     *  been applied, or a named agent was deleted. Either way "the chat target
+     *  is gone" is now a fact rather than a race with agents re-registering.
+     *  The reason only picks the wording the user is shown. */
+    "af-agents-settled": { reason: "reset" | "deleted" };
     "af-clear-feed": void;
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;

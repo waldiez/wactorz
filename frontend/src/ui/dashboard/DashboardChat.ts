@@ -10,19 +10,20 @@
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
 import type { View } from "./types";
-import {
-    canDirectMessage,
-    messageableNames,
-    stateColor,
-    stateLabel,
-    MESSAGEABLE_PRIORITY,
-} from "./agentState";
+import { canDirectMessage, messageableNames, stateColor, stateLabel } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
+import { renderTargetSelect } from "./targetSelect";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
-import { buildIobar as buildChatIobar } from "./chatIobar";
+import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
 import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
-import { pickChatTarget, replacementAfterReset, resolveSendTarget, stripLeadingMention } from "./chatRouting";
+import {
+    defaultChatTarget,
+    replacementTarget,
+    resolveSendTarget,
+    sendBlockedReason,
+    stripLeadingMention,
+} from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
 import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";
@@ -45,7 +46,13 @@ export interface ChatHost {
 }
 
 export class DashboardChat {
-    chatTarget = MAIN_AGENT;
+    /**
+     * Who the user is talking to — their choice, and nothing else. Empty until
+     * one is made (or resolved for them on first arrival), which is the state
+     * the old `MAIN_AGENT` default could not express: "never chose" looked
+     * exactly like "chose main", so renders felt free to overwrite it.
+     */
+    chatTarget = "";
     private chatMessages: ChatMessage[] = [];
     private sidebarFilter = "";
 
@@ -61,9 +68,6 @@ export class DashboardChat {
         },
     });
     private _lastSentTarget = MAIN_AGENT;
-    // True once the user has explicitly chosen a target. Until then the picker
-    // prefers main (so an agent registering before main on startup can't stick).
-    private _userPicked = false;
     /**
      * Mobile master–detail: the pane is open unless the user asked for the list.
      * Derived in `_syncPaneVisibility` rather than toggled at each call site —
@@ -80,7 +84,7 @@ export class DashboardChat {
         // Only messageable agents — mirrors the target <select> (see _populateSelect).
         agentNames: () => messageableNames(this.host.agents.values()),
         setTarget: (name: string) => this.setTarget(name),
-        send: (input, select) => this._sendMessage(input, select),
+        send: input => this._sendMessage(input),
     });
 
     private _evChat: EventListener | null = null;
@@ -100,10 +104,20 @@ export class DashboardChat {
         return this.host.root;
     }
 
-    /** Switch the open thread to `agent` (wactor-card "Chat" button). */
+    /**
+     * Switch the conversation to `name` — the one owner of a target change.
+     *
+     * Every way of choosing an agent lands here (wactor-card "Chat" button, the
+     * target `<select>`, the `@mention` panel, the sidebar). It used to set the
+     * field and stop, so each caller re-rendered whatever it remembered — in
+     * practice only the composer placeholder — and the pane header and thread
+     * went on showing the previous conversation.
+     */
     setTarget(name: string): void {
         this.chatTarget = name;
-        this._userPicked = true;
+        this._refreshForTarget();
+        void this.loadHistory(name);
+        this.updateTargetSelect();
     }
 
     /** Release the mic if a recording was in progress (dashboard hidden). */
@@ -125,6 +139,8 @@ export class DashboardChat {
 
     /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
     buildChatView(): HTMLElement {
+        // Building the view is the first moment there is something to open on.
+        this.resolveDefaultTarget();
         const chat = document.createElement("div");
         chat.className = "af-chat";
         chat.append(this._buildChatSidebar(), this._buildChatPane());
@@ -210,10 +226,7 @@ export class DashboardChat {
         this._listVisible = false;
         // The composer names its recipient, and nothing on the send paths
         // refreshed it — an `@mention` left it advertising the previous agent,
-        // "Message @main…" while replies went to catalog. Only the placeholder:
-        // `updateTargetSelect` also repopulates the select, which re-runs
-        // `syncChatTarget` and would snap the target back to main here, since
-        // `_userPicked` is not set until after this returns.
+        // "Message @main…" while replies went to catalog.
         this._updateComposerPlaceholder();
     }
 
@@ -259,11 +272,8 @@ export class DashboardChat {
         if (!latest || !canDirectMessage(latest)) {
             return;
         }
-        this.chatTarget = name;
-        this._userPicked = true;
-        this._refreshForTarget();
-        void this.loadHistory(name);
-        this.updateTargetSelect();
+        this.setTarget(name);
+        // Picking from the sidebar is also a request to see the conversation.
         this._listVisible = false;
         this._syncPaneVisibility();
     }
@@ -357,7 +367,8 @@ export class DashboardChat {
     /** Fetch and merge an agent's persisted chat history once, by agent NAME
      *  (history is keyed by name, not actor id; subsequent calls no-op). */
     async loadHistory(agentName: string): Promise<void> {
-        if (this._historyLoaded.has(agentName)) {
+        // No target chosen yet — there is no conversation to fetch.
+        if (!agentName || this._historyLoaded.has(agentName)) {
             return;
         }
         const incoming = await fetchChatHistory(agentName);
@@ -383,7 +394,7 @@ export class DashboardChat {
             target: () => this.chatTarget,
             setTarget: name => this.setTarget(name),
             populateSelect: select => this._populateSelect(select),
-            send: (input, select) => this._sendMessage(input, select),
+            send: input => this._sendMessage(input),
             stop: () => void this._stopGeneration(),
         });
     }
@@ -396,39 +407,7 @@ export class DashboardChat {
     }
 
     private _populateSelect(select: HTMLSelectElement): void {
-        select.innerHTML = "";
-        [...this.host.agents.values()]
-            .filter(canDirectMessage)
-            .sort((a, b) => {
-                const ai = MESSAGEABLE_PRIORITY.indexOf(a.name);
-                const bi = MESSAGEABLE_PRIORITY.indexOf(b.name);
-                if (ai !== -1 && bi !== -1) {
-                    return ai - bi;
-                }
-                if (ai !== -1) {
-                    return -1;
-                }
-                if (bi !== -1) {
-                    return 1;
-                }
-                return a.name.localeCompare(b.name);
-            })
-            .forEach(agent => {
-                const opt = document.createElement("option");
-                opt.value = agent.name;
-                opt.textContent = `@${agent.name}`;
-                select.appendChild(opt);
-            });
-        // Render only. This used to call `syncChatTarget()` and fall back to the
-        // first option, so drawing the dropdown decided who the next message went
-        // to — and it runs on every agent-list change, including each individual
-        // removal during a reset. Once the chosen agent was momentarily absent the
-        // target moved to `main`, while the pane header and thread went on naming
-        // the agent the user picked. The select shows a fallback when the target
-        // is not in the list; the target itself is the user's, and only a user
-        // action changes it.
-        const hasTarget = [...select.options].some(o => o.value === this.chatTarget);
-        select.value = hasTarget ? this.chatTarget : (select.options[0]?.value ?? "");
+        renderTargetSelect(select, [...this.host.agents.values()], this.chatTarget);
     }
 
     /** Rebuild the target-agent `<select>` options from the current agent list. */
@@ -444,59 +423,91 @@ export class DashboardChat {
     private _updateComposerPlaceholder(): void {
         const input = this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input");
         if (input) {
-            input.placeholder = `Message @${this.chatTarget}…`;
+            input.placeholder = composerPlaceholder(this.chatTarget);
         }
     }
 
     /**
-     * After a reset, move off an agent that did not survive it — and say so.
+     * Move off a chat target that has left the list for good — and say so.
      *
-     * Safe only here: the reset frame carries the settled list, so "gone" means
-     * gone rather than "not back yet". A spawned agent is destroyed by a reset;
-     * a system agent returns.
+     * Called only where "gone" is a fact: a reset frame carrying the settled
+     * survivors, or a `delete_agent` frame naming the agent. Both destroy the
+     * conversation rather than pausing it, so there is nothing to resume into
+     * and staying put would strand the user. A *stopped* agent is the opposite
+     * case — it keeps the choice, and the send blocks instead.
      */
-    dropTargetIfResetRemovedIt(): void {
-        const next = replacementAfterReset([...this.host.agents.values()], this.chatTarget);
+    dropTargetIfGone(reason: "reset" | "deleted"): void {
+        const next = replacementTarget([...this.host.agents.values()], this.chatTarget);
         if (next === null) {
             return;
         }
         const lost = this.chatTarget;
         this.chatTarget = next;
-        this._userPicked = false;
         this._refreshForTarget();
         this.updateTargetSelect();
+        // The move always happens, or the chat is wrong when it is next opened.
+        // The toast explains a change on screen, so it is only owed to someone
+        // looking at the conversation that just changed.
+        if (this.host.getView() !== "chat") {
+            return;
+        }
+        const what = reason === "deleted" ? "was deleted" : "did not survive the reset";
         toast.show({
             type: "system",
             title: "Chat moved",
-            message: `@${lost} did not survive the reset — now messaging @${this.chatTarget}.`,
+            message: `@${lost} ${what} — now messaging @${this.chatTarget}.`,
         });
     }
 
-    /** Keep chatTarget on a live messageable agent (prefers main; never an id). */
-    syncChatTarget(): void {
-        this.chatTarget = pickChatTarget([...this.host.agents.values()], this.chatTarget, this._userPicked);
+    /**
+     * Fill an empty choice on first arrival at the chat view. Never overwrites:
+     * a target already on screen is the user's, whether they picked it or it was
+     * picked for them, and moving it under them is the whole class of bug this
+     * split removes.
+     */
+    resolveDefaultTarget(): void {
+        if (!this.chatTarget) {
+            this.chatTarget = defaultChatTarget([...this.host.agents.values()]);
+        }
     }
 
-    private _sendMessage(input: HTMLTextAreaElement, select: HTMLSelectElement): void {
+    private _sendMessage(input: HTMLTextAreaElement): void {
         const content = input.value.trim();
         const attachments = this._pendingAttachments;
         if (!content && !attachments.length) {
             return;
         }
+        const prevTarget = this.chatTarget;
+        const agents = [...this.host.agents.values()];
+        // The choice, not the control. `select.value` is set programmatically on
+        // every redraw and shows a fallback when the choice is not among the
+        // options, so reading it here let drawing a dropdown decide where the
+        // message went.
+        const target = resolveSendTarget(
+            content,
+            agents.map(a => a.name),
+            this.chatTarget || MAIN_AGENT,
+        );
+
+        // Say so rather than sending somewhere else. Routing a message the user
+        // addressed to a stopped agent onwards to main is what the original
+        // complaint was, and a quiet fallback here would reproduce it.
+        const blocked = sendBlockedReason(agents, target);
+        if (blocked) {
+            toast.show({ type: "alert-error", title: "Agent unavailable", message: blocked });
+            return;
+        }
+
         if (content) {
             this._chatInput.recordSent(content, input);
         }
+        this._deliver(input, content, target, prevTarget);
+    }
 
-        const prevTarget = this.chatTarget;
-        const target = resolveSendTarget(
-            content,
-            [...this.host.agents.values()].map(a => a.name),
-            select.value || MAIN_AGENT,
-        );
+    /** Show the message, clear the composer and put it on the wire. */
+    private _deliver(input: HTMLTextAreaElement, content: string, target: string, prevTarget: string): void {
+        const attachments = this._pendingAttachments;
         this._focusConversation(target);
-        // An @mention that routes elsewhere is a deliberate pick — keep it sticky
-        // so syncChatTarget() won't snap the view back to main on the next reply.
-        this._userPicked ||= target !== prevTarget;
         this._lastSentTarget = target;
         // The leading @mention is the routing prefix; drop it from the displayed
         // bubble/feed (the transport re-adds the canonical one). Keep the original

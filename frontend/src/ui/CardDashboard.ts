@@ -348,11 +348,11 @@ export class CardDashboard {
             this._renderView();
         });
 
-        // Fires once the reset's survivors have been applied, so the list is
-        // settled — the only point at which "the chat target is gone" is a fact
-        // rather than a race with agents re-registering.
-        this._agentsSettled = listen("af-agents-settled", () => {
-            this._chat.dropTargetIfResetRemovedIt();
+        // Fires once the agent list can be trusted — a reset's survivors applied,
+        // or an agent explicitly deleted. The only point at which "the chat
+        // target is gone" is a fact rather than a race with re-registration.
+        this._agentsSettled = listen("af-agents-settled", d => {
+            this._chat.dropTargetIfGone(d?.reason ?? "reset");
         });
 
         // A metrics/logs reset cleared the server-side activity log — drop this
@@ -436,7 +436,7 @@ export class CardDashboard {
 
     private _setView(v: View): void {
         if (v === "chat") {
-            this._chat.syncChatTarget();
+            this._chat.resolveDefaultTarget();
             // Only on arrival. `_renderView` also runs for state updates while
             // the view is open, and resetting there would reopen the pane on the
             // next render — undoing Back the moment anything changed.

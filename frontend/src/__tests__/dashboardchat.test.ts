@@ -9,7 +9,12 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 import { toast } from "../ui/ToastManager";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
 import { withoutAttachment } from "../ui/dashboard/attachTray";
-import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "../ui/dashboard/chatRouting";
+import {
+    defaultChatTarget,
+    resolveSendTarget,
+    sendBlockedReason,
+    stripLeadingMention,
+} from "../ui/dashboard/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { View } from "../ui/dashboard/types";
 
@@ -51,27 +56,20 @@ const thread = (host: ChatHost) => host.root.querySelector<HTMLElement>("#af-cha
 // resolved to a friendly name keeps the id as its name.
 const UUID = "45511e2b-3a2f-4c1d-9e8a-1b2c3d4e5f60";
 
-describe("pickChatTarget", () => {
-    it("prefers main on startup even after another agent was auto-selected first", () => {
-        // No user pick yet: catalog registered before main and is the current
-        // auto-pick, but once main is present it must win (else it sticks).
-        expect(pickChatTarget([agent("catalog"), agent("main")], "catalog", false)).toBe("main");
+describe("defaultChatTarget", () => {
+    // Only ever consulted for an empty choice, so it answers one question:
+    // who should this dashboard open on? Keeping a choice, and moving off a
+    // dead one, are separate concerns now (resolveDefaultTarget, dropTargetIfGone).
+    it("prefers main, whatever order the agents arrived in", () => {
+        expect(defaultChatTarget([agent("catalog"), agent("main")])).toBe("main");
     });
 
     it("falls back to the alphabetical-first messageable agent when main is absent", () => {
-        expect(pickChatTarget([agent("catalog"), agent("worker")], "main", false)).toBe("catalog");
+        expect(defaultChatTarget([agent("catalog"), agent("worker")])).toBe("catalog");
     });
 
-    it("keeps a user-picked target even when main is present", () => {
-        expect(pickChatTarget([agent("catalog"), agent("main")], "catalog", true)).toBe("catalog");
-    });
-
-    it("moves a user-picked target off an agent that is gone", () => {
-        expect(pickChatTarget([agent("main"), agent("worker")], "ghost", true)).toBe("main");
-    });
-
-    it("returns current when there are no messageable agents", () => {
-        expect(pickChatTarget([], "main", false)).toBe("main");
+    it("returns nothing rather than guessing when there is no one to talk to", () => {
+        expect(defaultChatTarget([])).toBe("");
     });
 });
 
@@ -95,6 +93,20 @@ describe("resolveSendTarget", () => {
     });
 });
 
+describe("sendBlockedReason", () => {
+    it("passes a running agent", () => {
+        expect(sendBlockedReason([agent("worker")], "worker")).toBeNull();
+    });
+
+    it("tells a stopped agent apart from one that is gone", () => {
+        // "start it and try again" is actively wrong for an agent that no longer
+        // exists — there is nothing to start.
+        expect(sendBlockedReason([agent("worker", { state: "stopped" })], "worker")).toContain("start it");
+        expect(sendBlockedReason([], "worker")).not.toContain("start it");
+        expect(sendBlockedReason([], "worker")).toContain("worker");
+    });
+});
+
 describe("stripLeadingMention", () => {
     it("drops a leading @target (case-insensitive) and following space", () => {
         expect(stripLeadingMention("@catalog spawn x", "catalog")).toBe("spawn x");
@@ -115,37 +127,60 @@ describe("stripLeadingMention", () => {
     });
 });
 
-describe("DashboardChat — syncChatTarget", () => {
+describe("DashboardChat — resolveDefaultTarget", () => {
     it("prefers main even when an id-named agent sorts first", () => {
         const dc = new DashboardChat(makeHost([agent(UUID), agent("main")]));
-        dc.syncChatTarget();
+        dc.resolveDefaultTarget();
         expect(dc.chatTarget).toBe("main");
     });
 
-    it("never auto-targets a raw id — stays on the default when nothing better exists", () => {
+    it("never auto-targets a raw id — leaves the choice unmade instead", () => {
         const dc = new DashboardChat(makeHost([agent(UUID)]));
-        dc.syncChatTarget();
-        expect(dc.chatTarget).toBe("main"); // the default, NOT the uuid
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe(""); // NOT the uuid
     });
 
     it("falls back to the first human-named agent (ignoring id-named ones) when there is no main", () => {
         const dc = new DashboardChat(makeHost([agent(UUID), agent("zebra"), agent("alpha")]));
-        dc.syncChatTarget();
+        dc.resolveDefaultTarget();
         expect(dc.chatTarget).toBe("alpha");
     });
 
-    it("keeps a user-picked target instead of re-picking", () => {
+    it("keeps a target the user picked", () => {
         const dc = new DashboardChat(makeHost([agent("main"), agent("worker")]));
-        dc.setTarget("worker"); // explicit user pick → sticky
-        dc.syncChatTarget();
+        dc.setTarget("worker");
+        dc.resolveDefaultTarget();
         expect(dc.chatTarget).toBe("worker");
     });
 
-    it("re-selects main on startup even if an agent was auto-picked before main loaded", () => {
-        const dc = new DashboardChat(makeHost([agent("catalog"), agent("main")]));
-        dc.chatTarget = "catalog"; // auto-picked before main arrived (no user pick)
-        dc.syncChatTarget();
-        expect(dc.chatTarget).toBe("main");
+    it("says nothing about a recipient, and fetches nothing, until there is one", () => {
+        // An empty target is a real state now, so the two places that read it
+        // must cope: the composer must not advertise "@" and history must not
+        // request a conversation with nobody.
+        const fetchSpy = vi.fn();
+        globalThis.fetch = fetchSpy as unknown as typeof fetch;
+        const host = makeHost([]);
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.afterMount(); // the path that loads history for the open target
+
+        expect(dc.chatTarget).toBe("");
+        expect(host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")?.placeholder).toBe("Message…");
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("keeps a target resolved earlier, even once main turns up", () => {
+        // The behaviour change: first resolution sticks. Main arriving late no
+        // longer takes the conversation over — the user has already seen the
+        // current target named on screen, and moving it silently is the bug.
+        const host = makeHost([agent("catalog")]);
+        const dc = new DashboardChat(host);
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe("catalog");
+
+        host.agents.set("main", agent("main"));
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe("catalog");
     });
 });
 
@@ -225,11 +260,13 @@ describe("DashboardChat — target selection", () => {
         expect(dc.chatTarget).toBe("main"); // unchanged
     });
 
-    it("syncChatTarget falls back to main when the target vanished", () => {
+    it("resolveDefaultTarget leaves a target that vanished alone", () => {
+        // A target that is merely absent may be coming back, and a deletion has
+        // its own signal (dropTargetIfGone). Resolution only fills a blank.
         const dc = mount(host);
         dc.chatTarget = "ghost";
-        dc.syncChatTarget();
-        expect(dc.chatTarget).toBe("main");
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe("ghost");
     });
 
     it("populates the iobar select with messageable agents, main pinned first", () => {
@@ -523,12 +560,8 @@ describe("DashboardChat — stop, attachments, external events", () => {
         dc._pendingAttachments = [att()];
         const input = document.createElement("textarea");
         input.value = ""; // no text — attachment alone must still send
-        const select = document.createElement("select");
-        const opt = document.createElement("option");
-        opt.value = "worker";
-        select.append(opt);
-        select.value = "worker";
-        dc._sendMessage(input, select);
+        dc.chatTarget = "worker"; // the choice is what routes; the select only shows it
+        dc._sendMessage(input, document.createElement("select"));
 
         document.removeEventListener("af-send-message", onSend);
         expect(seen).toEqual([{ content: "", target: "worker", attachments: ["a1"] }]);
@@ -640,9 +673,9 @@ describe("DashboardChat — @mention target stickiness", () => {
         // the @mention switched the open thread to catalog
         expect(dc.chatTarget).toBe("catalog");
 
-        // a reply / agent-list refresh triggers syncChatTarget — it must NOT
-        // revert to main now that the @mention counts as a deliberate pick.
-        dc.syncChatTarget();
+        // arriving at the view resolves a default — it must NOT revert to main
+        // now that the @mention has set the target.
+        dc.resolveDefaultTarget();
         expect(dc.chatTarget).toBe("catalog");
 
         dc.unwire();
@@ -653,9 +686,9 @@ describe("mobile master–detail: which pane is showing", () => {
     /**
      * The pane is revealed by an `agent-selected` class on `.af-chat`. It used to
      * be added only inside `_selectAgent`, so arriving at the chat view with a
-     * target already chosen — which is what tapping "Chat" does, since
-     * `pickChatTarget` prefers `main` — left the sidebar showing and the rest of
-     * the screen empty.
+     * target already chosen — which is what tapping "Chat" does, since the
+     * default resolves to `main` — left the sidebar showing and the rest of the
+     * screen empty.
      */
     function mount(agents: AgentInfo[] = [agent("main"), agent("worker")]) {
         const host = makeHost(agents);

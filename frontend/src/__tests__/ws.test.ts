@@ -441,6 +441,24 @@ describe("WSClient", () => {
         expect(patchSpy).toHaveBeenCalledWith([{ agent_id: "m1", name: "main" }], undefined, {});
     });
 
+    it("a delete_agent frame settles the list too, so a dead chat target is judged", () => {
+        // Deletion is the other way the chat target can vanish for good. The
+        // frame names the agent, so it is a fact rather than reset churn.
+        const c = new WSClient();
+        c.connect("ws://localhost/ws");
+        const settled = vi.fn();
+        document.addEventListener("af-agents-settled", settled, { once: true });
+        ws().emit("message", {
+            data: JSON.stringify({
+                type: "delete_agent",
+                agent_id: "a1",
+                state: { agents: [{ agent_id: "m1", name: "main" }] },
+            }),
+        });
+        expect(settled).toHaveBeenCalledTimes(1);
+        expect((settled.mock.calls[0]![0] as CustomEvent).detail).toEqual({ reason: "deleted" });
+    });
+
     it("reset message with scope='logs' does not dispatch af-reset-chat event", () => {
         const c = new WSClient();
         c.connect("ws://localhost/ws");

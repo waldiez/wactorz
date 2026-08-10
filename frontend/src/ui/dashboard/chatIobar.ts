@@ -15,6 +15,11 @@ import { iconMarkup } from "./icons";
 import { UPLOADS_ENABLED, uploadFile } from "./uploads";
 import { emit, listen } from "../../events";
 
+/** The composer's prompt: it names the recipient, or invites picking one. */
+export function composerPlaceholder(target: string): string {
+    return target ? `Message @${target}…` : "Message…";
+}
+
 export interface IobarDeps {
     chatInput: ChatInput;
     stt: SpeechToText;
@@ -25,7 +30,7 @@ export interface IobarDeps {
     /** Fill the target <select> with messageable agents. */
     populateSelect(select: HTMLSelectElement): void;
     /** Send the current message. */
-    send(input: HTMLTextAreaElement, select: HTMLSelectElement): void;
+    send(input: HTMLTextAreaElement): void;
     /** Stop the in-flight generation (POST /chat/stop). */
     stop(): void;
 }
@@ -42,7 +47,7 @@ function buildTextarea(
     input.name = "chat-message";
     input.setAttribute("aria-label", "Chat message");
     input.rows = 1;
-    input.placeholder = `Message @${deps.target()}…`;
+    input.placeholder = composerPlaceholder(deps.target());
 
     // Auto-expand up to MAX_ROWS lines, then scroll. The cap is derived from
     // the computed line-height + padding/border so it tracks the CSS.
@@ -70,17 +75,13 @@ function buildTextarea(
     input.addEventListener("blur", () => {
         setTimeout(() => deps.chatInput.closePanel(mentionPanel), 150);
     });
-    select.addEventListener("change", () => {
-        deps.setTarget(select.value);
-        input.placeholder = `Message @${select.value}…`;
-    });
+    select.addEventListener("change", () => deps.setTarget(select.value));
     return input;
 }
 
 function buildSendBtn(
     deps: IobarDeps,
     input: HTMLTextAreaElement,
-    select: HTMLSelectElement,
     mentionPanel: HTMLElement,
 ): HTMLButtonElement {
     const sendBtn = document.createElement("button");
@@ -90,7 +91,7 @@ function buildSendBtn(
     sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
     sendBtn.addEventListener("click", () => {
         deps.chatInput.closePanel(mentionPanel);
-        deps.send(input, select); // recordSent() clears the ghost
+        deps.send(input); // recordSent() clears the ghost
     });
     return sendBtn;
 }
@@ -309,7 +310,7 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     if (micAvailable()) {
         bar.appendChild(buildMicBtn(deps.stt, input));
     }
-    const sendBtn = buildSendBtn(deps, input, select, mentionPanel);
+    const sendBtn = buildSendBtn(deps, input, mentionPanel);
     const stopBtn = buildStopBtn(deps);
     wireGenerationLifecycle(sendBtn, stopBtn);
     bar.append(sendBtn, stopBtn);

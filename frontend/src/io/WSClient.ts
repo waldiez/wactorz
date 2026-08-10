@@ -240,6 +240,9 @@ export class WSClient {
         if (type === "delete_agent") {
             // Server explicitly deleted an agent — remove it and apply rest of patch
             this._applyStatePatch(data["state"] as StatePatch | undefined, asStr(data["agent_id"]));
+            // The frame names the agent, so this is a fact, not reset churn: the
+            // chat target can be judged against the list that is left.
+            emit("af-agents-settled", { reason: "deleted" });
             return;
         }
         // Any message with a "state" field is a state patch broadcast; it may
@@ -261,7 +264,7 @@ export class WSClient {
             this._applyStatePatch(data["state"] as StatePatch | undefined);
             // The list is now whatever survived, in one frame — the only moment
             // a stale chat target can be judged without racing the churn.
-            emit("af-agents-settled");
+            emit("af-agents-settled", { reason: "reset" });
             return;
         }
         this._applyStatePatch(data["state"] as StatePatch | undefined);

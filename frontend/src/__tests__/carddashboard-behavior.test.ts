@@ -351,3 +351,46 @@ describe("CardDashboard behaviour", () => {
         });
     });
 });
+
+describe("entering the chat view opens a conversation", () => {
+    let cd: any;
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        localStorage.clear();
+        cd = new CardDashboard() as any;
+        cd.show([agent("main"), agent("worker")]);
+    });
+
+    afterEach(() => {
+        try {
+            cd.destroy();
+        } catch {
+            /* ignore */
+        }
+    });
+
+    const paneOpen = () => cd.root.querySelector(".af-chat")?.classList.contains("agent-selected");
+
+    it("arriving from another view clears a previous Back", () => {
+        cd._setView("chat");
+        cd.root.querySelector(".af-chat-back-btn")?.click();
+        expect(paneOpen()).toBe(false);
+
+        cd._setView("overview");
+        cd._setView("chat");
+
+        expect(paneOpen()).toBe(true);
+    });
+
+    it("re-rendering while already in chat leaves the list showing", () => {
+        // `_renderView` also runs for state updates. Resetting on every render
+        // would undo Back the moment anything changed on screen.
+        cd._setView("chat");
+        cd.root.querySelector(".af-chat-back-btn")?.click();
+
+        cd._setView("chat");
+
+        expect(paneOpen()).toBe(false);
+    });
+});

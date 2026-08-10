@@ -427,6 +427,12 @@ export class CardDashboard {
     private _setView(v: View): void {
         if (v === "chat") {
             this._chat.syncChatTarget();
+            // Only on arrival. `_renderView` also runs for state updates while
+            // the view is open, and resetting there would reopen the pane on the
+            // next render — undoing Back the moment anything changed.
+            if (this.view !== "chat") {
+                this._chat.showConversation();
+            }
         }
         this.view = v;
         this._renderView();

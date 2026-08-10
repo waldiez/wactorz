@@ -647,3 +647,107 @@ describe("DashboardChat — @mention target stickiness", () => {
         dc.unwire();
     });
 });
+
+describe("mobile master–detail: which pane is showing", () => {
+    /**
+     * The pane is revealed by an `agent-selected` class on `.af-chat`. It used to
+     * be added only inside `_selectAgent`, so arriving at the chat view with a
+     * target already chosen — which is what tapping "Chat" does, since
+     * `pickChatTarget` prefers `main` — left the sidebar showing and the rest of
+     * the screen empty.
+     */
+    function mount(agents: AgentInfo[] = [agent("main"), agent("worker")]) {
+        const host = makeHost(agents);
+        const chat = new DashboardChat(host);
+        host.root.appendChild(chat.buildChatView());
+        chat.afterMount();
+        return { host, chat, el: () => host.root.querySelector(".af-chat") };
+    }
+
+    it("opens the conversation when the view is entered with a target", () => {
+        const { el } = mount();
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("still opens it when an agent is picked from the list", () => {
+        const { host, el } = mount();
+        host.root.querySelector<HTMLElement>("#af-chat-agent-list button")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("shows the list when Back is pressed", () => {
+        const { host, el } = mount();
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+    });
+
+    it("opens the conversation when a message is sent from another view", () => {
+        // Typing "@catalog spawn weather agent" on Overview navigates to chat.
+        // Landing on the agent list there strands the user: the reply is already
+        // on its way to an agent they cannot see.
+        const { host, chat, el } = mount([agent("main"), agent("catalog")]);
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+
+        chat.wire();
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "@catalog spawn weather agent", target: "catalog", attachments: [] },
+            }),
+        );
+        chat.afterMount();
+
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("opens the conversation again when the view is re-entered", () => {
+        // Back is a choice within one visit. Leaving and returning via the nav
+        // means "Chat", which always means a conversation — otherwise one Back
+        // silently changes what that tab does until the next select or send.
+        const { host, chat, el } = mount();
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+
+        chat.showConversation(); // what CardDashboard._setView does on arrival
+        chat.afterMount();
+
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("names the new recipient in the composer after an @mention send", () => {
+        // The placeholder is the only on-screen statement of where a message
+        // goes. Left stale it read "Message @main…" while replies went to
+        // catalog — worse than unhelpful, because it is wrong.
+        // Start on another view: that is the path where _showSentMessage
+        // switches view and returns early, skipping updateTargetSelect. With the
+        // host already on "chat" the placeholder gets set by that branch instead,
+        // and the test passes whether or not the fix is present.
+        const host = makeHost([agent("main"), agent("catalog")], "overview");
+        const chat = new DashboardChat(host);
+        host.root.appendChild(chat.buildChatView());
+        chat.afterMount();
+        // The composer lives in the shell, outside the chat view, so the
+        // harness has to supply it the way the dashboard does.
+        const input = document.createElement("textarea");
+        input.id = "af-iobar-input";
+        host.root.appendChild(input);
+        chat.wire();
+
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "@catalog spawn weather agent", target: "catalog", attachments: [] },
+            }),
+        );
+
+        expect(input.placeholder).toBe("Message @catalog…");
+    });
+
+    it("keeps the list showing across a re-render", () => {
+        // Deriving purely from "has a target" would re-open the pane here,
+        // making Back appear to do nothing the moment anything re-rendered.
+        const { host, chat, el } = mount();
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        chat.afterMount();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+    });
+});

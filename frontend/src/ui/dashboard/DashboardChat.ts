@@ -63,6 +63,13 @@ export class DashboardChat {
     // True once the user has explicitly chosen a target. Until then the picker
     // prefers main (so an agent registering before main on startup can't stick).
     private _userPicked = false;
+    /**
+     * Mobile master–detail: the pane is open unless the user asked for the list.
+     * Derived in `_syncPaneVisibility` rather than toggled at each call site —
+     * the class used to be added only in `_selectAgent`, so arriving at the view
+     * with a target already chosen left the pane hidden and the screen blank.
+     */
+    private _listVisible = false;
 
     private _historyLoaded = new Set<string>();
     private _selfDispatching = false;
@@ -133,6 +140,7 @@ export class DashboardChat {
         this.renderChatPaneHeader();
         this.renderChatThread();
         this._renderAttachTray();
+        this._syncPaneVisibility();
         void this.loadHistory(this.chatTarget);
     }
 
@@ -203,6 +211,43 @@ export class DashboardChat {
         return pane;
     }
 
+    /**
+     * Point the chat view at `target` and open it.
+     *
+     * Sending a message is a request to see that conversation, so it overrides
+     * an earlier Back. Without this, "@catalog spawn weather agent" typed on
+     * Overview arrives in the chat view showing the agent list, with the reply
+     * already on its way to an agent the user cannot see.
+     */
+    private _focusConversation(target: string): void {
+        this.chatTarget = target;
+        this._listVisible = false;
+        // The composer names its recipient, and nothing on the send paths
+        // refreshed it — an `@mention` left it advertising the previous agent,
+        // "Message @main…" while replies went to catalog. Only the placeholder:
+        // `updateTargetSelect` also repopulates the select, which re-runs
+        // `syncChatTarget` and would snap the target back to main here, since
+        // `_userPicked` is not set until after this returns.
+        this._updateComposerPlaceholder();
+    }
+
+    /**
+     * Entering the chat view opens a conversation rather than the agent list.
+     *
+     * Back is a choice within one visit, not a lasting preference: without this
+     * a single Back changed what the Chat tab means until the user happened to
+     * select an agent or send something, with nothing on screen saying so.
+     */
+    showConversation(): void {
+        this._listVisible = false;
+    }
+
+    /** Show the chat pane, or the agent list when the user asked for it. */
+    private _syncPaneVisibility(): void {
+        const open = !this._listVisible && Boolean(this.chatTarget);
+        this.root.querySelector(".af-chat")?.classList.toggle("agent-selected", open);
+    }
+
     /** Render the agent list in the chat sidebar (honouring the current search filter). */
     renderSidebar(): void {
         const list = this.root.querySelector<HTMLElement>("#af-chat-agent-list");
@@ -227,8 +272,8 @@ export class DashboardChat {
         this.renderChatThread();
         void this.loadHistory(name);
         this.updateTargetSelect();
-        // Mobile: switch to pane view.
-        this.root.querySelector(".af-chat")?.classList.add("agent-selected");
+        this._listVisible = false;
+        this._syncPaneVisibility();
     }
 
     /** Render the chat pane header (target agent name, state dot, back button). */
@@ -264,7 +309,8 @@ export class DashboardChat {
         backBtn.className = "af-chat-back-btn";
         backBtn.textContent = "‹ Back";
         backBtn.addEventListener("click", () => {
-            this.root.querySelector(".af-chat")?.classList.remove("agent-selected");
+            this._listVisible = true;
+            this._syncPaneVisibility();
         });
         return backBtn;
     }
@@ -397,6 +443,11 @@ export class DashboardChat {
         if (select) {
             this._populateSelect(select);
         }
+        this._updateComposerPlaceholder();
+    }
+
+    /** The composer names the agent it will send to; keep it on the target. */
+    private _updateComposerPlaceholder(): void {
         const input = this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input");
         if (input) {
             input.placeholder = `Message @${this.chatTarget}…`;
@@ -424,7 +475,7 @@ export class DashboardChat {
             [...this.host.agents.values()].map(a => a.name),
             select.value || MAIN_AGENT,
         );
-        this.chatTarget = target;
+        this._focusConversation(target);
         // An @mention that routes elsewhere is a deliberate pick — keep it sticky
         // so syncChatTarget() won't snap the view back to main on the next reply.
         this._userPicked ||= target !== prevTarget;
@@ -567,7 +618,7 @@ export class DashboardChat {
             }
             const { content, target } = detail;
             const switched = this.chatTarget !== target;
-            this.chatTarget = target;
+            this._focusConversation(target);
             this._lastSentTarget = target;
             const msg: ChatMessage = {
                 id: uid("user"),

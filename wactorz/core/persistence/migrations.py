@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # ── Current version ────────────────────────────────────────────────────────
 # Increment this when adding new migrations.
 # The startup sequence runs all migrations between the stored version and this.
-FRAMEWORK_VERSION = 2
+FRAMEWORK_VERSION = 3
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -87,10 +87,23 @@ def migrate_sql_2(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE spawn_registry ADD COLUMN framework_version INTEGER DEFAULT 1")
 
 
+def migrate_sql_3(conn: sqlite3.Connection):
+    """v2 → v3: chat_log carries the attachments a turn was sent with.
+
+    Without it the thread rebuilt after a reload shows the text of a turn and
+    not the file it was about.
+    """
+    try:
+        conn.execute("SELECT attachments FROM chat_log LIMIT 1")
+    except sqlite3.OperationalError:
+        conn.execute("ALTER TABLE chat_log ADD COLUMN attachments TEXT DEFAULT ''")
+
+
 # Register SQL migrations: version → function
 # Each migration upgrades FROM (version-1) TO (version)
 _SQL_MIGRATIONS = {
     2: migrate_sql_2,
+    3: migrate_sql_3,
     # 3: migrate_sql_3,  ← add future migrations here
 }
 

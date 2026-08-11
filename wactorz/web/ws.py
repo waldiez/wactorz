@@ -15,7 +15,7 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from ..monitoring.log_redaction import redact
-from . import chat, events, lifecycle, origins, runtime
+from . import chat, events, lifecycle, origins, runtime, uploads
 
 logger = logging.getLogger(__name__)
 
@@ -200,15 +200,21 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # routing; defaults to the gateway id until a chat turn arrives.
     _reply_from = {"name": runtime.IO_GATEWAY_ID}
 
-    def _persist_chat(role: str, content: str, agent_name: str = "main") -> None:
+    def _persist_chat(
+        role: str,
+        content: str,
+        agent_name: str = "main",
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Best-effort write to chat_log. Never raises into the WS path."""
-        if runtime.db is None or not content:
+        if runtime.db is None or not (content or attachments):
             return
         try:
             runtime.db.write_chat_log(
                 ts=time.time(),
                 agent_name=agent_name,
                 role=role,
+                attachments=attachments,
                 # The log outlives the conversation and is readable through the
                 # API, so it gets the same treatment as the log file: a user can
                 # still type a credential even where no command accepts one.
@@ -289,6 +295,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()
+                        # Ids only travel on the wire; the name and type come
+                        # from what the server stored, so a caller cannot label
+                        # a file as something else in every thread that shows it.
+                        files = uploads.resolve(data.get("attachments"))
                         if content and runtime.registry is not None:
                             # Attribute the whole turn to the agent it addresses
                             # (slash commands and un-mentioned text default to
@@ -302,7 +312,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
-                            _persist_chat("user", content, _reply_from["name"])
+                            _persist_chat("user", content, _reply_from["name"], files)
 
                             async def _safe_route(c=content):
                                 try:

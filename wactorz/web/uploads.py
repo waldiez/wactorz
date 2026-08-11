@@ -16,6 +16,7 @@ Three properties, each load-bearing:
   matches on the `image/` prefix, which includes SVG.
 """
 
+import json
 import re
 import uuid
 from pathlib import Path
@@ -48,6 +49,10 @@ OPAQUE_TYPE = "application/octet-stream"
 #: How much of the stream is needed to decide. The longest signature is 12 bytes
 #: (RIFF/WEBP); the rest is slack so this never has to change with the table.
 SNIFF_BYTES = 32
+
+#: How many attachments one message may carry. A turn is composed by hand, so
+#: this is only a bound on what a crafted message can make the server look up.
+MAX_PER_MESSAGE = 20
 
 #: Stored ids are generated here, so a lookup can reject anything else outright
 #: rather than relying on path containment to catch a traversal.
@@ -109,3 +114,41 @@ def safe_name(raw: str) -> str:
     name = re.sub(r"[\x00-\x1f\x7f]", "", name).strip()
     name = re.sub(r'[<>:"|?*]', "", name)
     return name[:120] or "attachment"
+
+
+def metadata(file_id: str, state_dir: str | None = None) -> dict[str, object] | None:
+    """What was stored under `file_id`, or None if it is not ours.
+
+    Read on the send path rather than trusted from the request: a client knows
+    an id, but the name, type and size are the server's own record. Taking them
+    from the message would let a caller label a file as anything it liked in
+    every thread that shows it.
+    """
+    if not is_id(file_id):
+        return None
+    try:
+        raw = (upload_dir(state_dir) / f"{file_id}.json").read_text(encoding="utf-8")
+        stored = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(stored, dict):
+        return None
+    return {
+        "id": file_id,
+        "name": safe_name(str(stored.get("name", ""))),
+        "mime": str(stored.get("mime", OPAQUE_TYPE)),
+        "size": int(stored.get("size", 0) or 0),
+    }
+
+
+def resolve(ids: object, state_dir: str | None = None) -> list[dict[str, object]]:
+    """The stored records for `ids`, dropping anything unknown.
+
+    Silently dropping is right here: an id that does not resolve is a file that
+    was never stored or has since gone, and refusing the whole message would
+    lose the text of the turn over a missing thumbnail.
+    """
+    if not isinstance(ids, list):
+        return []
+    found = [metadata(str(i), state_dir) for i in ids[:MAX_PER_MESSAGE]]
+    return [m for m in found if m is not None]

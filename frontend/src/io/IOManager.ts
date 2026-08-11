@@ -65,7 +65,7 @@ export class IOManager {
     // Async for the caller-facing contract; the transport calls (WS send / MQTT
     // publish) are fire-and-forget, so there's nothing to await.
     // eslint-disable-next-line @typescript-eslint/require-await
-    async send(text: string, agent: AgentInfo | null): Promise<void> {
+    async send(text: string, agent: AgentInfo | null, attachments: string[] = []): Promise<void> {
         let content = text;
         // Prepend @name if a specific agent is selected and no prefix given.
         if (agent && !text.startsWith("@")) {
@@ -80,7 +80,7 @@ export class IOManager {
             timestampMs: Date.now(),
         };
 
-        const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT);
+        const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT, attachments);
         if (!sent) {
             toast.show({
                 type: "alert-error",

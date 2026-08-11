@@ -427,9 +427,9 @@ listen("af-agent-command", detail => {
 
 // af-iobar sends: route through ioManager (same as regular io-bar)
 listen("af-send-message", detail => {
-    const { content } = detail;
+    const { content, attachments } = detail;
     const agent = agentStore.getAgents().find(a => a.name === detail.target) ?? null;
-    void ioManager.send(content, agent);
+    void ioManager.send(content, agent, attachments);
 });
 
 // wipe all

@@ -151,12 +151,21 @@ export class WSClient {
      * Send a chat message over the WebSocket.
      * Returns false when the socket is not open.
      */
-    send(content: string, agentName = MAIN_AGENT): boolean {
+    send(content: string, agentName = MAIN_AGENT, attachments: string[] = []): boolean {
         if (!this.connected) {
             return false;
         }
         this._lastAgentName = agentName;
-        this.ws!.send(JSON.stringify({ type: "chat", content, agent_name: agentName }));
+        // Ids only — the server holds the name, type and size it stored, so a
+        // turn cannot claim a file is something other than what was uploaded.
+        this.ws!.send(
+            JSON.stringify({
+                type: "chat",
+                content,
+                agent_name: agentName,
+                ...(attachments.length ? { attachments } : {}),
+            }),
+        );
         return true;
     }
 

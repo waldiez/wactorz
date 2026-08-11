@@ -318,3 +318,56 @@ class TestHandleCommand:
         await ws.handle_command({"command": "stop", "agent_id": "a1"})
 
         assert not commands
+
+
+class TestAttachmentsOnATurn:
+    """Ids travel; the record of what they are stays server-side."""
+
+    async def test_they_are_stored_against_the_turn(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        stored = {"id": "a" * 32, "name": "shot.png", "mime": "image/png", "size": 12}
+        with (
+            patch.object(ws.chat, "route_chat", new=AsyncMock()),
+            patch.object(ws.uploads, "resolve", return_value=[stored]),
+        ):
+            async with client.ws_connect("/ws") as socket:
+                await _frames(socket, 3)
+                await socket.send_str(
+                    json.dumps({"type": "chat", "content": "look", "attachments": ["x"]})
+                )
+                for _ in range(50):
+                    if db.rows:
+                        break
+                    await asyncio.sleep(0.01)
+
+        assert db.rows[0]["attachments"] == [stored]
+
+    async def test_what_the_message_claims_is_not_what_is_recorded(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        # ⚠ The point of resolving server-side: a caller knows an id, but the
+        # name and type are ours. Taking them from the message would let a turn
+        # label a file as anything it liked in every thread that shows it.
+        with (
+            patch.object(ws.chat, "route_chat", new=AsyncMock()),
+            patch.object(ws.uploads, "resolve", return_value=[]) as resolve,
+        ):
+            async with client.ws_connect("/ws") as socket:
+                await _frames(socket, 3)
+                await socket.send_str(
+                    json.dumps(
+                        {
+                            "type": "chat",
+                            "content": "hi",
+                            "attachments": [{"id": "x", "name": "invoice.pdf"}],
+                        }
+                    )
+                )
+                for _ in range(50):
+                    if db.rows:
+                        break
+                    await asyncio.sleep(0.01)
+
+        resolve.assert_called_once_with([{"id": "x", "name": "invoice.pdf"}])
+        assert db.rows[0]["attachments"] == []

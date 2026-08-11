@@ -29,6 +29,17 @@ def _cfg(host: str) -> AppConfig:
     return replace(CONFIG, bind_host=host)
 
 
+def _server() -> Any:
+    """A listening server shaped like asyncio's: close() is sync, wait_closed is not.
+
+    An AsyncMock here makes close() return a coroutine nobody awaits — a
+    RuntimeWarning rather than a failure, so the test passes while leaking.
+    """
+    server = MagicMock()
+    server.wait_closed = AsyncMock()
+    return server
+
+
 def _site_factory() -> MagicMock:
     """Stands in for web.TCPSite; records the address it was asked to bind."""
     return MagicMock(return_value=AsyncMock())
@@ -76,7 +87,7 @@ class TestTheDashboardServer:
         # ⚠ The probe and the serving socket must agree. Probing 0.0.0.0 while
         # serving loopback tests the wrong interface: the port can be busy on an
         # address nothing will listen on, or free on one that is already taken.
-        opened = AsyncMock()
+        opened = AsyncMock(return_value=_server())
         with (
             patch.object(app, "CONFIG", _cfg("127.0.0.1")),
             patch.object(app.asyncio, "start_server", opened),

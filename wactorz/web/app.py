@@ -166,6 +166,7 @@ async def main(exit_on_failure: bool = False) -> None:
             raise SystemExit(1)
         return
 
+    origins.log_mode()
     app = build_app()
 
     runner = web.AppRunner(app)

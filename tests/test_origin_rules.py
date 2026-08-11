@@ -17,6 +17,7 @@ from wactorz import config
 from wactorz.web.origins import (
     cors_headers,
     host_allowed,
+    log_mode,
     normalize_origin,
     origin_allowed,
     parse_allow_list,
@@ -303,3 +304,44 @@ class TestTheIngressPeer:
 
         with patch.object(config, "INGRESS_PEERS", "10.1.2.0/24"):
             assert refuse(request, strict_origin=True) is None
+
+
+class TestSayingWhichModeWeAreIn:
+    """Off and "on but never needed" are both an absence of lines otherwise."""
+
+    def test_an_available_bypass_is_announced_at_warning(
+        self, ingress: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A deployment that logs only warnings is exactly where someone needs to
+        # know that a path past the origin and host checks exists at all.
+        with caplog.at_level("WARNING"):
+            log_mode()
+
+        assert "ingress mode on" in caplog.text
+        assert "172.30.32.0/23" in caplog.text
+
+    def test_an_unavailable_one_says_nothing_at_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Nothing to warn about, so silence at warning level means "off" — which
+        # is what makes the line above readable as a signal.
+        with caplog.at_level("WARNING"):
+            log_mode()
+
+        assert not caplog.text
+
+    def test_it_is_still_stated_when_the_log_is_verbose(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("INFO"):
+            log_mode()
+
+        assert "ingress mode off" in caplog.text
+
+    def test_a_configured_range_is_the_one_announced(
+        self, ingress: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level("WARNING"), patch.object(config, "INGRESS_PEERS", "10.1.2.0/24"):
+            log_mode()
+
+        assert "10.1.2.0/24" in caplog.text

@@ -161,6 +161,25 @@ def _trusted_peers() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...
     return tuple(nets)
 
 
+def log_mode() -> None:
+    """State once, at startup, whether the ingress bypass exists here.
+
+    Otherwise "off" and "on but never needed" look identical from the outside:
+    both are simply an absence of lines, and telling them apart means reading
+    `run.sh` on the host. Reported at warning when the bypass is available, since
+    it is the one path that skips the origin and host checks and an operator
+    should see it on a deployment that logs only warnings.
+    """
+    if not config.INGRESS_ENABLED:
+        logger.info("[origin] ingress mode off — the bypass is unavailable")
+        return
+    peers = ", ".join(str(net) for net in _trusted_peers()) or "nothing"
+    logger.warning(
+        "[origin] ingress mode on — requests from %s may skip the origin and host checks",
+        peers,
+    )
+
+
 def from_supervisor(request: Any) -> bool:
     """Whether this request came from Home Assistant's ingress proxy itself.
 
@@ -187,9 +206,11 @@ def from_supervisor(request: Any) -> bool:
     if any(address in net for net in _trusted_peers()):
         if address not in _seen_peers:
             # Named once per address so an operator can confirm which proxy is
-            # actually reaching them, rather than trusting a range from a doc.
+            # actually reaching them, rather than trusting a documented range.
+            # At warning because it is the fact someone goes looking for, and a
+            # deployment that logs only warnings is exactly where it is needed.
             _seen_peers.add(address)
-            logger.info("[origin] accepting the ingress bypass from %s", address)
+            logger.warning("[origin] accepting the ingress bypass from %s", address)
         return True
     logger.warning(
         "[origin] ingress header from %s, which is outside WACTORZ_INGRESS_PEERS — refused",

@@ -218,6 +218,20 @@ export PORT=8000
 # every interface. No port is published (see config.yaml), so this is not a
 # route in from outside Home Assistant.
 export WACTORZ_BIND_HOST=0.0.0.0
+# The name Supervisor reaches this container under, so a request it forwards is
+# answered rather than refused as an unrecognised host. This is a backstop:
+# ingress requests are recognised by the header Supervisor sets on them, and
+# that is what the panel actually relies on. `hostname` is used rather than
+# $HOSTNAME so an empty value is a missing command and not an unexported shell
+# variable, and the result is logged — a backstop that silently resolves to
+# nothing is worse than none, because it reads as protection that is not there.
+WACTORZ_ALLOWED_HOSTS="$(hostname 2>/dev/null || true)"
+export WACTORZ_ALLOWED_HOSTS
+if bashio::var.has_value "${WACTORZ_ALLOWED_HOSTS}"; then
+    bashio::log.info "Answering to host name: ${WACTORZ_ALLOWED_HOSTS}"
+else
+    bashio::log.warning "Could not determine this container's host name; relying on ingress detection alone."
+fi
 export WACTORZ_STATE_DIR=/data/state
 mkdir -p "$WACTORZ_STATE_DIR"
 

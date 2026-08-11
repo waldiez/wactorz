@@ -20,6 +20,7 @@ from . import (
     api_system,
     chat,
     mqtt,
+    origins,
     runtime,
     static_site,
     ws,
@@ -52,19 +53,22 @@ def build_app() -> web.Application:
 
     @web.middleware
     async def cors_middleware(request: web.Request, handler: Handler) -> Response:
+        """Decide whether a browser somewhere else may act on this server.
+
+        In middleware rather than per route: nearly every path below is
+        registered twice, under `/api/x` and a bare `/x`, and a per-route
+        decorator would guard whichever alias its author remembered.
+        """
+        refusal = origins.refuse(request)
+        if refusal is not None:
+            return refusal
+
+        origin = origins.allowed_origin(request)
         if request.method == "OPTIONS":
-            return web.Response(
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                }
-            )
+            return web.Response(headers=origins.cors_headers(origin))
         response = await handler(request)
         try:
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+            response.headers.update(origins.cors_headers(origin))
         except Exception:
             pass
         return response

@@ -119,6 +119,17 @@ def _bind_host() -> str:
     return os.getenv("WACTORZ_BIND_HOST", "").strip() or "0.0.0.0"
 
 
+#: Extra browser origins allowed to call the API, comma-separated. The page the
+#: server serves is always allowed; this is for a dashboard hosted elsewhere.
+CORS_ORIGINS = os.getenv("WACTORZ_CORS_ORIGINS", "")
+
+#: Extra hostnames this server answers to, comma-separated. Loopback names and
+#: address literals are always accepted. A name that is neither is refused even
+#: when it resolves here, because that is what a DNS rebinding attack looks
+#: like — set this to reach the dashboard by an mDNS or LAN name.
+ALLOWED_HOSTS = os.getenv("WACTORZ_ALLOWED_HOSTS", "")
+
+
 @dataclass(frozen=True)
 class DeployTarget:
     """One SSH deploy target — a remote machine ``/deploy <name>`` can bootstrap.

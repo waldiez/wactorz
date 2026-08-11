@@ -15,7 +15,7 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from ..monitoring.log_redaction import redact
-from . import chat, events, lifecycle, runtime
+from . import chat, events, lifecycle, origins, runtime
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,16 @@ async def broadcast(msg: dict[str, Any]) -> None:
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    """Handle websocket connection."""
+    """Handle websocket connection.
+
+    The handshake is checked before anything is accepted. A WebSocket is exempt
+    from CORS entirely, so narrowing the HTTP surface alone leaves a page on any
+    origin able to open this socket, read the live feed and send commands.
+    """
+    refusal = origins.refuse(request, strict_origin=True)
+    if refusal is not None:
+        raise web.HTTPForbidden(text=refusal.text, content_type="application/json")
+
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     channel = Channel(ws)

@@ -17,8 +17,8 @@ other
 unknown
 
 Guidelines:
-- recommend_hardware  → user only wants hardware/device suggestions, compatibility info, or to know what the existing hardware can do
-- create_automation   → user wants to create/add/build/make a new automation, even if they also mention choosing between existing sensors, lights, or devices
+- recommend_hardware  → user only wants hardware/device suggestions, compatibility info, or to know what the existing hardware can do, OR wants a new automation built (see the decision rule below)
+- create_automation   → unused: kept so a request that asks for a new automation still has a label, but nothing writes one
 - delete_automation   → user wants to delete/remove/disable an existing automation
 - edit_automation     → user wants to update/change/rename/modify an existing automation
 - list_automations    → user explicitly asks to list/show/enumerate existing automations
@@ -29,8 +29,8 @@ Guidelines:
 - unknown             → request is unclear or not Home Assistant related
 
 Decision rule:
-- If the user asks you to create/build/add/set up an automation, classify as create_automation.
-- Use recommend_hardware only when the user is asking about hardware feasibility or hardware choices and is not asking you to actually create the automation.
+- New automations are never written to Home Assistant — Wactorz runs those rules itself, and such a request should have been routed away before reaching you. If one arrives anyway, classify it as recommend_hardware: report which hardware could serve the rule, and do not claim the automation was created.
+- Editing, renaming, disabling and deleting automations that already exist ARE supported — classify those normally.
 - Use other for Home Assistant status/context questions that need current HA data.
 - Use other for existence, count, lookup, or state questions about specific HA devices, sensors, entities, rooms, or device types.
 - "Do I have any thermometers?" is other, not list_devices.

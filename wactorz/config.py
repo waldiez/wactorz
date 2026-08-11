@@ -119,6 +119,15 @@ def _bind_host() -> str:
     return os.getenv("WACTORZ_BIND_HOST", "").strip() or "0.0.0.0"
 
 
+#: Whether chat file attachments may be uploaded. Off unless asked for: the
+#: endpoint writes caller-supplied bytes to disk, and no deployment that has not
+#: turned the feature on should carry that.
+UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "0").strip().lower() not in ("", "0", "false", "no")
+
+#: Largest single upload. Matches the limit the browser enforces before sending,
+#: so a file the UI accepts is not refused by the server.
+UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
+
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
 #: deployment with no Supervisor must never offer it. Inferring it from the peer's

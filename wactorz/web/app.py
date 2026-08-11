@@ -13,11 +13,13 @@ import sys
 from aiohttp import web
 from aiohttp.typedefs import Handler
 
+from .. import config
 from ..config import CONFIG, MAX_REQUEST_BYTES
 from . import (
     api_actors,
     api_reset,
     api_system,
+    api_uploads,
     chat,
     mqtt,
     origins,
@@ -125,6 +127,13 @@ def build_app() -> web.Application:
 
     app.router.add_get("/api/config", api_system.config_handler)
     app.router.add_get("/config", api_system.config_handler)
+    # Only when asked for: these write caller-supplied bytes to disk.
+    if config.UPLOADS_ENABLED:
+        app.router.add_post("/api/upload", api_uploads.upload_handler)
+        app.router.add_post("/upload", api_uploads.upload_handler)
+        app.router.add_get("/api/upload/{file_id}", api_uploads.download_handler)
+        app.router.add_get("/upload/{file_id}", api_uploads.download_handler)
+
     app.router.add_get("/api/feed", api_system.feed_handler)
     app.router.add_get("/feed", api_system.feed_handler)
     app.router.add_post("/api/reset", api_reset.reset_handler)

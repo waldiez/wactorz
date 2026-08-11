@@ -64,6 +64,10 @@ services:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       INTERFACE: "${INTERFACE:-rest}"
+      # Bind every interface *inside* the container. The ports above publish to
+      # the host's loopback, which is what keeps this off the network; a process
+      # bound to the container's own loopback would be unreachable through them.
+      WACTORZ_BIND_HOST: "0.0.0.0"
     # The entrypoint is root only long enough to chown the state directory, then
     # drops to uid 1000. These three are the only capabilities that step needs —
     # the app itself runs with none. Dropping the rest shrinks the bounding set,

@@ -214,6 +214,10 @@ export PORT=8000
 # Durable state directory. /data is addon-private and survives addon updates,
 # so chat history / pickle / SQLite state is not lost on rebuild. Pinned here
 # as an absolute path instead of relying on CWD.
+# Ingress reaches the add-on over the container network, so it must listen on
+# every interface. No port is published (see config.yaml), so this is not a
+# route in from outside Home Assistant.
+export WACTORZ_BIND_HOST=0.0.0.0
 export WACTORZ_STATE_DIR=/data/state
 mkdir -p "$WACTORZ_STATE_DIR"
 

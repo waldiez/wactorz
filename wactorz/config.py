@@ -107,6 +107,18 @@ DEV_MODE = _env_truthy("WACTORZ_DEV_MODE")
 MAX_REQUEST_BYTES = 256 * 1024
 
 
+def _bind_host() -> str:
+    """The interface every HTTP/WebSocket server listens on.
+
+    Defaults to every interface. A container publishes its own ports and a
+    process cannot see its own port mappings, so a process bound to loopback
+    inside one is unreachable through them — tightening this default is a
+    breaking change and belongs with a release that documents it. The shipped
+    deployments set the variable explicitly, so that flip is a no-op for them.
+    """
+    return os.getenv("WACTORZ_BIND_HOST", "").strip() or "0.0.0.0"
+
+
 @dataclass(frozen=True)
 class DeployTarget:
     """One SSH deploy target — a remote machine ``/deploy <name>`` can bootstrap.
@@ -231,6 +243,8 @@ class AppConfig:
     telegram_token: str
     telegram_allowed_user_id: int
     ws_port: int
+    #: Interface every HTTP/WebSocket server binds to. See _bind_host().
+    bind_host: str
     nim_api_key: str
     nvidia_api_key: str
     twilio_account_sid: str
@@ -269,6 +283,7 @@ CONFIG = AppConfig(
     # empty keeps each provider's own default (the previous behavior).
     llm_temperature=_env_opt_float("LLM_TEMPERATURE"),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
+    bind_host=_bind_host(),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
     mqtt_port=_env_int("MQTT_PORT", 1883),
     mqtt_username=os.getenv("MQTT_USERNAME", ""),

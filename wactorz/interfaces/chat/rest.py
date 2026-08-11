@@ -13,7 +13,7 @@ from aiohttp import web
 from aiohttp.web_request import Request
 from aiohttp.web_response import Response
 
-from ...config import MAX_REQUEST_BYTES
+from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...monitoring import PrometheusMonitor
 
 if TYPE_CHECKING:
@@ -280,7 +280,7 @@ class RESTInterface:
     async def run(self) -> None:
         runner = web.AppRunner(self.build_app())
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", self.port)
+        site = web.TCPSite(runner, CONFIG.bind_host, self.port)
         await site.start()
-        logger.info("[REST] API running at http://0.0.0.0:%s", self.port)
+        logger.info("[REST] API running at http://%s:%s", CONFIG.bind_host, self.port)
         await asyncio.Event().wait()

@@ -13,7 +13,7 @@ import sys
 from aiohttp import web
 from aiohttp.typedefs import Handler
 
-from ..config import MAX_REQUEST_BYTES
+from ..config import CONFIG, MAX_REQUEST_BYTES
 from . import (
     api_actors,
     api_reset,
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 async def check_ws_port() -> bool:
     """Return True if WS_PORT is free to bind."""
     try:
-        server = await asyncio.start_server(lambda r, w: None, "0.0.0.0", runtime.WS_PORT)
+        server = await asyncio.start_server(lambda r, w: None, CONFIG.bind_host, runtime.WS_PORT)
         server.close()
         await server.wait_closed()
         return True
@@ -166,7 +166,7 @@ async def main(exit_on_failure: bool = False) -> None:
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", runtime.WS_PORT)
+    site = web.TCPSite(runner, CONFIG.bind_host, runtime.WS_PORT)
     await site.start()
     msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/"
     logger.info(msg)

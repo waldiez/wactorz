@@ -14,7 +14,7 @@ from typing import Any
 
 from ..core.mqtt import mqtt_client
 from ..monitoring.log_redaction import redact
-from . import events, runtime, ws
+from . import events, relay, runtime, ws
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,10 @@ async def handle_message(topic: str, payload: str) -> None:
     the loop around it is connection management, this is the part with rules.
     """
     event: dict[str, Any] | None = events.parse_topic(topic, payload)
-    await broadcast_mqtt_msg(topic, payload)
+    # State first, and for every message: the filter below decides only whether a
+    # browser is shown the raw frame, not whether the server takes it in.
+    if relay.is_relayed(topic):
+        await broadcast_mqtt_msg(topic, payload)
     if not event or runtime.hard_resetting:
         return
 

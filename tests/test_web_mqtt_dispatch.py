@@ -72,7 +72,9 @@ def _patches(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [f for f in frames if f.get("type") == "patch"]
 
 
-class TestEveryMessageReachesTheBrowser:
+class TestWhatReachesTheBrowser:
+    """Only topics the dashboard reads — see `test_relayed_topics` for the set."""
+
     async def test_a_json_payload_is_forwarded_decoded(self, sent: list[dict[str, Any]]) -> None:
         await mqtt.handle_message("agents/a1/metrics", json.dumps({"cpu": 1.5}))
 
@@ -82,9 +84,9 @@ class TestEveryMessageReachesTheBrowser:
     async def test_a_payload_that_is_not_json_passes_through_as_text(
         self, sent: list[dict[str, Any]]
     ) -> None:
-        # Agents and external publishers put plain strings on topics too; the
-        # relay must not swallow one for failing to parse.
-        await mqtt.handle_message("custom/thing", "not json at all")
+        # Agents put plain strings on topics too; a payload that will not parse
+        # must still be relayed rather than swallowed.
+        await mqtt.handle_message("agents/a1/logs", "not json at all")
 
         relayed = [f for f in sent if f.get("type") == "server_event"]
         assert relayed[0]["payload"] == "not json at all"

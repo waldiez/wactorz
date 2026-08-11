@@ -167,6 +167,12 @@ class TestTheShippedDeployments:
         # loopback inside one is unreachable through them.
         assert "WACTORZ_BIND_HOST" in _repo_text(path)
 
+    @pytest.mark.parametrize("path", ["ha-addon/wactorz/run.sh", "ha-addon/wactorz-ultra/run.sh"])
+    def test_the_addons_declare_that_they_sit_behind_ingress(self, path: str) -> None:
+        # Without it the panel has no way past the origin and host checks, since
+        # the bypass does not exist unless a deployment claims it.
+        assert "WACTORZ_INGRESS=1" in _repo_text(path)
+
 
 def _repo_text(relative: str) -> str:
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

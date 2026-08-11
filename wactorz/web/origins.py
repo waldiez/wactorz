@@ -23,9 +23,12 @@ from typing import Any
 from aiohttp import web
 
 from .. import config
-from . import static_site
+from .static_site import ingress_path_of
 
 logger = logging.getLogger(__name__)
+
+#: Ingress peers already named in the log, so each is reported once.
+_seen_peers: set[Any] = set()
 
 #: Scheme defaults that never appear in an Origin header.
 _DEFAULT_PORTS = {"http": "80", "https": "443"}
@@ -144,6 +147,57 @@ def parse_host_list(raw: str) -> set[str]:
 STATE_CHANGING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
+def _trusted_peers() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """The networks the ingress bypass is accepted from."""
+    nets = []
+    for part in config.INGRESS_PEERS.split(","):
+        raw = part.strip()
+        if not raw:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            logger.warning("[origin] ignoring malformed WACTORZ_INGRESS_PEERS entry %r", raw)
+    return tuple(nets)
+
+
+def from_supervisor(request: Any) -> bool:
+    """Whether this request came from Home Assistant's ingress proxy itself.
+
+    Three things have to agree, because each alone is forgeable or coincidental.
+    `ingress_path_of` covers the first two — the deployment declares that it sits
+    behind ingress, and the marker is a plain URL path. This adds the third.
+
+    The marker cannot decide it alone: any peer on the container network can set
+    one, and since the add-on publishes no ports this bypass is the only way past
+    the origin and host checks. So it is corroborated by where the request came
+    from, which a peer on another host cannot forge.
+
+    A peer we cannot see (a unix socket, an unusual transport) is not trusted:
+    absence of evidence is not evidence.
+    """
+    if not ingress_path_of(request):
+        return False
+    peer = getattr(request, "remote", None)
+    try:
+        address = ipaddress.ip_address(peer or "")
+    except ValueError:
+        logger.warning("[origin] ingress header from an unreadable peer %r — refused", peer)
+        return False
+    if any(address in net for net in _trusted_peers()):
+        if address not in _seen_peers:
+            # Named once per address so an operator can confirm which proxy is
+            # actually reaching them, rather than trusting a range from a doc.
+            _seen_peers.add(address)
+            logger.info("[origin] accepting the ingress bypass from %s", address)
+        return True
+    logger.warning(
+        "[origin] ingress header from %s, which is outside WACTORZ_INGRESS_PEERS — refused",
+        address,
+    )
+    return False
+
+
 def _allow_lists() -> tuple[set[str], set[str]]:
     """Read the settings at call time, so a reconfigured process is not stale."""
     return parse_allow_list(config.CORS_ORIGINS), parse_host_list(config.ALLOWED_HOSTS)
@@ -162,21 +216,20 @@ def refuse(request: Any, *, strict_origin: bool = False) -> web.Response | None:
     value in the message is exactly what has to be added to
     `WACTORZ_ALLOWED_HOSTS` or `WACTORZ_CORS_ORIGINS` to fix it.
     """
-    if static_site.ingress_path_of(request):
+    if from_supervisor(request):
         # Behind Home Assistant's Supervisor, whose own login is the boundary.
         # Which internal name and scheme it forwards under is its business, and
         # depending on that would refuse the whole panel.
         #
         # A browser cannot forge this: a custom request header triggers a
         # preflight, and it is deliberately absent from the Allow-Headers below,
-        # so the browser refuses before sending the real request. ⚠ A non-browser
-        # peer on the same network can still set it — which changes nothing here,
-        # since such a caller sends no Origin and is already unaffected. Making
-        # this header trustworthy in its own right means accepting it only from
-        # the Supervisor's address range.
+        # so the browser refuses before sending the real request. Nor can another
+        # peer on the container network, whatever headers it sets, because the
+        # marker is only honoured from Supervisor's own address range.
         #
-        # The value is validated rather than merely present, so a garbage header
-        # cannot buy a bypass.
+        # Both halves are required: the value is validated rather than merely
+        # present, and it is corroborated by the peer address, so neither a
+        # garbage header nor a header from the wrong host buys a bypass.
         return None
 
     allowed_origins, allowed_hosts = _allow_lists()

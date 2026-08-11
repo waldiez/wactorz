@@ -218,6 +218,11 @@ export PORT=8000
 # every interface. No port is published (see config.yaml), so this is not a
 # route in from outside Home Assistant.
 export WACTORZ_BIND_HOST=0.0.0.0
+# This deployment sits behind Home Assistant's ingress, which signs the user in
+# before proxying — so a request it forwards is allowed to skip the origin and
+# host checks. Nothing else may claim that: a plain Docker or bare install never
+# sets this, so the bypass does not exist there whatever headers arrive.
+export WACTORZ_INGRESS=1
 # The name Supervisor reaches this container under, so a request it forwards is
 # answered rather than refused as an unrecognised host. This is a backstop:
 # ingress requests are recognised by the header Supervisor sets on them, and

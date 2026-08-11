@@ -119,6 +119,19 @@ def _bind_host() -> str:
     return os.getenv("WACTORZ_BIND_HOST", "").strip() or "0.0.0.0"
 
 
+#: Whether this deployment sits behind Home Assistant's ingress. Off unless the
+#: add-on says so: the bypass below skips the origin and host checks, and a
+#: deployment with no Supervisor must never offer it. Inferring it from the peer's
+#: address is not enough — Docker's default pool covers the Supervisor's range, so
+#: an ordinary network can land on it by coincidence.
+INGRESS_ENABLED = os.getenv("WACTORZ_INGRESS", "0").strip().lower() not in ("", "0", "false", "no")
+
+#: Addresses the Home Assistant ingress bypass is accepted from, comma-separated
+#: CIDRs. Defaults to the Supervisor proxy's own range. The bypass exists because
+#: Supervisor authenticates the user before proxying; a header alone cannot show
+#: a request came from it, since any peer on the container network can set one.
+INGRESS_PEERS = os.getenv("WACTORZ_INGRESS_PEERS", "").strip() or "172.30.32.0/23"
+
 #: Extra browser origins allowed to call the API, comma-separated. The page the
 #: server serves is always allowed; this is for a dashboard hosted elsewhere.
 CORS_ORIGINS = os.getenv("WACTORZ_CORS_ORIGINS", "")

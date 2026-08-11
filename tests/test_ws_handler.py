@@ -1,9 +1,9 @@
 """The `/ws` endpoint: what a browser is told on connect, and what it may ask for.
 
-Coverage here is deliberately ahead of the auth work. C-1, C-2 and C-11 all land
-in this handler, and an unprotected endpoint that nothing describes is one where
-adding a guard is indistinguishable from breaking a feature. These tests pin the
-current contract so the guard has something to fail against.
+Coverage here is deliberately ahead of the authentication work, which lands in
+this handler. An unprotected endpoint that nothing describes is one where adding
+a guard is indistinguishable from breaking a feature, so these tests pin the
+current contract for the guard to fail against.
 
 Real aiohttp throughout — a real server, a real WebSocket client. The framework
 is a hard dependency and faking it in `sys.modules` has produced order-dependent

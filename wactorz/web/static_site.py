@@ -12,6 +12,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from .. import config
 from . import runtime
 
 logger = logging.getLogger(__name__)
@@ -59,10 +60,13 @@ def ingress_path_of(request: web.Request) -> str:
     executes carrying the page's own CSP nonce: the policy permits it because
     the server vouched for it.
 
-    Validating the shape here is not the whole answer — accepting the header
-    only from the Supervisor's own address range is (see C-10 in the security
-    plan) — but it removes the injection while that lands.
+    Two gates, both cheap: the deployment must declare ingress at all
+    (`WACTORZ_INGRESS`, set by the add-on and nothing else), and the shape must
+    be a plain URL path. The origin gate adds the third: the peer's address
+    (`origins.from_supervisor`).
     """
+    if not config.INGRESS_ENABLED:
+        return ""
     raw = request.headers.get("X-Ingress-Path", "").rstrip("/")
     if not raw:
         return ""

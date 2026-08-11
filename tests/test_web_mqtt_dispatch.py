@@ -5,8 +5,8 @@ says the loop around it is connection management. It decides what reaches the
 dashboard, what is written to `chat_log`, and (the expensive one) when a snapshot
 queries the database for totals.
 
-Coverage here is ahead of the auth work for the same reason as the `/ws` tests:
-C-1, C-2 and C-3 land in this file, and a transport nothing describes is one
+Coverage here is ahead of the authentication work for the same reason as the
+`/ws` tests: it lands in this file, and a transport nothing describes is one
 where adding a guard looks the same as breaking a feature.
 
 `aiomqtt` is a hard dependency and is never faked in `sys.modules` — that has

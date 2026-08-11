@@ -101,7 +101,7 @@ class TestRemoteRunnerLoadState:
 
         agent._load_state()
 
-        assert agent._persistent_state == {}
+        assert not agent._persistent_state
         assert _quarantined(tmp_path), "nothing was kept"
 
     def test_a_readable_file_loads_and_is_left_alone(self, tmp_path: Path) -> None:
@@ -145,7 +145,7 @@ class TestActorLegacyLoad:
 
         await actor._load_persistent_state()
 
-        assert actor._persistent_state == {}
+        assert not actor._persistent_state
         assert _quarantined(tmp_path), "nothing was kept"
 
     async def test_a_readable_legacy_pickle_still_loads(self, tmp_path: Path) -> None:

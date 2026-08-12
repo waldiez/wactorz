@@ -212,8 +212,16 @@ class TestTheModelFlagsDoNotInventAModel:
 
         assert getattr(get_args(), flag) is None
 
-    def test_gemini_falls_back_to_the_configured_model(self) -> None:
+    def test_gemini_falls_back_to_the_configured_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from wactorz.config import CONFIG
+
+        # Building the provider constructs a real SDK client, which refuses to
+        # exist without a key — and a machine with one configured would pass
+        # this while CI, having none, could not. The key is nothing to do with
+        # what is under test, so it is supplied rather than depended on.
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-used")
 
         provider = create_provider("gemini", None)
 

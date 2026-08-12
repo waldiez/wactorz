@@ -32,6 +32,16 @@ MAX_INLINE_BYTES = int(_REQUEST_LIMIT_BYTES / 1.4)
 #: re-read from history — the full text goes to the model in the turn it arrives.
 HISTORY_TEXT_LIMIT = 2000
 
+#: Stands in for a document's bytes on a format with no inline document part.
+#: The name note `to_blocks` emits ahead of the block still says which file it
+#: was, so the model can name what it could not read rather than inventing it.
+NO_DOCUMENTS = "[document content omitted — this model cannot read files of this type]"
+
+#: Stands in for an attachment whose data did not survive translation. Never
+#: reached from `to_blocks`, which only builds a block once the bytes are in
+#: hand — it is the translators' floor, so no path drops a block in silence.
+UNREADABLE = "[attachment content could not be read]"
+
 #: Types a model reads as an image.
 _IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 

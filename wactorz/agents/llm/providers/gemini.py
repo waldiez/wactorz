@@ -5,6 +5,7 @@ import logging
 import queue
 from typing import Any
 
+from ..attachments import UNREADABLE
 from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..pricing import calc_cost
 
@@ -12,6 +13,47 @@ logger = logging.getLogger(__name__)
 
 
 _GEMINI_STREAM_STALL_TIMEOUT = 60
+
+
+def _gemini_parts(blocks: list[Any]) -> list[dict[str, Any]]:
+    """Attachment blocks (the ``llm.attachments.to_blocks`` shape) as Gemini parts.
+
+    Text stays text; images and documents become ``inline_data`` — Gemini reads
+    both, PDFs included, so unlike the OpenAI-shaped providers nothing needs to
+    be dropped to a marker here.
+
+    ⚠ Anything that is not an attachment block is passed through untouched. A
+    list content is not always attachments: this provider's own tool loop feeds
+    an assistant turn back as Gemini parts (``{"text": ...}``,
+    ``{"function_call": ...}``), and translating those would drop the tool call
+    while the ``function_response`` answering it stayed — leaving a request
+    Gemini cannot make sense of.
+    """
+    parts: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            parts.append({"text": str(block)})
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            parts.append({"text": str(block.get("text", ""))})
+        elif block_type in ("image", "document"):
+            source = block.get("source") or {}
+            data = source.get("data") or ""
+            if data:
+                parts.append(
+                    {
+                        "inline_data": {
+                            "mime_type": source.get("media_type") or "application/octet-stream",
+                            "data": data,
+                        }
+                    }
+                )
+            else:
+                parts.append({"text": UNREADABLE})
+        else:
+            parts.append(block)
+    return parts
 
 
 class GeminiProvider(LLMProvider):
@@ -40,6 +82,13 @@ class GeminiProvider(LLMProvider):
         self.model_name = model
         self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
         self._types = genai_types
+
+    @classmethod
+    def supports_blocks(cls) -> bool:
+        """Block content is translated to Gemini parts (``inline_data``) in
+        ``_to_gemini_contents``, so a list content is safe here.
+        """
+        return True
 
     async def _complete(
         self, messages: list[dict[str, Any]], system: str = "", **kwargs
@@ -159,7 +208,7 @@ class GeminiProvider(LLMProvider):
             try:
                 for chunk in self.client.models.generate_content_stream(
                     model=self.model_name,
-                    contents=contents,
+                    contents=contents,  # pyright: ignore[reportArgumentType]
                     config=config,
                 ):
                     text = getattr(chunk, "text", "")
@@ -238,7 +287,9 @@ class GeminiProvider(LLMProvider):
                 )
                 continue
             content = m.get("content", "")
-            parts = content if isinstance(content, list) else [{"text": str(content)}]
+            parts = (
+                _gemini_parts(content) if isinstance(content, list) else [{"text": str(content)}]
+            )
             # Gemini uses "user" and "model" (not "assistant")
             gemini_role = "model" if role == "assistant" else "user"
             # Merge consecutive same-role messages (Gemini requires alternating)

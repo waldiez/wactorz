@@ -228,3 +228,35 @@ class TestServingItBack:
         resp = await client.get(f"/api/upload/{bad}")
 
         assert resp.status == 404
+
+
+class TestReadingItBackForTheModel:
+    """The send path reads bytes directly rather than over HTTP."""
+
+    def test_a_stored_file_reads_back_verbatim(self, store: Path) -> None:
+        store.mkdir(parents=True, exist_ok=True)
+        (store / ("a" * 32)).write_bytes(PNG)
+
+        assert uploads.read_bytes("a" * 32) == PNG
+
+    @pytest.mark.parametrize("bad", ["../../etc/passwd", "nope", "", "0" * 31, "A" * 32])
+    def test_nothing_but_an_id_we_issued_is_read(self, store: Path, bad: str) -> None:
+        # Same shape check the download handler applies, so no caller-supplied
+        # byte ever reaches a path.
+        assert uploads.read_bytes(bad) is None
+
+    def test_a_missing_file_is_not_an_error(self, store: Path) -> None:
+        assert uploads.read_bytes("b" * 32) is None
+
+    def test_a_file_larger_than_the_endpoint_accepts_is_refused(self, store: Path) -> None:
+        # Reaching this means the bytes on disk disagree with what was recorded.
+        # Refused on the stat rather than measured after being read into memory.
+        store.mkdir(parents=True, exist_ok=True)
+        (store / ("c" * 32)).write_bytes(b"x" * (config.UPLOAD_MAX_BYTES + 1))
+
+        assert uploads.read_bytes("c" * 32) is None
+
+    def test_a_directory_is_not_a_file(self, store: Path) -> None:
+        (store / ("d" * 32)).mkdir(parents=True)
+
+        assert uploads.read_bytes("d" * 32) is None

@@ -22,6 +22,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import unquote
 
+from .. import config
 from ..core.paths import resolve_state_dir
 
 #: Leading bytes that identify a type we are willing to serve back inline.
@@ -139,6 +140,32 @@ def metadata(file_id: str, state_dir: str | None = None) -> dict[str, object] | 
         "mime": str(stored.get("mime", OPAQUE_TYPE)),
         "size": int(stored.get("size", 0) or 0),
     }
+
+
+def read_bytes(file_id: str, state_dir: str | None = None) -> bytes | None:
+    """The stored bytes for `file_id`, or None if it cannot be read.
+
+    Reached through the same three steps the download handler uses — shape
+    check, then the generated name under the upload directory — so no part of
+    the path comes from a caller and traversal is impossible by construction
+    rather than caught afterwards.
+
+    The size is taken from the filesystem before the read, not after: a file
+    larger than the endpoint would ever have accepted is refused rather than
+    pulled into memory to be measured. That bound and the model's own inline
+    limit are different questions — `attachments.to_blocks` applies the smaller
+    one from the stored record and never calls this for a file over it, so
+    reaching this cap means the bytes on disk disagree with what was recorded.
+    """
+    if not is_id(file_id):
+        return None
+    target = upload_dir(state_dir) / file_id
+    try:
+        if not target.is_file() or target.stat().st_size > config.UPLOAD_MAX_BYTES:
+            return None
+        return target.read_bytes()
+    except OSError:
+        return None
 
 
 def resolve(ids: object, state_dir: str | None = None) -> list[dict[str, object]]:

@@ -191,12 +191,31 @@ topics (e.g. `actuations`, `anomaly`) ride the `raw` catch-all and are mapped to
 feed rows by the extensible `rawFeedItem` registry in `agents/mapping.ts` — add a
 topic there without touching the router.
 
-## Feature flags (build-time)
+## Gated UI
 
-Some UI is gated behind backend endpoints that aren't always available. They're
-off by default; enable per-deploy by setting the env var at build time (`.env`):
+Two things are gated, for two different reasons — and the difference decides
+where the switch belongs.
+
+### Not built yet — build-time
 
 | Flag | Enables | Needs backend |
 | ---- | ------- | ------------- |
 | `VITE_STT_ENABLED=true` | Voice/mic button (speech-to-text) | `/api/stt` |
-| `VITE_UPLOADS_ENABLED=true` | Attachments (drag-drop + paste) | `/api/upload` |
+
+`STT_ENABLED` (`src/io/SpeechToText.ts`) is off by default because **`/api/stt`
+does not exist**. The client half is written and waiting; turning the flag on
+without the endpoint gives a mic button whose every recording fails. It is a
+switch for developing the feature, not a per-deploy option — when the endpoint
+lands, this should become a server capability like the one below and the flag
+should go.
+
+### Optional per deployment — runtime, from the server
+
+Attachments (drag-drop + paste) are **not** a build-time flag. The server only
+registers `/api/upload` when it has uploads on, so the browser asks rather than
+assumes: the `uploads.enabled` field of `/api/config` is seeded into
+`wactorz-uploads-enabled` and read by `uploadsEnabled()`.
+
+A build genuinely cannot know the answer here — one bundle is served by
+deployments that differ, and the committed `static/app` goes to all of them. Set
+`WACTORZ_UPLOADS` on the backend; the UI follows it.

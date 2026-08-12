@@ -230,13 +230,26 @@ class Actor(ABC):
         # Shield cleanup from CancelledError — chat tasks run as fire-and-forget
         # asyncio tasks outside actor._tasks and get cancelled by asyncio.run()
         # cleanup BEFORE these awaits if we don't shield them.
+        #
+        # ⚠ A cancellation arriving here belongs to whoever is *calling* stop(),
+        # not to this cleanup: `shield` keeps the inner coroutine running and
+        # raises in the awaiting task. Discarding it told that caller its
+        # cancellation had been honoured when it had not — the supervisor's watch
+        # loop resumed polling, and `Supervisor.stop()` waited forever on a task
+        # already marked cancelling. So it is remembered, both steps still run,
+        # and it is re-raised once cleanup is done.
+        cancelled = False
         try:
             await asyncio.shield(self.on_stop())
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
             pass
         try:
             await asyncio.shield(self._save_persistent_state())
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
             pass
 
         # ── Persist message count so overview survives restarts ──────────
@@ -284,6 +297,11 @@ class Actor(ABC):
         except Exception:
             pass  # TopicBus not initialised or unavailable — not fatal
         logger.info("[%s] Actor stopped.", self.name)
+        # Deferred to here rather than raised where it arrived: the shield exists
+        # so cleanup completes, and stopping half way through would defeat it.
+        # The caller still learns its cancellation was real.
+        if cancelled:
+            raise asyncio.CancelledError
 
     #: How long stop() waits for a cancelled task before giving up on it.
     TASK_SHUTDOWN_TIMEOUT = 5.0

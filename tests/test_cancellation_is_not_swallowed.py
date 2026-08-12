@@ -24,9 +24,11 @@ property the change relies on.
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from wactorz.core.actor import Actor, Message
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.registry import ActorRegistry, Supervisor
 from wactorz.web import ws
@@ -185,3 +187,76 @@ class TestTheDistinctionItself:
 
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+class _BlocksInCleanup(Actor):
+    """An actor whose `on_stop` waits, holding its stopper inside the shield.
+
+    That wait is the window: the caller of `stop()` sits at the shielded await
+    for as long as the gate stays closed, so a cancellation can be delivered
+    there deliberately rather than hoped for.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("name", "blocks-in-cleanup")
+        super().__init__(**kwargs)
+        self.entered_cleanup = asyncio.Event()
+        self.gate = asyncio.Event()
+        self.cleanup_finished = False
+
+    async def on_stop(self) -> None:
+        self.entered_cleanup.set()
+        await self.gate.wait()
+        self.cleanup_finished = True
+
+    async def handle_message(self, msg: Message) -> None:
+        return None
+
+
+class TestTheCallersCancellationSurvivesCleanup:
+    """⚠ The case the module docstring above called un-hittable.
+
+    It is hittable through the shield rather than through the inner task: an
+    `on_stop` that blocks holds the caller at the shielded await indefinitely,
+    so the cancellation lands exactly where it must with no race.
+
+    Swallowing it here is what left `Supervisor.stop()` waiting on a watch loop
+    that had resumed polling — a hang on shutdown, reproducible roughly once in
+    thirty runs, and not only in tests: `ActorSystem.stop_all()` takes the same
+    path when the process is going down.
+    """
+
+    async def test_the_stopper_still_learns_it_was_cancelled(self, tmp_path: Path) -> None:
+        actor = _BlocksInCleanup(persistence_dir=str(tmp_path))
+        stopper = asyncio.create_task(actor.stop())
+        await actor.entered_cleanup.wait()
+
+        stopper.cancel()
+        await asyncio.sleep(0)  # let the cancellation reach the shielded await
+        actor.gate.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await stopper
+
+    async def test_cleanup_still_ran_to_completion(self, tmp_path: Path) -> None:
+        # The shield earns its place: the cancellation is reported, but not at
+        # the cost of the cleanup it was protecting.
+        actor = _BlocksInCleanup(persistence_dir=str(tmp_path))
+        stopper = asyncio.create_task(actor.stop())
+        await actor.entered_cleanup.wait()
+
+        stopper.cancel()
+        await asyncio.sleep(0)
+        actor.gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await stopper
+
+        assert actor.cleanup_finished
+
+    async def test_an_uncancelled_stop_is_unaffected(self, tmp_path: Path) -> None:
+        actor = _BlocksInCleanup(persistence_dir=str(tmp_path))
+        actor.gate.set()
+
+        await actor.stop()  # must not raise
+
+        assert actor.cleanup_finished

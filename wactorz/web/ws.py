@@ -314,13 +314,14 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             # request even if the assistant reply errors out.
                             _persist_chat("user", content, _reply_from["name"], files)
 
-                            async def _safe_route(c=content):
+                            async def _safe_route(c=content, files=files):
                                 try:
                                     await chat.route_chat(
                                         c,
                                         ws_reply,
                                         stream_fn=ws_stream_chunk,
                                         stream_end_fn=ws_stream_end,
+                                        attachments=files,
                                     )
                                 except asyncio.CancelledError:
                                     # Stop button: finalize the partial stream so

@@ -27,22 +27,26 @@ def _reader(data: bytes | None) -> Any:
 
 
 class TestWhatTheModelCanRead:
-    def test_an_image_becomes_an_image_block(self) -> None:
-        blocks = attachments.to_blocks([_ref("image/png")], _reader(PNG))
+    def test_an_image_becomes_a_named_image_block(self) -> None:
+        blocks = attachments.to_blocks([_ref("image/png", name="shot.png")], _reader(PNG))
 
-        assert blocks[0]["type"] == "image"
-        assert blocks[0]["source"]["media_type"] == "image/png"
+        # Named first: without it the model cannot answer "what does shot.png
+        # show", and there is nothing to flatten for a provider taking text only.
+        assert blocks[0] == {"type": "text", "text": "[attachment: shot.png]"}
+        assert blocks[1]["type"] == "image"
+        assert blocks[1]["source"]["media_type"] == "image/png"
 
-    def test_a_pdf_becomes_a_document_block(self) -> None:
-        blocks = attachments.to_blocks([_ref("application/pdf")], _reader(PDF))
+    def test_a_pdf_becomes_a_named_document_block(self) -> None:
+        blocks = attachments.to_blocks([_ref("application/pdf", name="spec.pdf")], _reader(PDF))
 
-        assert blocks[0]["type"] == "document"
+        assert "spec.pdf" in blocks[0]["text"]
+        assert blocks[1]["type"] == "document"
 
     def test_encoded_data_carries_no_newlines(self) -> None:
         # The encoded string is sent verbatim; a wrapped one is rejected.
         blocks = attachments.to_blocks([_ref("image/png")], _reader(PNG * 100))
 
-        assert "\n" not in blocks[0]["source"]["data"]
+        assert "\n" not in blocks[1]["source"]["data"]
 
     def test_text_is_inlined_under_its_name(self) -> None:
         blocks = attachments.to_blocks([_ref("text/csv", name="sales.csv")], _reader(b"a,b\n1,2\n"))
@@ -124,10 +128,51 @@ class TestOrdering:
 
         blocks = attachments.to_blocks(refs, lambda file_id: PNG)
 
-        assert [b["type"] for b in blocks] == ["image", "document"]
+        assert [b["type"] for b in blocks] == ["text", "image", "text", "document"]
+        assert "one" in blocks[0]["text"]
+        assert "two" in blocks[2]["text"]
 
     def test_nothing_attached_is_no_blocks(self) -> None:
         assert attachments.to_blocks([], _reader(PNG)) == []
+
+
+class TestFlattening:
+    """What a provider that cannot take blocks is sent instead."""
+
+    def test_an_image_is_named_rather_than_dropped(self) -> None:
+        blocks = attachments.to_blocks([_ref("image/png", name="shot.png")], _reader(PNG))
+
+        assert attachments.flatten(blocks) == "[attachment: shot.png]"
+
+    def test_no_base64_survives_flattening(self) -> None:
+        # ⚠ The reason this exists: a provider flattening content with `str()`
+        # would put the whole encoded payload into the prompt.
+        blocks = attachments.to_blocks([_ref("image/png")], _reader(PNG * 100))
+
+        assert "iVBOR" not in attachments.flatten(blocks)
+        assert blocks[1]["source"]["data"][:5] not in attachments.flatten(blocks)
+
+    def test_a_text_attachment_is_readable_everywhere(self) -> None:
+        blocks = attachments.to_blocks([_ref("text/csv", name="sales.csv")], _reader(b"a,b\n1,2\n"))
+
+        flat = attachments.flatten(blocks)
+
+        assert "sales.csv" in flat
+        assert "a,b" in flat
+
+    def test_the_history_stand_in_is_bounded(self) -> None:
+        # The full text goes to the model on the turn it arrives; history keeps
+        # enough to know a file was attached, not a copy of it.
+        blocks = attachments.to_blocks([_ref("text/plain", name="big.txt")], _reader(b"x" * 50_000))
+
+        stand_in = attachments.flatten(blocks, limit=attachments.HISTORY_TEXT_LIMIT)
+
+        assert len(stand_in) < len(attachments.flatten(blocks))
+        assert "big.txt" in stand_in
+        assert stand_in.endswith("truncated]")
+
+    def test_nothing_attached_flattens_to_nothing(self) -> None:
+        assert not attachments.flatten([])
 
 
 @pytest.mark.parametrize("mime", ["image/png", "image/jpeg", "image/gif", "image/webp"])
@@ -136,4 +181,4 @@ def test_every_type_the_uploader_serves_inline_is_readable(mime: str) -> None:
     # cannot read would show a thumbnail the agent then claims not to see.
     blocks = attachments.to_blocks([_ref(mime)], _reader(PNG))
 
-    assert blocks[0]["type"] == "image"
+    assert blocks[1]["type"] == "image"

@@ -27,6 +27,11 @@ _REQUEST_LIMIT_BYTES = 32 * 1024 * 1024
 #: the raw file has to be comfortably under the request limit rather than near it.
 MAX_INLINE_BYTES = int(_REQUEST_LIMIT_BYTES / 1.4)
 
+#: How much of an attachment's text survives into conversation history. The
+#: stand-in exists so a later turn knows a file was attached, not so it can be
+#: re-read from history — the full text goes to the model in the turn it arrives.
+HISTORY_TEXT_LIMIT = 2000
+
 #: Types a model reads as an image.
 _IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 
@@ -72,25 +77,19 @@ def to_blocks(
             blocks.append(_describe(name, "no longer available"))
             continue
 
-        if mime in _IMAGE_TYPES:
+        if mime in _IMAGE_TYPES or mime in _DOCUMENT_TYPES:
+            # Named before the data block rather than left anonymous: the model
+            # cannot otherwise answer "what does screenshot.png show", and the
+            # name is what makes this block flattenable for the providers and
+            # the history stand-in that take text only.
+            blocks.append(_note(f"[attachment: {name}]"))
             blocks.append(
                 {
-                    "type": "image",
+                    "type": "image" if mime in _IMAGE_TYPES else "document",
                     "source": {
                         "type": "base64",
                         "media_type": mime,
                         # No newlines: the encoded string is sent verbatim.
-                        "data": base64.b64encode(raw).decode("ascii"),
-                    },
-                }
-            )
-        elif mime in _DOCUMENT_TYPES:
-            blocks.append(
-                {
-                    "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime,
                         "data": base64.b64encode(raw).decode("ascii"),
                     },
                 }
@@ -102,6 +101,28 @@ def to_blocks(
         else:
             blocks.append(_describe(name, "a file type that cannot be read"))
     return blocks
+
+
+def flatten(blocks: list[dict[str, Any]], limit: int | None = None) -> str:
+    """The text-only reading of `blocks`, for the two places that take no blocks.
+
+    Providers that cannot carry multimodal content get this instead, so a file
+    is always named and a text attachment is always readable — a model that
+    cannot see the image can still say which one it was sent.
+
+    It is also what goes into conversation history. The blocks themselves are
+    spliced into a single request and deliberately not persisted: base64 in the
+    history would be written to disk every turn and re-sent on every turn after.
+    The stand-in leaves the next turn knowing a file was attached and what it
+    was called, which is enough to ask for it again — hence `limit`, which
+    bounds a large text attachment there without touching what the model is
+    sent now.
+    """
+    parts = [str(b.get("text", "")) for b in blocks if b.get("type") == "text"]
+    text = "\n".join(p for p in parts if p)
+    if limit is not None and len(text) > limit:
+        return text[:limit] + "\n[…truncated]"
+    return text
 
 
 def _is_text(raw: bytes) -> bool:

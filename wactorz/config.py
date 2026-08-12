@@ -119,10 +119,13 @@ def _bind_host() -> str:
     return os.getenv("WACTORZ_BIND_HOST", "").strip() or "0.0.0.0"
 
 
-#: Whether chat file attachments may be uploaded. Off unless asked for: the
-#: endpoint writes caller-supplied bytes to disk, and no deployment that has not
-#: turned the feature on should carry that.
-UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "0").strip().lower() not in ("", "0", "false", "no")
+#: Whether chat file attachments may be uploaded. On by default now that the
+#: feature is complete, and still a flag: the endpoint writes caller-supplied
+#: bytes to disk with nothing pruning them, and a deployment that does not want
+#: attachment storage growing there turns it off. ⚠ Like every other route it is
+#: unauthenticated, so an install exposed beyond its own network has an open
+#: 25 MB write endpoint until authentication lands.
+UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", "0", "false", "no")
 
 #: Largest single upload. Matches the limit the browser enforces before sending,
 #: so a file the UI accepts is not refused by the server.

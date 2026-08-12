@@ -9,6 +9,7 @@ the Supervisor, and verifies behaviour by inspecting actor state.
 import argparse
 import asyncio
 import sys
+import tempfile
 import time
 import traceback
 from collections.abc import Callable
@@ -18,6 +19,14 @@ from wactorz.core.actor import Actor, ActorState, Message, SupervisorStrategy
 from wactorz.core.registry import ActorSystem, Supervisor
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+# Every actor built here writes state somewhere. A fixed path under /tmp is
+# shared by every run at once — a second run of the suite, or a second checkout,
+# reads and writes the same files. Not `tmp_path`: these tests are also run
+# directly (see ``ALL_TESTS`` and ``main`` below), so they take no fixtures.
+# Held at module scope so it is cleaned up when the process exits.
+_STATE = tempfile.TemporaryDirectory(prefix="wactorz-supervisor-test-")
+STATE_DIR = _STATE.name
 
 PASS = "✅ PASS"
 FAIL = "❌ FAIL"
@@ -168,7 +177,7 @@ async def test_stable_actor_not_restarted() -> None:
     actor_ref = {}
 
     def factory() -> StableActor:
-        a = StableActor(persistence_dir="/tmp/af_test")
+        a = StableActor(persistence_dir=STATE_DIR)
         actor_ref["a"] = a
         return a
 
@@ -205,12 +214,12 @@ async def test_one_for_one_restart() -> None:
         call_n["crash"] += 1
         # Only the FIRST instance should crash; subsequent restarts get healthy actor
         should_crash = call_n["crash"] == 1
-        a = CrashOnceActor(should_crash=should_crash, persistence_dir="/tmp/af_test")
+        a = CrashOnceActor(should_crash=should_crash, persistence_dir=STATE_DIR)
         crash_ref["a"] = a
         return a
 
     def stable_factory() -> StableActor:
-        a = StableActor(name="sibling", persistence_dir="/tmp/af_test")
+        a = StableActor(name="sibling", persistence_dir=STATE_DIR)
         stable_ref["a"] = a
         return a
 
@@ -259,9 +268,7 @@ async def test_restart_count_increments() -> None:
     def factory() -> CrashOnceActor:
         crash_counter["n"] += 1
         should_crash = crash_counter["n"] <= 2
-        return CrashOnceActor(
-            name="counted", should_crash=should_crash, persistence_dir="/tmp/af_test"
-        )
+        return CrashOnceActor(name="counted", should_crash=should_crash, persistence_dir=STATE_DIR)
 
     system.supervisor.supervise(
         "counted",
@@ -305,7 +312,7 @@ async def test_budget_exhausted_gives_up() -> None:
     start_count = {"n": 0}
 
     def factory() -> Actor:
-        a = AlwaysCrashActor(persistence_dir="/tmp/af_test")
+        a = AlwaysCrashActor(persistence_dir=STATE_DIR)
         start_count["n"] += 1
         return a
 
@@ -347,7 +354,7 @@ async def test_one_for_all_restarts_siblings() -> None:
             start_counts[name] += 1
             crash_this_time = should_crash and call_n["n"] == 1
             return CrashOnceActor(
-                name=name, should_crash=crash_this_time, persistence_dir="/tmp/af_test"
+                name=name, should_crash=crash_this_time, persistence_dir=STATE_DIR
             )
 
         return factory
@@ -412,7 +419,7 @@ async def test_rest_for_one_only_downstream() -> None:
             start_counts[name] += 1
             crash_this_time = should_crash and call_n["n"] == 1
             return CrashOnceActor(
-                name=name, should_crash=crash_this_time, persistence_dir="/tmp/af_test"
+                name=name, should_crash=crash_this_time, persistence_dir=STATE_DIR
             )
 
         return factory
@@ -467,7 +474,7 @@ async def test_supervisor_status_snapshot() -> None:
     system = make_system()
 
     def factory() -> Actor:
-        return StableActor(name="snap", persistence_dir="/tmp/af_test")
+        return StableActor(name="snap", persistence_dir=STATE_DIR)
 
     system.supervisor.supervise(
         "snap",
@@ -497,7 +504,7 @@ async def test_supervised_flag_on_actor() -> None:
     system = make_system()
 
     def factory() -> Actor:
-        return StableActor(name="flag-test", persistence_dir="/tmp/af_test")
+        return StableActor(name="flag-test", persistence_dir=STATE_DIR)
 
     system.supervisor.supervise(
         "flag-test", factory, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=3
@@ -521,7 +528,7 @@ async def test_stop_all_stops_supervisor() -> None:
     system = make_system()
 
     def factory() -> Actor:
-        return StableActor(name="teardown", persistence_dir="/tmp/af_test")
+        return StableActor(name="teardown", persistence_dir=STATE_DIR)
 
     system.supervisor.supervise(
         "teardown", factory, strategy=SupervisorStrategy.ONE_FOR_ONE, max_restarts=3

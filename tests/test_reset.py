@@ -719,3 +719,67 @@ class FactoryResetKeepSetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Stored attachments are wiped with the rows that referenced them
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ResetUploadsTest(unittest.TestCase):
+    """An upload is only reachable through the chat rows that name it.
+
+    So a wipe that clears those rows and keeps the files leaves bytes nothing
+    can afterwards identify — not the app, not someone reading the directory.
+    """
+
+    def _seed(self, tmp: str) -> Path:
+        """One stored attachment: the blob and the metadata beside it."""
+        uploads = Path(tmp) / "uploads"
+        uploads.mkdir(parents=True)
+        (uploads / ("a" * 32)).write_bytes(b"\x89PNG\r\n\x1a\n")
+        (uploads / ("a" * 32 + ".json")).write_text('{"name":"shot.png"}', encoding="utf-8")
+        return uploads
+
+    def test_a_full_chat_reset_takes_the_files_with_it(self):
+        from wactorz.reset import reset_chat
+
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads = self._seed(tmp)
+
+            reset_chat(db_path=str(Path(tmp) / "wactorz.db"), state_dir=tmp)
+
+            self.assertEqual(list(uploads.iterdir()), [])
+
+    def test_a_full_wipe_takes_them_too(self):
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads = self._seed(tmp)
+
+            reset_all(db_path=str(Path(tmp) / "wactorz.db"), state_dir=tmp)
+
+            self.assertEqual(list(uploads.iterdir()), [])
+
+    def test_one_agent_leaves_them_alone(self):
+        from wactorz.reset import reset_chat
+
+        # An upload records the file's name, type and size — never who attached
+        # it — so there is no way to select one agent's files. Deleting all of
+        # them here would take another agent's attachments with it.
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads = self._seed(tmp)
+
+            reset_chat(agent_name="main", db_path=str(Path(tmp) / "wactorz.db"), state_dir=tmp)
+
+            self.assertEqual(len(list(uploads.iterdir())), 2)
+
+    def test_a_state_dir_with_no_uploads_is_not_created(self):
+        from wactorz.reset import reset_uploads
+
+        # A wipe must not bring a state directory into being on a machine that
+        # has none — the module resolves the path without ensuring it.
+        with tempfile.TemporaryDirectory() as tmp:
+            reset_uploads(state_dir=str(Path(tmp) / "absent"))
+
+            self.assertFalse((Path(tmp) / "absent").exists())

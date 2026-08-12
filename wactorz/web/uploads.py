@@ -59,6 +59,11 @@ MAX_PER_MESSAGE = 20
 #: rather than relying on path containment to catch a traversal.
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
+#: Where uploads live under the state directory. Named here because the reset
+#: path has to find them without creating them, so it cannot go through
+#: `upload_dir` — and the two must not drift apart.
+UPLOADS_DIRNAME = "uploads"
+
 
 def sniff(head: bytes) -> str:
     """The type these bytes actually are, or the opaque fallback."""
@@ -97,7 +102,7 @@ def upload_dir(state_dir: str | None = None) -> Path:
     attachments with it, in a subdirectory of its own so a stored file can never
     occupy the path an agent's pickle is read from.
     """
-    path = Path(resolve_state_dir(state_dir)) / "uploads"
+    path = Path(resolve_state_dir(state_dir)) / UPLOADS_DIRNAME
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -286,17 +286,17 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── User input ─────────────────────────────────────────────────────────
 
-    async def chat(self, user_message: str) -> str:
-        response = await super().chat(user_message)
+    async def chat(self, user_message: str, attachments: list[dict] | None = None) -> str:
+        response = await super().chat(user_message, attachments)
         # Fire-and-forget fact extraction — strip auto-injected context first
         clean_msg = _strip_live_context(user_message)
         asyncio.create_task(self._extract_and_save_facts(clean_msg, response))
         return response
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(self, user_message: str, attachments: list[dict] | None = None):
         full_response = []
         got_usage = False
-        async for chunk in super().chat_stream(user_message):
+        async for chunk in super().chat_stream(user_message, attachments):
             if isinstance(chunk, dict):
                 got_usage = True
                 yield chunk
@@ -1542,13 +1542,18 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         clean, _ = await self._process_delegate_commands(clean, restricted=True)
         return note_prefix + clean.strip()
 
-    async def process_user_input_stream(self, text: str):
+    async def process_user_input_stream(self, text: str, attachments: list[dict] | None = None):
         """Streaming version of process_user_input().
         Yields text chunks as the LLM generates them, then a final dict:
           {"done": True, "spawned": [...names...], "system_msg": "..."}
 
         The CLI calls this and prints chunks immediately.
         REST/Discord/WhatsApp should use process_user_input() instead.
+
+        `attachments` are content blocks for this turn. They reach the model on
+        the branch below that calls the LLM; a turn answered without one — a
+        command, an actuation, a pipeline plan, a delegation to the Home
+        Assistant agent — does not read them.
         """
         # Drain monitor notifications first
         note_prefix = self._drain_notifications()
@@ -1658,7 +1663,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Stream the LLM response chunk by chunk
         full_chunks = []
-        async for chunk in self.chat_stream(prefixed_text):
+        async for chunk in self.chat_stream(prefixed_text, attachments):
             if isinstance(chunk, dict):
                 break  # usage dict — discard, already tracked inside chat_stream
             full_chunks.append(chunk)

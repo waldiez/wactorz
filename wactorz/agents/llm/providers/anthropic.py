@@ -214,6 +214,13 @@ class AnthropicProvider(LLMProvider):
         self.client = anthropic.AsyncAnthropic(api_key=api_key)
         self.model = model
 
+    @classmethod
+    def supports_blocks(cls) -> bool:
+        """Block content reaches the API as written — `_request_params` passes
+        `messages` through, so a list content needs no conversion here.
+        """
+        return True
+
     # ── Request shaping ─────────────────────────────────────────────────────
 
     def _request_params(self, messages: list[dict], system: str, kwargs: dict) -> dict[str, Any]:

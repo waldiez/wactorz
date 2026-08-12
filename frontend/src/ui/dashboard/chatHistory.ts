@@ -9,7 +9,7 @@
  * actor kv_store) and merges it into the live thread, de-duplicating by id and
  * reconciling optimistic user echoes with their persisted copies.
  */
-import type { ChatMessage } from "../../types/agent";
+import type { Attachment, ChatMessage } from "../../types/agent";
 import { toMs } from "../../time";
 
 function ingressBase(): string {
@@ -49,6 +49,27 @@ function stripInternalTurns<T extends { role: string; content: string }>(rows: T
     return out;
 }
 
+/** What the server records on a turn — the file's identity, but no address. */
+type StoredAttachment = { id: string; name: string; mime: string; size: number };
+
+/**
+ * Rebuild a turn's attachment chips from what was stored with it.
+ *
+ * The row carries no `url`: the server keeps the record, not a link, so the
+ * address is derived from the id exactly as it was when the file was uploaded.
+ * Without it every restored attachment falls back to a plain file chip — an
+ * image would come back as a nameplate instead of its thumbnail.
+ */
+function restoreAttachments(stored: StoredAttachment[] | undefined): Attachment[] | undefined {
+    if (!stored?.length) {
+        return undefined;
+    }
+    return stored.map(a => ({
+        ...a,
+        url: `${ingressBase()}/api/upload/${encodeURIComponent(a.id)}`,
+    }));
+}
+
 /** Primary source: chat_log table — carries real persisted timestamps.
  *  Returns null on a failed request so callers can retry later. */
 async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
@@ -56,14 +77,26 @@ async function fromChatLog(agentName: string): Promise<ChatMessage[] | null> {
     if (!res.ok) {
         return null;
     }
-    const rows = (await res.json()) as { id: number; ts: number; role: string; content: string }[];
-    return stripInternalTurns(rows.reverse()).map(r => ({
-        id: `hist-${agentName}-${r.id}`,
-        from: r.role === "user" ? "user" : agentName,
-        to: r.role === "user" ? agentName : "user",
-        content: r.content,
-        timestampMs: toMs(r.ts),
-    }));
+    const rows = (await res.json()) as {
+        id: number;
+        ts: number;
+        role: string;
+        content: string;
+        attachments?: StoredAttachment[];
+    }[];
+    return stripInternalTurns(rows.reverse()).map(r => {
+        const attachments = restoreAttachments(r.attachments);
+        return {
+            id: `hist-${agentName}-${r.id}`,
+            from: r.role === "user" ? "user" : agentName,
+            to: r.role === "user" ? agentName : "user",
+            content: r.content,
+            timestampMs: toMs(r.ts),
+            // Spread rather than set: `exactOptionalPropertyTypes` refuses an
+            // explicit `undefined` for an optional field.
+            ...(attachments ? { attachments } : {}),
+        };
+    });
 }
 
 /** Fallback: actor kv_store history — no timestamps, so synthesise them.

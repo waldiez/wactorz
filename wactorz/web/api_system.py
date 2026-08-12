@@ -90,6 +90,7 @@ async def chat_log_handler(request: web.Request) -> Response:
 
 async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
+    from .. import config
     from ..config import CONFIG
     from ..ext import collect_public_config
 
@@ -114,6 +115,11 @@ async def config_handler(request: web.Request) -> Response:
         "weather": {
             "defaultLocation": CONFIG.weather_default_location,
         },
+        # The upload routes are only registered when this is on, so the browser
+        # has to learn it from the server rather than from how it was built —
+        # otherwise a deployment with uploads off still offers a drop zone that
+        # can only fail, and one with uploads on hides a feature it has.
+        "uploads": {"enabled": config.UPLOADS_ENABLED},
         "ws_url": ws_url,
     }
     # Merge each extension's non-secret browser config (e.g. tts availability),

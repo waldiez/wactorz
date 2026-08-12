@@ -19,6 +19,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz import config
 from wactorz.web import api_uploads, uploads
+from wactorz.web.app import build_app
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 40
 PDF = b"%PDF-1.7\n" + b"\x00" * 40
@@ -228,6 +229,35 @@ class TestServingItBack:
         resp = await client.get(f"/api/upload/{bad}")
 
         assert resp.status == 404
+
+
+class TestTellingTheBrowser:
+    """`/api/config` reports whether uploads are on.
+
+    The routes are only registered when they are, so a browser that assumed
+    instead of asking would either offer a drop zone whose every upload 404s or
+    hide a feature the deployment has. The field and the routes come from one
+    flag, and this is what keeps them from drifting apart.
+    """
+
+    @pytest.mark.parametrize("enabled", [True, False])
+    async def test_the_field_matches_the_routes(
+        self, monkeypatch: pytest.MonkeyPatch, enabled: bool
+    ) -> None:
+        monkeypatch.setattr(config, "UPLOADS_ENABLED", enabled)
+        app = build_app()
+        # Asked of the route table rather than of a request: the SPA catch-all
+        # answers an unregistered path too, so a status code cannot tell the
+        # difference between a missing route and a served page.
+        posts = {
+            r.resource.canonical for r in app.router.routes() if r.method == "POST" and r.resource
+        }
+
+        async with TestClient(TestServer(app)) as client:
+            payload = await (await client.get("/api/config")).json()
+
+        assert payload["uploads"]["enabled"] is enabled
+        assert ("/api/upload" in posts) is enabled
 
 
 class TestReadingItBackForTheModel:

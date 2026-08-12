@@ -161,7 +161,7 @@ describe("buildResetPopover", () => {
         const pop = buildResetPopover();
         const btn = pop.querySelector<HTMLButtonElement>("button")!; // first = chat
         btn.click(); // arm
-        expect(btn.querySelector("span")!.textContent).toBe("Confirm chat history?");
+        expect(btn.querySelector("span")!.textContent).toBe("Confirm chat history & files?");
         expect(fetch).not.toHaveBeenCalled();
         btn.click(); // fire
         await vi.waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/reset", expect.anything()));
@@ -175,7 +175,7 @@ describe("buildResetPopover", () => {
         expect(first!.querySelector("span")!.textContent).toContain("Confirm");
         second!.click();
         // first disarmed back to its label, second now armed
-        expect(first!.querySelector("span")!.textContent).toBe("Chat history");
+        expect(first!.querySelector("span")!.textContent).toBe("Chat history & files");
         expect(second!.querySelector("span")!.textContent).toContain("Confirm");
     });
 
@@ -186,7 +186,7 @@ describe("buildResetPopover", () => {
         btn.click();
         expect(btn.querySelector("span")!.textContent).toContain("Confirm");
         vi.advanceTimersByTime(3000);
-        expect(btn.querySelector("span")!.textContent).toBe("Chat history");
+        expect(btn.querySelector("span")!.textContent).toBe("Chat history & files");
     });
 
     it("toasts an error with the server message when the reset response is not ok", async () => {

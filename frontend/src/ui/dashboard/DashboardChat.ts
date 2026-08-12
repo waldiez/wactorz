@@ -30,7 +30,6 @@ import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";
 import { MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
-import { UPLOADS_ENABLED } from "./uploads";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, listen } from "../../events";
 
@@ -504,12 +503,13 @@ export class DashboardChat {
     wire(): void {
         this._wireChatEvents();
         this._wireStreamEvents();
-        if (UPLOADS_ENABLED) {
-            this._evAttach = listen("af-attachment-added", detail => {
-                this._pendingAttachments.push(detail.attachment);
-                this._renderAttachTray();
-            });
-        }
+        // Wired unconditionally — `wire()` can run before /api/config answers.
+        // The event only originates from the drop zone and the paste handler,
+        // both of which check first, so with uploads off nothing ever arrives.
+        this._evAttach = listen("af-attachment-added", detail => {
+            this._pendingAttachments.push(detail.attachment);
+            this._renderAttachTray();
+        });
     }
 
     /** Remove all event listeners added by wire() (call when the dashboard is hidden). */

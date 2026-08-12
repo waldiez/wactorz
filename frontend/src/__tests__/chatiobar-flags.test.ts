@@ -5,8 +5,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Force the gated features ON for this file so the mic + paste paths (dead while
-// STT_ENABLED / UPLOADS_ENABLED are false) are exercised. The flags themselves
-// are covered in feature-flags.test.ts.
+// STT is off and the server has not said it takes uploads) are exercised. The
+// gates themselves are covered in feature-flags.test.ts and uploads-gate.test.ts.
 vi.mock("../io/SpeechToText", () => {
     class SpeechToText {
         static isSupported() {
@@ -16,7 +16,7 @@ vi.mock("../io/SpeechToText", () => {
     return { STT_ENABLED: true, SpeechToText };
 });
 vi.mock("../ui/dashboard/uploads", () => ({
-    UPLOADS_ENABLED: true,
+    uploadsEnabled: () => true,
     uploadFile: vi.fn(async () => ({ id: "att-1" })),
 }));
 vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));

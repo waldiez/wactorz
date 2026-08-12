@@ -20,6 +20,7 @@
  */
 
 import { safeStorage } from "../safeStorage";
+import { UPLOADS_KEY } from "../ui/dashboard/uploads";
 
 /** Seed a single key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {
@@ -50,6 +51,14 @@ export function registerConfigEntry(key: string, extract: ConfigExtract): void {
 registerConfigEntry(
     "wactorz-ha-url",
     c => (c.ha as Record<string, unknown> | undefined)?.url as string | undefined,
+);
+
+// Core entry — whether the server registered its upload routes, which is what
+// decides if the attachment UI can work at all. Seeded as "1"/"0" rather than
+// "1"/absent: `seedKeyFromServer` ignores an empty value, so an absent one would
+// leave a stale "1" behind and keep offering uploads after they were turned off.
+registerConfigEntry(UPLOADS_KEY, c =>
+    (c.uploads as Record<string, unknown> | undefined)?.enabled ? "1" : "0",
 );
 
 /** Fetch `/api/config` and seed every registered client-side key from it.

@@ -36,7 +36,7 @@ import { seedServerConfig } from "./config/serverConfig";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
-import { UPLOADS_ENABLED } from "./ui/dashboard/uploads";
+import { uploadsEnabled } from "./ui/dashboard/uploads";
 import type { AgentInfo } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import {
@@ -125,10 +125,10 @@ const router = new ServerEventRouter();
 const ioManager = new IOManager(router);
 const ws = new WSClient();
 
-// Global drag-and-drop upload overlay — only wired up when the backend endpoint
-// exists (flip UPLOADS_ENABLED once /api/upload is live), so the overlay never
-// appears for a feature that can't work yet.
-const _dropZone = UPLOADS_ENABLED ? new DropZone(_apiBase) : null;
+// Global drag-and-drop upload overlay. Built after /api/config answers, since
+// only the server knows whether the upload routes are registered — an overlay
+// raised before that would accept a file it has nowhere to send.
+let _dropZone: DropZone | null = null;
 
 // Live-grid deletion guard (mirrors the backend's _deleted_agent_ids): blocks
 // stale stop-window events from blinking a deleted card back, and re-admits a
@@ -488,6 +488,11 @@ seedServerConfig()
         // Boot TTS after config is seeded — reads availability from safeStorage.
         const available = safeStorage.get("wactorz-tts-available") === "1";
         registerTTS({ apiBase: _apiBase, available });
+        // Same reason, same moment: the server has now said whether it takes
+        // uploads at all.
+        if (uploadsEnabled()) {
+            _dropZone = new DropZone(_apiBase);
+        }
     })
     .catch(() => {
         // Config fetch failed — boot TTS anyway, it probes /api/tts/voices itself.
@@ -506,6 +511,9 @@ function teardown(): void {
     window.clearInterval(_liveActorsTimer);
     ws.disconnect();
     agentStore.dispose();
+    // Detaches the window drag listeners it put up; null when uploads are off.
+    _dropZone?.destroy();
+    _dropZone = null;
 }
 
 // `beforeunload` does not fire reliably on mobile, where a page is more often

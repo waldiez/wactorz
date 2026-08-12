@@ -12,7 +12,7 @@ import type { SpeechToText } from "../../io/SpeechToText";
 import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
-import { UPLOADS_ENABLED, uploadFile } from "./uploads";
+import { uploadsEnabled, uploadFile } from "./uploads";
 import { emit, listen } from "../../events";
 
 /** The composer's prompt: it names the recipient, or invites picking one. */
@@ -267,9 +267,9 @@ function buildInputArea(
     const tray = document.createElement("div");
     tray.className = "af-attach-tray";
     tray.id = "af-attach-tray";
-    if (UPLOADS_ENABLED) {
-        input.addEventListener("paste", e => void handlePaste(e));
-    }
+    // Always attached, gated inside: the input is built before /api/config has
+    // answered, so a check here would decide with an answer nobody has yet.
+    input.addEventListener("paste", e => void handlePaste(e));
     inputWrap.append(tray, mentionPanel, ghost, input, hint);
     return { inputWrap, input, mentionPanel };
 }
@@ -277,6 +277,9 @@ function buildInputArea(
 /** Paste handler: turn clipboard files (e.g. a pasted screenshot) into pending
  *  attachments via the same event the drop zone uses. */
 async function handlePaste(e: ClipboardEvent): Promise<void> {
+    if (!uploadsEnabled()) {
+        return;
+    }
     const files = Array.from(e.clipboardData?.files ?? []);
     if (!files.length) {
         return;

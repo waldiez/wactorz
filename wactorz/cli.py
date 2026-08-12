@@ -23,9 +23,11 @@ def get_args():
         help="NVIDIA NIM model, e.g. meta/llama-3.3-70b-instruct or deepseek-ai/deepseek-r1",
     )
     parser.add_argument(
+        # No default, matching --ollama-model and --nim-model: argparse fills a
+        # default in whether or not the flag was passed, so one here overrode
+        # LLM_MODEL on every run and pinned Gemini to a single model for good.
         "--gemini-model",
-        default="gemini-2.5-flash",
-        help="Google Gemini model (default: gemini-2.5-flash). Options: gemini-2.5-flash-lite, gemini-2.5-pro, gemini-3.1-pro",
+        help="Google Gemini model (default: LLM_MODEL), e.g. gemini-3.6-flash",
     )
     parser.add_argument("--discord-token")
     parser.add_argument("--mqtt-broker")

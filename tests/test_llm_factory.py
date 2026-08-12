@@ -1,5 +1,7 @@
 """Tests for per-call-site LLM provider overrides (wactorz/llm_factory.py)."""
 
+import sys
+
 import pytest
 
 from wactorz.agents.llm_agent import OllamaProvider
@@ -188,3 +190,34 @@ def test_bad_override_falls_back_to_default():
 def test_override_none_disables_site_llm():
     default = object()
     assert provider_for("intent", default, overrides={"intent": "none"}) is None
+
+
+# ── model flags ──────────────────────────────────────────────────────────────
+
+
+class TestTheModelFlagsDoNotInventAModel:
+    """⚠ argparse fills a `default=` in whether or not the flag was passed.
+
+    A default on a model flag therefore reaches `create_provider` as an explicit
+    model on every run, outranking `LLM_MODEL` — which pinned Gemini to one
+    model no `.env` could change, and answered every request with a 404 once
+    that model was retired.
+    """
+
+    @pytest.mark.parametrize("flag", ["ollama_model", "nim_model", "gemini_model"])
+    def test_an_unpassed_flag_stays_unset(self, monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
+        from wactorz.cli import get_args
+
+        monkeypatch.setattr(sys, "argv", ["wactorz"])
+
+        assert getattr(get_args(), flag) is None
+
+    def test_gemini_falls_back_to_the_configured_model(self) -> None:
+        from wactorz.config import CONFIG
+
+        provider = create_provider("gemini", None)
+
+        assert provider is not None
+        # `model_name` here, `model` on every other provider — see the startup
+        # log in app.py, which reads both.
+        assert provider.model_name == CONFIG.llm_model  # pyright: ignore[reportAttributeAccessIssue]

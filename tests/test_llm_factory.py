@@ -229,3 +229,51 @@ class TestTheModelFlagsDoNotInventAModel:
         # `model_name` here, `model` on every other provider — see the startup
         # log in app.py, which reads both.
         assert provider.model_name == CONFIG.llm_model  # pyright: ignore[reportAttributeAccessIssue]
+
+
+class TestASecretOnTheCommandLineIsCalledOut:
+    """⚠ argv is world-readable on Linux: `ps` shows it to any local user, and
+    the shell writes it to history. The environment variable carries the same
+    value without either — so a token passed as a flag earns a warning.
+
+    Warned, not refused: an existing launcher should keep working, and it cannot
+    act on a failure it never sees.
+    """
+
+    @pytest.mark.parametrize("flag", ["--discord-token", "--telegram-token"])
+    def test_it_warns_and_still_accepts_the_value(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], flag: str
+    ) -> None:
+        from wactorz.cli import get_args
+
+        monkeypatch.setattr(sys, "argv", ["wactorz", flag, "s3cret"])
+
+        args = get_args()
+
+        warning = capsys.readouterr().err
+        assert flag in warning
+        assert "ps" in warning
+        assert getattr(args, flag.removeprefix("--").replace("-", "_")) == "s3cret"
+
+    def test_the_secret_itself_is_not_echoed(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Printing it would put the value in a second place — the logs.
+        from wactorz.cli import get_args
+
+        monkeypatch.setattr(sys, "argv", ["wactorz", "--discord-token", "s3cret"])
+
+        get_args()
+
+        assert "s3cret" not in capsys.readouterr().err
+
+    def test_a_run_without_tokens_is_silent(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from wactorz.cli import get_args
+
+        monkeypatch.setattr(sys, "argv", ["wactorz"])
+
+        get_args()
+
+        assert capsys.readouterr().err == ""

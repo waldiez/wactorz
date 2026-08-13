@@ -573,7 +573,15 @@ async def handle_task(agent, payload):
                     pass
 
     file_path    = payload.get("file_path", "")
-    output_path  = payload.get("output_path", "/tmp/presentation.pptx")
+    # A private temp dir, not a fixed `/tmp/presentation.pptx`. That name was
+    # predictable in a world-writable directory: two conversions at once
+    # clobbered each other, and anything that got there first — a symlink, say —
+    # decided where the file was actually written. `mkdtemp` is 0700 and honours
+    # TMPDIR, so it is also correct off Linux. The path goes back to the caller
+    # as `pptx_path`, so a generated name costs nothing.
+    output_path  = payload.get("output_path") or os.path.join(
+        tempfile.mkdtemp(prefix="wactorz-pptx-"), "presentation.pptx"
+    )
     slide_count  = int(payload.get("slide_count", 8))
     nim_fallback = bool(payload.get("nim_fallback", True))
     min_w        = int(payload.get("min_img_width",  200))

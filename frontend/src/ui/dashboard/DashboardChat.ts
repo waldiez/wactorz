@@ -355,6 +355,11 @@ export class DashboardChat {
         this._updateComposerPlaceholder();
     }
 
+    /** Put the caret in the composer, if it is on the page yet. */
+    private _focusComposer(): void {
+        this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")?.focus();
+    }
+
     /** The composer names the agent it will send to; keep it on the target. */
     private _updateComposerPlaceholder(): void {
         const input = this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input");
@@ -509,6 +514,12 @@ export class DashboardChat {
         this._evAttach = listen("af-attachment-added", detail => {
             this._pendingAttachments.push(detail.attachment);
             this._renderAttachTray();
+            // Attaching a file is the first half of composing a message, so the
+            // caret belongs in the composer for the second half. No view switch:
+            // the iobar sits below every view, so a file dropped from the
+            // overview is already visible there — and sending moves to the chat
+            // view on its own.
+            this._focusComposer();
         });
     }
 

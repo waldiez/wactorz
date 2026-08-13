@@ -550,6 +550,60 @@ describe("DashboardChat — stop, attachments, external events", () => {
         fetchSpy.mockRestore();
     });
 
+    it("puts the caret in the composer when a file is attached", () => {
+        // Attaching is the first half of composing; the caret belongs where the
+        // second half gets typed.
+        const host = makeHost();
+        const dc = mount(host) as any;
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
+
+        document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
+
+        expect(document.activeElement).toBe(host.root.querySelector("#af-iobar-input"));
+        dc.unwire();
+    });
+
+    it("leaves the user on the view they chose", () => {
+        // Deliberate: the iobar sits below every view, so a file dropped from
+        // the overview is already visible in the tray. Sending moves to the chat
+        // view on its own — attaching should not.
+        const host = makeHost([agent("main")], "overview");
+        const dc = mount(host) as any;
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
+
+        document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
+
+        expect(host.setView).not.toHaveBeenCalled();
+        expect(host.root.querySelectorAll(".af-attach-chip")).toHaveLength(1);
+        dc.unwire();
+    });
+
+    it("keeps a dropped file through an @mention typed afterwards", () => {
+        // The natural order: drop the file, then say who it is for. Nothing
+        // clears the tray on a target change, and the mention decides the
+        // recipient — so the file must ride along to the agent named last.
+        const host = makeHost([agent("main"), agent("worker")]);
+        const dc = mount(host) as any;
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
+        const seen: Array<{ target: string; attachments: unknown[] }> = [];
+        const onSend = (e: Event) => seen.push((e as CustomEvent).detail);
+        document.addEventListener("af-send-message", onSend);
+
+        document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
+        const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        input.value = "@worker look at this";
+        dc._sendMessage(input);
+
+        document.removeEventListener("af-send-message", onSend);
+        dc.unwire();
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.target).toBe("worker");
+        expect(seen[0]!.attachments).toHaveLength(1);
+    });
+
     it("sends an attachments-only message and clears the pending tray", () => {
         const host = makeHost();
         const dc = mount(host) as any;

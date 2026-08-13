@@ -19,7 +19,7 @@
 
 import type { AgentInfo } from "../types/agent";
 import { safeStorage } from "../safeStorage";
-import type { FeedItem } from "../types/feed";
+import type { AppLogItem, FeedItem } from "../types/feed";
 import {
     buildHeader,
     buildBottomNav,
@@ -37,6 +37,7 @@ import {
     DEFAULT_FILTERS,
     type FeedFilters,
 } from "./dashboard/feedView";
+import { fetchAppLogs } from "./dashboard/appLogs";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import type { AgentAction } from "./dashboard/cards";
@@ -65,6 +66,8 @@ export class CardDashboard {
     private view: View = "overview";
     private connState: ConnState = "connecting";
     private tickTimer: ReturnType<typeof setInterval> | null = null;
+    /** Application-log records, pulled when the activity view opens. */
+    private _appLogs: AppLogItem[] = [];
     /** Toolbar state for the activity view, kept across view rebuilds. */
     private _feedFilters: FeedFilters = { ...DEFAULT_FILTERS };
 
@@ -406,6 +409,7 @@ export class CardDashboard {
             body.appendChild(this._overview.build());
         } else if (this.view === "feed") {
             body.appendChild(this._buildFeedView());
+            this._loadAppLogs();
         } else if (this.view === "settings") {
             body.appendChild(this._buildSettingsView());
         } else if (this.view === "chat") {
@@ -455,8 +459,32 @@ export class CardDashboard {
         this._renderView();
     }
 
+    /**
+     * Pull the application log and fold it into the feed already on screen.
+     *
+     * Fetched when the view opens rather than streamed: records arrive by
+     * asking, so a page left open does not accumulate them. Appended to the
+     * existing rows and re-filtered, so the toolbar's current state decides
+     * what becomes visible.
+     */
+    private _loadAppLogs(): void {
+        void fetchAppLogs().then(entries => {
+            if (!entries?.length || this.view !== "feed") {
+                return;
+            }
+            // Only what is not on screen already. The build above renders
+            // `_appLogs` from the previous visit, so appending the whole
+            // response would double every record each time the view is opened.
+            const known = new Set(this._appLogs.map(feedKey));
+            this._appLogs = entries;
+            entries
+                .filter(e => !known.has(feedKey(e)))
+                .forEach(e => appendFeedItemToView(this.root, e, this._feedFilters));
+        });
+    }
+
     private _buildFeedView(): HTMLElement {
-        return buildFeedView(this.feedItems, {
+        return buildFeedView([...this.feedItems, ...this._appLogs], {
             filters: this._feedFilters,
             // Held here, not in the view: the view is rebuilt on every tab
             // switch, so state owned by it would drop a search mid-investigation.

@@ -90,6 +90,7 @@ AGENT_CODE = r'''
 import asyncio
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -369,6 +370,26 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
 # 5. PPTXGENJS SCRIPT BUILDER
 # ─────────────────────────────────────────────────────────────────────────────
 
+_HEX6 = re.compile(r"[0-9A-Fa-f]{6}")
+
+
+def _hex_color(value, fallback):
+    """Six hex digits, or the default.
+
+    These values are the only ones in the generated script that are not
+    passed through `json.dumps`: they go in raw, inside single quotes, into JS
+    that `node` then executes. And they are LLM-chosen from the *document's*
+    content — so a crafted document could close the quote and append statements:
+
+        x'}); require('child_process').execSync('...'); ({a:'
+
+    Refusing anything that is not six hex digits closes that. It falls back
+    rather than raising, because a bad palette is not a reason to fail a
+    conversion the user asked for.
+    """
+    return value if isinstance(value, str) and _HEX6.fullmatch(value) else fallback
+
+
 def _build_js(outline, image_assignment, output_path):
     """Generate a Node.js / pptxgenjs script as a string."""
     title  = outline.get("title", "Presentation")
@@ -376,11 +397,11 @@ def _build_js(outline, image_assignment, output_path):
     colors = outline.get("theme_colors", {})
 
     C = {
-        "bg_dark":    colors.get("bg_dark",    "1E2761"),
-        "bg_light":   colors.get("bg_light",   "F5F7FA"),
-        "accent":     colors.get("accent",     "4A90D9"),
-        "text_dark":  colors.get("text_dark",  "1A1A2E"),
-        "text_light": colors.get("text_light", "FFFFFF"),
+        "bg_dark":    _hex_color(colors.get("bg_dark"),    "1E2761"),
+        "bg_light":   _hex_color(colors.get("bg_light"),   "F5F7FA"),
+        "accent":     _hex_color(colors.get("accent"),     "4A90D9"),
+        "text_dark":  _hex_color(colors.get("text_dark"),  "1A1A2E"),
+        "text_light": _hex_color(colors.get("text_light"), "FFFFFF"),
     }
 
     L = [

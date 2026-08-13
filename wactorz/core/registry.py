@@ -92,6 +92,7 @@ class ActorRegistry:
 
     async def register(self, actor: Actor) -> None:
         """Add an actor, replacing any earlier one holding the same id."""
+        superseded: Actor | None = None
         async with self._lock:
             existing = self._actors.get(actor.actor_id)
             if existing is not None and existing is not actor:
@@ -119,12 +120,27 @@ class ActorRegistry:
                     existing.name,
                     actor.actor_id[:8],
                 )
-                # Schedule stop outside this lock to avoid re-entrancy / deadlock.
-                # stop() acquires no shared locks but may await on tasks that do.
-                asyncio.create_task(existing.stop())
+                # Stopped outside this lock to avoid re-entrancy: stop()
+                # acquires no shared lock but may await tasks that do.
+                superseded = existing
             actor._registry = self
             self._actors[actor.actor_id] = actor
             logger.info("[Registry] Registered %s (%s)", actor.name, actor.actor_id[:8])
+
+        if superseded is not None:
+            # ⚠ Awaited, not fired and forgotten. `create_task` here kept no
+            # reference, so the task could be garbage-collected mid-stop, and an
+            # exception inside it went to nobody — the failure mode being the one
+            # this code exists to prevent: an old instance still subscribed, so
+            # every published event is delivered twice.
+            try:
+                await superseded.stop()
+            except Exception as exc:
+                logger.error(
+                    "[Registry] Stopping the superseded '%s' failed — its listeners may still be live: %s",
+                    superseded.name,
+                    exc,
+                )
 
     async def unregister(self, actor_id: str) -> None:
         """Remove an actor. Does not stop it — the caller owns that."""

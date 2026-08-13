@@ -17,6 +17,7 @@ from .. import config
 from ..config import CONFIG, MAX_REQUEST_BYTES
 from . import (
     api_actors,
+    api_logs,
     api_reset,
     api_system,
     api_uploads,
@@ -127,6 +128,10 @@ def build_app() -> web.Application:
 
     app.router.add_get("/api/config", api_system.config_handler)
     app.router.add_get("/config", api_system.config_handler)
+
+    # `/api/` only, unlike the pairs above: whatever authentication lands will be
+    # middleware over that prefix, and a bare `/logs` alias would sit outside it.
+    app.router.add_get("/api/logs", api_logs.logs_handler)
     # Only when asked for: these write caller-supplied bytes to disk.
     if config.UPLOADS_ENABLED:
         app.router.add_post("/api/upload", api_uploads.upload_handler)

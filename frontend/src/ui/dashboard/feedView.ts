@@ -313,6 +313,12 @@ export const DEFAULT_FILTERS: FeedFilters = {
 export interface FeedViewOptions {
     filters: FeedFilters;
     onFiltersChange: (filters: FeedFilters) => void;
+    /** Fetch the application log again now. */
+    onRefresh?: () => void;
+    /** Start or stop re-fetching on an interval. */
+    onFollowChange?: (following: boolean) => void;
+    /** Whether following is on, so the control survives a view rebuild. */
+    following?: boolean;
 }
 
 /** Whether one already-rendered row survives the current filters. */
@@ -433,6 +439,54 @@ function syncControlRelevance(
     heartbeats.classList.toggle("af-feed-filter-off", !heartbeatsApply);
 }
 
+/**
+ * Refresh and follow — the application log's two actions.
+ *
+ * Follow re-fetches on an interval rather than opening a stream: it reaches the
+ * same place over the path that is already a pull, so a page left open receives
+ * nothing it did not ask for. When a live push does land it replaces the timer
+ * behind this same control, which is why it is named for what the user wants
+ * rather than for how it currently works.
+ */
+function refreshButton(onRefresh: () => void): HTMLButtonElement {
+    const refresh = document.createElement("button");
+    refresh.className = "af-mini-btn af-feed-refresh";
+    refresh.type = "button";
+    refresh.title = "Fetch the application log again";
+    refresh.textContent = "refresh";
+    refresh.addEventListener("click", () => onRefresh());
+    return refresh;
+}
+
+function followButton(starting: boolean, onChange: (following: boolean) => void): HTMLButtonElement {
+    let following = starting;
+    const follow = document.createElement("button");
+    follow.type = "button";
+    follow.title = "Keep fetching new records";
+    const paint = () => {
+        follow.textContent = `follow: ${following ? "on" : "off"}`;
+        follow.className = `af-mini-btn af-feed-follow${following ? " active" : ""}`;
+    };
+    paint();
+    follow.addEventListener("click", () => {
+        following = !following;
+        paint();
+        onChange(following);
+    });
+    return follow;
+}
+
+function logActions(opts: FeedViewOptions): HTMLElement[] {
+    const controls: HTMLElement[] = [];
+    if (opts.onRefresh) {
+        controls.push(refreshButton(opts.onRefresh));
+    }
+    if (opts.onFollowChange) {
+        controls.push(followButton(opts.following ?? false, opts.onFollowChange));
+    }
+    return controls;
+}
+
 /** Source / level / search / heartbeats — the whole toolbar. */
 function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
     const filters: FeedFilters = { ...opts.filters };
@@ -474,7 +528,13 @@ function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
 
     const toolbar = document.createElement("div");
     toolbar.className = "af-feed-toolbar";
-    toolbar.append(labelled("show", source), labelled("level", level), labelled("find", search), heartbeats);
+    toolbar.append(
+        labelled("show", source),
+        labelled("level", level),
+        labelled("find", search),
+        heartbeats,
+        ...logActions(opts),
+    );
     syncControlRelevance(filters, level, heartbeats);
     return toolbar;
 }
@@ -511,6 +571,25 @@ export function buildFeedView(items: ActivityItem[], opts: FeedViewOptions): HTM
     return wrap;
 }
 
+/**
+ * How many rows the list may hold. Beyond this the oldest are dropped.
+ *
+ * ⚠ Nothing used to remove a row. `feedItems` is capped, but that only bounds
+ * what a *rebuild* renders — appending never evicted, so a long session on a
+ * busy broker grew the DOM without limit. Polling the application log makes
+ * that faster and pushing it would make it faster still, so the bound belongs
+ * on the append path itself rather than on any one source.
+ */
+export const MAX_ROWS = 600;
+
+/** Drop the oldest rows once the list is over `MAX_ROWS`. */
+function evictOldestRows(feed: HTMLElement): void {
+    const rows = feed.querySelectorAll<HTMLElement>(".af-feed-item");
+    for (let i = 0; i < rows.length - MAX_ROWS; i++) {
+        rows[i]!.remove();
+    }
+}
+
 /** Append a newly-arrived entry to the live view inside `root`, if shown. */
 export function appendFeedItemToView(root: HTMLElement, item: ActivityItem, filters: FeedFilters): void {
     const feed = root.querySelector<HTMLElement>("#af-feed-view");
@@ -518,6 +597,7 @@ export function appendFeedItemToView(root: HTMLElement, item: ActivityItem, filt
         return;
     }
     activityItemEl(feed, item);
+    evictOldestRows(feed);
     applyFilters(feed, filters);
     feed.scrollTop = feed.scrollHeight;
 }

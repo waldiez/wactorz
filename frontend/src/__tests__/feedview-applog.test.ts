@@ -18,6 +18,8 @@ import {
     applyFilters,
     buildFeedView,
     shortOrigin,
+    MAX_ROWS,
+    appendFeedItemToView,
     DEFAULT_FILTERS,
     type FeedFilters,
 } from "../ui/dashboard/feedView";
@@ -225,5 +227,74 @@ describe("controls the current source has no use for", () => {
         source.value = "agent";
         source.dispatchEvent(new Event("change"));
         expect(level(wrap).disabled).toBe(true);
+    });
+});
+
+describe("the list stays bounded", () => {
+    it("drops the oldest rows past the cap", () => {
+        // ⚠ Nothing used to remove a row. `feedItems` is capped, but that only
+        // bounds a rebuild — appending never evicted, so a long session grew
+        // the DOM without limit, and polling the log makes that faster.
+        const root = document.createElement("div");
+        root.innerHTML = `<div id="af-feed-view"></div>`;
+        const f = filters();
+
+        for (let i = 0; i < MAX_ROWS + 25; i++) {
+            appendFeedItemToView(root, log({ ts: 1_700_000_000 + i, text: `line ${i}` }), f);
+        }
+
+        const rows = root.querySelectorAll(".af-feed-item");
+        expect(rows).toHaveLength(MAX_ROWS);
+        // The survivors are the newest — an activity view that drops the latest
+        // row is worse than one that grows.
+        expect(rows[rows.length - 1]!.textContent).toContain(`line ${MAX_ROWS + 24}`);
+    });
+});
+
+describe("the application log's own controls", () => {
+    it("are absent unless the caller offers them", () => {
+        const wrap = buildFeedView([], { filters: filters(), onFiltersChange: vi.fn() });
+        expect(wrap.querySelector(".af-feed-refresh")).toBeNull();
+        expect(wrap.querySelector(".af-feed-follow")).toBeNull();
+    });
+
+    it("refresh asks the caller to fetch again", () => {
+        const onRefresh = vi.fn();
+        const wrap = buildFeedView([], { filters: filters(), onFiltersChange: vi.fn(), onRefresh });
+
+        wrap.querySelector<HTMLButtonElement>(".af-feed-refresh")!.click();
+
+        expect(onRefresh).toHaveBeenCalledOnce();
+    });
+
+    it("follow reports both directions and shows its state", () => {
+        const onFollowChange = vi.fn();
+        const wrap = buildFeedView([], {
+            filters: filters(),
+            onFiltersChange: vi.fn(),
+            onFollowChange,
+        });
+        const btn = wrap.querySelector<HTMLButtonElement>(".af-feed-follow")!;
+
+        btn.click();
+        expect(onFollowChange).toHaveBeenLastCalledWith(true);
+        expect(btn.textContent).toContain("on");
+
+        btn.click();
+        expect(onFollowChange).toHaveBeenLastCalledWith(false);
+        expect(btn.textContent).toContain("off");
+    });
+
+    it("starts on when the caller says it already is", () => {
+        // The view is rebuilt on every tab switch; a control that forgot would
+        // read "off" while the timer was still running.
+        const wrap = buildFeedView([], {
+            filters: filters(),
+            onFiltersChange: vi.fn(),
+            onFollowChange: vi.fn(),
+            following: true,
+        });
+
+        expect(wrap.querySelector(".af-feed-follow")!.textContent).toContain("on");
     });
 });

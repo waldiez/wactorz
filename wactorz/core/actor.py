@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 import psutil
 
 from .atomic_io import quarantine_unreadable, write_pickle
+from .paths import resolve_state_dir
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
@@ -136,7 +137,7 @@ class Actor(ABC):
         self,
         actor_id: str | None = None,
         name: str | None = None,
-        persistence_dir: str = "./actor_state",
+        persistence_dir: str | None = None,
         mailbox_size: int = 1000,
     ):
         if actor_id:
@@ -164,7 +165,12 @@ class Actor(ABC):
         # Use name as persistence folder so it survives restarts with same name
         # Falls back to actor_id for anonymous actors
         safe_name = self.name.replace("/", "_").replace("\\", "_")
-        self._persistence_dir = Path(persistence_dir) / safe_name
+        # `resolve_state_dir` rather than a literal: where durable state lives is
+        # one question with one answer (explicit argument, else
+        # `WACTORZ_STATE_DIR`, else `./state`). The old `./actor_state` default
+        # was a second opinion that disagreed with the resolver, so a caller who
+        # omitted the argument wrote somewhere nothing else would look.
+        self._persistence_dir = Path(persistence_dir or resolve_state_dir()) / safe_name
         self._persistence_dir.mkdir(parents=True, exist_ok=True)
         self._persistent_state: dict = {}
 

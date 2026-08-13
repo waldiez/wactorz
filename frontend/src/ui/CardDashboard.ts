@@ -30,7 +30,13 @@ import {
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
-import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
+import {
+    buildFeedView,
+    appendFeedItemToView,
+    feedKey,
+    DEFAULT_FILTERS,
+    type FeedFilters,
+} from "./dashboard/feedView";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import type { AgentAction } from "./dashboard/cards";
@@ -59,7 +65,8 @@ export class CardDashboard {
     private view: View = "overview";
     private connState: ConnState = "connecting";
     private tickTimer: ReturnType<typeof setInterval> | null = null;
-    private hideHeartbeats: boolean = true;
+    /** Toolbar state for the activity view, kept across view rebuilds. */
+    private _feedFilters: FeedFilters = { ...DEFAULT_FILTERS };
 
     private _remoteNodes = new Map<string, { agents: string[]; lastSeen: number }>();
     private _removingIds = new Set<string>();
@@ -450,15 +457,17 @@ export class CardDashboard {
 
     private _buildFeedView(): HTMLElement {
         return buildFeedView(this.feedItems, {
-            hideHeartbeats: this.hideHeartbeats,
-            onToggleHeartbeats: h => {
-                this.hideHeartbeats = h;
+            filters: this._feedFilters,
+            // Held here, not in the view: the view is rebuilt on every tab
+            // switch, so state owned by it would drop a search mid-investigation.
+            onFiltersChange: f => {
+                this._feedFilters = f;
             },
         });
     }
 
     private _appendFeedItemToView(item: FeedItem): void {
-        appendFeedItemToView(this.root, item, this.hideHeartbeats);
+        appendFeedItemToView(this.root, item, this._feedFilters);
     }
 
     private _renderConnBadge(): void {

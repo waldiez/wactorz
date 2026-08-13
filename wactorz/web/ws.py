@@ -403,9 +403,16 @@ async def handle_command(cmd: dict[str, Any]) -> None:
         events.add_log(
             {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
         )
-        runtime.state["agents"].get(agent_id, {})["state"] = (
-            "stopped" if command == "stop" else "paused" if command == "pause" else "running"
-        )  # start and resume both end up running
+        # ⚠ `.get(agent_id, {})` returned a *fresh* dict when the agent was
+        # absent, so the assignment mutated a throwaway and the write silently
+        # did nothing — a line that reads like a state update and is not one.
+        # An absent agent is not an error here: the command already succeeded,
+        # and the next heartbeat re-creates the entry.
+        entry = runtime.state["agents"].get(agent_id)
+        if entry is not None:
+            entry["state"] = (
+                "stopped" if command == "stop" else "paused" if command == "pause" else "running"
+            )  # start and resume both end up running
         await broadcast({"type": "patch", "state": events.snapshot()})
     except Exception as exc:
         logger.error("[cmd] %s failed: %s", command, exc)

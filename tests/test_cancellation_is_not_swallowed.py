@@ -260,3 +260,85 @@ class TestTheCallersCancellationSurvivesCleanup:
         await actor.stop()  # must not raise
 
         assert actor.cleanup_finished
+
+
+class _Scheduled(Actor):
+    """Stands in for ScheduledAgent: a loop task its `on_stop` cancels.
+
+    The loop takes its time to finish cancelling — it catches `CancelledError`,
+    waits on a gate, then re-raises. That is what holds `on_stop` inside its
+    `gather` long enough for a cancellation aimed at the *caller* to land there,
+    which is the window the original audit called unreproducible.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("name", "scheduled")
+        super().__init__(**kwargs)
+        self._loop_task: asyncio.Task | None = None
+        self.cancelling = asyncio.Event()
+        self.release = asyncio.Event()
+        self.entered = asyncio.Event()
+
+    async def start_loop(self) -> None:
+        self._loop_task = asyncio.create_task(self._run())
+        await self.entered.wait()
+
+    async def _run(self) -> None:
+        self.entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelling.set()
+            await self.release.wait()
+            raise
+
+    async def on_stop(self) -> None:
+        """The shape under test — mirrors `ScheduledAgent.on_stop`."""
+        if self._loop_task and not self._loop_task.done():
+            self._loop_task.cancel()
+            (outcome,) = await asyncio.gather(self._loop_task, return_exceptions=True)
+            if isinstance(outcome, Exception):
+                logging.getLogger(__name__).error("loop ended in error: %s", outcome)
+
+    async def handle_message(self, msg: Message) -> None:
+        return None
+
+
+class TestATaskItCancelsIsNotConfusedWithBeingCancelled:
+    """⚠ The shape a tuple `except` hides.
+
+    `except (asyncio.CancelledError, Exception): pass` cannot tell the loop's own
+    cancellation — which the coroutine asked for — from one aimed at whoever
+    called `stop()`. Absorbing the second is what left a supervisor's watch loop
+    believing it had never been cancelled, and hung shutdown.
+
+    The audit that swept these missed the site because its grep matched only a
+    bare `except asyncio.CancelledError`, never a tuple clause.
+    """
+
+    async def test_its_own_cancellation_is_not_re_raised(self, tmp_path: Path) -> None:
+        # Cancelling the loop is what `on_stop` asked for; surfacing that would
+        # make every clean shutdown look like an interruption.
+        actor = _Scheduled(persistence_dir=str(tmp_path))
+        await actor.start_loop()
+        actor.release.set()
+
+        await actor.on_stop()  # must not raise
+
+        assert actor._loop_task is not None and actor._loop_task.done()
+
+    async def test_the_callers_cancellation_survives(self, tmp_path: Path) -> None:
+        # ⚠ The regression. With the old tuple `except`, `on_stop` returned
+        # normally here and the caller was told its cancellation had been
+        # honoured when it had not.
+        actor = _Scheduled(persistence_dir=str(tmp_path))
+        await actor.start_loop()
+        stopper = asyncio.create_task(actor.on_stop())
+        await actor.cancelling.wait()
+
+        stopper.cancel()
+        await asyncio.sleep(0)
+        actor.release.set()
+
+        with pytest.raises(asyncio.CancelledError):
+            await stopper

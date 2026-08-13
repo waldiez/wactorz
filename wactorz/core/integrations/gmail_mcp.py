@@ -295,8 +295,8 @@ class GmailMcpClient(GoogleMcpClient):
         body = arguments.get("body") or arguments.get("text") or arguments.get("message") or ""
         lines = []
         if to:
-            lines.append(f"To: {to}")
-        lines.append(f"Subject: {subject}")
+            lines.append(f"To: {_header_safe(to)}")
+        lines.append(f"Subject: {_header_safe(subject)}")
         mime = "\r\n".join(lines) + "\r\n\r\n" + body
         raw = base64.urlsafe_b64encode(mime.encode("utf-8")).decode("ascii")
         status, data = await self._rest_request(
@@ -306,6 +306,22 @@ class GmailMcpClient(GoogleMcpClient):
             raise GoogleRestError(rest_error_message(data))
         target = f" to {to}" if to else ""
         return f"Draft{target} created: '{subject or '(no subject)'}'."
+
+
+def _header_safe(value: str) -> str:
+    """One header line's worth of `value` — no line breaks, no smuggled headers.
+
+    ⚠ These fields are joined with CRLF into a MIME message, and a `to` or
+    `subject` carrying its own CRLF ends the header and starts another. That is
+    header injection: a crafted value adds `Bcc:` and the draft quietly copies a
+    third party, or terminates the header block early and rewrites the body.
+    The values reach here from tool arguments, which a model fills from whatever
+    it was asked to send.
+
+    Everything up to the first break is kept, so an ordinary subject is
+    untouched and only the smuggled remainder is dropped.
+    """
+    return re.split(r"[\r\n]", str(value or ""), maxsplit=1)[0].strip()
 
 
 __all__ = [

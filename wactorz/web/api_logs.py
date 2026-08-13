@@ -71,7 +71,16 @@ def _at_or_above(level: str | None) -> set[str] | None:
 
 
 def _matches(entry: dict[str, Any], allowed: set[str] | None, origin: str) -> bool:
-    if allowed is not None and str(entry.get("level", "")) not in allowed:
+    """Whether one record survives the requested filters.
+
+    ⚠ A record whose level we do not rank is *kept*. Python allows custom levels
+    (`NOTICE`, `TRACE`, and whatever a library registers), and excluding them
+    would mean even `?level=DEBUG` — the most permissive request there is —
+    silently dropped records. That is the same mistake `_at_or_above` refuses to
+    make for an unknown filter value, and it is worse here: nobody asked for it.
+    """
+    level = str(entry.get("level", ""))
+    if allowed is not None and level in LEVELS and level not in allowed:
         return False
     return not origin or origin in str(entry.get("origin", "")).lower()
 

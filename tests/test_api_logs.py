@@ -159,6 +159,19 @@ class TestFiltering:
 
         assert len(body["entries"]) == 1
 
+    async def test_a_record_whose_level_we_cannot_rank_is_kept(
+        self, client: TestClient[Any, Any], buffer: log_buffer.LogRingBuffer
+    ) -> None:
+        # ⚠ Python allows custom levels, so a library can log at NOTICE(25).
+        # Excluding what cannot be ranked means even the most permissive request
+        # drops records — and nobody asked for that.
+        logging.addLevelName(25, "NOTICE")
+        _fill(buffer, (25, "wactorz", "in between"), (logging.ERROR, "wactorz", "boom"))
+
+        body = await _get(client, "?level=DEBUG")
+
+        assert "in between" in [e["text"] for e in body["entries"]]
+
     async def test_logger_matches_a_substring_case_insensitively(
         self, client: TestClient[Any, Any], buffer: log_buffer.LogRingBuffer
     ) -> None:

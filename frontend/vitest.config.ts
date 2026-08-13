@@ -8,7 +8,7 @@ import { defineConfig } from "vitest/config";
 // and functions share TARGET; branches trail (defensive guards + flag-gated
 // paths cover slower), so they keep a small offset.
 const TARGET = 95;
-const BRANCHES_FLOOR = TARGET - 10; // 85
+const BRANCHES_FLOOR = TARGET - 5;
 
 export default defineConfig({
     test: {

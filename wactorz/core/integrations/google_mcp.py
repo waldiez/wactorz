@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -430,13 +431,17 @@ class GoogleMcpClient:
             .decode()
         )
         redirect = self.config.redirect_uri()
+        # Kept, because it has to be compared to what comes back. Generating a
+        # `state` and discarding it is the same as not sending one: the check it
+        # exists for never happens.
+        expected_state = secrets.token_urlsafe(16)
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(
             {
                 "response_type": "code",
                 "client_id": client_id,
                 "redirect_uri": redirect,
                 "scope": scopes,
-                "state": secrets.token_urlsafe(16),
+                "state": expected_state,
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
                 "access_type": "offline",
@@ -446,9 +451,20 @@ class GoogleMcpClient:
         wait_task = asyncio.create_task(_make_callback_handler(self.config)())
         await asyncio.sleep(0.4)  # let the callback server bind before opening the browser
         await _make_redirect_handler(self.config)(auth_url)
-        code, _state = await wait_task
+        code, returned_state = await wait_task
         if not code:
             return f"{self.config.label}: authorization was cancelled"
+        # ⚠ The point of `state`: the callback is an unauthenticated local URL,
+        # so anything that can reach it can deliver a code. Without this, an
+        # attacker's code could be exchanged and *their* account linked to this
+        # install — the user sees a successful connection to an account they do
+        # not own. `compare_digest` because this is a secret comparison.
+        if not returned_state or not hmac.compare_digest(returned_state, expected_state):
+            logger.warning(
+                "[%s] OAuth callback carried an unexpected state — refusing the code",
+                self.config.label,
+            )
+            return f"{self.config.label}: authorization failed a security check, please retry"
         async with aiohttp.ClientSession() as sess:
             async with sess.post(
                 GOOGLE_TOKEN_URL,

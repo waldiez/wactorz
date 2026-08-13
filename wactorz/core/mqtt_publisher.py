@@ -30,8 +30,15 @@ class MQTTPublisher:
 
     Message priority:
       qos=1  → goes to durable SQLite outbox, guaranteed delivery
-      qos=0  → in-memory only, dropped if disconnected (telemetry/logs)
+      qos=0  → in-memory only, and kept there until it can be sent
       retain → stored at broker, replayed to new subscribers
+
+    ⚠ QoS 0 is **not** dropped while disconnected — it is queued like anything
+    else and delivered on reconnect; only a process exit loses it. This said
+    "dropped if disconnected" for a long time, which made the in-memory queue
+    look self-limiting when nothing bounds it. Bounding it is a durability
+    decision (what to discard, and whether a discarded message is reported)
+    and has not been made — see R-07.
     """
 
     # Topics that must use QoS 1 regardless of caller setting
@@ -49,6 +56,8 @@ class MQTTPublisher:
 
     def __init__(self, db_path: str = "./state/mqtt_outbox.db") -> None:
         self._queue: asyncio.Queue = asyncio.Queue()
+        #: A message whose publish failed, retried before the queue is read again.
+        self._retry: tuple | None = None
         self._task: asyncio.Task | None = None
         self._available = False
         self._db_path = db_path
@@ -219,14 +228,29 @@ class MQTTPublisher:
                     logger.info("[MQTT] Publisher connected | client_id=%s", self._client_id)
 
                     while True:
-                        # Peek at item without removing from queue
-                        item = await self._queue.get()
+                        # A message whose publish failed is retried before
+                        # anything queued behind it. Held here rather than put
+                        # back on the queue: `asyncio.Queue.put` appends to the
+                        # *tail*, so the old "put back at front" comment
+                        # described the opposite of what happened — a failed
+                        # message came back out after every message produced
+                        # during the outage, and an agent's ordered updates were
+                        # delivered out of order.
+                        if self._retry is not None:
+                            item, self._retry = self._retry, None
+                            from_queue = False
+                        else:
+                            item = await self._queue.get()
+                            from_queue = True
                         topic, payload, retain, qos, row_id = item
 
                         try:
                             await client.publish(topic, payload, retain=retain, qos=qos)
-                            # Only remove from queue AFTER successful publish
-                            self._queue.task_done()
+                            # Only remove from queue AFTER successful publish.
+                            # `task_done` belongs to a `get`, so it is skipped
+                            # for a retry that never went back on the queue.
+                            if from_queue:
+                                self._queue.task_done()
                             # Remove from SQLite outbox if it was persisted
                             if row_id >= 0:
                                 self._delete_from_db(row_id)
@@ -234,10 +258,10 @@ class MQTTPublisher:
                             backoff = 1.0
                             _last_exc_str = None
                         except Exception as pub_err:
-                            # Put back at front of queue and reconnect
-                            logger.warning("[MQTT] Publish failed: %s — requeueing", pub_err)
-                            await self._queue.put(item)  # re-enqueue
-                            self._queue.task_done()
+                            logger.warning("[MQTT] Publish failed: %s — retrying it first", pub_err)
+                            self._retry = item
+                            if from_queue:
+                                self._queue.task_done()
                             raise  # trigger reconnect
 
             except asyncio.CancelledError:

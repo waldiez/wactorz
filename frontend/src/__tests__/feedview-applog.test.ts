@@ -301,3 +301,49 @@ describe("the application log's own controls", () => {
         expect(wrap.querySelector(".af-feed-follow")!.textContent).toContain("on");
     });
 });
+
+describe("appending filters only the new row", () => {
+    /**
+     * The append path used to re-run the whole-list filter, reading
+     * `textContent` on every row — O(n²) over a session, and `follow` makes it
+     * recur. It now judges just the row it added, so these pin the two
+     * consequences of that: rows already on screen are left alone, and the
+     * empty-state placeholder still resolves correctly.
+     *
+     * Deliberately not a timing assertion — a wall-clock bound in CI flakes on
+     * a busy runner and teaches nobody anything when it does.
+     */
+    function feedWith(...texts: string[]): { root: HTMLElement; f: FeedFilters } {
+        const root = document.createElement("div");
+        root.innerHTML = `<div id="af-feed-view"><div class="af-feed-empty">No events yet.</div></div>`;
+        const f = filters();
+        texts.forEach((t, i) => appendFeedItemToView(root, log({ ts: 1_700_000_000 + i, text: t }), f));
+        return { root, f };
+    }
+
+    it("leaves an already-hidden row hidden", () => {
+        const { root, f } = feedWith("keep me");
+        const first = root.querySelector<HTMLElement>(".af-feed-item")!;
+        first.hidden = true; // as a filter change would have left it
+
+        appendFeedItemToView(root, log({ ts: 1_700_000_100, text: "newcomer" }), f);
+
+        expect(first.hidden).toBe(true);
+    });
+
+    it("retires the placeholder when the new row is visible", () => {
+        const { root } = feedWith("first");
+
+        expect(root.querySelector<HTMLElement>(".af-feed-empty")!.hidden).toBe(true);
+    });
+
+    it("leaves the placeholder alone when the new row is filtered out", () => {
+        const root = document.createElement("div");
+        root.innerHTML = `<div id="af-feed-view"><div class="af-feed-empty">No events yet.</div></div>`;
+
+        appendFeedItemToView(root, log({ text: "hidden by search" }), filters({ search: "nothing" }));
+
+        // Still empty as far as the reader is concerned, so the placeholder stays.
+        expect(root.querySelector<HTMLElement>(".af-feed-empty")!.hidden).toBe(false);
+    });
+});

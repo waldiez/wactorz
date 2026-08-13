@@ -350,12 +350,18 @@ function rowMatches(row: HTMLElement, filters: FeedFilters): boolean {
  * the search box — and so the expanded state of a row is not thrown away by an
  * unrelated keystroke.
  */
+/** Show or hide one row. The whole-list pass is for a filter change; a single
+ *  append must not pay for every row already on screen. */
+function applyFilterToRow(row: HTMLElement, filters: FeedFilters): boolean {
+    const visible = rowMatches(row, filters);
+    row.hidden = !visible;
+    return visible;
+}
+
 export function applyFilters(feed: HTMLElement, filters: FeedFilters): void {
     let shown = 0;
     feed.querySelectorAll<HTMLElement>(".af-feed-item").forEach(row => {
-        const visible = rowMatches(row, filters);
-        row.hidden = !visible;
-        if (visible) {
+        if (applyFilterToRow(row, filters)) {
             shown += 1;
         }
     });
@@ -547,6 +553,7 @@ function populateFeed(feed: HTMLElement, items: ActivityItem[], filters: FeedFil
     empty.hidden = rows.length > 0;
     feed.appendChild(empty);
     rows.forEach(item => activityItemEl(feed, item));
+    setRowCount(feed, rows.length);
     applyFilters(feed, filters);
 }
 
@@ -582,12 +589,28 @@ export function buildFeedView(items: ActivityItem[], opts: FeedViewOptions): HTM
  */
 export const MAX_ROWS = 600;
 
+/** How many rows the list holds, cached on the element.
+ *
+ * ⚠ Counted rather than queried. `querySelectorAll` on every append made the
+ * append path O(n), and with the full re-filter below that was O(n²) over a
+ * session — slow enough to time a test out at 600 rows, and the same cost in
+ * the browser while `follow` is on. */
+function rowCount(feed: HTMLElement): number {
+    const cached = feed.dataset["rows"];
+    return cached === undefined ? feed.querySelectorAll(".af-feed-item").length : Number(cached);
+}
+
+function setRowCount(feed: HTMLElement, count: number): void {
+    feed.dataset["rows"] = String(Math.max(0, count));
+}
+
 /** Drop the oldest rows once the list is over `MAX_ROWS`. */
 function evictOldestRows(feed: HTMLElement): void {
-    const rows = feed.querySelectorAll<HTMLElement>(".af-feed-item");
-    for (let i = 0; i < rows.length - MAX_ROWS; i++) {
-        rows[i]!.remove();
+    const count = rowCount(feed);
+    for (let over = count - MAX_ROWS; over > 0; over--) {
+        feed.querySelector(".af-feed-item")?.remove();
     }
+    setRowCount(feed, Math.min(count, MAX_ROWS));
 }
 
 /** Append a newly-arrived entry to the live view inside `root`, if shown. */
@@ -596,8 +619,22 @@ export function appendFeedItemToView(root: HTMLElement, item: ActivityItem, filt
     if (!feed || isHidden(item, filters.hideHeartbeats)) {
         return;
     }
+    // Counted before the append: with no cache yet, `rowCount` falls back to
+    // querying the DOM, and reading it afterwards would count the new row and
+    // then add it again — leaving the cache one ahead for the rest of the
+    // session, so eviction trims a row early.
+    const before = rowCount(feed);
     activityItemEl(feed, item);
+    setRowCount(feed, before + 1);
+    const row = feed.lastElementChild as HTMLElement | null;
+    if (row && applyFilterToRow(row, filters)) {
+        // Only a visible row can retire the placeholder; a hidden one leaves
+        // whatever the last full pass decided.
+        const empty = feed.querySelector<HTMLElement>(".af-feed-empty");
+        if (empty) {
+            empty.hidden = true;
+        }
+    }
     evictOldestRows(feed);
-    applyFilters(feed, filters);
     feed.scrollTop = feed.scrollHeight;
 }

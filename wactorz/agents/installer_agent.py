@@ -6,6 +6,8 @@ not the system Python.
 import asyncio
 import importlib
 import logging
+import re
+import shlex
 import socket
 import sys
 import time
@@ -28,6 +30,46 @@ logger = logging.getLogger(__name__)
 
 
 # pip package name → importable module name
+#: What a package name may look like. PEP 508 names are letters, digits, and
+#: `-`/`_`/`.` as internal separators; a version specifier or extras may follow.
+#: Nothing else — no path, no URL, no whitespace, and no leading `-`.
+_PACKAGE_NAME = re.compile(
+    # Name: never a leading dash, which is what makes an option an option.
+    r"[A-Za-z0-9][A-Za-z0-9._-]*"
+    # Optional extras: package[extra,extra]
+    r"(?:\[[A-Za-z0-9,._-]+\])?"
+    # Optional version specifiers, comma-separated: >=1.2,<2. No spaces — a
+    # space would let a second argument ride along inside one list element.
+    r"(?:"
+    r"(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+"
+    r"(?:,(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+)*"
+    r")?"
+)
+
+
+def is_installable_name(package: str) -> bool:
+    """Whether `package` is a package name and not an instruction to pip.
+
+    ⚠ Two different exposures, one answer.
+
+    Locally the command is built as a *list*, so there is no shell — but pip
+    reads its own options from positional arguments, so `--index-url=http://…`
+    or a bare URL is honoured as configuration rather than treated as a name.
+    That is fetch-and-execute from an attacker-chosen index with no shell
+    involved, and it arrives in a spawn config an LLM wrote.
+
+    Remotely the same list is joined into a string and sent over SSH, so there
+    the value is also shell syntax — `;`, backticks, `$(…)`. `shlex.quote`
+    handles that half; this handles the half quoting cannot, because a properly
+    quoted `--index-url` is still an option.
+
+    An allow-list rather than a deny-list: the set of legitimate names is small
+    and describable, and the set of harmful strings is not.
+    """
+    candidate = (package or "").strip()
+    return bool(candidate) and _PACKAGE_NAME.fullmatch(candidate) is not None
+
+
 PACKAGE_TO_IMPORT = {
     "opencv-python": "cv2",
     "pillow": "PIL",
@@ -188,6 +230,15 @@ class InstallerAgent(Actor):
 
             # Resolve import name → pip name (e.g. "cv2" → "opencv-python")
             pip_name = IMPORT_TO_PACKAGE.get(pkg, pkg)
+
+            # No shell here — the command is a list — but pip reads its own
+            # options from positional arguments, so `--index-url=http://…` is
+            # honoured as configuration rather than treated as a name.
+            if not is_installable_name(pip_name):
+                logger.warning("[%s] Refusing to install %r — not a package name", self.name, pkg)
+                results[pkg] = "refused"
+                failed.append(pkg)
+                continue
 
             # Check if already importable (invalidate cache so fresh installs show up)
             import_name = PACKAGE_TO_IMPORT.get(pip_name, pip_name)
@@ -533,7 +584,17 @@ class InstallerAgent(Actor):
         if not packages:
             return {"error": "No packages specified"}
 
-        pkg_str = " ".join(packages)
+        refused = [p for p in packages if not is_installable_name(p)]
+        if refused:
+            # Refused rather than filtered: installing a subset silently would
+            # report success for a request that was not carried out.
+            return {"error": f"Not package names: {', '.join(refused)}"}
+
+        # ⚠ Two guards, because neither covers the other. `shlex.quote` stops
+        # the value being read as *shell* syntax once this string reaches SSH;
+        # the allow-list above stops it being read as *pip options*, which a
+        # correctly quoted `--index-url=…` still would be.
+        pkg_str = " ".join(shlex.quote(p) for p in packages)
         self._log_remote(f"Installing {pkg_str} on {host}...")
 
         try:

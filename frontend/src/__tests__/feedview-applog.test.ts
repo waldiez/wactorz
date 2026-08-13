@@ -176,6 +176,9 @@ describe("the toolbar filters", () => {
     });
 
     it("shows a row whose level nobody recognises", () => {
+        // Defensive: the fetch boundary normally coerces an unrankable level to
+        // INFO, so this is for rows that arrive by any other route. Hiding what
+        // cannot be ranked is the one wrong answer — it is invisible.
         const feed = document.createElement("div");
         appLogItemEl(feed, log({ level: "TRACE" as never }));
         applyFilters(feed, filters({ source: "app", level: "ERROR" }));

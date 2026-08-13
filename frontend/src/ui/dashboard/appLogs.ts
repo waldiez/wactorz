@@ -37,9 +37,11 @@ function toEntry(raw: unknown): AppLogItem | null {
     return {
         source: "app",
         ts: e["ts"],
-        // An unrecognised level is kept as-is rather than coerced: the row
-        // renderer shows it plainly and the filter lets it through, which is
-        // the right answer for a record nobody can classify.
+        // An unrecognised level becomes INFO. Python allows custom levels, so
+        // a `NOTICE` or `TRACE` can reach us — and passing it through would make
+        // the severity filter unpredictable, since a level with no rank cannot
+        // be compared to the one the user chose. INFO is the honest default for
+        // something a library logged without saying how severe it is.
         level: (LEVELS.includes(level) ? level : "INFO") as LogLevel,
         origin: typeof e["origin"] === "string" ? e["origin"] : "?",
         text: e["text"],

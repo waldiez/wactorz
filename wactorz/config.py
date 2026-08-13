@@ -1,5 +1,6 @@
 import os
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -17,7 +18,23 @@ def _env_int(name: str, default: int) -> int:
     value = value.strip()
     if not value:
         return default
-    return int(value)
+    try:
+        return int(value)
+    except ValueError:
+        # Raised at *import*, so a stray character in one variable took the
+        # process down with a traceback that named neither the variable nor the
+        # value. Falling back keeps a typo from being fatal, and says which
+        # setting was ignored.
+        #
+        # `warnings`, not `logging`: this module is imported before logging is
+        # configured, so a log record here would go to the root handler-of-last-
+        # resort and often nowhere at all.
+        warnings.warn(
+            f"{name}={value!r} is not a whole number — using {default} instead",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return default
 
 
 def _env_id_set(*names: str) -> frozenset[int]:
@@ -330,8 +347,7 @@ CONFIG = AppConfig(
         "HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"
     ),
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
-    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0")
-    not in ("0", "false", "no"),
+    ha_state_bridge_per_entity=_env_truthy("HA_STATE_BRIDGE_PER_ENTITY"),
     # Also accept the shorter DISCORD_TOKEN / TELEGRAM_TOKEN names.
     discord_token=os.getenv("DISCORD_BOT_TOKEN", "") or os.getenv("DISCORD_TOKEN", ""),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),

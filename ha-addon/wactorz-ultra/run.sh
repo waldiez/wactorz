@@ -218,6 +218,11 @@ export PORT=8000
 # every interface. No port is published (see config.yaml), so this is not a
 # route in from outside Home Assistant.
 export WACTORZ_BIND_HOST=0.0.0.0
+# The wide bind above is required for ingress, and the add-on sets no API key.
+# Without this the fail-closed rule refuses to start. It is honest here: the
+# add-on publishes no ports, so ingress is the only way in, and Home Assistant
+# authenticates the user before proxying.
+export WACTORZ_EXPOSED_OK=1
 # This deployment sits behind Home Assistant's ingress, which signs the user in
 # before proxying — so a request it forwards is allowed to skip the origin and
 # host checks. Nothing else may claim that: a plain Docker or bare install never

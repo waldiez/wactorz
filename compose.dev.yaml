@@ -60,6 +60,11 @@ services:
     env_file:
       - .env
     environment:
+      # A published port cannot reach a process bound to the container's own
+      # loopback, so the wide bind is required — and declared, since the
+      # mappings below publish only to the host's loopback.
+      WACTORZ_BIND_HOST: "0.0.0.0"
+      WACTORZ_EXPOSED_OK: "1"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       INFLUX_URL: "${INFLUX_URL:-}"

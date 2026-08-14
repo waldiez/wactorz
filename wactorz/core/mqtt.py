@@ -39,35 +39,10 @@ def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
     return aiomqtt.Client(hostname, port, **kwargs)
 
 
-#: Hostnames that mean "this machine", where broker traffic never leaves it.
-_LOOPBACK_HOSTS = {"localhost", "localhost.localdomain", "127.0.0.1", "::1", ""}
-
-
-def _is_loopback(host: str) -> bool:
-    """Whether traffic to `host` stays on this machine.
-
-    Literal names first, then an address parse — `127.0.0.1` is not the only
-    loopback address, and `127.0.0.53` (systemd-resolved) is one too.
-    """
-    name = (host or "").strip().lower().strip("[]")
-    if name in _LOOPBACK_HOSTS:
-        return True
-    try:
-        import ipaddress
-
-        return ipaddress.ip_address(name).is_loopback
-    except ValueError:
-        # A hostname we cannot classify without resolving it. Treated as remote:
-        # warning about a broker that turns out to be local is a wasted line,
-        # while staying quiet about one that is not is the failure this exists
-        # to prevent.
-        return False
-
-
 def broker_exposure_warning(host: str, username: str) -> str | None:
     """What to say at startup about a broker that is not on this machine.
 
-    ⚠ Naming what actually travels, because the risk is not "unencrypted
+    Naming what actually travels, because the risk is not "unencrypted
     telemetry". The runner **executes code delivered over the broker**
     (`nodes/<name>/spawn`), so anyone who can read the wire sees that code and
     anyone who can write to it runs code on every node. Plaintext plus anonymous
@@ -77,7 +52,9 @@ def broker_exposure_warning(host: str, username: str) -> str | None:
     plaintext — the message says so rather than implying a setting exists to
     turn it on. Returns None when the broker is local, where none of this bites.
     """
-    if _is_loopback(host):
+    from .net import is_loopback
+
+    if is_loopback(host):
         return None
     anonymous = not (username or "").strip()
     return (

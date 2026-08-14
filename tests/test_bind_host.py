@@ -4,7 +4,7 @@
 webhook listen. Without it an install on a laptop or a Pi serves all three to the
 whole network whether or not anyone meant it to.
 
-⚠ **The default is `0.0.0.0`, and that is deliberate.** A container publishes its
+**The default is `0.0.0.0`, and that is deliberate.** A container publishes its
 own ports and a process cannot see its own port mappings, so a process bound to
 loopback inside one is unreachable through them — a tighter default here would
 make every containerised install unreachable, and would make the change
@@ -46,15 +46,22 @@ def _site_factory() -> MagicMock:
 
 
 class TestTheSetting:
-    def test_it_defaults_to_every_interface(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_it_defaults_to_loopback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Changed in 0.6.0, and breaking on purpose. The old default was
+        # `0.0.0.0`, which served the dashboard and the whole API to the LAN out
+        # of the box on an install that had asked for neither.
         monkeypatch.delenv("WACTORZ_BIND_HOST", raising=False)
 
-        assert _bind_host() == "0.0.0.0"
-
-    def test_an_operator_can_ask_for_loopback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("WACTORZ_BIND_HOST", "127.0.0.1")
-
         assert _bind_host() == "127.0.0.1"
+
+    def test_an_operator_can_still_ask_for_every_interface(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # What a container needs: a published port cannot reach a process bound
+        # to the container's own loopback.
+        monkeypatch.setenv("WACTORZ_BIND_HOST", "0.0.0.0")
+
+        assert _bind_host() == "0.0.0.0"
 
     def test_surrounding_whitespace_does_not_become_part_of_the_address(
         self, monkeypatch: pytest.MonkeyPatch
@@ -84,7 +91,7 @@ class TestTheDashboardServer:
         assert site.call_args.args[1] == "127.0.0.1"
 
     async def test_the_port_probe_checks_the_interface_it_will_serve_on(self) -> None:
-        # ⚠ The probe and the serving socket must agree. Probing 0.0.0.0 while
+        # The probe and the serving socket must agree. Probing 0.0.0.0 while
         # serving loopback tests the wrong interface: the port can be busy on an
         # address nothing will listen on, or free on one that is already taken.
         opened = AsyncMock(return_value=_server())

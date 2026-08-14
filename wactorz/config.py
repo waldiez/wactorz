@@ -127,19 +127,23 @@ MAX_REQUEST_BYTES = 256 * 1024
 def _bind_host() -> str:
     """The interface every HTTP/WebSocket server listens on.
 
-    Defaults to every interface. A container publishes its own ports and a
-    process cannot see its own port mappings, so a process bound to loopback
-    inside one is unreachable through them — tightening this default is a
-    breaking change and belongs with a release that documents it. The shipped
-    deployments set the variable explicitly, so that flip is a no-op for them.
+    Defaults to loopback. Most installs are single-host and should never have
+    been reachable from the network — the previous default served the dashboard
+    and the whole API to the LAN out of the box.
+
+    A container publishes its own ports and a process cannot see its own port
+    mappings, so a process bound to loopback inside one is unreachable through
+    them. Both shipped deployments therefore set this explicitly to `0.0.0.0`
+    and declare `WACTORZ_EXPOSED_OK=1` alongside it; a hand-rolled container
+    must do the same.
     """
-    return os.getenv("WACTORZ_BIND_HOST", "").strip() or "0.0.0.0"
+    return os.getenv("WACTORZ_BIND_HOST", "").strip() or "127.0.0.1"
 
 
 #: Whether chat file attachments may be uploaded. On by default now that the
 #: feature is complete, and still a flag: the endpoint writes caller-supplied
 #: bytes to disk with nothing pruning them, and a deployment that does not want
-#: attachment storage growing there turns it off. ⚠ Like every other route it is
+#: attachment storage growing there turns it off.  Like every other route it is
 #: unauthenticated, so an install exposed beyond its own network has an open
 #: 25 MB write endpoint until authentication lands.
 UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", "0", "false", "no")

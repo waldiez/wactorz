@@ -21,6 +21,7 @@ from . import (
     api_reset,
     api_system,
     api_uploads,
+    auth,
     chat,
     mqtt,
     origins,
@@ -76,7 +77,11 @@ def build_app() -> web.Application:
             pass
         return response
 
-    app = web.Application(middlewares=[cors_middleware], client_max_size=MAX_REQUEST_BYTES)
+    app = web.Application(
+        # Order matters only for which refusal a caller sees first; both run.
+        middlewares=[cors_middleware, auth.auth_middleware],
+        client_max_size=MAX_REQUEST_BYTES,
+    )
     # Expose the registry to extensions (via app.get) before setup_all() runs.
     # None in standalone/legacy MQTT mode — consumers handle that.
     from ..core import contract
@@ -176,6 +181,15 @@ async def main(exit_on_failure: bool = False) -> None:
             msg.append(f"Port {runtime.WS_PORT} already in use")
         err_msg = "; ".join(msg)
         logger.error("[startup] Cannot start: %s", err_msg)
+        if exit_on_failure:
+            raise SystemExit(1)
+        return
+
+    refusal = auth.exposure_refusal(CONFIG.bind_host, CONFIG.api_key)
+    if refusal:
+        # Before the socket, not after: a process that has already bound has
+        # already been reachable.
+        logger.error("[startup] %s", refusal)
         if exit_on_failure:
             raise SystemExit(1)
         return

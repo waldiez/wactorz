@@ -1,6 +1,6 @@
 """What is said at startup about a broker that is not on this machine.
 
-⚠ The risk is not "unencrypted telemetry". The remote runner **executes code
+The risk is not "unencrypted telemetry". The remote runner **executes code
 delivered over the broker** (`nodes/<name>/spawn`), so anyone who can read the
 wire sees that code and anyone who can write to it runs code on every node.
 Plaintext plus anonymous is remote code execution offered to a network segment.
@@ -12,7 +12,8 @@ on. This is what keeps deferring TLS honest instead of silent.
 
 import pytest
 
-from wactorz.core.mqtt import _is_loopback, broker_exposure_warning
+from wactorz.core.mqtt import broker_exposure_warning
+from wactorz.core.net import is_loopback as _is_loopback
 
 
 class TestWhatCountsAsLocal:

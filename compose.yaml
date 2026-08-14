@@ -68,6 +68,12 @@ services:
       # the host's loopback, which is what keeps this off the network; a process
       # bound to the container's own loopback would be unreachable through them.
       WACTORZ_BIND_HOST: "0.0.0.0"
+      # Declares that the wide bind above is deliberate and already contained.
+      # Without it the process refuses to start: reachable with no API_KEY is
+      # the configuration that refusal exists to stop shipping. Here the
+      # containment is the port mapping above, which publishes only to the
+      # host's loopback.
+      WACTORZ_EXPOSED_OK: "1"
     # The entrypoint is root only long enough to chown the state directory, then
     # drops to uid 1000. These three are the only capabilities that step needs —
     # the app itself runs with none. Dropping the rest shrinks the bounding set,

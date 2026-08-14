@@ -20,6 +20,7 @@ from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
 from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_setup import setup_logging
+from wactorz.web.auth import exposure_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -356,6 +357,16 @@ async def app(args: argparse.Namespace):
     # unfiltered console or log file.
     setup_logging()
     install_log_buffer()
+
+    # Before anything binds, and at the *process* root rather than in one
+    # server's startup. Three servers read `CONFIG.bind_host` — the monitor, the
+    # REST API and the WhatsApp webhook — so a check that lived in the monitor
+    # alone left the REST interface serving chat and lifecycle commands to the
+    # network in exactly the configuration this refusal exists to stop.
+    refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key)
+    if refusal:
+        logger.error("[startup] %s", refusal)
+        raise SystemExit(1)
 
     if args.reload:
         start_reloader(logger)

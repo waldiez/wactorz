@@ -197,9 +197,15 @@ class DeployTarget:
     user: str = "pi"
     key_path: str = ""
     password: str = field(default="", repr=False)
+    ssh_port: int = 22
     broker: str = ""
     broker_port: int = 1883
-    ssh_port: int = 22
+    #: Broker credentials for this node. Empty means "use the server's own" —
+    #: resolved at the point of use, not here, because this dataclass is built
+    #: inside the ``AppConfig(...)`` call where ``CONFIG`` is still unbound.
+    #: Resolving late also keeps the secret out of a frozen, logged dataclass.
+    broker_user: str = ""
+    broker_password: str = field(default="", repr=False)
 
 
 def _env_slug(name: str) -> str:
@@ -265,6 +271,8 @@ def _deploy_targets() -> tuple[DeployTarget, ...]:
                 broker=os.getenv(f"DEPLOY_{slug}_BROKER", "").strip(),
                 broker_port=_env_int(f"DEPLOY_{slug}_BROKER_PORT", 1883),
                 ssh_port=_env_int(f"DEPLOY_{slug}_SSH_PORT", 22),
+                broker_user=os.getenv(f"DEPLOY_{slug}_BROKER_USER", "").strip(),
+                broker_password=os.getenv(f"DEPLOY_{slug}_BROKER_PASSWORD", ""),
             )
         )
     return tuple(targets)

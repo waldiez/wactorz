@@ -42,8 +42,35 @@ services:
       - mosquitto-logs:/mosquitto/log
     networks:
       - wactorz-net
+    environment:
+      # Required: the broker no longer accepts anonymous connections, and a
+      # generated-per-start secret would orphan every edge node on restart.
+      MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:?set MQTT_PASSWORD in .env — the broker carries agent commands and spawned code, and no longer accepts anonymous clients}"
+    # Written at start rather than committed, so there is no secret in the repo
+    # and no manual mosquitto_passwd step for an existing deployment. The file
+    # lives in the image, not a volume: regenerating it from the environment on
+    # every start is what keeps an edited credential from being shadowed by a
+    # stale one. chown because mosquitto drops to its own user and would then be
+    # unable to read a root-owned 0600 file.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        umask 077
+        mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+        chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
+        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
     healthcheck:
-      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc", "-W", "3"]
+      # Authenticated, or the probe fails the moment anonymous access is off —
+      # and wactorz-python waits on service_healthy, so the whole stack would
+      # refuse to start.
+      test:
+        [
+          "CMD-SHELL",
+          "mosquitto_sub -t '$$SYS/#' -C 1 -i hc -W 3 -u \"$$MQTT_USERNAME\" -P \"$$MQTT_PASSWORD\"",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -63,6 +90,11 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
+      # Mirrors the broker's defaults above. Without this the app would take
+      # MQTT_USERNAME from .env, where it may be unset while the broker
+      # defaulted it — the two would disagree and every connection be refused.
+      MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:?set MQTT_PASSWORD in .env — the broker no longer accepts anonymous clients}"
       INTERFACE: "${INTERFACE:-rest}"
       # Bind every interface *inside* the container. The ports above publish to
       # the host's loopback, which is what keeps this off the network; a process

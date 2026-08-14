@@ -141,10 +141,24 @@ Leaving `DEPLOY_<NODE>_HOST` unset makes the deploy resolve `<node>.local` over 
 
 A remote node connects back to the MQTT broker over the network, so `broker` in
 its target block is the address the **node** should dial — your main machine's
-LAN IP, not `localhost`. The node also connects anonymously: broker credentials
-are not delivered to it yet, so a broker with `allow_anonymous false` cannot
-serve a remote node. That includes the Home Assistant Mosquitto add-on, and the
-Wactorz add-on's own embedded broker, whose port is deliberately not published.
+LAN IP, not `localhost`.
+
+Broker credentials travel with the deploy. They are written to `~/wactorz/.env`
+on the node (mode `0600`) and sourced when the runner starts, so they appear in
+no command line — SSH runs the launch command through a shell whose own
+arguments any local user can read with `ps`, which is why they are not passed
+that way. A node uses `DEPLOY_<NODE>_BROKER_USER` / `_BROKER_PASSWORD` if set,
+and this server's `MQTT_USERNAME` / `MQTT_PASSWORD` otherwise.
+
+Sharing the server's account is the usable default for one broker with one
+account, and it has a cost worth stating: **a stolen node holds full broker
+access**, and the broker carries the code spawned agents run. Give a node its
+own account when that matters — a Mosquitto password file holds as many users
+as you need.
+
+The Wactorz add-on's embedded broker still cannot serve a remote node, but for a
+different reason: its port is deliberately not published, so there is no route
+to it whatever credentials a node holds.
 
 ### Host key verification
 

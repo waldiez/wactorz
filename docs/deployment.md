@@ -83,8 +83,8 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `LLM_COST_LIMIT_PERIOD` | `monthly` | Reset period: `daily`, `weekly`, or `monthly` |
 | `MQTT_HOST` | `localhost` | Use `mosquitto` inside Docker |
 | `MQTT_PORT` | `1883` | |
-| `MQTT_USERNAME` | _(blank)_ | Broker username — blank = anonymous; required for brokers with `allow_anonymous false` (e.g. the official Mosquitto add-on) |
-| `MQTT_PASSWORD` | _(blank)_ | Broker password |
+| `MQTT_USERNAME` | `wactorz` | Broker username. Blank only for a broker of your own that takes anonymous connections |
+| `MQTT_PASSWORD` | _(none)_ | Broker password. **Required by docker compose** — the bundled broker refuses anonymous connections and compose refuses to start without it, rather than coming up open. Its password file is generated from these at container start, so there is no `mosquitto_passwd` step |
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
 | `WACTORZ_STATE_DIR` | `./state` | Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins `/data/state`. `wactorz-reset` reads the same variable, so a wipe targets whatever the app is using |

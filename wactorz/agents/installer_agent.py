@@ -12,6 +12,7 @@ import socket
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import asyncssh
 
@@ -477,6 +478,39 @@ class InstallerAgent(Actor):
             )
             return str(path)
 
+    async def _put_broker_env(self, sftp: Any, target: DeployTarget, user: str) -> bool:
+        """Write the node's broker credentials to ``~/wactorz/.env``, mode 0600.
+
+        Returns whether anything was written — nothing is when the broker takes
+        anonymous connections, and writing an empty file would then leave the
+        runner exporting two blank variables over a working setup.
+
+        A node's own ``DEPLOY_<NODE>_BROKER_USER``/``_PASSWORD`` win; otherwise
+        it gets the server's. That default is the usable one — a single broker
+        with one account is the common deployment — but it does mean **a stolen
+        edge device holds full broker access**, and the broker carries the code
+        spawned agents run. Per-node accounts are the answer when that matters;
+        ``password_file`` holds as many users as you like.
+
+        This is the out-of-band channel the broker credentials must travel by:
+        sending them over the broker itself would publish the very secret that
+        protects it, to a channel that is unauthenticated until they arrive.
+        """
+        username = target.broker_user or CONFIG.mqtt_username
+        password = target.broker_password or CONFIG.mqtt_password
+        if not username and not password:
+            return False
+
+        body = f"MQTT_USERNAME={shlex.quote(username)}\nMQTT_PASSWORD={shlex.quote(password)}\n"
+        remote = f"/home/{user}/wactorz/.env"
+        async with sftp.open(remote, "w") as handle:
+            await handle.write(body)
+        # After writing, not before: SFTP creates with the umask, so there is a
+        # window either way, but a file that is never widened is better than one
+        # created world-readable and tightened later.
+        await sftp.chmod(remote, 0o600)
+        return True
+
     async def _ssh_kwargs(self, payload: dict) -> dict:
         """Build asyncssh connection kwargs for a task payload.
 
@@ -724,10 +758,14 @@ class InstallerAgent(Actor):
                 await self._ssh_run(conn, "mkdir -p ~/wactorz")
                 self._log_remote(f"[{node_name}] Directory created.")
 
-                # 2. Upload remote_runner.py
+                # 2. Upload remote_runner.py and, if the broker needs them, the
+                # credentials it will read from its environment.
                 async with conn.start_sftp_client() as sftp:
                     await sftp.put(str(runner_path), f"/home/{user}/wactorz/remote_runner.py")
+                    env_written = await self._put_broker_env(sftp, target, user)
                 self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
+                if env_written:
+                    self._log_remote(f"[{node_name}] Broker credentials written to ~/wactorz/.env.")
 
                 # 3. Create venv if it doesn't exist — avoids all --break-system-packages issues
                 ok, out = await self._ssh_run(
@@ -762,7 +800,14 @@ class InstallerAgent(Actor):
                 # `~` is left outside the quotes so the remote shell still
                 # expands it.
                 log_path = shlex.quote(f"{node_name}.log")
+                # Sourced, never passed. Putting MQTT_PASSWORD=… in front of the
+                # command would keep it out of the *runner's* argv, but SSH exec
+                # runs `$SHELL -c '<the whole string>'`, and that wrapper's argv
+                # is readable by any local user with `ps` for as long as the
+                # launch takes. Sourcing a 0600 file puts it in no argv at all.
+                launch_env = "set -a; . ~/wactorz/.env; set +a; " if env_written else ""
                 cmd = (
+                    f"{launch_env}"
                     f"nohup ~/wactorz/venv/bin/python ~/wactorz/remote_runner.py "
                     f"--broker {shlex.quote(str(broker))} "
                     f"--port {shlex.quote(str(mqtt_port))} "

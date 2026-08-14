@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from unittest import mock
 
@@ -5,8 +6,17 @@ from wactorz.agents.google_calendar_agent import GoogleCalendarAgent
 
 
 class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        # See test_gmail_agent: "state/…" is the developer's own state dir, and
+        # neither tmp_path nor the WACTORZ_STATE_DIR isolation reaches an
+        # explicit persistence_dir in a unittest TestCase.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
     async def test_structured_today_calls_calendar_mcp(self):
-        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent = GoogleCalendarAgent(
+            llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
+        )
         agent.client.call_tool = mock.AsyncMock(return_value="Standup at 10:00")
 
         result = await agent._process({"operation": "today", "count": 5})
@@ -23,7 +33,9 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         # On systems without the IANA tz database (e.g. Windows without tzdata),
         # even ZoneInfo("UTC") raises. The read path must not crash, and must
         # not send an unusable timeZone key to Google.
-        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent = GoogleCalendarAgent(
+            llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
+        )
         agent.client.call_tool = mock.AsyncMock(return_value="Standup at 10:00")
 
         with mock.patch.dict("os.environ", {}, clear=False) as env:
@@ -44,7 +56,9 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("timeZone", arguments)
 
     async def test_structured_create_event_requires_start_and_end_when_title_present(self):
-        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent = GoogleCalendarAgent(
+            llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
+        )
 
         result = await agent._process({"operation": "create_event", "summary": "Dentist"})
 
@@ -53,7 +67,9 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("end", result["missing"])
 
     async def test_structured_create_event_calls_calendar_mcp(self):
-        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent = GoogleCalendarAgent(
+            llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
+        )
         agent.client.call_tool = mock.AsyncMock(return_value="created")
 
         result = await agent._process(
@@ -78,7 +94,9 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_help_is_user_friendly(self):
-        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent = GoogleCalendarAgent(
+            llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
+        )
 
         result = await agent._process({"text": "what can you do"})
 
@@ -87,7 +105,9 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("calendar_mcp_url", result["result"])
 
     async def test_natural_create_now_for_duration_uses_default_title(self):
-        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent = GoogleCalendarAgent(
+            llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
+        )
         agent.client.call_tool = mock.AsyncMock(return_value="created")
 
         result = await agent._process({"text": "make an event now for 2 hours"})
@@ -100,7 +120,9 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("endTime", arguments)
 
     async def test_create_followup_reuses_pending_request(self):
-        agent = GoogleCalendarAgent(llm_provider=None, persistence_dir="state/test-google-calendar")
+        agent = GoogleCalendarAgent(
+            llm_provider=None, persistence_dir=f"{self._tmp.name}/test-google-calendar"
+        )
         agent.client.call_tool = mock.AsyncMock(return_value="created")
 
         first = await agent._process({"text": "make an event"})
@@ -117,11 +139,19 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
 
 
 class GoogleCalendarCatalogTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # See the agent test above: an explicit persistence_dir wins over the
+        # suite's WACTORZ_STATE_DIR isolation, and tmp_path cannot be injected
+        # into a unittest TestCase — so a hardcoded "state/…" would persist into
+        # a developer's own install.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
     def test_google_calendar_agent_is_catalog_recipe(self):
         from wactorz.agents.catalog_agent import CatalogAgent
 
         catalog = CatalogAgent(
-            name="catalog-test", persistence_dir="state/test-google-calendar-catalog"
+            name="catalog-test", persistence_dir=f"{self._tmp.name}/test-google-calendar-catalog"
         )
         info = catalog._action_info("google-calendar-agent")
 

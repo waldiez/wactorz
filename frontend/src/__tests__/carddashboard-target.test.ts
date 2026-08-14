@@ -463,3 +463,62 @@ describe("deleting the agent you are chatting with", () => {
         expect(toast.show).not.toHaveBeenCalled();
     });
 });
+
+describe("the composer names the target on a fresh tab", () => {
+    // Through the whole dashboard, not DashboardChat alone: the bug this covers
+    // lived in the seam between them. The composer is built in the constructor,
+    // before any chat view exists and so before there is a target, and only the
+    // chat view's mount can tell it what that target turned out to be.
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        localStorage.clear();
+    });
+
+    it("names it on the overview, where chat was never opened", () => {
+        // Where this was caught. The composer is outside the view body, so it
+        // is on screen from the first paint — and nothing on the overview
+        // builds a chat view, so a fix that runs on that mount never fires.
+        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
+        const cd = new CardDashboard() as any;
+        cd.agents.clear();
+        cd.agents.set("1", agent("main"));
+        cd.agents.set("2", agent("home-assistant-agent"));
+
+        cd._renderView(); // still on the overview
+
+        expect(cd.view).not.toBe("chat");
+        expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
+    });
+
+    it("names the remembered agent when the list is already loaded", () => {
+        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
+        const cd = new CardDashboard() as any;
+        cd.agents.clear();
+        cd.agents.set("1", agent("main"));
+        cd.agents.set("2", agent("home-assistant-agent"));
+
+        cd._setView("chat");
+
+        expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
+    });
+
+    it("names it even when the agents arrive after the view is open", () => {
+        // The fresh-tab order: the socket has not delivered anyone yet when the
+        // user lands on chat, so the first resolve has nothing to work with.
+        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
+        const cd = new CardDashboard() as any;
+        cd.agents.clear();
+
+        cd._setView("chat");
+        cd.agents.set("1", agent("main"));
+        cd.agents.set("2", agent("home-assistant-agent"));
+        cd._renderView();
+
+        expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
+    });
+});
+
+function _placeholder(cd: any): string {
+    const input = cd.root.querySelector("#af-iobar-input") as HTMLTextAreaElement;
+    return input.placeholder;
+}

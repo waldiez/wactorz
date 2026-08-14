@@ -442,6 +442,13 @@ export class CardDashboard {
             }
         });
         this._renderHealth();
+        // The composer sits outside the view body, so it is on screen on the
+        // overview too — and there the chat view may never have been mounted.
+        // Resolving and naming the target here rather than on that mount is
+        // what keeps it from reading "Message…" until someone opens chat.
+        // Cheap and idempotent: resolveDefaultTarget only fills an empty choice.
+        this._chat.resolveDefaultTarget();
+        this._chat.updateTargetSelect();
         // Only show the agent-target dropdown in the chat view
         const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
         if (select) {

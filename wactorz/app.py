@@ -82,6 +82,7 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.main_actor import MainActor
     from wactorz.agents.monitor_agent import MonitorActor
     from wactorz.core.actor import Actor, SupervisorStrategy
+    from wactorz.core.mqtt import broker_exposure_warning
     from wactorz.core.registry import ActorSystem
     from wactorz.llm_factory import create_provider, parse_overrides, provider_for
 
@@ -122,6 +123,13 @@ async def build_system(args: argparse.Namespace):
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
     _sd = ensure_state_dir()
+
+    # Said once, before the first connection: the broker is where spawn code
+    # travels, so an exposed one is a bigger surface than it looks.
+    _broker_host = args.mqtt_broker or CONFIG.mqtt_host
+    _exposure = broker_exposure_warning(_broker_host, CONFIG.mqtt_username)
+    if _exposure:
+        logger.warning("[startup] %s", _exposure)
 
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(

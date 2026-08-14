@@ -64,6 +64,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -120,6 +121,41 @@ async def _bootstrap_deps_async(ready: asyncio.Event) -> None:
 
 
 logger = logging.getLogger("remote_runner")
+
+
+# ── What a pip package name may look like ─────────────────────────────────────
+# A deliberate copy of `agents/installer_agent.py`'s rule, not an oversight:
+# this module is deployed as a single file to machines where wactorz is not
+# installed, so it cannot import it. Keep the two in step by hand; the module
+# docstring's "deploy this single file" is what forbids the obvious fix.
+#
+# PEP 508 names are letters, digits, and `-`/`_`/`.` as internal separators,
+# optionally followed by extras and version specifiers. Nothing else — no path,
+# no URL, no whitespace, and no leading `-`, which is what makes an option an
+# option. An allow-list because the set of legitimate names is describable and
+# the set of harmful strings is not.
+_PACKAGE_NAME = re.compile(
+    r"[A-Za-z0-9][A-Za-z0-9._-]*"
+    r"(?:\[[A-Za-z0-9,._-]+\])?"
+    r"(?:"
+    r"(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+"
+    r"(?:,(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+)*"
+    r")?"
+)
+
+
+def _is_installable_name(package: str) -> bool:
+    """Whether `package` is a package name and not an instruction to pip.
+
+    Two exposures, one answer. The command below is now a *list*, so no shell
+    reads it — but pip reads its own options from positional arguments, so
+    `--index-url=http://…` or a bare URL is honoured as configuration rather
+    than treated as a name. That is fetch-and-execute from an attacker-chosen
+    index with no shell involved, and it arrives in a spawn payload off the
+    broker.
+    """
+    candidate = (package or "").strip()
+    return bool(candidate) and _PACKAGE_NAME.fullmatch(candidate) is not None
 
 
 # ── Sentinel: awaitable None ──────────────────────────────────────────────────
@@ -1440,7 +1476,27 @@ class _RemoteRunner:
 
         packages = config.get("install", [])
         if packages:
-            await self._install_packages(packages)
+            refused = await self._install_packages(packages)
+            if refused:
+                # Abort, unlike the pip-failure path below it, which warns and
+                # carries on. A pip failure can be transient and may still leave
+                # a usable environment; a refusal means we read the request and
+                # rejected it, so starting the agent only moves the failure to an
+                # import somewhere else — with the reason left in this node's log
+                # and nothing on the dashboard saying why.
+                logger.error(f"[runner] Not spawning '{name}' — install list refused.")
+                await self.publish(
+                    f"agents/{self.node_name}/logs",
+                    {
+                        "type": "error",
+                        "message": (
+                            f"Refused to spawn '{name}': these are not package names: {refused}"
+                        ),
+                        "node": self.node_name,
+                        "timestamp": time.time(),
+                    },
+                )
+                return
 
         try:
             agent = _RemoteAgent(config, self, state_dir=self._state_dir)
@@ -1535,18 +1591,43 @@ class _RemoteRunner:
         for name in list(self._agents):
             await self.stop_agent(name)
 
-    async def _install_packages(self, packages: list[str]) -> None:
-        """Install pip packages on the edge node."""
-        pkgs = " ".join(packages)
-        logger.info(f"[runner] Installing: {pkgs}")
-        proc = await asyncio.create_subprocess_shell(
-            f"pip install {pkgs} --break-system-packages -q",
+    async def _install_packages(self, packages: list[str]) -> list[str]:
+        """Install pip packages on the edge node. Returns the names it refused.
+
+        The names arrive in a spawn payload off the broker, so they are treated
+        as input: refused unless they look like package names, and passed as
+        argv rather than through a shell. A non-empty return means nothing was
+        installed and the caller should not start the agent.
+        """
+        refused = [p for p in packages if not _is_installable_name(p)]
+        if refused:
+            # Refused as a whole, not filtered down to the acceptable ones:
+            # installing a subset would report success for a request that was
+            # not carried out, and the agent would then fail on a missing import
+            # somewhere far from here.
+            logger.error(
+                f"[runner] Refusing install — not package names: {refused}. "
+                f"Names may contain letters, digits, '.', '-', '_', extras and "
+                f"version specifiers; anything else (options, URLs, paths) is rejected."
+            )
+            return refused
+
+        logger.info(f"[runner] Installing: {' '.join(packages)}")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            *packages,
+            "--break-system-packages",
+            "-q",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
             logger.warning(f"[runner] pip install warning: {stderr.decode()[:200]}")
+        return []
 
     # ── Status heartbeat for the node itself ──────────────────────────────────
 

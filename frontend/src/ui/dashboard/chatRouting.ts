@@ -93,3 +93,25 @@ export function replacementTarget(agents: AgentInfo[], current: string): string 
     }
     return messageable.find(a => a.name === MAIN_AGENT)?.name ?? messageable[0]!.name;
 }
+
+/**
+ * The agent to open on, honouring a remembered choice when it still stands.
+ *
+ * The remembered name is a *preference*, never the effective target: it is only
+ * consulted when nothing has been chosen yet, and only if it still names an
+ * agent that can be direct-messaged. A name that no longer exists falls back to
+ * the ordinary default rather than becoming a target nothing can deliver to.
+ *
+ * A stale name is left in storage rather than cleaned up. Validating on every
+ * read already makes it inert, so removing it would add a write path on a read
+ * for no visible difference — and an agent can come back under the same name.
+ *
+ * Deliberately not filtered by whether the agent is *running*. A stopped agent
+ * stays the target across a reload for the same reason it stays the target
+ * without one — stopping is a state the conversation survives, and moving the
+ * user off it is the class of bug the target split removed.
+ */
+export function preferredChatTarget(agents: AgentInfo[], remembered: string | null): string {
+    const kept = agents.filter(canDirectMessage).find(a => a.name === remembered);
+    return kept?.name ?? defaultChatTarget(agents);
+}

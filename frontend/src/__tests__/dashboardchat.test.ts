@@ -11,6 +11,7 @@ import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
 import { withoutAttachment } from "../ui/dashboard/attachTray";
 import {
     defaultChatTarget,
+    preferredChatTarget,
     resolveSendTarget,
     sendBlockedReason,
     stripLeadingMention,
@@ -56,6 +57,13 @@ const thread = (host: ChatHost) => host.root.querySelector<HTMLElement>("#af-cha
 // resolved to a friendly name keeps the id as its name.
 const UUID = "45511e2b-3a2f-4c1d-9e8a-1b2c3d4e5f60";
 
+// The picked agent is remembered in localStorage now, so it outlives the
+// instance that chose it — and, without this, the test that chose it. Reset it
+// like any other global rather than per describe block: six of them here build
+// their own host, and only the ones that happened to assert on the target would
+// have caught the leak.
+beforeEach(() => localStorage.clear());
+
 describe("defaultChatTarget", () => {
     // Only ever consulted for an empty choice, so it answers one question:
     // who should this dashboard open on? Keeping a choice, and moving off a
@@ -70,6 +78,45 @@ describe("defaultChatTarget", () => {
 
     it("returns nothing rather than guessing when there is no one to talk to", () => {
         expect(defaultChatTarget([])).toBe("");
+    });
+});
+
+describe("preferredChatTarget", () => {
+    // The remembered name is a preference, consulted only when nothing has been
+    // chosen yet. It has to be checked against the live list: a name that no
+    // longer exists would otherwise become a target nothing can deliver to.
+    it("reopens on the remembered agent when it is still there", () => {
+        expect(preferredChatTarget([agent("main"), agent("worker")], "worker")).toBe("worker");
+    });
+
+    it("falls back to the default when the remembered agent is gone", () => {
+        expect(preferredChatTarget([agent("main")], "deleted-one")).toBe("main");
+    });
+
+    it("keeps a remembered agent that is merely stopped", () => {
+        // Stopping is a state the conversation survives — the composer blocks
+        // and says so. Moving the user off it on reload would be the bug the
+        // target split removed, reintroduced by the back door.
+        const agents = [agent("main"), agent("worker", { state: "stopped" })];
+
+        expect(preferredChatTarget(agents, "worker")).toBe("worker");
+    });
+
+    it("ignores a remembered agent nobody may message", () => {
+        const agents = [agent("main"), agent("monitor-agent")];
+
+        expect(preferredChatTarget(agents, "monitor-agent")).toBe("main");
+    });
+
+    it("behaves as the plain default with nothing remembered", () => {
+        expect(preferredChatTarget([agent("worker")], null)).toBe("worker");
+    });
+
+    it("returns nothing when the list has not arrived yet", () => {
+        // An empty list means "not back yet", never "yours is gone" — so this
+        // stays empty and resolveDefaultTarget tries again on the next visit,
+        // rather than burning the preference against an empty roster.
+        expect(preferredChatTarget([], "worker")).toBe("");
     });
 });
 

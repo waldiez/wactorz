@@ -19,13 +19,14 @@ import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
 import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
 import {
-    defaultChatTarget,
+    preferredChatTarget,
     replacementTarget,
     resolveSendTarget,
     sendBlockedReason,
     stripLeadingMention,
 } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
+import { safeStorage } from "../../safeStorage";
 import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";
 import { MAIN_AGENT } from "../../agents/naming";
@@ -44,6 +45,9 @@ export interface ChatHost {
     /** Agents sorted with main pinned first (shared with the overview). */
     sortedAgents(): AgentInfo[];
 }
+
+/** Where the picked agent is remembered between visits. */
+const CHAT_TARGET_KEY = "wactorz-chat-target";
 
 export class DashboardChat {
     /**
@@ -115,6 +119,12 @@ export class DashboardChat {
      */
     setTarget(name: string): void {
         this.chatTarget = name;
+        // Only here. An agent going away moves the conversation by assigning the
+        // field directly, and that move is not a choice worth remembering — it
+        // would come back on the next load as though the user had made it.
+        if (name) {
+            safeStorage.set(CHAT_TARGET_KEY, name);
+        }
         this._refreshForTarget();
         void this.loadHistory(name);
         this.updateTargetSelect();
@@ -408,7 +418,10 @@ export class DashboardChat {
      */
     resolveDefaultTarget(): void {
         if (!this.chatTarget) {
-            this.chatTarget = defaultChatTarget([...this.host.agents.values()]);
+            this.chatTarget = preferredChatTarget(
+                [...this.host.agents.values()],
+                safeStorage.get(CHAT_TARGET_KEY),
+            );
         }
     }
 

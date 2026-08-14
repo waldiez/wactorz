@@ -77,6 +77,16 @@ async def _frames(socket: Any, count: int) -> list[dict[str, Any]]:
     return out
 
 
+async def _opening(socket: Any) -> list[dict[str, Any]]:
+    """Everything a browser is sent on connect, before it asks for anything.
+
+    Named rather than a literal count at each call site: most tests here only
+    want it out of the way before asserting on what comes next, and when the
+    handshake last changed size that count was written out ten times.
+    """
+    return await _frames(socket, 2)
+
+
 class TestTheOpeningHandshake:
     async def test_a_browser_is_given_the_state_before_it_asks(
         self, client: TestClient[Any, Any]
@@ -95,24 +105,10 @@ class TestTheOpeningHandshake:
         # The "live" badge is wrong on load without it, and nothing else would
         # correct it until the connection state next changed.
         async with client.ws_connect("/ws") as socket:
-            frames = await _frames(socket, 3)
+            frames = await _opening(socket)
 
         status = [f for f in frames if f["type"] == "mqtt_status"]
         assert status and status[0]["connected"] is True
-
-    async def test_the_config_frame_is_sent_and_nobody_reads_it(
-        self, client: TestClient[Any, Any]
-    ) -> None:
-        # Pinned as documentation, not as a contract worth keeping: the client
-        # has no handler for `type === "config"` at all, and the key is
-        # `chat.chat_mode` — a literal dotted string, not the `chat_mode` the
-        # frontend's own comment describes. Deleting both ends should make this
-        # test go away rather than need updating.
-        async with client.ws_connect("/ws") as socket:
-            frames = await _frames(socket, 3)
-
-        config = [f for f in frames if f["type"] == "config"]
-        assert config and "chat.chat_mode" in config[0]
 
 
 class TestTheClientRegister:
@@ -120,14 +116,14 @@ class TestTheClientRegister:
         self, client: TestClient[Any, Any]
     ) -> None:
         async with client.ws_connect("/ws") as socket:
-            await _frames(socket, 3)
+            await _opening(socket)
             assert len(runtime.ws_clients) == 1
 
     async def test_a_disconnected_browser_is_forgotten(self, client: TestClient[Any, Any]) -> None:
         # A leak here is invisible until broadcast starts writing to dead
         # sockets, which is a slow failure rather than a loud one.
         async with client.ws_connect("/ws") as socket:
-            await _frames(socket, 3)
+            await _opening(socket)
         for _ in range(50):
             if not runtime.ws_clients:
                 break
@@ -141,7 +137,7 @@ class TestChatTurnAttribution:
 
     async def _send(self, client: TestClient[Any, Any], db: _Db, content: str) -> None:
         async with client.ws_connect("/ws") as socket:
-            await _frames(socket, 3)
+            await _opening(socket)
             await socket.send_str(json.dumps({"type": "chat", "content": content}))
             for _ in range(50):
                 if db.rows:
@@ -192,7 +188,7 @@ class TestChatTurnAttribution:
         route = AsyncMock()
         with patch.object(ws.chat, "route_chat", new=route):
             async with client.ws_connect("/ws") as socket:
-                await _frames(socket, 3)
+                await _opening(socket)
                 await socket.send_str(json.dumps({"type": "chat", "content": "   "}))
                 await asyncio.sleep(0.05)
 
@@ -204,7 +200,7 @@ class TestChatTurnAttribution:
     ) -> None:
         # A browser sending nonsense must not cost the user their dashboard.
         async with client.ws_connect("/ws") as socket:
-            await _frames(socket, 3)
+            await _opening(socket)
             await socket.send_str("not json at all")
             await socket.send_str(json.dumps({"type": "command"}))  # no agent_id
             await asyncio.sleep(0.05)
@@ -216,7 +212,7 @@ class TestChatWithoutARegistry:
     async def test_the_user_is_told_rather_than_ignored(self, client: TestClient[Any, Any]) -> None:
         runtime.registry = None
         async with client.ws_connect("/ws") as socket:
-            await _frames(socket, 3)
+            await _opening(socket)
             await socket.send_str(json.dumps({"type": "chat", "content": "hello"}))
             reply = (await _frames(socket, 1))[0]
 
@@ -332,7 +328,7 @@ class TestAttachmentsOnATurn:
             patch.object(ws.uploads, "resolve", return_value=[stored]),
         ):
             async with client.ws_connect("/ws") as socket:
-                await _frames(socket, 3)
+                await _opening(socket)
                 await socket.send_str(
                     json.dumps({"type": "chat", "content": "look", "attachments": ["x"]})
                 )
@@ -354,7 +350,7 @@ class TestAttachmentsOnATurn:
             patch.object(ws.uploads, "resolve", return_value=[]) as resolve,
         ):
             async with client.ws_connect("/ws") as socket:
-                await _frames(socket, 3)
+                await _opening(socket)
                 await socket.send_str(
                     json.dumps(
                         {

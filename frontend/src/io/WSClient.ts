@@ -8,8 +8,7 @@
  * It owns the connection (and the "live" signal) and dispatches every server frame
  * by `type`: chat/stream, state patches (store + log_feed), and `server_event`
  * frames — `{topic, payload}` live activity that it hands to the ServerEventRouter.
- * On connect the server sends `{"type":"config","chat_mode":"direct_ws"|"mqtt"}`;
- * chat is sent back over this socket (never over a broker).
+ * Chat is sent back over this socket, never over a broker.
  */
 import { log } from "./logger";
 import { toMs } from "../time";

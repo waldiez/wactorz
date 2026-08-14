@@ -182,9 +182,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # Send initial state
     await ws.send_str(json.dumps({"type": "full_snapshot", "state": events.snapshot()}))
 
-    # Advertise chat mode so the frontend knows where to send messages
-    await ws.send_str(json.dumps({"type": "config", "chat.chat_mode": "direct_ws"}))
-
     # Current server↔broker state so the "live" badge is right immediately on load.
     await ws.send_str(json.dumps({"type": "mqtt_status", "connected": runtime.mqtt_connected}))
 

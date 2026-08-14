@@ -403,7 +403,7 @@ async def handle_command(cmd: dict[str, Any]) -> None:
         events.add_log(
             {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
         )
-        # ⚠ `.get(agent_id, {})` returned a *fresh* dict when the agent was
+        # `.get(agent_id, {})` returned a *fresh* dict when the agent was
         # absent, so the assignment mutated a throwaway and the write silently
         # did nothing — a line that reads like a state update and is not one.
         # An absent agent is not an error here: the command already succeeded,

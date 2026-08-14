@@ -63,7 +63,7 @@ describe("entries from both sources together", () => {
     });
 
     it("interleaves the two chronologically", () => {
-        // ⚠ The units differ as well as the field name: agent events are in
+        // The units differ as well as the field name: agent events are in
         // milliseconds, the log buffer records seconds. Sorted naively, every
         // log row lands in 1970 and the feed reads as if nothing was logged.
         const sorted = dedupeAndSortFeed([

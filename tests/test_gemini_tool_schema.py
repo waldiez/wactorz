@@ -5,7 +5,7 @@ strict tool calling wants it. Gemini's function-declaration format has no such
 field and answers the whole request with a 400 — one violation per declaration
 it appears in — so the keyword is dropped at this provider's boundary.
 
-⚠ Nothing catches this before the request. The SDK's own `Schema` model declares
+Nothing catches this before the request. The SDK's own `Schema` model declares
 `additional_properties`, so the value validates and serializes without complaint
 and only the API refuses; a filter written against the SDK's field list would
 pass it straight through. These tests assert on what is serialized, which is the
@@ -105,7 +105,7 @@ class TestTheStrippingItself:
 
 
 class TestTheSignatureOnAToolCall:
-    """⚠ Gemini 3 returns an opaque signature on the part that made a call and
+    """Gemini 3 returns an opaque signature on the part that made a call and
     requires it back on the turn reporting the result.
 
     The assistant turn is rebuilt from the extracted `ToolCall`, which carries

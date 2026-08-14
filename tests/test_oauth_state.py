@@ -1,6 +1,6 @@
 """The OAuth callback must prove it is answering *our* authorization request.
 
-⚠ The callback is an unauthenticated local URL, so anything that can reach it
+The callback is an unauthenticated local URL, so anything that can reach it
 can deliver a code. `state` is the only thing tying a callback to the request
 that started it — and it was generated, sent, and then discarded, which is the
 same as never sending one: an attacker's code could be exchanged and *their*
@@ -57,7 +57,7 @@ class TestTheStateIsWorthComparing:
         assert secrets.token_urlsafe(16) != secrets.token_urlsafe(16)
 
     def test_the_source_keeps_it_for_the_comparison(self) -> None:
-        # ⚠ The regression this guards: the value used to be inlined into the
+        # The regression this guards: the value used to be inlined into the
         # request dict and thrown away, so nothing could compare it later.
         from pathlib import Path
 

@@ -1,6 +1,6 @@
 """The static and docs handlers may only serve files inside their own root.
 
-⚠ The guard these tests pin used to be `str(candidate).startswith(str(base))`.
+The guard these tests pin used to be `str(candidate).startswith(str(base))`.
 `resolve()` collapses `..`, so ordinary traversal was already closed — what was
 not is the **sibling whose name shares a prefix**: with a base of `…/static/app`,
 `…/static/app-old/secret` starts with it and passed. That is a directory the
@@ -48,7 +48,7 @@ class TestTheContainmentTestItself:
         assert static_site._within(tmp_path / "app", tmp_path / "app")
 
     def test_a_sibling_sharing_the_prefix_is_not(self, tmp_path: Path) -> None:
-        # ⚠ The whole bug: this passes `startswith` and must not pass here.
+        # The whole bug: this passes `startswith` and must not pass here.
         assert not static_site._within(tmp_path / "app-old" / "secret", tmp_path / "app")
 
     def test_the_parent_is_not(self, tmp_path: Path) -> None:
@@ -58,7 +58,7 @@ class TestTheContainmentTestItself:
 class TestServingBuiltAssets:
     """Driven through `make_mocked_request`, not a real URL.
 
-    ⚠ An earlier version of these tests went through a test client and passed
+    An earlier version of these tests went through a test client and passed
     against the broken guard: aiohttp normalises `..` out of the path before
     routing, so the escaping value never reached the handler. A test that
     passes either way is worse than no test — the relative path is injected
@@ -114,7 +114,7 @@ class TestServingDocs:
             await static_site.docs_handler(self._get("../docs-private/internal/index.html"))
 
     async def test_an_escaped_path_names_nothing_outside_the_root(self, tree: Path) -> None:
-        # ⚠ The second half of this fix. The directory-index fallback reads
+        # The second half of this fix. The directory-index fallback reads
         # `candidate.parent` and redirects to a name found there — so an escaped
         # path disclosed the contents of a directory nobody published, even
         # while refusing to serve the file itself.

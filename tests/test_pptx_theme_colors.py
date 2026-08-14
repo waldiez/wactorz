@@ -1,6 +1,6 @@
 """The one value in the generated deck script that is not JSON-encoded.
 
-⚠ `theme_colors` is interpolated raw, inside single quotes, into JavaScript that
+`theme_colors` is interpolated raw, inside single quotes, into JavaScript that
 `node` executes — and the model chooses it from the *document's* own content. So
 a crafted document could close the quote and append statements. Every other
 value in that script goes through `json.dumps`; these five did not.

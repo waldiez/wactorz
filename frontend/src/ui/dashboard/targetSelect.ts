@@ -29,7 +29,7 @@ function byPriorityThenName(a: AgentInfo, b: AgentInfo): number {
 /**
  * Draw the options and show `target`.
  *
- * ⚠ Render only. This used to re-derive the chat target and fall back to the
+ * Render only. This used to re-derive the chat target and fall back to the
  * first option, so drawing the dropdown decided who the next message went to —
  * and it runs on every agent-list change, including each individual removal
  * during a reset. Once the chosen agent was momentarily absent the target moved

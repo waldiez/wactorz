@@ -5,11 +5,11 @@ the same envelope the activity feed already renders for agent events. A pull,
 not a push: the caller must ask for the records, and nothing is streamed to a
 connected page as it is logged.
 
-⚠ **Registered under `/api/` deliberately.** Whatever authentication lands will
+**Registered under `/api/` deliberately.** Whatever authentication lands will
 be middleware over that prefix, so this route is covered by it with no further
 edit here — and until then it is open, like the rest of the API.
 
-⚠ **What this exposes is different in kind from the rest.** Chat disclosure is
+**What this exposes is different in kind from the rest.** Chat disclosure is
 bounded by what was said; a log carries what nobody chose to write there —
 resolved config, file paths, and third-party output from libraries that log
 freely. The buffer redacts the shapes it knows on the way in (see
@@ -73,7 +73,7 @@ def _at_or_above(level: str | None) -> set[str] | None:
 def _matches(entry: dict[str, Any], allowed: set[str] | None, origin: str) -> bool:
     """Whether one record survives the requested filters.
 
-    ⚠ A record whose level we do not rank is *kept*. Python allows custom levels
+    A record whose level we do not rank is *kept*. Python allows custom levels
     (`NOTICE`, `TRACE`, and whatever a library registers), and excluding them
     would mean even `?level=DEBUG` — the most permissive request there is —
     silently dropped records. That is the same mistake `_at_or_above` refuses to

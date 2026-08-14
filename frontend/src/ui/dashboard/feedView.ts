@@ -12,7 +12,7 @@
  * and the log's text is monospace — so the two are distinguishable without a
  * badge on every row.
  *
- * ⚠ Every string rendered here is untrusted: agent output, model output and
+ * Every string rendered here is untrusted: agent output, model output and
  * third-party log text all land in these rows. Text goes in through
  * `textContent` or a text node, never `innerHTML` — the only `innerHTML` is
  * first-party icon markup from `iconMarkup`. Class names come from the lookup
@@ -195,7 +195,7 @@ export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
 /**
  * Make a row reveal its whole record in place.
  *
- * ⚠ `textContent`, never `innerHTML`. This is the one place the *entire*
+ * `textContent`, never `innerHTML`. This is the one place the *entire*
  * untrusted record is rendered, and a traceback is exactly the string an agent
  * can be induced to emit — the reach for `innerHTML` here is stored XSS in the
  * feature whose purpose is displaying attacker-influenceable strings.
@@ -581,7 +581,7 @@ export function buildFeedView(items: ActivityItem[], opts: FeedViewOptions): HTM
 /**
  * How many rows the list may hold. Beyond this the oldest are dropped.
  *
- * ⚠ Nothing used to remove a row. `feedItems` is capped, but that only bounds
+ * Nothing used to remove a row. `feedItems` is capped, but that only bounds
  * what a *rebuild* renders — appending never evicted, so a long session on a
  * busy broker grew the DOM without limit. Polling the application log makes
  * that faster and pushing it would make it faster still, so the bound belongs
@@ -591,7 +591,7 @@ export const MAX_ROWS = 600;
 
 /** How many rows the list holds, cached on the element.
  *
- * ⚠ Counted rather than queried. `querySelectorAll` on every append made the
+ * Counted rather than queried. `querySelectorAll` on every append made the
  * append path O(n), and with the full re-filter below that was O(n²) over a
  * session — slow enough to time a test out at 600 rows, and the same cost in
  * the browser while `follow` is on. */

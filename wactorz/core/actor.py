@@ -237,7 +237,7 @@ class Actor(ABC):
         # asyncio tasks outside actor._tasks and get cancelled by asyncio.run()
         # cleanup BEFORE these awaits if we don't shield them.
         #
-        # ⚠ A cancellation arriving here belongs to whoever is *calling* stop(),
+        # A cancellation arriving here belongs to whoever is *calling* stop(),
         # not to this cleanup: `shield` keeps the inner coroutine running and
         # raises in the awaiting task. Discarding it told that caller its
         # cancellation had been honoured when it had not — the supervisor's watch

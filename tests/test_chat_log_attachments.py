@@ -57,7 +57,7 @@ class TestStoringThem:
         assert db.query_chat_log()[0]["content"] == "done"
 
     def test_a_row_written_before_the_column_existed_still_reads(self, db: Any) -> None:
-        # ⚠ The upgrade path: an older row has NULL here, not '[]'.
+        # The upgrade path: an older row has NULL here, not '[]'.
         db.write_chat_log(ts=1.0, agent_name="main", role="user", content="old")
         with db.transaction() as conn:
             conn.execute("UPDATE chat_log SET attachments = NULL")

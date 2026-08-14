@@ -66,7 +66,7 @@ class TestWhatTheModelCanRead:
 
 class TestWhatItCannotRead:
     def test_a_file_over_the_inline_limit_is_named_not_dropped(self) -> None:
-        # ⚠ The gap: this uploads fine and cannot be sent. Silence here reads as
+        # The gap: this uploads fine and cannot be sent. Silence here reads as
         # the agent ignoring a file the user can see they attached.
         blocks = attachments.to_blocks(
             [_ref("image/png", size=attachments.MAX_INLINE_BYTES + 1, name="huge.png")],
@@ -116,7 +116,7 @@ class TestTheLimitItself:
         assert encoded < 32 * 1024 * 1024
 
     def test_it_is_below_what_the_upload_endpoint_accepts(self) -> None:
-        # ⚠ Deliberate: the two limits are different questions. If this ever
+        # Deliberate: the two limits are different questions. If this ever
         # inverts, the "too large" branch above becomes unreachable and oversize
         # files start failing at the model instead.
         assert attachments.MAX_INLINE_BYTES < config.UPLOAD_MAX_BYTES
@@ -145,7 +145,7 @@ class TestFlattening:
         assert attachments.flatten(blocks) == "[attachment: shot.png]"
 
     def test_no_base64_survives_flattening(self) -> None:
-        # ⚠ The reason this exists: a provider flattening content with `str()`
+        # The reason this exists: a provider flattening content with `str()`
         # would put the whole encoded payload into the prompt.
         blocks = attachments.to_blocks([_ref("image/png")], _reader(PNG * 100))
 

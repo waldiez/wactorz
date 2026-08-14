@@ -1,6 +1,6 @@
 """A message whose publish failed is retried before anything queued behind it.
 
-⚠ The old code put it back with `await self._queue.put(item)` under a comment
+The old code put it back with `await self._queue.put(item)` under a comment
 saying "put back at front of queue". `asyncio.Queue.put` appends to the *tail*,
 so a failed message came back out after every message produced during the
 outage — an agent's ordered updates arrived out of order, and the comment said
@@ -42,7 +42,7 @@ async def _fake_broker(client: "_Client", **_kwargs: Any) -> Any:
 async def _run_briefly(pub: MQTTPublisher, client: "_Client", seconds: float = 0.25) -> None:
     """Drive `MQTTPublisher._run` against a fake broker for a moment.
 
-    ⚠ The real loop, not a re-implementation of it. An earlier version of this
+    The real loop, not a re-implementation of it. An earlier version of this
     file reproduced the retry logic in the test helper, so it passed against the
     old tail-requeue too — a test that cannot fail.
     """

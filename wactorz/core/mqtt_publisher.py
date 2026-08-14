@@ -33,7 +33,7 @@ class MQTTPublisher:
       qos=0  → in-memory only, and kept there until it can be sent
       retain → stored at broker, replayed to new subscribers
 
-    ⚠ QoS 0 is **not** dropped while disconnected — it is queued like anything
+    QoS 0 is **not** dropped while disconnected — it is queued like anything
     else and delivered on reconnect; only a process exit loses it. This said
     "dropped if disconnected" for a long time, which made the in-memory queue
     look self-limiting when nothing bounds it. Bounding it is a durability

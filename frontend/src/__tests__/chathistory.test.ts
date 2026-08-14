@@ -196,7 +196,7 @@ describe("attachments restored from history", () => {
     }
 
     it("brings a turn's attachments back with it", async () => {
-        // ⚠ Without this the turn reloads as bare text: the file was stored on
+        // Without this the turn reloads as bare text: the file was stored on
         // the row and the chip vanished on the next restart.
         servingRow([{ id: "a".repeat(32), name: "shot.png", mime: "image/png", size: 100 }]);
 

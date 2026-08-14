@@ -75,7 +75,7 @@ class TestNormalising:
 
     @pytest.mark.parametrize("raw", ["", "   ", "null", "example.com", "not an origin"])
     def test_anything_unidentifiable_is_not_an_origin(self, raw: str) -> None:
-        # ⚠ `null` is a decision, not an oversight: a sandboxed iframe and a
+        # `null` is a decision, not an oversight: a sandboxed iframe and a
         # file:// page both send it, and neither can be told apart from any
         # other. Treated as a mismatch rather than as same-origin.
         assert normalize_origin(raw) == ""
@@ -159,7 +159,7 @@ class TestWhichHostsWeAnswerTo:
         assert host_allowed(_Request(Host=host), set())
 
     def test_a_name_nobody_configured_is_refused(self) -> None:
-        # ⚠ This is the rebinding case: the name resolves here, and Origin
+        # This is the rebinding case: the name resolves here, and Origin
         # matches Host, so every other check passes.
         assert not host_allowed(_Request(Host="attacker.example.com"), set())
 
@@ -221,7 +221,7 @@ class TestHomeAssistantIngress:
         assert refuse(request, strict_origin=True) is None
 
     def test_without_the_marker_the_same_request_is_refused(self, ingress: None) -> None:
-        # ⚠ Proves the marker is doing the work, not the rest of the request.
+        # Proves the marker is doing the work, not the rest of the request.
         # A browser cannot set it cross-origin: it is a custom header, so it
         # preflights, and it is not in Allow-Headers.
         request = _Request(
@@ -272,7 +272,7 @@ class TestTheIngressPeer:
         assert refuse(request, strict_origin=True) is None
 
     def test_the_same_request_from_elsewhere_does_not(self, ingress: None) -> None:
-        # ⚠ The case this whole check exists for: identical headers, different
+        # The case this whole check exists for: identical headers, different
         # peer. Everything the attacker controls is the same; only the address
         # differs.
         request = _Request("http://172.30.33.2:8888", **self.INGRESS, **self.FOREIGN)

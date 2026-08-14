@@ -134,7 +134,7 @@ class TestAnAgentThatCannotTakeThem:
 
         replies = await _say("@calendar-agent book friday", [_record()])
 
-        # ⚠ Passing blocks to an entry point that never grew a parameter would
+        # Passing blocks to an entry point that never grew a parameter would
         # be a TypeError, and the user would lose the message with it.
         assert agent.asked == ["book friday"]
         assert "booked" in replies

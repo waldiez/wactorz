@@ -214,7 +214,7 @@ class _BlocksInCleanup(Actor):
 
 
 class TestTheCallersCancellationSurvivesCleanup:
-    """⚠ The case the module docstring above called un-hittable.
+    """The case the module docstring above called un-hittable.
 
     It is hittable through the shield rather than through the inner task: an
     `on_stop` that blocks holds the caller at the shielded await indefinitely,
@@ -305,7 +305,7 @@ class _Scheduled(Actor):
 
 
 class TestATaskItCancelsIsNotConfusedWithBeingCancelled:
-    """⚠ The shape a tuple `except` hides.
+    """The shape a tuple `except` hides.
 
     `except (asyncio.CancelledError, Exception): pass` cannot tell the loop's own
     cancellation — which the coroutine asked for — from one aimed at whoever
@@ -328,7 +328,7 @@ class TestATaskItCancelsIsNotConfusedWithBeingCancelled:
         assert actor._loop_task is not None and actor._loop_task.done()
 
     async def test_the_callers_cancellation_survives(self, tmp_path: Path) -> None:
-        # ⚠ The regression. With the old tuple `except`, `on_stop` returned
+        # The regression. With the old tuple `except`, `on_stop` returned
         # normally here and the caller was told its cancellation had been
         # honoured when it had not.
         actor = _Scheduled(persistence_dir=str(tmp_path))

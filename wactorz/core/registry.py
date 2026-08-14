@@ -128,7 +128,7 @@ class ActorRegistry:
             logger.info("[Registry] Registered %s (%s)", actor.name, actor.actor_id[:8])
 
         if superseded is not None:
-            # ⚠ Awaited, not fired and forgotten. `create_task` here kept no
+            # Awaited, not fired and forgotten. `create_task` here kept no
             # reference, so the task could be garbage-collected mid-stop, and an
             # exception inside it went to nobody — the failure mode being the one
             # this code exists to prevent: an old instance still subscribed, so

@@ -113,7 +113,7 @@ class TestTheFilterIsApplied:
     async def test_state_is_still_updated_for_a_topic_that_is_not_relayed(
         self, sent: list[dict[str, Any]]
     ) -> None:
-        # ⚠ Only the raw echo is filtered. Dropping the parse too would stop the
+        # Only the raw echo is filtered. Dropping the parse too would stop the
         # dashboard updating for anything not on the list, which is a far bigger
         # change than the one intended.
         with patch.object(mqtt.events, "parse_topic") as parse:

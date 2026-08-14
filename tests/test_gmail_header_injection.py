@@ -1,6 +1,6 @@
 """A draft's `to` and `subject` may not smuggle extra headers.
 
-⚠ Both are joined with CRLF into a MIME message. A value carrying its own CRLF
+Both are joined with CRLF into a MIME message. A value carrying its own CRLF
 ends that header and starts another — so a crafted `subject` adds `Bcc:` and the
 draft quietly copies a third party, or ends the header block early and writes the
 body itself. The values arrive as tool arguments, filled by a model from whatever

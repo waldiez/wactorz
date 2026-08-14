@@ -454,7 +454,7 @@ class GoogleMcpClient:
         code, returned_state = await wait_task
         if not code:
             return f"{self.config.label}: authorization was cancelled"
-        # ⚠ The point of `state`: the callback is an unauthenticated local URL,
+        # The point of `state`: the callback is an unauthenticated local URL,
         # so anything that can reach it can deliver a code. Without this, an
         # attacker's code could be exchanged and *their* account linked to this
         # install — the user sees a successful connection to an account they do

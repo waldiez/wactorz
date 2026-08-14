@@ -1,6 +1,6 @@
 """Reading the environment must not be able to take the process down.
 
-⚠ `_env_int` raised a bare `ValueError` at *import* time, so one stray character
+`_env_int` raised a bare `ValueError` at *import* time, so one stray character
 in one variable killed startup with a traceback naming neither the variable nor
 the value. And one boolean was parsed inline and case-sensitively, so `FALSE`
 read as true while every other flag in the file accepted it.
@@ -66,7 +66,7 @@ class TestTheBooleanVocabulary:
 
     @pytest.mark.parametrize("value", ["0", "false", "FALSE", "no", "off", "", "2", "maybe"])
     def test_every_spelling_of_no(self, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-        # ⚠ `FALSE` is the regression this closes: the old inline check was
+        # `FALSE` is the regression this closes: the old inline check was
         # case-sensitive, so it read as true.
         monkeypatch.setenv("WACTORZ_TEST_FLAG", value)
 
@@ -79,7 +79,7 @@ class TestTheBooleanVocabulary:
 
 
 def test_the_state_bridge_flag_is_wired_to_the_shared_parser() -> None:
-    """⚠ The behaviour change worth naming, and the reason for a source check.
+    """The behaviour change worth naming, and the reason for a source check.
 
     Only the parser above can be exercised without reloading the module, so this
     pins the wiring instead. `2` and an empty-but-set value used to read as

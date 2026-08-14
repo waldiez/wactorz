@@ -1,6 +1,6 @@
 """Re-registering a name must actually stop the instance it replaces.
 
-⚠ The old instance's message loop, heartbeat and any MQTT subscriptions are
+The old instance's message loop, heartbeat and any MQTT subscriptions are
 still running when its id is re-registered. If it is not stopped, every
 published event is delivered twice — to the new listener and to the old one
 nothing points at any more.

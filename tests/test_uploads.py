@@ -74,7 +74,7 @@ class TestTheTypeComesFromTheBytes:
         assert uploads.sniff(b"just some text") == uploads.OPAQUE_TYPE
 
     def test_an_svg_is_never_an_image(self) -> None:
-        # ⚠ The browser's own accept-list matches the `image/` prefix, which
+        # The browser's own accept-list matches the `image/` prefix, which
         # includes SVG — and an SVG is a script container. It has no signature
         # here, so it can only ever come back as a download.
         assert uploads.sniff(SVG) == uploads.OPAQUE_TYPE
@@ -146,7 +146,7 @@ class TestStoringAFile:
     async def test_nothing_the_caller_sent_names_the_file_on_disk(
         self, client: TestClient[Any, Any], store: Path
     ) -> None:
-        # ⚠ The rule that keeps a write from becoming a chosen write.
+        # The rule that keeps a write from becoming a chosen write.
         await client.post("/api/upload", data=_form(PNG))
 
         stored = [p.name for p in store.iterdir() if not p.name.endswith(".json")]

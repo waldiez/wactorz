@@ -101,7 +101,7 @@ class TestAProviderThatCannotTakeBlocks:
         assert "what is this?" in content
 
     async def test_no_encoded_payload_reaches_the_prompt(self, text_only: LLMAgent) -> None:
-        # ⚠ This is the failure the flag exists to prevent: a provider that
+        # This is the failure the flag exists to prevent: a provider that
         # flattens with `str()` would inline the whole base64 string.
         await text_only.chat("what is this?", _blocks(data=PNG * 200))
 

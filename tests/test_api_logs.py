@@ -5,7 +5,7 @@ caller controls is bounded here rather than trusted: `limit` is clamped, the
 level filter accepts only names we know, and the logger filter is a substring
 match over a field the server wrote.
 
-⚠ These records are not chat. A log carries what nobody chose to put there —
+These records are not chat. A log carries what nobody chose to put there —
 resolved config, paths, third-party output — so what this route serves, and to
 whom, is a different question from the rest of the API. The redaction that
 guards it happens on the way into the buffer, not here.
@@ -115,7 +115,7 @@ class TestTheCallerDoesNotChooseTheResponseSize:
         asked: str,
         expected: int,
     ) -> None:
-        # ⚠ The cap is the point: a request must not be able to name how much
+        # The cap is the point: a request must not be able to name how much
         # work the server does building a response.
         _fill(buffer, *[(logging.INFO, "wactorz", f"line {i}") for i in range(10)])
 
@@ -162,7 +162,7 @@ class TestFiltering:
     async def test_a_record_whose_level_we_cannot_rank_is_kept(
         self, client: TestClient[Any, Any], buffer: log_buffer.LogRingBuffer
     ) -> None:
-        # ⚠ Python allows custom levels, so a library can log at NOTICE(25).
+        # Python allows custom levels, so a library can log at NOTICE(25).
         # Excluding what cannot be ranked means even the most permissive request
         # drops records — and nobody asked for that.
         logging.addLevelName(25, "NOTICE")

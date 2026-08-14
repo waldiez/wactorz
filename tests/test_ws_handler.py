@@ -346,7 +346,7 @@ class TestAttachmentsOnATurn:
     async def test_what_the_message_claims_is_not_what_is_recorded(
         self, client: TestClient[Any, Any], db: _Db
     ) -> None:
-        # ⚠ The point of resolving server-side: a caller knows an id, but the
+        # The point of resolving server-side: a caller knows an id, but the
         # name and type are ours. Taking them from the message would let a turn
         # label a file as anything it liked in every thread that shows it.
         with (

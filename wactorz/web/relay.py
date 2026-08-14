@@ -8,7 +8,7 @@ socket, and that surface grows with each new agent rather than with this file.
 
 The patterns mirror what the frontend's `ServerEventRouter` dispatches, the
 feed-only suffixes its `raw` fallback maps in `agents/mapping.ts`, and the
-Home Assistant subtree the fallback feeds. ⚠ **A topic added to the router or
+Home Assistant subtree the fallback feeds.  **A topic added to the router or
 the feed mappers needs adding here too, or it will be relayed and silently
 dropped on arrival.**
 State is unaffected: every message still reaches `parse_topic`, so an agent's

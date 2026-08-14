@@ -142,7 +142,7 @@ class TestNothingIsDroppedInSilence:
 
 
 class TestAListThatIsNotAttachments:
-    """⚠ Translating a list that was never attachments is how a tool loop breaks.
+    """Translating a list that was never attachments is how a tool loop breaks.
 
     Gemini's own `_complete_with_tools` feeds the assistant turn back as Gemini
     parts, and the HA agent appends it to the messages for the next iteration.

@@ -144,7 +144,7 @@ async def index_handler(request: web.Request) -> Response:
 def _within(candidate: Path, base: Path) -> bool:
     """Whether `candidate` is really inside `base`. Both must be resolved.
 
-    ⚠ `str.startswith` is not this test, and that is what was here. With a base
+    `str.startswith` is not this test, and that is what was here. With a base
     of `…/static/app`, the path `…/static/app-old/secret` starts with it and
     passes — a sibling whose name merely shares a prefix escapes the directory
     the check exists to pin. `is_relative_to` compares path *components*, so

@@ -5,7 +5,7 @@
 /**
  * Application-log rows in the activity view.
  *
- * ⚠ These rows render the one thing the feed never had to before: whole
+ * These rows render the one thing the feed never had to before: whole
  * untrusted records, including tracebacks an agent can be induced to emit. The
  * escaping tests below are the point of this file, not a formality — a
  * `<pre>` holding the full record is exactly where someone reaches for
@@ -64,7 +64,7 @@ describe("an application-log row", () => {
     });
 
     it("colours its border from a lookup, never from the payload", () => {
-        // ⚠ `af-feed-lvl-${level}` would let a crafted record name any class in
+        // `af-feed-lvl-${level}` would let a crafted record name any class in
         // the stylesheet; `level` arrives over the wire.
         expect(render(log({ level: "ERROR" })).className).toContain("af-feed-lvl-error");
         expect(render(log({ level: "</style><script>" as never })).className).not.toContain("script");
@@ -235,7 +235,7 @@ describe("controls the current source has no use for", () => {
 
 describe("the list stays bounded", () => {
     it("drops the oldest rows past the cap", () => {
-        // ⚠ Nothing used to remove a row. `feedItems` is capped, but that only
+        // Nothing used to remove a row. `feedItems` is capped, but that only
         // bounds a rebuild — appending never evicted, so a long session grew
         // the DOM without limit, and polling the log makes that faster.
         const root = document.createElement("div");

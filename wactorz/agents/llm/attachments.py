@@ -3,7 +3,7 @@
 A chat turn carries attachment ids; a model request carries content blocks. This
 is the conversion, and the size rule that governs it.
 
-⚠ **A file can be small enough to upload and still too large to send.** Base64
+**A file can be small enough to upload and still too large to send.** Base64
 inflates by about a third, and the request as a whole is capped — so the usable
 inline size is well under the upload limit. A file over it is named to the model
 rather than dropped, so the agent can say it could not read the file instead of

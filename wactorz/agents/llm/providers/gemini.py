@@ -25,7 +25,7 @@ _UNSUPPORTED_SCHEMA_KEYS = frozenset({"additionalProperties", "additional_proper
 def _gemini_schema(node: Any) -> Any:
     """A tool's parameter schema, minus the keywords Gemini rejects.
 
-    ⚠ Nothing fails until the request is made. The SDK's own `Schema` model
+    Nothing fails until the request is made. The SDK's own `Schema` model
     declares `additional_properties`, so it validates and serializes happily and
     only the API refuses — with a 400 naming every declaration the keyword
     appears in. A filter written against the SDK's field list would let it
@@ -52,7 +52,7 @@ def _gemini_parts(blocks: list[Any]) -> list[dict[str, Any]]:
     both, PDFs included, so unlike the OpenAI-shaped providers nothing needs to
     be dropped to a marker here.
 
-    ⚠ Anything that is not an attachment block is passed through untouched. A
+    Anything that is not an attachment block is passed through untouched. A
     list content is not always attachments: this provider's own tool loop feeds
     an assistant turn back as Gemini parts (``{"text": ...}``,
     ``{"function_call": ...}``), and translating those would drop the tool call
@@ -176,7 +176,7 @@ class GeminiProvider(LLMProvider):
         )
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
-        # ⚠ Gemini 3 returns an opaque signature on the part that made a call and
+        # Gemini 3 returns an opaque signature on the part that made a call and
         # requires it back, on that same part, in the turn reporting the result.
         # Rebuilding the call from `ToolCall` alone drops it and the next request
         # is a 400. Collected in step with `tool_calls` so the two stay paired.

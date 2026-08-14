@@ -196,7 +196,7 @@ def test_override_none_disables_site_llm():
 
 
 class TestTheModelFlagsDoNotInventAModel:
-    """⚠ argparse fills a `default=` in whether or not the flag was passed.
+    """argparse fills a `default=` in whether or not the flag was passed.
 
     A default on a model flag therefore reaches `create_provider` as an explicit
     model on every run, outranking `LLM_MODEL` — which pinned Gemini to one
@@ -232,7 +232,7 @@ class TestTheModelFlagsDoNotInventAModel:
 
 
 class TestASecretOnTheCommandLineIsCalledOut:
-    """⚠ argv is world-readable on Linux: `ps` shows it to any local user, and
+    """argv is world-readable on Linux: `ps` shows it to any local user, and
     the shell writes it to history. The environment variable carries the same
     value without either — so a token passed as a flag earns a warning.
 

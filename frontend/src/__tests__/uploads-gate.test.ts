@@ -53,7 +53,7 @@ describe("the uploads gate", () => {
     });
 
     it("turns back off once the server stops taking them", async () => {
-        // ⚠ The reason the value is seeded as "1"/"0" rather than "1"/absent:
+        // The reason the value is seeded as "1"/"0" rather than "1"/absent:
         // an empty value is ignored, so an absent one would leave the previous
         // "1" in place and keep offering uploads after they were turned off.
         respondWith({ uploads: { enabled: true } });

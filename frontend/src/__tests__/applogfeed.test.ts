@@ -5,7 +5,7 @@
 /**
  * The application-log controller: what it fetches, and when it stops.
  *
- * ⚠ The timer is the part worth pinning. A poll that outlives the view keeps
+ * The timer is the part worth pinning. A poll that outlives the view keeps
  * asking for something nobody is looking at, and a second one stacked on the
  * first is invisible until the request rate doubles.
  */

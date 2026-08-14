@@ -30,7 +30,7 @@ def get_args():
         "--gemini-model",
         help="Google Gemini model (default: LLM_MODEL), e.g. gemini-3.6-flash",
     )
-    # ⚠ Tokens are accepted but deprecated as arguments. A process's argv is
+    # Tokens are accepted but deprecated as arguments. A process's argv is
     # world-readable on Linux — any local user running `ps` sees the value, and
     # it lands in shell history — so the environment variable is the supported
     # route. Kept working rather than removed: silently breaking an existing

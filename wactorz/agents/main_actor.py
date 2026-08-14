@@ -109,6 +109,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _get_spawn_registry(self) -> dict:
         return self.recall(SPAWN_REGISTRY_KEY) or {}
 
+    def _restore_earned_trust(self, agent_name: str, local_cfg: dict) -> bool:
+        """Re-attach a migrating agent's ``trusted`` flag from our own registry.
+
+        A config coming back from a node arrives over MQTT, where a publisher
+        can claim anything, so it is not evidence of anything. Our registry
+        entry is: it was written here when the agent was sent out. Reading the
+        flag from that record rather than from the wire is what lets a catalog
+        agent migrate home without meeting a validator its recipe was never
+        written to pass, while a node's claim of trust still buys nothing.
+
+        Returns whether the flag was earned, for the caller to pass as
+        ``from_registry``. A claim that was not earned is left in place rather
+        than removed here, so the spawn path strips it and says so.
+        """
+        if not self._get_spawn_registry().get(agent_name, {}).get("trusted"):
+            return False
+        local_cfg["trusted"] = True
+        return True
+
     def _save_to_spawn_registry(self, config: dict):
         reg = self._get_spawn_registry()
         reg[config["name"]] = config
@@ -266,7 +285,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 logger.info(f"[{self.name}] '{name}' already running, skipping.")
                 continue
             try:
-                await self._spawn_from_config(config, save=False)
+                await self._spawn_from_config(config, save=False, from_registry=True)
                 logger.info(f"[{self.name}] Restored: {name}")
             except Exception as e:
                 logger.error(f"[{self.name}] Failed to restore '{name}': {e}")
@@ -915,7 +934,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     await self._registry.unregister(target.actor_id)
             new_config = dict(config)
             new_config["replace"] = True
-            await self._spawn_from_config(new_config, save=True)
+            # Straight from the registry a few lines up, so a catalog agent
+            # restarts trusted rather than failing the validator it never had
+            # to pass.
+            await self._spawn_from_config(new_config, save=True, from_registry=True)
             return note_prefix + f"Agent '{agent_name}' restarted locally."
 
         # ── /nodes remove <node> ────────────────────────────────────────────
@@ -2170,17 +2192,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
         return clean, deleted, missing
 
-    async def _spawn_from_config(self, config: dict, save: bool = True) -> Actor | None:
+    async def _spawn_from_config(
+        self, config: dict, save: bool = True, *, from_registry: bool = False
+    ) -> Actor | SpawnPlaceholder | None:
         """Spawn one agent from a config dict.
 
         Remote (node-targeted) spawns go out over MQTT via ``_spawn_remote``;
         everything local is handled by the shared ``SpawnMixin`` so main and the
         planner construct agents identically.
+
+        ``from_registry`` says the config was read back from the spawn registry,
+        which is what entitles it to a ``trusted`` flag. It defaults to False so
+        a new call site is untrusted until someone decides otherwise.
         """
         node = config.get("node", "").strip()
         if node:
             return await self._spawn_remote(config, node, save)
-        return await self._spawn_local_from_config(config, register=save)
+        return await self._spawn_local_from_config(
+            config, register=save, from_registry=from_registry
+        )
 
     # Synthetic bridge code shipped with type:"llm" agents when they're spawned
     # on a remote node. The runner compiles this and finds handle_task, so the
@@ -2838,6 +2868,8 @@ async def handle_task(agent, payload):
                         ):
                             local_cfg.pop("code", None)
 
+                        earned = self._restore_earned_trust(agent_name, local_cfg)
+
                         logger.info(
                             f"[main] Received state_return for '{agent_name}' "
                             f"from '{from_node}' "
@@ -2845,7 +2877,9 @@ async def handle_task(agent, payload):
                             f"state key(s)) — spawning locally"
                         )
                         try:
-                            await self._spawn_from_config(local_cfg, save=True)
+                            await self._spawn_from_config(
+                                local_cfg, save=True, from_registry=earned
+                            )
                             self._queue_notification(
                                 {
                                     "_monitor_notification": True,

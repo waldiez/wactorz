@@ -94,7 +94,10 @@ services:
       mosquitto:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8888"]
+      # /health, not /: every other route needs the key once API_KEY is set, and
+      # a probe cannot carry one. Curling / would report unhealthy forever while
+      # the process is fine, and anything acting on that restarts it in a loop.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8888/health"]
       interval: 10s
       timeout: 5s
       retries: 5

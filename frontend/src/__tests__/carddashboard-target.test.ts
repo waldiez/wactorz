@@ -533,6 +533,22 @@ describe("the composer names the target on a fresh tab", () => {
 
         expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
     });
+    it("remembers an agent reached by @mention, not the one left behind", () => {
+        // Sending is a choice: `@catalog …` routes the message there and the
+        // view follows, so reopening on main contradicts what was last shown.
+        const cd = new CardDashboard() as any;
+        cd.agents.clear();
+        cd.show([agent("main"), agent("catalog")]);
+        cd._setView("chat");
+        const input = cd.root.querySelector("#af-iobar-input") as HTMLTextAreaElement;
+        input.value = "@catalog spawn weather-agent";
+
+        cd._chat._sendMessage(input);
+
+        expect(cd._chat.chatTarget).toBe("catalog");
+        expect(localStorage.getItem("wactorz-chat-target")).toBe("catalog");
+    });
+
     it("does not move the conversation under someone already reading it", () => {
         // The cost of the load-window exception, kept in bounds: once the chat
         // view has shown a real target, a remembered agent registering late is

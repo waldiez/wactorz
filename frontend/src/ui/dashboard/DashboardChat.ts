@@ -122,16 +122,25 @@ export class DashboardChat {
      */
     setTarget(name: string): void {
         this.chatTarget = name;
-        this._targetSettled = true;
-        // Only here. An agent going away moves the conversation by assigning the
-        // field directly, and that move is not a choice worth remembering — it
-        // would come back on the next load as though the user had made it.
-        if (name) {
-            safeStorage.set(CHAT_TARGET_KEY, name);
-        }
+        this._claimTarget(name);
         this._refreshForTarget();
         void this.loadHistory(name);
         this.updateTargetSelect();
+    }
+
+    /**
+     * Mark the target as the user's own: remembered, and no longer movable.
+     *
+     * The two ways in are picking an agent and sending to one. Not the third:
+     * an agent going away moves the conversation by assigning the field
+     * directly, and remembering that would bring it back next load as though
+     * they had chosen it.
+     */
+    private _claimTarget(name: string): void {
+        this._targetSettled = true;
+        if (name) {
+            safeStorage.set(CHAT_TARGET_KEY, name);
+        }
     }
 
     /** Release the mic if a recording was in progress (dashboard hidden). */
@@ -206,6 +215,10 @@ export class DashboardChat {
      */
     private _focusConversation(target: string): void {
         this.chatTarget = target;
+        // Sending is a choice too. Both callers are a message going out — an
+        // `@mention` routes it elsewhere and the view follows, so reopening on
+        // the agent left behind contradicts what the screen last showed.
+        this._claimTarget(target);
         this._listVisible = false;
         // The composer names its recipient, and nothing on the send paths
         // refreshed it — an `@mention` left it advertising the previous agent,

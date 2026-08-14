@@ -6,6 +6,7 @@ into tests that believe they are fully injected — and the failure mode is
 confusing rather than loud: the test looks wrong, not the environment.
 """
 
+import pathlib
 from collections.abc import Iterator
 from typing import Any
 
@@ -32,6 +33,28 @@ def _no_ambient_llm_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     explicitly via `provider_for(..., overrides=...)`, which takes precedence.
     """
     monkeypatch.setattr(llm_factory, "parse_overrides", lambda _spec: {})
+
+
+@pytest.fixture(autouse=True)
+def _no_writes_to_the_real_state_dir(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point every store at a temp directory for the duration of a test.
+
+    `resolve_state_dir()` falls back to `./state` — the directory a developer's
+    own install writes to. An `Actor` built without an explicit
+    `persistence_dir` therefore persists into it, and the damage is not
+    theoretical or subtle: a `MainActor` constructed in a test wrote the test's
+    own scripted conversation into `state/main/state.pkl`, where it then showed
+    up in the running dashboard as a chat nobody had. It survived a chat reset,
+    because the reset clears the database rows and the pickle keeps its own
+    copy.
+
+    Isolating the directory rather than fixing the call sites that forget: a
+    forgotten `persistence_dir` is invisible in review — the test passes either
+    way — and one is added every time someone constructs an actor.
+    """
+    monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "state"))
 
 
 #: The real factory, for the tests that exist to exercise it.

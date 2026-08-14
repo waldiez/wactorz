@@ -57,6 +57,9 @@ export class DashboardChat {
      * exactly like "chose main", so renders felt free to overwrite it.
      */
     chatTarget = "";
+
+    /** Whether the target is the user's rather than a default filled for them. */
+    private _targetSettled = false;
     private chatMessages: ChatMessage[] = [];
     private sidebarFilter = "";
 
@@ -119,6 +122,7 @@ export class DashboardChat {
      */
     setTarget(name: string): void {
         this.chatTarget = name;
+        this._targetSettled = true;
         // Only here. An agent going away moves the conversation by assigning the
         // field directly, and that move is not a choice worth remembering — it
         // would come back on the next load as though the user had made it.
@@ -174,6 +178,13 @@ export class DashboardChat {
         this.renderChatThread();
         this._renderAttachTray();
         this._syncPaneVisibility();
+        // Shown a real conversation, so it is theirs from here: a late-arriving
+        // remembered agent must not take it over while they are reading it.
+        // Guarded on there being one — mounting with nothing to open on has
+        // shown them nothing, and the preference has not had its chance yet.
+        if (this.chatTarget) {
+            this._targetSettled = true;
+        }
         void this.loadHistory(this.chatTarget);
     }
 
@@ -358,6 +369,11 @@ export class DashboardChat {
 
     /** Rebuild the target-agent `<select>` options from the current agent list. */
     updateTargetSelect(): void {
+        // Resolve first, or this renders the empty choice it was called to
+        // refresh. The composer is on screen from the first paint, before any
+        // agent has arrived, so the call that matters is the one made when the
+        // list first fills — and at that point nothing else has picked a target.
+        this.resolveDefaultTarget();
         const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
         if (select) {
             this._populateSelect(select);
@@ -393,6 +409,7 @@ export class DashboardChat {
             return;
         }
         const lost = this.chatTarget;
+        this._targetSettled = true;
         this.chatTarget = next;
         this._refreshForTarget();
         this.updateTargetSelect();
@@ -411,17 +428,32 @@ export class DashboardChat {
     }
 
     /**
-     * Fill an empty choice on first arrival at the chat view. Never overwrites:
-     * a target already on screen is the user's, whether they picked it or it was
-     * picked for them, and moving it under them is the whole class of bug this
-     * split removes.
+     * Fill an empty choice, and let a remembered one win the race it would lose.
+     *
+     * Never overwrites a *settled* target: one the user picked, or one they were
+     * moved to because theirs went away. Moving those under them is the whole
+     * class of bug the target split removed.
+     *
+     * The one exception is the load window, and it exists because agents arrive
+     * one frame at a time. Resolving against the first of them picks whatever
+     * that partial list defaults to — usually `main` — and "first resolution
+     * sticks" would then hold that against the remembered agent arriving a
+     * moment later. So an unsettled default steps aside when the remembered
+     * agent turns up. It is not a move under the user: it happens before they
+     * have chosen anything, and only ever towards the agent they last chose.
      */
     resolveDefaultTarget(): void {
+        const agents = [...this.host.agents.values()];
+        const remembered = safeStorage.get(CHAT_TARGET_KEY);
         if (!this.chatTarget) {
-            this.chatTarget = preferredChatTarget(
-                [...this.host.agents.values()],
-                safeStorage.get(CHAT_TARGET_KEY),
-            );
+            this.chatTarget = preferredChatTarget(agents, remembered);
+            return;
+        }
+        if (this._targetSettled || !remembered || remembered === this.chatTarget) {
+            return;
+        }
+        if (agents.some(a => a.name === remembered && canDirectMessage(a))) {
+            this.chatTarget = remembered;
         }
     }
 

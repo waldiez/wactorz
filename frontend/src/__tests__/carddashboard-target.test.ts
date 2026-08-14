@@ -474,6 +474,23 @@ describe("the composer names the target on a fresh tab", () => {
         localStorage.clear();
     });
 
+    it("names it when the agents arrive over the socket, on the overview", () => {
+        // The reported path, and the one every earlier attempt missed: agents
+        // land through addAgent, not a view render. That already refreshed the
+        // composer — with the empty target nothing had resolved yet, so it
+        // rewrote "Message…" and stayed there until chat was opened by hand.
+        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
+        const cd = new CardDashboard() as any;
+        cd.agents.clear();
+        cd.show([]); // fresh tab: visible, on the overview, nobody here yet
+
+        cd.addAgent(agent("main"));
+        cd.addAgent(agent("home-assistant-agent"));
+
+        expect(cd.view).not.toBe("chat");
+        expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
+    });
+
     it("names it on the overview, where chat was never opened", () => {
         // Where this was caught. The composer is outside the view body, so it
         // is on screen from the first paint — and nothing on the overview
@@ -515,6 +532,22 @@ describe("the composer names the target on a fresh tab", () => {
         cd._renderView();
 
         expect(_placeholder(cd)).toBe("Message @home-assistant-agent…");
+    });
+    it("does not move the conversation under someone already reading it", () => {
+        // The cost of the load-window exception, kept in bounds: once the chat
+        // view has shown a real target, a remembered agent registering late is
+        // just another agent. Moving the conversation then is the bug the
+        // target split removed.
+        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
+        const cd = new CardDashboard() as any;
+        cd.agents.clear();
+        cd.show([agent("main")]);
+        cd._setView("chat"); // opens on main, and they are looking at it
+
+        cd.addAgent(agent("home-assistant-agent")); // registers late
+
+        expect(cd._chat.chatTarget).toBe("main");
+        expect(_placeholder(cd)).toBe("Message @main…");
     });
 });
 

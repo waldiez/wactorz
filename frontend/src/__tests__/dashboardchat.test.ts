@@ -216,6 +216,37 @@ describe("DashboardChat — resolveDefaultTarget", () => {
         expect(fetchSpy).not.toHaveBeenCalled();
     });
 
+    it("names the resolved agent in the composer on a fresh load", () => {
+        // The shell builds the composer before any chat view exists, so it is
+        // born with no target. Nothing refreshed it afterwards, and the agent
+        // the dashboard opened on went unmentioned until the user picked
+        // someone — the pick that is now made for them.
+        const host = makeHost([agent("main"), agent("home-assistant-agent")]);
+        const dc = new DashboardChat(host);
+        host.root.appendChild(dc.buildIobar());
+        host.root.appendChild(dc.buildChatView());
+        document.body.appendChild(host.root);
+
+        dc.afterMount();
+
+        const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        expect(input.placeholder).toBe("Message @main…");
+    });
+
+    it("names the remembered agent, not the default, after a reload", () => {
+        localStorage.setItem("wactorz-chat-target", "home-assistant-agent");
+        const host = makeHost([agent("main"), agent("home-assistant-agent")]);
+        const dc = new DashboardChat(host);
+        host.root.appendChild(dc.buildIobar());
+        host.root.appendChild(dc.buildChatView());
+        document.body.appendChild(host.root);
+
+        dc.afterMount();
+
+        const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        expect(input.placeholder).toBe("Message @home-assistant-agent…");
+    });
+
     it("keeps a target resolved earlier, even once main turns up", () => {
         // The behaviour change: first resolution sticks. Main arriving late no
         // longer takes the conversation over — the user has already seen the

@@ -174,6 +174,11 @@ export class DashboardChat {
         this.renderChatThread();
         this._renderAttachTray();
         this._syncPaneVisibility();
+        // The composer is built with the rest of the shell, before any chat view
+        // exists and so before there is a target — it would otherwise keep the
+        // "Message…" it was born with until the user picked someone, which is
+        // exactly the pick that is now remembered for them.
+        this.updateTargetSelect();
         void this.loadHistory(this.chatTarget);
     }
 

@@ -107,6 +107,7 @@ def reset_chat(
         "[reset] conversation kv cleared%s",
         f" for {agent_name!r}" if agent_name else " (all agents)",
     )
+    _strip_chat_from_pickles(agent_name, state_dir)
     if not agent_name:
         reset_uploads(state_dir)
 
@@ -261,6 +262,36 @@ def reset_all(
 def _all_kv_agents(db) -> list[str]:
     rows = db._conn.execute("SELECT DISTINCT agent FROM kv_store").fetchall()
     return [r[0] for r in rows]
+
+
+def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = None) -> None:
+    """Remove the conversation keys from any legacy `state.pkl` that holds them.
+
+    Clearing the database is not enough on its own. An agent's `state.pkl`
+    predates the per-key store and can hold its own `conversation_history`;
+    `Actor` loads it at start and `recall` falls back to it whenever the store
+    has nothing, so a cleared conversation came back on the next restart.
+
+    Driven off the files on disk rather than the agents with database rows: the
+    case that motivated this had a pickle and no rows at all, so a
+    database-driven loop would have walked straight past it.
+
+    Only rewrites a file something was actually removed from. That is also what
+    makes it safe for an unreadable one: `PickleStore.load` quarantines it and
+    returns an empty dict, which contains none of these keys, so it is skipped
+    rather than replaced with the empty dict.
+    """
+    store = _pickle_store(state_dir)
+    base = Path(state_dir or _DEFAULT_STATE)
+    names = [agent_name] if agent_name else [p.parent.name for p in base.glob("*/state.pkl")]
+    for name in names:
+        state = store.load(name)
+        if not any(key in state for key in _CHAT_KV_KEYS):
+            continue
+        for key in _CHAT_KV_KEYS:
+            state.pop(key, None)
+        store.save(name, state)
+        logger.info("[reset] conversation removed from legacy state file for %r", name)
 
 
 def _reset_all_pickles(state_dir: str | None = None) -> None:

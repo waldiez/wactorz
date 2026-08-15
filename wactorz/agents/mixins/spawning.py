@@ -37,6 +37,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, MessageType
+from ...core.paths import agent_state_dir
 from ..lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
@@ -514,10 +515,8 @@ class SpawnMixin(_Host):
             )
             try:
                 import pickle
-                from pathlib import Path
 
-                safe = name.replace("/", "_").replace("\\", "_")
-                pdir = Path(str(self._persistence_dir.parent)) / safe
+                pdir = agent_state_dir(self._persistence_dir.parent, name)
                 pdir.mkdir(parents=True, exist_ok=True)
                 with open(pdir / "state.pkl", "wb") as fh:
                     pickle.dump(snapshot, fh)

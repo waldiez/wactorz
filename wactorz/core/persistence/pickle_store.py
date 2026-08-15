@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..atomic_io import quarantine_unreadable, write_pickle
-from ..paths import resolve_state_dir
+from ..paths import agent_state_dir, resolve_state_dir
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +31,7 @@ class PickleStore:
         way a name can climb out, which matters because these files are
         unpickled, and unpickling a file an attacker placed is code execution.
         """
-        safe = agent_name.replace("/", "_").replace("\\", "_").strip()
-        if safe in {"", ".", ".."} or safe.startswith(".."):
-            raise ValueError(f"unsafe agent name for a state path: {agent_name!r}")
-
-        p = (self._base / safe).resolve()
-        if p != self._base and self._base not in p.parents:
-            raise ValueError(f"agent name escapes the state directory: {agent_name!r}")
-
+        p = agent_state_dir(self._base, agent_name)
         p.mkdir(parents=True, exist_ok=True)
         return p / "state.pkl"
 

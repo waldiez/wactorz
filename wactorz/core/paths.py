@@ -40,3 +40,32 @@ def ensure_state_dir(explicit: str | None = None) -> str:
     # functions in this module always hand back the same form of the same path.
     Path(base).resolve().mkdir(parents=True, exist_ok=True)
     return base
+
+
+def agent_state_dir(base: str | Path, agent_name: str) -> Path:
+    """The directory `agent_name` may keep state in, inside `base`.
+
+    Replacing separators is not enough on its own: `..` contains none, so it
+    survives the substitution and walks up a level — an agent called `..` wrote
+    its state over the state directory itself, and `POST /api/reset` with that
+    name reached the same path. The containment check below is what actually
+    holds, because it does not depend on having predicted every way a name can
+    climb out. That matters here more than most places: these files are
+    unpickled, and unpickling a file someone else placed is code execution.
+
+    Raises rather than sanitising silently. A name that cannot be made into a
+    directory is a name the caller should not be storing anything under, and an
+    agent quietly writing somewhere other than where it was told is the failure
+    this exists to prevent.
+
+    Does not create the directory — callers differ on when that should happen.
+    """
+    safe = agent_name.replace("/", "_").replace("\\", "_").strip()
+    if safe in {"", ".", ".."} or safe.startswith(".."):
+        raise ValueError(f"unsafe agent name for a state path: {agent_name!r}")
+
+    root = Path(base).resolve()
+    candidate = (root / safe).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise ValueError(f"agent name escapes the state directory: {agent_name!r}")
+    return candidate

@@ -23,6 +23,7 @@ from . import (
     api_uploads,
     auth,
     chat,
+    login,
     mqtt,
     origins,
     runtime,
@@ -90,6 +91,12 @@ def build_app() -> web.Application:
 
     app.router.add_get("/", static_site.index_handler)
     app.router.add_get("/health", api_system.health_handler)
+    # Sign-in. Exempt from the key check and from nothing else — `POST /login`
+    # stays inside the origin gate, which is what stands in for a CSRF token.
+    app.router.add_get("/login", login.login_page_handler)
+    app.router.add_post("/login", login.login_submit_handler)
+    app.router.add_post("/logout", login.logout_handler)
+    app.router.add_post("/logout/all", login.logout_everywhere_handler)
     app.router.add_get("/api/cost", api_system.cost_handler)
     app.router.add_get("/cost", api_system.cost_handler)
     app.router.add_post("/api/cost/limit", api_system.cost_limit_handler)

@@ -8,11 +8,12 @@ confusing rather than loud: the test looks wrong, not the environment.
 
 import pathlib
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
-from wactorz import llm_factory
+from wactorz import config, llm_factory
 from wactorz.core import mqtt
 from wactorz.core.persistence.stores import Stores
 
@@ -55,6 +56,24 @@ def _no_writes_to_the_real_state_dir(
     way — and one is added every time someone constructs an actor.
     """
     monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "state"))
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore an `API_KEY` from the developer's environment or `.env`.
+
+    `wactorz.config` reads the repo's `.env`, so a developer who sets a key —
+    to try the sign-in page, say — turns every test that expects an open server
+    into a 401. Sixteen of them, in files that have nothing to do with auth, all
+    failing for a reason that is nowhere in the diff.
+
+    CI never sees it, which is the worst shape for this kind of thing: green
+    there, broken only on the machine of whoever is working on the feature.
+
+    Tests that want a key set one explicitly and win, because this only replaces
+    the default.
+    """
+    monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
 
 
 #: The real factory, for the tests that exist to exercise it.

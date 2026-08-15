@@ -60,11 +60,14 @@ def _print_ready_banner(port: int) -> None:
     must reach the terminal without also being written to the unrotated log file
     or shipped onward by a metrics exporter.
     """
-    from wactorz.web import static_site
+    from wactorz.web import login, static_site
 
     lines = [f"Dashboard   http://localhost:{port}/"]
     if static_site.DOCS_SITE.is_dir():
         lines.append(f"Docs        http://localhost:{port}/docs/")
+    sign_in = login.sign_in_line(port)
+    if sign_in is not None:
+        lines.append(sign_in)
     width = max(len(line) for line in lines) + 4
     print("\n    ┌" + "─" * width + "┐")
     for line in lines:

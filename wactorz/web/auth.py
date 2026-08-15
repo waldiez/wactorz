@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import hmac
 import logging
-from typing import Any
+from typing import Any, NoReturn
+from urllib.parse import quote
 
 from aiohttp import web
 
 from ..config import _env_truthy
 from ..core.net import is_loopback
-from . import origins
+from . import origins, sessions
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,19 @@ logger = logging.getLogger(__name__)
 #: unauthenticated, so guarding it makes every container report unhealthy — and
 #: anything acting on that restarts a perfectly healthy process, in a loop.
 #: Probes cannot carry a key. The path is exempt, not the method.
-UNGUARDED_PATHS = frozenset({"/health"})
+#: `/login` is exempt from *authentication* and from nothing else. It stays
+#: inside the origin gate, and that is deliberate: C-2 refuses a mismatched
+#: `Origin` on state-changing methods, and a browser always sends one on a
+#: cross-origin POST — so the origin gate *is* the CSRF control here, with no
+#: token and no pre-session cookie to manage.
+#: `/favicon.svg` is the mark the sign-in page shows. Gating it would leave that
+#: page — the one a stranger is *meant* to reach — asking for a credential to
+#: render its own logo. It is a static brand asset, published with the docs.
+UNGUARDED_PATHS = frozenset({"/health", "/login", "/favicon.svg"})
+
+#: Carries the session id. `HttpOnly` so script cannot read it — the point of
+#: keeping the key server-side is lost if the cookie is scriptable.
+SESSION_COOKIE = "wactorz_session"
 
 #: Declares "the only way in is already authenticated" for a deployment that
 #: must bind widely — a container publishing its own ports, or the add-on behind
@@ -71,7 +84,55 @@ def is_authorized(request: web.Request, api_key: str) -> bool:
         # has no way to attach a header. Peer-verified (C-10), so this is not a
         # header anyone on the network can claim.
         return True
+    if sessions.store.is_valid(request.cookies.get(SESSION_COOKIE, "")):
+        # A browser that logged in. The cookie holds a session id, never the
+        # key, so this path can be revoked without touching the credential
+        # every script and probe uses.
+        return True
     return hmac.compare_digest(_presented_key(request), api_key)
+
+
+def wants_html(request: web.Request) -> bool:
+    """Whether this is a browser asking for a page rather than a client for data.
+
+    Decides what an unauthenticated caller is told: a person gets sent to the
+    login form, a script gets a 401 it can act on. One answer cannot serve
+    both — a 302 hands `curl` an HTML page and a 200 it did not earn, and a
+    bare 401 leaves a browser on a blank tab with no way forward.
+    """
+    return "text/html" in request.headers.get("Accept", "")
+
+
+def safe_next(raw: str) -> str:
+    """`raw` if it is somewhere on this server, else the dashboard root.
+
+    Guards both directions of the login round trip — the `?next=` this puts on
+    the redirect, and the one that comes back on the form. Without it,
+    `?next=https://elsewhere` turns the one page a stranger can always reach
+    into an open redirect.
+
+    A scheme-relative `//host` is the case worth naming: it starts with `/`, so
+    a "must be absolute" check alone waves it through, and a browser reads it as
+    another host. Anything unacceptable becomes `/` rather than being repaired —
+    landing on the dashboard is a better failure than landing somewhere the user
+    did not ask for.
+    """
+    if raw.startswith("/") and not raw.startswith("//") and "\\" not in raw:
+        return raw
+    return "/"
+
+
+def login_redirect(request: web.Request) -> NoReturn:
+    """Send a browser to the login form, remembering where it was going.
+
+    Raised rather than returned: aiohttp deprecated returning an
+    ``HTTPException``, and a redirect that arrives as a 200-with-a-body is not
+    a redirect at all.
+    """
+    target = request.path_qs
+    if target == "/login" or safe_next(target) == "/":
+        raise web.HTTPFound("/login")
+    raise web.HTTPFound(f"/login?next={quote(target, safe='')}")
 
 
 @web.middleware
@@ -81,6 +142,8 @@ async def auth_middleware(request: web.Request, handler: Any) -> web.StreamRespo
 
     if request.path in UNGUARDED_PATHS or is_authorized(request, CONFIG.api_key):
         return await handler(request)
+    if wants_html(request):
+        login_redirect(request)
     return web.json_response({"error": "Unauthorized"}, status=401)
 
 

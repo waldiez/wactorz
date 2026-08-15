@@ -20,10 +20,11 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from aiohttp import WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.config import CONFIG
-from wactorz.web import auth, login, sessions, throttle
+from wactorz.web import auth, login, origins, sessions, throttle
 from wactorz.web.app import build_app
 
 KEY = "the-configured-key"
@@ -339,3 +340,83 @@ class TestGuessingGetsExpensive:
         await client.post("/login", data={"key": KEY})
 
         assert throttle.throttle.retry_after("127.0.0.1") == 0.0
+
+
+class TestWhatTheBrowserIsToldAboutSigningOut:
+    """The dashboard cannot work out whether it holds a session by itself.
+
+    "Is a key configured" is the wrong question: under Home Assistant ingress
+    the user was authenticated by HA and carries no session here, so a sign-out
+    would end nothing while implying it had.
+    """
+
+    async def test_a_signed_in_browser_is_offered_it(self, client: TestClient) -> None:
+        await client.post("/login", data={"key": KEY})
+
+        payload = await (await client.get("/api/config")).json()
+
+        assert payload["auth"]["canSignOut"] is True
+
+    async def test_an_install_with_no_key_is_not(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("wactorz.config.CONFIG", replace(CONFIG, api_key=""))
+        async with TestClient(TestServer(build_app())) as client:
+            payload = await (await client.get("/api/config")).json()
+
+            assert payload["auth"]["canSignOut"] is False
+
+    async def test_an_ingress_visitor_is_not(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Home Assistant authenticated them; there is no session here to end.
+        monkeypatch.setattr(origins, "from_supervisor", lambda _request: True)
+
+        payload = await (await client.get("/api/config")).json()
+
+        assert payload["auth"]["canSignOut"] is False
+
+
+class TestTheWebsocketHandshake:
+    """The socket is behind the same gate as everything else.
+
+    It carries the live feed and accepts chat and command frames, so leaving it
+    open would make the key check decorative — a caller refused at `/api/actors`
+    could simply open `/ws` and drive the same system.
+
+    Nothing extra guards it: the middleware runs on the upgrade like any other
+    request, which is the point of putting the check there rather than on each
+    route. These pin that, because a handshake looks different enough from a
+    request that "surely it needs its own check" is an easy conclusion to draw.
+    """
+
+    async def test_an_anonymous_socket_is_refused(self, client: TestClient) -> None:
+        with pytest.raises(WSServerHandshakeError) as refused:
+            async with client.ws_connect("/ws"):
+                pass
+
+        assert refused.value.status == 401
+
+    async def test_a_signed_in_browser_may_open_it(self, client: TestClient) -> None:
+        # The browser attaches the cookie to the upgrade itself; it cannot set
+        # a header there, which is why the cookie is what makes this work.
+        await client.post("/login", data={"key": KEY})
+
+        async with client.ws_connect("/ws") as socket:
+            assert not socket.closed
+
+    async def test_a_script_may_open_it_with_the_key(self, client: TestClient) -> None:
+        # No cookie and no browser: the header path has to work at the handshake
+        # too, or every non-browser client is locked out of the live feed.
+        async with client.ws_connect("/ws", headers={"X-API-Key": KEY}) as socket:
+            assert not socket.closed
+
+    async def test_a_revoked_session_cannot_reopen_it(self, client: TestClient) -> None:
+        # What "sign out everywhere" has to mean for a socket: the open one is
+        # unaffected, but it cannot be re-established.
+        await client.post("/login", data={"key": KEY})
+        sessions.store.revoke_all()
+
+        with pytest.raises(WSServerHandshakeError) as refused:
+            async with client.ws_connect("/ws"):
+                pass
+
+        assert refused.value.status == 401

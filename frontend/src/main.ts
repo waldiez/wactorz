@@ -33,6 +33,7 @@ import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
 import { seedServerConfig } from "./config/serverConfig";
+import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
@@ -456,6 +457,12 @@ const _liveActorsTimer = window.setInterval(() => {
     refreshLiveActors();
     agentStore.pruneStaleRemoteAgents();
 }, 15000);
+
+// Ahead of the first request this module makes — the feed seed below. A session
+// that ended while the tab was closed refuses that one too, and installing after
+// it would leave the very first 401 unhandled and the page waiting on a poll
+// half a minute away.
+installSessionExpiry();
 
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).

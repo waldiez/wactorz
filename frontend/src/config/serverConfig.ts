@@ -20,6 +20,7 @@
  */
 
 import { safeStorage } from "../safeStorage";
+import { SIGN_OUT_KEY } from "../ui/dashboard/signOut";
 import { UPLOADS_KEY } from "../ui/dashboard/uploads";
 
 /** Seed a single key from the server value; returns whether it wrote. */
@@ -57,6 +58,12 @@ registerConfigEntry(
 // decides if the attachment UI can work at all. Seeded as "1"/"0" rather than
 // "1"/absent: `seedKeyFromServer` ignores an empty value, so an absent one would
 // leave a stale "1" behind and keep offering uploads after they were turned off.
+// Seeded as "1"/"0" rather than "1"/absent, for the same reason as uploads: an
+// install that turns a key off must clear the flag, not leave a stale one that
+// keeps offering a sign-out ending nothing.
+registerConfigEntry(SIGN_OUT_KEY, c =>
+    (c.auth as Record<string, unknown> | undefined)?.canSignOut ? "1" : "0",
+);
 registerConfigEntry(UPLOADS_KEY, c =>
     (c.uploads as Record<string, unknown> | undefined)?.enabled ? "1" : "0",
 );

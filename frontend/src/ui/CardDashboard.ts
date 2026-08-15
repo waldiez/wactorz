@@ -27,6 +27,7 @@ import {
     releaseHeaderPopovers,
     releaseBottomNav,
 } from "./dashboard/header";
+import { setSignOutVisible } from "./dashboard/signOut";
 import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
@@ -142,7 +143,10 @@ export class CardDashboard {
     /** Seed runtime config from /api/config and point the Devices nav link at it. */
     private _loadServerConfig(): void {
         seedServerConfig()
-            .then(() => setHaNavUrl(this.root, this.haUrl))
+            .then(() => {
+                setHaNavUrl(this.root, this.haUrl);
+                setSignOutVisible(this.root);
+            })
             .catch(() => {});
     }
 

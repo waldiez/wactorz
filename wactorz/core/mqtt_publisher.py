@@ -34,11 +34,16 @@ class MQTTPublisher:
       retain → stored at broker, replayed to new subscribers
 
     QoS 0 is **not** dropped while disconnected — it is queued like anything
-    else and delivered on reconnect; only a process exit loses it. This said
-    "dropped if disconnected" for a long time, which made the in-memory queue
-    look self-limiting when nothing bounds it. Bounding it is a durability
-    decision (what to discard, and whether a discarded message is reported)
-    and has not been made — see R-07.
+    else and delivered on reconnect; only a process exit loses it.
+
+    **The queue is bounded, and what gives way is telemetry.** A broker that is
+    absent or slower than the app publishes used to grow this without limit
+    until the process died — the failure being a memory graph, not a message,
+    which is what made it easy to leave. At the cap, the *oldest* queued QoS 0
+    message is discarded: heartbeats, metrics, logs and status are superseded by
+    the next sample, so the newest is the one worth keeping. QoS 1 is never
+    discarded to make room, because it is already in the SQLite outbox — at
+    worst it waits for the reconnect that reloads it.
     """
 
     # Topics that must use QoS 1 regardless of caller setting
@@ -54,8 +59,16 @@ class MQTTPublisher:
         "/heartbeat",
     )
 
+    #: How many messages may wait in memory before telemetry starts giving way.
+    #: Large enough that an ordinary reconnect blip queues and drains without
+    #: dropping anything; small enough that an absent broker costs megabytes
+    #: rather than the process.
+    MAX_QUEUED = 10_000
+
     def __init__(self, db_path: str = "./state/mqtt_outbox.db") -> None:
-        self._queue: asyncio.Queue = asyncio.Queue()
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.MAX_QUEUED)
+        #: How many messages the cap has discarded, for the log and for tests.
+        self._dropped = 0
         #: A message whose publish failed, retried before the queue is read again.
         self._retry: tuple | None = None
         self._task: asyncio.Task | None = None
@@ -139,6 +152,62 @@ class MQTTPublisher:
         except Exception as e:
             logger.debug("[MQTT] Outbox delete failed: %s", e)
 
+    def _enqueue(self, item: tuple) -> None:
+        """Queue `item`, making room by discarding telemetry if the cap is reached.
+
+        Never blocks the caller. `publish()` promises to return immediately, so
+        waiting for space here would push a slow broker back into the actor loop
+        that called it — the thing this class exists to prevent.
+
+        Room is made from the front: the oldest QoS 0 message goes, because the
+        next heartbeat or metric replaces it anyway and the freshest sample is
+        the useful one. If the queue holds nothing droppable, the *incoming*
+        message gives way instead — a QoS 1 in that position is already in the
+        outbox and will be reloaded on the next connect, so what is lost is the
+        wait, not the message.
+        """
+        while True:
+            try:
+                self._queue.put_nowait(item)
+                return
+            except asyncio.QueueFull:
+                if not self._discard_one_telemetry():
+                    self._note_drop(item)
+                    return
+
+    def _discard_one_telemetry(self) -> bool:
+        """Drop the oldest QoS 0 message, if the queue has one. True if it did.
+
+        Rebuilds the queue rather than reaching into it: `asyncio.Queue` has no
+        supported way to remove from the middle, and its internal deque is not
+        ours to mutate.
+        """
+        held = []
+        dropped = False
+        while not self._queue.empty():
+            entry = self._queue.get_nowait()
+            self._queue.task_done()
+            if not dropped and entry[3] < 1:
+                dropped = True
+                self._note_drop(entry)
+                continue
+            held.append(entry)
+        for entry in held:
+            self._queue.put_nowait(entry)
+        return dropped
+
+    def _note_drop(self, item: tuple) -> None:
+        """Count a discarded message, and say so at a rate a log can carry."""
+        self._dropped += 1
+        if self._dropped == 1 or self._dropped % 1000 == 0:
+            logger.warning(
+                "[MQTT] outbox full at %d — discarded %s (%d total). The broker is not "
+                "keeping up, or is not there.",
+                self.MAX_QUEUED,
+                item[0],
+                self._dropped,
+            )
+
     def _load_pending_from_db(self) -> None:
         """On startup, reload undelivered QoS 1 messages into the in-memory queue."""
         try:
@@ -149,7 +218,7 @@ class MQTTPublisher:
             if rows:
                 logger.info("[MQTT] Replaying %s undelivered message(s) from outbox", len(rows))
             for row_id, topic, payload, retain, qos in rows:
-                self._queue.put_nowait((topic, payload, bool(retain), qos, row_id))
+                self._enqueue((topic, payload, bool(retain), qos, row_id))
         except Exception as e:
             logger.debug("[MQTT] Outbox load failed: %s", e)
 
@@ -171,10 +240,10 @@ class MQTTPublisher:
         if qos >= 1:
             # Durable: persist to SQLite first, then enqueue
             row_id = self._save_to_db(topic, payload, retain, qos)
-            await self._queue.put((topic, payload, retain, qos, row_id))
+            self._enqueue((topic, payload, retain, qos, row_id))
         else:
             # Best-effort: in-memory only
-            await self._queue.put((topic, payload, retain, qos, -1))
+            self._enqueue((topic, payload, retain, qos, -1))
 
     async def disconnect(self) -> None:
         """Stop the drain loop and close the connection."""

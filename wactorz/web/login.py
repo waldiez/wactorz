@@ -19,7 +19,7 @@ import logging
 
 from aiohttp import web
 
-from . import auth, sessions
+from . import auth, sessions, throttle
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +116,13 @@ _PAGE = """<!doctype html>
 """
 
 
+def _wait_message(seconds: float) -> str:
+    """How long to wait, in words a person can act on rather than a raw count."""
+    if seconds < 60:
+        return f"Too many attempts. Try again in {max(1, round(seconds))} seconds."
+    return f"Too many attempts. Try again in {round(seconds / 60)} minutes."
+
+
 def _escape(value: str) -> str:
     """Minimal HTML-attribute escaping for the one value echoed back.
 
@@ -178,23 +185,43 @@ async def login_page_handler(request: web.Request) -> Response:
 
 
 async def login_submit_handler(request: web.Request) -> Response:
-    """Check the key, start a session, and put the browser back where it was."""
+    """Check the key, start a session, and put the browser back where it was.
+
+    ⚠ The origin gate has already run — it is middleware, and this is a handler.
+    That ordering is load-bearing rather than incidental: a page on another site
+    can make a visitor's browser POST here, and if those attempts reached the
+    counter they would spend *the visitor's* allowance. Someone else's page
+    could then lock a user out of their own dashboard, which turns the
+    protection into the attack. Cross-origin attempts are refused upstream and
+    never counted here.
+    """
     from ..config import CONFIG  # read per request so a test can swap it
 
     form = await request.post()
     presented = str(form.get("key", ""))
     target = auth.safe_next(str(form.get("next", "/")))
+    caller = request.remote or "an unknown address"
+
+    throttle.throttle.prune()
+    waiting = throttle.throttle.retry_after(caller)
+    if waiting > 0:
+        # Refused before the comparison happens at all, so being locked out
+        # tells the caller nothing about the key.
+        logger.warning("[auth] sign-in refused, %s must wait %.0fs", caller, waiting)
+        return _page(target, _wait_message(waiting), status=429)
 
     if not CONFIG.api_key or not hmac.compare_digest(presented, CONFIG.api_key):
         # No detail about which part was wrong, and the same page either way.
-        logger.warning("[auth] failed sign-in from %s", request.remote or "an unknown address")
+        throttle.throttle.record_failure(caller)
+        logger.warning("[auth] failed sign-in from %s", caller)
         return _page(target, "That key was not accepted.", status=401)
 
     # Built, then raised: the cookie has to be on the redirect that carries it,
     # and aiohttp wants an HTTPException raised rather than returned.
+    throttle.throttle.record_success(caller)
     response = web.HTTPFound(target)
     _set_session_cookie(request, response, sessions.store.create())
-    logger.info("[auth] signed in from %s", request.remote or "an unknown address")
+    logger.info("[auth] signed in from %s", caller)
     raise response
 
 

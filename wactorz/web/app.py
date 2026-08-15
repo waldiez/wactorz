@@ -192,6 +192,12 @@ async def main(exit_on_failure: bool = False) -> None:
             raise SystemExit(1)
         return
 
+    weak_key = auth.weak_key_warning(CONFIG.api_key)
+    if weak_key:
+        # Said on this path too: the process root has its own copy, and starting
+        # the monitor alone must not be the quiet way to skip the advice.
+        logger.warning("[startup] %s", weak_key)
+
     refusal = auth.exposure_refusal(CONFIG.bind_host, CONFIG.api_key)
     if refusal:
         # Before the socket, not after: a process that has already bound has

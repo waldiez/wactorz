@@ -147,6 +147,32 @@ async def auth_middleware(request: web.Request, handler: Any) -> web.StreamRespo
     return web.json_response({"error": "Unauthorized"}, status=401)
 
 
+#: The shortest configured key this will not complain about. A generated one is
+#: 64 hex characters; this is the length below which a key stops being something
+#: an attacker has to work for. Not a refusal — a short key on an install that
+#: has one at all is still far better than the alternative, and the throttle is
+#: what actually stands between it and a guesser.
+MIN_KEY_LENGTH = 16
+
+
+def weak_key_warning(api_key: str) -> str | None:
+    """What to say at startup about a key short enough to guess, or None.
+
+    Says what protects them in the meantime rather than only what is wrong:
+    sign-in attempts back off and then lock out, so a short key is slow to
+    attack rather than open. The header path has no such limit, which is the
+    reason to fix it rather than rely on the throttle.
+    """
+    if not api_key or len(api_key) >= MIN_KEY_LENGTH:
+        return None
+    return (
+        f"API_KEY is {len(api_key)} characters, under the {MIN_KEY_LENGTH} this expects. "
+        "Sign-in attempts are throttled, so guessing it through the form is slow — but "
+        "requests carrying the key as a header are not, so a short one is worth replacing. "
+        "Something like `openssl rand -hex 32` gives a key nobody has to remember."
+    )
+
+
 def exposure_refusal(bind_host: str, api_key: str) -> str | None:
     """Why this process must not start, or None if it may.
 

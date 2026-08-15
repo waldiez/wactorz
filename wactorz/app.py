@@ -89,6 +89,7 @@ async def build_system(args: argparse.Namespace):
     from wactorz.core.mqtt import broker_exposure_warning
     from wactorz.core.registry import ActorSystem
     from wactorz.llm_factory import create_provider, parse_overrides, provider_for
+    from wactorz.web import auth
 
     llm = args.llm or CONFIG.llm_provider
     model_flag = {
@@ -134,6 +135,12 @@ async def build_system(args: argparse.Namespace):
     _exposure = broker_exposure_warning(_broker_host, CONFIG.mqtt_username)
     if _exposure:
         logger.warning("[startup] %s", _exposure)
+
+    # Said once too: a key short enough to guess is worth hearing about while
+    # there is still a terminal open to read it.
+    _weak_key = auth.weak_key_warning(CONFIG.api_key)
+    if _weak_key:
+        logger.warning("[startup] %s", _weak_key)
 
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(

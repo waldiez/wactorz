@@ -171,3 +171,41 @@ class TestTheMiddleware:
         response = await auth.auth_middleware(_request(path="/health"), _handler)
 
         assert response.status == 200
+
+
+class TestWarningAboutAShortKey:
+    """A key short enough to guess is worth saying out loud at startup.
+
+    A warning rather than a refusal, unlike binding wide with no key at all: an
+    install with a short key is far better off than one with none, and refusing
+    to start would punish exactly the person who did something. The throttle is
+    what actually stands between a short key and a guesser.
+    """
+
+    def test_a_short_key_is_named_with_its_length(self) -> None:
+        warning = auth.weak_key_warning("hunter2")
+
+        assert warning is not None
+        assert "7 characters" in warning
+
+    def test_a_long_key_says_nothing(self) -> None:
+        assert auth.weak_key_warning("x" * auth.MIN_KEY_LENGTH) is None
+
+    def test_no_key_says_nothing(self) -> None:
+        # The default install. Its protection is the loopback bind, and being
+        # told a key it never set is too short would be noise.
+        assert auth.weak_key_warning("") is None
+
+    def test_it_says_what_to_do(self) -> None:
+        warning = auth.weak_key_warning("short")
+
+        assert warning is not None
+        assert "openssl rand" in warning
+
+    def test_it_names_the_gap_the_throttle_does_not_close(self) -> None:
+        # The form is throttled; a request carrying the key as a header is not.
+        # That is the reason to replace the key rather than rely on the counter.
+        warning = auth.weak_key_warning("short")
+
+        assert warning is not None
+        assert "header" in warning

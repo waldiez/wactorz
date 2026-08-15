@@ -23,7 +23,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz.config import CONFIG
-from wactorz.web import auth, login, sessions
+from wactorz.web import auth, login, sessions, throttle
 from wactorz.web.app import build_app
 
 KEY = "the-configured-key"
@@ -34,6 +34,10 @@ async def client_fixture(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[Test
     """The real app with a key set — the configuration sign-in exists for."""
     monkeypatch.setattr("wactorz.config.CONFIG", replace(CONFIG, api_key=KEY))
     sessions.store.revoke_all()
+    # A fresh counter per test: every case here signs in from the same address,
+    # so a shared one would carry one test's failures into the next and answer
+    # 429 where the test expected the key to be checked.
+    monkeypatch.setattr(throttle, "throttle", throttle.LoginThrottle())
     async with TestClient(TestServer(build_app())) as c:
         yield c
 
@@ -277,3 +281,61 @@ class TestSigningOutEverywhere:
 
         resp = await client.get("/api/actors", headers={"X-API-Key": KEY})
         assert resp.status == 200
+
+
+class TestGuessingGetsExpensive:
+    """The backoff bites on the *second* attempt, not the fifth.
+
+    A first wrong key costs a second, and that second is enough to refuse
+    everything that follows it — so a burst of guesses never reaches the
+    lockout count at all, because only the first of them is ever compared.
+    Patience is what reaches the fifteen-minute lockout, and patience is what
+    it is there to defeat.
+    """
+
+    async def test_a_second_guess_is_refused_without_being_checked(
+        self, client: TestClient
+    ) -> None:
+        await client.post("/login", data={"key": "guess"})
+
+        resp = await client.post("/login", data={"key": "guess"})
+
+        assert resp.status == 429
+        assert "Too many attempts" in await resp.text()
+
+    async def test_the_wait_applies_to_the_right_key_too(self, client: TestClient) -> None:
+        # Counting rather than delaying: the door is shut for the address, and
+        # knowing the key does not reopen it early.
+        await client.post("/login", data={"key": "guess"})
+
+        resp = await client.post("/login", data={"key": KEY})
+
+        assert resp.status == 429
+        assert not _cookie(client)
+
+    async def test_it_says_how_long_to_wait(self, client: TestClient) -> None:
+        await client.post("/login", data={"key": "guess"})
+
+        body = await (await client.post("/login", data={"key": "guess"})).text()
+
+        assert "1 seconds" in body
+
+    async def test_a_locked_out_address_is_told_in_minutes(self, client: TestClient) -> None:
+        # Driven through the store, because reaching five failures over HTTP
+        # means waiting out four backoffs first — which is the point of them.
+        for _ in range(5):
+            throttle.throttle.record_failure("127.0.0.1")
+
+        body = await (await client.post("/login", data={"key": KEY})).text()
+
+        assert "15 minutes" in body
+
+    async def test_signing_in_clears_the_count(self, client: TestClient) -> None:
+        # Seeded in the past so the wait has elapsed but the failure is still
+        # counted: a typo followed later by the right key must leave nothing
+        # behind, or the next typo costs more than a first one.
+        throttle.throttle.record_failure("127.0.0.1", now=0.0)
+
+        await client.post("/login", data={"key": KEY})
+
+        assert throttle.throttle.retry_after("127.0.0.1") == 0.0

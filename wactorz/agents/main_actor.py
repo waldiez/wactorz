@@ -3,12 +3,14 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import socket
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
 from ..config import (
@@ -1289,50 +1291,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 # Send via MQTT and wait for reply
                 import time as _t
 
-                reply_topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
-                future: asyncio.Future = asyncio.get_event_loop().create_future()
-                self._result_futures[reply_topic] = future
-
-                await self._mqtt_publish(
-                    f"agents/by-name/{target_name}/task",
-                    {
-                        "text": message,
-                        "_reply_topic": reply_topic,
-                        "_remote_task": True,
-                        "payload": message,
-                    },
-                )
-
-                # Subscribe briefly for the reply
-                async def _wait_reply():
-                    try:
-                        async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                            await client.subscribe(reply_topic)
-                            async for msg in client.messages:
-                                try:
-                                    data = json.loads(msg.payload.decode())
-                                    if not future.done():
-                                        future.set_result(data)
-                                except Exception:
-                                    pass
-                                return
-                    except Exception as e:
-                        if not future.done():
-                            future.set_exception(e)
-
-                reply_task = asyncio.create_task(_wait_reply())
-                try:
-                    result = await asyncio.wait_for(asyncio.shield(future), timeout=30.0)
-                    reply_task.cancel()
-                    reply = result.get("result") or result.get("response") or str(result)
-                    return note_prefix + f"**{target_name}** (on {remote_node}): {reply}"
-                except asyncio.TimeoutError:
-                    reply_task.cancel()
-                    return (
-                        note_prefix + f"{target_name} on {remote_node} did not respond within 30s."
+                async with self._reply_topic() as (reply_topic, future):
+                    await self._mqtt_publish(
+                        f"agents/by-name/{target_name}/task",
+                        {
+                            "text": message,
+                            "_reply_topic": reply_topic,
+                            "_remote_task": True,
+                            "payload": message,
+                        },
                     )
-                finally:
-                    self._result_futures.pop(reply_topic, None)
+                    try:
+                        result = await asyncio.wait_for(asyncio.shield(future), timeout=30.0)
+                        reply = result.get("result") or result.get("response") or str(result)
+                        return note_prefix + f"**{target_name}** (on {remote_node}): {reply}"
+                    except asyncio.TimeoutError:
+                        return (
+                            note_prefix
+                            + f"{target_name} on {remote_node} did not respond within 30s."
+                        )
 
             # Not found locally or remotely
             known_remote = [a for nd in self._known_nodes.values() for a in nd.get("agents", [])]
@@ -3835,42 +3812,84 @@ async def handle_task(agent, payload):
             )
             return None
 
-        reply_topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_event_loop().create_future()
-        self._result_futures[reply_topic] = future
+        async with self._reply_topic() as (reply_topic, future):
+            await self._mqtt_publish(
+                f"agents/by-name/{target_name}/task",
+                {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
+            )
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{self.name}] delegate_task: '{target_name}' on '{remote_node}' "
+                    f"timed out after {timeout}s"
+                )
+                return None
 
-        await self._mqtt_publish(
-            f"agents/by-name/{target_name}/task",
-            {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
-        )
+    #: How long to wait for the reply subscription before publishing anyway.
+    #: Short: a broker that is up answers a subscribe immediately, and one that
+    #: is not will not answer at all.
+    _SUBSCRIBE_TIMEOUT = 5.0
 
-        async def _wait_reply():
+    @contextlib.asynccontextmanager
+    async def _reply_topic(self) -> AsyncGenerator[tuple[str, asyncio.Future]]:
+        """A reply topic that is already subscribed, and the future its answer lands in.
+
+        ⚠ **Subscribing before the caller publishes is the whole point.** Both
+        call sites used to publish first and subscribe after, so an agent that
+        answered quickly answered into nothing: the reply was published to a
+        topic with no subscriber, dropped by the broker, and the caller waited
+        out its full timeout for a task that had in fact succeeded. It reads as
+        a flaky node, which is why it survived so long. The monitor's own copy
+        of this logic was corrected years ago and the fix was never brought back
+        here.
+
+        Publishes anyway if the subscription does not come up in time. The task
+        still gets done, and its side effects are usually what the caller wanted;
+        losing the answer is worse than losing the work. The reason is logged, so
+        a timeout that follows is explained rather than mysterious.
+        """
+        topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._result_futures[topic] = future
+        subscribed = asyncio.Event()
+
+        async def _listen() -> None:
             try:
                 async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe(reply_topic)
+                    await client.subscribe(topic)
+                    subscribed.set()
                     async for msg in client.messages:
                         try:
-                            data = json.loads(msg.payload.decode())
                             if not future.done():
-                                future.set_result(data)
+                                future.set_result(json.loads(msg.payload.decode()))
                         except Exception:
                             pass
                         return
-            except Exception as e:
+            except Exception as exc:
                 if not future.done():
-                    future.set_exception(e)
+                    future.set_exception(exc)
+            finally:
+                # Whatever happened, stop the caller waiting on a listener that
+                # is no longer going to subscribe.
+                subscribed.set()
 
-        reply_task = asyncio.create_task(_wait_reply())
+        task = asyncio.create_task(_listen())
         try:
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"[{self.name}] delegate_task: '{target_name}' on '{remote_node}' timed out after {timeout}s"
-            )
-            return None
+            try:
+                await asyncio.wait_for(subscribed.wait(), timeout=self._SUBSCRIBE_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[%s] reply subscription for %s did not come up in %.0fs — sending anyway, "
+                    "so a reply may be missed",
+                    self.name,
+                    topic,
+                    self._SUBSCRIBE_TIMEOUT,
+                )
+            yield topic, future
         finally:
-            reply_task.cancel()
-            self._result_futures.pop(reply_topic, None)
+            task.cancel()
+            self._result_futures.pop(topic, None)
 
     async def list_agents(self) -> list[dict]:
         if not self._registry:

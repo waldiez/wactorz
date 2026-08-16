@@ -166,7 +166,7 @@ if [ -f /data/options.json ]; then
             # of non-alphanumerics becomes a single underscore.
             deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
                 | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
-            for deploy_field in host user key password broker broker_port ssh_port; do
+            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password; do
                 deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" /data/options.json)
                 if [ -n "$deploy_value" ]; then
                     deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"

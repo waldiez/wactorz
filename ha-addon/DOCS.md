@@ -89,7 +89,11 @@ deploy_targets:
     broker: 192.168.1.10
 ```
 
-Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`) and `ssh_port` (default `22`).
+Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`), `broker_user`, `broker_password` and `ssh_port` (default `22`).
+
+`user`, `key` and `password` are the **SSH** login. `broker_user` and
+`broker_password` are the node's **broker** account, and are separate on
+purpose — see below.
 
 Private keys go under `/config` or `/share` — both are mapped into the addon — and the path is given as the addon sees it, e.g. `/config/ssh/rpi_kitchen`. Then, from the chat:
 
@@ -115,11 +119,27 @@ runner sources that file rather than taking them on a command line — so they
 appear in no process listing. They cannot travel over the broker itself, which
 is the one channel that is unauthenticated until they arrive.
 
-Every node gets the credentials this addon uses for its own broker connection.
-That is the workable default for a single broker with one account, and it means
-**a stolen edge device holds full broker access** — the broker carries the code
-spawned agents run, so treat a node as trusted hardware. Per-node accounts exist
-in Wactorz but are not configurable from this addon yet.
+A node uses its own `broker_user` / `broker_password` when you set them, and
+this addon's own broker account otherwise. That default is the workable one for
+a single broker with one account, but it means **a stolen edge device holds full
+broker access** — and the broker carries the code spawned agents run. Give a
+node its own account when that matters:
+
+```yaml
+deploy_targets:
+  - name: rpi-garage
+    host: 192.168.1.51
+    key: /config/ssh/rpi_garage
+    broker: 192.168.1.10
+    broker_user: rpi-garage
+    broker_password: "…"
+```
+
+The account has to exist on the broker already — this sets what the node
+presents, it does not create anything. With the **official Mosquitto addon**,
+add it as a Home Assistant user. With **`mosquitto_embedded`** you cannot yet:
+the addon generates a single `wactorz` account and rewrites its password file on
+every start, so an account added by hand does not survive a restart.
 
 If your broker accepts anonymous connections, nothing is sent and nothing needs
 to be. If you only need agents on the machine running Home Assistant, leave

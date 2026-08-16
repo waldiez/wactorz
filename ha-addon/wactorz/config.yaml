@@ -89,8 +89,10 @@ options:
   # one it can reach. `/deploy` delivers the broker credentials to the node over
   # SSH, so a broker requiring a username and password is fine; mosquitto_embedded
   # can serve remote nodes only if you publish port 1883 under Network settings.
-  # Every node gets this addon's own broker account, so treat a node as trusted
-  # hardware. See "Remote edge nodes" in the documentation before adding entries.
+  # A node uses its own broker_user/broker_password when set, and this addon's
+  # broker account otherwise — that default means a stolen node holds full
+  # broker access, so give a node its own account when that matters. See
+  # "Remote edge nodes" in the documentation before adding entries.
   deploy_targets: []
 
   # Home Assistant connection (used by HA agents inside Wactorz)
@@ -169,6 +171,8 @@ schema:
       password: password?
       broker: str?
       broker_port: port?
+      broker_user: str?
+      broker_password: password?
       ssh_port: port?
   #otel_endpoint: str?
   #otel_service_name: str?

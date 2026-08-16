@@ -85,9 +85,11 @@ options:
   # give the path as seen from inside the addon, e.g. /config/ssh/rpi_kitchen.
   #
   # A remote node connects back to the MQTT broker over the network, so it needs
-  # one it can reach and connect to anonymously. See "Remote edge nodes" in the
-  # documentation before adding entries here — mosquitto_embedded cannot serve
-  # remote nodes, and a broker requiring credentials is not yet supported.
+  # one it can reach. `/deploy` delivers the broker credentials to the node over
+  # SSH, so a broker requiring a username and password is fine; mosquitto_embedded
+  # can serve remote nodes only if you publish port 1883 under Network settings.
+  # Every node gets this addon's own broker account, so treat a node as trusted
+  # hardware. See "Remote edge nodes" in the documentation before adding entries.
   deploy_targets: []
 
   # Home Assistant connection (used by HA agents inside Wactorz)

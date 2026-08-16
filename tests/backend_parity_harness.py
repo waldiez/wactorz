@@ -4,6 +4,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import tempfile
 import types
 from dataclasses import dataclass
 
@@ -57,9 +58,16 @@ class ActorTracker:
     starts: int = 0
 
 
+# A fixed path under /tmp is shared by every run at once — a second run of the
+# harness, or a second checkout, reads and writes the same actor state. Held at
+# module scope so it is cleaned up when the process exits.
+_STATE = tempfile.TemporaryDirectory(prefix="wactorz-parity-")
+STATE_DIR = _STATE.name
+
+
 class ProbeActor(Actor):
     def __init__(self, tracker: ActorTracker, **kwargs):
-        super().__init__(name=tracker.name, persistence_dir="/tmp/wactorz_backend_parity", **kwargs)
+        super().__init__(name=tracker.name, persistence_dir=STATE_DIR, **kwargs)
         self._tracker = tracker
 
     async def on_start(self):

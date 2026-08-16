@@ -142,5 +142,7 @@ async def tts_handler(request: web.Request) -> web.Response:
             headers={"Cache-Control": "no-store"},
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Logged in full, answered in summary: the exception comes from a
+        # third-party service and can carry a URL or a request detail.
         logger.warning("[tts] Synthesis failed: %s", exc)
-        return web.Response(status=500, text=str(exc))
+        return web.Response(status=500, text="Speech synthesis failed")

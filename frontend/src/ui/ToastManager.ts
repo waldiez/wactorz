@@ -101,6 +101,29 @@ const CSS = `
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 }
 
+/* Phones: the composer is the bottom of the viewport, so a bottom-anchored
+   toast lands on the message input — and chat replies are the most common
+   toast, firing exactly when someone is about to type. Anchor to the top
+   instead, clear of the header, and span the width so a long reply stays
+   readable on a narrow screen. column-reverse is kept: with append order
+   that puts the newest toast nearest the anchored edge. */
+@media (max-width: 639px) {
+  .wz-toasts {
+    /* Clears .af-header, which is ~48px at this breakpoint (6px padding plus
+       its content). There is no header-height variable to reference; if the
+       header grows, this needs to grow with it. */
+    top: 60px;
+    bottom: auto;
+    left: 10px;
+    right: 10px;
+  }
+  /* The desktop toast is a fixed 330px, which neither fills a 360px screen nor
+     fits a narrow one. Let it take the container's width instead. */
+  .wz-toast {
+    width: auto;
+  }
+}
+
 .wz-toast {
   pointer-events: all;
   width: 330px;

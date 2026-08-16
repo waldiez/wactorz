@@ -6,12 +6,14 @@ into tests that believe they are fully injected — and the failure mode is
 confusing rather than loud: the test looks wrong, not the environment.
 """
 
+import pathlib
 from collections.abc import Iterator
+from dataclasses import replace
 from typing import Any
 
 import pytest
 
-from wactorz import llm_factory
+from wactorz import config, llm_factory
 from wactorz.core import mqtt
 from wactorz.core.persistence.stores import Stores
 
@@ -32,6 +34,46 @@ def _no_ambient_llm_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     explicitly via `provider_for(..., overrides=...)`, which takes precedence.
     """
     monkeypatch.setattr(llm_factory, "parse_overrides", lambda _spec: {})
+
+
+@pytest.fixture(autouse=True)
+def _no_writes_to_the_real_state_dir(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Point every store at a temp directory for the duration of a test.
+
+    `resolve_state_dir()` falls back to `./state` — the directory a developer's
+    own install writes to. An `Actor` built without an explicit
+    `persistence_dir` therefore persists into it, and the damage is not
+    theoretical or subtle: a `MainActor` constructed in a test wrote the test's
+    own scripted conversation into `state/main/state.pkl`, where it then showed
+    up in the running dashboard as a chat nobody had. It survived a chat reset,
+    because the reset clears the database rows and the pickle keeps its own
+    copy.
+
+    Isolating the directory rather than fixing the call sites that forget: a
+    forgotten `persistence_dir` is invisible in review — the test passes either
+    way — and one is added every time someone constructs an actor.
+    """
+    monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "state"))
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore an `API_KEY` from the developer's environment or `.env`.
+
+    `wactorz.config` reads the repo's `.env`, so a developer who sets a key —
+    to try the sign-in page, say — turns every test that expects an open server
+    into a 401. Sixteen of them, in files that have nothing to do with auth, all
+    failing for a reason that is nowhere in the diff.
+
+    CI never sees it, which is the worst shape for this kind of thing: green
+    there, broken only on the machine of whoever is working on the feature.
+
+    Tests that want a key set one explicitly and win, because this only replaces
+    the default.
+    """
+    monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
 
 
 #: The real factory, for the tests that exist to exercise it.

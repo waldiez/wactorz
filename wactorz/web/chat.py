@@ -6,6 +6,7 @@ plus the in-flight task tracker that ``POST /chat/stop`` cancels through.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import socket
@@ -16,11 +17,12 @@ from typing import Any
 from aiohttp import web
 from aiohttp.web import Response
 
+from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
-from . import runtime
+from . import runtime, uploads
 
 logger = logging.getLogger(__name__)
 
@@ -331,17 +333,51 @@ def _install_reply_capture(target: Any) -> None:
     target._io_gateway_capture_installed = True
 
 
-async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None):
+def _takes_attachments(fn) -> bool:
+    """Whether `fn` accepts an `attachments` argument.
+
+    The dispatch below reaches four differently-shaped entry points, and only
+    the LLM ones grew a parameter for this: the Gmail, Calendar and Home
+    Assistant agents override `chat` with routing of their own, and a dynamic
+    agent's `chat` takes `(prompt, system)` entirely. Asking is what keeps a
+    file from becoming a TypeError on an agent that never wanted one.
+    """
+    try:
+        return "attachments" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+async def route_chat(
+    content: str,
+    reply_fn,
+    stream_fn=None,
+    stream_end_fn=None,
+    attachments: list[dict[str, Any]] | None = None,
+):
     """Core chat routing — slash commands, @mentions, or the orchestrator's stream.
 
     reply_fn(text)        — send a complete message (slash commands, errors)
     stream_fn(chunk)      — send one streaming chunk (optional; falls back to reply_fn)
     stream_end_fn()       — signal that streaming is done (optional)
+    attachments           — stored records for this turn, resolved by the caller
+
+    The records are read into content blocks here rather than by the agent: the
+    files are the web layer's, and only this side knows how to reach them. Every
+    route that cannot carry them says so instead of answering as though the user
+    attached nothing.
     """
     _chunk_fn = stream_fn or reply_fn
     _end_fn = stream_end_fn or no_op_async
+    blocks = to_blocks(attachments, uploads.read_bytes) if attachments else []
+
+    async def _say_files_not_sent(why: str) -> None:
+        names = ", ".join(str(a.get("name") or "attachment") for a in attachments or [])
+        await _chunk_fn(f"[note] {names} not sent — {why}.")
 
     if content.startswith("/"):
+        if blocks:
+            await _say_files_not_sent("a command does not take attachments")
         handled = await handle_slash(content, reply_fn)
         if not handled:
             main_actor = find_main_actor(runtime.registry)
@@ -379,6 +415,11 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
                     break
 
             if remote_node:
+                if blocks:
+                    # The files are on this disk; a remote node cannot read them,
+                    # and shipping them means megabytes of base64 through the
+                    # broker and into its outbox. The broker is the wrong pipe.
+                    await _say_files_not_sent(f"@{target_name} runs on {remote_node}")
                 reply_topic = f"main/reply/io-gateway/{uuid.uuid4().hex[:8]}"
                 payload = {
                     "text": text,
@@ -473,14 +514,19 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
         target, "chat_stream", None
     )
     if gen_fn:
+        if blocks and not _takes_attachments(gen_fn):
+            await _say_files_not_sent(f"@{target.name} cannot read attachments")
+        kwargs = {"attachments": blocks} if blocks and _takes_attachments(gen_fn) else {}
         try:
-            async for chunk in gen_fn(text):  # pylint: disable=not-callable
+            async for chunk in gen_fn(text, **kwargs):  # pylint: disable=not-callable
                 if isinstance(chunk, dict):
                     continue
                 await _chunk_fn(str(chunk))
         finally:
             await _end_fn()
     elif hasattr(target, "process_user_input"):
+        if blocks:
+            await _say_files_not_sent(f"@{target.name} cannot read attachments")
         result = await target.process_user_input(text)  # pyright: ignore[reportAttributeAccessIssue]
         await reply_fn(str(result))
         await _end_fn()
@@ -496,6 +542,8 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
 
         # manual-agent: prefer its native chat() — it handles plain text well
         if hasattr(target, "chat") and not hasattr(target, "_fn_handle_task"):
+            if blocks:
+                await _say_files_not_sent(f"@{target.name} cannot read attachments")
             try:
                 result = await target.chat(text)  # pyright: ignore[reportAttributeAccessIssue]
                 await reply_fn(str(result))
@@ -510,6 +558,8 @@ async def route_chat(content: str, reply_fn, stream_fn=None, stream_end_fn=None)
         # RESULT, since it is addressed to a correlation id rather than a real
         # actor. The interceptor is installed once per agent and correlates by
         # that id; it is never swapped back.
+        if blocks:
+            await _say_files_not_sent(f"@{target.name} cannot read attachments")
         correlation_id = f"io-gateway:{uuid.uuid4().hex[:12]}"
         reply_queue: asyncio.Queue = asyncio.Queue()
         _install_reply_capture(target)

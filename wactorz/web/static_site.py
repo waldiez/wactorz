@@ -12,6 +12,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from .. import config
 from . import runtime
 
 logger = logging.getLogger(__name__)
@@ -59,10 +60,13 @@ def ingress_path_of(request: web.Request) -> str:
     executes carrying the page's own CSP nonce: the policy permits it because
     the server vouched for it.
 
-    Validating the shape here is not the whole answer — accepting the header
-    only from the Supervisor's own address range is (see C-10 in the security
-    plan) — but it removes the injection while that lands.
+    Two gates, both cheap: the deployment must declare ingress at all
+    (`WACTORZ_INGRESS`, set by the add-on and nothing else), and the shape must
+    be a plain URL path. The origin gate adds the third: the peer's address
+    (`origins.from_supervisor`).
     """
+    if not config.INGRESS_ENABLED:
+        return ""
     raw = request.headers.get("X-Ingress-Path", "").rstrip("/")
     if not raw:
         return ""
@@ -137,6 +141,21 @@ async def index_handler(request: web.Request) -> Response:
     raise web.HTTPNotFound()
 
 
+def _within(candidate: Path, base: Path) -> bool:
+    """Whether `candidate` is really inside `base`. Both must be resolved.
+
+    `str.startswith` is not this test, and that is what was here. With a base
+    of `…/static/app`, the path `…/static/app-old/secret` starts with it and
+    passes — a sibling whose name merely shares a prefix escapes the directory
+    the check exists to pin. `is_relative_to` compares path *components*, so
+    only a genuine descendant passes.
+
+    `resolve()` already collapses `..`, so this is the remaining half of the
+    guard rather than the whole of it.
+    """
+    return candidate.is_relative_to(base)
+
+
 async def static_handler(request: web.Request) -> Response:
     """Serve a built asset, rewriting absolute API/WS URLs when behind HA ingress."""
     rel = request.match_info["path"]
@@ -153,7 +172,7 @@ async def static_handler(request: web.Request) -> Response:
         candidate = base / rel
         try:
             candidate = candidate.resolve()
-            if candidate.is_file() and str(candidate).startswith(str(base.resolve())):
+            if candidate.is_file() and _within(candidate, base.resolve()):
                 # If it's a JS file and we're behind Ingress, we must rewrite hardcoded absolute paths
                 if candidate.suffix == ".js" and ingress_path:
                     content = candidate.read_text(encoding="utf-8")
@@ -199,8 +218,13 @@ async def docs_handler(request: web.Request) -> web.FileResponse:
         rel += "index.html"
     root = DOCS_SITE.resolve()
     candidate = (DOCS_SITE / rel).resolve()
+    if not _within(candidate, root):
+        # Refused before either branch below: the directory-index fallback reads
+        # `candidate.parent`, so a path that escaped would list a directory
+        # outside the docs root and name one of its entries in a redirect.
+        raise web.HTTPNotFound()
     try:
-        if candidate.is_file() and str(candidate).startswith(str(root)):
+        if candidate.is_file():
             return web.FileResponse(candidate)
         if rel.endswith("index.html") and not candidate.exists():
             parent = candidate.parent

@@ -40,6 +40,22 @@ export function canDirectMessage(agent: { name: string; protected?: boolean }): 
 }
 
 /**
+ * Whether a message sent right now would reach this agent.
+ *
+ * Deliberately separate from `canDirectMessage`, which asks whether the user may
+ * address the agent at all — an identity and policy question that knows nothing
+ * about state. A stopped or failed agent stays in the list and stays the user's
+ * choice; it simply cannot answer until it is running again, so the send says so
+ * instead of quietly going somewhere else.
+ *
+ * `paused` and `initializing` pass: both are transient, and a false block during
+ * normal startup would be worse than the problem this solves.
+ */
+export function isReachable(agent: { state: AgentState }): boolean {
+    return !(typeof agent.state === "object" || agent.state === "stopped");
+}
+
+/**
  * Names of the agents the user may directly message. Single source for both the
  * target `<select>` and the `@mention` suggestions, so a mention can never offer
  * an agent the picker can't target (which would silently fail to switch target).

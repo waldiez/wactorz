@@ -50,6 +50,15 @@ ENV HOME=/app/state/home \
 
 ENV INTERFACE=rest
 
+# A published port cannot reach a process bound to the container's own loopback,
+# so the image binds wide. It deliberately does *not* set WACTORZ_EXPOSED_OK:
+# that flag means "the only way in is already authenticated", and an image
+# cannot know whether its ports were published to a loopback mapping or to the
+# world. So `docker run -p 8888:8888 …` refuses to start until the operator
+# says which — `-e API_KEY=…` or `-e WACTORZ_EXPOSED_OK=1` — and the refusal
+# names both. Loud beats a container that starts and serves nothing.
+ENV WACTORZ_BIND_HOST=0.0.0.0
+
 EXPOSE 8000 8888
 
 # Liveness only: 200 means the server is accepting requests, not that MQTT, a

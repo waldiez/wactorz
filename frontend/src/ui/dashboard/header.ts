@@ -12,6 +12,7 @@ import { BUILTIN_VIEWS, SETTINGS_VIEW } from "./types";
 import { uid } from "../../ids";
 import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
 import { escapeHtml } from "../escapeHtml";
+import { buildSignOutButton } from "./signOut";
 import { iconMarkup, type IconName } from "./icons";
 
 export interface HeaderOpts {
@@ -179,6 +180,16 @@ function buildHeaderLeft(connState: ConnState): HTMLElement {
     return left;
 }
 
+/** A square icon-only header button, labelled for anyone not seeing the icon. */
+function iconButton(label: string, icon: IconName): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.className = "af-view-btn af-view-btn-icon";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.innerHTML = iconMarkup(icon);
+    return btn;
+}
+
 function buildHeaderRight(
     view: View,
     onSetView: (v: View) => void,
@@ -204,21 +215,17 @@ function buildHeaderRight(
     // Devices links out to the HA UI rather than embedding a controllable view.
     right.appendChild(buildHaNavLink(haUrl, false));
 
-    const audioBtn = document.createElement("button");
-    audioBtn.className = "af-view-btn af-view-btn-icon";
-    audioBtn.title = "Audio settings";
-    audioBtn.setAttribute("aria-label", "Audio settings");
-    audioBtn.innerHTML = iconMarkup("volume");
+    const audioBtn = iconButton("Audio settings", "volume");
     right.appendChild(audioBtn);
     wirePopover(audioBtn, buildAudioPopover());
 
-    const resetBtn = document.createElement("button");
-    resetBtn.className = "af-view-btn af-view-btn-icon";
-    resetBtn.title = "Clear stored state";
-    resetBtn.setAttribute("aria-label", "Clear stored state");
-    resetBtn.innerHTML = iconMarkup("reset");
+    const resetBtn = iconButton("Clear stored state", "reset");
     right.appendChild(resetBtn);
     wirePopover(resetBtn, buildResetPopover(), pop => (pop as ResetPopover)._resetArmed());
+
+    // Last, and hidden on an install with no sign-in — revealed by
+    // setSignOutVisible once /api/config has answered.
+    right.appendChild(buildSignOutButton());
 
     return right;
 }

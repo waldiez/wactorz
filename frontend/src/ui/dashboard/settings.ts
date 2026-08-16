@@ -129,7 +129,7 @@ function buildCostActions(
     return actions;
 }
 
-/** The 🪙 LLM Spend Limit panel. */
+/** The  LLM Spend Limit panel. */
 function buildCostLimitSection(info: CostLimitInfo | null, cb: CostLimitCallbacks): HTMLElement {
     const section = document.createElement("div");
     section.className = "af-settings-section";

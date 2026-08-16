@@ -36,6 +36,26 @@ def _serialised(fn: Callable[..., Any]) -> Callable[..., Any]:
     return wrapper
 
 
+def _with_attachments(row: dict[str, Any]) -> dict[str, Any]:
+    """Decode a chat_log row's attachment references.
+
+    Absent, empty and unreadable all mean the same thing to a caller: the turn
+    had no files. A row predating the column reads as NULL, and one history
+    request must not fail wholesale over a single malformed value — that would
+    lose every other turn with it.
+    """
+    raw = row.get("attachments")
+    if not raw:
+        row["attachments"] = []
+        return row
+    try:
+        decoded = json.loads(raw)
+        row["attachments"] = decoded if isinstance(decoded, list) else []
+    except Exception:
+        row["attachments"] = []
+    return row
+
+
 class WactorzDB:
     """SQLite connection manager. One instance per process, created at startup.
 
@@ -308,16 +328,34 @@ class WactorzDB:
     # ── Chat log (persistent feed for the UI) ──────────────────────────────
 
     def write_chat_log(
-        self, ts: float, agent_name: str, role: str, content: str, session_id: str = ""
+        self,
+        ts: float,
+        agent_name: str,
+        role: str,
+        content: str,
+        session_id: str = "",
+        attachments: list[dict[str, Any]] | None = None,
     ) -> None:
         """Persist a single chat turn so the UI feed can be rebuilt with real
         timestamps after a restart. The schema lives in :mod:`.schema`.
+
+        ``attachments`` are stored on the row rather than resolved from disk on
+        read: the files are immutable, so there is nothing to keep in step, and a
+        chip should still say what was attached even once the file behind it is
+        gone.
         """
         with self.transaction() as conn:
             conn.execute(
-                "INSERT INTO chat_log (ts, agent_name, role, content, session_id) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (ts, agent_name, role, content, session_id),
+                "INSERT INTO chat_log (ts, agent_name, role, content, session_id, attachments) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    ts,
+                    agent_name,
+                    role,
+                    content,
+                    session_id,
+                    json.dumps(attachments) if attachments else "",
+                ),
             )
 
     def clear_chat_log(self, agent_name: str | None = None) -> int:
@@ -349,7 +387,7 @@ class WactorzDB:
         """Return chat_log rows newest-first as plain dicts. Used by the
         /api/chats endpoint and by feed_handler to seed the UI feed.
         """
-        sql = "SELECT id, ts, agent_name, role, content, session_id FROM chat_log"
+        sql = "SELECT id, ts, agent_name, role, content, session_id, attachments FROM chat_log"
         clauses: list[str] = []
         params: list = []
         if agent_name:
@@ -367,7 +405,7 @@ class WactorzDB:
         params.append(int(limit))
         rows = self.conn.execute(sql, params).fetchall()
         # rows are sqlite3.Row because connect() set row_factory; coerce to dict
-        return [dict(r) for r in rows]
+        return [_with_attachments(dict(r)) for r in rows]
 
     # ── Time-series queries (for ML agents) ────────────────────────────────
 

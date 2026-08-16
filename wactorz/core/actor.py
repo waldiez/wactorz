@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING, Any
 
 import psutil
 
-from .atomic_io import write_pickle
+from .atomic_io import quarantine_unreadable, write_pickle
+from .paths import agent_state_dir, resolve_state_dir
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
@@ -136,7 +137,7 @@ class Actor(ABC):
         self,
         actor_id: str | None = None,
         name: str | None = None,
-        persistence_dir: str = "./actor_state",
+        persistence_dir: str | None = None,
         mailbox_size: int = 1000,
     ):
         if actor_id:
@@ -163,8 +164,15 @@ class Actor(ABC):
         # Persistence
         # Use name as persistence folder so it survives restarts with same name
         # Falls back to actor_id for anonymous actors
-        safe_name = self.name.replace("/", "_").replace("\\", "_")
-        self._persistence_dir = Path(persistence_dir) / safe_name
+
+        # `resolve_state_dir` rather than a literal: where durable state lives is
+        # one question with one answer (explicit argument, else
+        # `WACTORZ_STATE_DIR`, else `./state`). The old `./actor_state` default
+        # was a second opinion that disagreed with the resolver, so a caller who
+        # omitted the argument wrote somewhere nothing else would look.
+        # Through `agent_state_dir`, so a name like `..` is refused rather than
+        # walking out of the state directory it was given.
+        self._persistence_dir = agent_state_dir(persistence_dir or resolve_state_dir(), self.name)
         self._persistence_dir.mkdir(parents=True, exist_ok=True)
         self._persistent_state: dict = {}
 
@@ -230,13 +238,26 @@ class Actor(ABC):
         # Shield cleanup from CancelledError — chat tasks run as fire-and-forget
         # asyncio tasks outside actor._tasks and get cancelled by asyncio.run()
         # cleanup BEFORE these awaits if we don't shield them.
+        #
+        # A cancellation arriving here belongs to whoever is *calling* stop(),
+        # not to this cleanup: `shield` keeps the inner coroutine running and
+        # raises in the awaiting task. Discarding it told that caller its
+        # cancellation had been honoured when it had not — the supervisor's watch
+        # loop resumed polling, and `Supervisor.stop()` waited forever on a task
+        # already marked cancelling. So it is remembered, both steps still run,
+        # and it is re-raised once cleanup is done.
+        cancelled = False
         try:
             await asyncio.shield(self.on_stop())
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
             pass
         try:
             await asyncio.shield(self._save_persistent_state())
-        except (asyncio.CancelledError, Exception):
+        except asyncio.CancelledError:
+            cancelled = True
+        except Exception:
             pass
 
         # ── Persist message count so overview survives restarts ──────────
@@ -284,6 +305,11 @@ class Actor(ABC):
         except Exception:
             pass  # TopicBus not initialised or unavailable — not fatal
         logger.info("[%s] Actor stopped.", self.name)
+        # Deferred to here rather than raised where it arrived: the shield exists
+        # so cleanup completes, and stopping half way through would defeat it.
+        # The caller still learns its cancellation was real.
+        if cancelled:
+            raise asyncio.CancelledError
 
     #: How long stop() waits for a cancelled task before giving up on it.
     TASK_SHUTDOWN_TIMEOUT = 5.0
@@ -800,7 +826,7 @@ class Actor(ABC):
                         self.name,
                     )
                 except Exception as e:
-                    logger.error("[%s] Failed to load legacy state: %s", self.name, e)
+                    self._keep_unreadable_state(path, e)
             return
         # Legacy pickle path
         path = self._persistence_dir / "state.pkl"
@@ -810,7 +836,22 @@ class Actor(ABC):
                     self._persistent_state = pickle.load(f)
                 logger.info("[%s] Loaded persistent state.", self.name)
             except Exception as e:
-                logger.error("[%s] Failed to load state: %s", self.name, e)
+                self._keep_unreadable_state(path, e)
+
+    def _keep_unreadable_state(self, path: Path, exc: Exception) -> None:
+        """Move a state file we could not read out of the next save's way.
+
+        Starting empty is the right call — the agent must come up — but the very
+        next `persist` would write over the file, so the only record of what was
+        lost has to be taken out of that path first.
+        """
+        kept = quarantine_unreadable(path)
+        logger.error(
+            "[%s] Failed to load state: %s — %s",
+            self.name,
+            exc,
+            f"kept at {kept}" if kept else "the file could not be preserved",
+        )
 
     def persist(self, key: str, value: Any):
         """Persist a key-value pair. Routes to the correct backend:

@@ -37,3 +37,32 @@ def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
     if "password" not in kwargs and CONFIG.mqtt_password:
         kwargs["password"] = CONFIG.mqtt_password
     return aiomqtt.Client(hostname, port, **kwargs)
+
+
+def broker_exposure_warning(host: str, username: str) -> str | None:
+    """What to say at startup about a broker that is not on this machine.
+
+    Naming what actually travels, because the risk is not "unencrypted
+    telemetry". The runner **executes code delivered over the broker**
+    (`nodes/<name>/spawn`), so anyone who can read the wire sees that code and
+    anyone who can write to it runs code on every node. Plaintext plus anonymous
+    is remote code execution offered to the network segment.
+
+    There is no TLS support in this client, so a non-loopback broker is always
+    plaintext — the message says so rather than implying a setting exists to
+    turn it on. Returns None when the broker is local, where none of this bites.
+    """
+    from .net import is_loopback
+
+    if is_loopback(host):
+        return None
+    anonymous = not (username or "").strip()
+    return (
+        f"MQTT broker {host} is not on this machine and the connection is unencrypted"
+        f"{' and unauthenticated' if anonymous else ''}. "
+        "Broker traffic includes the code spawned agents run, so anyone who can "
+        "read this network sees it"
+        f"{' and anyone who can reach the broker can run code on every node' if anonymous else ''}. "
+        "Keep the broker on localhost, or put it on a network you trust"
+        f"{' and set MQTT_USERNAME/MQTT_PASSWORD' if anonymous else ''}."
+    )

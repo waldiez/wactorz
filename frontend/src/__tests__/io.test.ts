@@ -60,7 +60,7 @@ describe("IOManager.send", () => {
         const ws = makeWS();
         io.setWSClient(ws as unknown as WSClient);
         await io.send("hello", agentInfo);
-        expect(ws.send).toHaveBeenCalledWith("@alpha hello", "alpha");
+        expect(ws.send).toHaveBeenCalledWith("@alpha hello", "alpha", []);
     });
 
     it("toasts when the WebSocket send fails", async () => {
@@ -177,5 +177,19 @@ describe("IOManager.receiveAgentMessage", () => {
         io.setWSClient(makeWS() as unknown as WSClient);
         io.receiveAgentMessage(reply());
         expect(tts.notify).toHaveBeenCalledWith("hi", "alpha");
+    });
+});
+
+describe("IOManager.send — attachments", () => {
+    it("carries attachment ids onto the wire", async () => {
+        // The composer resolves files to ids before sending; only ids travel,
+        // because the server holds the record of what each one actually is.
+        const io = new IOManager(makeRouter());
+        const ws = makeWS();
+        io.setWSClient(ws as unknown as WSClient);
+
+        await io.send("look at this", agentInfo, ["f1", "f2"]);
+
+        expect(ws.send).toHaveBeenCalledWith("@alpha look at this", "alpha", ["f1", "f2"]);
     });
 });

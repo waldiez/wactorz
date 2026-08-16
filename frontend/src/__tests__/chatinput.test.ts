@@ -128,7 +128,7 @@ describe("ChatInput send", () => {
     it("Enter sends the message", () => {
         h.input.value = "hello";
         h.ci.onKeydown(key("Enter"), h.input, h.select, h.ghost, h.panel);
-        expect(h.host.send).toHaveBeenCalledWith(h.input, h.select);
+        expect(h.host.send).toHaveBeenCalledWith(h.input);
     });
 
     it("Shift+Enter does not send", () => {

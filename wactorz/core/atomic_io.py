@@ -11,6 +11,7 @@ initialisation can use it at file scope.
 
 import os
 import pickle
+import time
 from pathlib import Path
 from typing import Any
 
@@ -41,3 +42,32 @@ def write_pickle(path: Path, obj: Any) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def quarantine_unreadable(path: Path) -> Path | None:
+    """Move a file that could not be read aside, returning where it went.
+
+    The counterpart to `write_pickle`: that makes a write survive a crash, this
+    makes an unreadable file survive the *recovery*. Every load path treats a
+    corrupt file as absent and carries on with empty state — which is right, an
+    agent should still start — but the next save then writes over the only copy
+    of whatever was in there. Renaming first puts it out of that path's reach.
+
+    The name carries a timestamp so a second bad start cannot overwrite the
+    evidence from the first. Returns None when there was nothing to move, or
+    when the move itself failed — a caller recovering from a bad read must not
+    be stopped by a failure to preserve it.
+    """
+    try:
+        if not path.exists():
+            return None
+        target = path.with_name(f"{path.name}.corrupt.{int(time.time())}")
+        # Never clobber an earlier quarantine that landed in the same second.
+        suffix = 1
+        while target.exists():
+            target = path.with_name(f"{path.name}.corrupt.{int(time.time())}.{suffix}")
+            suffix += 1
+        os.replace(path, target)
+        return target
+    except Exception:
+        return None

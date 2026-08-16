@@ -144,7 +144,7 @@ class WhatsAppInterface:
 
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", self.port)
+        site = web.TCPSite(runner, CONFIG.bind_host, self.port)
         await site.start()
-        logger.info(f"[WhatsApp] Webhook server running on port {self.port}")
+        logger.info(f"[WhatsApp] Webhook server running on {CONFIG.bind_host}:{self.port}")
         await asyncio.Event().wait()  # Run forever

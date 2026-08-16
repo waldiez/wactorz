@@ -8,8 +8,7 @@
  * It owns the connection (and the "live" signal) and dispatches every server frame
  * by `type`: chat/stream, state patches (store + log_feed), and `server_event`
  * frames — `{topic, payload}` live activity that it hands to the ServerEventRouter.
- * On connect the server sends `{"type":"config","chat_mode":"direct_ws"|"mqtt"}`;
- * chat is sent back over this socket (never over a broker).
+ * Chat is sent back over this socket, never over a broker.
  */
 import { log } from "./logger";
 import { toMs } from "../time";
@@ -30,6 +29,10 @@ export type MqttStatusHandler = (connected: boolean) => void;
 /** Coerce an untrusted JSON field to a string; non-strings fall back (so a
  *  hostile object can't stringify to "[object Object]"). */
 const asStr = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
+
+/** Coerce an untrusted JSON field to an array; anything else becomes empty, so
+ *  a caller can iterate without checking what the server actually sent. */
+const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
 /**
  * Called whenever the server broadcasts a state patch over the WebSocket.
@@ -151,12 +154,21 @@ export class WSClient {
      * Send a chat message over the WebSocket.
      * Returns false when the socket is not open.
      */
-    send(content: string, agentName = MAIN_AGENT): boolean {
+    send(content: string, agentName = MAIN_AGENT, attachments: string[] = []): boolean {
         if (!this.connected) {
             return false;
         }
         this._lastAgentName = agentName;
-        this.ws!.send(JSON.stringify({ type: "chat", content, agent_name: agentName }));
+        // Ids only — the server holds the name, type and size it stored, so a
+        // turn cannot claim a file is something other than what was uploaded.
+        this.ws!.send(
+            JSON.stringify({
+                type: "chat",
+                content,
+                agent_name: agentName,
+                ...(attachments.length ? { attachments } : {}),
+            }),
+        );
         return true;
     }
 
@@ -229,6 +241,13 @@ export class WSClient {
             this._onServerEvent?.(asStr(data["topic"]), data["payload"]);
             return;
         }
+        if (type === "app_log") {
+            // Records the server wrote since the last frame. Emitted rather
+            // than handled here: WSClient owns the socket, not the view that
+            // decides what a new row does.
+            emit("af-app-log", { entries: asArray(data["entries"]) });
+            return;
+        }
         if (type === "mqtt_status") {
             this._onMqttStatus?.(Boolean(data["connected"]));
             return;
@@ -240,6 +259,9 @@ export class WSClient {
         if (type === "delete_agent") {
             // Server explicitly deleted an agent — remove it and apply rest of patch
             this._applyStatePatch(data["state"] as StatePatch | undefined, asStr(data["agent_id"]));
+            // The frame names the agent, so this is a fact, not reset churn: the
+            // chat target can be judged against the list that is left.
+            emit("af-agents-settled", { reason: "deleted" });
             return;
         }
         // Any message with a "state" field is a state patch broadcast; it may
@@ -255,6 +277,13 @@ export class WSClient {
         const scope = asStr(data["scope"]);
         if (scope === "all") {
             emit("af-wipe-all");
+            // The reset frame carries the survivors itself — the server rebuilds
+            // from the registry before broadcasting — so apply it rather than
+            // sitting on an empty list until the next heartbeat.
+            this._applyStatePatch(data["state"] as StatePatch | undefined);
+            // The list is now whatever survived, in one frame — the only moment
+            // a stale chat target can be judged without racing the churn.
+            emit("af-agents-settled", { reason: "reset" });
             return;
         }
         this._applyStatePatch(data["state"] as StatePatch | undefined);

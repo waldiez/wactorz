@@ -51,7 +51,7 @@ ha-addon/
 
 ## Embedded services
 
-- **Mosquitto** (`/etc/mosquitto/`) — optionally started before Wactorz (`mosquitto_embedded: true`); data persisted to `/share/mosquitto`.
+- **Mosquitto** (`/etc/mosquitto/`) — optionally started before Wactorz (`mosquitto_embedded: true`); data persisted to `/data/mosquitto`.
 
 > Fuseki / SPARQL has been **removed** — no embedded server, no connection options, and the UI "Graph" tab is gone. Wactorz runs without a triplestore.
 

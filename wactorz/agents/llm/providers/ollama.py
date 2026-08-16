@@ -6,6 +6,7 @@ from typing import Any
 
 import aiohttp
 
+from ..attachments import NO_DOCUMENTS, UNREADABLE
 from ..base import LLMProvider, ToolCall, ToolCompletion, _ollama_options
 from ..openai_shape import _openai_tools, _parse_tool_arguments
 
@@ -23,11 +24,54 @@ class OllamaProvider(LLMProvider):
         self.model = model
         self.base_url = base_url
 
+    @classmethod
+    def supports_blocks(cls) -> bool:
+        """Block content is translated on the way out (images to the
+        message-level ``images`` field) in ``_chat_messages``, so a list
+        content is safe here. Whether the *model* does anything with an image
+        is its own question — a non-vision model ignores the field.
+        """
+        return True
+
     @staticmethod
     def _chat_messages(messages: list[dict], system: str = "") -> list[dict]:
+        out: list[dict] = []
+        for m in messages:
+            content = m.get("content") if isinstance(m, dict) else m
+            if isinstance(content, list):
+                # Blocks → this format: text joins into content, images go to
+                # the message-level `images` field (the only place /api/chat
+                # takes them), documents become a marker — there is no inline
+                # document part, and the name note to_blocks emits already says
+                # what the file was called.
+                text_parts: list[str] = []
+                images: list[str] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        text_parts.append(str(block))
+                        continue
+                    block_type = block.get("type")
+                    if block_type == "text":
+                        text_parts.append(str(block.get("text", "")))
+                    elif block_type == "image":
+                        data = (block.get("source") or {}).get("data") or ""
+                        if data:
+                            images.append(data)
+                        else:
+                            text_parts.append(UNREADABLE)
+                    elif block_type == "document":
+                        text_parts.append(NO_DOCUMENTS)
+                    else:
+                        # Not an attachment block. Content here is a flat
+                        # string, so there is nowhere to pass one through to.
+                        text_parts.append(str(block))
+                m = {**m, "content": "\n".join(p for p in text_parts if p)}
+                if images:
+                    m["images"] = images
+            out.append(m)
         if not system:
-            return list(messages)
-        return [{"role": "system", "content": system}, *list(messages)]
+            return out
+        return [{"role": "system", "content": system}, *out]
 
     async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         payload = {

@@ -164,3 +164,82 @@ describe("fetchChatHistory", () => {
         expect(await fetchChatHistory("main")).toBeNull();
     });
 });
+
+describe("attachments restored from history", () => {
+    const origFetch = globalThis.fetch;
+    afterEach(() => {
+        globalThis.fetch = origFetch;
+        vi.restoreAllMocks();
+    });
+    beforeEach(() => {
+        (window as unknown as Record<string, unknown>).__WACTORZ_INGRESS_PATH = "";
+    });
+
+    function servingRow(attachments?: unknown): void {
+        globalThis.fetch = vi.fn(async (url: string) => {
+            if (url.includes("/api/chats")) {
+                return {
+                    ok: true,
+                    json: async () => [
+                        {
+                            id: 7,
+                            ts: 1_700_000_000,
+                            role: "user",
+                            content: "describe this",
+                            ...(attachments === undefined ? {} : { attachments }),
+                        },
+                    ],
+                };
+            }
+            return { ok: false };
+        }) as unknown as typeof fetch;
+    }
+
+    it("brings a turn's attachments back with it", async () => {
+        // Without this the turn reloads as bare text: the file was stored on
+        // the row and the chip vanished on the next restart.
+        servingRow([{ id: "a".repeat(32), name: "shot.png", mime: "image/png", size: 100 }]);
+
+        const out = await fetchChatHistory("main");
+
+        expect(out![0]!.attachments).toHaveLength(1);
+        expect(out![0]!.attachments![0]!.name).toBe("shot.png");
+    });
+
+    it("rebuilds the address the row does not carry", async () => {
+        // The server stores the record, not a link. Without deriving the url an
+        // image comes back as a plain file chip instead of its thumbnail.
+        const id = "b".repeat(32);
+        servingRow([{ id, name: "shot.png", mime: "image/png", size: 100 }]);
+
+        const out = await fetchChatHistory("main");
+
+        expect(out![0]!.attachments![0]!.url).toBe(`/api/upload/${id}`);
+    });
+
+    it("honours the ingress prefix in that address", async () => {
+        (window as unknown as Record<string, unknown>).__WACTORZ_INGRESS_PATH = "/hassio/ingress/xyz";
+        const id = "c".repeat(32);
+        servingRow([{ id, name: "shot.png", mime: "image/png", size: 100 }]);
+
+        const out = await fetchChatHistory("main");
+
+        expect(out![0]!.attachments![0]!.url).toBe(`/hassio/ingress/xyz/api/upload/${id}`);
+    });
+
+    it("leaves a turn with no attachments alone", async () => {
+        servingRow(undefined);
+
+        const out = await fetchChatHistory("main");
+
+        expect(out![0]!.attachments).toBeUndefined();
+    });
+
+    it("treats an empty list as no attachments", async () => {
+        servingRow([]);
+
+        const out = await fetchChatHistory("main");
+
+        expect(out![0]!.attachments).toBeUndefined();
+    });
+});

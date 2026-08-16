@@ -2,7 +2,9 @@
 
 Handles all HA operations in a single agent:
   - recommend_hardware    : advise which devices/entities are needed
-  - create_automation     : build and insert a new automation via REST (temporarily disabled — routes to recommend_hardware)
+  - create_automation     : not written to Home Assistant by design — routes to recommend_hardware
+                            (a new rule is a Wactorz pipeline; only the payload path below still
+                            reaches `_create_automation`, for a caller that supplies its own entities)
   - delete_automation     : remove an existing automation
   - edit_automation       : update an existing automation
   - list_automations      : enumerate all automations
@@ -247,17 +249,18 @@ class HomeAssistantAgent(LLMAgent):
             return await self._recommend_hardware(text, devices)
 
         if action == "create_automation":
-            # Create flow: hardware selection then automation generation.
-            # NOTE: the create_automation flow is temporarily disabled in _process.
-            # instead, hardware recommendation is used.
+            # Deliberately not a create. Wactorz runs reactive rules itself rather
+            # than writing Home Assistant automations, so a request to build one is
+            # routed to PIPELINE upstream and never normally arrives here. What is
+            # left is the answer for one that slips through anyway: report the
+            # hardware that could serve the rule, rather than claim a create.
             devices = await self._get_devices()
-            logger.info("[%s] Got devices from Home Assistant", self.name)
-            # hardware_result = await self._select_hardware(text, devices)
-            # if not hardware_result.get("can_fulfill"):
-            #     return hardware_result
-
-            # entities = self._extract_entity_ids_from_hardware(hardware_result)
-            # return await self._create_automation(text, entities, hardware_result.get("hardware", []))
+            logger.info(
+                "[%s] Automation creation is a pipeline, not a HA automation; "
+                "answering with hardware for: %s",
+                self.name,
+                text[:80],
+            )
             return await self._recommend_hardware(text, devices)
 
         if action == "other":

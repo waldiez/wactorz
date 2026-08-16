@@ -37,7 +37,7 @@ WHAT IT DOES NOT DO BY DEFAULT
   it's done" — these are RULES the user requests through main, which forwards
   them as TASK messages. The agent starts with zero rules.
 
-🔒 PLUG PROTECTION — THE HARD GUARD
+PLUG PROTECTION — THE HARD GUARD
 ───────────────────────────────────
   Every plug has a `protection` level:
     "locked"            → the agent will NEVER issue a turn-off for this plug.

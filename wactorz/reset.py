@@ -2,7 +2,8 @@
 
 Scopes
 ------
-chat        chat_log rows + conversation_history / history_summary kv entries
+chat        chat_log rows + conversation_history / history_summary kv entries,
+            and the stored attachments too unless one agent was named
 state       per-agent pickle file (state/<name>/state.pkl)
 metrics     cost and message-count kv entries
 spawns      spawn_registry table
@@ -50,8 +51,46 @@ def _pickle_store(state_dir: str | None = None):
 # ── public API ────────────────────────────────────────────────────────────────
 
 
-def reset_chat(agent_name: str | None = None, db_path: str | None = None) -> None:
-    """Clear chat_log and conversation kv entries (optionally for one agent)."""
+def reset_uploads(state_dir: str | None = None) -> None:
+    """Delete every stored chat attachment.
+
+    Only ever called for a whole-system wipe. An upload records the file's name,
+    type and size and nothing about who attached it, so there is no way to
+    select one agent's files — and no way to keep them straight if some rows
+    survive.
+
+    Leaving them behind is worse than it sounds: the rows referencing them are
+    what has just been deleted, so afterwards nothing can tell which bytes are
+    still live, including someone reading the directory by hand.
+    """
+    from wactorz.web.uploads import UPLOADS_DIRNAME
+
+    # Not `upload_dir()`: that creates the directory, and a wipe must not bring
+    # a state directory into being on a machine that has none.
+    base = Path(state_dir or _DEFAULT_STATE) / UPLOADS_DIRNAME
+    if not base.is_dir():
+        return
+    removed = 0
+    for path in base.iterdir():
+        try:
+            path.unlink()
+            removed += 1
+        except OSError as exc:
+            logger.warning("[reset] could not remove %s: %s", path, exc)
+    logger.info("[reset] uploads: deleted %d files", removed)
+
+
+def reset_chat(
+    agent_name: str | None = None,
+    db_path: str | None = None,
+    state_dir: str | None = None,
+) -> None:
+    """Clear chat_log and conversation kv entries (optionally for one agent).
+
+    A full clear takes the stored attachments with it — every reference to them
+    lives in the rows being deleted. Clearing one agent leaves them, because an
+    upload does not record which agent it was sent to.
+    """
     with _db(db_path) as db:
         rows = db.clear_chat_log(agent_name)
         logger.info(
@@ -68,6 +107,9 @@ def reset_chat(agent_name: str | None = None, db_path: str | None = None) -> Non
         "[reset] conversation kv cleared%s",
         f" for {agent_name!r}" if agent_name else " (all agents)",
     )
+    _strip_chat_from_pickles(agent_name, state_dir)
+    if not agent_name:
+        reset_uploads(state_dir)
 
 
 def reset_agent_state(agent_name: str, state_dir: str | None = None) -> None:
@@ -201,8 +243,8 @@ def reset_logs(log_dir: str | None = None) -> None:
 def reset_all(
     agent_name: str | None = None, db_path: str | None = None, state_dir: str | None = None
 ) -> None:
-    """Full wipe: chat, metrics, spawns, pickle state, and log files."""
-    reset_chat(agent_name, db_path)
+    """Full wipe: chat, metrics, spawns, pickle state, attachments, and logs."""
+    reset_chat(agent_name, db_path, state_dir)
     reset_metrics(agent_name, db_path)
     reset_spawns(agent_name, db_path)
     if agent_name:
@@ -220,6 +262,36 @@ def reset_all(
 def _all_kv_agents(db) -> list[str]:
     rows = db._conn.execute("SELECT DISTINCT agent FROM kv_store").fetchall()
     return [r[0] for r in rows]
+
+
+def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = None) -> None:
+    """Remove the conversation keys from any legacy `state.pkl` that holds them.
+
+    Clearing the database is not enough on its own. An agent's `state.pkl`
+    predates the per-key store and can hold its own `conversation_history`;
+    `Actor` loads it at start and `recall` falls back to it whenever the store
+    has nothing, so a cleared conversation came back on the next restart.
+
+    Driven off the files on disk rather than the agents with database rows: the
+    case that motivated this had a pickle and no rows at all, so a
+    database-driven loop would have walked straight past it.
+
+    Only rewrites a file something was actually removed from. That is also what
+    makes it safe for an unreadable one: `PickleStore.load` quarantines it and
+    returns an empty dict, which contains none of these keys, so it is skipped
+    rather than replaced with the empty dict.
+    """
+    store = _pickle_store(state_dir)
+    base = Path(state_dir or _DEFAULT_STATE)
+    names = [agent_name] if agent_name else [p.parent.name for p in base.glob("*/state.pkl")]
+    for name in names:
+        state = store.load(name)
+        if not any(key in state for key in _CHAT_KV_KEYS):
+            continue
+        for key in _CHAT_KV_KEYS:
+            state.pop(key, None)
+        store.save(name, state)
+        logger.info("[reset] conversation removed from legacy state file for %r", name)
 
 
 def _reset_all_pickles(state_dir: str | None = None) -> None:
@@ -268,7 +340,7 @@ def main() -> None:
         return
 
     if args.chat:
-        reset_chat(agent, db_path)
+        reset_chat(agent, db_path, state_dir)
     if args.state:
         if agent:
             reset_agent_state(agent, state_dir)

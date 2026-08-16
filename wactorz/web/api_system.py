@@ -12,7 +12,7 @@ import time
 from aiohttp import web
 from aiohttp.web import Response
 
-from . import cost, runtime
+from . import cost, origins, runtime
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,15 @@ async def cost_limit_handler(request: web.Request) -> Response:
             )
         set_cost_limit(limit_usd, period)
         return web.json_response({"ok": True, "limit_usd": limit_usd, "period": period})
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
+    except Exception as exc:
+        # Our own words, not the exception's. A caller needs to know what to
+        # send differently, and an exception string answers a different
+        # question — often with a path or a driver detail attached.
+        logger.warning("[api] cost limit rejected: %s", exc)
+        return web.json_response(
+            {"error": "limit_usd must be a number and period one of daily, weekly, monthly"},
+            status=400,
+        )
 
 
 async def cost_reset_handler(_request: web.Request) -> Response:
@@ -62,8 +69,11 @@ async def cost_reset_handler(_request: web.Request) -> Response:
             except Exception:
                 pass
         return web.json_response({"ok": True, **info})
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
+    except Exception as exc:
+        # A failure here is the database's, not the caller's, and a sqlite
+        # error carries the file path it was opening.
+        logger.exception("[api] cost reset failed: %s", exc)
+        return web.json_response({"error": "Could not reset the cost ledger"}, status=500)
 
 
 async def chat_log_handler(request: web.Request) -> Response:
@@ -85,11 +95,13 @@ async def chat_log_handler(request: web.Request) -> Response:
         rows = runtime.db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
         return web.json_response(rows)
     except Exception as exc:
-        return web.json_response({"error": str(exc)}, status=500)
+        logger.exception("[api] chat log query failed: %s", exc)
+        return web.json_response({"error": "Could not read the chat log"}, status=500)
 
 
 async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
+    from .. import config
     from ..config import CONFIG
     from ..ext import collect_public_config
 
@@ -114,6 +126,17 @@ async def config_handler(request: web.Request) -> Response:
         "weather": {
             "defaultLocation": CONFIG.weather_default_location,
         },
+        # The upload routes are only registered when this is on, so the browser
+        # has to learn it from the server rather than from how it was built —
+        # otherwise a deployment with uploads off still offers a drop zone that
+        # can only fail, and one with uploads on hides a feature it has.
+        "uploads": {"enabled": config.UPLOADS_ENABLED},
+        # Whether this browser holds a session it could end, which is not the
+        # same question as "is a key configured". Under Home Assistant ingress
+        # the user was authenticated by HA and carries no session here, so a
+        # sign-out would end nothing while implying it had — and on an install
+        # with no key there is nothing to sign out of at all.
+        "auth": {"canSignOut": bool(CONFIG.api_key) and not origins.from_supervisor(request)},
         "ws_url": ws_url,
     }
     # Merge each extension's non-secret browser config (e.g. tts availability),

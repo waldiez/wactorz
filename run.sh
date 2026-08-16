@@ -13,6 +13,20 @@ if [ -f .env ]; then
   set +a
 fi
 
+# The dev broker authenticates (compose.dev.yaml), with defaults so `make dev`
+# needs no setup. A host-run backend has to use the same ones or it is refused.
+#
+# It has to happen here rather than as a Makefile export: .env is sourced above,
+# and the template ships MQTT_PASSWORD= blank — a blank assignment overrides
+# whatever was inherited, so an exported value would be wiped a line later.
+# `:-` covers unset and empty alike, so anyone who has filled these in keeps
+# their own broker.
+if [ "${WACTORZ_DEV_MODE:-}" = "1" ]; then
+  MQTT_USERNAME="${MQTT_USERNAME:-wactorz}"
+  MQTT_PASSWORD="${MQTT_PASSWORD:-wactorz-dev}"
+  export MQTT_USERNAME MQTT_PASSWORD
+fi
+
 echo "Starting Wactorz (Python backend)..."
 
 # Ensure virtualenv is used if available (POSIX layout: .venv/bin, Windows:

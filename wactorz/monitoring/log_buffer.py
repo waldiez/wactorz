@@ -40,6 +40,10 @@ class LogRingBuffer(logging.Handler):
     def __init__(self, capacity: int = DEFAULT_CAPACITY) -> None:
         super().__init__()
         self._entries: deque[dict[str, Any]] = deque(maxlen=capacity)
+        #: Records ever appended, not records held. A reader remembers a
+        #: position in this count and asks what has arrived since, which the
+        #: deque itself cannot answer — it forgets what it evicts.
+        self._total = 0
 
     @property
     def capacity(self) -> int:
@@ -49,6 +53,9 @@ class LogRingBuffer(logging.Handler):
         """Buffer one record. Never raises, never logs."""
         try:
             self._entries.append(self._entry(record))
+            # After the append, so a record that could not be built does not
+            # advance the count and silently become "missed" for every reader.
+            self._total += 1
         except Exception:
             # handleError writes to stderr (and honours logging.raiseExceptions)
             # rather than logging, which is what keeps this from recursing.
@@ -79,6 +86,31 @@ class LogRingBuffer(logging.Handler):
         if limit is not None and limit >= 0:
             entries = entries[-limit:] if limit else []
         return entries
+
+    @property
+    def total(self) -> int:
+        """Records ever appended. A reader's starting position."""
+        return self._total
+
+    def since(self, position: int) -> tuple[list[dict[str, Any]], int]:
+        """Entries appended after `position`, and the position to remember next.
+
+        Returns what is *still held*, which is not always what was missed: a
+        reader that falls further behind than the buffer is deep gets the oldest
+        surviving records rather than the ones evicted while it was away. The
+        alternative — pretending nothing was lost — is worse for a log.
+        """
+        missed = self._total - position
+        if missed <= 0:
+            return [], self._total
+        # Copied without a lock. `emit` can append from any thread while this
+        # iterates, which CPython tolerates for a deque in practice and which
+        # would at worst raise here — a caller that skips one tick, not one that
+        # loses records: the position is only advanced on the way out. A lock on
+        # the logging path would cost every record to protect a reader that can
+        # simply try again.
+        entries = list(self._entries)
+        return entries[-missed:] if missed < len(entries) else entries, self._total
 
 
 _buffer: LogRingBuffer | None = None

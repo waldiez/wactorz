@@ -18,7 +18,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `api_key` | *(blank)* | Shared secret for the Wactorz REST API. Leave blank to disable auth. |
+| `api_key` | *(blank)* | Only consulted if you publish a port (see below). The Wactorz panel does not use it. |
 | `llm_provider` | `anthropic` | LLM backend: `anthropic`, `openai`, `gemini`, `ollama`, `nim` |
 | `llm_model` | `claude-sonnet-4-6` | Model name for the chosen provider |
 | `llm_api_key` | *(blank)* | API key for the chosen provider |
@@ -40,13 +40,29 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `telegram_allowed_user_ids` | *(blank)* | **Required with the token** — comma-separated Telegram user IDs. Without it the bot only answers `/start` with your user ID, so you can fill this in and restart. |
 | `telegram_allowed_user_id` | `0` | Older single-ID form of the above; still honoured. `0` means unset. |
 | `social_rate_limit_per_min` | `12` | Max messages per minute per sender on the bots. `0` disables the limit. |
-| `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects, and it needs a broker the node can reach anonymously — see [Remote edge nodes](#remote-edge-nodes) below. |
+| `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
 | `otel_endpoint` | *(blank)* | OTLP HTTP collector URL (e.g. `http://192.168.1.10:4318`). Leave blank to disable OpenTelemetry. |
 | `otel_service_name` | `wactorz` | Service name reported to the OTLP collector. |
 | `influx_url` | *(blank)* | InfluxDB 2.x base URL (e.g. `http://homeassistant:8086`). Leave blank to disable. `wactorz[influx]` is installed automatically when set. |
 | `influx_token` | *(blank)* | InfluxDB API token. |
 | `influx_org` | `wactorz` | InfluxDB organisation name. |
 | `influx_bucket` | `wactorz` | InfluxDB bucket name. |
+
+> **`api_key` and publishing a port.** Nothing is published to your network by
+> default: the panel reaches Wactorz through ingress, where Home Assistant has
+> already signed you in and the request is verified as coming from the
+> Supervisor. On that path the key is never consulted, which is why setting one
+> changes nothing for panel users.
+>
+> It matters in one case. If you assign a host port to `8000` or `8888` under
+> the add-on's **Network** settings, the API and dashboard land on your network
+> directly, and anything that can reach them can delete agents, read the chat
+> log and spend your LLM budget. Outside the add-on, Wactorz refuses to start in
+> that configuration — but the add-on declares its exposure already handled,
+> which is true right up until you publish a port, and that declaration switches
+> the refusal off. **Set `api_key` before publishing a port**, and reach the API
+> with `X-API-Key: <your key>` or `Authorization: Bearer <your key>`. Something
+> like `openssl rand -hex 32` gives a key nobody has to remember.
 
 > **The bots are capability-restricted.** Discord and Telegram allow conversation, Home Assistant
 > questions, and everyday device control (lights, switches, climate, covers, media players). They
@@ -89,14 +105,25 @@ and **connect to**, and not every setup provides one:
 
 | `mqtt_host` setting | Remote nodes |
 | --- | --- |
-| `mosquitto_embedded: true` | **Not supported.** The broker runs inside the addon container and its port is deliberately not published to your network, so nothing outside the addon can reach it. |
-| `core-mosquitto` (official Mosquitto addon) | **Not yet supported.** The node can reach the broker, but that addon disables anonymous access and the node is not given credentials. |
-| An external broker on your network that accepts anonymous connections | **Supported.** Set `mqtt_host` to its address, and set each target's `broker` to the address the *node* should use to reach it. |
+| `mosquitto_embedded: true` | **Supported, but only if you publish port `1883`.** The broker runs inside the addon container, so nothing outside can reach it until you assign a host port under the addon's **Network** settings. It requires a password, which is generated once, kept across restarts and updates, and delivered to each node by `/deploy`. |
+| `core-mosquitto` (official Mosquitto addon) | **Supported.** Set `mqtt_username` and `mqtt_password` to an account that addon accepts; `/deploy` delivers them to the node. |
+| An external broker on your network | **Supported**, with or without credentials. Set `mqtt_host` to its address, and set each target's `broker` to the address the *node* should use to reach it. |
 
-Delivering broker credentials to a remote node is not implemented yet, so a
-broker requiring a username and password cannot serve one. If you only need
-agents on the machine running Home Assistant, leave `deploy_targets` empty —
-everything else works unchanged.
+Credentials reach a node out of band. `/deploy` writes them to `~/wactorz/.env`
+there (mode `0600`) over the SSH connection it already has, and the node's
+runner sources that file rather than taking them on a command line — so they
+appear in no process listing. They cannot travel over the broker itself, which
+is the one channel that is unauthenticated until they arrive.
+
+Every node gets the credentials this addon uses for its own broker connection.
+That is the workable default for a single broker with one account, and it means
+**a stolen edge device holds full broker access** — the broker carries the code
+spawned agents run, so treat a node as trusted hardware. Per-node accounts exist
+in Wactorz but are not configurable from this addon yet.
+
+If your broker accepts anonymous connections, nothing is sent and nothing needs
+to be. If you only need agents on the machine running Home Assistant, leave
+`deploy_targets` empty — everything else works unchanged.
 
 > **Credentials never go through chat.** `/deploy` takes a node name and nothing else, and the installer ignores credentials supplied in a task payload. Anything typed into chat is written to the conversation history and the chat log, where it stays long after the deploy finished.
 
@@ -108,7 +135,7 @@ SSH host keys are verified. A machine that has not been connected to before has 
 Install the [Mosquitto broker addon](https://github.com/home-assistant/addons/tree/master/mosquitto), leave `mqtt_host` as `core-mosquitto` and `mqtt_port` as `1883`.
 
 **Option B — embedded broker (no extra addon):**
-Set `mosquitto_embedded: true`. Wactorz starts its own Mosquitto instance inside the container. Change `mqtt_host` to `localhost`. MQTT data is persisted to `/share/mosquitto`.
+Set `mosquitto_embedded: true`. Wactorz starts its own Mosquitto instance inside the container. Change `mqtt_host` to `localhost`. MQTT data is persisted to `/data/mosquitto`.
 
 ## Embedded services
 
@@ -116,7 +143,7 @@ Setting `mosquitto_embedded` to `true` bundles a Mosquitto broker inside the Wac
 
 | Option | Port | Data path |
 | --- | --- | --- |
-| `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/share/mosquitto` |
+| `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/data/mosquitto` |
 
 ## Home Assistant integration
 

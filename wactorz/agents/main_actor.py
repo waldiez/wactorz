@@ -3,12 +3,14 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
 import socket
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
 from ..config import (
@@ -108,6 +110,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     def _get_spawn_registry(self) -> dict:
         return self.recall(SPAWN_REGISTRY_KEY) or {}
+
+    def _restore_earned_trust(self, agent_name: str, local_cfg: dict) -> bool:
+        """Re-attach a migrating agent's ``trusted`` flag from our own registry.
+
+        A config coming back from a node arrives over MQTT, where a publisher
+        can claim anything, so it is not evidence of anything. Our registry
+        entry is: it was written here when the agent was sent out. Reading the
+        flag from that record rather than from the wire is what lets a catalog
+        agent migrate home without meeting a validator its recipe was never
+        written to pass, while a node's claim of trust still buys nothing.
+
+        Returns whether the flag was earned, for the caller to pass as
+        ``from_registry``. A claim that was not earned is left in place rather
+        than removed here, so the spawn path strips it and says so.
+        """
+        if not self._get_spawn_registry().get(agent_name, {}).get("trusted"):
+            return False
+        local_cfg["trusted"] = True
+        return True
 
     def _save_to_spawn_registry(self, config: dict):
         reg = self._get_spawn_registry()
@@ -266,7 +287,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 logger.info(f"[{self.name}] '{name}' already running, skipping.")
                 continue
             try:
-                await self._spawn_from_config(config, save=False)
+                await self._spawn_from_config(config, save=False, from_registry=True)
                 logger.info(f"[{self.name}] Restored: {name}")
             except Exception as e:
                 logger.error(f"[{self.name}] Failed to restore '{name}': {e}")
@@ -286,17 +307,17 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── User input ─────────────────────────────────────────────────────────
 
-    async def chat(self, user_message: str) -> str:
-        response = await super().chat(user_message)
+    async def chat(self, user_message: str, attachments: list[dict] | None = None) -> str:
+        response = await super().chat(user_message, attachments)
         # Fire-and-forget fact extraction — strip auto-injected context first
         clean_msg = _strip_live_context(user_message)
         asyncio.create_task(self._extract_and_save_facts(clean_msg, response))
         return response
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(self, user_message: str, attachments: list[dict] | None = None):
         full_response = []
         got_usage = False
-        async for chunk in super().chat_stream(user_message):
+        async for chunk in super().chat_stream(user_message, attachments):
             if isinstance(chunk, dict):
                 got_usage = True
                 yield chunk
@@ -915,7 +936,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     await self._registry.unregister(target.actor_id)
             new_config = dict(config)
             new_config["replace"] = True
-            await self._spawn_from_config(new_config, save=True)
+            # Straight from the registry a few lines up, so a catalog agent
+            # restarts trusted rather than failing the validator it never had
+            # to pass.
+            await self._spawn_from_config(new_config, save=True, from_registry=True)
             return note_prefix + f"Agent '{agent_name}' restarted locally."
 
         # ── /nodes remove <node> ────────────────────────────────────────────
@@ -1267,50 +1291,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 # Send via MQTT and wait for reply
                 import time as _t
 
-                reply_topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
-                future: asyncio.Future = asyncio.get_event_loop().create_future()
-                self._result_futures[reply_topic] = future
-
-                await self._mqtt_publish(
-                    f"agents/by-name/{target_name}/task",
-                    {
-                        "text": message,
-                        "_reply_topic": reply_topic,
-                        "_remote_task": True,
-                        "payload": message,
-                    },
-                )
-
-                # Subscribe briefly for the reply
-                async def _wait_reply():
-                    try:
-                        async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                            await client.subscribe(reply_topic)
-                            async for msg in client.messages:
-                                try:
-                                    data = json.loads(msg.payload.decode())
-                                    if not future.done():
-                                        future.set_result(data)
-                                except Exception:
-                                    pass
-                                return
-                    except Exception as e:
-                        if not future.done():
-                            future.set_exception(e)
-
-                reply_task = asyncio.create_task(_wait_reply())
-                try:
-                    result = await asyncio.wait_for(asyncio.shield(future), timeout=30.0)
-                    reply_task.cancel()
-                    reply = result.get("result") or result.get("response") or str(result)
-                    return note_prefix + f"**{target_name}** (on {remote_node}): {reply}"
-                except asyncio.TimeoutError:
-                    reply_task.cancel()
-                    return (
-                        note_prefix + f"{target_name} on {remote_node} did not respond within 30s."
+                async with self._reply_topic() as (reply_topic, future):
+                    await self._mqtt_publish(
+                        f"agents/by-name/{target_name}/task",
+                        {
+                            "text": message,
+                            "_reply_topic": reply_topic,
+                            "_remote_task": True,
+                            "payload": message,
+                        },
                     )
-                finally:
-                    self._result_futures.pop(reply_topic, None)
+                    try:
+                        result = await asyncio.wait_for(asyncio.shield(future), timeout=30.0)
+                        reply = result.get("result") or result.get("response") or str(result)
+                        return note_prefix + f"**{target_name}** (on {remote_node}): {reply}"
+                    except asyncio.TimeoutError:
+                        return (
+                            note_prefix
+                            + f"{target_name} on {remote_node} did not respond within 30s."
+                        )
 
             # Not found locally or remotely
             known_remote = [a for nd in self._known_nodes.values() for a in nd.get("agents", [])]
@@ -1542,13 +1541,18 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         clean, _ = await self._process_delegate_commands(clean, restricted=True)
         return note_prefix + clean.strip()
 
-    async def process_user_input_stream(self, text: str):
+    async def process_user_input_stream(self, text: str, attachments: list[dict] | None = None):
         """Streaming version of process_user_input().
         Yields text chunks as the LLM generates them, then a final dict:
           {"done": True, "spawned": [...names...], "system_msg": "..."}
 
         The CLI calls this and prints chunks immediately.
         REST/Discord/WhatsApp should use process_user_input() instead.
+
+        `attachments` are content blocks for this turn. They reach the model on
+        the branch below that calls the LLM; a turn answered without one — a
+        command, an actuation, a pipeline plan, a delegation to the Home
+        Assistant agent — does not read them.
         """
         # Drain monitor notifications first
         note_prefix = self._drain_notifications()
@@ -1658,7 +1662,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Stream the LLM response chunk by chunk
         full_chunks = []
-        async for chunk in self.chat_stream(prefixed_text):
+        async for chunk in self.chat_stream(prefixed_text, attachments):
             if isinstance(chunk, dict):
                 break  # usage dict — discard, already tracked inside chat_stream
             full_chunks.append(chunk)
@@ -2165,17 +2169,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
         return clean, deleted, missing
 
-    async def _spawn_from_config(self, config: dict, save: bool = True) -> Actor | None:
+    async def _spawn_from_config(
+        self, config: dict, save: bool = True, *, from_registry: bool = False
+    ) -> Actor | SpawnPlaceholder | None:
         """Spawn one agent from a config dict.
 
         Remote (node-targeted) spawns go out over MQTT via ``_spawn_remote``;
         everything local is handled by the shared ``SpawnMixin`` so main and the
         planner construct agents identically.
+
+        ``from_registry`` says the config was read back from the spawn registry,
+        which is what entitles it to a ``trusted`` flag. It defaults to False so
+        a new call site is untrusted until someone decides otherwise.
         """
         node = config.get("node", "").strip()
         if node:
             return await self._spawn_remote(config, node, save)
-        return await self._spawn_local_from_config(config, register=save)
+        return await self._spawn_local_from_config(
+            config, register=save, from_registry=from_registry
+        )
 
     # Synthetic bridge code shipped with type:"llm" agents when they're spawned
     # on a remote node. The runner compiles this and finds handle_task, so the
@@ -2833,6 +2845,8 @@ async def handle_task(agent, payload):
                         ):
                             local_cfg.pop("code", None)
 
+                        earned = self._restore_earned_trust(agent_name, local_cfg)
+
                         logger.info(
                             f"[main] Received state_return for '{agent_name}' "
                             f"from '{from_node}' "
@@ -2840,7 +2854,9 @@ async def handle_task(agent, payload):
                             f"state key(s)) — spawning locally"
                         )
                         try:
-                            await self._spawn_from_config(local_cfg, save=True)
+                            await self._spawn_from_config(
+                                local_cfg, save=True, from_registry=earned
+                            )
                             self._queue_notification(
                                 {
                                     "_monitor_notification": True,
@@ -3796,42 +3812,84 @@ async def handle_task(agent, payload):
             )
             return None
 
-        reply_topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_event_loop().create_future()
-        self._result_futures[reply_topic] = future
+        async with self._reply_topic() as (reply_topic, future):
+            await self._mqtt_publish(
+                f"agents/by-name/{target_name}/task",
+                {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
+            )
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[{self.name}] delegate_task: '{target_name}' on '{remote_node}' "
+                    f"timed out after {timeout}s"
+                )
+                return None
 
-        await self._mqtt_publish(
-            f"agents/by-name/{target_name}/task",
-            {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
-        )
+    #: How long to wait for the reply subscription before publishing anyway.
+    #: Short: a broker that is up answers a subscribe immediately, and one that
+    #: is not will not answer at all.
+    _SUBSCRIBE_TIMEOUT = 5.0
 
-        async def _wait_reply():
+    @contextlib.asynccontextmanager
+    async def _reply_topic(self) -> AsyncGenerator[tuple[str, asyncio.Future]]:
+        """A reply topic that is already subscribed, and the future its answer lands in.
+
+        ⚠ **Subscribing before the caller publishes is the whole point.** Both
+        call sites used to publish first and subscribe after, so an agent that
+        answered quickly answered into nothing: the reply was published to a
+        topic with no subscriber, dropped by the broker, and the caller waited
+        out its full timeout for a task that had in fact succeeded. It reads as
+        a flaky node, which is why it survived so long. The monitor's own copy
+        of this logic was corrected years ago and the fix was never brought back
+        here.
+
+        Publishes anyway if the subscription does not come up in time. The task
+        still gets done, and its side effects are usually what the caller wanted;
+        losing the answer is worse than losing the work. The reason is logged, so
+        a timeout that follows is explained rather than mysterious.
+        """
+        topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._result_futures[topic] = future
+        subscribed = asyncio.Event()
+
+        async def _listen() -> None:
             try:
                 async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe(reply_topic)
+                    await client.subscribe(topic)
+                    subscribed.set()
                     async for msg in client.messages:
                         try:
-                            data = json.loads(msg.payload.decode())
                             if not future.done():
-                                future.set_result(data)
+                                future.set_result(json.loads(msg.payload.decode()))
                         except Exception:
                             pass
                         return
-            except Exception as e:
+            except Exception as exc:
                 if not future.done():
-                    future.set_exception(e)
+                    future.set_exception(exc)
+            finally:
+                # Whatever happened, stop the caller waiting on a listener that
+                # is no longer going to subscribe.
+                subscribed.set()
 
-        reply_task = asyncio.create_task(_wait_reply())
+        task = asyncio.create_task(_listen())
         try:
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"[{self.name}] delegate_task: '{target_name}' on '{remote_node}' timed out after {timeout}s"
-            )
-            return None
+            try:
+                await asyncio.wait_for(subscribed.wait(), timeout=self._SUBSCRIBE_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[%s] reply subscription for %s did not come up in %.0fs — sending anyway, "
+                    "so a reply may be missed",
+                    self.name,
+                    topic,
+                    self._SUBSCRIBE_TIMEOUT,
+                )
+            yield topic, future
         finally:
-            reply_task.cancel()
-            self._result_futures.pop(reply_topic, None)
+            task.cancel()
+            self._result_futures.pop(topic, None)
 
     async def list_agents(self) -> list[dict]:
         if not self._registry:

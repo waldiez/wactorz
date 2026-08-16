@@ -30,6 +30,23 @@
     display: inline-flex;
   }
 
+  /* ── Host resource bar ──────────────────────────────────────────────
+     `.af-host-metric` sets `min-width: 0`, but that cannot shrink it: its own
+     children are a fixed-width label and a track with `min-width: 60px`, so
+     each metric has a floor of roughly 156px. Two of those plus the APP label
+     and two 20px gaps exceed a 390px phone, and because the surrounding pane
+     is `overflow-y: auto` — which makes the other axis `auto` too — the excess
+     became a horizontal scroll rather than a clip. */
+  .af-host-bar {
+    gap: 10px;
+  }
+  .af-host-metric {
+    gap: 6px;
+  }
+  .af-host-bar-track {
+    min-width: 24px;
+  }
+
   /* ── Bottom nav ─────────────────────────────────────────────────────── */
   .af-bottom-nav {
     display: flex;

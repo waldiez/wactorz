@@ -8,7 +8,14 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { toast } from "../ui/ToastManager";
 import { DashboardChat, type ChatHost } from "../ui/dashboard/DashboardChat";
-import { pickChatTarget, resolveSendTarget, stripLeadingMention } from "../ui/dashboard/chatRouting";
+import { withoutAttachment } from "../ui/dashboard/attachTray";
+import {
+    defaultChatTarget,
+    preferredChatTarget,
+    resolveSendTarget,
+    sendBlockedReason,
+    stripLeadingMention,
+} from "../ui/dashboard/chatRouting";
 import type { AgentInfo, ChatMessage } from "../types/agent";
 import type { View } from "../ui/dashboard/types";
 
@@ -50,27 +57,66 @@ const thread = (host: ChatHost) => host.root.querySelector<HTMLElement>("#af-cha
 // resolved to a friendly name keeps the id as its name.
 const UUID = "45511e2b-3a2f-4c1d-9e8a-1b2c3d4e5f60";
 
-describe("pickChatTarget", () => {
-    it("prefers main on startup even after another agent was auto-selected first", () => {
-        // No user pick yet: catalog registered before main and is the current
-        // auto-pick, but once main is present it must win (else it sticks).
-        expect(pickChatTarget([agent("catalog"), agent("main")], "catalog", false)).toBe("main");
+// The picked agent is remembered in localStorage now, so it outlives the
+// instance that chose it — and, without this, the test that chose it. Reset it
+// like any other global rather than per describe block: six of them here build
+// their own host, and only the ones that happened to assert on the target would
+// have caught the leak.
+beforeEach(() => localStorage.clear());
+
+describe("defaultChatTarget", () => {
+    // Only ever consulted for an empty choice, so it answers one question:
+    // who should this dashboard open on? Keeping a choice, and moving off a
+    // dead one, are separate concerns now (resolveDefaultTarget, dropTargetIfGone).
+    it("prefers main, whatever order the agents arrived in", () => {
+        expect(defaultChatTarget([agent("catalog"), agent("main")])).toBe("main");
     });
 
     it("falls back to the alphabetical-first messageable agent when main is absent", () => {
-        expect(pickChatTarget([agent("catalog"), agent("worker")], "main", false)).toBe("catalog");
+        expect(defaultChatTarget([agent("catalog"), agent("worker")])).toBe("catalog");
     });
 
-    it("keeps a user-picked target even when main is present", () => {
-        expect(pickChatTarget([agent("catalog"), agent("main")], "catalog", true)).toBe("catalog");
+    it("returns nothing rather than guessing when there is no one to talk to", () => {
+        expect(defaultChatTarget([])).toBe("");
+    });
+});
+
+describe("preferredChatTarget", () => {
+    // The remembered name is a preference, consulted only when nothing has been
+    // chosen yet. It has to be checked against the live list: a name that no
+    // longer exists would otherwise become a target nothing can deliver to.
+    it("reopens on the remembered agent when it is still there", () => {
+        expect(preferredChatTarget([agent("main"), agent("worker")], "worker")).toBe("worker");
     });
 
-    it("moves a user-picked target off an agent that is gone", () => {
-        expect(pickChatTarget([agent("main"), agent("worker")], "ghost", true)).toBe("main");
+    it("falls back to the default when the remembered agent is gone", () => {
+        expect(preferredChatTarget([agent("main")], "deleted-one")).toBe("main");
     });
 
-    it("returns current when there are no messageable agents", () => {
-        expect(pickChatTarget([], "main", false)).toBe("main");
+    it("keeps a remembered agent that is merely stopped", () => {
+        // Stopping is a state the conversation survives — the composer blocks
+        // and says so. Moving the user off it on reload would be the bug the
+        // target split removed, reintroduced by the back door.
+        const agents = [agent("main"), agent("worker", { state: "stopped" })];
+
+        expect(preferredChatTarget(agents, "worker")).toBe("worker");
+    });
+
+    it("ignores a remembered agent nobody may message", () => {
+        const agents = [agent("main"), agent("monitor-agent")];
+
+        expect(preferredChatTarget(agents, "monitor-agent")).toBe("main");
+    });
+
+    it("behaves as the plain default with nothing remembered", () => {
+        expect(preferredChatTarget([agent("worker")], null)).toBe("worker");
+    });
+
+    it("returns nothing when the list has not arrived yet", () => {
+        // An empty list means "not back yet", never "yours is gone" — so this
+        // stays empty and resolveDefaultTarget tries again on the next visit,
+        // rather than burning the preference against an empty roster.
+        expect(preferredChatTarget([], "worker")).toBe("");
     });
 });
 
@@ -94,6 +140,20 @@ describe("resolveSendTarget", () => {
     });
 });
 
+describe("sendBlockedReason", () => {
+    it("passes a running agent", () => {
+        expect(sendBlockedReason([agent("worker")], "worker")).toBeNull();
+    });
+
+    it("tells a stopped agent apart from one that is gone", () => {
+        // "start it and try again" is actively wrong for an agent that no longer
+        // exists — there is nothing to start.
+        expect(sendBlockedReason([agent("worker", { state: "stopped" })], "worker")).toContain("start it");
+        expect(sendBlockedReason([], "worker")).not.toContain("start it");
+        expect(sendBlockedReason([], "worker")).toContain("worker");
+    });
+});
+
 describe("stripLeadingMention", () => {
     it("drops a leading @target (case-insensitive) and following space", () => {
         expect(stripLeadingMention("@catalog spawn x", "catalog")).toBe("spawn x");
@@ -114,37 +174,60 @@ describe("stripLeadingMention", () => {
     });
 });
 
-describe("DashboardChat — syncChatTarget", () => {
+describe("DashboardChat — resolveDefaultTarget", () => {
     it("prefers main even when an id-named agent sorts first", () => {
         const dc = new DashboardChat(makeHost([agent(UUID), agent("main")]));
-        dc.syncChatTarget();
+        dc.resolveDefaultTarget();
         expect(dc.chatTarget).toBe("main");
     });
 
-    it("never auto-targets a raw id — stays on the default when nothing better exists", () => {
+    it("never auto-targets a raw id — leaves the choice unmade instead", () => {
         const dc = new DashboardChat(makeHost([agent(UUID)]));
-        dc.syncChatTarget();
-        expect(dc.chatTarget).toBe("main"); // the default, NOT the uuid
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe(""); // NOT the uuid
     });
 
     it("falls back to the first human-named agent (ignoring id-named ones) when there is no main", () => {
         const dc = new DashboardChat(makeHost([agent(UUID), agent("zebra"), agent("alpha")]));
-        dc.syncChatTarget();
+        dc.resolveDefaultTarget();
         expect(dc.chatTarget).toBe("alpha");
     });
 
-    it("keeps a user-picked target instead of re-picking", () => {
+    it("keeps a target the user picked", () => {
         const dc = new DashboardChat(makeHost([agent("main"), agent("worker")]));
-        dc.setTarget("worker"); // explicit user pick → sticky
-        dc.syncChatTarget();
+        dc.setTarget("worker");
+        dc.resolveDefaultTarget();
         expect(dc.chatTarget).toBe("worker");
     });
 
-    it("re-selects main on startup even if an agent was auto-picked before main loaded", () => {
-        const dc = new DashboardChat(makeHost([agent("catalog"), agent("main")]));
-        dc.chatTarget = "catalog"; // auto-picked before main arrived (no user pick)
-        dc.syncChatTarget();
-        expect(dc.chatTarget).toBe("main");
+    it("says nothing about a recipient, and fetches nothing, until there is one", () => {
+        // An empty target is a real state now, so the two places that read it
+        // must cope: the composer must not advertise "@" and history must not
+        // request a conversation with nobody.
+        const fetchSpy = vi.fn();
+        globalThis.fetch = fetchSpy as unknown as typeof fetch;
+        const host = makeHost([]);
+        const dc = mount(host);
+        host.root.appendChild(dc.buildIobar());
+        dc.afterMount(); // the path that loads history for the open target
+
+        expect(dc.chatTarget).toBe("");
+        expect(host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")?.placeholder).toBe("Message…");
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("keeps a target resolved earlier, even once main turns up", () => {
+        // The behaviour change: first resolution sticks. Main arriving late no
+        // longer takes the conversation over — the user has already seen the
+        // current target named on screen, and moving it silently is the bug.
+        const host = makeHost([agent("catalog")]);
+        const dc = new DashboardChat(host);
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe("catalog");
+
+        host.agents.set("main", agent("main"));
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe("catalog");
     });
 });
 
@@ -224,11 +307,13 @@ describe("DashboardChat — target selection", () => {
         expect(dc.chatTarget).toBe("main"); // unchanged
     });
 
-    it("syncChatTarget falls back to main when the target vanished", () => {
+    it("resolveDefaultTarget leaves a target that vanished alone", () => {
+        // A target that is merely absent may be coming back, and a deletion has
+        // its own signal (dropTargetIfGone). Resolution only fills a blank.
         const dc = mount(host);
         dc.chatTarget = "ghost";
-        dc.syncChatTarget();
-        expect(dc.chatTarget).toBe("main");
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe("ghost");
     });
 
     it("populates the iobar select with messageable agents, main pinned first", () => {
@@ -512,6 +597,60 @@ describe("DashboardChat — stop, attachments, external events", () => {
         fetchSpy.mockRestore();
     });
 
+    it("puts the caret in the composer when a file is attached", () => {
+        // Attaching is the first half of composing; the caret belongs where the
+        // second half gets typed.
+        const host = makeHost();
+        const dc = mount(host) as any;
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
+
+        document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
+
+        expect(document.activeElement).toBe(host.root.querySelector("#af-iobar-input"));
+        dc.unwire();
+    });
+
+    it("leaves the user on the view they chose", () => {
+        // Deliberate: the iobar sits below every view, so a file dropped from
+        // the overview is already visible in the tray. Sending moves to the chat
+        // view on its own — attaching should not.
+        const host = makeHost([agent("main")], "overview");
+        const dc = mount(host) as any;
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
+
+        document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
+
+        expect(host.setView).not.toHaveBeenCalled();
+        expect(host.root.querySelectorAll(".af-attach-chip")).toHaveLength(1);
+        dc.unwire();
+    });
+
+    it("keeps a dropped file through an @mention typed afterwards", () => {
+        // The natural order: drop the file, then say who it is for. Nothing
+        // clears the tray on a target change, and the mention decides the
+        // recipient — so the file must ride along to the agent named last.
+        const host = makeHost([agent("main"), agent("worker")]);
+        const dc = mount(host) as any;
+        host.root.appendChild(dc.buildIobar());
+        dc.wire();
+        const seen: Array<{ target: string; attachments: unknown[] }> = [];
+        const onSend = (e: Event) => seen.push((e as CustomEvent).detail);
+        document.addEventListener("af-send-message", onSend);
+
+        document.dispatchEvent(new CustomEvent("af-attachment-added", { detail: { attachment: att() } }));
+        const input = host.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        input.value = "@worker look at this";
+        dc._sendMessage(input);
+
+        document.removeEventListener("af-send-message", onSend);
+        dc.unwire();
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.target).toBe("worker");
+        expect(seen[0]!.attachments).toHaveLength(1);
+    });
+
     it("sends an attachments-only message and clears the pending tray", () => {
         const host = makeHost();
         const dc = mount(host) as any;
@@ -522,12 +661,8 @@ describe("DashboardChat — stop, attachments, external events", () => {
         dc._pendingAttachments = [att()];
         const input = document.createElement("textarea");
         input.value = ""; // no text — attachment alone must still send
-        const select = document.createElement("select");
-        const opt = document.createElement("option");
-        opt.value = "worker";
-        select.append(opt);
-        select.value = "worker";
-        dc._sendMessage(input, select);
+        dc.chatTarget = "worker"; // the choice is what routes; the select only shows it
+        dc._sendMessage(input, document.createElement("select"));
 
         document.removeEventListener("af-send-message", onSend);
         expect(seen).toEqual([{ content: "", target: "worker", attachments: ["a1"] }]);
@@ -542,9 +677,9 @@ describe("DashboardChat — stop, attachments, external events", () => {
         const remote = att({ id: "a2", url: "https://x/y.png" });
         dc._pendingAttachments = [blob, remote];
 
-        dc._removeAttachment(remote); // non-blob → no revoke
-        expect(revoke).not.toHaveBeenCalled();
-        dc._removeAttachment(blob); // blob → revoke
+        dc._pendingAttachments = withoutAttachment(dc._pendingAttachments, remote);
+        expect(revoke).not.toHaveBeenCalled(); // non-blob → nothing to release
+        dc._pendingAttachments = withoutAttachment(dc._pendingAttachments, blob);
         expect(revoke).toHaveBeenCalledWith("blob:abc");
         expect(dc._pendingAttachments).toEqual([]);
         revoke.mockRestore();
@@ -639,11 +774,132 @@ describe("DashboardChat — @mention target stickiness", () => {
         // the @mention switched the open thread to catalog
         expect(dc.chatTarget).toBe("catalog");
 
-        // a reply / agent-list refresh triggers syncChatTarget — it must NOT
-        // revert to main now that the @mention counts as a deliberate pick.
-        dc.syncChatTarget();
+        // arriving at the view resolves a default — it must NOT revert to main
+        // now that the @mention has set the target.
+        dc.resolveDefaultTarget();
         expect(dc.chatTarget).toBe("catalog");
 
         dc.unwire();
+    });
+});
+
+describe("mobile master–detail: which pane is showing", () => {
+    /**
+     * The pane is revealed by an `agent-selected` class on `.af-chat`. It used to
+     * be added only inside `_selectAgent`, so arriving at the chat view with a
+     * target already chosen — which is what tapping "Chat" does, since the
+     * default resolves to `main` — left the sidebar showing and the rest of the
+     * screen empty.
+     */
+    function mount(agents: AgentInfo[] = [agent("main"), agent("worker")]) {
+        const host = makeHost(agents);
+        const chat = new DashboardChat(host);
+        host.root.appendChild(chat.buildChatView());
+        chat.afterMount();
+        return { host, chat, el: () => host.root.querySelector(".af-chat") };
+    }
+
+    it("opens the conversation when the view is entered with a target", () => {
+        const { el } = mount();
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("still opens it when an agent is picked from the list", () => {
+        const { host, el } = mount();
+        host.root.querySelector<HTMLElement>("#af-chat-agent-list button")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("shows the list when Back is pressed", () => {
+        const { host, el } = mount();
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+    });
+
+    it("opens the conversation when a message is sent from another view", () => {
+        // Typing "@catalog spawn weather agent" on Overview navigates to chat.
+        // Landing on the agent list there strands the user: the reply is already
+        // on its way to an agent they cannot see.
+        const { host, chat, el } = mount([agent("main"), agent("catalog")]);
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+
+        chat.wire();
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "@catalog spawn weather agent", target: "catalog", attachments: [] },
+            }),
+        );
+        chat.afterMount();
+
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("opens the conversation again when the view is re-entered", () => {
+        // Back is a choice within one visit. Leaving and returning via the nav
+        // means "Chat", which always means a conversation — otherwise one Back
+        // silently changes what that tab does until the next select or send.
+        const { host, chat, el } = mount();
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+
+        chat.showConversation(); // what CardDashboard._setView does on arrival
+        chat.afterMount();
+
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("names the new recipient in the composer after an @mention send", () => {
+        // The placeholder is the only on-screen statement of where a message
+        // goes. Left stale it read "Message @main…" while replies went to
+        // catalog — worse than unhelpful, because it is wrong.
+        // Start on another view: that is the path where _showSentMessage
+        // switches view and returns early, skipping updateTargetSelect. With the
+        // host already on "chat" the placeholder gets set by that branch instead,
+        // and the test passes whether or not the fix is present.
+        const host = makeHost([agent("main"), agent("catalog")], "overview");
+        const chat = new DashboardChat(host);
+        host.root.appendChild(chat.buildChatView());
+        chat.afterMount();
+        // The composer lives in the shell, outside the chat view, so the
+        // harness has to supply it the way the dashboard does.
+        const input = document.createElement("textarea");
+        input.id = "af-iobar-input";
+        host.root.appendChild(input);
+        chat.wire();
+
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "@catalog spawn weather agent", target: "catalog", attachments: [] },
+            }),
+        );
+
+        expect(input.placeholder).toBe("Message @catalog…");
+    });
+
+    it("opens the conversation when sending while the list is showing", () => {
+        // Already in the chat view, list showing: nothing mounts, so clearing
+        // the flag is not enough on its own — the send path has to apply it.
+        const { host, chat, el } = mount([agent("main"), agent("catalog")]);
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
+
+        chat.wire();
+        document.dispatchEvent(
+            new CustomEvent("af-send-message", {
+                detail: { content: "@catalog spawn weather-agent", target: "catalog", attachments: [] },
+            }),
+        );
+
+        expect(el()?.classList.contains("agent-selected")).toBe(true);
+    });
+
+    it("keeps the list showing across a re-render", () => {
+        // Deriving purely from "has a target" would re-open the pane here,
+        // making Back appear to do nothing the moment anything re-rendered.
+        const { host, chat, el } = mount();
+        host.root.querySelector<HTMLElement>(".af-chat-back-btn")?.click();
+        chat.afterMount();
+        expect(el()?.classList.contains("agent-selected")).toBe(false);
     });
 });

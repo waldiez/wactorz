@@ -338,6 +338,22 @@ class TestWebSocketCommands:
         finally:
             runtime.state["agents"].pop("remote-1", None)
 
+    async def test_a_command_for_an_untracked_agent_creates_no_phantom_entry(self) -> None:
+        # The write used to be `state["agents"].get(agent_id, {})["state"] = …`,
+        # which mutated a *fresh* dict when the agent was absent — a line that
+        # reads like a state update and silently was not one. An absent agent is
+        # not an error: the command succeeded, and the next heartbeat re-creates
+        # the entry.
+        actor = _Recorder()
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
+        runtime.mqtt_client_ref = None
+        runtime.state["agents"].pop(actor.actor_id, None)
+
+        await ws.handle_command({"command": "pause", "agent_id": actor.actor_id})
+
+        assert actor.calls == ["pause"]  # the command still reached the actor
+        assert actor.actor_id not in runtime.state["agents"]
+
 
 class TestCommandListener:
     async def test_a_protected_actor_keeps_listening_after_refusing_stop(self) -> None:

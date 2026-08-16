@@ -36,3 +36,22 @@ export function renderAttachTray(
         tray.appendChild(chip);
     });
 }
+
+/** Release a dev-stub blob URL, if that is what this attachment holds. */
+function revoke(att: Attachment): void {
+    if (att.url?.startsWith("blob:")) {
+        URL.revokeObjectURL(att.url);
+    }
+}
+
+/** Drop one attachment from `pending`, returning the remainder. */
+export function withoutAttachment(pending: Attachment[], att: Attachment): Attachment[] {
+    revoke(att);
+    return pending.filter(a => a !== att);
+}
+
+/** Discard every pending attachment (send / wipe), releasing their blob URLs. */
+export function dropAllAttachments(pending: Attachment[]): Attachment[] {
+    pending.forEach(revoke);
+    return [];
+}

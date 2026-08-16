@@ -13,14 +13,24 @@ import sys
 from aiohttp import web
 from aiohttp.typedefs import Handler
 
-from ..config import MAX_REQUEST_BYTES
+from .. import config
+from ..config import CONFIG, MAX_REQUEST_BYTES
+from ..core.paths import ensure_state_dir
 from . import (
     api_actors,
+    api_log_capture,
+    api_logs,
     api_reset,
     api_system,
+    api_uploads,
+    auth,
     chat,
+    log_stream,
+    login,
     mqtt,
+    origins,
     runtime,
+    sessions,
     static_site,
     ws,
 )
@@ -34,7 +44,7 @@ logger = logging.getLogger(__name__)
 async def check_ws_port() -> bool:
     """Return True if WS_PORT is free to bind."""
     try:
-        server = await asyncio.start_server(lambda r, w: None, "0.0.0.0", runtime.WS_PORT)
+        server = await asyncio.start_server(lambda r, w: None, CONFIG.bind_host, runtime.WS_PORT)
         server.close()
         await server.wait_closed()
         return True
@@ -52,24 +62,31 @@ def build_app() -> web.Application:
 
     @web.middleware
     async def cors_middleware(request: web.Request, handler: Handler) -> Response:
+        """Decide whether a browser somewhere else may act on this server.
+
+        In middleware rather than per route: nearly every path below is
+        registered twice, under `/api/x` and a bare `/x`, and a per-route
+        decorator would guard whichever alias its author remembered.
+        """
+        refusal = origins.refuse(request)
+        if refusal is not None:
+            return refusal
+
+        origin = origins.allowed_origin(request)
         if request.method == "OPTIONS":
-            return web.Response(
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-                    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                }
-            )
+            return web.Response(headers=origins.cors_headers(origin))
         response = await handler(request)
         try:
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+            response.headers.update(origins.cors_headers(origin))
         except Exception:
             pass
         return response
 
-    app = web.Application(middlewares=[cors_middleware], client_max_size=MAX_REQUEST_BYTES)
+    app = web.Application(
+        # Order matters only for which refusal a caller sees first; both run.
+        middlewares=[cors_middleware, auth.auth_middleware],
+        client_max_size=MAX_REQUEST_BYTES,
+    )
     # Expose the registry to extensions (via app.get) before setup_all() runs.
     # None in standalone/legacy MQTT mode — consumers handle that.
     from ..core import contract
@@ -78,6 +95,12 @@ def build_app() -> web.Application:
 
     app.router.add_get("/", static_site.index_handler)
     app.router.add_get("/health", api_system.health_handler)
+    # Sign-in. Exempt from the key check and from nothing else — `POST /login`
+    # stays inside the origin gate, which is what stands in for a CSRF token.
+    app.router.add_get("/login", login.login_page_handler)
+    app.router.add_post("/login", login.login_submit_handler)
+    app.router.add_post("/logout", login.logout_handler)
+    app.router.add_post("/logout/all", login.logout_everywhere_handler)
     app.router.add_get("/api/cost", api_system.cost_handler)
     app.router.add_get("/cost", api_system.cost_handler)
     app.router.add_post("/api/cost/limit", api_system.cost_limit_handler)
@@ -121,6 +144,21 @@ def build_app() -> web.Application:
 
     app.router.add_get("/api/config", api_system.config_handler)
     app.router.add_get("/config", api_system.config_handler)
+
+    # `/api/` only, unlike the pairs above: whatever authentication lands will be
+    # middleware over that prefix, and a bare `/logs` alias would sit outside it.
+    app.router.add_get("/api/logs", api_logs.logs_handler)
+    # Under `/api/` like the rest, so the key check covers the write without a
+    # second rule. DEBUG additionally needs a host-side flag — see the module.
+    app.router.add_get("/api/logs/capture", api_log_capture.capture_state_handler)
+    app.router.add_post("/api/logs/capture", api_log_capture.capture_handler)
+    # Only when asked for: these write caller-supplied bytes to disk.
+    if config.UPLOADS_ENABLED:
+        app.router.add_post("/api/upload", api_uploads.upload_handler)
+        app.router.add_post("/upload", api_uploads.upload_handler)
+        app.router.add_get("/api/upload/{file_id}", api_uploads.download_handler)
+        app.router.add_get("/upload/{file_id}", api_uploads.download_handler)
+
     app.router.add_get("/api/feed", api_system.feed_handler)
     app.router.add_get("/feed", api_system.feed_handler)
     app.router.add_post("/api/reset", api_reset.reset_handler)
@@ -162,11 +200,35 @@ async def main(exit_on_failure: bool = False) -> None:
             raise SystemExit(1)
         return
 
+    weak_key = auth.weak_key_warning(CONFIG.api_key)
+    if weak_key:
+        # Said on this path too: the process root has its own copy, and starting
+        # the monitor alone must not be the quiet way to skip the advice.
+        logger.warning("[startup] %s", weak_key)
+
+    refusal = auth.exposure_refusal(CONFIG.bind_host, CONFIG.api_key)
+    if refusal:
+        # Before the socket, not after: a process that has already bound has
+        # already been reachable.
+        logger.error("[startup] %s", refusal)
+        if exit_on_failure:
+            raise SystemExit(1)
+        return
+
+    # Before the socket: a browser that still holds a cookie from the last run
+    # should not race a store that has not read the file yet, and be sent to the
+    # login form for a session that was there all along.
+    # `ensure_` rather than `resolve_`: a server is starting, and a state
+    # directory that does not exist yet would otherwise make every write fail
+    # quietly and sessions never survive anything.
+    sessions.store.bind(ensure_state_dir(), CONFIG.api_key)
+
+    origins.log_mode()
     app = build_app()
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", runtime.WS_PORT)
+    site = web.TCPSite(runner, CONFIG.bind_host, runtime.WS_PORT)
     await site.start()
     msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/"
     logger.info(msg)
@@ -177,14 +239,19 @@ async def main(exit_on_failure: bool = False) -> None:
     # Held in a local so the task is not garbage-collected mid-flight, and
     # cancelled below so shutdown does not leave it running.
     totals_task = asyncio.create_task(ws.totals_broadcaster())
+    # Follows the log for pages that are already open. Same shape as the totals
+    # broadcaster — a sleep and a broadcast — so it unwinds on cancel just as
+    # quickly.
+    log_task = asyncio.create_task(log_stream.log_push_loop())
     try:
         await mqtt.mqtt_listener()
     finally:
         # cancel() only requests it; awaiting is what makes shutdown mean the
         # task has actually unwound. No timeout needed here — unlike an actor's
-        # tasks, this one is a sleep and a broadcast, so it stops immediately.
+        # tasks, these are a sleep and a broadcast, so they stop immediately.
         totals_task.cancel()
-        await asyncio.gather(totals_task, return_exceptions=True)
+        log_task.cancel()
+        await asyncio.gather(totals_task, log_task, return_exceptions=True)
 
 
 def cli_main() -> None:

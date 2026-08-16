@@ -9,6 +9,7 @@ import json
 import logging
 from typing import Any
 
+from .attachments import NO_DOCUMENTS, UNREADABLE
 from .pricing import calc_cost
 
 logger = logging.getLogger(__name__)
@@ -94,3 +95,56 @@ def _openai_tool_result_message(message: dict[str, Any]) -> dict[str, Any]:
         "name": message.get("name") or message.get("tool_name") or "",
         "content": str(message.get("content", "")),
     }
+
+
+def openai_content(content: Any) -> Any:
+    """Message content for the OpenAI wire format.
+
+    Strings pass through untouched. A list of attachment blocks (the shape
+    ``llm.attachments.to_blocks`` produces) becomes chat-completions parts:
+    text stays text, an image becomes an ``image_url`` part carrying a data
+    URL, and a document becomes a text marker — the format has no inline
+    document part, and the name note ``to_blocks`` emits ahead of the block
+    already tells the model what the file was called.
+
+    Anything that is not one of those blocks is passed through as it stands.
+    A list content is not always attachments: it can be parts this format
+    already understands, so translating only what is recognisable is what keeps
+    this from eating them.
+    """
+    if not isinstance(content, list):
+        return content
+    parts: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            parts.append({"type": "text", "text": str(block)})
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            parts.append({"type": "text", "text": str(block.get("text", ""))})
+        elif block_type == "image":
+            source = block.get("source") or {}
+            data = source.get("data") or ""
+            if data:
+                media_type = source.get("media_type") or "image/png"
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{data}"},
+                    }
+                )
+            else:
+                parts.append({"type": "text", "text": UNREADABLE})
+        elif block_type == "document":
+            parts.append({"type": "text", "text": NO_DOCUMENTS})
+        else:
+            parts.append(block)
+    return parts
+
+
+def openai_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """A message list with every content field run through :func:`openai_content`."""
+    return [
+        {**m, "content": openai_content(m.get("content"))} if isinstance(m, dict) else m
+        for m in messages
+    ]

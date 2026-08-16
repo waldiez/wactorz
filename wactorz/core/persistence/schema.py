@@ -163,7 +163,8 @@ CREATE TABLE IF NOT EXISTS chat_log (
     agent_name TEXT    NOT NULL,             -- agent that produced/received the message
     role       TEXT    NOT NULL,             -- 'user' | 'assistant'
     content    TEXT    NOT NULL,
-    session_id TEXT    DEFAULT ''            -- optional grouping (actor_id or custom)
+    session_id TEXT    DEFAULT '',           -- optional grouping (actor_id or custom)
+    attachments TEXT   DEFAULT ''            -- JSON array of {id,name,mime,size}
 );
 
 CREATE INDEX IF NOT EXISTS idx_chatlog_ts          ON chat_log (ts);

@@ -11,9 +11,13 @@
  */
 
 /**
- * Whether the `/api/stt` backend endpoint is available. Off by default; enable
- * per-deploy at build time with `VITE_STT_ENABLED=true` once the endpoint is
- * live. While off, the mic button is not rendered at all.
+ * Whether the mic button is shown. Off by default, and `/api/stt` does not
+ * exist yet — this is a switch for developing the feature, not a per-deploy
+ * option. While off, the mic button is not rendered at all.
+ *
+ * Build-time for that reason alone. Once the endpoint lands this becomes a
+ * question only the server can answer, and it should move to `/api/config`
+ * beside `uploads.enabled` rather than stay in the bundle.
  */
 export const STT_ENABLED = import.meta.env["VITE_STT_ENABLED"] === "true";
 

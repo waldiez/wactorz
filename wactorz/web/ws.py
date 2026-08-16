@@ -15,7 +15,7 @@ from typing import Any
 from aiohttp import WSMsgType, web
 
 from ..monitoring.log_redaction import redact
-from . import chat, events, lifecycle, runtime
+from . import chat, events, lifecycle, origins, runtime, uploads
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,16 @@ async def broadcast(msg: dict[str, Any]) -> None:
 
 
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
-    """Handle websocket connection."""
+    """Handle websocket connection.
+
+    The handshake is checked before anything is accepted. A WebSocket is exempt
+    from CORS entirely, so narrowing the HTTP surface alone leaves a page on any
+    origin able to open this socket, read the live feed and send commands.
+    """
+    refusal = origins.refuse(request, strict_origin=True)
+    if refusal is not None:
+        raise web.HTTPForbidden(text=refusal.text, content_type="application/json")
+
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     channel = Channel(ws)
@@ -172,9 +181,6 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
     # Send initial state
     await ws.send_str(json.dumps({"type": "full_snapshot", "state": events.snapshot()}))
-
-    # Advertise chat mode so the frontend knows where to send messages
-    await ws.send_str(json.dumps({"type": "config", "chat.chat_mode": "direct_ws"}))
 
     # Current server↔broker state so the "live" badge is right immediately on load.
     await ws.send_str(json.dumps({"type": "mqtt_status", "connected": runtime.mqtt_connected}))
@@ -191,15 +197,21 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # routing; defaults to the gateway id until a chat turn arrives.
     _reply_from = {"name": runtime.IO_GATEWAY_ID}
 
-    def _persist_chat(role: str, content: str, agent_name: str = "main") -> None:
+    def _persist_chat(
+        role: str,
+        content: str,
+        agent_name: str = "main",
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> None:
         """Best-effort write to chat_log. Never raises into the WS path."""
-        if runtime.db is None or not content:
+        if runtime.db is None or not (content or attachments):
             return
         try:
             runtime.db.write_chat_log(
                 ts=time.time(),
                 agent_name=agent_name,
                 role=role,
+                attachments=attachments,
                 # The log outlives the conversation and is readable through the
                 # API, so it gets the same treatment as the log file: a user can
                 # still type a credential even where no command accepts one.
@@ -280,6 +292,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()
+                        # Ids only travel on the wire; the name and type come
+                        # from what the server stored, so a caller cannot label
+                        # a file as something else in every thread that shows it.
+                        files = uploads.resolve(data.get("attachments"))
                         if content and runtime.registry is not None:
                             # Attribute the whole turn to the agent it addresses
                             # (slash commands and un-mentioned text default to
@@ -293,15 +309,16 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
-                            _persist_chat("user", content, _reply_from["name"])
+                            _persist_chat("user", content, _reply_from["name"], files)
 
-                            async def _safe_route(c=content):
+                            async def _safe_route(c=content, files=files):
                                 try:
                                     await chat.route_chat(
                                         c,
                                         ws_reply,
                                         stream_fn=ws_stream_chunk,
                                         stream_end_fn=ws_stream_end,
+                                        attachments=files,
                                     )
                                 except asyncio.CancelledError:
                                     # Stop button: finalize the partial stream so
@@ -383,9 +400,16 @@ async def handle_command(cmd: dict[str, Any]) -> None:
         events.add_log(
             {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
         )
-        runtime.state["agents"].get(agent_id, {})["state"] = (
-            "stopped" if command == "stop" else "paused" if command == "pause" else "running"
-        )  # start and resume both end up running
+        # `.get(agent_id, {})` returned a *fresh* dict when the agent was
+        # absent, so the assignment mutated a throwaway and the write silently
+        # did nothing — a line that reads like a state update and is not one.
+        # An absent agent is not an error here: the command already succeeded,
+        # and the next heartbeat re-creates the entry.
+        entry = runtime.state["agents"].get(agent_id)
+        if entry is not None:
+            entry["state"] = (
+                "stopped" if command == "stop" else "paused" if command == "pause" else "running"
+            )  # start and resume both end up running
         await broadcast({"type": "patch", "state": events.snapshot()})
     except Exception as exc:
         logger.error("[cmd] %s failed: %s", command, exc)

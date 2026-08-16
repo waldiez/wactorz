@@ -18,7 +18,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `api_key` | *(blank)* | Shared secret for the Wactorz REST API. Leave blank to disable auth. |
+| `api_key` | *(blank)* | Only consulted if you publish a port (see below). The Wactorz panel does not use it. |
 | `llm_provider` | `anthropic` | LLM backend: `anthropic`, `openai`, `gemini`, `ollama`, `nim` |
 | `llm_model` | `claude-sonnet-4-6` | Model name for the chosen provider |
 | `llm_api_key` | *(blank)* | API key for the chosen provider |
@@ -47,6 +47,22 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `influx_token` | *(blank)* | InfluxDB API token. |
 | `influx_org` | `wactorz` | InfluxDB organisation name. |
 | `influx_bucket` | `wactorz` | InfluxDB bucket name. |
+
+> **`api_key` and publishing a port.** Nothing is published to your network by
+> default: the panel reaches Wactorz through ingress, where Home Assistant has
+> already signed you in and the request is verified as coming from the
+> Supervisor. On that path the key is never consulted, which is why setting one
+> changes nothing for panel users.
+>
+> It matters in one case. If you assign a host port to `8000` or `8888` under
+> the add-on's **Network** settings, the API and dashboard land on your network
+> directly, and anything that can reach them can delete agents, read the chat
+> log and spend your LLM budget. Outside the add-on, Wactorz refuses to start in
+> that configuration — but the add-on declares its exposure already handled,
+> which is true right up until you publish a port, and that declaration switches
+> the refusal off. **Set `api_key` before publishing a port**, and reach the API
+> with `X-API-Key: <your key>` or `Authorization: Bearer <your key>`. Something
+> like `openssl rand -hex 32` gives a key nobody has to remember.
 
 > **The bots are capability-restricted.** Discord and Telegram allow conversation, Home Assistant
 > questions, and everyday device control (lights, switches, climate, covers, media players). They
@@ -108,7 +124,7 @@ SSH host keys are verified. A machine that has not been connected to before has 
 Install the [Mosquitto broker addon](https://github.com/home-assistant/addons/tree/master/mosquitto), leave `mqtt_host` as `core-mosquitto` and `mqtt_port` as `1883`.
 
 **Option B — embedded broker (no extra addon):**
-Set `mosquitto_embedded: true`. Wactorz starts its own Mosquitto instance inside the container. Change `mqtt_host` to `localhost`. MQTT data is persisted to `/share/mosquitto`.
+Set `mosquitto_embedded: true`. Wactorz starts its own Mosquitto instance inside the container. Change `mqtt_host` to `localhost`. MQTT data is persisted to `/data/mosquitto`.
 
 ## Embedded services
 
@@ -116,7 +132,7 @@ Setting `mosquitto_embedded` to `true` bundles a Mosquitto broker inside the Wac
 
 | Option | Port | Data path |
 | --- | --- | --- |
-| `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/share/mosquitto` |
+| `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/data/mosquitto` |
 
 ## Home Assistant integration
 

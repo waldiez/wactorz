@@ -108,7 +108,7 @@ SSH host keys are verified. A machine that has not been connected to before has 
 Install the [Mosquitto broker addon](https://github.com/home-assistant/addons/tree/master/mosquitto), leave `mqtt_host` as `core-mosquitto` and `mqtt_port` as `1883`.
 
 **Option B — embedded broker (no extra addon):**
-Set `mosquitto_embedded: true`. Wactorz starts its own Mosquitto instance inside the container. Change `mqtt_host` to `localhost`. MQTT data is persisted to `/share/mosquitto`.
+Set `mosquitto_embedded: true`. Wactorz starts its own Mosquitto instance inside the container. Change `mqtt_host` to `localhost`. MQTT data is persisted to `/data/mosquitto`.
 
 ## Embedded services
 
@@ -116,7 +116,7 @@ Setting `mosquitto_embedded` to `true` bundles a Mosquitto broker inside the Wac
 
 | Option | Port | Data path |
 | --- | --- | --- |
-| `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/share/mosquitto` |
+| `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/data/mosquitto` |
 
 ## Home Assistant integration
 

@@ -29,14 +29,17 @@ webui: http://[HOST]:[PORT:8888]
 # Nothing is published to the host by default: the dashboard is reached through
 # the Wactorz panel (ingress), which goes through Home Assistant's own login.
 # Assign a host port below only if you need to reach these from outside Home
-# Assistant, and note that doing so puts them on your network directly.
+# Assistant, and note that doing so puts them on your network directly. Set
+# `api_key` if you do: the add-on tells Wactorz its exposure is already handled
+# by ingress, which is true until a port is published, and that also switches
+# off the refusal that would otherwise stop an unauthenticated wide bind.
 ports:
   8000/tcp: null
   8888/tcp: null
   1883/tcp: null
 ports_description:
-  8000/tcp: Wactorz REST + WebSocket API — not published by default
-  8888/tcp: Wactorz Monitor UI — not published by default; use the Wactorz panel
+  8000/tcp: Wactorz REST + WebSocket API — not published by default; set api_key first if you publish it
+  8888/tcp: Wactorz Monitor UI — not published by default; use the Wactorz panel, or set api_key first if you publish it
   1883/tcp: MQTT TCP broker (only active when mosquitto_embedded is true)
 
 # ── Persistent state ───────────────────────────────────────────────────────────
@@ -46,8 +49,6 @@ map:
 
 # ── User-configurable options ──────────────────────────────────────────────────
 options:
-  # API access key for the Wactorz REST API (leave blank to disable auth)
-  #api_key: ""
 
   # LLM backend
   llm_provider: anthropic
@@ -62,6 +63,13 @@ options:
   # real OpenAI API, or point to any compatible proxy/provider for communication
   # with it — e.g. a LiteLLM proxy, Groq, Together, vLLM, or LM Studio.
   openai_url: ""
+
+  # Only needed if you publish port 8000 or 8888 above. Reaching Wactorz
+  # through its panel goes via ingress, where Home Assistant has already
+  # signed you in and the request is verified as coming from the Supervisor —
+  # so the key is not consulted on that path and setting one changes nothing
+  # for panel users.
+  api_key: ""
 
   # MQTT broker — set to the Mosquitto addon host if using the official addon
   mqtt_host: core-mosquitto
@@ -90,7 +98,7 @@ options:
   ha_token: ""
 
   # Embedded services — bundle Mosquitto inside this addon container
-  # (no external addon needed; data persisted to /share/mosquitto)
+  # (no external addon needed; data persisted to /data/mosquitto)
   mosquitto_embedded: false
 
   # Spend cap — set to 0 to disable. Period: daily, weekly, or monthly. Resets automatically.
@@ -129,7 +137,7 @@ options:
   #influx_bucket: "wactorz"
 
 schema:
-  #api_key: str?
+  api_key: str?
   llm_provider: list(anthropic|ollama|openai|gemini|nim)
   llm_model: str
   llm_api_key: str?

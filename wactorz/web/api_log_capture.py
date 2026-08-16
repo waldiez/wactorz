@@ -105,6 +105,10 @@ async def capture_state_handler(_request: web.Request) -> Response:
     placeholder for every name ever referenced, and listing those would bury the
     handful somebody actually changed.
     """
+    # Walked without a lock, for the same reason the ring buffer is: a logger
+    # created on another thread mid-walk would at worst fail this one request,
+    # and the caller can ask again. Locking the logging manager to render a
+    # diagnostic page is the wrong trade.
     manager: Any = logging.Logger.manager
     overrides = {
         name: logging.getLevelName(item.level)

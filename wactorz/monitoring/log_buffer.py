@@ -103,6 +103,12 @@ class LogRingBuffer(logging.Handler):
         missed = self._total - position
         if missed <= 0:
             return [], self._total
+        # Copied without a lock. `emit` can append from any thread while this
+        # iterates, which CPython tolerates for a deque in practice and which
+        # would at worst raise here — a caller that skips one tick, not one that
+        # loses records: the position is only advanced on the way out. A lock on
+        # the logging path would cost every record to protect a reader that can
+        # simply try again.
         entries = list(self._entries)
         return entries[-missed:] if missed < len(entries) else entries, self._total
 

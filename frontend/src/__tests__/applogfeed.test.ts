@@ -222,16 +222,13 @@ describe("records pushed by the server", () => {
     });
 });
 
-
 describe("the push subscription's lifecycle", () => {
     beforeEach(() => {
         document.body.innerHTML = "";
     });
 
     const push = (text: string) =>
-        document.dispatchEvent(
-            new CustomEvent("af-app-log", { detail: { entries: [record(text)] } }),
-        );
+        document.dispatchEvent(new CustomEvent("af-app-log", { detail: { entries: [record(text)] } }));
 
     it("takes nothing before it is wired", () => {
         const feed = new AppLogFeed(host());

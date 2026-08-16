@@ -17,12 +17,14 @@ from .. import config
 from ..config import CONFIG, MAX_REQUEST_BYTES
 from . import (
     api_actors,
+    api_log_capture,
     api_logs,
     api_reset,
     api_system,
     api_uploads,
     auth,
     chat,
+    log_stream,
     login,
     mqtt,
     origins,
@@ -144,6 +146,10 @@ def build_app() -> web.Application:
     # `/api/` only, unlike the pairs above: whatever authentication lands will be
     # middleware over that prefix, and a bare `/logs` alias would sit outside it.
     app.router.add_get("/api/logs", api_logs.logs_handler)
+    # Under `/api/` like the rest, so the key check covers the write without a
+    # second rule. DEBUG additionally needs a host-side flag — see the module.
+    app.router.add_get("/api/logs/capture", api_log_capture.capture_state_handler)
+    app.router.add_post("/api/logs/capture", api_log_capture.capture_handler)
     # Only when asked for: these write caller-supplied bytes to disk.
     if config.UPLOADS_ENABLED:
         app.router.add_post("/api/upload", api_uploads.upload_handler)
@@ -223,14 +229,19 @@ async def main(exit_on_failure: bool = False) -> None:
     # Held in a local so the task is not garbage-collected mid-flight, and
     # cancelled below so shutdown does not leave it running.
     totals_task = asyncio.create_task(ws.totals_broadcaster())
+    # Follows the log for pages that are already open. Same shape as the totals
+    # broadcaster — a sleep and a broadcast — so it unwinds on cancel just as
+    # quickly.
+    log_task = asyncio.create_task(log_stream.log_push_loop())
     try:
         await mqtt.mqtt_listener()
     finally:
         # cancel() only requests it; awaiting is what makes shutdown mean the
         # task has actually unwound. No timeout needed here — unlike an actor's
-        # tasks, this one is a sleep and a broadcast, so it stops immediately.
+        # tasks, these are a sleep and a broadcast, so they stop immediately.
         totals_task.cancel()
-        await asyncio.gather(totals_task, return_exceptions=True)
+        log_task.cancel()
+        await asyncio.gather(totals_task, log_task, return_exceptions=True)
 
 
 def cli_main() -> None:

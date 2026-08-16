@@ -9,9 +9,15 @@ Time is injected rather than slept, so the expiry tests are exact instead of
 slow and flaky.
 """
 
+import hashlib
+import stat
+import time
+from pathlib import Path
+
 from wactorz.web.sessions import (
     ONE_TIME_TTL_SECONDS,
     SESSION_TTL_SECONDS,
+    SESSIONS_FILENAME,
     OneTimeCodes,
     SessionStore,
 )
@@ -63,17 +69,17 @@ class TestExpiry:
         # Otherwise a client retrying a dead cookie grows the dict for as long
         # as it keeps trying.
         store = SessionStore(ttl_seconds=10)
-        store.create(now=0.0)
+        session = store.create(now=0.0)
 
         store.is_valid("nonexistent", now=100.0)
         assert len(store) == 1  # the retry did not clear anything on its own
 
-        store.is_valid(next(iter(store._created)), now=100.0)
+        store.is_valid(session, now=100.0)
         assert len(store) == 0
 
     def test_the_default_window_is_a_month(self) -> None:
         # Long on purpose, and safe because it is revocable — one browser or
-        # all of them. The in-memory store cuts it shorter on every restart.
+        # all of them.
         assert SESSION_TTL_SECONDS == 30 * 24 * 60 * 60
 
 
@@ -150,3 +156,170 @@ class TestTheStartupSignInCode:
         # It lands in scrollback and in `docker logs`, so the window is the
         # thing keeping it from being a long-lived credential in plain text.
         assert ONE_TIME_TTL_SECONDS == 15 * 60
+
+
+class TestSurvivingARestart:
+    """Sessions are kept on disk, so a bounce is not a sign-in ceremony.
+
+    A "restart" here is a second `SessionStore` bound to the same directory,
+    which is what the next process does.
+    """
+
+    def test_a_session_outlives_the_process_that_made_it(self, tmp_path: Path) -> None:
+        first = SessionStore()
+        first.bind(tmp_path, "the-configured-key")
+        session_id = first.create()
+
+        second = SessionStore()
+        second.bind(tmp_path, "the-configured-key")
+
+        assert second.is_valid(session_id)
+
+    def test_the_file_never_holds_a_working_cookie(self, tmp_path: Path) -> None:
+        store = SessionStore()
+        store.bind(tmp_path, "the-configured-key")
+        session_id = store.create()
+
+        written = (tmp_path / SESSIONS_FILENAME).read_text()
+
+        assert session_id not in written
+
+    def test_only_this_user_can_read_it(self, tmp_path: Path) -> None:
+        store = SessionStore()
+        store.bind(tmp_path, "the-configured-key")
+        store.create()
+
+        mode = (tmp_path / SESSIONS_FILENAME).stat().st_mode
+
+        assert stat.S_IMODE(mode) == 0o600
+
+    def test_signing_out_here_signs_out_after_a_restart_too(self, tmp_path: Path) -> None:
+        first = SessionStore()
+        first.bind(tmp_path, "the-configured-key")
+        session_id = first.create()
+        first.revoke(session_id)
+
+        second = SessionStore()
+        second.bind(tmp_path, "the-configured-key")
+
+        assert not second.is_valid(session_id)
+
+    def test_signing_out_everywhere_outlives_the_restart(self, tmp_path: Path) -> None:
+        first = SessionStore()
+        first.bind(tmp_path, "the-configured-key")
+        sessions = [first.create() for _ in range(3)]
+        first.revoke_all()
+
+        second = SessionStore()
+        second.bind(tmp_path, "the-configured-key")
+
+        assert not [s for s in sessions if second.is_valid(s)]
+
+    def test_an_expired_session_is_not_restored(self, tmp_path: Path) -> None:
+        first = SessionStore()
+        first.bind(tmp_path, "the-configured-key")
+        session_id = first.create(now=time.time() - SESSION_TTL_SECONDS - 1)
+
+        second = SessionStore()
+        second.bind(tmp_path, "the-configured-key")
+
+        assert not second.is_valid(session_id)
+
+    def test_expired_sessions_are_dropped_from_the_file(self, tmp_path: Path) -> None:
+        # Otherwise a long-lived install accumulates every session it ever
+        # issued, and the file only ever grows.
+        first = SessionStore()
+        first.bind(tmp_path, "the-configured-key")
+        first.create(now=time.time() - SESSION_TTL_SECONDS - 1)
+
+        second = SessionStore()
+        second.bind(tmp_path, "the-configured-key")
+
+        assert not len(second)
+
+
+class TestRotatingTheKey:
+    """Changing the API key ends every session, with nothing to remember to do.
+
+    Rotating a credential is often *how* access gets revoked, so sessions that
+    outlived it would quietly defeat the rotation.
+    """
+
+    def test_a_rotated_key_ends_existing_sessions(self, tmp_path: Path) -> None:
+        first = SessionStore()
+        first.bind(tmp_path, "the-original-key")
+        session_id = first.create()
+
+        second = SessionStore()
+        second.bind(tmp_path, "the-rotated-key")
+
+        assert not second.is_valid(session_id)
+
+    def test_the_file_holds_no_fingerprint_of_the_key(self, tmp_path: Path) -> None:
+        # Entries are keyed *under* the key rather than stored alongside a hash
+        # of it: a stored fingerprint would be an offline guessing target for a
+        # short key, which is exactly the key this warns about elsewhere.
+        key = "the-configured-key"
+        store = SessionStore()
+        store.bind(tmp_path, key)
+        store.create()
+
+        written = (tmp_path / SESSIONS_FILENAME).read_text()
+
+        assert hashlib.sha256(key.encode()).hexdigest() not in written
+        assert key not in written
+
+
+class TestWhenThereIsNoKeyToProtect:
+    def test_an_install_with_no_key_writes_no_file(self, tmp_path: Path) -> None:
+        # Every request is allowed through already, so the file would guard
+        # nothing — and the default install gains nothing on disk.
+        store = SessionStore()
+        store.bind(tmp_path, "")
+        store.create()
+
+        assert not list(tmp_path.iterdir())
+
+    def test_sessions_still_work_in_memory(self, tmp_path: Path) -> None:
+        store = SessionStore()
+        store.bind(tmp_path, "")
+
+        assert store.is_valid(store.create())
+
+
+class TestWhenTheFileIsUnusable:
+    """A convenience cache must never be the reason the monitor will not start."""
+
+    def test_a_corrupt_file_leaves_everyone_signed_out_rather_than_raising(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / SESSIONS_FILENAME).write_text("{not json at all")
+
+        store = SessionStore()
+        store.bind(tmp_path, "the-configured-key")
+
+        assert not len(store)
+
+    def test_a_file_of_the_wrong_shape_is_survived(self, tmp_path: Path) -> None:
+        (tmp_path / SESSIONS_FILENAME).write_text('["a list, not a mapping"]')
+
+        store = SessionStore()
+        store.bind(tmp_path, "the-configured-key")
+
+        assert not len(store)
+
+    def test_sessions_still_work_after_an_unreadable_file(self, tmp_path: Path) -> None:
+        (tmp_path / SESSIONS_FILENAME).write_text("{not json at all")
+        store = SessionStore()
+        store.bind(tmp_path, "the-configured-key")
+
+        assert store.is_valid(store.create())
+
+    def test_a_directory_that_cannot_be_written_does_not_break_signing_in(
+        self, tmp_path: Path
+    ) -> None:
+        # The session still works for this process; it just will not outlive it.
+        store = SessionStore()
+        store.bind(tmp_path / "does-not-exist", "the-configured-key")
+
+        assert store.is_valid(store.create())

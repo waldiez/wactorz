@@ -15,6 +15,7 @@ from aiohttp.typedefs import Handler
 
 from .. import config
 from ..config import CONFIG, MAX_REQUEST_BYTES
+from ..core.paths import ensure_state_dir
 from . import (
     api_actors,
     api_log_capture,
@@ -29,6 +30,7 @@ from . import (
     mqtt,
     origins,
     runtime,
+    sessions,
     static_site,
     ws,
 )
@@ -212,6 +214,14 @@ async def main(exit_on_failure: bool = False) -> None:
         if exit_on_failure:
             raise SystemExit(1)
         return
+
+    # Before the socket: a browser that still holds a cookie from the last run
+    # should not race a store that has not read the file yet, and be sent to the
+    # login form for a session that was there all along.
+    # `ensure_` rather than `resolve_`: a server is starting, and a state
+    # directory that does not exist yet would otherwise make every write fail
+    # quietly and sessions never survive anything.
+    sessions.store.bind(ensure_state_dir(), CONFIG.api_key)
 
     origins.log_mode()
     app = build_app()

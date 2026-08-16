@@ -5,10 +5,17 @@ key stays server-side, so a stolen cookie is one revocable session rather than
 the credential itself, and "sign out everywhere" is a dict being cleared rather
 than a secret being rotated.
 
-Deliberately in memory only. A restart means everyone logs in again, which is
-the honest trade for a store that cannot leak to disk, cannot drift out of sync
-with a wiped state directory, and needs no migration. The installs this serves
-restart often enough that persistence would buy little.
+Sessions outlive a restart, because the alternative is a sign-in ceremony every
+time the process bounces — and a credential a person retypes that often is one
+they end up storing somewhere worse. `bind` is what turns persistence on; until
+it is called this is a plain dict, which is how the tests take it.
+
+What lands on disk is deliberately not the session ids. Entries are keyed by
+``HMAC-SHA256(api_key, session_id)``, which does two jobs at once: the file
+cannot be read for working cookies, and rotating the key stops every stored
+entry from matching anything a browser presents — so rotating a credential
+still means what an operator expects it to mean, with nothing here to remember
+to do about it.
 
 Nothing here reads configuration or touches aiohttp — it is a set of ids with
 ages, so it can be tested for what it is.
@@ -16,8 +23,16 @@ ages, so it can be tested for what it is.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
+import logging
+import os
 import secrets
 import time
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 #: How long a session lasts, counted from when it was created rather than from
 #: the last request. Absolute rather than sliding: a sliding window renews
@@ -26,9 +41,15 @@ import time
 #:
 #: Thirty days is long for a credential and deliberate: it is revocable, both
 #: for one browser and for all of them at once, and revocation is what makes a
-#: long window safe. In practice restarts cut it far shorter — the store is in
-#: memory — so this is a ceiling rather than a promise.
+#: long window safe. Now that the store survives a restart this is the real
+#: window rather than a ceiling restarts kept cutting short.
 SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
+
+#: Where sessions are kept, inside the state directory. A plain name at the top
+#: of it: a wipe clears chat, metrics, spawns, pickles and logs by naming each,
+#: so nothing there matches this — and being signed out by "wipe all" would read
+#: as a bug rather than as the reset it belongs to.
+SESSIONS_FILENAME = "sessions.json"
 
 #: 32 bytes from `secrets`, hex-encoded. Long enough that guessing is not a
 #: threat model, so the store needs no rate limit of its own.
@@ -53,12 +74,81 @@ class SessionStore:
 
     def __init__(self, ttl_seconds: float = SESSION_TTL_SECONDS) -> None:
         self._ttl = ttl_seconds
-        self._created: dict[str, float] = {}
+        #: Keyed by `_token`, never by the id itself, so what is held in memory
+        #: is what gets written and neither is a working cookie.
+        self._tokens: dict[str, float] = {}
+        self._path: Path | None = None
+        self._secret = b""
+
+    def bind(self, state_dir: str | Path, api_key: str) -> None:
+        """Keep sessions in `state_dir`, and load the ones already there.
+
+        Called once at startup, before anything is served: it replaces whatever
+        is held, and it fixes the key entries are derived under.
+
+        With no key configured this does nothing and the store stays in memory.
+        That install allows every request through already, so a sessions file
+        would protect nothing and the default install gains no new file on disk.
+        """
+        if not api_key:
+            return
+        self._secret = api_key.encode()
+        self._path = Path(state_dir) / SESSIONS_FILENAME
+        self._load()
+
+    def _token(self, session_id: str) -> str:
+        """What is stored for `session_id`.
+
+        Keyed rather than plainly hashed. A bare digest of a 32-byte id would
+        already be safe from guessing, but keying it means the entries also stop
+        matching when the key changes — so a rotated key ends every session
+        without a stored fingerprint of the key to be attacked offline.
+        """
+        return hmac.new(self._secret, session_id.encode(), hashlib.sha256).hexdigest()
+
+    def _load(self) -> None:
+        """Read stored sessions, dropping any that have expired.
+
+        A file that cannot be read leaves the store empty rather than raising:
+        the cost is that everyone signs in again, and refusing to start the
+        monitor because a convenience cache is malformed is far worse than that.
+        """
+        if self._path is None or not self._path.is_file():
+            return
+        try:
+            stored = {str(k): float(v) for k, v in json.loads(self._path.read_text()).items()}
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
+            logger.warning("[auth] could not read stored sessions (%s); starting empty", exc)
+            return
+        now = time.time()
+        self._tokens = {token: at for token, at in stored.items() if now - at < self._ttl}
+
+    def _save(self) -> None:
+        """Write the store out, atomically and readable only by this user.
+
+        Opened at 0600 rather than chmod-ed afterwards: creating it at the
+        umask's permissions and narrowing them after leaves a window where the
+        file is readable, which is the whole thing this is trying to avoid.
+        """
+        if self._path is None:
+            return
+        tmp = self._path.with_name(f"{self._path.name}.tmp")
+        try:
+            fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                json.dump(self._tokens, handle)
+            # Replaced rather than written in place, so a crash mid-write leaves
+            # the previous file whole instead of a truncated one nobody can read.
+            os.replace(tmp, self._path)
+        except OSError as exc:
+            logger.warning("[auth] could not persist sessions: %s", exc)
+            tmp.unlink(missing_ok=True)
 
     def create(self, now: float | None = None) -> str:
         """Start a session and return the id the cookie will carry."""
         session_id = secrets.token_hex(_ID_BYTES)
-        self._created[session_id] = time.time() if now is None else now
+        self._tokens[self._token(session_id)] = time.time() if now is None else now
+        self._save()
         return session_id
 
     def is_valid(self, session_id: str, now: float | None = None) -> bool:
@@ -68,21 +158,28 @@ class SessionStore:
         presents does not matter, and one that is presented is checked here
         anyway. An expired entry is dropped as it is found, so the dict does not
         grow without bound for a caller that keeps retrying an old cookie.
+
+        Dropping one does not write the file. This runs on every request, and an
+        entry that has expired is refused whether or not it is still on disk —
+        the next session started or ended writes it out, and `_load` drops it
+        again anyway.
         """
         if not session_id:
             return False
-        started = self._created.get(session_id)
+        token = self._token(session_id)
+        started = self._tokens.get(token)
         if started is None:
             return False
         moment = time.time() if now is None else now
         if moment - started >= self._ttl:
-            self._created.pop(session_id, None)
+            self._tokens.pop(token, None)
             return False
         return True
 
     def revoke(self, session_id: str) -> None:
         """End one session — logging out of this browser."""
-        self._created.pop(session_id, None)
+        if self._tokens.pop(self._token(session_id), None) is not None:
+            self._save()
 
     def revoke_all(self) -> int:
         """End every session, returning how many there were.
@@ -91,12 +188,13 @@ class SessionStore:
         id rather than the key: signing everyone out is this, not a credential
         change that would also break every script and probe.
         """
-        count = len(self._created)
-        self._created.clear()
+        count = len(self._tokens)
+        self._tokens.clear()
+        self._save()
         return count
 
     def __len__(self) -> int:
-        return len(self._created)
+        return len(self._tokens)
 
 
 class OneTimeCodes:

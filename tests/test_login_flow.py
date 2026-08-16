@@ -16,6 +16,7 @@ loudest about.
 
 from collections.abc import AsyncGenerator
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -420,3 +421,63 @@ class TestTheWebsocketHandshake:
                 pass
 
         assert refused.value.status == 401
+
+
+class TestASessionSurvivesARestart:
+    """The reason sessions are kept on disk, driven through the real app.
+
+    A restart here is what the next process does: a new store over the same
+    state directory, and a browser that still holds the cookie from before.
+    """
+
+    @staticmethod
+    def _restart(monkeypatch: pytest.MonkeyPatch, state_dir: Path, key: str) -> None:
+        """Stand up the store the next process would have."""
+        store = sessions.SessionStore()
+        store.bind(state_dir, key)
+        monkeypatch.setattr(sessions, "store", store)
+
+    async def test_a_cookie_from_the_previous_process_still_works(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr("wactorz.config.CONFIG", replace(CONFIG, api_key=KEY))
+        monkeypatch.setattr(throttle, "throttle", throttle.LoginThrottle())
+
+        self._restart(monkeypatch, tmp_path, KEY)
+        async with TestClient(TestServer(build_app())) as first:
+            await first.post("/login", data={"key": KEY}, allow_redirects=False)
+            cookie = _cookie(first)
+        assert cookie
+
+        self._restart(monkeypatch, tmp_path, KEY)
+        async with TestClient(TestServer(build_app())) as second:
+            resp = await second.get(
+                "/api/actors",
+                headers={"Accept": "application/json"},
+                cookies={auth.SESSION_COOKIE: cookie},
+            )
+
+        assert resp.status == 200
+
+    async def test_a_rotated_key_sends_that_browser_back_to_the_form(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr("wactorz.config.CONFIG", replace(CONFIG, api_key=KEY))
+        monkeypatch.setattr(throttle, "throttle", throttle.LoginThrottle())
+
+        self._restart(monkeypatch, tmp_path, KEY)
+        async with TestClient(TestServer(build_app())) as first:
+            await first.post("/login", data={"key": KEY}, allow_redirects=False)
+            cookie = _cookie(first)
+
+        rotated = "the-key-after-rotation"
+        monkeypatch.setattr("wactorz.config.CONFIG", replace(CONFIG, api_key=rotated))
+        self._restart(monkeypatch, tmp_path, rotated)
+        async with TestClient(TestServer(build_app())) as second:
+            resp = await second.get(
+                "/api/actors",
+                headers={"Accept": "application/json"},
+                cookies={auth.SESSION_COOKIE: cookie},
+            )
+
+        assert resp.status == 401

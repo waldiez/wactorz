@@ -35,6 +35,10 @@ export interface AppEventMap {
      *  The reason only picks the wording the user is shown. */
     "af-agents-settled": { reason: "reset" | "deleted" };
     "af-clear-feed": void;
+    /** Application-log records the server pushed as it wrote them. Untyped
+     *  entries: they arrive off the socket and are validated where they are
+     *  turned into rows, not here. */
+    "af-app-log": { entries: unknown[] };
     "tts-voices-loaded": { voices: TTSVoice[] };
     "tts-audio-start": void;
     "tts-audio-end": void;

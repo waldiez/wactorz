@@ -30,6 +30,10 @@ export type MqttStatusHandler = (connected: boolean) => void;
  *  hostile object can't stringify to "[object Object]"). */
 const asStr = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
 
+/** Coerce an untrusted JSON field to an array; anything else becomes empty, so
+ *  a caller can iterate without checking what the server actually sent. */
+const asArray = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
 /**
  * Called whenever the server broadcasts a state patch over the WebSocket.
  * `deletedId` is set when the server explicitly deletes an agent.
@@ -235,6 +239,13 @@ export class WSClient {
         const type = data["type"];
         if (type === "server_event") {
             this._onServerEvent?.(asStr(data["topic"]), data["payload"]);
+            return;
+        }
+        if (type === "app_log") {
+            // Records the server wrote since the last frame. Emitted rather
+            // than handled here: WSClient owns the socket, not the view that
+            // decides what a new row does.
+            emit("af-app-log", { entries: asArray(data["entries"]) });
             return;
         }
         if (type === "mqtt_status") {

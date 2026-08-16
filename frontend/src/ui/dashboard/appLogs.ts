@@ -24,8 +24,12 @@ function ingressBase(): string {
  * Validated rather than cast: the envelope is checked at the boundary so a
  * malformed entry is dropped here instead of becoming `undefined` in the middle
  * of rendering a row.
+ *
+ * Exported because records arrive two ways — fetched from `/api/logs` and
+ * pushed over the socket — and a row that is valid one way and not the other
+ * would be a difference nobody could see until it rendered.
  */
-function toEntry(raw: unknown): AppLogItem | null {
+export function toEntry(raw: unknown): AppLogItem | null {
     if (!raw || typeof raw !== "object") {
         return null;
     }

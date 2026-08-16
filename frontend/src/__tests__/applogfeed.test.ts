@@ -10,7 +10,7 @@
  * first is invisible until the request rate doubles.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { AppLogFeed, FOLLOW_INTERVAL_MS } from "../ui/dashboard/appLogFeed";
+import { AppLogFeed, FOLLOW_INTERVAL_MS, MAX_ENTRIES } from "../ui/dashboard/appLogFeed";
 import { DEFAULT_FILTERS } from "../ui/dashboard/feedView";
 
 const record = (text: string, ts = 1_700_000_000) => ({
@@ -159,5 +159,128 @@ describe("following", () => {
         feed.resume();
 
         expect(feed.armed).toBe(false);
+    });
+});
+
+describe("records pushed by the server", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    it("are folded into what is already held", () => {
+        const feed = new AppLogFeed(host());
+
+        feed.receive([record("pushed while watching")]);
+
+        expect(feed.entries.map(e => (e as { text: string }).text)).toContain("pushed while watching");
+    });
+
+    it("are deduplicated against what has already arrived", () => {
+        // A record can arrive twice — pushed as it happens, then again in the
+        // next fetch. The overlap is deliberate; `feedKey` is what makes it
+        // cost nothing.
+        const feed = new AppLogFeed(host());
+        const same = record("said once");
+
+        feed.receive([same]);
+        feed.receive([same]);
+
+        expect(feed.entries).toHaveLength(1);
+    });
+
+    it("drop anything that is not a log record", () => {
+        // They arrive off a socket, so they are validated exactly as fetched
+        // ones are rather than trusted for having come over a different path.
+        const feed = new AppLogFeed(host());
+
+        feed.receive([{ nonsense: true }, null, "text", record("the real one")]);
+
+        expect(feed.entries).toHaveLength(1);
+    });
+
+    it("stop accumulating at the cap", () => {
+        // `load()` replaces the list with a bounded response, but pushes append
+        // — so without this a dashboard left open overnight keeps every line.
+        const feed = new AppLogFeed(host());
+
+        for (let i = 0; i < MAX_ENTRIES + 50; i++) {
+            feed.receive([record(`line ${i}`, 1_700_000_000 + i)]);
+        }
+
+        expect(feed.entries).toHaveLength(MAX_ENTRIES);
+        expect(feed.entries.map(e => (e as { text: string }).text)).toContain(`line ${MAX_ENTRIES + 49}`);
+    });
+
+    it("are kept but not drawn while the activity view is closed", () => {
+        // Returning to the view should show what happened meanwhile, and
+        // appending to a view nobody is looking at renders into nothing.
+        const feed = new AppLogFeed(host(false));
+
+        feed.receive([record("happened while away")]);
+
+        expect(feed.entries).toHaveLength(1);
+    });
+});
+
+
+describe("the push subscription's lifecycle", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    const push = (text: string) =>
+        document.dispatchEvent(
+            new CustomEvent("af-app-log", { detail: { entries: [record(text)] } }),
+        );
+
+    it("takes nothing before it is wired", () => {
+        const feed = new AppLogFeed(host());
+
+        push("before wiring");
+
+        expect(feed.entries).toHaveLength(0);
+    });
+
+    it("takes records once wired", () => {
+        const feed = new AppLogFeed(host());
+        feed.wire();
+
+        push("while wired");
+
+        expect(feed.entries).toHaveLength(1);
+    });
+
+    it("stops when unwired", () => {
+        const feed = new AppLogFeed(host());
+        feed.wire();
+        feed.unwire();
+
+        push("after unwiring");
+
+        expect(feed.entries).toHaveLength(0);
+    });
+
+    it("comes back when wired again", () => {
+        // The reason this is not done once at construction: a dashboard hidden
+        // and shown again would return with the push silently dead, and the
+        // periodic fetch would mask it — a view that looks live and lags.
+        const feed = new AppLogFeed(host());
+        feed.wire();
+        feed.unwire();
+
+        feed.wire();
+        push("after re-wiring");
+
+        expect(feed.entries).toHaveLength(1);
+    });
+
+    it("does not stack two listeners when wired twice", () => {
+        const feed = new AppLogFeed(host());
+        feed.wire();
+        feed.wire();
+
+        push("delivered once");
+
+        expect(feed.entries).toHaveLength(1);
     });
 });

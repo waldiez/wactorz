@@ -45,31 +45,31 @@ describe("CardDashboard behaviour", () => {
             cd._setView("feed");
             const item = feedItem({ label: "first" });
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
             expect(cd.root.querySelector(".af-feed")?.textContent).toContain("first");
             // exact duplicate is dropped
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
         });
 
         it("af-feed-push while not on the feed view still records the item", () => {
             cd.show([agent("main")]);
             cd._setView("overview");
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem() } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
         });
 
         it("af-wipe-all and af-clear-feed empty the feed", () => {
             cd.show([agent("main")]);
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem() } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
             document.dispatchEvent(new CustomEvent("af-clear-feed"));
-            expect(cd.feedItems.length).toBe(0);
+            expect(cd._activity.count).toBe(0);
 
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem() } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
             document.dispatchEvent(new CustomEvent("af-wipe-all"));
-            expect(cd.feedItems.length).toBe(0);
+            expect(cd._activity.count).toBe(0);
         });
     });
 
@@ -202,10 +202,11 @@ describe("CardDashboard behaviour", () => {
             expect(() => cd.onChat("ghost", "user")).not.toThrow();
         });
 
-        it("_refreshTimestamps updates known cards and marks stale dots", () => {
+        it("the heartbeat refresh updates known cards and marks stale dots", () => {
             cd.show([agent("main")]);
-            cd.lastHb.set("main", Date.now() - 200_000); // older than STALE_MS (180s)
-            cd._refreshTimestamps();
+            // Older than STALE_MS (180s).
+            cd._heartbeats.lastSeen.set("main", Date.now() - 200_000);
+            cd._heartbeats.refresh();
             const dot = cd.root.querySelector('[data-id="main"] .af-card-state-dot');
             expect(dot.classList.contains("af-card-stale")).toBe(true);
         });
@@ -271,7 +272,7 @@ describe("CardDashboard behaviour", () => {
             vi.useFakeTimers();
             const fresh = new CardDashboard() as any;
             fresh.show([agent("main")]);
-            const spy = vi.spyOn(fresh, "_refreshTimestamps");
+            const spy = vi.spyOn(fresh._heartbeats, "refresh");
             vi.advanceTimersByTime(5000);
             expect(spy).toHaveBeenCalled();
             fresh.destroy();
@@ -281,7 +282,7 @@ describe("CardDashboard behaviour", () => {
             vi.useFakeTimers();
             const fresh = new CardDashboard() as any;
             fresh.show([agent("main")]);
-            const spy = vi.spyOn(fresh, "_refreshTimestamps");
+            const spy = vi.spyOn(fresh._heartbeats, "refresh");
             const hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
             vi.advanceTimersByTime(5000);
             expect(spy).not.toHaveBeenCalled();
@@ -317,17 +318,17 @@ describe("CardDashboard behaviour", () => {
             expect(() => cd.onHeartbeat("catalog", Date.now())).not.toThrow();
         });
 
-        it("_refreshTimestamps skips ids with no rendered card", () => {
+        it("the heartbeat refresh skips ids with no rendered card", () => {
             cd.show([agent("main")]);
-            cd.lastHb.set("ghost", Date.now());
-            expect(() => cd._refreshTimestamps()).not.toThrow();
+            cd._heartbeats.lastSeen.set("ghost", Date.now());
+            expect(() => cd._heartbeats.refresh()).not.toThrow();
         });
 
-        it("removeAgent clears the agent's lastHb entry (no leak on churn)", () => {
+        it("removeAgent forgets the agent's heartbeat (no leak on churn)", () => {
             cd.show([agent("catalog")]);
-            cd.lastHb.set("catalog", Date.now());
+            cd._heartbeats.lastSeen.set("catalog", Date.now());
             cd.removeAgent("catalog");
-            expect(cd.lastHb.has("catalog")).toBe(false);
+            expect(cd._heartbeats.lastSeen.has("catalog")).toBe(false);
         });
     });
 

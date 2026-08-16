@@ -134,7 +134,6 @@ options:
 
   # InfluxDB 2.x — leave influx_url blank to disable
   # Use the official InfluxDB HA addon (http://homeassistant:8086) or any external instance.
-  # pip install 'wactorz[influx]' is handled automatically when influx_url is set.
   #influx_url: ""
   #influx_token: ""
   #influx_org: "wactorz"

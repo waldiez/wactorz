@@ -40,7 +40,7 @@ Options are defined in three places that must stay in sync:
 
 - **Base image**: Keep `aarch64-base-python` and `amd64-base-python` in sync. The `BUILD_FROM` ARG is resolved by the Supervisor build matrix; only one Dockerfile is needed.
 - **System packages** (`apk add`): Add to the existing `RUN apk add --no-cache` line — avoid extra layers.
-- **Wactorz version**: The pip install always pulls `@main`. Version pinning for stable releases happens at the addon `version:` field level, not inside the Dockerfile.
+- **Wactorz version**: the pip install takes a git ref through the `WACTORZ_REF` ARG, and never touches PyPI — the release workflow publishes to PyPI on the same tag, so a PyPI install would race its own publish. A **tag push** builds that tag (`@v0.5.3`), so a released image is reproducible. A **`workflow_dispatch`** takes whatever ref you give it, defaulting to `main`; that is the path for an add-on-only rebuild, where the add-on version gains a fourth component (`0.5.3.1`) and the library stays put.
 - **New binaries/services**: Add them to the same Alpine RUN block or a dedicated RUN block. If the service needs a config file, `COPY` it alongside `run.sh` and reference it in the entrypoint.
 
 ## Modifying run.sh

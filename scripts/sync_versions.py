@@ -4,9 +4,11 @@ import re
 import sys
 from pathlib import Path
 
+ROOT_DIR = Path(__file__).parent.parent
 
-def update_python_version(new_version):
-    version_file = Path("wactorz/_version.py")
+
+def update_python_version(new_version: str) -> None:
+    version_file = ROOT_DIR / "wactorz" / "_version.py"
     if version_file.exists():
         content = version_file.read_text()
         new_content = re.sub(r'__version__ = ".*"', f'__version__ = "{new_version}"', content)
@@ -14,8 +16,8 @@ def update_python_version(new_version):
         print(f"Updated {version_file}")
 
 
-def update_package_json(new_version):
-    files = [Path("frontend/package.json")]
+def update_package_json(new_version: str) -> None:
+    files = [ROOT_DIR / "frontend" / "package.json"]
     for package_file in files:
         if package_file.exists():
             with open(package_file) as f:
@@ -27,22 +29,50 @@ def update_package_json(new_version):
             print(f"Updated {package_file}")
 
 
-def update_ha_addon_config(new_version):
+_ADDON_VERSION = re.compile(r'^version: "(.*)"', re.MULTILINE)
+
+
+def addon_version_for(current: str, new_version: str) -> str:
+    """What the add-on's version should become, given what it already is.
+
+    The add-on may carry a fourth component the library does not have: a rebuild
+    that ships no new library code — a run.sh fix, a schema entry — goes from
+    0.5.3 to 0.5.3.1 and is published without tagging the repository.
+
+    So a suffix survives a sync against the same library version, and does not
+    survive a new one: 0.5.3.1 stays put when syncing to 0.5.3, and becomes
+    0.5.4 when syncing to 0.5.4, because the add-on's suffix counts rebuilds of
+    one library version and means nothing once that version changes.
+    """
+    parts = current.split(".")
+    if len(parts) == 4 and ".".join(parts[:3]) == new_version:
+        return current
+    return new_version
+
+
+def update_ha_addon_config(new_version: str) -> None:
+    addon_root = ROOT_DIR / "ha-addon"
     for ha_file in (
-        Path("ha-addon/wactorz/config.yaml"),
-        Path("ha-addon/wactorz-ultra/config.yaml"),
+        addon_root / "wactorz" / "config.yaml",
+        addon_root / "wactorz-ultra" / "config.yaml",
     ):
         if ha_file.exists():
             content = ha_file.read_text()
-            new_content = re.sub(
-                r'^version: ".*"', f'version: "{new_version}"', content, flags=re.MULTILINE
-            )
+            found = _ADDON_VERSION.search(content)
+            current = found.group(1) if found else ""
+            wanted = addon_version_for(current, new_version)
+            if wanted != new_version:
+                # The only case that is not a write: an add-on rebuild of this
+                # same library version, whose suffix would otherwise be lost.
+                print(f"Kept {ha_file} at {current} (add-on rebuild of {new_version})")
+                continue
+            new_content = _ADDON_VERSION.sub(f'version: "{wanted}"', content, count=1)
             ha_file.write_text(new_content)
             print(f"Updated {ha_file}")
 
 
-def update_docs_landing(new_version):
-    landing_file = Path("docs/_landing.html")
+def update_docs_landing(new_version: str) -> None:
+    landing_file = ROOT_DIR / "docs" / "_landing.html"
     if landing_file.exists():
         content = landing_file.read_text(encoding="utf-8")
         new_content = re.sub(
@@ -54,8 +84,8 @@ def update_docs_landing(new_version):
         print(f"Updated {landing_file}")
 
 
-def update_docs_versions_json(new_version):
-    v_file = Path("docs/versions.json")
+def update_docs_versions_json(new_version: str) -> None:
+    v_file = ROOT_DIR / "docs" / "versions.json"
     if v_file.exists():
         try:
             with open(v_file) as f:
@@ -72,13 +102,22 @@ def update_docs_versions_json(new_version):
             print(f"Warning: Could not update {v_file}: {e}")
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: python scripts/sync_versions.py <new_version>")
         sys.exit(1)
 
     new_version = sys.argv[1]
     new_version = new_version.removeprefix("v")
+
+    # Checked because every writer below takes this string on trust. There are
+    # no options to parse, so a mistyped flag arrives here as the version and is
+    # written into _version.py, package.json, both add-on manifests and the docs
+    # before anything looks wrong.
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:[.-]?\w+)?", new_version):
+        print(f"Not a version: {new_version!r}")
+        print("Usage: python scripts/sync_versions.py <new_version>")
+        sys.exit(1)
 
     update_python_version(new_version)
     update_package_json(new_version)

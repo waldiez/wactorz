@@ -37,6 +37,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Chat history reaches the persistent feed again.** Every turn handled by an LLM agent was written to the chat log by calling a method that does not exist, so each write raised and was swallowed by a handler that reported it at debug level — the turn was lost and nothing said so. Restarting therefore came back to an empty feed for those conversations even though the agent's own memory of them survived. The turns are now stored, and a write that genuinely fails is reported as a warning instead of disappearing.
+
 - **A remote agent that answers quickly is heard.** Delegating a task to an agent on another machine published the request and only then started listening for the answer, so a fast reply arrived before anything was there to receive it and was dropped. The caller then waited out its full timeout and reported a failure for work that had actually been done — which looks like an unreliable node rather than a bug. The reply channel is opened before the request goes out now.
 
 - **A broker that is away no longer costs memory without limit.** Messages waiting to be published were held in a queue with no ceiling, so a broker that was slow or absent grew it until the process ran out of memory. The queue is capped, and what gives way is telemetry — heartbeats, metrics and status, where the next sample replaces the last, so the newest is kept. Anything queued for guaranteed delivery is written to disk before it is queued and is never discarded to make room; at worst it waits for the reconnect that reloads it. Discards are reported, not silent.

@@ -49,12 +49,6 @@ map:
 
 # ── User-configurable options ──────────────────────────────────────────────────
 options:
-  # Only needed if you publish port 8000 or 8888 above. Reaching Wactorz
-  # through its panel goes via ingress, where Home Assistant has already
-  # signed you in and the request is verified as coming from the Supervisor —
-  # so the key is not consulted on that path and setting one changes nothing
-  # for panel users.
-  api_key: ""
 
   # LLM backend
   llm_provider: anthropic
@@ -69,6 +63,13 @@ options:
   # real OpenAI API, or point to any compatible proxy/provider for communication
   # with it — e.g. a LiteLLM proxy, Groq, Together, vLLM, or LM Studio.
   openai_url: ""
+
+  # Only needed if you publish port 8000 or 8888 above. Reaching Wactorz
+  # through its panel goes via ingress, where Home Assistant has already
+  # signed you in and the request is verified as coming from the Supervisor —
+  # so the key is not consulted on that path and setting one changes nothing
+  # for panel users.
+  api_key: ""
 
   # MQTT broker — set to the Mosquitto addon host if using the official addon
   mqtt_host: core-mosquitto

@@ -22,6 +22,7 @@ from ..helpers.main_actor_helpers import (
     PIPELINE_RULES_KEY,
     _parse_plan_envelope,
     _strip_dryrun_bypass,
+    starts_with_bypass,
 )
 
 logger = logging.getLogger(__name__)
@@ -445,17 +446,15 @@ class PlanningMixin(_Host):
         """Decide whether dry-run / approval should gate this PIPELINE request.
 
         Bypass conditions (always skip approval):
-          - Text uses the explicit bypass marker `pipeline!` or `coordinate!`
+          - Text opens with one of the bypass markers
           - User policy `policy_dryrun` is set to "off" / "false" / "disabled"
 
         Otherwise dry-run is on by default for PIPELINE intent.
         """
         if not text:
             return True
-        lowered = text.lower().lstrip()
-        for bypass in ("pipeline!", "coordinate!", "@planner!"):
-            if lowered.startswith(bypass):
-                return False
+        if starts_with_bypass(text):
+            return False
         # Check user-set policy
         facts = self.get_user_facts()
         for key in ("policy_dryrun", "policy_dry_run", "policy_approval"):

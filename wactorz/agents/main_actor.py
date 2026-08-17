@@ -27,6 +27,7 @@ from .helpers.main_actor_helpers import (
     _normalize_agent_name,
     _parse_spawn_config,
     _strip_live_context,
+    starts_with_bypass,
 )
 from .llm_agent import LLMAgent, LLMProvider
 from .mixins import (
@@ -1469,8 +1470,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         note_prefix = self._drain_notifications()
         stripped = text.strip()
 
-        # Slash / pipeline! commands are the admin surface — not exposed here.
-        if stripped.startswith("/") or stripped.lower().startswith("pipeline!"):
+        # Slash commands and the bypass markers are the admin surface — not
+        # exposed here. Every marker the planner honours is refused, not just
+        # the first: a guard that catches one spelling of a family reads as
+        # covering the family.
+        if stripped.startswith("/") or starts_with_bypass(stripped):
             reply = (
                 "Admin commands aren't available on this channel — just talk to me "
                 "normally. I can answer questions, tell you what's going on, and "

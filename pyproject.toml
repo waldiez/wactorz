@@ -62,8 +62,13 @@ tts       = [
     "edge-tts>=6.1.9",
 ]
 docs      = [
-    "markdown>=3.10.2",
-    "pygments>=2.19.2",
+    # Pinned exactly, not floored: both decide the bytes of the HTML committed
+    # under static/docs, which CI checks against the sources. Pygments in
+    # particular classifies box-drawing characters differently between minor
+    # versions, so a floating floor makes the freshness check fail on every pull
+    # request the day a new one is released, for a page nobody touched.
+    "markdown==3.10.2",
+    "pygments==2.20.0",
     "watchdog>=6.0.0",
     "pdoc>=16.0.0",
 ]

@@ -303,7 +303,10 @@ HA_STATE_BRIDGE_PER_ENTITY=0 # 0 = flat topic (default), 1 = per-entity topics
 <div class="highlight"><pre><span></span><code><span class="gh">#</span> Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
-<span class="gh">#</span> Optional — set for a broker with allow_anonymous false; blank = anonymous
+<span class="gh">#</span> The dev broker authenticates, with defaults (wactorz / wactorz-dev) and bound
+<span class="gh">#</span> to loopback, so no setup is needed either way: compose injects them for the
+<span class="gh">#</span> containers, and run.sh applies the same ones when WACTORZ_DEV_MODE=1 for a
+<span class="gh">#</span> host-run backend. Fill these in to point at a broker of your own instead.
 MQTT_USERNAME=
 MQTT_PASSWORD=
 </code></pre></div>

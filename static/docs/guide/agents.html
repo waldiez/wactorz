@@ -389,7 +389,7 @@
 </tr>
 </tbody>
 </table>
-<p>Runs <code>pip install</code> in a subprocess on request. Called automatically by <code>CatalogAgent</code> before spawning a recipe that declares an <code>"install": [...]</code> list. Also handles remote node deployment via SSH (<code>node_deploy</code>, <code>node_install</code>, <code>node_run</code> actions). Replies with a result dict so the caller can gate on success before proceeding.</p>
+<p>Runs <code>pip install</code> in a subprocess on request. Called automatically by <code>CatalogAgent</code> before spawning a recipe that declares an <code>"install": [...]</code> list. Also handles remote node deployment via SSH (<code>node_deploy</code>, <code>node_install</code>, <code>node_run</code> actions), for machines listed in <code>DEPLOY_TARGETS</code> — SSH credentials come from the environment, never from the task payload. Replies with a result dict so the caller can gate on success before proceeding.</p>
 <div class="highlight"><pre><span></span><code><span class="err">@</span><span class="nx">installer</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;action&quot;</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;install&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;packages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s">&quot;httpx&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;aiomqtt&quot;</span><span class="p">]}</span>
 </code></pre></div>
 

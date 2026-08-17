@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Weather agent — Wactorz</title>
+  <title>Security — Wactorz</title>
   <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
   <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
   <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
@@ -114,7 +114,7 @@
 
 <div class="layout">
   <aside class="sidebar">
-    <details class="sidebar-group">
+    <details class="sidebar-group" open>
       <summary class="sidebar-label">Guide</summary>
       <a href="../guide/development.html" class="">Installation</a>
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
@@ -124,17 +124,17 @@
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
-      <a href="../guide/security.html" class="">Security</a>
+      <a href="../guide/security.html" class="active">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
     </details>
-    <details class="sidebar-group" open>
+    <details class="sidebar-group">
       <summary class="sidebar-label">Catalogue agents</summary>
       <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
       <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
       <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
       <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
-      <a href="../catalogue/catalogue-weather.html" class="active">Weather</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
       <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
       <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
       <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
@@ -144,49 +144,166 @@
     </details>
   </aside>
   <main class="content">
-<h1 id="weather-agent">Weather agent</h1>
-<p><code>weather-agent</code> — natural-language weather: current conditions, forecast, and history via
-<a href="https://open-meteo.com/">Open-Meteo</a>. <strong>No API key required.</strong></p>
-<h2 id="spawn">Spawn</h2>
-<div class="highlight"><pre><span></span><code>@catalog spawn weather-agent
-</code></pre></div>
-
-<h2 id="usage">Usage</h2>
-<div class="highlight"><pre><span></span><code>what&#39;s the weather in Athens?
-5-day forecast for Berlin
-what was the weather yesterday in London?
-set my default location to Athens
-</code></pre></div>
-
-<p>With a default location set, you can drop the place name ("what's the weather?").</p>
-<h2 id="structured-operations">Structured operations</h2>
+<h1 id="security">Security</h1>
+<p>Wactorz runs AI agents that hold your credentials, control your devices, and can
+write and run Python. This page describes what it protects, what it does not,
+and how to deploy it so the difference does not matter.</p>
+<p>Read it before you make Wactorz reachable from anything but the machine it runs
+on.</p>
+<hr />
+<h2 id="the-short-version">The short version</h2>
 <table>
 <thead>
 <tr>
-<th>Field</th>
-<th>Meaning</th>
+<th>Deployment</th>
+<th>What protects it</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>action</code></td>
-<td><code>current</code>, <code>forecast</code>, <code>history</code>, <code>set-default</code></td>
+<td><strong>Default install</strong></td>
+<td>It listens on <code>127.0.0.1</code> only. Nothing off the machine can reach it.</td>
 </tr>
 <tr>
-<td><code>location</code></td>
-<td>city name or <code>lat,lon</code> (optional; falls back to the default)</td>
+<td><strong>Reachable install</strong></td>
+<td><code>API_KEY</code>. Binding to a reachable address without one refuses to start.</td>
 </tr>
 <tr>
-<td><code>days</code></td>
-<td>forecast horizon 1–16 (forecast only, default 3)</td>
-</tr>
-<tr>
-<td><code>date</code></td>
-<td>ISO date or <code>yesterday</code> (history only)</td>
+<td><strong>Home Assistant add-on</strong></td>
+<td>Home Assistant's own login. The panel goes through ingress, and requests are verified as coming from the Supervisor.</td>
 </tr>
 </tbody>
 </table>
-<p>Returns <code>location</code>, <code>temp_c</code>, <code>feels_like_c</code>, <code>condition</code>, <code>humidity</code>, and <code>wind_kph</code>.</p>
+<p>The refusal is deliberate rather than a warning: a warning scrolls past in a
+container log while you believe you only changed an address. Three ways forward,
+and the message names all three — set <code>API_KEY</code>, bind to <code>127.0.0.1</code>, or set
+<code>WACTORZ_EXPOSED_OK=1</code> when the only route in is already authenticated.</p>
+<hr />
+<h2 id="trust-boundaries">Trust boundaries</h2>
+<table>
+<thead>
+<tr>
+<th>Inside the boundary</th>
+<th>Outside it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The Wactorz process and every agent in it</td>
+<td>The browser</td>
+</tr>
+<tr>
+<td>The MQTT broker and everything published on it</td>
+<td>Any machine that can reach the broker port</td>
+</tr>
+<tr>
+<td>Edge nodes reached by <code>/deploy</code></td>
+<td>The network between them</td>
+</tr>
+<tr>
+<td>The state directory and the SQLite database</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Everything inside shares one privilege level. There is no separation between
+agents: an agent is a Python object in a process, not a principal. If two agents
+have different levels of trust in your head, they do not have different levels
+of access in Wactorz.</p>
+<hr />
+<h2 id="agents-run-code-in-the-wactorz-process">Agents run code in the Wactorz process</h2>
+<p>A spawned agent's body is Python, compiled and executed inside the running
+process. It has the same file access, the same network access, the same
+environment variables, and the same credentials as Wactorz itself — including
+your LLM keys and your Home Assistant token.</p>
+<p>Generated code is scanned for dangerous constructs before it runs, and obvious
+ones are rejected. <strong>That check is not a sandbox and is not intended as one.</strong>
+It reads source text; code that reaches the same capability by another route
+passes it. Treat it as a guard against mistakes, not against intent.</p>
+<p>The practical consequence:</p>
+<blockquote>
+<p><strong>Anyone who can make Wactorz spawn an agent can run arbitrary code as the
+Wactorz process.</strong> Granting that ability is equivalent to granting shell
+access to the machine, with the credentials attached.</p>
+</blockquote>
+<p>Spawning is reachable from the dashboard and the API, both of which sit behind
+<code>API_KEY</code> on a reachable install. It is deliberately <strong>not</strong> reachable from
+social channels — Discord and Telegram use a restricted entry point that refuses
+spawning, deletion, code and automation, at the action rather than by inspecting
+the text, so it cannot be talked around.</p>
+<p>If you need agents that cannot do this, run Wactorz in a container with only the
+credentials that deployment needs, and do not mount what it should not reach.</p>
+<hr />
+<h2 id="untrusted-input-is-not-just-what-a-user-types">Untrusted input is not just what a user types</h2>
+<p>The boundary that matters is not "someone typed into chat". It is <strong>any text any
+agent reads</strong>, because that text reaches a model that can act.</p>
+<p>Agents ingest, among other things:</p>
+<ul>
+<li>web pages and search results</li>
+<li>PDFs and device manuals downloaded from the internet</li>
+<li>email bodies and calendar entries</li>
+<li>MQTT payloads from devices and edge nodes</li>
+<li>Home Assistant entity names and attributes</li>
+</ul>
+<p>A concrete example that ships in the catalogue: the device-manual agent searches
+the web for a manual, downloads the PDF it finds, extracts the text, and puts
+that text into a prompt. Nothing about that PDF is under your control. It
+reaches that agent's own model first and the main agent's context only
+indirectly, through the reply — two hops rather than a direct line to the
+spawner, which is why it is worth stating plainly rather than assuming the
+distance protects you.</p>
+<p>Assume any document an agent reads can attempt to instruct it. Give agents the
+narrowest credentials that let them do their job.</p>
+<hr />
+<h2 id="the-mqtt-broker-is-the-control-plane">The MQTT broker is the control plane</h2>
+<p>Agent commands, chat, task delegation and the source of spawned agents all cross
+the broker. Anything that can publish to it can drive Wactorz.</p>
+<ul>
+<li><strong>Credentials are required.</strong> The bundled broker refuses anonymous
+  connections, and <code>docker compose</code> will not start without <code>MQTT_PASSWORD</code>.</li>
+<li><strong>There is no TLS in the client.</strong> Traffic is cleartext, so the broker and
+  everything talking to it belong on a network you trust. Do not route it across
+  the public internet without a tunnel or VPN.</li>
+<li><strong>Edge nodes hold broker credentials.</strong> <code>/deploy</code> writes them to the node over
+  SSH, and by default a node uses the server's own account. A stolen node
+  therefore holds full broker access; give a node its own account when that
+  matters.</li>
+</ul>
+<hr />
+<h2 id="secrets-logs-and-stored-data">Secrets, logs and stored data</h2>
+<ul>
+<li><strong>Logs are redacted</strong> as they are written — known credential shapes are
+  scrubbed before anything is stored or served. This is a floor, not a
+  guarantee: a log can carry a secret nobody chose to write into it. Treat the
+  log view as shareable with care.</li>
+<li><strong>Raising a library to <code>DEBUG</code></strong> puts request bodies and headers into that same
+  log. It is refused through the API unless <code>WACTORZ_LOG_DEBUG_CAPTURE=1</code> is set
+  on the host, so turning it on requires reaching the machine.</li>
+<li><strong>Chat history, uploaded files and agent state</strong> are stored unencrypted in the
+  state directory. Protect it with filesystem permissions; anyone who can read
+  it can read every conversation.</li>
+<li><strong>The browser is never given your API key.</strong> Signing in exchanges it for a
+  session cookie that can be revoked on its own, so signing out does not disturb
+  scripts and integrations using the key directly.</li>
+</ul>
+<hr />
+<h2 id="deployment-checklist">Deployment checklist</h2>
+<ol>
+<li>Keep the default <code>127.0.0.1</code> bind unless you need otherwise.</li>
+<li>If you need otherwise, set <code>API_KEY</code> to something generated —
+   <code>openssl rand -hex 32</code>.</li>
+<li>Put the broker on a trusted network segment, and set <code>MQTT_PASSWORD</code>.</li>
+<li>Give each edge node its own broker account if a stolen node would matter.</li>
+<li>Give Wactorz only the credentials the agents you run actually need.</li>
+<li>Restrict filesystem access to the state directory.</li>
+<li>Treat the ability to spawn agents as equivalent to shell access, and hand it
+   out on that basis.</li>
+</ol>
+<hr />
+<h2 id="reporting-a-problem">Reporting a problem</h2>
+<p>Please report security issues privately, by email to <code>development @ waldiez.io</code>,
+rather than in a public issue. The maintainers will work with you on a fix
+before any public disclosure.</p>
   </main>
 </div>
 

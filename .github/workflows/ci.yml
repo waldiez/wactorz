@@ -66,6 +66,24 @@ jobs:
       - name: Lint
         run: make lint-py
 
+      # static/docs is committed and shipped in the wheel, so a change under
+      # docs/ without a rebuild releases documentation for the previous version
+      # — the same failure the static/app check below covers for the frontend.
+      # Markdown pages only: the build leaves api/js and api/python alone unless
+      # asked for them, so this needs no typedoc or pdoc and costs under a
+      # second. docs.yml builds those two for the published site.
+      - name: Build docs
+        run: python3 scripts/build_docs.py
+
+      - name: static/docs matches the documentation source
+        run: |
+          if [ -n "$(git status --porcelain -- static/docs)" ]; then
+            echo "::error::static/docs is stale. Run 'make docs-build' and commit static/docs."
+            git status --porcelain -- static/docs
+            exit 1
+          fi
+          echo "static/docs is up to date."
+
   test-frontend:
     name: Frontend
     runs-on: ubuntu-latest

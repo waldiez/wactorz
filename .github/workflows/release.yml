@@ -10,8 +10,15 @@ permissions:
   id-token: write
 
 jobs:
+  # The whole of CI, on the tagged commit. A tag is not proof anything passed:
+  # it can be cut from a commit CI never ran on, or from one where it failed.
+  verify:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Publish to PyPI
+    needs: verify
     runs-on: ubuntu-latest
     environment: release
 
@@ -19,6 +26,35 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Before anything is built. The wheel takes its version from
+      # _version.py (hatch reads it), never from the tag, so the two can
+      # disagree and every later step still passes: the notes step only checks
+      # the tag against the CHANGELOG, the build succeeds at the old version,
+      # and `skip-existing` turns the upload of an already-published version
+      # into a no-op. The result is a release that looks green and carries the
+      # previous version's artifacts under the new tag.
+      #
+      # The add-on may legitimately be ahead within one library version
+      # (0.5.3.1 is a rebuild of 0.5.3), so only its first three parts are
+      # compared — that is what catches a release where sync_versions was
+      # never run.
+      - name: Assert the tag, the package and the add-ons agree
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(grep -oP '__version__ = "\K[^"]+' wactorz/_version.py)
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag $tag does not match wactorz/_version.py ($pkg)"
+            exit 1
+          fi
+          for manifest in ha-addon/*/config.yaml; do
+            addon=$(grep -oP '^version: "\K[^"]+' "$manifest")
+            if [ "$(echo "$addon" | cut -d. -f1-3)" != "$tag" ]; then
+              echo "::error::$manifest is at $addon, which is not a release of $tag"
+              exit 1
+            fi
+          done
+          echo "tag $tag matches the package and both add-on manifests."
 
       - uses: actions/setup-python@v5
         with:
@@ -43,11 +79,6 @@ jobs:
       - name: Validate
         run: twine check dist/*
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true
-
       # Only this version's section — the whole CHANGELOG makes the release
       # page an endless scroll of every past version.
       - name: Extract release notes for this tag
@@ -63,6 +94,15 @@ jobs:
             exit 1
           fi
           cat release-notes.md
+
+      # Kept, now that the version is asserted above: what it covers is a
+      # re-run after a later step failed, where the upload already succeeded.
+      # Without that assertion it was the thing that made a mis-tagged release
+      # silent rather than loud.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

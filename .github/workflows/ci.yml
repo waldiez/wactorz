@@ -5,6 +5,9 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # Called by release.yml before it publishes, so a release runs the same
+  # checks a pull request does rather than a second, drifting copy of them.
+  workflow_call:
 
 jobs:
   test-python:

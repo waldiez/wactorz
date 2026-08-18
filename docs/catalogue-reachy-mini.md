@@ -309,8 +309,15 @@ conversation` or `start conversation with barge in`) sets the same flag without 
 JSON; plain `start conversation` leaves it off. Either way the reply to the start command
 says which mode you are in, so a robot that will not be talked over is distinguishable from
 one that is ignoring you. In that mode the monitor ignores the first 450 ms of speaker startup,
-then requires about 210 ms of sustained voice onset; confirmed speech stops playback,
-retains the interrupting audio, and routes it as the next turn. A typed `stop`,
+then requires about 210 ms of sustained voice onset. Onset is treated as a suspicion
+rather than a verdict: the sentence in progress finishes, and the recording is then
+checked before it counts. It has to carry at least `barge_verify_min_speech_s` (0.35 s)
+of voice, transcribe to something the recogniser stands behind, and not repeat the words
+Reachy was speaking — his own voice satisfies every acoustic test, so the only thing that
+separates it from a person's is what was said. A confirmed interruption stops the reply
+and is routed as the next turn; an unconfirmed one is discarded and he keeps talking.
+The cost of a real interruption is the rest of one sentence, which reads as letting him
+finish rather than as ignoring you. A typed `stop`,
 `silence`, `quiet`, or `shut up` still cuts the current reply immediately without
 ending the conversation. Spoken stop phrases work while Reachy is listening, but
 reliable spoken interruption during TTS requires a true full-duplex realtime audio
@@ -335,7 +342,7 @@ timeout. Set a positive `max_turns` only when a bounded session is wanted. Optio
 start fields include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s`,
 `flush_s`, `vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_guard_s`,
 `barge_onset_s`, `barge_silence_s`, `barge_min_speech_s`, `barge_flush_s`,
-`barge_min_rms`, `voice_friendly`,
+`barge_min_rms`, `barge_verify_min_speech_s`, `voice_friendly`,
 `state_motion`, `idle_motion`, `stt_language`, `stt_hotwords`,
 `stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in defaults to
 false and is enabled only by an explicit `barge_in:true`; all physical conversation

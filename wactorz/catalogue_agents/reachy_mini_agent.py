@@ -2858,12 +2858,94 @@ async def _begin_barge_in_monitor(agent, session, speech_seconds):
     return task, onset, cancel
 
 
-async def _finish_barge_in_monitor(session, monitor, interrupted):
-    """Stop a playback monitor and retain a completed interruption as next input."""
+def _barge_in_sounds_like_reachy(transcript, spoken_text):
+    """Whether a transcript is Reachy's own sentence arriving back through the mic.
+
+    The one thing that separates his voice from a person's here is *what was
+    said*: he knows the words he is playing, so a transcript made of them is
+    echo however loud or well-formed it looks. Energy and duration cannot make
+    that call — his voice is real speech by every acoustic measure.
+    """
+    import difflib as _difflib
+
+    heard = " ".join(str(transcript or "").lower().split())
+    said = " ".join(str(spoken_text or "").lower().split())
+    if not heard or not said:
+        return False
+    if heard in said:
+        return True
+    # The longest shared run, not a whole-string ratio: the microphone catches
+    # part of a sentence, so what matters is whether that part is his — not
+    # whether the two strings came out the same length.
+    match = _difflib.SequenceMatcher(None, heard, said).find_longest_match(
+        0, len(heard), 0, len(said)
+    )
+    return match.size >= max(12, int(len(heard) * 0.6))
+
+
+async def _verified_barge_in(agent, session, capture, spoken_text):
+    """Whether audio captured during playback is a person, not the loudspeaker.
+
+    Onset alone used to stop the reply, which is why Reachy cut himself off
+    mid-word: his own voice clears any onset test, because it is speech. The
+    capture is therefore checked before it is believed — enough voice to be a
+    turn, a transcript the recogniser stands behind, and words that are not the
+    ones he was just saying. Only then does it become the next turn.
+    """
+    payload = session.get("payload", {})
+    min_voiced = max(0.0, min(3.0, float(payload.get("barge_verify_min_speech_s", 0.35))))
+    voiced = float(getattr(capture, "voiced_duration_s", 0.0) or 0.0)
+    if voiced < min_voiced:
+        await agent.log(
+            f"ignored a suspected interruption: {voiced:.2f}s of voice is under "
+            f"{min_voiced:.2f}s",
+            level="info",
+        )
+        return False
+    import base64 as _b64
+
+    stt_payload = _conversation_stt_payload(payload)
+    try:
+        wav_b64, _frames = await _do(
+            _pcm_to_wav_b64, capture.audio, capture.samplerate, capture.channels)
+        transcription, _retried = await _conversation_transcribe(
+            agent, _b64.b64decode(wav_b64), stt_payload, session)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Unverifiable is not the same as real. Keep speaking rather than let a
+        # recogniser failure become a way to silence him.
+        await agent.log(f"could not check a suspected interruption: {exc}", level="warning")
+        return False
+    transcript = _normalize_reachy_transcript(
+        str(getattr(transcription, "text", "") or "").strip())
+    if not _conversation_transcript_is_meaningful(transcript):
+        return False
+    credible, reason = _conversation_transcription_is_credible(transcription, stt_payload)
+    if not credible:
+        await agent.log(f"ignored a suspected interruption: {reason}", level="info")
+        return False
+    if _barge_in_sounds_like_reachy(transcript, spoken_text):
+        await agent.log(
+            f"ignored a suspected interruption: those were my own words ({transcript!r})",
+            level="info",
+        )
+        return False
+    session["pending_capture"] = capture
+    return True
+
+
+async def _finish_barge_in_monitor(session, monitor, onset_seen):
+    """Stop a playback monitor and return any completed capture for checking.
+
+    Deliberately no longer decides anything: a clip recorded while Reachy was
+    speaking may be Reachy, so whether it becomes the next turn is settled by
+    `_verified_barge_in` after the sentence has finished.
+    """
     if monitor is None:
         return None
     task, _onset, cancel = monitor
-    if not interrupted:
+    if not onset_seen:
         cancel.set()
     try:
         capture = await asyncio.shield(task)
@@ -2877,8 +2959,7 @@ async def _finish_barge_in_monitor(session, monitor, interrupted):
         if session.get("barge_task") is task:
             session["barge_task"] = None
             session["barge_cancel_event"] = None
-    if interrupted and getattr(capture, "audio", None) is not None and capture.audio.size:
-        session["pending_capture"] = capture
+    if onset_seen and getattr(capture, "audio", None) is not None and capture.audio.size:
         return capture
     return None
 
@@ -3026,20 +3107,20 @@ async def _say(agent, payload):
                             level="warning")
     waited = 0.0
     stopped = False
+    onset_seen = False
     try:
         while waited < pad:
             if agent.state.get("stop_speaking"):
                 stopped = True
                 break
-            if monitor is not None and monitor[1].is_set():
-                interrupted = True
-                await _stop_audio(agent)
-                try:
-                    await _conversation_publish(
-                        agent, session, "listening", {"interrupted": True})
-                except Exception:
-                    pass
-                break
+            if monitor is not None and not onset_seen and monitor[1].is_set():
+                # Onset is a suspicion, not a verdict. Stopping here is what cut
+                # him off mid-word, because the microphone hears his own speaker
+                # and his voice satisfies any onset test. The sentence is short,
+                # so it finishes and the recording is judged afterwards; a real
+                # interruption costs the rest of one sentence, which reads as
+                # letting him finish rather than as ignoring you.
+                onset_seen = True
             chunk = min(0.05, pad - waited)
             await asyncio.sleep(chunk)
             waited += chunk
@@ -3047,7 +3128,15 @@ async def _say(agent, payload):
         # Cancellation (conversation_stop) must never leave the microphone
         # gate believing Reachy is still speaking.
         agent.state["_speaking"] = False
-        await _finish_barge_in_monitor(session, monitor, interrupted)
+        capture = await _finish_barge_in_monitor(session, monitor, onset_seen)
+        if capture is not None and not stopped:
+            interrupted = await _verified_barge_in(agent, session, capture, text)
+            if interrupted:
+                try:
+                    await _conversation_publish(
+                        agent, session, "listening", {"interrupted": True})
+                except Exception:
+                    pass
 
     # Clean up the previous utterance now that a new one is playing.
     prev = agent.state.get("_say_tmp")

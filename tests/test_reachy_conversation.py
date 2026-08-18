@@ -1472,5 +1472,117 @@ class ConversationStartMessageTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Talk over me", result["result"])
 
 
+class BargeInIsCheckedBeforeItIsBelievedTest(unittest.IsolatedAsyncioTestCase):
+    """Reachy no longer stops himself by hearing his own speaker.
+
+    Speech onset used to end the reply outright. His own voice satisfies every
+    onset test — it is speech — so a joke died at "why don't eg-". Onset is now
+    only a suspicion: the sentence finishes, and the recording is checked before
+    it counts as someone talking over him.
+    """
+
+    JOKE = "Why don't eggs tell jokes? Because they'd crack each other up!"
+
+    def _capture(self, voiced=1.0):
+        audio = np.full(16000, 0.2, np.float32)
+        return VoiceCapture(audio, 16000, 1, 1.0, None, 4, voiced_duration_s=voiced)
+
+    def _session(self, **payload):
+        return {"payload": payload, "cancel_event": None}
+
+    async def _verify(self, transcript, *, session=None, voiced=1.0, spoken=None, raises=None):
+        agent = FakeAgent()
+        session = session if session is not None else self._session()
+
+        async def fake_transcribe(_agent, _wav, _payload, _session):
+            if raises is not None:
+                raise raises
+            return transcript, False
+
+        with mock.patch.dict(NS, {"_conversation_transcribe": fake_transcribe}):
+            verdict = await NS["_verified_barge_in"](
+                agent, session, self._capture(voiced), self.JOKE if spoken is None else spoken
+            )
+        return verdict, session, agent
+
+    @staticmethod
+    def _heard(text, **kwargs):
+        return Transcription(text, "fake", "fake", **kwargs)
+
+    async def test_his_own_sentence_coming_back_is_not_an_interruption(self):
+        verdict, session, agent = await self._verify(self._heard("why don't eggs tell jokes"))
+
+        self.assertFalse(verdict)
+        self.assertNotIn("pending_capture", session)
+        self.assertTrue(any("my own words" in text for _level, text in agent.logs))
+
+    async def test_a_person_talking_over_him_is_an_interruption(self):
+        verdict, session, _ = await self._verify(self._heard("okay stop, I have heard it"))
+
+        self.assertTrue(verdict)
+        self.assertIsNotNone(session["pending_capture"])
+
+    async def test_a_stray_click_is_too_little_voice_to_count(self):
+        verdict, session, _ = await self._verify(
+            self._heard("okay stop, I have heard it"), voiced=0.05
+        )
+
+        self.assertFalse(verdict)
+        self.assertNotIn("pending_capture", session)
+
+    async def test_a_transcript_the_recogniser_doubts_is_not_believed(self):
+        verdict, _session, _ = await self._verify(
+            self._heard("okay stop", no_speech_probability=0.99)
+        )
+
+        self.assertFalse(verdict)
+
+    async def test_punctuation_only_output_is_not_a_turn(self):
+        verdict, _session, _ = await self._verify(self._heard("..."))
+
+        self.assertFalse(verdict)
+
+    async def test_a_recogniser_failure_leaves_him_talking(self):
+        # Unverifiable is not the same as real: a failing recogniser must not
+        # become a way to silence him.
+        verdict, session, agent = await self._verify(
+            self._heard("anything"), raises=RuntimeError("stt down")
+        )
+
+        self.assertFalse(verdict)
+        self.assertNotIn("pending_capture", session)
+        self.assertTrue(any("could not check" in text for _level, text in agent.logs))
+
+
+class OwnVoiceRecognitionTest(unittest.TestCase):
+    """What separates his voice from a person's is the words, not the loudness."""
+
+    JOKE = "Why don't eggs tell jokes? Because they'd crack each other up!"
+
+    def test_a_fragment_of_what_he_is_saying_is_his(self):
+        for fragment in (
+            "why don't eggs tell jokes",
+            "because they'd crack each other up",
+            "WHY DON'T EGGS TELL JOKES",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertTrue(NS["_barge_in_sounds_like_reachy"](fragment, self.JOKE))
+
+    def test_something_he_never_said_is_not(self):
+        for said in ("stop talking please", "turn the light blue", "what time is it"):
+            with self.subTest(said=said):
+                self.assertFalse(NS["_barge_in_sounds_like_reachy"](said, self.JOKE))
+
+    def test_nothing_heard_is_not_his_voice(self):
+        self.assertFalse(NS["_barge_in_sounds_like_reachy"]("", self.JOKE))
+        self.assertFalse(NS["_barge_in_sounds_like_reachy"]("hello", ""))
+
+    def test_a_short_shared_word_is_not_enough(self):
+        # "the" appearing in both must not make a real request look like echo.
+        self.assertFalse(
+            NS["_barge_in_sounds_like_reachy"]("open the door", "the eggs are cracking")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -203,6 +203,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy no longer interrupts himself.** With `barge_in` on, speech onset ended the reply
+  outright — and the microphone hears his own loudspeaker, so his voice ended it. A joke died
+  at "why don't eg-". Onset is now only a suspicion: the sentence in progress finishes, and
+  the recording is checked before it counts. It must carry enough voice to be a turn
+  (`barge_verify_min_speech_s`, 0.35 s), transcribe to something the recogniser stands behind,
+  and not repeat the words he was speaking — his own voice passes every acoustic test, so what
+  was said is the only thing that separates it from a person. Unconfirmed, he keeps talking; a
+  recogniser failure also leaves him talking, rather than becoming a way to silence him.
+  A real interruption now costs the rest of one sentence, which reads as letting him finish.
+
 - **Reachy's spoken answer and the one in chat are the same answer again.** Ask him to
   actuate something and main replies with a machine acknowledgement — `Done: light.turn_on ->
   light.tapo_l920.` Reachy already turned that into a sentence before speaking it, but chat

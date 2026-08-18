@@ -391,8 +391,15 @@ conversation</code> or <code>start conversation with barge in</code>) sets the s
 JSON; plain <code>start conversation</code> leaves it off. Either way the reply to the start command
 says which mode you are in, so a robot that will not be talked over is distinguishable from
 one that is ignoring you. In that mode the monitor ignores the first 450 ms of speaker startup,
-then requires about 210 ms of sustained voice onset; confirmed speech stops playback,
-retains the interrupting audio, and routes it as the next turn. A typed <code>stop</code>,
+then requires about 210 ms of sustained voice onset. Onset is treated as a suspicion
+rather than a verdict: the sentence in progress finishes, and the recording is then
+checked before it counts. It has to carry at least <code>barge_verify_min_speech_s</code> (0.35 s)
+of voice, transcribe to something the recogniser stands behind, and not repeat the words
+Reachy was speaking — his own voice satisfies every acoustic test, so the only thing that
+separates it from a person's is what was said. A confirmed interruption stops the reply
+and is routed as the next turn; an unconfirmed one is discarded and he keeps talking.
+The cost of a real interruption is the rest of one sentence, which reads as letting him
+finish rather than as ignoring you. A typed <code>stop</code>,
 <code>silence</code>, <code>quiet</code>, or <code>shut up</code> still cuts the current reply immediately without
 ending the conversation. Spoken stop phrases work while Reachy is listening, but
 reliable spoken interruption during TTS requires a true full-duplex realtime audio
@@ -413,7 +420,7 @@ timeout. Set a positive <code>max_turns</code> only when a bounded session is wa
 start fields include <code>silence_s</code>, <code>max_utterance_s</code>, <code>min_speech_s</code>, <code>pre_roll_s</code>,
 <code>flush_s</code>, <code>vad_mode</code>, <code>vad_min_rms</code>, <code>cooldown_s</code>, <code>barge_in</code>, <code>barge_guard_s</code>,
 <code>barge_onset_s</code>, <code>barge_silence_s</code>, <code>barge_min_speech_s</code>, <code>barge_flush_s</code>,
-<code>barge_min_rms</code>, <code>voice_friendly</code>,
+<code>barge_min_rms</code>, <code>barge_verify_min_speech_s</code>, <code>voice_friendly</code>,
 <code>state_motion</code>, <code>idle_motion</code>, <code>stt_language</code>, <code>stt_hotwords</code>,
 <code>stt_min_confidence</code>, <code>stt_max_no_speech</code>, and <code>max_turns</code>. Barge-in defaults to
 false and is enabled only by an explicit <code>barge_in:true</code>; all physical conversation

@@ -393,8 +393,10 @@ says which mode you are in, so a robot that will not be talked over is distingui
 one that is ignoring you. In that mode the monitor ignores the first 450 ms of speaker startup,
 then requires about 210 ms of sustained voice onset. Onset is treated as a suspicion
 rather than a verdict: the sentence in progress finishes, and the recording is then
-checked before it counts. It has to carry at least <code>barge_verify_min_speech_s</code> (0.35 s)
-of voice, transcribe to something the recogniser stands behind, and not repeat the words
+checked before it counts. It has to carry at least <code>barge_verify_min_speech_s</code>
+of voice — defaulting to <code>barge_min_speech_s</code>, the same floor used to call it an utterance
+in the first place, since a stricter one here only discards real interruptions — transcribe
+to something the recogniser stands behind, and not repeat the words
 Reachy was speaking — his own voice satisfies every acoustic test, so the only thing that
 separates it from a person's is what was said. That check transcribes with the recogniser's own VAD switched off
 (<code>stt_vad_filter</code>): the clip was recorded while the loudspeaker was playing and has already

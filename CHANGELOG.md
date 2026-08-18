@@ -203,6 +203,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A short spoken interruption is no longer discarded for being short.** Checking a suspected
+  interruption required more voice than the capture layer had needed to call it an utterance at
+  all — 0.35 s against 0.12 s — so "stop", about 0.2 s of speech and trimmed further by the echo
+  suppression that runs while the loudspeaker is playing, was thrown out before it was ever
+  transcribed. The two now agree: `barge_verify_min_speech_s` defaults to `barge_min_speech_s`.
+  The floor is only there to skip the recogniser on a click; whether a clip is a person or the
+  loudspeaker is decided by what it says, which is the only thing that can tell them apart.
+
 - **Telling Reachy to stop, out loud, while he is talking, now stops him.** The interruption was
   recorded — 4.3 seconds of it — and then thrown away by the recogniser's own voice filter, which
   runs before decoding and removed every frame of a clip captured over the loudspeaker. An empty

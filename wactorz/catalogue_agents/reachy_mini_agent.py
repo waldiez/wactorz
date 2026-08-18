@@ -2893,7 +2893,15 @@ async def _verified_barge_in(agent, session, capture, spoken_text):
     ones he was just saying. Only then does it become the next turn.
     """
     payload = session.get("payload", {})
-    min_voiced = max(0.0, min(3.0, float(payload.get("barge_verify_min_speech_s", 0.35))))
+    # Defaults to the same floor the capture layer used to call this an
+    # utterance at all. A separate, stricter number here second-guessed that
+    # decision and threw away real interruptions: "stop" is about 0.2s of voice,
+    # and echo suppression during playback trims what little there is. The floor
+    # exists only to skip the recogniser on a click — telling his voice from a
+    # person's is the transcript's job, and it is the only thing that can.
+    min_voiced = max(0.0, min(3.0, float(payload.get(
+        "barge_verify_min_speech_s",
+        payload.get("barge_min_speech_s", 0.12)))))
     voiced = float(getattr(capture, "voiced_duration_s", 0.0) or 0.0)
     if voiced < min_voiced:
         await agent.log(

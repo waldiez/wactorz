@@ -1522,6 +1522,27 @@ class BargeInIsCheckedBeforeItIsBelievedTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(verdict)
         self.assertIsNotNone(session["pending_capture"])
 
+    async def test_a_short_word_over_him_still_counts(self):
+        # "stop" is about 0.2s of voice, and echo suppression during playback
+        # trims what little there is. A stricter floor here than the one the
+        # capture layer used to call it an utterance threw these away — which
+        # is exactly what let him talk over someone telling him to stop.
+        verdict, session, _ = await self._verify(self._heard("stop"), voiced=0.21)
+
+        self.assertTrue(verdict)
+        self.assertIsNotNone(session["pending_capture"])
+
+    async def test_the_floor_follows_the_one_that_called_it_speech(self):
+        # Raising the capture layer's own minimum raises this with it, rather
+        # than leaving two numbers to disagree.
+        verdict, _session, _ = await self._verify(
+            self._heard("stop"),
+            session=self._session(barge_min_speech_s=0.5),
+            voiced=0.21,
+        )
+
+        self.assertFalse(verdict)
+
     async def test_a_stray_click_is_too_little_voice_to_count(self):
         verdict, session, _ = await self._verify(
             self._heard("okay stop, I have heard it"), voiced=0.05

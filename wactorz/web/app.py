@@ -230,11 +230,9 @@ async def main(exit_on_failure: bool = False) -> None:
     await runner.setup()
     site = web.TCPSite(runner, CONFIG.bind_host, runtime.WS_PORT)
     await site.start()
-    msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/"
-    logger.info(msg)
+    logger.info("Monitor  → http://localhost:%s/", runtime.WS_PORT)
     if static_site.DOCS_SITE.is_dir():
-        msg = f"Docs     → http://localhost:{runtime.WS_PORT}/docs/"
-        logger.info(msg)
+        logger.info("Docs     → http://localhost:%s/docs/", runtime.WS_PORT)
 
     # Held in a local so the task is not garbage-collected mid-flight, and
     # cancelled below so shutdown does not leave it running.

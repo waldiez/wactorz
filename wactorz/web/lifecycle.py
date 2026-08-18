@@ -189,11 +189,12 @@ async def delete_agent(agent_id: str) -> str:
                 await main_actor.delete_spawned_agent(name)
                 routed = f"via main.delete_spawned_agent({name!r})"
             except Exception as e:
-                msg = (
-                    f"[delete] main.delete_spawned_agent('{name}') failed: {e}; "
-                    "falling back to direct MQTT"
+                logger.warning(
+                    "[delete] main.delete_spawned_agent(%r) failed: %s; "
+                    "falling back to direct MQTT",
+                    name,
+                    e,
                 )
-                logger.warning(msg)
                 routed = "main path failed"
 
         # If main wasn't reachable or the call failed, also try to stop a
@@ -235,6 +236,5 @@ async def delete_agent(agent_id: str) -> str:
     # dashboard's view to clear immediately rather than wait for tombstones.
     asyncio.create_task(purge_agent_retained(agent_id))
 
-    msg = f"[delete] '{name}' (id={agent_id[:8]}, node={node or 'local'}) {routed}"
-    logger.info(msg)
+    logger.info("[delete] %r (id=%s, node=%s) %s", name, agent_id[:8], node or "local", routed)
     return routed

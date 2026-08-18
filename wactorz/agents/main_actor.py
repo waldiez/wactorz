@@ -12,7 +12,7 @@ import socket
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, ClassVar
 
 from ..config import (
@@ -51,6 +51,22 @@ from .prompts.main_actor_prompts import (
 logger = logging.getLogger(__name__)
 
 
+def _decoded_json(payload: bytes | None) -> Any | None:
+    """The payload decoded as JSON, or None if it is not.
+
+    Used where the subscription is a wildcard over every agent topic and an
+    agent may publish whatever it likes: a payload that is not JSON is ordinary
+    traffic rather than a fault, and reporting each one would bury the listener
+    in its own output.
+    """
+    if not payload:
+        return None
+    try:
+        return json.loads(payload.decode())
+    except Exception:
+        return None
+
+
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     DESCRIPTION = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
     CAPABILITIES: ClassVar[list[str]] = [
@@ -66,7 +82,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     #: answer itself. Oldest are dropped first.
     MAX_PENDING_NOTIFICATIONS = 50
 
-    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs):
+    def __init__(
+        self,
+        llm_provider: LLMProvider | None = None,
+        **kwargs: Any,
+    ) -> None:
         kwargs.setdefault("name", "main")
         kwargs.setdefault("system_prompt", ORCHESTRATOR_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
@@ -84,7 +104,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         await super().on_start()
         await self._restore_spawned_agents()
         # Listen for remote node heartbeats so we know what's online
@@ -104,10 +124,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── Spawn registry ─────────────────────────────────────────────────────
 
-    def _get_spawn_registry(self) -> dict:
+    def _get_spawn_registry(self) -> dict[str, Any]:
         return self.recall(SPAWN_REGISTRY_KEY) or {}
 
-    def _restore_earned_trust(self, agent_name: str, local_cfg: dict) -> bool:
+    def _restore_earned_trust(self, agent_name: str, local_cfg: dict[str, Any]) -> bool:
         """Re-attach a migrating agent's ``trusted`` flag from our own registry.
 
         A config coming back from a node arrives over MQTT, where a publisher
@@ -126,20 +146,20 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         local_cfg["trusted"] = True
         return True
 
-    def _save_to_spawn_registry(self, config: dict):
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         reg = self._get_spawn_registry()
         reg[config["name"]] = config
         self.persist(SPAWN_REGISTRY_KEY, reg)
-        logger.info(f"[{self.name}] Spawn registry: {list(reg.keys())}")
+        logger.info("[%s] Spawn registry: %s", self.name, list(reg.keys()))
 
-    def _remove_from_spawn_registry(self, name: str):
+    def _remove_from_spawn_registry(self, name: str) -> None:
         reg = self._get_spawn_registry()
         if name in reg:
             del reg[name]
             self.persist(SPAWN_REGISTRY_KEY, reg)
-            logger.info(f"[{self.name}] Removed '{name}' from spawn registry.")
+            logger.info("[%s] Removed %r from spawn registry.", self.name, name)
 
-    async def _clear_agent_manifest(self, name: str, actor_id: str | None = None):
+    async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         """Clear an agent's manifest from main's in-memory caches AND from the
         retained MQTT manifest topic. Without this, list_capabilities() will
         keep reporting the agent (with running=false but never disappearing),
@@ -162,9 +182,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 actor_id = target.actor_id
         if actor_id:
             await self._mqtt_publish(f"agents/{actor_id}/manifest", b"", retain=True)
-            logger.debug(f"[{self.name}] Cleared retained manifest for '{name}'")
+            logger.debug("[%s] Cleared retained manifest for %r", self.name, name)
 
-    def _record_agent_deletion(self, name: str, reason: str = "user request"):
+    def _record_agent_deletion(self, name: str, reason: str = "user request") -> None:
         """Inject a system-style note into conversation history that an agent was
         deleted. This is critical because the LLM otherwise sees its own earlier
         turn ("Spawned 'chat-agent'") and assumes the agent still exists when
@@ -189,11 +209,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 }
             )
             self.persist("conversation_history", self._conversation_history)
-            logger.info(f"[{self.name}] Recorded deletion note for '{name}' in history")
+            logger.info("[%s] Recorded deletion note for %r in history", self.name, name)
         except Exception as e:
-            logger.warning(f"[{self.name}] Failed to record deletion note: {e}")
+            logger.warning("[%s] Failed to record deletion note: %s", self.name, e)
 
-    def get_notification_urls(self) -> dict:
+    def get_notification_urls(self) -> dict[str, Any]:
         """Return persisted notification webhook URLs (discord, telegram, slack, etc.)"""
         return self.recall("_notification_urls") or {}
 
@@ -202,7 +222,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     # user name, webhook URLs, etc. Stored separately from history so they
     # survive summarization and persist indefinitely.
 
-    async def _restore_spawned_agents(self):
+    async def _restore_spawned_agents(self) -> None:
         reg = self._get_spawn_registry()
         if not reg:
             return
@@ -226,45 +246,47 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             skip = sorted(n for n in reg if n in already_supervised)
             if skip:
                 logger.info(
-                    f"[{self.name}] Supervisor already restarted "
-                    f"{len(skip)} agent(s); skipping restore for: {skip}"
+                    "[%s] Supervisor already restarted %s agent(s); skipping restore for: %s",
+                    self.name,
+                    len(skip),
+                    skip,
                 )
 
         pending = {n: c for n, c in reg.items() if n not in already_supervised}
         if not pending:
             return
 
-        logger.info(f"[{self.name}] Restoring {len(pending)} agent(s): {list(pending.keys())}")
+        logger.info("[%s] Restoring %s agent(s): %s", self.name, len(pending), list(pending.keys()))
         for name, config in pending.items():
             node = config.get("node", "").strip()
             if node:
                 # Remote agent — re-publish spawn to its node; no local object expected
-                logger.info(f"[{self.name}] Re-spawning remote agent '{name}' on node '{node}'")
+                logger.info("[%s] Re-spawning remote agent %r on node %r", self.name, name, node)
                 try:
                     await self._spawn_remote(config, node, save=False)
-                except Exception as e:
-                    logger.error(
-                        f"[{self.name}] Failed to restore remote '{name}' on '{node}': {e}"
+                except Exception:
+                    logger.exception(
+                        "[%s] Failed to restore remote %r on %r", self.name, name, node
                     )
                 continue
             if self._registry and self._registry.find_by_name(name):
-                logger.info(f"[{self.name}] '{name}' already running, skipping.")
+                logger.info("[%s] %r already running, skipping.", self.name, name)
                 continue
             try:
                 await self._spawn_from_config(config, save=False, from_registry=True)
-                logger.info(f"[{self.name}] Restored: {name}")
-            except Exception as e:
-                logger.error(f"[{self.name}] Failed to restore '{name}': {e}")
+                logger.info("[%s] Restored: %s", self.name, name)
+            except Exception:
+                logger.exception("[%s] Failed to restore %r", self.name, name)
 
     # ── Message handling ───────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         if msg.type == MessageType.TASK:
             # Intercept monitor notifications BEFORE passing to LLM _handle_task
             if isinstance(msg.payload, dict) and msg.payload.get("_monitor_notification"):
                 self._queue_notification(msg.payload)
                 logger.info(
-                    f"[{self.name}] Monitor alert queued: {msg.payload.get('message', '')[:80]}"
+                    "[%s] Monitor alert queued: %s", self.name, msg.payload.get("message", "")[:80]
                 )
                 return
             await self._handle_task(msg)
@@ -278,7 +300,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         asyncio.create_task(self._extract_and_save_facts(clean_msg, response))
         return response
 
-    async def chat_stream(self, user_message: str, attachments: list[dict] | None = None):
+    async def chat_stream(
+        self, user_message: str, attachments: list[dict[str, Any]] | None = None
+    ) -> AsyncGenerator[str | dict[str, Any]]:
         full_response = []
         got_usage = False
         async for chunk in super().chat_stream(user_message, attachments):
@@ -294,7 +318,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             clean_msg = _strip_live_context(user_message)
             asyncio.create_task(self._extract_and_save_facts(clean_msg, "".join(full_response)))
 
-    async def _record_external_exchange(self, user_message: str, assistant_response: str):
+    async def _record_external_exchange(self, user_message: str, assistant_response: str) -> None:
         """Record a turn that was handled OUTSIDE self.chat() / self.chat_stream() —
         i.e. by the HA, ACTUATE, or PIPELINE branches that return before the LLM
         is called on main. Without this, those exchanges vanish from history and
@@ -318,7 +342,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             await self._maybe_summarize()
             self.persist("conversation_history", self._conversation_history)
         except Exception as e:
-            logger.warning(f"[{self.name}] Failed to record external exchange: {e}")
+            logger.warning("[%s] Failed to record external exchange: %s", self.name, e)
         # Fire-and-forget fact extraction — same as chat()
         asyncio.create_task(self._extract_and_save_facts(user_message, str(assistant_response)))
 
@@ -637,7 +661,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             elif "telegram" in url:
                 urls["telegram"] = url
             self.persist("_notification_urls", urls)
-            logger.info(f"[{self.name}] Auto-saved webhook URL from message")
+            logger.info("[%s] Auto-saved webhook URL from message", self.name)
 
         if stripped in ("/rules", "rules"):
             rules = self.get_pipeline_rules()
@@ -651,7 +675,13 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 agents = rule.get("agents", [])
                 task = rule.get("task", "")[:]
                 ts = rule.get("created_at", 0)
-                created = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "unknown"
+                created = (
+                    datetime.fromtimestamp(ts, tz=timezone.utc)
+                    .astimezone()
+                    .strftime("%Y-%m-%d %H:%M")
+                    if ts
+                    else "unknown"
+                )
                 # Check which agents are running
                 running_agents = []
                 stopped_agents = []
@@ -701,7 +731,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             try:
                 result = await self.migrate_agent(agent_name, target_node)
             except Exception as exc:
-                logger.exception(f"[main] /migrate failed for '{agent_name}' → '{target_node}'")
+                logger.exception("[main] /migrate failed for %r → %r", agent_name, target_node)
                 return note_prefix + f"Migrate failed: {exc}"
             sym = "OK" if result.get("success") else "FAIL"
             return note_prefix + f"[{sym}] {result.get('message', str(result))}"
@@ -781,7 +811,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     # and putting a started agent back under supervision.
                     applied = await target.apply_command(_verb)
                 except Exception as exc:
-                    logger.exception(f"[main] /{_verb} failed for '{agent_name}'")
+                    logger.exception("[main] /%s failed for %r", _verb, agent_name)
                     return note_prefix + f"Failed to {_verb} '{agent_name}': {exc}"
 
                 if not applied:
@@ -810,7 +840,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                         await self.delete_spawned_agent(agent_name)
                     except Exception as e:
                         logger.exception(
-                            f"[{self.name}] delete_spawned_agent('{agent_name}') failed"
+                            "[%s] delete_spawned_agent(%r) failed", self.name, agent_name
                         )
                         return note_prefix + f"Delete of '{agent_name}' failed: {e}"
                     return note_prefix + (
@@ -1201,7 +1231,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     )
                     if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
                         logger.info(
-                            f"[main] '{target_name}' not running — auto-spawning via {catalog_name}..."
+                            "[main] %r not running — auto-spawning via %s...",
+                            target_name,
+                            catalog_name,
                         )
                         try:
                             spawn_result = await catalog_actor._action_spawn(target_name, {})  # pyright: ignore[reportAttributeAccessIssue]
@@ -1212,7 +1244,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                                     if self._registry
                                     else None
                                 )
-                                logger.info(f"[main] '{target_name}' spawned, routing task...")
+                                logger.info("[main] %r spawned, routing task...", target_name)
                             else:
                                 err = (
                                     spawn_result.get("message", "unknown error")
@@ -1290,7 +1322,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Single LLM call classifies intent: ACTUATE, HA, PIPELINE (reactive rule), OTHER
         intent = await self._classify_intent(text)
-        logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
+        logger.info("[%s] Intent: %s — %s", self.name, intent, text[:60])
 
         if intent == "PIPELINE":
             response = await self._propose_or_execute_pipeline(text)
@@ -1342,7 +1374,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             w in text.lower() for w in ("spawn", "create", "make", "build", "add", "agent")
         )
         if has_code and not has_spawn and asked_spawn:
-            logger.info(f"[{self.name}] Code written without <spawn> — prompting to wrap it")
+            logger.info("[%s] Code written without <spawn> — prompting to wrap it", self.name)
             response = await self.chat(
                 "You wrote agent code but forgot to wrap it in a <spawn> block. "
                 "Please output the complete spawn block now with that exact code inside it. "
@@ -1433,7 +1465,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Reuse the main intent classifier; PIPELINE (creates rules/agents) is refused.
         intent = await self._classify_intent(text)
-        logger.info(f"[{self.name}] Intent (restricted): {intent} — {text[:60]}")
+        logger.info("[%s] Intent (restricted): %s — %s", self.name, intent, text[:60])
 
         if intent == "PIPELINE":
             reply = (
@@ -1492,7 +1524,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         clean, _ = await self._process_delegate_commands(clean, restricted=True)
         return note_prefix + clean.strip()
 
-    async def process_user_input_stream(self, text: str, attachments: list[dict] | None = None):
+    async def process_user_input_stream(
+        self, text: str, attachments: list[dict[str, Any]] | None = None
+    ) -> AsyncGenerator[Any]:
         """Streaming version of process_user_input().
         Yields text chunks as the LLM generates them, then a final dict:
           {"done": True, "spawned": [...names...], "system_msg": "..."}
@@ -1574,7 +1608,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Single LLM call classifies intent: ACTUATE, HA, PIPELINE, or OTHER
         intent = await self._classify_intent(text)
-        logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
+        logger.info("[%s] Intent: %s — %s", self.name, intent, text[:60])
 
         if intent == "PIPELINE":
             response = await self._propose_or_execute_pipeline(text)
@@ -1688,7 +1722,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── Planner ────────────────────────────────────────────────────────────
 
-    def _match_catalog_recipe(self, name: str, capabilities: list | None = None) -> str | None:
+    def _match_catalog_recipe(self, name: str, capabilities: list[str] | None = None) -> str | None:
         """Return the name of a catalog recipe that already covers this request.
 
         Used to stop the LLM from reimplementing an agent that the catalog
@@ -1723,12 +1757,12 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     for recipe_name in cat.list_recipes():  # pyright: ignore[reportAttributeAccessIssue]
                         if _normalize_agent_name(recipe_name) == want:
                             return recipe_name
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[%s] Catalog recipe lookup failed: %s", self.name, exc)
 
         return None
 
-    async def _resolve_or_spawn(self, agent_name: str):
+    async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]:
         """Resolve an agent by name, auto-spawning it from a catalog recipe if it
         isn't running yet. Shared by @mention delegations and <delegate> blocks.
 
@@ -1751,7 +1785,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     self._registry.find_by_name(manifest["catalog"]) if self._registry else None
                 )
                 if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
-                    logger.info(f"[{self.name}] Auto-spawning '{agent_name}' via catalog...")
+                    logger.info("[%s] Auto-spawning %r via catalog...", self.name, agent_name)
                     try:
                         spawn_result = await catalog_actor._action_spawn(agent_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                         if spawn_result and spawn_result.get("ok"):
@@ -1759,41 +1793,48 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                             target = (
                                 self._registry.find_by_name(agent_name) if self._registry else None
                             )
-                            logger.info(f"[{self.name}] '{agent_name}' spawned successfully")
+                            logger.info("[%s] %r spawned successfully", self.name, agent_name)
                         else:
                             err = (
                                 spawn_result.get("message", "unknown")
                                 if spawn_result
                                 else "no response"
                             )
-                            logger.warning(f"[{self.name}] Spawn failed for '{agent_name}': {err}")
-                    except Exception as e:
-                        logger.error(f"[{self.name}] Spawn error for '{agent_name}': {e}")
+                            logger.warning(
+                                "[%s] Spawn failed for %r: %s", self.name, agent_name, err
+                            )
+                    except Exception:
+                        logger.exception("[%s] Spawn error for %r", self.name, agent_name)
         return target, spawnable
 
-    async def _run_delegation(self, agent_name: str, payload) -> str:
+    async def _run_delegation(self, agent_name: str, payload: Any) -> str:
         """Dispatch one already-resolved delegation and format the result string.
         Shared by @mention delegations and <delegate> blocks.
         """
         json_str = json.dumps(payload)
-        logger.info(f"[{self.name}] Executing LLM delegation → @{agent_name} {json_str[:80]}")
+        logger.info("[%s] Executing LLM delegation → @%s %s", self.name, agent_name, json_str[:80])
         try:
             result = await self.delegate_task(agent_name, json_str, timeout=300.0)
-            if result:
-                if isinstance(result, dict):
-                    error = result.get("error")
-                    if error:
-                        return f"❌ {agent_name} failed: {error}"
-                    for key in ("pptx_path", "image_path", "result", "message", "output", "text"):
-                        if result.get(key):
-                            return f"✅ {agent_name} completed: {key}={result[key]}"
-                    return f"✅ {agent_name} completed: {result}"
-                return f"✅ {agent_name}: {result}"
-            return f"[{agent_name} did not respond]"
         except Exception as e:
             return f"[{agent_name} error: {e}]"
+        # Formatting the reply is outside the guard on purpose: only the
+        # delegation can fail, and reporting a formatting bug as an agent error
+        # would send the reader looking at the wrong machine.
+        if not result:
+            return f"[{agent_name} did not respond]"
+        if not isinstance(result, dict):
+            return f"✅ {agent_name}: {result}"
+        error = result.get("error")
+        if error:
+            return f"❌ {agent_name} failed: {error}"
+        for key in ("pptx_path", "image_path", "result", "message", "output", "text"):
+            if result.get(key):
+                return f"✅ {agent_name} completed: {key}={result[key]}"
+        return f"✅ {agent_name} completed: {result}"
 
-    async def _process_delegate_commands(self, response: str, restricted: bool = False):
+    async def _process_delegate_commands(
+        self, response: str, restricted: bool = False
+    ) -> tuple[str, list[str]]:
         """Scan the LLM response for structured delegation blocks and execute them:
 
             <delegate>{"agent": "manual-agent", "task": "search for the Philips 2200 manual"}</delegate>
@@ -1819,16 +1860,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             block = m.group(1).strip()
             try:
                 cfg = json.loads(block)
-            except json.JSONDecodeError as e:
-                logger.error(
-                    f"[{self.name}] Invalid <delegate> JSON: {e}\nRaw block: {block[:200]}"
+            except json.JSONDecodeError:
+                logger.exception(
+                    "[%s] Invalid <delegate> JSON\nRaw block: %s", self.name, block[:200]
                 )
                 response = response.replace(m.group(0), "[delegate: malformed block]")
                 continue
 
             agent_name = (cfg.get("agent") or cfg.get("name") or "").strip()
             if not agent_name:
-                logger.warning(f"[{self.name}] <delegate> block missing 'agent': {block[:200]}")
+                logger.warning("[%s] <delegate> block missing 'agent': %s", self.name, block[:200])
                 response = response.replace(m.group(0), "[delegate: no agent named]")
                 continue
             if agent_name == self.name:
@@ -1946,7 +1987,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 # explicit JSON form is unambiguous machine intent — surface it.
                 if is_bare and not spawnable:
                     logger.debug(
-                        f"[{self.name}] Ignoring bare mention of unknown agent '{agent_name}'"
+                        "[%s] Ignoring bare mention of unknown agent %r", self.name, agent_name
                     )
                     continue
                 replacements.append((full_match, f"[Could not reach {agent_name}]"))
@@ -1959,7 +2000,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         return response
 
-    async def _process_spawn_commands(self, response: str):
+    async def _process_spawn_commands(self, response: str) -> tuple[str, list[Any]]:
         spawned = []
         pattern = r"<spawn>(.*?)</spawn>"
 
@@ -1978,7 +2019,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     recipe_name = self._match_catalog_recipe(req_name)
                     # Log catalog recipe resolution for spawn-routing diagnostics.
                     logger.info(
-                        f"[{self.name}] spawn '{req_name}': catalog-dedup match = {recipe_name!r}"
+                        "[%s] spawn %r: catalog-dedup match = %r", self.name, req_name, recipe_name
                     )
                     if recipe_name:
                         existing = (
@@ -1986,8 +2027,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                         )
                         if existing:
                             logger.info(
-                                f"[{self.name}] '{req_name}' already covered by running "
-                                f"catalog agent '{recipe_name}' — skipping LLM reimplementation"
+                                "[%s] %r already covered by running catalog agent %r — skipping LLM reimplementation",
+                                self.name,
+                                req_name,
+                                recipe_name,
                             )
                             spawned.append(existing)
                             continue
@@ -1996,8 +2039,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                         )
                         if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
                             logger.info(
-                                f"[{self.name}] LLM tried to write '{req_name}'; spawning catalog "
-                                f"recipe '{recipe_name}' instead"
+                                "[%s] LLM tried to write %r; spawning catalog recipe %r instead",
+                                self.name,
+                                req_name,
+                                recipe_name,
                             )
                             spawn_result = await catalog_actor._action_spawn(recipe_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                             if spawn_result and spawn_result.get("ok"):
@@ -2011,8 +2056,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                                     spawned.append(actor)
                                     continue
                             logger.warning(
-                                f"[{self.name}] Catalog spawn of '{recipe_name}' failed "
-                                f"({spawn_result}); falling back to LLM code"
+                                "[%s] Catalog spawn of %r failed (%s); falling back to LLM code",
+                                self.name,
+                                recipe_name,
+                                spawn_result,
                             )
 
                 # LLM agents have no "code" — only check for code if type is dynamic
@@ -2020,22 +2067,26 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 has_code = bool(config.get("code", "").strip())
                 has_prompt = bool(config.get("system_prompt", "").strip())
                 if agent_type == "dynamic" and not has_code:
-                    logger.error(f"[{self.name}] Dynamic agent has no code: {config.get('name')}")
+                    logger.error(
+                        "[%s] Dynamic agent has no code: %s", self.name, config.get("name")
+                    )
                     continue
                 if agent_type == "llm" and not has_prompt:
                     logger.warning(
-                        f"[{self.name}] LLM agent has no system_prompt, using default: {config.get('name')}"
+                        "[%s] LLM agent has no system_prompt, using default: %s",
+                        self.name,
+                        config.get("name"),
                     )
                 actor = await self._spawn_from_config(config, save=True)
                 if actor:
                     spawned.append(actor)
-            except Exception as e:
-                logger.error(f"[{self.name}] Spawn failed: {e}\nRaw block:\n{match[:500]}")
+            except Exception:
+                logger.exception("[%s] Spawn failed\nRaw block:\n%s", self.name, match[:500])
 
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
         return clean, spawned
 
-    async def _process_delete_commands(self, response: str):
+    async def _process_delete_commands(self, response: str) -> tuple[str, list[str], list[str]]:
         """Scan the LLM response for <delete>{"name": "agent-name"}</delete> blocks
         and execute them. Mirrors _process_spawn_commands so deletion has the same
         UX as spawn: the LLM emits a tagged block, we parse and execute, and the
@@ -2091,29 +2142,31 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     name = stripped.strip("\"'").split()[0] if stripped else None
                 if not name or not isinstance(name, str):
                     logger.warning(
-                        f"[{self.name}] Empty or malformed <delete> block: {block[:200]}"
+                        "[%s] Empty or malformed <delete> block: %s", self.name, block[:200]
                     )
                     continue
                 name = name.strip()
 
                 if name in protected:
-                    logger.warning(f"[{self.name}] Refused to delete protected agent '{name}'")
+                    logger.warning("[%s] Refused to delete protected agent %r", self.name, name)
                     continue
 
                 if name not in known_names:
-                    logger.info(f"[{self.name}] LLM requested deletion of unknown agent '{name}'")
+                    logger.info("[%s] LLM requested deletion of unknown agent %r", self.name, name)
                     missing.append(name)
                     continue
 
-                logger.info(f"[{self.name}] LLM-requested deletion of '{name}'")
+                logger.info("[%s] LLM-requested deletion of %r", self.name, name)
                 # Reuse the existing helper — it handles spawn registry, stop,
                 # manifest cleanup, history note, and remote-vs-local routing.
                 await self.delete_spawned_agent(name)
                 deleted.append(name)
-            except json.JSONDecodeError as e:
-                logger.error(f"[{self.name}] Invalid <delete> JSON: {e}\nRaw block: {block[:200]}")
-            except Exception as e:
-                logger.error(f"[{self.name}] Delete failed: {e}\nRaw block:\n{block[:500]}")
+            except json.JSONDecodeError:
+                logger.exception(
+                    "[%s] Invalid <delete> JSON\nRaw block: %s", self.name, block[:200]
+                )
+            except Exception:
+                logger.exception("[%s] Delete failed\nRaw block:\n%s", self.name, block[:500])
 
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
         return clean, deleted, missing
@@ -2226,7 +2279,7 @@ async def handle_task(agent, payload):
     return {{"text": response, "task": text[:60], "duration": duration}}
 """
 
-    def _inject_llm_bridge_code(self, config: dict) -> dict:
+    def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
         """If ``config`` is for an LLM-typed agent without code, return a copy
         with synthesized bridge code so the remote runner can actually run it.
 
@@ -2266,12 +2319,15 @@ async def handle_task(agent, payload):
         out.setdefault("input_schema", {"text": "str — the question or request"})
         out.setdefault("output_schema", {"text": "str — the LLM response"})
         logger.info(
-            f"[{self.name}] Synthesized LLM bridge code for '{out.get('name')}': "
-            f"{len(bridge)} chars, max_history={max_history}"
+            "[%s] Synthesized LLM bridge code for %r: %s chars, max_history=%s",
+            self.name,
+            out.get("name"),
+            len(bridge),
+            max_history,
         )
         return out
 
-    async def _spawn_remote(self, config: dict, node: str, save: bool) -> None:
+    async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
         """Publish a spawn command to a remote node via MQTT.
         The remote_runner.py on that machine will receive it and run the agent.
         Remote agents appear in the dashboard exactly like local ones
@@ -2297,7 +2353,7 @@ async def handle_task(agent, payload):
         if isinstance(packages, str):
             packages = [p.strip() for p in packages.replace(",", " ").split()]
 
-        logger.info(f"[{self.name}] Spawning '{name}' on remote node '{node}'")
+        logger.info("[%s] Spawning %r on remote node %r", self.name, name, node)
 
         # ── Install packages on remote node first ─────────────────────────────
         if packages:
@@ -2321,7 +2377,11 @@ async def handle_task(agent, payload):
                 installer = self._registry.find_by_name("installer")
                 if installer:
                     logger.info(
-                        f"[{self.name}] Installing {packages} on {node} ({host}) before spawn..."
+                        "[%s] Installing %s on %s (%s) before spawn...",
+                        self.name,
+                        packages,
+                        node,
+                        host,
                     )
                     task_id = f"remote_install_{uuid.uuid4().hex[:8]}"
                     future = asyncio.get_running_loop().create_future()
@@ -2342,23 +2402,29 @@ async def handle_task(agent, payload):
                     try:
                         result = await asyncio.wait_for(future, timeout=180.0)
                         if result.get("success"):
-                            logger.info(f"[{self.name}] Remote install OK: {packages}")
+                            logger.info("[%s] Remote install OK: %s", self.name, packages)
                         else:
                             logger.warning(
-                                f"[{self.name}] Remote install issue: {result.get('error', '?')}"
+                                "[%s] Remote install issue: %s", self.name, result.get("error", "?")
                             )
                     except asyncio.TimeoutError:
-                        logger.warning(f"[{self.name}] Remote install timed out — spawning anyway")
+                        logger.warning("[%s] Remote install timed out — spawning anyway", self.name)
                     finally:
                         self._result_futures.pop(task_id, None)
                 else:
                     logger.warning(
-                        f"[{self.name}] installer not found — skipping remote package install for '{name}'"
+                        "[%s] installer not found — skipping remote package install for %r",
+                        self.name,
+                        name,
                     )
             else:
                 logger.warning(
-                    f"[{self.name}] No host known for node '{node}' — cannot pre-install {packages}. "
-                    f"Install manually: ssh into {node} and run: pip install {' '.join(packages)} --break-system-packages"
+                    "[%s] No host known for node %r — cannot pre-install %s. Install manually: ssh into %s and run: pip install %s --break-system-packages",
+                    self.name,
+                    node,
+                    packages,
+                    node,
+                    " ".join(packages),
                 )
 
         # Publish individual spawn (for immediate delivery).
@@ -2531,15 +2597,15 @@ async def handle_task(agent, payload):
             )
         return sorted(results, key=lambda x: x["name"])
 
-    async def _manifest_listener(self):
+    async def _manifest_listener(self) -> None:
         """Follow agent manifests. Owned by `self.nodes`."""
         await self.manifests.manifest_listener()
 
-    async def _state_return_listener(self):
+    async def _state_return_listener(self) -> None:
         """Receive agents returning from a node. Owned by `self.nodes`."""
         await self.migration.state_return_listener()
 
-    async def _slash_deploy_stream(self, stripped: str):
+    async def _slash_deploy_stream(self, stripped: str) -> AsyncGenerator[str]:
         """Async generator implementing /deploy. Yields progress strings.
 
         Accepts one form only::
@@ -2611,7 +2677,7 @@ async def handle_task(agent, payload):
                 timeout=120.0,
             )
         except Exception as exc:
-            logger.exception(f"[main] /deploy failed for node '{node_name}'")
+            logger.exception("[main] /deploy failed for node %r", node_name)
             yield f"[FAIL] Deploy failed: {exc}"
             return
 
@@ -2625,15 +2691,15 @@ async def handle_task(agent, payload):
         else:
             yield f"[FAIL] Deploy failed: {result.get('error', result)}"
 
-    async def migrate_agent(self, agent_name: str, target_node: str) -> dict:
+    async def migrate_agent(self, agent_name: str, target_node: str) -> dict[str, Any]:
         """Move a running agent to a different node. Owned by `self.migration`."""
         return await self.migration.migrate_agent(agent_name, target_node)
 
-    async def _node_heartbeat_listener(self):
+    async def _node_heartbeat_listener(self) -> None:
         """Follow node heartbeats. Owned by `self.nodes`."""
         await self.nodes.heartbeat_listener()
 
-    async def _node_offline_watcher(self):
+    async def _node_offline_watcher(self) -> None:
         """Periodically check for nodes that have gone silent. If a node has not
         sent a heartbeat in NODE_OFFLINE_GRACE_S, treat all its agents as gone
         and drop the node from our tracking.
@@ -2662,8 +2728,9 @@ async def handle_task(agent, payload):
                 reg = self._get_spawn_registry()
                 for node_name, _info in stale_nodes:
                     logger.warning(
-                        f"[main] Node '{node_name}' has been silent for >"
-                        f"{NODE_OFFLINE_GRACE_S:.0f}s — treating as offline"
+                        "[main] Node %r has been silent for >%.0fs — treating as offline",
+                        node_name,
+                        NODE_OFFLINE_GRACE_S,
                     )
                     # Find all agents that belong to this node according to the
                     # spawn registry (the heartbeat's last-known agent list may
@@ -2694,15 +2761,15 @@ async def handle_task(agent, payload):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"[main] Node offline watcher error: {e}")
+                logger.warning("[main] Node offline watcher error: %s", e)
 
     # ── Delegation ─────────────────────────────────────────────────────────
 
-    async def _llm_bridge_listener(self):
+    async def _llm_bridge_listener(self) -> None:
         """Serve LLM calls for remote agents. Owned by `self.llm_bridge`."""
         await self.llm_bridge.listen()
 
-    async def _remote_observed_samples_listener(self):
+    async def _remote_observed_samples_listener(self) -> None:
         """Subscribe to all MQTT topics published by remote agents and update
         their TopicContract.observed_samples with real payload field names.
 
@@ -2728,8 +2795,8 @@ async def handle_task(agent, payload):
                     producers = bus.registry.producers_of(topic)
                     if producers:
                         return producers[0].name
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[%s] TopicBus producer lookup failed: %s", self.name, exc)
             return None
 
         while self.state.value not in ("stopped", "failed"):
@@ -2742,9 +2809,8 @@ async def handle_task(agent, payload):
                         # Skip internal wactorz topics
                         if any(topic.startswith(p) for p in ("agents/by-name", "nodes/", "main/")):
                             continue
-                        try:
-                            payload = json.loads(msg.payload.decode())
-                        except Exception:
+                        payload = _decoded_json(msg.payload)
+                        if payload is None:
                             continue
                         if not isinstance(payload, dict):
                             continue
@@ -2761,8 +2827,13 @@ async def handle_task(agent, payload):
                                 contract = bus.registry.get(agent_name)
                                 if contract:
                                     contract.update_observed(topic, payload)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(
+                                "[%s] Recording observed sample for %r failed: %s",
+                                self.name,
+                                agent_name,
+                                exc,
+                            )
 
             except asyncio.CancelledError:
                 break
@@ -2770,7 +2841,9 @@ async def handle_task(agent, payload):
                 if self.state.value not in ("stopped", "failed"):
                     await asyncio.sleep(5)
 
-    async def delegate_to_installer(self, payload: dict, timeout: float = 300.0) -> dict:
+    async def delegate_to_installer(
+        self, payload: dict[str, Any], timeout: float = 300.0
+    ) -> dict[str, Any]:
         """Send a task to the installer agent and wait for the result.
         Handles node_deploy, node_install, node_run, install, check actions.
         timeout is generous (300s) because deploys involve SSH + pip installs.
@@ -2842,7 +2915,7 @@ async def handle_task(agent, payload):
 
         if not remote_node:
             logger.warning(
-                f"[{self.name}] delegate_task: '{target_name}' not found locally or remotely"
+                "[%s] delegate_task: %r not found locally or remotely", self.name, target_name
             )
             return None
 
@@ -2855,8 +2928,11 @@ async def handle_task(agent, payload):
                 return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"[{self.name}] delegate_task: '{target_name}' on '{remote_node}' "
-                    f"timed out after {timeout}s"
+                    "[%s] delegate_task: %r on %r timed out after %ss",
+                    self.name,
+                    target_name,
+                    remote_node,
+                    timeout,
                 )
                 return None
 
@@ -2897,8 +2973,8 @@ async def handle_task(agent, payload):
                         try:
                             if not future.done():
                                 future.set_result(json.loads(msg.payload.decode()))
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("[%s] Undecodable reply on %r: %s", self.name, topic, exc)
                         return
             except Exception as exc:
                 if not future.done():
@@ -2930,7 +3006,7 @@ async def handle_task(agent, payload):
             return []
         return [a.get_status() for a in self._registry.all_actors()]
 
-    async def send_command(self, target_name: str, command: MessageType):
+    async def send_command(self, target_name: str, command: MessageType) -> None:
         if not self._registry:
             return
         target = self._registry.find_by_name(target_name)
@@ -2944,7 +3020,7 @@ async def handle_task(agent, payload):
         """
         return self.nodes.running_agent(name)
 
-    async def delete_spawned_agent(self, name: str):
+    async def delete_spawned_agent(self, name: str) -> None:
         """Permanently delete an agent.
 
         Unlike a stop (which preserves state so the agent can resume later),
@@ -3047,10 +3123,14 @@ async def handle_task(agent, payload):
                 await self._mqtt_publish(f"agents/{actor_id}/{metric}", b"", retain=True)
             except Exception as e:
                 logger.debug(
-                    f"[{self.name}] Failed to clear retained agents/{actor_id}/{metric}: {e}"
+                    "[%s] Failed to clear retained agents/%s/%s: %s", self.name, actor_id, metric, e
                 )
 
-    async def _purge_local_agent_persistence(self, actor, name: str) -> None:
+    async def _purge_local_agent_persistence(
+        self,
+        actor: Any,
+        name: str,
+    ) -> None:
         """For a local actor: hard-delete its persisted state across all
         backends (SQLite kv_store rows, in-memory ephemeral keys, pickle file).
 
@@ -3063,12 +3143,15 @@ async def handle_task(agent, payload):
         if api is not None and hasattr(api, "purge"):
             try:
                 api.purge()
-                return
             except Exception as e:
                 logger.warning(
-                    f"[{self.name}] PersistenceAPI.purge() failed for '{name}': {e} — "
-                    f"falling back to filesystem cleanup"
+                    "[%s] PersistenceAPI.purge() failed for %r: %s — falling back to filesystem cleanup",
+                    self.name,
+                    name,
+                    e,
                 )
+            else:
+                return
 
         # Legacy fallback: nuke the agent's pickle directory directly.
         pdir = getattr(actor, "_persistence_dir", None)
@@ -3077,7 +3160,9 @@ async def handle_task(agent, payload):
                 pdir_path = str(pdir)
                 shutil.rmtree(pdir_path, ignore_errors=True)
                 logger.info(
-                    f"[{self.name}] Removed local persistence dir for '{name}': {pdir_path}"
+                    "[%s] Removed local persistence dir for %r: %s", self.name, name, pdir_path
                 )
             except Exception as e:
-                logger.warning(f"[{self.name}] Could not remove persistence dir for '{name}': {e}")
+                logger.warning(
+                    "[%s] Could not remove persistence dir for %r: %s", self.name, name, e
+                )

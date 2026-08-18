@@ -123,7 +123,7 @@ def rebuild_from_registry(registry: Any) -> int:
     return restored
 
 
-def add_log(entry: dict) -> None:
+def add_log(entry: dict[str, Any]) -> None:
     """Append to the bounded log feed shared with connected browsers.
 
     Stamps ``source`` here rather than at each of the call sites, so a later one
@@ -188,11 +188,13 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
             agent_state = data.get("state", "")
             if uptime < 10.0 and agent_state not in ("stopped", "failed"):
                 runtime.undelete(agent_id)
-                msg = (
-                    f"[MQTT] Re-admitting respawned agent {agent_id[:8]} "
-                    f"(uptime={uptime:.1f}s, state={agent_state}, previously deleted)"
+                logger.info(
+                    "[MQTT] Re-admitting respawned agent %s "
+                    "(uptime=%.1fs, state=%s, previously deleted)",
+                    agent_id[:8],
+                    uptime,
+                    agent_state,
                 )
-                logger.info(msg)
 
         # If the agent was just deleted, update_agent() refuses to recreate
         # the entry — so any direct state["agents"][agent_id] access below
@@ -224,8 +226,7 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
             record_heartbeat(agent_id, data)
             if agent_id in runtime.state["agents"]:
                 agent_name = runtime.state["agents"][agent_id].get("name", agent_id[:8])
-                msg = f"[MQTT] Heartbeat: {agent_name}"
-                logger.info(msg)
+                logger.info("[MQTT] Heartbeat: %s", agent_name)
 
         elif metric == "metrics":
             update_agent(agent_id, "metrics", data)
@@ -398,8 +399,8 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
     # coalesce the same three sources per agent. Summing only state["cost_usd"]
     # (or only iterating the local registry) dropped any on-screen agent whose
     # cost lives on the actor object / SQLite rather than in an MQTT metrics frame.
-    actors_by_id: dict = {}
-    actors_by_name: dict = {}
+    actors_by_id: dict[str, Any] = {}
+    actors_by_name: dict[str, Any] = {}
     if runtime.registry is not None:
         for a in runtime.registry.all_actors():
             actors_by_id[a.actor_id] = a

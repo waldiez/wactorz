@@ -83,7 +83,8 @@ class LLMBridge:
                     async for message in client.messages:
                         try:
                             data = json.loads(message.payload.decode())
-                        except Exception:
+                        except Exception as exc:
+                            logger.debug("[main] Undecodable bridge request: %s", exc)
                             continue
                         if isinstance(data, dict):
                             await self.answer(data)
@@ -151,7 +152,7 @@ class LLMBridge:
             self._record_usage(usage)
             return response if isinstance(response, str) else str(response)
         except Exception as exc:
-            logger.error("[main] LLM bridge error for %r: %s", agent_name, exc)
+            logger.exception("[main] LLM bridge error for %r", agent_name)
             return f"LLM error: {exc}"
 
     def _record_usage(self, usage: dict[str, Any]) -> None:
@@ -165,5 +166,5 @@ class LLMBridge:
             self.host.total_output_tokens += usage.get("output_tokens", 0)
             self.host.total_cost_usd += usage.get("cost_usd", 0.0)
             self.host._persist_cost()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[main] Recording bridge usage failed: %s", exc)

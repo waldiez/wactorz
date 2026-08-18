@@ -188,9 +188,7 @@ class Migration:
         try:
             await host._spawn_from_config(local, save=True, from_registry=earned)
         except Exception as exc:
-            logger.exception(
-                "[main] Local re-spawn after state_return failed for %r: %s", agent_name, exc
-            )
+            logger.exception("[main] Local re-spawn after state_return failed for %r", agent_name)
             self._announce(
                 f"Migration of '{agent_name}' from '{from_node}' → local FAILED: {exc}", "warning"
             )
@@ -210,7 +208,7 @@ class Migration:
             }
         )
 
-    async def migrate_agent(self, agent_name: str, target_node: str) -> dict:
+    async def migrate_agent(self, agent_name: str, target_node: str) -> dict[str, Any]:
         """Move a running agent to a different node.
 
         Sources of truth, in priority order:
@@ -386,7 +384,7 @@ class Migration:
 
             # Snapshot the local agent's persisted state before stopping it.
             # Only JSON-serialisable keys survive the MQTT trip.
-            initial_state: dict = {}
+            initial_state: dict[str, Any] = {}
             if self.host._registry:
                 local = self.host._registry.find_by_name(agent_name)
                 if local and hasattr(local, "_persistence_api") and local._persistence_api:
@@ -429,7 +427,7 @@ class Migration:
             # auto-registration or declare_contract). Without this merge those
             # topics would be lost across the migration and the remote agent
             # would publish a manifest missing them — breaking auto-wiring.
-            live_contract: dict = {}
+            live_contract: dict[str, Any] = {}
             try:
                 from ..core.topic_bus import get_topic_bus
 

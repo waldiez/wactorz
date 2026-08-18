@@ -22,7 +22,10 @@ class _Request:
 class TestIngressPath:
     """The value lands in a `<base href>` and inside a nonced `<script>`."""
 
-    def test_a_real_ingress_path_is_accepted(self) -> None:
+    def test_a_real_ingress_path_is_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The shape check runs only where the deployment declares ingress at
+        # all — the bypass does not exist on a plain Docker or bare install.
+        monkeypatch.setattr("wactorz.config.INGRESS_ENABLED", True)
         req = _Request(**{"X-Ingress-Path": "/api/hassio_ingress/abc123"})
 
         assert static_site.ingress_path_of(req) == "/api/hassio_ingress/abc123"  # type: ignore[arg-type]

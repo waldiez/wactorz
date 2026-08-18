@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from unittest import mock
 
@@ -5,8 +6,18 @@ from wactorz.agents.gmail_agent import GmailAgent
 
 
 class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        # A temp directory rather than "state/…": that is the directory a
+        # developer's own install writes to, so a hardcoded path persists test
+        # agents into it — where they then show up in the running dashboard.
+        # pytest's tmp_path cannot be injected into a unittest TestCase, and the
+        # suite-wide WACTORZ_STATE_DIR isolation does not help either, because
+        # an explicit persistence_dir wins over it.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
     def _agent(self):
-        return GmailAgent(llm_provider=None, persistence_dir="state/test-gmail")
+        return GmailAgent(llm_provider=None, persistence_dir=f"{self._tmp.name}/test-gmail")
 
     async def test_unread_searches_is_unread(self):
         agent = self._agent()
@@ -103,10 +114,20 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
 
 
 class GmailCatalogTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # See the agent test above: an explicit persistence_dir wins over the
+        # suite's WACTORZ_STATE_DIR isolation, and tmp_path cannot be injected
+        # into a unittest TestCase — so a hardcoded "state/…" would persist into
+        # a developer's own install.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
     def test_gmail_agent_is_catalog_recipe(self):
         from wactorz.agents.catalog_agent import CatalogAgent
 
-        catalog = CatalogAgent(name="catalog-test", persistence_dir="state/test-gmail-catalog")
+        catalog = CatalogAgent(
+            name="catalog-test", persistence_dir=f"{self._tmp.name}/test-gmail-catalog"
+        )
         info = catalog._action_info("gmail-agent")
 
         self.assertTrue(info["ok"])

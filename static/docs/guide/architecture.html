@@ -124,6 +124,7 @@
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
     </details>
@@ -467,6 +468,12 @@ Gemini default to <code>1.0</code>, Ollama to <code>0.8</code>, so pinning it is
 backends). Ollama receives it as <code>options.temperature</code>; the others take it as a top-level request
 parameter. An individual call site can still pass <code>temperature=</code> to <code>complete()</code> / <code>stream()</code>,
 which wins over the env setting. The resolved value is logged at startup.</p>
+<p>One exception, and it is not configurable: Anthropic removed the sampling parameters with Claude
+Opus 4.7, and a request that carries <code>temperature</code> to one of those models is refused rather than
+ignored. <code>AnthropicProvider</code> therefore leaves the parameter off for the models known to have
+dropped it, and learns the rest the first time one refuses — that request is retried without the
+parameter, and it is omitted for the remainder of the process. Those models are effectively pinned
+to their own default, so pinning a temperature no longer makes runs comparable against them.</p>
 <h3 id="per-call-site-overrides">Per-call-site overrides</h3>
 <p><code>LLM_OVERRIDES</code> routes individual call sites to different providers/models, falling back to the global <code>LLM_PROVIDER</code> for any site not listed (<code>wactorz/llm_factory.py</code>):</p>
 <div class="highlight"><pre><span></span><code><span class="nv">LLM_OVERRIDES</span><span class="o">=</span><span class="s2">&quot;intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6&quot;</span>
@@ -506,7 +513,8 @@ which wins over the env setting. The resolved value is logged at startup.</p>
 </tr>
 </tbody>
 </table>
-<p>The format is <code>&lt;site&gt;=&lt;provider&gt;[:&lt;model&gt;]</code>; only the first colon splits provider from model, so Ollama tags like <code>qwen3:4b</code> work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. <code>site=none</code> disables the LLM for that site.</p>
+<p>The format is <code>&lt;site&gt;=&lt;provider&gt;[:&lt;model&gt;]</code>; only the first colon splits provider from model, so Ollama tags like <code>qwen3:4b</code> work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. An entry naming a site not in the table above is skipped with a warning too — nothing would read it, and a silent no-op looks exactly like an override that did not work. <code>site=none</code> disables the LLM for that site.</p>
+<p>Surrounding quotes are stripped, from the value as a whole and from each site and model, as they are from <code>LLM_PROVIDER</code> and <code>LLM_MODEL</code>. Several ways of setting an environment variable keep the quotes as part of the value — Windows <code>set VAR="…"</code>, Docker's <code>env_file</code>, an unbalanced quote in a hand-edited <code>.env</code> — and split on <code>,</code> and <code>=</code> afterwards, those quotes land on the first site name and the last model name. The site then matches nothing and the model is one character away from real, which the API answers with <code>404 … model: claude-sonnet-4-6"</code>. The startup line logs the parsed table rather than the raw string, so an entry that was dropped is visible by its absence.</p>
 <p>For Ollama, <code>system</code> is encoded as the first <code>{"role": "system"}</code> entry in the native <code>/api/chat</code> <code>messages</code> array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.</p>
 <hr />
 <h2 id="supervision-tree">Supervision Tree</h2>

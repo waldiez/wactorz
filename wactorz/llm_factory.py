@@ -112,8 +112,9 @@ def _build_nim(model: str | None) -> LLMProvider:
 
 def _build_gemini(model: str | None) -> LLMProvider:
     return GeminiProvider(
-        # Gemini is the one provider with a usable default: the shared
-        # LLM_MODEL is often set to another provider's model name.
+        # `CONFIG.llm_model` always has a value, so the trailing default only
+        # answers an explicitly empty LLM_MODEL. It is not a way to catch one
+        # holding another provider's model name — nothing here can tell.
         model=model or CONFIG.llm_model or "gemini-2.5-flash",
         api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or CONFIG.llm_api_key,
     )

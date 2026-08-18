@@ -90,6 +90,18 @@ class LLMProvider:
         """
         return cls._stream is not LLMProvider._stream
 
+    @classmethod
+    def supports_blocks(cls) -> bool:
+        """Whether this provider takes list-of-block message content.
+
+        Off by default, and the default is the safe answer: a provider that
+        flattens content with `str()` would put a base64 payload into the prompt
+        rather than drop it. Callers send `attachments.flatten` instead when this
+        is False, so every provider names the file and reads text attachments —
+        only the image itself needs the provider to say yes.
+        """
+        return False
+
     # ── Provider implementations ────────────────────────────────────────────
 
     async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:

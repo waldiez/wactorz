@@ -251,14 +251,29 @@ def _strip_live_context(message: str) -> str:
     return message[idx + len(end_marker) :].lstrip("\n").lstrip()
 
 
+#: Prefixes that skip dry-run and approval for PIPELINE intent.
+#:
+#: One tuple because three places act on them — the planner deciding whether to
+#: gate a request, the helper stripping the marker off the task text, and the
+#: restricted channel refusing the admin surface — and a marker added to one of
+#: those and missed by another is a guard that catches some spellings of the
+#: same thing. Add a marker here, not at a call site.
+BYPASS_MARKERS = ("pipeline!", "coordinate!", "@planner!")
+
+
+def starts_with_bypass(text: str) -> bool:
+    """Whether `text` opens with a bypass marker, whatever its case or spacing."""
+    return text.lower().lstrip().startswith(BYPASS_MARKERS)
+
+
 def _strip_dryrun_bypass(text: str) -> str:
-    """Strip the `pipeline!` / `coordinate!` bypass marker from the user's
-    text so the planner doesn't see it as part of the task.
+    """Strip the bypass marker from the user's text so the planner does not see
+    it as part of the task.
     """
     if not text:
         return text
     lowered = text.lower().lstrip()
-    for bypass in ("pipeline!", "coordinate!", "@planner!"):
+    for bypass in BYPASS_MARKERS:
         if lowered.startswith(bypass):
             # Find the bypass in the original (case-insensitive) and skip it
             idx = text.lower().find(bypass)

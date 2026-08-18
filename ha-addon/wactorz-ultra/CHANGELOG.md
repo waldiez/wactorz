@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.3
+
+- Added: `deploy_targets` add-on option — list the remote machines `/deploy <name>` may bootstrap as edge nodes over SSH. Credentials live in the add-on configuration, never in chat; private keys go under `/config` or `/share`. See "Remote edge nodes" in the documentation for the broker requirement — `mosquitto_embedded` cannot serve remote nodes.
+- Changed: **the API and dashboard ports are no longer published to your network by default.** The dashboard is reached through the Wactorz panel (ingress), which is behind Home Assistant's own login. If you were reaching `8000` or `8888` directly from another machine, assign a host port for them again in the add-on's Network settings.
+- Changed: **the embedded Mosquitto broker now requires authentication.** Credentials are generated once and kept under `/data`, so they survive restarts and updates; Wactorz is pointed at them automatically. Its WebSocket listener on `8083` is gone — the dashboard has used the add-on's own `/mqtt` proxy for some time.
+- Changed: the add-on now requests the `default` Supervisor role instead of `admin`. It only reads its own options; `admin` additionally exposed every other add-on's configuration and secrets.
+- Removed: the `mqtt_ws_port` option, which no longer had any effect. Delete it from your add-on configuration if you had set it.
+- Fixed: dashboard cost and message totals now stay live during a conversation instead of only refreshing on reload.
+- Fixed: Home Assistant entities that belong to no device are now visible to the planner and actuator, so agents can act on them.
+- Fixed: Claude models that reject a `temperature` parameter no longer fail every request.
+- Fixed: quoted values in LLM environment settings (e.g. `"sk-..."`) are now stripped rather than sent as-is, and an unknown override site is reported instead of silently ignored.
+- Fixed: the planner no longer waits past its own lifetime cap, and the supervisor no longer restarts retired agents when a sibling crashes.
+- Fixed: the REST API now requires its key on every route except `/health`, rejects request bodies that are not JSON objects, and reports real values from `/actors/{id}/metrics`.
+
 ## 0.5.2
 
 - Added: `ha_connection` add-on option (`auto` / `supervisor` / `custom`) — explicit Home Assistant connection mode. `auto` keeps the previous token-presence inference, so existing installs are unaffected.

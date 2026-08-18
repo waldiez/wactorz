@@ -3,13 +3,17 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
+import contextlib
 import contextvars
 import json
 import logging
 import re
+import shutil
 import socket
 import time
 import uuid
+from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 from typing import Any, ClassVar
 
 from ..config import (
@@ -26,8 +30,12 @@ from .helpers.main_actor_helpers import (
     _normalize_agent_name,
     _parse_spawn_config,
     _strip_live_context,
+    starts_with_bypass,
 )
 from .llm_agent import LLMAgent, LLMProvider
+from .llm_bridge import LLMBridge
+from .manifests import ManifestRegistry
+from .migration import Migration
 from .mixins import (
     MemoryMixin,
     PlanningMixin,
@@ -35,6 +43,7 @@ from .mixins import (
     SpawnMixin,
     SpawnPlaceholder,
 )
+from .nodes import NodeManager
 from .one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from .prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
@@ -42,10 +51,22 @@ from .prompts.main_actor_prompts import (
 
 logger = logging.getLogger(__name__)
 
-# Consecutive node heartbeats a registry-claimed agent must be absent from before
-# it is pruned as a silent loss. A single miss is a transient discovery gap; pruning
-# on it drops a live agent from the registry (breaking delete + node-reboot recovery).
-VANISH_MISS_THRESHOLD = 3
+
+def _decoded_json(payload: bytes | None) -> Any | None:
+    """The payload decoded as JSON, or None if it is not.
+
+    Used where the subscription is a wildcard over every agent topic and an
+    agent may publish whatever it likes: a payload that is not JSON is ordinary
+    traffic rather than a fault, and reporting each one would bury the listener
+    in its own output.
+    """
+    if not payload:
+        return None
+    try:
+        return json.loads(payload.decode())
+    except Exception:
+        return None
+
 
 _INTERFACE_SOURCE = contextvars.ContextVar("wactorz_interface_source", default="")
 _INTERFACE_HISTORY = contextvars.ContextVar("wactorz_interface_history", default=())
@@ -72,7 +93,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     #: answer itself. Oldest are dropped first.
     MAX_PENDING_NOTIFICATIONS = 50
 
-    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs):
+    def __init__(
+        self,
+        llm_provider: LLMProvider | None = None,
+        **kwargs: Any,
+    ) -> None:
         kwargs.setdefault("name", "main")
         kwargs.setdefault("system_prompt", ORCHESTRATOR_PROMPT)
         super().__init__(llm_provider=llm_provider, **kwargs)
@@ -83,16 +108,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._pending_notifications: list[dict] = []
         self.protected = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
-        self._known_nodes: dict[str, dict] = {}
-        # Consecutive heartbeats a registry-claimed agent has been absent from its
-        # node — (node_name, agent_name) → count. Prune only past the threshold so a
-        # single missed heartbeat (a transient gap) doesn't drop a live agent.
-        self._node_agent_misses: dict[tuple[str, str], int] = {}
-        # Topic registry: topic → [manifest, ...] — built from agents/+/manifest
-        self._topic_registry: dict[str, list] = {}  # topic → list of agent manifests
-        self._agent_manifests: dict[
-            str, dict
-        ] = {}  # agent name → latest manifest (includes schemas)
+        self.manifests = ManifestRegistry(self)
+        self.nodes = NodeManager(self, self.manifests)
+        self.migration = Migration(self, self.nodes)
+        self.llm_bridge = LLMBridge(self)
 
     def _current_interface_source(self) -> str:
         """Task-local interface actor excluded from delegation for this turn."""
@@ -183,7 +202,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         await super().on_start()
         await self._restore_spawned_agents()
         # Listen for remote node heartbeats so we know what's online
@@ -203,55 +222,42 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── Spawn registry ─────────────────────────────────────────────────────
 
-    def _get_spawn_registry(self) -> dict:
+    def _get_spawn_registry(self) -> dict[str, Any]:
         return self.recall(SPAWN_REGISTRY_KEY) or {}
 
-    def _save_to_spawn_registry(self, config: dict):
+    def _restore_earned_trust(self, agent_name: str, local_cfg: dict[str, Any]) -> bool:
+        """Re-attach a migrating agent's ``trusted`` flag from our own registry.
+
+        A config coming back from a node arrives over MQTT, where a publisher
+        can claim anything, so it is not evidence of anything. Our registry
+        entry is: it was written here when the agent was sent out. Reading the
+        flag from that record rather than from the wire is what lets a catalog
+        agent migrate home without meeting a validator its recipe was never
+        written to pass, while a node's claim of trust still buys nothing.
+
+        Returns whether the flag was earned, for the caller to pass as
+        ``from_registry``. A claim that was not earned is left in place rather
+        than removed here, so the spawn path strips it and says so.
+        """
+        if not self._get_spawn_registry().get(agent_name, {}).get("trusted"):
+            return False
+        local_cfg["trusted"] = True
+        return True
+
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         reg = self._get_spawn_registry()
         reg[config["name"]] = config
         self.persist(SPAWN_REGISTRY_KEY, reg)
-        logger.info(f"[{self.name}] Spawn registry: {list(reg.keys())}")
+        logger.info("[%s] Spawn registry: %s", self.name, list(reg.keys()))
 
-    def _remove_from_spawn_registry(self, name: str):
+    def _remove_from_spawn_registry(self, name: str) -> None:
         reg = self._get_spawn_registry()
         if name in reg:
             del reg[name]
             self.persist(SPAWN_REGISTRY_KEY, reg)
-            logger.info(f"[{self.name}] Removed '{name}' from spawn registry.")
+            logger.info("[%s] Removed %r from spawn registry.", self.name, name)
 
-    def _agents_to_prune(
-        self, node_name: str, curr_agents: set[str], prev_agents: set[str]
-    ) -> list[str]:
-        """Registry agents on ``node_name`` that have now missed
-        ``VANISH_MISS_THRESHOLD`` consecutive heartbeats, so they count as a real
-        silent loss rather than a transient gap. Updates the miss counters:
-        presence resets, absence increments. Never starts counting an agent that
-        has not yet appeared on the node (e.g. just spawned, first heartbeat
-        pending); migrated-away agents (registry now names a different node) are
-        skipped like before.
-        """
-        reg = self._get_spawn_registry()
-        to_prune: list[str] = []
-        for agent_name, cfg in list(reg.items()):
-            if (cfg.get("node", "") or "").strip() != node_name:
-                continue
-            key = (node_name, agent_name)
-            if agent_name in curr_agents:
-                self._node_agent_misses.pop(key, None)
-                continue
-            # Absent this heartbeat — only count it if the agent was present last
-            # heartbeat or is already mid-count; ignore one that never appeared.
-            if key not in self._node_agent_misses and agent_name not in prev_agents:
-                continue
-            misses = self._node_agent_misses.get(key, 0) + 1
-            if misses >= VANISH_MISS_THRESHOLD:
-                self._node_agent_misses.pop(key, None)
-                to_prune.append(agent_name)
-            else:
-                self._node_agent_misses[key] = misses
-        return to_prune
-
-    async def _clear_agent_manifest(self, name: str, actor_id: str | None = None):
+    async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         """Clear an agent's manifest from main's in-memory caches AND from the
         retained MQTT manifest topic. Without this, list_capabilities() will
         keep reporting the agent (with running=false but never disappearing),
@@ -274,9 +280,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 actor_id = target.actor_id
         if actor_id:
             await self._mqtt_publish(f"agents/{actor_id}/manifest", b"", retain=True)
-            logger.debug(f"[{self.name}] Cleared retained manifest for '{name}'")
+            logger.debug("[%s] Cleared retained manifest for %r", self.name, name)
 
-    def _record_agent_deletion(self, name: str, reason: str = "user request"):
+    def _record_agent_deletion(self, name: str, reason: str = "user request") -> None:
         """Inject a system-style note into conversation history that an agent was
         deleted. This is critical because the LLM otherwise sees its own earlier
         turn ("Spawned 'chat-agent'") and assumes the agent still exists when
@@ -301,11 +307,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 }
             )
             self.persist("conversation_history", self._conversation_history)
-            logger.info(f"[{self.name}] Recorded deletion note for '{name}' in history")
+            logger.info("[%s] Recorded deletion note for %r in history", self.name, name)
         except Exception as e:
-            logger.warning(f"[{self.name}] Failed to record deletion note: {e}")
+            logger.warning("[%s] Failed to record deletion note: %s", self.name, e)
 
-    def get_notification_urls(self) -> dict:
+    def get_notification_urls(self) -> dict[str, Any]:
         """Return persisted notification webhook URLs (discord, telegram, slack, etc.)"""
         return self.recall("_notification_urls") or {}
 
@@ -314,7 +320,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     # user name, webhook URLs, etc. Stored separately from history so they
     # survive summarization and persist indefinitely.
 
-    async def _restore_spawned_agents(self):
+    async def _restore_spawned_agents(self) -> None:
         reg = self._get_spawn_registry()
         if not reg:
             return
@@ -338,45 +344,47 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             skip = sorted(n for n in reg if n in already_supervised)
             if skip:
                 logger.info(
-                    f"[{self.name}] Supervisor already restarted "
-                    f"{len(skip)} agent(s); skipping restore for: {skip}"
+                    "[%s] Supervisor already restarted %s agent(s); skipping restore for: %s",
+                    self.name,
+                    len(skip),
+                    skip,
                 )
 
         pending = {n: c for n, c in reg.items() if n not in already_supervised}
         if not pending:
             return
 
-        logger.info(f"[{self.name}] Restoring {len(pending)} agent(s): {list(pending.keys())}")
+        logger.info("[%s] Restoring %s agent(s): %s", self.name, len(pending), list(pending.keys()))
         for name, config in pending.items():
             node = config.get("node", "").strip()
             if node:
                 # Remote agent — re-publish spawn to its node; no local object expected
-                logger.info(f"[{self.name}] Re-spawning remote agent '{name}' on node '{node}'")
+                logger.info("[%s] Re-spawning remote agent %r on node %r", self.name, name, node)
                 try:
                     await self._spawn_remote(config, node, save=False)
-                except Exception as e:
-                    logger.error(
-                        f"[{self.name}] Failed to restore remote '{name}' on '{node}': {e}"
+                except Exception:
+                    logger.exception(
+                        "[%s] Failed to restore remote %r on %r", self.name, name, node
                     )
                 continue
             if self._registry and self._registry.find_by_name(name):
-                logger.info(f"[{self.name}] '{name}' already running, skipping.")
+                logger.info("[%s] %r already running, skipping.", self.name, name)
                 continue
             try:
-                await self._spawn_from_config(config, save=False)
-                logger.info(f"[{self.name}] Restored: {name}")
-            except Exception as e:
-                logger.error(f"[{self.name}] Failed to restore '{name}': {e}")
+                await self._spawn_from_config(config, save=False, from_registry=True)
+                logger.info("[%s] Restored: %s", self.name, name)
+            except Exception:
+                logger.exception("[%s] Failed to restore %r", self.name, name)
 
     # ── Message handling ───────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         if msg.type == MessageType.TASK:
             # Intercept monitor notifications BEFORE passing to LLM _handle_task
             if isinstance(msg.payload, dict) and msg.payload.get("_monitor_notification"):
                 self._queue_notification(msg.payload)
                 logger.info(
-                    f"[{self.name}] Monitor alert queued: {msg.payload.get('message', '')[:80]}"
+                    "[%s] Monitor alert queued: %s", self.name, msg.payload.get("message", "")[:80]
                 )
                 return
             await self._handle_task(msg)
@@ -472,17 +480,19 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── User input ─────────────────────────────────────────────────────────
 
-    async def chat(self, user_message: str) -> str:
-        response = await super().chat(user_message)
+    async def chat(self, user_message: str, attachments: list[dict] | None = None) -> str:
+        response = await super().chat(user_message, attachments)
         # Fire-and-forget fact extraction — strip auto-injected context first
         clean_msg = _strip_live_context(user_message)
         asyncio.create_task(self._extract_and_save_facts(clean_msg, response))
         return response
 
-    async def chat_stream(self, user_message: str):
+    async def chat_stream(
+        self, user_message: str, attachments: list[dict[str, Any]] | None = None
+    ) -> AsyncGenerator[str | dict[str, Any]]:
         full_response = []
         got_usage = False
-        async for chunk in super().chat_stream(user_message):
+        async for chunk in super().chat_stream(user_message, attachments):
             if isinstance(chunk, dict):
                 got_usage = True
                 yield chunk
@@ -495,7 +505,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             clean_msg = _strip_live_context(user_message)
             asyncio.create_task(self._extract_and_save_facts(clean_msg, "".join(full_response)))
 
-    async def _record_external_exchange(self, user_message: str, assistant_response: str):
+    async def _record_external_exchange(self, user_message: str, assistant_response: str) -> None:
         """Record a turn that was handled OUTSIDE self.chat() / self.chat_stream() —
         i.e. by the HA, ACTUATE, or PIPELINE branches that return before the LLM
         is called on main. Without this, those exchanges vanish from history and
@@ -519,11 +529,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             await self._maybe_summarize()
             self.persist("conversation_history", self._conversation_history)
         except Exception as e:
-            logger.warning(f"[{self.name}] Failed to record external exchange: {e}")
+            logger.warning("[%s] Failed to record external exchange: %s", self.name, e)
         # Fire-and-forget fact extraction — same as chat()
         asyncio.create_task(self._extract_and_save_facts(user_message, str(assistant_response)))
 
-    def _queue_notification(self, notice: dict) -> None:
+    def _queue_notification(self, notice: dict[str, Any]) -> None:
         """Queue a system notice for the next chat reply, keeping the newest.
 
         The queue drains only when someone chats, so an idle system with a
@@ -639,8 +649,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             )
         if stripped in ("main.list_nodes", "list_nodes", "/nodes"):
             nodes = self.list_nodes()
-            import time as _t
-
             # Local row first — matches the format users got from io_agent
             local_agents = []
             if self._registry:
@@ -652,7 +660,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             for nd in sorted(nodes, key=lambda x: x["node"]):
                 status = "🟢 online " if nd["online"] else "🔴 offline"
                 agents = ", ".join("@" + a for a in nd["agents"]) or "(no agents)"
-                age = int(_t.time() - nd["last_seen"])
+                age = int(time.time() - nd["last_seen"])
                 lines.append(
                     f"  {nd['node']:22s} {status}  |  agents: {agents}  |  last heartbeat: {age}s ago"
                 )
@@ -827,9 +835,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             )
 
         # Auto-detect webhook URLs in any message and persist them
-        import re as _re
-
-        _webhook_match = _re.search(
+        _webhook_match = re.search(
             r"https?://(?:discord\.com/api/webhooks|hooks\.slack\.com|api\.telegram\.org)/\S+", text
         )
         if _webhook_match:
@@ -842,7 +848,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             elif "telegram" in url:
                 urls["telegram"] = url
             self.persist("_notification_urls", urls)
-            logger.info(f"[{self.name}] Auto-saved webhook URL from message")
+            logger.info("[%s] Auto-saved webhook URL from message", self.name)
 
         if stripped in ("/rules", "rules"):
             rules = self.get_pipeline_rules()
@@ -855,11 +861,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             for rule_id, rule in sorted(rules.items(), key=lambda x: x[1].get("created_at", 0)):
                 agents = rule.get("agents", [])
                 task = rule.get("task", "")[:]
-                import datetime
-
                 ts = rule.get("created_at", 0)
                 created = (
-                    datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+                    datetime.fromtimestamp(ts, tz=timezone.utc)
+                    .astimezone()
+                    .strftime("%Y-%m-%d %H:%M")
                     if ts
                     else "unknown"
                 )
@@ -912,7 +918,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             try:
                 result = await self.migrate_agent(agent_name, target_node)
             except Exception as exc:
-                logger.exception(f"[main] /migrate failed for '{agent_name}' → '{target_node}'")
+                logger.exception("[main] /migrate failed for %r → %r", agent_name, target_node)
                 return note_prefix + f"Migrate failed: {exc}"
             sym = "OK" if result.get("success") else "FAIL"
             return note_prefix + f"[{sym}] {result.get('message', str(result))}"
@@ -992,7 +998,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     # and putting a started agent back under supervision.
                     applied = await target.apply_command(_verb)
                 except Exception as exc:
-                    logger.exception(f"[main] /{_verb} failed for '{agent_name}'")
+                    logger.exception("[main] /%s failed for %r", _verb, agent_name)
                     return note_prefix + f"Failed to {_verb} '{agent_name}': {exc}"
 
                 if not applied:
@@ -1021,7 +1027,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                         await self.delete_spawned_agent(agent_name)
                     except Exception as e:
                         logger.exception(
-                            f"[{self.name}] delete_spawned_agent('{agent_name}') failed"
+                            "[%s] delete_spawned_agent(%r) failed", self.name, agent_name
                         )
                         return note_prefix + f"Delete of '{agent_name}' failed: {e}"
                     return note_prefix + (
@@ -1101,7 +1107,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     await self._registry.unregister(target.actor_id)
             new_config = dict(config)
             new_config["replace"] = True
-            await self._spawn_from_config(new_config, save=True)
+            # Straight from the registry a few lines up, so a catalog agent
+            # restarts trusted rather than failing the validator it never had
+            # to pass.
+            await self._spawn_from_config(new_config, save=True, from_registry=True)
             return note_prefix + f"Agent '{agent_name}' restarted locally."
 
         # ── /nodes remove <node> ────────────────────────────────────────────
@@ -1281,11 +1290,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     f"\U0001f47b '{name}' is in manifest cache but nowhere else — stale entry, run `/agents delete {name}` to clean up"
                 )
             # In spawn registry as remote, but the node is offline / not heartbeating
-            online_nodes = {
-                n
-                for n, info in self._known_nodes.items()
-                if (time.time() - info.get("last_seen", 0)) < 30
-            }
+            online_nodes = set(self.nodes.online_names())
             for name, cfg in spawn_reg.items():
                 node = cfg.get("node", "").strip()
                 if node and node not in online_nodes:
@@ -1413,7 +1418,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     )
                     if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
                         logger.info(
-                            f"[main] '{target_name}' not running — auto-spawning via {catalog_name}..."
+                            "[main] %r not running — auto-spawning via %s...",
+                            target_name,
+                            catalog_name,
                         )
                         try:
                             spawn_result = await catalog_actor._action_spawn(target_name, {})  # pyright: ignore[reportAttributeAccessIssue]
@@ -1424,7 +1431,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                                     if self._registry
                                     else None
                                 )
-                                logger.info(f"[main] '{target_name}' spawned, routing task...")
+                                logger.info("[main] %r spawned, routing task...", target_name)
                             else:
                                 err = (
                                     spawn_result.get("message", "unknown error")
@@ -1451,52 +1458,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
             if remote_node:
                 # Send via MQTT and wait for reply
-                import time as _t
-
-                reply_topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
-                future: asyncio.Future = asyncio.get_event_loop().create_future()
-                self._result_futures[reply_topic] = future
-
-                await self._mqtt_publish(
-                    f"agents/by-name/{target_name}/task",
-                    {
-                        "text": message,
-                        "_reply_topic": reply_topic,
-                        "_remote_task": True,
-                        "payload": message,
-                    },
-                )
-
-                # Subscribe briefly for the reply
-                async def _wait_reply():
-                    try:
-                        async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                            await client.subscribe(reply_topic)
-                            async for msg in client.messages:
-                                try:
-                                    data = json.loads(msg.payload.decode())
-                                    if not future.done():
-                                        future.set_result(data)
-                                except Exception:
-                                    pass
-                                return
-                    except Exception as e:
-                        if not future.done():
-                            future.set_exception(e)
-
-                reply_task = asyncio.create_task(_wait_reply())
-                try:
-                    result = await asyncio.wait_for(asyncio.shield(future), timeout=30.0)
-                    reply_task.cancel()
-                    reply = result.get("result") or result.get("response") or str(result)
-                    return note_prefix + f"**{target_name}** (on {remote_node}): {reply}"
-                except asyncio.TimeoutError:
-                    reply_task.cancel()
-                    return (
-                        note_prefix + f"{target_name} on {remote_node} did not respond within 30s."
+                async with self._reply_topic() as (reply_topic, future):
+                    await self._mqtt_publish(
+                        f"agents/by-name/{target_name}/task",
+                        {
+                            "text": message,
+                            "_reply_topic": reply_topic,
+                            "_remote_task": True,
+                            "payload": message,
+                        },
                     )
-                finally:
-                    self._result_futures.pop(reply_topic, None)
+                    try:
+                        result = await asyncio.wait_for(asyncio.shield(future), timeout=30.0)
+                        reply = result.get("result") or result.get("response") or str(result)
+                        return note_prefix + f"**{target_name}** (on {remote_node}): {reply}"
+                    except asyncio.TimeoutError:
+                        return (
+                            note_prefix
+                            + f"{target_name} on {remote_node} did not respond within 30s."
+                        )
 
             # Not found locally or remotely
             known_remote = [a for nd in self._known_nodes.values() for a in nd.get("agents", [])]
@@ -1529,7 +1509,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Single LLM call classifies intent: ACTUATE, HA, PIPELINE (reactive rule), OTHER
         intent = await self._classify_intent(text)
-        logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
+        logger.info("[%s] Intent: %s — %s", self.name, intent, text[:60])
 
         if intent == "PIPELINE":
             response = await self._propose_or_execute_pipeline(text)
@@ -1581,7 +1561,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             w in text.lower() for w in ("spawn", "create", "make", "build", "add", "agent")
         )
         if has_code and not has_spawn and asked_spawn:
-            logger.info(f"[{self.name}] Code written without <spawn> — prompting to wrap it")
+            logger.info("[%s] Code written without <spawn> — prompting to wrap it", self.name)
             response = await self.chat(
                 "You wrote agent code but forgot to wrap it in a <spawn> block. "
                 "Please output the complete spawn block now with that exact code inside it. "
@@ -1656,8 +1636,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         note_prefix = self._drain_notifications()
         stripped = text.strip()
 
-        # Slash / pipeline! commands are the admin surface — not exposed here.
-        if stripped.startswith("/") or stripped.lower().startswith("pipeline!"):
+        # Slash commands and the bypass markers are the admin surface — not
+        # exposed here. Every marker the planner honours is refused, not just
+        # the first: a guard that catches one spelling of a family reads as
+        # covering the family.
+        if stripped.startswith("/") or starts_with_bypass(stripped):
             reply = (
                 "Admin commands aren't available on this channel — just talk to me "
                 "normally. I can answer questions, tell you what's going on, and "
@@ -1669,7 +1652,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Reuse the main intent classifier; PIPELINE (creates rules/agents) is refused.
         intent = await self._classify_intent(text)
-        logger.info(f"[{self.name}] Intent (restricted): {intent} — {text[:60]}")
+        logger.info("[%s] Intent (restricted): %s — %s", self.name, intent, text[:60])
 
         if intent == "PIPELINE":
             reply = (
@@ -1728,13 +1711,20 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         clean, _ = await self._process_delegate_commands(clean, restricted=True)
         return note_prefix + clean.strip()
 
-    async def process_user_input_stream(self, text: str):
+    async def process_user_input_stream(
+        self, text: str, attachments: list[dict[str, Any]] | None = None
+    ) -> AsyncGenerator[Any]:
         """Streaming version of process_user_input().
         Yields text chunks as the LLM generates them, then a final dict:
           {"done": True, "spawned": [...names...], "system_msg": "..."}
 
         The CLI calls this and prints chunks immediately.
         REST/Discord/WhatsApp should use process_user_input() instead.
+
+        `attachments` are content blocks for this turn. They reach the model on
+        the branch below that calls the LLM; a turn answered without one — a
+        command, an actuation, a pipeline plan, a delegation to the Home
+        Assistant agent — does not read them.
         """
         # Drain monitor notifications first
         note_prefix = self._drain_notifications()
@@ -1805,7 +1795,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Single LLM call classifies intent: ACTUATE, HA, PIPELINE, or OTHER
         intent = await self._classify_intent(text)
-        logger.info(f"[{self.name}] Intent: {intent} — {text[:60]}")
+        logger.info("[%s] Intent: %s — %s", self.name, intent, text[:60])
 
         if intent == "PIPELINE":
             response = await self._propose_or_execute_pipeline(text)
@@ -1844,7 +1834,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Stream the LLM response chunk by chunk
         full_chunks = []
-        async for chunk in self.chat_stream(prefixed_text):
+        async for chunk in self.chat_stream(prefixed_text, attachments):
             if isinstance(chunk, dict):
                 break  # usage dict — discard, already tracked inside chat_stream
             full_chunks.append(chunk)
@@ -1879,9 +1869,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         delegated = await self._execute_llm_delegations(full_response)
         if delegated != full_response:
             # Find what changed and yield just the new parts
-            import re as _re
-
-            results = _re.findall(r"[✅❌]\s+\S+.*", delegated)
+            results = re.findall(r"[✅❌]\s+\S+.*", delegated)
             if results:
                 yield "\n" + "\n".join(results)
         full_response = delegated
@@ -1921,7 +1909,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     # ── Planner ────────────────────────────────────────────────────────────
 
-    def _match_catalog_recipe(self, name: str, capabilities: list | None = None) -> str | None:
+    def _match_catalog_recipe(self, name: str, capabilities: list[str] | None = None) -> str | None:
         """Return the name of a catalog recipe that already covers this request.
 
         Used to stop the LLM from reimplementing an agent that the catalog
@@ -1956,12 +1944,12 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     for recipe_name in cat.list_recipes():  # pyright: ignore[reportAttributeAccessIssue]
                         if _normalize_agent_name(recipe_name) == want:
                             return recipe_name
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[%s] Catalog recipe lookup failed: %s", self.name, exc)
 
         return None
 
-    async def _resolve_or_spawn(self, agent_name: str):
+    async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]:
         """Resolve an agent by name, auto-spawning it from a catalog recipe if it
         isn't running yet. Shared by @mention delegations and <delegate> blocks.
 
@@ -1984,7 +1972,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     self._registry.find_by_name(manifest["catalog"]) if self._registry else None
                 )
                 if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
-                    logger.info(f"[{self.name}] Auto-spawning '{agent_name}' via catalog...")
+                    logger.info("[%s] Auto-spawning %r via catalog...", self.name, agent_name)
                     try:
                         spawn_result = await catalog_actor._action_spawn(agent_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                         if spawn_result and spawn_result.get("ok"):
@@ -1992,41 +1980,48 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                             target = (
                                 self._registry.find_by_name(agent_name) if self._registry else None
                             )
-                            logger.info(f"[{self.name}] '{agent_name}' spawned successfully")
+                            logger.info("[%s] %r spawned successfully", self.name, agent_name)
                         else:
                             err = (
                                 spawn_result.get("message", "unknown")
                                 if spawn_result
                                 else "no response"
                             )
-                            logger.warning(f"[{self.name}] Spawn failed for '{agent_name}': {err}")
-                    except Exception as e:
-                        logger.error(f"[{self.name}] Spawn error for '{agent_name}': {e}")
+                            logger.warning(
+                                "[%s] Spawn failed for %r: %s", self.name, agent_name, err
+                            )
+                    except Exception:
+                        logger.exception("[%s] Spawn error for %r", self.name, agent_name)
         return target, spawnable
 
-    async def _run_delegation(self, agent_name: str, payload) -> str:
+    async def _run_delegation(self, agent_name: str, payload: Any) -> str:
         """Dispatch one already-resolved delegation and format the result string.
         Shared by @mention delegations and <delegate> blocks.
         """
         json_str = json.dumps(payload)
-        logger.info(f"[{self.name}] Executing LLM delegation → @{agent_name} {json_str[:80]}")
+        logger.info("[%s] Executing LLM delegation → @%s %s", self.name, agent_name, json_str[:80])
         try:
             result = await self.delegate_task(agent_name, json_str, timeout=300.0)
-            if result:
-                if isinstance(result, dict):
-                    error = result.get("error")
-                    if error:
-                        return f"❌ {agent_name} failed: {error}"
-                    for key in ("pptx_path", "image_path", "result", "message", "output", "text"):
-                        if result.get(key):
-                            return f"✅ {agent_name} completed: {key}={result[key]}"
-                    return f"✅ {agent_name} completed: {result}"
-                return f"✅ {agent_name}: {result}"
-            return f"[{agent_name} did not respond]"
         except Exception as e:
             return f"[{agent_name} error: {e}]"
+        # Formatting the reply is outside the guard on purpose: only the
+        # delegation can fail, and reporting a formatting bug as an agent error
+        # would send the reader looking at the wrong machine.
+        if not result:
+            return f"[{agent_name} did not respond]"
+        if not isinstance(result, dict):
+            return f"✅ {agent_name}: {result}"
+        error = result.get("error")
+        if error:
+            return f"❌ {agent_name} failed: {error}"
+        for key in ("pptx_path", "image_path", "result", "message", "output", "text"):
+            if result.get(key):
+                return f"✅ {agent_name} completed: {key}={result[key]}"
+        return f"✅ {agent_name} completed: {result}"
 
-    async def _process_delegate_commands(self, response: str, restricted: bool = False):
+    async def _process_delegate_commands(
+        self, response: str, restricted: bool = False
+    ) -> tuple[str, list[str]]:
         """Scan the LLM response for structured delegation blocks and execute them:
 
             <delegate>{"agent": "manual-agent", "task": "search for the Philips 2200 manual"}</delegate>
@@ -2052,16 +2047,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             block = m.group(1).strip()
             try:
                 cfg = json.loads(block)
-            except json.JSONDecodeError as e:
-                logger.error(
-                    f"[{self.name}] Invalid <delegate> JSON: {e}\nRaw block: {block[:200]}"
+            except json.JSONDecodeError:
+                logger.exception(
+                    "[%s] Invalid <delegate> JSON\nRaw block: %s", self.name, block[:200]
                 )
                 response = response.replace(m.group(0), "[delegate: malformed block]")
                 continue
 
             agent_name = (cfg.get("agent") or cfg.get("name") or "").strip()
             if not agent_name:
-                logger.warning(f"[{self.name}] <delegate> block missing 'agent': {block[:200]}")
+                logger.warning("[%s] <delegate> block missing 'agent': %s", self.name, block[:200])
                 response = response.replace(m.group(0), "[delegate: no agent named]")
                 continue
             if agent_name == self.name:
@@ -2195,7 +2190,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 # explicit JSON form is unambiguous machine intent — surface it.
                 if is_bare and not spawnable:
                     logger.debug(
-                        f"[{self.name}] Ignoring bare mention of unknown agent '{agent_name}'"
+                        "[%s] Ignoring bare mention of unknown agent %r", self.name, agent_name
                     )
                     continue
                 replacements.append((full_match, f"[Could not reach {agent_name}]"))
@@ -2208,7 +2203,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         return response
 
-    async def _process_spawn_commands(self, response: str):
+    async def _process_spawn_commands(self, response: str) -> tuple[str, list[Any]]:
         spawned = []
         pattern = r"<spawn>(.*?)</spawn>"
 
@@ -2227,7 +2222,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     recipe_name = self._match_catalog_recipe(req_name)
                     # Log catalog recipe resolution for spawn-routing diagnostics.
                     logger.info(
-                        f"[{self.name}] spawn '{req_name}': catalog-dedup match = {recipe_name!r}"
+                        "[%s] spawn %r: catalog-dedup match = %r", self.name, req_name, recipe_name
                     )
                     if recipe_name:
                         existing = (
@@ -2235,8 +2230,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                         )
                         if existing:
                             logger.info(
-                                f"[{self.name}] '{req_name}' already covered by running "
-                                f"catalog agent '{recipe_name}' — skipping LLM reimplementation"
+                                "[%s] %r already covered by running catalog agent %r — skipping LLM reimplementation",
+                                self.name,
+                                req_name,
+                                recipe_name,
                             )
                             spawned.append(existing)
                             continue
@@ -2245,8 +2242,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                         )
                         if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
                             logger.info(
-                                f"[{self.name}] LLM tried to write '{req_name}'; spawning catalog "
-                                f"recipe '{recipe_name}' instead"
+                                "[%s] LLM tried to write %r; spawning catalog recipe %r instead",
+                                self.name,
+                                req_name,
+                                recipe_name,
                             )
                             spawn_result = await catalog_actor._action_spawn(recipe_name, {})  # pyright: ignore[reportAttributeAccessIssue]
                             if spawn_result and spawn_result.get("ok"):
@@ -2260,8 +2259,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                                     spawned.append(actor)
                                     continue
                             logger.warning(
-                                f"[{self.name}] Catalog spawn of '{recipe_name}' failed "
-                                f"({spawn_result}); falling back to LLM code"
+                                "[%s] Catalog spawn of %r failed (%s); falling back to LLM code",
+                                self.name,
+                                recipe_name,
+                                spawn_result,
                             )
 
                 # LLM agents have no "code" — only check for code if type is dynamic
@@ -2269,22 +2270,26 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 has_code = bool(config.get("code", "").strip())
                 has_prompt = bool(config.get("system_prompt", "").strip())
                 if agent_type == "dynamic" and not has_code:
-                    logger.error(f"[{self.name}] Dynamic agent has no code: {config.get('name')}")
+                    logger.error(
+                        "[%s] Dynamic agent has no code: %s", self.name, config.get("name")
+                    )
                     continue
                 if agent_type == "llm" and not has_prompt:
                     logger.warning(
-                        f"[{self.name}] LLM agent has no system_prompt, using default: {config.get('name')}"
+                        "[%s] LLM agent has no system_prompt, using default: %s",
+                        self.name,
+                        config.get("name"),
                     )
                 actor = await self._spawn_from_config(config, save=True)
                 if actor:
                     spawned.append(actor)
-            except Exception as e:
-                logger.error(f"[{self.name}] Spawn failed: {e}\nRaw block:\n{match[:500]}")
+            except Exception:
+                logger.exception("[%s] Spawn failed\nRaw block:\n%s", self.name, match[:500])
 
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
         return clean, spawned
 
-    async def _process_delete_commands(self, response: str):
+    async def _process_delete_commands(self, response: str) -> tuple[str, list[str], list[str]]:
         """Scan the LLM response for <delete>{"name": "agent-name"}</delete> blocks
         and execute them. Mirrors _process_spawn_commands so deletion has the same
         UX as spawn: the LLM emits a tagged block, we parse and execute, and the
@@ -2340,44 +2345,54 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     name = stripped.strip("\"'").split()[0] if stripped else None
                 if not name or not isinstance(name, str):
                     logger.warning(
-                        f"[{self.name}] Empty or malformed <delete> block: {block[:200]}"
+                        "[%s] Empty or malformed <delete> block: %s", self.name, block[:200]
                     )
                     continue
                 name = name.strip()
 
                 if name in protected:
-                    logger.warning(f"[{self.name}] Refused to delete protected agent '{name}'")
+                    logger.warning("[%s] Refused to delete protected agent %r", self.name, name)
                     continue
 
                 if name not in known_names:
-                    logger.info(f"[{self.name}] LLM requested deletion of unknown agent '{name}'")
+                    logger.info("[%s] LLM requested deletion of unknown agent %r", self.name, name)
                     missing.append(name)
                     continue
 
-                logger.info(f"[{self.name}] LLM-requested deletion of '{name}'")
+                logger.info("[%s] LLM-requested deletion of %r", self.name, name)
                 # Reuse the existing helper — it handles spawn registry, stop,
                 # manifest cleanup, history note, and remote-vs-local routing.
                 await self.delete_spawned_agent(name)
                 deleted.append(name)
-            except json.JSONDecodeError as e:
-                logger.error(f"[{self.name}] Invalid <delete> JSON: {e}\nRaw block: {block[:200]}")
-            except Exception as e:
-                logger.error(f"[{self.name}] Delete failed: {e}\nRaw block:\n{block[:500]}")
+            except json.JSONDecodeError:
+                logger.exception(
+                    "[%s] Invalid <delete> JSON\nRaw block: %s", self.name, block[:200]
+                )
+            except Exception:
+                logger.exception("[%s] Delete failed\nRaw block:\n%s", self.name, block[:500])
 
         clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
         return clean, deleted, missing
 
-    async def _spawn_from_config(self, config: dict, save: bool = True) -> Actor | None:
+    async def _spawn_from_config(
+        self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
+    ) -> Actor | SpawnPlaceholder | None:
         """Spawn one agent from a config dict.
 
         Remote (node-targeted) spawns go out over MQTT via ``_spawn_remote``;
         everything local is handled by the shared ``SpawnMixin`` so main and the
         planner construct agents identically.
+
+        ``from_registry`` says the config was read back from the spawn registry,
+        which is what entitles it to a ``trusted`` flag. It defaults to False so
+        a new call site is untrusted until someone decides otherwise.
         """
         node = config.get("node", "").strip()
         if node:
             return await self._spawn_remote(config, node, save)
-        return await self._spawn_local_from_config(config, register=save)
+        return await self._spawn_local_from_config(
+            config, register=save, from_registry=from_registry
+        )
 
     # Synthetic bridge code shipped with type:"llm" agents when they're spawned
     # on a remote node. The runner compiles this and finds handle_task, so the
@@ -2401,7 +2416,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 # ── Auto-generated LLM bridge (synthesized by main when this agent was spawned
 # remotely with type: "llm"). Do not edit; replace the agent if you need to
 # change behavior. ─────────────────────────────────────────────────────────
-import time as _t
+import time
 
 _SYSTEM_PROMPT = {system_prompt_literal}
 _MAX_HISTORY   = {max_history}
@@ -2444,7 +2459,7 @@ async def handle_task(agent, payload):
     else:
         text = str(payload) if payload is not None else ""
 
-    started = _t.time()
+    started = time.time()
     history = agent.state.setdefault("history", [])
     history.append({{"role": "user", "content": text, "ts": started}})
 
@@ -2456,9 +2471,9 @@ async def handle_task(agent, payload):
     ]
 
     response = await agent.chat(safe_history, system=_now_block() + _SYSTEM_PROMPT)
-    duration = _t.time() - started
+    duration = time.time() - started
 
-    history.append({{"role": "assistant", "content": response, "ts": _t.time()}})
+    history.append({{"role": "assistant", "content": response, "ts": time.time()}})
     # Trim in-memory list too so it doesn't grow forever between persists.
     if len(history) > _MAX_HISTORY * 2:
         del history[: len(history) - _MAX_HISTORY * 2]
@@ -2467,7 +2482,7 @@ async def handle_task(agent, payload):
     return {{"text": response, "task": text[:60], "duration": duration}}
 """
 
-    def _inject_llm_bridge_code(self, config: dict) -> dict:
+    def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
         """If ``config`` is for an LLM-typed agent without code, return a copy
         with synthesized bridge code so the remote runner can actually run it.
 
@@ -2487,12 +2502,10 @@ async def handle_task(agent, payload):
         if (config.get("type") or "").strip().lower() != "llm":
             return config
 
-        import json as _json
-
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
         max_history = int(config.get("max_history", 32) or 32)
         bridge = self._LLM_BRIDGE_CODE_TEMPLATE.format(
-            system_prompt_literal=_json.dumps(system_prompt),
+            system_prompt_literal=json.dumps(system_prompt),
             max_history=max_history,
         )
 
@@ -2509,12 +2522,15 @@ async def handle_task(agent, payload):
         out.setdefault("input_schema", {"text": "str — the question or request"})
         out.setdefault("output_schema", {"text": "str — the LLM response"})
         logger.info(
-            f"[{self.name}] Synthesized LLM bridge code for '{out.get('name')}': "
-            f"{len(bridge)} chars, max_history={max_history}"
+            "[%s] Synthesized LLM bridge code for %r: %s chars, max_history=%s",
+            self.name,
+            out.get("name"),
+            len(bridge),
+            max_history,
         )
         return out
 
-    async def _spawn_remote(self, config: dict, node: str, save: bool) -> None:
+    async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
         """Publish a spawn command to a remote node via MQTT.
         The remote_runner.py on that machine will receive it and run the agent.
         Remote agents appear in the dashboard exactly like local ones
@@ -2540,7 +2556,7 @@ async def handle_task(agent, payload):
         if isinstance(packages, str):
             packages = [p.strip() for p in packages.replace(",", " ").split()]
 
-        logger.info(f"[{self.name}] Spawning '{name}' on remote node '{node}'")
+        logger.info("[%s] Spawning %r on remote node %r", self.name, name, node)
 
         # ── Install packages on remote node first ─────────────────────────────
         if packages:
@@ -2564,7 +2580,11 @@ async def handle_task(agent, payload):
                 installer = self._registry.find_by_name("installer")
                 if installer:
                     logger.info(
-                        f"[{self.name}] Installing {packages} on {node} ({host}) before spawn..."
+                        "[%s] Installing %s on %s (%s) before spawn...",
+                        self.name,
+                        packages,
+                        node,
+                        host,
                     )
                     task_id = f"remote_install_{uuid.uuid4().hex[:8]}"
                     future = asyncio.get_running_loop().create_future()
@@ -2585,23 +2605,29 @@ async def handle_task(agent, payload):
                     try:
                         result = await asyncio.wait_for(future, timeout=180.0)
                         if result.get("success"):
-                            logger.info(f"[{self.name}] Remote install OK: {packages}")
+                            logger.info("[%s] Remote install OK: %s", self.name, packages)
                         else:
                             logger.warning(
-                                f"[{self.name}] Remote install issue: {result.get('error', '?')}"
+                                "[%s] Remote install issue: %s", self.name, result.get("error", "?")
                             )
                     except asyncio.TimeoutError:
-                        logger.warning(f"[{self.name}] Remote install timed out — spawning anyway")
+                        logger.warning("[%s] Remote install timed out — spawning anyway", self.name)
                     finally:
                         self._result_futures.pop(task_id, None)
                 else:
                     logger.warning(
-                        f"[{self.name}] installer not found — skipping remote package install for '{name}'"
+                        "[%s] installer not found — skipping remote package install for %r",
+                        self.name,
+                        name,
                     )
             else:
                 logger.warning(
-                    f"[{self.name}] No host known for node '{node}' — cannot pre-install {packages}. "
-                    f"Install manually: ssh into {node} and run: pip install {' '.join(packages)} --break-system-packages"
+                    "[%s] No host known for node %r — cannot pre-install %s. Install manually: ssh into %s and run: pip install %s --break-system-packages",
+                    self.name,
+                    node,
+                    packages,
+                    node,
+                    " ".join(packages),
                 )
 
         # Publish individual spawn (for immediate delivery).
@@ -2639,74 +2665,76 @@ async def handle_task(agent, payload):
     async def _update_node_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
     ) -> None:
-        """Maintain nodes/{node}/desired_state as a retained MQTT message containing
-        ALL agents that should run on this node. The runner reads this on startup
-        and reconciles — spawning missing agents, ignoring already-running ones.
-        """
-        # Build desired state from spawn registry filtered to this node
-        reg = self._get_spawn_registry()
-        agents = {name: cfg for name, cfg in reg.items() if cfg.get("node", "").strip() == node}
-
-        # Apply pending change before publishing
-        if new_config:
-            agents[new_config["name"]] = new_config
-        if remove_name:
-            agents.pop(remove_name, None)
-
-        # The spawn registry holds CLEAN configs (no synthesized bridge code).
-        # But the runner that consumes desired_state on reboot will compile
-        # whatever code field it finds and call handle_task() on it. So pass
-        # every config through _inject_llm_bridge_code() here, which is a
-        # no-op for non-llm-type agents and idempotent if code is already
-        # present. Without this, restarting a remote node would silently
-        # bring back all LLM agents in a non-functional state — same as the
-        # original "no handle_task" bug, just delayed by one reboot.
-        wire_agents = [self._inject_llm_bridge_code(cfg) for cfg in agents.values()]
-
-        await self._mqtt_publish(
-            f"nodes/{node}/desired_state",
-            {"node": node, "agents": wire_agents, "timestamp": time.time()},
-            retain=True,
-            qos=1,
-        )
-        logger.info(f"[{self.name}] Desired state for '{node}': {list(agents.keys())}")
+        """Republish what a node should be running. Owned by `self.migration`."""
+        await self.migration.update_desired_state(node, new_config, remove_name)
 
     # ── Node registry ──────────────────────────────────────────────────────
 
-    def list_nodes(self) -> list[dict]:
-        """Return all known remote nodes with their last-seen time, running agents, and system metrics."""
-        import time as _time
+    @property
+    def _node_agent_misses(self) -> dict[tuple[str, str], int]:
+        """Consecutive heartbeats each agent has been missing, owned by `self.nodes`."""
+        return self.nodes.agent_misses
 
-        now = _time.time()
-        return [
-            {
-                "node": name,
-                "agents": info.get("agents", []),
-                "last_seen": info.get("last_seen", 0),
-                "online": (now - info.get("last_seen", 0)) < 30,
-                "pid": info.get("pid"),
-                "uptime_s": info.get("uptime_s"),
-                "cpu_pct": info.get("cpu_pct"),
-                "mem_used_mb": info.get("mem_used_mb"),
-                "mem_free_mb": info.get("mem_free_mb"),
-            }
-            for name, info in self._known_nodes.items()
-        ]
+    @_node_agent_misses.setter
+    def _node_agent_misses(self, value: dict[tuple[str, str], int]) -> None:
+        self.nodes.agent_misses = value
+
+    def _agents_to_prune(
+        self, node_name: str, curr_agents: set[str], prev_agents: set[str]
+    ) -> list[str]:
+        """Agents on `node_name` that have missed enough heartbeats to count as gone."""
+        return self.nodes.agents_to_prune(node_name, curr_agents, prev_agents)
+
+    @property
+    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+        """Latest manifest per agent, owned by `self.nodes`.
+
+        Kept as a name here because the catalog agent writes recipe manifests
+        straight into it, and the chat router, the dynamic agents and the spawn
+        mixin all read it off the main actor.
+        """
+        return self.manifests.manifests
+
+    @_agent_manifests.setter
+    def _agent_manifests(self, value: dict[str, dict[str, Any]]) -> None:
+        self.manifests.manifests = value
+
+    @property
+    def _topic_registry(self) -> dict[str, list[dict[str, Any]]]:
+        """Topic to publishing agents, owned by `self.nodes`."""
+        return self.manifests.topic_registry
+
+    @_topic_registry.setter
+    def _topic_registry(self, value: dict[str, list[dict[str, Any]]]) -> None:
+        self.manifests.topic_registry = value
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        """The heartbeat table, which `self.nodes` owns.
+
+        Kept as a name on MainActor because several modules read it directly off
+        the main actor — the planner, the CLI, the chat router and the dynamic
+        agents all walk it to find where an agent is running.
+        """
+        return self.nodes.known
+
+    @_known_nodes.setter
+    def _known_nodes(self, value: dict[str, dict[str, Any]]) -> None:
+        self.nodes.known = value
+
+    def list_nodes(self) -> list[dict[str, Any]]:
+        """Return all known remote nodes with their last-seen time, running agents, and system metrics."""
+        return self.nodes.list_nodes()
 
     def _node_is_online(self, node_name: str) -> bool:
-        """True if ``node_name`` sent a heartbeat within the last 30s — the same
-        freshness window used by list_nodes() and _node_running_agent().
-        """
-        import time as _time
-
-        info = self._known_nodes.get(node_name)
-        return bool(info and (_time.time() - info.get("last_seen", 0)) < 30)
+        """True if ``node_name`` sent a heartbeat inside the freshness window."""
+        return self.nodes.is_online(node_name)
 
     def _online_node_names(self) -> list[str]:
-        """Names of all nodes currently considered online (30s heartbeat window)."""
-        return sorted(name for name in self._known_nodes if self._node_is_online(name))
+        """Names of all nodes currently considered online."""
+        return self.nodes.online_names()
 
-    def list_topics(self, keyword: str = "") -> list[dict]:
+    def list_topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
         Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}
 
@@ -2735,7 +2763,7 @@ async def handle_task(agent, payload):
             )
         return sorted(results, key=lambda x: x["topic"])
 
-    def list_capabilities(self, keyword: str = "") -> list[dict]:
+    def list_capabilities(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known agents with their full capability profile:
         name, description, capabilities, input_schema, output_schema.
 
@@ -2744,13 +2772,7 @@ async def handle_task(agent, payload):
         local ones). The `running` flag is True for both local registry actors
         AND agents currently listed in a live node's heartbeat.
         """
-        # Build the set of remotely-running agent names from live node heartbeats
-        import time as _time
-
-        remote_running: set = set()
-        for nd in self._known_nodes.values():
-            if _time.time() - nd.get("last_seen", 0) < 30:
-                remote_running.update(nd.get("agents", []))
+        remote_running = self.nodes.running_agents()
 
         results = []
         kw = keyword.lower().strip()
@@ -2778,321 +2800,15 @@ async def handle_task(agent, payload):
             )
         return sorted(results, key=lambda x: x["name"])
 
-    async def _manifest_listener(self):
-        """Subscribe to agents/+/manifest and build a searchable topic registry.
-        Retained manifests are delivered immediately on subscribe so the registry
-        is populated even for agents that started before main restarted.
+    async def _manifest_listener(self) -> None:
+        """Follow agent manifests. Owned by `self.nodes`."""
+        await self.manifests.manifest_listener()
 
-        An EMPTY retained payload is a tombstone — it means the agent has been
-        deleted. We extract the agent_id from the topic and drop any matching
-        manifest from both the agent registry and the topic registry. Without
-        this, _agent_manifests would grow forever and stale entries would be
-        reported as still-existing (with running=false but never disappearing).
+    async def _state_return_listener(self) -> None:
+        """Receive agents returning from a node. Owned by `self.nodes`."""
+        await self.migration.state_return_listener()
 
-        IMPORTANT: This listener is the SOURCE OF TRUTH for remote agents'
-        TopicContracts. Local agents register themselves with the TopicBus
-        directly (via DynamicAgent.declare_contract / publish / subscribe),
-        but remote agents live in another process — main only learns about
-        their real publish/subscribe topics through these MQTT manifests.
-        Every accepted manifest is therefore mirrored into the TopicBus so
-        the planner can auto-wire local and remote agents uniformly.
-        """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return
-
-        # Imported lazily once — cheap on subsequent uses.
-        from ..core.topic_bus import TopicContract, get_topic_bus
-
-        _last_exc_str: str | None = None
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe("agents/+/manifest")
-                    logger.info("[main] Subscribed to agent manifests.")
-                    _last_exc_str = None
-                    async for msg in client.messages:
-                        # ── Tombstone: empty payload means agent was deleted ──
-                        raw_payload = msg.payload
-                        if raw_payload is None or len(raw_payload) == 0:
-                            # Topic format: agents/{actor_id}/manifest
-                            topic_str = str(msg.topic)
-                            try:
-                                target_id = topic_str.split("/")[1]
-                            except IndexError:
-                                continue
-                            # Find the manifest entry for this actor_id and drop it.
-                            # Manifests are keyed by name, but each contains an actor_id.
-                            removed_name = None
-                            for name, manifest in list(self._agent_manifests.items()):
-                                if manifest.get("actor_id") == target_id or name == target_id:
-                                    self._agent_manifests.pop(name, None)
-                                    removed_name = name
-                                    break
-                            if removed_name:
-                                # Also drop from topic registry
-                                for topic, entries in list(self._topic_registry.items()):
-                                    self._topic_registry[topic] = [
-                                        m for m in entries if m.get("name") != removed_name
-                                    ]
-                                    if not self._topic_registry[topic]:
-                                        self._topic_registry.pop(topic, None)
-                                # And drop from the TopicBus so the planner stops
-                                # seeing this agent as a potential wiring target.
-                                try:
-                                    bus = get_topic_bus()
-                                    if bus:
-                                        bus.unregister(removed_name)
-                                except Exception as _e:
-                                    logger.debug(
-                                        f"[main] TopicBus unregister failed for "
-                                        f"'{removed_name}': {_e}"
-                                    )
-                                logger.info(f"[main] Manifest tombstone — removed '{removed_name}'")
-                            continue
-
-                        try:
-                            data = json.loads(raw_payload.decode())
-                        except Exception:
-                            continue
-                        if not isinstance(data, dict):
-                            continue
-                        agent_name = data.get("name", "?")
-                        published = data.get("publishes", [])
-                        # Update topic registry
-                        for topic in published:
-                            existing = self._topic_registry.setdefault(topic, [])
-                            # Replace existing entry for this agent or append
-                            updated = False
-                            for i, m in enumerate(existing):
-                                if m.get("name") == agent_name:
-                                    existing[i] = data
-                                    updated = True
-                                    break
-                            if not updated:
-                                existing.append(data)
-                        # Also store full manifest by agent name for capability queries
-                        self._agent_manifests[agent_name] = data
-
-                        # ── Mirror into the TopicBus ──────────────────────────
-                        # This is what makes remote agents visible to the planner's
-                        # auto-wiring. Local agents register their own contracts
-                        # directly; for remote agents the manifest is the only
-                        # channel main has, so it MUST drive TopicBus state here.
-                        # We honour observed_samples when present — those reflect
-                        # the real field names the remote code publishes, which
-                        # take precedence over LLM-declared produces_schema.
-                        try:
-                            bus = get_topic_bus()
-                            if bus and agent_name and agent_name != "?":
-                                observed = data.get("observed_samples", {}) or {}
-                                produces = dict(data.get("produces_schema", {}) or {})
-                                # Fold observed field names into produces_schema so
-                                # the planner sees the actual wire format.
-                                for _topic, sample in observed.items():
-                                    if isinstance(sample, dict):
-                                        for k, v in (sample.get("fields") or {}).items():
-                                            produces[k] = v
-                                contract = TopicContract(
-                                    name=agent_name,
-                                    publishes=list(published or []),
-                                    subscribes=list(data.get("subscribes", []) or []),
-                                    triggers_when=data.get("triggers_when", {}) or {},
-                                    produces_schema=produces,
-                                    consumes_schema=dict(
-                                        data.get(
-                                            "consumes_schema", data.get("input_schema", {}) or {}
-                                        )
-                                    ),
-                                    actor_id=data.get("actor_id"),
-                                    node=data.get("node"),
-                                )
-                                # Carry observed_samples through if the dataclass
-                                # supports the field (it does on TopicContract).
-                                if hasattr(contract, "observed_samples") and observed:
-                                    try:
-                                        contract.observed_samples = dict(observed)
-                                    except Exception:
-                                        pass
-                                bus.register_contract(contract)
-                        except Exception as _e:
-                            logger.debug(
-                                f"[main] TopicBus register from manifest "
-                                f"failed for '{agent_name}': {_e}"
-                            )
-
-                        logger.debug(f"[main] Manifest from '{agent_name}': {published}")
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.state.value not in ("stopped", "failed"):
-                    exc_str = str(e)
-                    if exc_str != _last_exc_str:
-                        logger.warning(f"[main] Manifest listener error: {e}. Reconnecting in 5s…")
-                        _last_exc_str = exc_str
-                    else:
-                        logger.debug("[main] Manifest listener still unavailable — retrying in 5s…")
-                    await asyncio.sleep(5)
-
-    async def _state_return_listener(self):
-        """Receive an agent's full config + persistent state from a remote node
-        during remote→local migration triggered with the '@main' sentinel.
-
-        Topic: nodes/+/state_return
-        Payload:
-          {
-            "agent":        "<name>",
-            "return_token": "<hex token>",          # must match a pending request
-            "config":       {... full spawn config ...},   # includes code
-            "state":        {... persistent state dict ...},
-            "timestamp":    <unix epoch>,
-          }
-
-        On a valid match we strip the remote-node field, attach the state,
-        and call _spawn_from_config() to bring the agent up locally. The 'config'
-        is authoritative — it's whatever the remote runner had in memory for
-        this agent, which already includes any runtime-learned contract data
-        that the remote runner copied into its manifest.
-
-        Tokens are single-use and expire after 5 minutes to keep the pending
-        map bounded if a remote node never replies.
-        """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return
-
-        TOKEN_TTL_S = 300
-        _last_exc_str: str | None = None
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe("nodes/+/state_return")
-                    logger.info("[main] Subscribed to state_return topics.")
-                    _last_exc_str = None
-                    async for msg in client.messages:
-                        # Drop empty retained messages (cleanup tombstones)
-                        raw = msg.payload
-                        if not raw:
-                            continue
-                        try:
-                            data = json.loads(raw.decode())
-                        except Exception:
-                            continue
-                        if not isinstance(data, dict):
-                            continue
-                        token = data.get("return_token", "")
-                        pending: dict = getattr(self, "_pending_state_returns", {})
-
-                        # Expire stale tokens before validating to keep the map tidy
-                        import time as _t
-
-                        now = _t.time()
-                        for t, info in list(pending.items()):
-                            if now - info.get("started_at", 0) > TOKEN_TTL_S:
-                                pending.pop(t, None)
-
-                        if not token or token not in pending:
-                            logger.warning(
-                                f"[main] state_return with unknown/expired token "
-                                f"'{token[:8]}…' from {msg.topic} — ignoring"
-                            )
-                            continue
-                        info = pending.pop(token)
-                        agent_name = data.get("agent") or info.get("agent_name", "?")
-                        from_node = info.get("from_node", "?")
-                        cfg = data.get("config") or {}
-                        state = data.get("state") or {}
-
-                        if not cfg or not isinstance(cfg, dict):
-                            logger.warning(
-                                f"[main] state_return for '{agent_name}' from "
-                                f"'{from_node}' has no config — cannot spawn locally"
-                            )
-                            continue
-
-                        # Build a local spawn config: strip the remote-node
-                        # field, attach state as _initial_state, force replace
-                        # so any leftover local instance is cleanly swapped.
-                        local_cfg = dict(cfg)
-                        local_cfg.pop("node", None)
-                        local_cfg.pop("_initial_state", None)
-                        if state:
-                            local_cfg["_initial_state"] = state
-                        local_cfg["replace"] = True
-                        local_cfg.setdefault("name", agent_name)
-
-                        # For LLM agents, drop the synthesized bridge code we
-                        # injected on the way out. Locally, type:"llm" routes
-                        # to LLMAgent and the code field is ignored anyway —
-                        # keeping it would just bloat the spawn registry and
-                        # confuse anyone inspecting it. Detect by the marker
-                        # comment in the synthesized template; user-written
-                        # code never carries this header.
-                        if local_cfg.get("type") == "llm" and "Auto-generated LLM bridge" in (
-                            local_cfg.get("code") or ""
-                        ):
-                            local_cfg.pop("code", None)
-
-                        logger.info(
-                            f"[main] Received state_return for '{agent_name}' "
-                            f"from '{from_node}' "
-                            f"({len(state) if isinstance(state, dict) else 0} "
-                            f"state key(s)) — spawning locally"
-                        )
-                        try:
-                            await self._spawn_from_config(local_cfg, save=True)
-                            self._queue_notification(
-                                {
-                                    "_monitor_notification": True,
-                                    "message": (
-                                        f"Migration of '{agent_name}' from "
-                                        f"'{from_node}' → local succeeded."
-                                    ),
-                                    "severity": "info",
-                                    "timestamp": now,
-                                }
-                            )
-                        except Exception as exc:
-                            logger.exception(
-                                f"[main] Local re-spawn after state_return failed "
-                                f"for '{agent_name}': {exc}"
-                            )
-                            self._queue_notification(
-                                {
-                                    "_monitor_notification": True,
-                                    "message": (
-                                        f"Migration of '{agent_name}' from "
-                                        f"'{from_node}' → local FAILED: {exc}"
-                                    ),
-                                    "severity": "warning",
-                                    "timestamp": now,
-                                }
-                            )
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.state.value not in ("stopped", "failed"):
-                    exc_str = str(e)
-                    if exc_str != _last_exc_str:
-                        logger.warning(
-                            f"[main] state_return listener error: {e}. Reconnecting in 5s…"
-                        )
-                        _last_exc_str = exc_str
-                    else:
-                        logger.debug(
-                            "[main] state_return listener still unavailable — retrying in 5s…"
-                        )
-                    await asyncio.sleep(5)
-
-    # ── Node deployment ────────────────────────────────────────────────────
-    # /deploy lives here (not in io_agent) so every interface — CLI, UI,
-    # Discord, future REST — shares one implementation. The streaming variant
-    # is the canonical one; process_user_input collects its chunks for the
-    # non-streaming path.
-
-    async def _slash_deploy_stream(self, stripped: str):
+    async def _slash_deploy_stream(self, stripped: str) -> AsyncGenerator[str]:
         """Async generator implementing /deploy. Yields progress strings.
 
         Accepts one form only::
@@ -3164,7 +2880,7 @@ async def handle_task(agent, payload):
                 timeout=120.0,
             )
         except Exception as exc:
-            logger.exception(f"[main] /deploy failed for node '{node_name}'")
+            logger.exception("[main] /deploy failed for node %r", node_name)
             yield f"[FAIL] Deploy failed: {exc}"
             return
 
@@ -3178,493 +2894,15 @@ async def handle_task(agent, payload):
         else:
             yield f"[FAIL] Deploy failed: {result.get('error', result)}"
 
-    async def migrate_agent(self, agent_name: str, target_node: str) -> dict:
-        """Move a running agent to a different node.
+    async def migrate_agent(self, agent_name: str, target_node: str) -> dict[str, Any]:
+        """Move a running agent to a different node. Owned by `self.migration`."""
+        return await self.migration.migrate_agent(agent_name, target_node)
 
-        Sources of truth, in priority order:
-          1. Spawn registry — has the full config including code.
-          2. Agent manifest — has node, description, schemas (no code).
-          3. Node heartbeats — minimum: tells us which node the agent runs on.
+    async def _node_heartbeat_listener(self) -> None:
+        """Follow node heartbeats. Owned by `self.nodes`."""
+        await self.nodes.heartbeat_listener()
 
-        If we have code (case 1), we can do any migration unilaterally.
-        If we only have node info (cases 2/3), remote→local migration uses the
-        '@main' sentinel — the remote node ships its full config back and main
-        re-spawns locally.
-
-        Returns {"success": bool, "message": str}
-        """
-        import time as _time
-
-        reg = self._get_spawn_registry()
-        config = reg.get(agent_name)
-        have_code = bool(config and config.get("code"))
-
-        # ── Locate the agent via every source we have ─────────────────────────
-        # Registry first, then manifest, then heartbeats. We need at least to
-        # know WHERE the agent is to do anything useful.
-        manifest = self._agent_manifests.get(agent_name, {})
-        current_node = ""
-        if config:
-            current_node = (config.get("node") or "").strip()
-        if not current_node and manifest:
-            current_node = (manifest.get("node") or "").strip()
-        if not current_node:
-            # Last resort — scan live heartbeats for which node lists this agent
-            import time as _t
-
-            for nd_name, nd in self._known_nodes.items():
-                if _t.time() - nd.get("last_seen", 0) >= 30:
-                    continue
-                if agent_name in nd.get("agents", []):
-                    current_node = nd_name
-                    break
-
-        # ── Verify the agent exists *somewhere* ───────────────────────────────
-        # If we found nothing — not in registry, not in manifest, not heart-
-        # beating from any node, not in the local registry — we genuinely
-        # can't migrate what doesn't exist.
-        local_alive = bool(self._registry and self._registry.find_by_name(agent_name))
-        if not config and not manifest and not current_node and not local_alive:
-            return {
-                "success": False,
-                "message": f"Agent '{agent_name}' not found anywhere (no registry "
-                f"entry, no manifest, no heartbeat). Nothing to migrate.",
-            }
-
-        if current_node == target_node:
-            return {
-                "success": False,
-                "message": f"Agent '{agent_name}' is already on '{target_node or 'local'}'.",
-            }
-
-        # Normalise "local" as a target so users can type /migrate agent-name local
-        is_target_local = target_node.strip().lower() in ("", "local", "main")
-
-        # ── Verify the target node exists and is online ────────────────────────
-        # This must happen BEFORE anything destructive. Without it, a typo'd or
-        # offline target made the agent vanish: the source stopped the agent
-        # (deleting its state file) and published the hand-off to a node topic
-        # nobody was listening on. Refuse up front instead — the agent keeps
-        # running where it is.
-        if not is_target_local and not self._node_is_online(target_node):
-            if target_node in self._known_nodes:
-                reason = f"node '{target_node}' is known but offline (no heartbeat in the last 30s)"
-            else:
-                reason = f"node '{target_node}' does not exist (never sent a heartbeat)"
-            online = self._online_node_names()
-            hint = (
-                f"Online nodes: {', '.join(online)}."
-                if online
-                else "No remote nodes are currently online."
-            )
-            return {
-                "success": False,
-                "message": f"Cannot migrate '{agent_name}': {reason}. {hint} "
-                f"Migration aborted — the agent stays on "
-                f"'{current_node or 'local'}'.",
-            }
-
-        if current_node and not is_target_local:
-            # ── Remote → Remote migration ────────────────────────────────────
-            # The source node still has the agent's compiled code and state;
-            # it does the heavy lifting via its own _migrate_agent handler.
-            # Main needs to update BOTH nodes' desired_state retained messages
-            # so neither tries to re-spawn the agent in the wrong place after
-            # a restart: source must forget the agent, target must remember it.
-            logger.info(
-                f"[{self.name}] Migrating '{agent_name}' from node "
-                f"'{current_node}' → '{target_node}'"
-            )
-            await self._mqtt_publish(
-                f"nodes/{current_node}/migrate",
-                {"name": agent_name, "target_node": target_node},
-            )
-            # Pre-stage the spawn registry and desired-state updates so a
-            # source-node restart between the migrate command and the
-            # spawn-completes-on-target window doesn't re-spawn the agent
-            # on the wrong side.
-            if config:
-                updated = dict(config)
-                updated["node"] = target_node
-                self._save_to_spawn_registry(updated)
-                # Remove from source's desired_state (forget the agent there)
-                # and add to target's desired_state (remember it on arrival).
-                await self._update_node_desired_state(current_node, remove_name=agent_name)
-                await self._update_node_desired_state(target_node, updated)
-
-        elif current_node and is_target_local:
-            # ── Remote → Local migration ─────────────────────────────────────
-            # Always use the '@main' sentinel mechanism so the remote node
-            # ships its persistent state (conversation history, counters,
-            # calibration, etc.) back to main BEFORE the agent is stopped.
-            #
-            # Earlier versions had a "fast path" when main already had the
-            # code in its spawn registry — it just sent a plain stop and
-            # re-spawned locally, but that silently lost ALL of the agent's
-            # accumulated memory. For LLM-based agents like chat-agent this
-            # was particularly bad: every migrate-back wiped their history.
-            #
-            # The @main path is slightly slower (one MQTT round-trip) but
-            # always correct. The state_return listener handles the spawn
-            # once the remote node replies.
-            logger.info(
-                f"[{self.name}] Migrating '{agent_name}' from node "
-                f"'{current_node}' → local (via @main sentinel; "
-                f"{'spawn-registry code available as fallback' if have_code else 'no local code, fully remote-driven'})"
-            )
-
-            import secrets
-
-            return_token = secrets.token_hex(8)
-            # Stash the token so the listener knows this return is ours
-            # and not from some other concurrent migration.
-            self._pending_state_returns: dict = getattr(self, "_pending_state_returns", {})
-            self._pending_state_returns[return_token] = {
-                "agent_name": agent_name,
-                "from_node": current_node,
-                "started_at": _time.time(),
-            }
-            await self._mqtt_publish(
-                f"nodes/{current_node}/migrate",
-                {"name": agent_name, "target_node": "@main", "return_token": return_token},
-                qos=1,
-            )
-            msg = (
-                f"Migration of '{agent_name}' from '{current_node}' → local "
-                f"initiated (waiting for state from remote node)."
-            )
-            logger.info(f"[{self.name}] {msg}")
-            return {"success": True, "message": msg}
-
-        else:
-            # ── Local → Remote migration ─────────────────────────────────────
-            # Requires the agent to be running locally. If it isn't, the
-            # spawn-registry config would also be useless (no code shipped
-            # over MQTT) so error early.
-            if not local_alive and not have_code:
-                return {
-                    "success": False,
-                    "message": f"Agent '{agent_name}' not running locally and "
-                    f"no config in registry — cannot migrate.",
-                }
-
-            logger.info(
-                f"[{self.name}] Migrating LOCAL agent '{agent_name}' → remote node '{target_node}'"
-            )
-
-            # Snapshot the local agent's persisted state before stopping it.
-            # Only JSON-serialisable keys survive the MQTT trip.
-            initial_state: dict = {}
-            if self._registry:
-                local = self._registry.find_by_name(agent_name)
-                if local and hasattr(local, "_persistence_api") and local._persistence_api:
-                    try:
-                        raw = local._persistence_api.all()
-                        dropped = []
-                        for k, v in raw.items():
-                            try:
-                                import json as _json
-
-                                _json.dumps(v)
-                                initial_state[k] = v
-                            except (TypeError, ValueError):
-                                dropped.append(k)
-                        if dropped:
-                            logger.warning(
-                                f"[{self.name}] Local→remote migrate '{agent_name}': "
-                                f"dropping non-JSON state keys {dropped}"
-                            )
-                        if initial_state:
-                            logger.info(
-                                f"[{self.name}] Carrying {len(initial_state)} state key(s) "
-                                f"from local to '{target_node}': {list(initial_state.keys())}"
-                            )
-                    except Exception as e:
-                        logger.warning(
-                            f"[{self.name}] Could not snapshot local state for '{agent_name}': {e}"
-                        )
-
-            # Snapshot the live topic contract from the TopicBus, then merge it
-            # into the config we ship to the remote node. The spawn registry
-            # only has what was REQUESTED at spawn time, but the local agent
-            # may have learned new topics at runtime (via publish/subscribe
-            # auto-registration or declare_contract). Without this merge those
-            # topics would be lost across the migration and the remote agent
-            # would publish a manifest missing them — breaking auto-wiring.
-            live_contract: dict = {}
-            try:
-                from ..core.topic_bus import get_topic_bus
-
-                bus = get_topic_bus()
-                if bus:
-                    c = bus.registry.get(agent_name)
-                    if c is not None:
-                        live_contract = {
-                            "publishes": list(c.publishes or []),
-                            "subscribes": list(c.subscribes or []),
-                            "triggers_when": dict(c.triggers_when or {}),
-                            "produces_schema": dict(c.produces_schema or {}),
-                            "consumes_schema": dict(c.consumes_schema or {}),
-                        }
-                        # observed_samples is a separate field on the contract
-                        if hasattr(c, "observed_samples") and c.observed_samples:
-                            live_contract["observed_samples"] = dict(c.observed_samples)
-                        logger.info(
-                            f"[{self.name}] Captured live contract for '{agent_name}': "
-                            f"pub={live_contract['publishes']} sub={live_contract['subscribes']}"
-                        )
-            except Exception as _e:
-                logger.debug(f"[{self.name}] Could not capture live contract: {_e}")
-
-            # Stop the local instance, then purge its persistence.
-            #
-            # We've already snapshotted `initial_state` above — that's the
-            # authoritative copy now being shipped to the remote node. The
-            # local SQLite rows / pickle / in-memory values are about to become
-            # stale ghosts. If the user later migrates the agent back here
-            # without those being cleared, they'd merge with the freshly
-            # arrived state and produce duplicate conversation entries.
-            if self._registry:
-                local = self._registry.find_by_name(agent_name)
-                if local:
-                    try:
-                        await self._registry.unregister(local.actor_id)
-                        await local.stop()
-                        self._agent_manifests.pop(agent_name, None)
-                        # Wipe SQLite / memory / pickle for this agent. Uses
-                        # the same purge primitive as permanent delete — the
-                        # difference is the agent is being re-created on the
-                        # target node with the snapshot we already have.
-                        try:
-                            await self._purge_local_agent_persistence(local, agent_name)
-                        except Exception as e:
-                            logger.warning(
-                                f"[{self.name}] Could not purge local persistence "
-                                f"for '{agent_name}' after local→remote migration: {e}"
-                            )
-                        await asyncio.sleep(0.3)
-                    except Exception as e:
-                        logger.warning(f"[{self.name}] Could not stop local '{agent_name}': {e}")
-
-            # Update config with new node target and inject captured state +
-            # live contract data. Live values take precedence over stale spawn
-            # config values (e.g. a topic the local agent actually published
-            # to is more authoritative than what was declared at spawn time).
-            new_config = dict(config or {})
-            new_config.setdefault("name", agent_name)
-            new_config["node"] = target_node
-            new_config.pop("replace", None)
-            if initial_state:
-                new_config["_initial_state"] = initial_state
-            for k, v in live_contract.items():
-                if v:  # don't overwrite with empty values
-                    new_config[k] = v
-
-            await self._spawn_remote(new_config, target_node, save=True)
-            # _spawn_remote already saved the full new_config (including state +
-            # live contract). The subsequent _save_to_spawn_registry below would
-            # OVERWRITE it with the stale `config`, so skip it for this branch.
-            msg = (
-                f"Migrating '{agent_name}' from 'local' "
-                f"→ '{target_node}'. It will appear in the dashboard shortly."
-            )
-            logger.info(f"[{self.name}] {msg}")
-            return {"success": True, "message": msg}
-
-        # NOTE: with the @main sentinel now handling all remote→local cases
-        # and the inline remote→remote registry update above, this trailing
-        # block is no longer reached in normal flow. Kept as a defensive
-        # net for any future path that finishes without updating the
-        # spawn registry — the write is idempotent.
-        if config:
-            updated = dict(config)
-            updated["node"] = target_node
-            self._save_to_spawn_registry(updated)
-
-        msg = (
-            f"Migrating '{agent_name}' from '{current_node or 'local'}' "
-            f"→ '{target_node or 'local'}'. It will appear in the dashboard shortly."
-        )
-        logger.info(f"[{self.name}] {msg}")
-        return {"success": True, "message": msg}
-
-    async def _node_heartbeat_listener(self):
-        """Subscribe to nodes/+/heartbeat so main knows which remote nodes are online.
-        Updates self._known_nodes which is used by list_nodes() and the LLM context.
-
-        Also detects agents that silently vanished from a node (crash, OOM kill,
-        manual kill, deploy gone wrong) by diffing each heartbeat's agent list
-        against what we last saw. Anything that disappeared and is still in the
-        spawn registry as belonging to this node is treated as a deletion event:
-        manifest cleared, registry entry removed, history note added.
-        """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.warning("[main] aiomqtt not available — node heartbeat tracking disabled.")
-            return
-
-        _last_exc_str: str | None = None
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe("nodes/+/heartbeat")
-                    await client.subscribe("nodes/+/migrate_result")
-                    logger.info("[main] Subscribed to node heartbeats.")
-                    _last_exc_str = None
-                    async for msg in client.messages:
-                        topic = str(msg.topic)
-                        try:
-                            data = json.loads(msg.payload.decode())
-                        except Exception:
-                            continue
-
-                        parts = topic.split("/")
-                        if len(parts) < 3:
-                            continue
-                        node_name = parts[1]
-
-                        if topic.endswith("/heartbeat"):
-                            import time as _t
-
-                            new_agents = data.get("agents", [])
-                            # ── Diff against previous snapshot for this node ──
-                            prev = self._known_nodes.get(node_name, {})
-                            prev_agents = set(prev.get("agents", []))
-                            curr_agents = set(new_agents)
-                            # Prune only agents absent for several consecutive
-                            # heartbeats — a single miss is a transient gap and must
-                            # not drop a live agent. _agents_to_prune tracks the miss
-                            # counts and skips migrated-away / never-appeared agents.
-                            for agent_name in self._agents_to_prune(
-                                node_name, curr_agents, prev_agents
-                            ):
-                                logger.warning(
-                                    f"[main] Agent '{agent_name}' silently disappeared "
-                                    f"from node '{node_name}' (crash/kill suspected)"
-                                )
-                                # Same cleanup as a manual delete, minus the node-side
-                                # stop signal (it's already gone there).
-                                self._remove_from_spawn_registry(agent_name)
-                                await self._clear_agent_manifest(agent_name)
-                                self._record_agent_deletion(
-                                    agent_name,
-                                    reason=f"vanished from node '{node_name}' (crash or external kill)",
-                                )
-                            self._known_nodes[node_name] = {
-                                "last_seen": _t.time(),
-                                "agents": new_agents,
-                                "node_id": data.get("node_id", ""),
-                                "pid": data.get("pid"),
-                                "uptime_s": data.get("uptime_s"),
-                                "cpu_pct": data.get("cpu_pct"),
-                                "mem_used_mb": data.get("mem_used_mb"),
-                                "mem_free_mb": data.get("mem_free_mb"),
-                            }
-                            # Bootstrap TopicContracts for remote agents whose
-                            # retained manifest hasn't been delivered yet (e.g.
-                            # main just restarted, or the remote node is mid-
-                            # reconnect). The MQTT manifest listener is the
-                            # source of truth for remote contracts — it carries
-                            # the agent's REAL publishes/subscribes/schemas and
-                            # observed_samples. The spawn-config we have here
-                            # only reflects what was REQUESTED at spawn time
-                            # and may be wrong/empty, so we must NEVER overwrite
-                            # a manifest-derived contract with it.
-                            try:
-                                from ..core.topic_bus import TopicContract, get_topic_bus
-
-                                bus = get_topic_bus()
-                                if bus:
-                                    spawn_reg = self._get_spawn_registry()
-                                    for aname in new_agents:
-                                        # Skip if the manifest listener has
-                                        # already registered a contract for
-                                        # this agent — that one is authoritative.
-                                        if bus.registry.get(aname) is not None:
-                                            continue
-                                        # Skip if a manifest is already cached
-                                        # in main — the listener will register
-                                        # it imminently; no need to race.
-                                        if aname in self._agent_manifests:
-                                            continue
-                                        cfg = spawn_reg.get(aname)
-                                        if not cfg:
-                                            continue
-                                        # Only bootstrap if the spawn config
-                                        # actually declared topics — an empty
-                                        # contract would just pollute the bus.
-                                        if not (cfg.get("publishes") or cfg.get("subscribes")):
-                                            continue
-                                        contract = TopicContract.from_spawn_config(
-                                            {
-                                                **cfg,
-                                                "node": node_name,
-                                                "actor_id": str(
-                                                    uuid.uuid5(
-                                                        uuid.NAMESPACE_DNS,
-                                                        f"wactorz.actor.{aname}",
-                                                    )
-                                                ),
-                                            }
-                                        )
-                                        bus.register_contract(contract)
-                                        logger.debug(
-                                            f"[main] Bootstrapped TopicContract for "
-                                            f"'{aname}' from spawn config (manifest pending)."
-                                        )
-                            except Exception as _e:
-                                logger.debug(f"[main] TopicContract bootstrap failed: {_e}")
-                            # P1: keep monitor's heartbeat tracker in sync for remote agents
-                            # so it raises alerts when a remote agent goes silent, exactly
-                            # as it does for local ones.
-                            if self._registry:
-                                mon = self._registry.find_by_name("monitor")
-                                if mon and hasattr(mon, "_last_seen"):
-                                    for aname in new_agents:
-                                        # Build the same deterministic actor_id used by _RemoteAgent
-                                        remote_id = str(
-                                            uuid.uuid5(
-                                                uuid.NAMESPACE_DNS,
-                                                f"wactorz.actor.{aname}",
-                                            )
-                                        )
-                                        mon._last_seen[remote_id] = _t.time()  # pyright: ignore[reportAttributeAccessIssue]
-                        elif topic.endswith("/migrate_result"):
-                            success = data.get("success", False)
-                            agent = data.get("agent", "?")
-                            to_node = data.get("to_node", "?")
-                            sev = "info" if success else "warning"
-                            self._queue_notification(
-                                {
-                                    "_monitor_notification": True,
-                                    "message": (
-                                        f"Migration of '{agent}' to '{to_node}' succeeded."
-                                        if success
-                                        else f"Migration of '{agent}' failed: {data.get('error', '?')}"
-                                    ),
-                                    "severity": sev,
-                                    "timestamp": time.time(),
-                                }
-                            )
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.state.value not in ("stopped", "failed"):
-                    exc_str = str(e)
-                    if exc_str != _last_exc_str:
-                        logger.warning(
-                            f"[main] Node heartbeat listener error: {e}. Reconnecting in 5s…"
-                        )
-                        _last_exc_str = exc_str
-                    else:
-                        logger.debug(
-                            "[main] Node heartbeat listener still unavailable — retrying in 5s…"
-                        )
-                    await asyncio.sleep(5)
-
-    async def _node_offline_watcher(self):
+    async def _node_offline_watcher(self) -> None:
         """Periodically check for nodes that have gone silent. If a node has not
         sent a heartbeat in NODE_OFFLINE_GRACE_S, treat all its agents as gone
         and drop the node from our tracking.
@@ -3674,15 +2912,13 @@ async def handle_task(agent, payload):
         indicator stays at 30s for snappy UX; this watcher waits long enough
         to be sure the node is genuinely down.
         """
-        import time as _t
-
         NODE_OFFLINE_GRACE_S = 90.0
         CHECK_INTERVAL_S = 15.0
 
         while self.state.value not in ("stopped", "failed"):
             try:
                 await asyncio.sleep(CHECK_INTERVAL_S)
-                now = _t.time()
+                now = time.time()
                 # Snapshot to avoid mutation-during-iteration
                 stale_nodes = [
                     (name, info)
@@ -3695,8 +2931,9 @@ async def handle_task(agent, payload):
                 reg = self._get_spawn_registry()
                 for node_name, _info in stale_nodes:
                     logger.warning(
-                        f"[main] Node '{node_name}' has been silent for >"
-                        f"{NODE_OFFLINE_GRACE_S:.0f}s — treating as offline"
+                        "[main] Node %r has been silent for >%.0fs — treating as offline",
+                        node_name,
+                        NODE_OFFLINE_GRACE_S,
                     )
                     # Find all agents that belong to this node according to the
                     # spawn registry (the heartbeat's last-known agent list may
@@ -3727,128 +2964,15 @@ async def handle_task(agent, payload):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"[main] Node offline watcher error: {e}")
+                logger.warning("[main] Node offline watcher error: %s", e)
 
     # ── Delegation ─────────────────────────────────────────────────────────
 
-    async def _llm_bridge_listener(self):
-        """Listens on main/llm_request for LLM calls from remote agents.
+    async def _llm_bridge_listener(self) -> None:
+        """Serve LLM calls for remote agents. Owned by `self.llm_bridge`."""
+        await self.llm_bridge.listen()
 
-        Remote agents call agent.ask_llm(prompt) or agent.chat(messages).
-        The request arrives here with a _reply_topic; we run the LLM call
-        using this node's configured provider and API key, then publish the
-        text response back to _reply_topic so the remote agent's future resolves.
-
-        This keeps API keys on the main machine — edge devices never need them.
-
-        Request payload:
-          prompt        — str (single-turn)    OR
-          messages      — list of {role, content} (multi-turn)
-          system        — optional system prompt override
-          _reply_topic  — where to send the result
-          agent         — name of requesting agent (for logging)
-          node          — node name (for logging)
-        """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.warning("[main] aiomqtt not available — LLM bridge disabled.")
-            return
-
-        _last_exc_str: str | None = None
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe("main/llm_request")
-                    logger.info("[main] LLM bridge listening on main/llm_request")
-                    _last_exc_str = None
-                    async for msg in client.messages:
-                        try:
-                            data = json.loads(msg.payload.decode())
-                        except Exception:
-                            continue
-
-                        reply_topic = data.get("_reply_topic")
-                        agent_name = data.get("agent", "remote-agent")
-                        node_name = data.get("node", "?")
-                        system_over = data.get("system", "")
-                        prompt = data.get("prompt", "")
-                        messages_in = data.get("messages")  # multi-turn path
-
-                        if not reply_topic:
-                            continue
-
-                        logger.info(
-                            f"[main] LLM bridge: request from '{agent_name}' on '{node_name}'"
-                        )
-
-                        try:
-                            # Build message list — either multi-turn or single prompt
-                            if messages_in and isinstance(messages_in, list):
-                                llm_messages = messages_in
-                            else:
-                                llm_messages = [{"role": "user", "content": prompt}]
-
-                            system = system_over or (
-                                f"You are {agent_name}, an AI agent running on node {node_name}."
-                            )
-
-                            # Use this node's LLM provider
-                            if self.llm is None:
-                                text = "[LLM error: no provider configured on main]"
-                                logger.warning(
-                                    f"[main] LLM bridge: request from "
-                                    f"'{agent_name}' but main has no LLM "
-                                    f"provider"
-                                )
-                            else:
-                                # LLMProvider.complete() returns (text, usage)
-                                response, usage = await self.llm.complete(
-                                    messages=llm_messages,
-                                    system=system,
-                                )
-                                text = response if isinstance(response, str) else str(response)
-                                # Roll bridge usage into main's totals so cost
-                                # tracking on this node stays accurate. Per-
-                                # agent attribution lives on the agent metrics
-                                # path — adding that here would need the
-                                # remote agent's actor_id, which we don't
-                                # require in the bridge request schema today.
-                                try:
-                                    self.total_input_tokens += usage.get("input_tokens", 0)
-                                    self.total_output_tokens += usage.get("output_tokens", 0)
-                                    self.total_cost_usd += usage.get("cost_usd", 0.0)
-                                    self._persist_cost()
-                                except Exception:
-                                    pass
-
-                        except Exception as e:
-                            logger.error(f"[main] LLM bridge error for '{agent_name}': {e}")
-                            text = f"LLM error: {e}"
-
-                        await self._mqtt_publish(reply_topic, {"text": text})
-                        logger.info(
-                            f"[main] LLM bridge: replied to '{agent_name}' "
-                            f"({len(text)} chars) → {reply_topic}"
-                        )
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.state.value not in ("stopped", "failed"):
-                    exc_str = str(e)
-                    if exc_str != _last_exc_str:
-                        logger.warning(
-                            f"[main] LLM bridge listener error: {e}. Reconnecting in 5s…"
-                        )
-                        _last_exc_str = exc_str
-                    else:
-                        logger.debug(
-                            "[main] LLM bridge listener still unavailable — retrying in 5s…"
-                        )
-                    await asyncio.sleep(5)
-
-    async def _remote_observed_samples_listener(self):
+    async def _remote_observed_samples_listener(self) -> None:
         """Subscribe to all MQTT topics published by remote agents and update
         their TopicContract.observed_samples with real payload field names.
 
@@ -3862,10 +2986,6 @@ async def handle_task(agent, payload):
           sensors/#          — common IoT namespace
         Additional topic patterns can be added as needed.
         """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return
 
         # Build a reverse map: topic prefix → agent name, kept fresh from spawn registry
         def _topic_to_agent(topic: str) -> str | None:
@@ -3878,8 +2998,8 @@ async def handle_task(agent, payload):
                     producers = bus.registry.producers_of(topic)
                     if producers:
                         return producers[0].name
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[%s] TopicBus producer lookup failed: %s", self.name, exc)
             return None
 
         while self.state.value not in ("stopped", "failed"):
@@ -3892,9 +3012,8 @@ async def handle_task(agent, payload):
                         # Skip internal wactorz topics
                         if any(topic.startswith(p) for p in ("agents/by-name", "nodes/", "main/")):
                             continue
-                        try:
-                            payload = json.loads(msg.payload.decode())
-                        except Exception:
+                        payload = _decoded_json(msg.payload)
+                        if payload is None:
                             continue
                         if not isinstance(payload, dict):
                             continue
@@ -3911,8 +3030,13 @@ async def handle_task(agent, payload):
                                 contract = bus.registry.get(agent_name)
                                 if contract:
                                     contract.update_observed(topic, payload)
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug(
+                                "[%s] Recording observed sample for %r failed: %s",
+                                self.name,
+                                agent_name,
+                                exc,
+                            )
 
             except asyncio.CancelledError:
                 break
@@ -3920,7 +3044,9 @@ async def handle_task(agent, payload):
                 if self.state.value not in ("stopped", "failed"):
                     await asyncio.sleep(5)
 
-    async def delegate_to_installer(self, payload: dict, timeout: float = 300.0) -> dict:
+    async def delegate_to_installer(
+        self, payload: dict[str, Any], timeout: float = 300.0
+    ) -> dict[str, Any]:
         """Send a task to the installer agent and wait for the result.
         Handles node_deploy, node_install, node_run, install, check actions.
         timeout is generous (300s) because deploys involve SSH + pip installs.
@@ -3931,9 +3057,7 @@ async def handle_task(agent, payload):
         if not installer:
             return {"error": "installer agent not found"}
 
-        import uuid as _uuid
-
-        task_id = f"inst_{_uuid.uuid4().hex[:8]}"
+        task_id = f"inst_{uuid.uuid4().hex[:8]}"
         future: asyncio.Future = asyncio.get_event_loop().create_future()
         self._result_futures[task_id] = future
 
@@ -3994,53 +3118,98 @@ async def handle_task(agent, payload):
 
         if not remote_node:
             logger.warning(
-                f"[{self.name}] delegate_task: '{target_name}' not found locally or remotely"
+                "[%s] delegate_task: %r not found locally or remotely", self.name, target_name
             )
             return None
 
-        reply_topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_event_loop().create_future()
-        self._result_futures[reply_topic] = future
+        async with self._reply_topic() as (reply_topic, future):
+            await self._mqtt_publish(
+                f"agents/by-name/{target_name}/task",
+                {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
+            )
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[%s] delegate_task: %r on %r timed out after %ss",
+                    self.name,
+                    target_name,
+                    remote_node,
+                    timeout,
+                )
+                return None
 
-        await self._mqtt_publish(
-            f"agents/by-name/{target_name}/task",
-            {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
-        )
+    #: How long to wait for the reply subscription before publishing anyway.
+    #: Short: a broker that is up answers a subscribe immediately, and one that
+    #: is not will not answer at all.
+    _SUBSCRIBE_TIMEOUT = 5.0
 
-        async def _wait_reply():
+    @contextlib.asynccontextmanager
+    async def _reply_topic(self) -> AsyncGenerator[tuple[str, asyncio.Future]]:
+        """A reply topic that is already subscribed, and the future its answer lands in.
+
+        ⚠ **Subscribing before the caller publishes is the whole point.** Both
+        call sites used to publish first and subscribe after, so an agent that
+        answered quickly answered into nothing: the reply was published to a
+        topic with no subscriber, dropped by the broker, and the caller waited
+        out its full timeout for a task that had in fact succeeded. It reads as
+        a flaky node, which is why it survived so long. The monitor's own copy
+        of this logic was corrected years ago and the fix was never brought back
+        here.
+
+        Publishes anyway if the subscription does not come up in time. The task
+        still gets done, and its side effects are usually what the caller wanted;
+        losing the answer is worse than losing the work. The reason is logged, so
+        a timeout that follows is explained rather than mysterious.
+        """
+        topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._result_futures[topic] = future
+        subscribed = asyncio.Event()
+
+        async def _listen() -> None:
             try:
                 async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe(reply_topic)
+                    await client.subscribe(topic)
+                    subscribed.set()
                     async for msg in client.messages:
                         try:
-                            data = json.loads(msg.payload.decode())
                             if not future.done():
-                                future.set_result(data)
-                        except Exception:
-                            pass
+                                future.set_result(json.loads(msg.payload.decode()))
+                        except Exception as exc:
+                            logger.debug("[%s] Undecodable reply on %r: %s", self.name, topic, exc)
                         return
-            except Exception as e:
+            except Exception as exc:
                 if not future.done():
-                    future.set_exception(e)
+                    future.set_exception(exc)
+            finally:
+                # Whatever happened, stop the caller waiting on a listener that
+                # is no longer going to subscribe.
+                subscribed.set()
 
-        reply_task = asyncio.create_task(_wait_reply())
+        task = asyncio.create_task(_listen())
         try:
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"[{self.name}] delegate_task: '{target_name}' on '{remote_node}' timed out after {timeout}s"
-            )
-            return None
+            try:
+                await asyncio.wait_for(subscribed.wait(), timeout=self._SUBSCRIBE_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[%s] reply subscription for %s did not come up in %.0fs — sending anyway, "
+                    "so a reply may be missed",
+                    self.name,
+                    topic,
+                    self._SUBSCRIBE_TIMEOUT,
+                )
+            yield topic, future
         finally:
-            reply_task.cancel()
-            self._result_futures.pop(reply_topic, None)
+            task.cancel()
+            self._result_futures.pop(topic, None)
 
     async def list_agents(self) -> list[dict]:
         if not self._registry:
             return []
         return [a.get_status() for a in self._registry.all_actors()]
 
-    async def send_command(self, target_name: str, command: MessageType):
+    async def send_command(self, target_name: str, command: MessageType) -> None:
         if not self._registry:
             return
         target = self._registry.find_by_name(target_name)
@@ -4048,22 +3217,13 @@ async def handle_task(agent, payload):
             await self.send(target.actor_id, command)
 
     def _node_running_agent(self, name: str) -> str:
-        """Return the live remote node currently running ``name``, from heartbeat
-        telemetry, or "" if none recently claims it.
+        """The live remote node running ``name``, or "" if none claims it.
 
-        Fallback for when the spawn registry doesn't record the node. Mirrors the
-        freshness window used by ``migrate_agent``.
+        Fallback for when the spawn registry does not record the node.
         """
-        import time as _t
+        return self.nodes.running_agent(name)
 
-        for nd_name, nd in self._known_nodes.items():
-            if _t.time() - nd.get("last_seen", 0) >= 30:
-                continue
-            if name in nd.get("agents", []):
-                return nd_name
-        return ""
-
-    async def delete_spawned_agent(self, name: str):
+    async def delete_spawned_agent(self, name: str) -> None:
         """Permanently delete an agent.
 
         Unlike a stop (which preserves state so the agent can resume later),
@@ -4166,10 +3326,14 @@ async def handle_task(agent, payload):
                 await self._mqtt_publish(f"agents/{actor_id}/{metric}", b"", retain=True)
             except Exception as e:
                 logger.debug(
-                    f"[{self.name}] Failed to clear retained agents/{actor_id}/{metric}: {e}"
+                    "[%s] Failed to clear retained agents/%s/%s: %s", self.name, actor_id, metric, e
                 )
 
-    async def _purge_local_agent_persistence(self, actor, name: str) -> None:
+    async def _purge_local_agent_persistence(
+        self,
+        actor: Any,
+        name: str,
+    ) -> None:
         """For a local actor: hard-delete its persisted state across all
         backends (SQLite kv_store rows, in-memory ephemeral keys, pickle file).
 
@@ -4182,23 +3346,26 @@ async def handle_task(agent, payload):
         if api is not None and hasattr(api, "purge"):
             try:
                 api.purge()
-                return
             except Exception as e:
                 logger.warning(
-                    f"[{self.name}] PersistenceAPI.purge() failed for '{name}': {e} — "
-                    f"falling back to filesystem cleanup"
+                    "[%s] PersistenceAPI.purge() failed for %r: %s — falling back to filesystem cleanup",
+                    self.name,
+                    name,
+                    e,
                 )
+            else:
+                return
 
         # Legacy fallback: nuke the agent's pickle directory directly.
         pdir = getattr(actor, "_persistence_dir", None)
         if pdir is not None:
             try:
-                import shutil
-
                 pdir_path = str(pdir)
                 shutil.rmtree(pdir_path, ignore_errors=True)
                 logger.info(
-                    f"[{self.name}] Removed local persistence dir for '{name}': {pdir_path}"
+                    "[%s] Removed local persistence dir for %r: %s", self.name, name, pdir_path
                 )
             except Exception as e:
-                logger.warning(f"[{self.name}] Could not remove persistence dir for '{name}': {e}")
+                logger.warning(
+                    "[%s] Could not remove persistence dir for %r: %s", self.name, name, e
+                )

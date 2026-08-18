@@ -166,7 +166,7 @@ if [ -f /data/options.json ]; then
             # of non-alphanumerics becomes a single underscore.
             deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
                 | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
-            for deploy_field in host user key password broker broker_port ssh_port; do
+            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password; do
                 deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" /data/options.json)
                 if [ -n "$deploy_value" ]; then
                     deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"
@@ -214,6 +214,34 @@ export PORT=8000
 # Durable state directory. /data is addon-private and survives addon updates,
 # so chat history / pickle / SQLite state is not lost on rebuild. Pinned here
 # as an absolute path instead of relying on CWD.
+# Ingress reaches the add-on over the container network, so it must listen on
+# every interface. No port is published (see config.yaml), so this is not a
+# route in from outside Home Assistant.
+export WACTORZ_BIND_HOST=0.0.0.0
+# The wide bind above is required for ingress, and the add-on sets no API key.
+# Without this the fail-closed rule refuses to start. It is honest here: the
+# add-on publishes no ports, so ingress is the only way in, and Home Assistant
+# authenticates the user before proxying.
+export WACTORZ_EXPOSED_OK=1
+# This deployment sits behind Home Assistant's ingress, which signs the user in
+# before proxying — so a request it forwards is allowed to skip the origin and
+# host checks. Nothing else may claim that: a plain Docker or bare install never
+# sets this, so the bypass does not exist there whatever headers arrive.
+export WACTORZ_INGRESS=1
+# The name Supervisor reaches this container under, so a request it forwards is
+# answered rather than refused as an unrecognised host. This is a backstop:
+# ingress requests are recognised by the header Supervisor sets on them, and
+# that is what the panel actually relies on. `hostname` is used rather than
+# $HOSTNAME so an empty value is a missing command and not an unexported shell
+# variable, and the result is logged — a backstop that silently resolves to
+# nothing is worse than none, because it reads as protection that is not there.
+WACTORZ_ALLOWED_HOSTS="$(hostname 2>/dev/null || true)"
+export WACTORZ_ALLOWED_HOSTS
+if bashio::var.has_value "${WACTORZ_ALLOWED_HOSTS}"; then
+    bashio::log.info "Answering to host name: ${WACTORZ_ALLOWED_HOSTS}"
+else
+    bashio::log.warning "Could not determine this container's host name; relying on ingress detection alone."
+fi
 export WACTORZ_STATE_DIR=/data/state
 mkdir -p "$WACTORZ_STATE_DIR"
 

@@ -10,7 +10,7 @@ base (self.persist, self.recall, self._registry).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..prompts.main_actor_prompts import FACTS_EXTRACT_PROMPT, ORCHESTRATOR_PROMPT
 
@@ -30,7 +30,7 @@ else:
 class MemoryMixin(_Host):
     """User facts + live system-prompt assembly. Mix into an LLMAgent host."""
 
-    def get_user_facts(self) -> dict:
+    def get_user_facts(self) -> dict[str, Any]:
         return self.recall("_user_facts") or {}
 
     def _preferred_timezone_name(self) -> str | None:
@@ -156,7 +156,7 @@ class MemoryMixin(_Host):
             )
         return ctx + user_text
 
-    def _rebuild_system_prompt(self):
+    def _rebuild_system_prompt(self) -> None:
         """Reconstruct the system prompt from ORCHESTRATOR_PROMPT plus dynamic blocks:
           1. Currently running agents (live registry — authoritative, refreshed each call)
           2. Known user facts (persisted)
@@ -246,11 +246,11 @@ class MemoryMixin(_Host):
 
         self.system_prompt = prompt
 
-    def _inject_user_facts_into_prompt(self):
+    def _inject_user_facts_into_prompt(self) -> None:
         """Backward-compatible alias — delegates to the unified rebuild."""
         self._rebuild_system_prompt()
 
-    async def _extract_and_save_facts(self, user_message: str, assistant_response: str):
+    async def _extract_and_save_facts(self, user_message: str, assistant_response: str) -> None:
         """After each exchange, ask the LLM to extract any new durable facts.
 
         Observability: this method logs every attempt at INFO level (start),
@@ -341,10 +341,15 @@ class MemoryMixin(_Host):
             facts.update(normalized)
             self.persist("_user_facts", facts)
             self._inject_user_facts_into_prompt()
-            log_msg = f"[{self.name}] User facts updated: {list(normalized.keys())}"
             if superseded:
-                log_msg += f" (superseded: {superseded})"
-            logger.info(log_msg)
+                logger.info(
+                    "[%s] User facts updated: %s (superseded: %s)",
+                    self.name,
+                    list(normalized.keys()),
+                    superseded,
+                )
+            else:
+                logger.info("[%s] User facts updated: %s", self.name, list(normalized.keys()))
         except _json.JSONDecodeError as e:
             logger.warning(
                 f"[{self.name}] Facts extraction JSON parse failed: {e}. "

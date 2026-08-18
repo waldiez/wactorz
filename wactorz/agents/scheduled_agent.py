@@ -343,10 +343,18 @@ class ScheduledAgent(Actor):
     async def on_stop(self):
         if self._loop_task and not self._loop_task.done():
             self._loop_task.cancel()
-            try:
-                await self._loop_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            # gather rather than a bare await: the scheduling loop's own
+            # CancelledError comes back as a value, so ignoring it cannot also
+            # swallow a cancellation aimed at whoever called stop(). `except
+            # (CancelledError, Exception)` could not tell the two apart, and
+            # eating the caller's is what left a supervisor's watch loop
+            # believing it had never been cancelled — a shutdown that hangs.
+            (outcome,) = await asyncio.gather(self._loop_task, return_exceptions=True)
+            # Reported, not dropped: gather *retrieves* the exception, so a loop
+            # that died of something real would otherwise vanish at shutdown.
+            # CancelledError is a BaseException, so this is a real crash only.
+            if isinstance(outcome, Exception):
+                logger.error("[%s] scheduling loop ended in error: %s", self.name, outcome)
 
     # ── Scheduling loop ────────────────────────────────────────────────────
 

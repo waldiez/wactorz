@@ -44,7 +44,12 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" ]]; then
             tag="${GITHUB_REF_NAME#v}"
             echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-            echo "ref=main" >> "$GITHUB_OUTPUT"
+            # The tag being released, not the branch it was cut from. `main`
+            # matches it at the moment of the push and stops matching the
+            # moment anything else lands, so a re-run would rebuild this same
+            # image tag from different code. Add-on-only rebuilds use the
+            # dispatch path below, where `ref` is chosen explicitly.
+            echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=${{ github.event.inputs.version_tag }}" >> "$GITHUB_OUTPUT"
             echo "ref=${{ github.event.inputs.ref }}" >> "$GITHUB_OUTPUT"

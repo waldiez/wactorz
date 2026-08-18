@@ -5,6 +5,9 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # Called by release.yml before it publishes, so a release runs the same
+  # checks a pull request does rather than a second, drifting copy of them.
+  workflow_call:
 
 jobs:
   test-python:
@@ -26,7 +29,7 @@ jobs:
         run: pip install -e ".[all,dev]"
 
       - name: Test
-        run: python -m pytest tests
+        run: python -m pytest tests -n auto
 
   coverage-python:
     name: Python coverage
@@ -65,6 +68,24 @@ jobs:
 
       - name: Lint
         run: make lint-py
+
+      # static/docs is committed and shipped in the wheel, so a change under
+      # docs/ without a rebuild releases documentation for the previous version
+      # — the same failure the static/app check below covers for the frontend.
+      # Markdown pages only: the build leaves api/js and api/python alone unless
+      # asked for them, so this needs no typedoc or pdoc and costs under a
+      # second. docs.yml builds those two for the published site.
+      - name: Build docs
+        run: python3 scripts/build_docs.py
+
+      - name: static/docs matches the documentation source
+        run: |
+          if [ -n "$(git status --porcelain -- static/docs)" ]; then
+            echo "::error::static/docs is stale. Run 'make docs-build' and commit static/docs."
+            git status --porcelain -- static/docs
+            exit 1
+          fi
+          echo "static/docs is up to date."
 
   test-frontend:
     name: Frontend

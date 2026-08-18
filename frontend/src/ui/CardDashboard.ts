@@ -8,18 +8,14 @@
  * Full-screen overlay with af-header + af-body + af-iobar layout.
  * Views: overview (stats + cards + nodes) | feed | chat (embedded).
  *
- * Connects to the rest of the app via document-level custom events:
- *   Listens: "af-feed-push"  { item: FeedItem }
- *            "af-chat-message" { msg: ChatMessage }
- *            "af-stream-chunk" { chunk, from }
- *            "af-stream-end"
- *            "af-connection-status" { status: "live"|"connecting"|"demo" }
- *   Fires:   "af-send-message" { content, target }
+ * Connects to the rest of the app through document-level `af-*` events, typed
+ * in `events.ts`. This class handles the ones about the dashboard as a whole —
+ * feed pushes, connection state, resets; the chat and application-log events
+ * belong to `DashboardChat` and `AppLogFeed`, which wire their own.
  */
 
 import type { AgentInfo } from "../types/agent";
 import { safeStorage } from "../safeStorage";
-import type { FeedItem } from "../types/feed";
 import {
     buildHeader,
     buildBottomNav,
@@ -27,10 +23,12 @@ import {
     releaseHeaderPopovers,
     releaseBottomNav,
 } from "./dashboard/header";
-import { stateLabel, relTime, sortAgents, STALE_MS } from "./dashboard/agentState";
+import { setSignOutVisible } from "./dashboard/signOut";
+import { stateLabel, sortAgents, STALE_MS } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
-import { buildFeedView, appendFeedItemToView, feedKey } from "./dashboard/feedView";
+import { ActivityFeed } from "./dashboard/activityFeed";
+import { Heartbeats } from "./dashboard/heartbeats";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import type { AgentAction } from "./dashboard/cards";
@@ -48,10 +46,10 @@ export const NODE_EVICT_MS = STALE_MS * 10;
 export class CardDashboard {
     private root: HTMLElement;
     private agents: Map<string, AgentInfo> = new Map();
-    private lastHb: Map<string, number> = new Map();
-    private feedItems: FeedItem[] = [];
-    /** Content keys of items in `feedItems`, for O(1) dedup across feed sources. */
-    private _feedKeys = new Set<string>();
+    /** Last-heard-from times, and the card bits that show them. */
+    private _heartbeats: Heartbeats;
+    /** The activity view's model — agent events and application-log records. */
+    private _activity: ActivityFeed;
     /** The chat concern (thread, iobar, streaming, history) lives in its own controller. */
     private _chat: DashboardChat;
     /** The overview view (host bar, stat cards, wactor grid, nodes panel). */
@@ -59,8 +57,6 @@ export class CardDashboard {
     private view: View = "overview";
     private connState: ConnState = "connecting";
     private tickTimer: ReturnType<typeof setInterval> | null = null;
-    private hideHeartbeats: boolean = true;
-
     private _remoteNodes = new Map<string, { agents: string[]; lastSeen: number }>();
     private _removingIds = new Set<string>();
 
@@ -76,6 +72,7 @@ export class CardDashboard {
     private _evFeed: ((e: Event) => void) | null = null;
     private _evConn: ((e: Event) => void) | null = null;
     private _wipeAll: ((e: Event) => void) | null = null;
+    private _agentsSettled: ((e: Event) => void) | null = null;
     private _clearFeed: ((e: Event) => void) | null = null;
 
     /** HA base URL (seeded from /api/config) — the Devices nav button links to it. */
@@ -85,6 +82,7 @@ export class CardDashboard {
 
     constructor() {
         this.root = this.buildRoot();
+        this._heartbeats = new Heartbeats(this.root);
         this._chat = new DashboardChat({
             root: this.root,
             agents: this.agents,
@@ -101,7 +99,7 @@ export class CardDashboard {
         this._overview = new OverviewView({
             root: this.root,
             agents: this.agents,
-            lastHb: this.lastHb,
+            lastHb: this._heartbeats.lastSeen,
             remoteNodes: this._remoteNodes,
             removingIds: this._removingIds,
             hostStats: () => this._metrics.hostStats(),
@@ -109,7 +107,7 @@ export class CardDashboard {
                 agents: [...this.agents.values()],
                 totalMessages: this._metrics.totalMessages,
                 totalCostUsd: this._metrics.totalCostUsd,
-                feedCount: this.feedItems.length,
+                feedCount: this._activity.count,
                 costLimit: this._metrics.costLimitInfo,
             }),
             onChat: name => {
@@ -118,16 +116,13 @@ export class CardDashboard {
             },
             onCommand: (id, action, btn) => this._sendCommand(id, action, btn),
         });
+        this._activity = new ActivityFeed({
+            root: this.root,
+            isFeedView: () => this.view === "feed",
+        });
         this.root.appendChild(this._chat.buildIobar());
         document.body.appendChild(this.root);
         void this._loadServerConfig();
-    }
-
-    /** Seed runtime config from /api/config and point the Devices nav link at it. */
-    private _loadServerConfig(): void {
-        seedServerConfig()
-            .then(() => setHaNavUrl(this.root, this.haUrl))
-            .catch(() => {});
     }
 
     /** Reveal the dashboard, seed it with `agents`, wire events, and start the refresh timers. */
@@ -138,7 +133,7 @@ export class CardDashboard {
         this._renderView();
         this.tickTimer = setInterval(() => {
             if (!document.hidden) {
-                this._refreshTimestamps();
+                this._heartbeats.refresh();
             }
         }, 5000);
         this._metrics.startPolling();
@@ -149,6 +144,7 @@ export class CardDashboard {
         this.root.classList.remove("cd-visible");
         this._unwireEvents();
         this._chat.cancelMic(); // release the mic if a recording was in progress
+        this._activity.release();
         if (this.tickTimer) {
             clearInterval(this.tickTimer);
             this.tickTimer = null;
@@ -215,7 +211,7 @@ export class CardDashboard {
     removeAgent(id: string): void {
         const removed = this.agents.get(id);
         this.agents.delete(id);
-        this.lastHb.delete(id); // else churned agents leak dead entries _refreshTimestamps scans
+        this._heartbeats.forget(id); // else churned agents leak dead entries _refreshTimestamps scans
         // history is keyed by agent NAME, not UUID — look up name before deleting
         if (removed) {
             this._chat.forgetHistory(removed.name);
@@ -262,27 +258,12 @@ export class CardDashboard {
 
     /** Record a heartbeat timestamp and pulse the agent's card. */
     onHeartbeat(agentId: string, timestampMs: number, _cpu?: number, _mem?: number): void {
-        this.lastHb.set(agentId, timestampMs);
-        if (!this.root.classList.contains("cd-visible")) {
-            return;
-        }
-        if (this._removingIds.has(agentId)) {
-            return;
-        }
-        const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(agentId)}"]`);
-        if (!card) {
-            return;
-        }
-        const hbEl = card.querySelector<HTMLElement>(".af-card-hb-time");
-        if (hbEl) {
-            hbEl.textContent = relTime(timestampMs);
-        }
-        const dot = card.querySelector<HTMLElement>(".af-card-state-dot");
-        if (dot) {
-            dot.classList.remove("af-card-pulse", "af-card-stale");
-            void dot.offsetWidth;
-            dot.classList.add("af-card-pulse");
-        }
+        // Recorded either way; painted only when there is something to paint on.
+        // A card mid-removal is animating out, and repainting it fights that.
+        const hidden = !this.root.classList.contains("cd-visible");
+        this._heartbeats.record(agentId, timestampMs, {
+            skip: hidden || this._removingIds.has(agentId),
+        });
     }
 
     /** Briefly flash an alert class (error/warning) on the agent's card. */
@@ -307,9 +288,36 @@ export class CardDashboard {
         setTimeout(() => card.classList.remove("af-card-chat-flash"), 600);
     }
 
+    renderView(): void {
+        this._renderView();
+    }
+
+    /** Register an extension view (nav button + content builder).
+     *  Extensions call this once during startup. */
+    registerView(key: string, icon: IconName, label: string, builder: () => HTMLElement): void {
+        this._viewBuilders.set(key, builder);
+        this._extraViews.push({ key, icon, label });
+        // Rebuild nav if dashboard is already visible — header buttons
+        // were built with the old extraViews list.
+        if (this.root.classList.contains("cd-visible")) {
+            this._rebuildNav();
+        }
+    }
+
+    /** Seed runtime config from /api/config and point the Devices nav link at it. */
+    private _loadServerConfig(): void {
+        seedServerConfig()
+            .then(() => {
+                setHaNavUrl(this.root, this.haUrl);
+                setSignOutVisible(this.root);
+            })
+            .catch(() => {});
+    }
+
     private _wireEvents(): void {
         this._wireFeedEvents();
         this._chat.wire();
+        this._activity.wire();
         this._evConn = listen("af-connection-status", detail => {
             this.connState = detail.status;
             this._renderConnBadge();
@@ -318,40 +326,25 @@ export class CardDashboard {
     }
 
     private _wireFeedEvents(): void {
-        this._evFeed = listen("af-feed-push", detail => {
-            const item = detail.item;
-            // The same event can arrive from several sources (SQLite seed, WS
-            // log_feed replay, live chat); drop exact duplicates so the feed
-            // doesn't double up or render out of order on rebuild.
-            const key = feedKey(item);
-            if (this._feedKeys.has(key)) {
-                return;
-            }
-            this._feedKeys.add(key);
-            this.feedItems.push(item);
-            if (this.feedItems.length > 500) {
-                const dropped = this.feedItems.shift();
-                if (dropped) {
-                    this._feedKeys.delete(feedKey(dropped));
-                }
-            }
-            if (this.view === "feed") {
-                this._appendFeedItemToView(item);
-            }
-        });
+        this._evFeed = listen("af-feed-push", detail => this._activity.push(detail.item));
 
         this._wipeAll = listen("af-wipe-all", () => {
-            this.feedItems = [];
-            this._feedKeys.clear();
+            this._activity.clear();
             this._chat.clearAll();
             this._renderView();
+        });
+
+        // Fires once the agent list can be trusted — a reset's survivors applied,
+        // or an agent explicitly deleted. The only point at which "the chat
+        // target is gone" is a fact rather than a race with re-registration.
+        this._agentsSettled = listen("af-agents-settled", d => {
+            this._chat.dropTargetIfGone(d?.reason ?? "reset");
         });
 
         // A metrics/logs reset cleared the server-side activity log — drop this
         // dashboard's own in-card feed too.
         this._clearFeed = listen("af-clear-feed", () => {
-            this.feedItems = [];
-            this._feedKeys.clear();
+            this._activity.clear();
             this._renderView();
         });
     }
@@ -362,6 +355,7 @@ export class CardDashboard {
             ["af-feed-push", this._evFeed],
             ["af-connection-status", this._evConn],
             ["af-wipe-all", this._wipeAll],
+            ["af-agents-settled", this._agentsSettled],
             ["af-clear-feed", this._clearFeed],
         ];
         pairs.forEach(([name, fn]) => {
@@ -370,10 +364,7 @@ export class CardDashboard {
             }
         });
         this._evFeed = this._evConn = this._wipeAll = this._clearFeed = null;
-    }
-
-    renderView(): void {
-        this._renderView();
+        this._agentsSettled = null;
     }
 
     private _renderView(): void {
@@ -388,7 +379,9 @@ export class CardDashboard {
         if (this.view === "overview") {
             body.appendChild(this._overview.build());
         } else if (this.view === "feed") {
-            body.appendChild(this._buildFeedView());
+            body.appendChild(this._activity.build());
+            this._activity.logs.load();
+            this._activity.logs.resume();
         } else if (this.view === "settings") {
             body.appendChild(this._buildSettingsView());
         } else if (this.view === "chat") {
@@ -414,6 +407,11 @@ export class CardDashboard {
             }
         });
         this._renderHealth();
+        // The composer sits outside the view body, so it is on screen on the
+        // overview too, where the chat view may never have been mounted. It
+        // names the target from here; updateTargetSelect resolves one if none
+        // has been chosen yet.
+        this._chat.updateTargetSelect();
         // Only show the agent-target dropdown in the chat view
         const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
         if (select) {
@@ -426,23 +424,21 @@ export class CardDashboard {
 
     private _setView(v: View): void {
         if (v === "chat") {
-            this._chat.syncChatTarget();
+            this._chat.resolveDefaultTarget();
+            // Only on arrival. `_renderView` also runs for state updates while
+            // the view is open, and resetting there would reopen the pane on the
+            // next render — undoing Back the moment anything changed.
+            if (this.view !== "chat") {
+                this._chat.showConversation();
+            }
+        }
+        if (this.view === "feed" && v !== "feed") {
+            // Leaving the activity view: stop polling for something nobody is
+            // looking at. The flag survives, so returning resumes it.
+            this._activity.release();
         }
         this.view = v;
         this._renderView();
-    }
-
-    private _buildFeedView(): HTMLElement {
-        return buildFeedView(this.feedItems, {
-            hideHeartbeats: this.hideHeartbeats,
-            onToggleHeartbeats: h => {
-                this.hideHeartbeats = h;
-            },
-        });
-    }
-
-    private _appendFeedItemToView(item: FeedItem): void {
-        appendFeedItemToView(this.root, item, this.hideHeartbeats);
     }
 
     private _renderConnBadge(): void {
@@ -479,36 +475,6 @@ export class CardDashboard {
             }, 600);
         }
         emit("af-agent-command", { command: action, agentId: id });
-    }
-
-    private _refreshTimestamps(): void {
-        const now = Date.now();
-        this.lastHb.forEach((ms, id) => {
-            const card = this.root.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
-            if (!card) {
-                return;
-            }
-            const el = card.querySelector<HTMLElement>(".af-card-hb-time");
-            if (el) {
-                el.textContent = relTime(ms);
-            }
-            const dot = card.querySelector<HTMLElement>(".af-card-state-dot");
-            if (dot) {
-                dot.classList.toggle("af-card-stale", now - ms > STALE_MS);
-            }
-        });
-    }
-
-    /** Register an extension view (nav button + content builder).
-     *  Extensions call this once during startup. */
-    registerView(key: string, icon: IconName, label: string, builder: () => HTMLElement): void {
-        this._viewBuilders.set(key, builder);
-        this._extraViews.push({ key, icon, label });
-        // Rebuild nav if dashboard is already visible — header buttons
-        // were built with the old extraViews list.
-        if (this.root.classList.contains("cd-visible")) {
-            this._rebuildNav();
-        }
     }
 
     private _rebuildNav(): void {

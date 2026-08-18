@@ -3,7 +3,7 @@
 One counter per period plus an all-time total, both in the key-value store, so
 spend survives a restart and a cap set mid-period still sees what came before.
 
-⚠ These functions resolve ``get_db`` and ``datetime`` in *this* module. Tests
+These functions resolve ``get_db`` and ``datetime`` in *this* module. Tests
 that stub either must patch them here — the re-export in ``llm_agent`` is a
 separate binding and patching it does not reach this code.
 """

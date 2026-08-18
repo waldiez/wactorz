@@ -10,25 +10,29 @@
 import type { AgentInfo, ChatMessage, Attachment } from "../../types/agent";
 import { uid } from "../../ids";
 import type { View } from "./types";
-import {
-    canDirectMessage,
-    messageableNames,
-    stateColor,
-    stateLabel,
-    MESSAGEABLE_PRIORITY,
-} from "./agentState";
+import { canDirectMessage, messageableNames } from "./agentState";
 import { renderChatSidebar } from "./chatSidebar";
+import { buildChatPane, buildChatSidebar, renderPaneHeader } from "./chatLayout";
+import { renderTargetSelect } from "./targetSelect";
 import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
-import { buildIobar as buildChatIobar } from "./chatIobar";
+import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
 import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
-import { pickChatTarget, resolveSendTarget, stripLeadingMention, voiceThreadTarget } from "./chatRouting";
+import {
+    preferredChatTarget,
+    replacementTarget,
+    resolveSendTarget,
+    sendBlockedReason,
+    stripLeadingMention,
+    voiceThreadTarget,
+} from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
+import { safeStorage } from "../../safeStorage";
 import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";
 import { MAIN_AGENT } from "../../agents/naming";
-import { UPLOADS_ENABLED } from "./uploads";
-import { renderAttachTray } from "./attachTray";
+import { toast } from "../ToastManager";
+import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, listen } from "../../events";
 
 /** What the chat controller needs from its host (CardDashboard). */
@@ -43,8 +47,20 @@ export interface ChatHost {
     sortedAgents(): AgentInfo[];
 }
 
+/** Where the picked agent is remembered between visits. */
+const CHAT_TARGET_KEY = "wactorz-chat-target";
+
 export class DashboardChat {
-    chatTarget = MAIN_AGENT;
+    /**
+     * Who the user is talking to — their choice, and nothing else. Empty until
+     * one is made (or resolved for them on first arrival), which is the state
+     * the old `MAIN_AGENT` default could not express: "never chose" looked
+     * exactly like "chose main", so renders felt free to overwrite it.
+     */
+    chatTarget = "";
+
+    /** Whether the target is the user's rather than a default filled for them. */
+    private _targetSettled = false;
     private chatMessages: ChatMessage[] = [];
     private sidebarFilter = "";
 
@@ -60,9 +76,13 @@ export class DashboardChat {
         },
     });
     private _lastSentTarget = MAIN_AGENT;
-    // True once the user has explicitly chosen a target. Until then the picker
-    // prefers main (so an agent registering before main on startup can't stick).
-    private _userPicked = false;
+    /**
+     * Mobile master–detail: the pane is open unless the user asked for the list.
+     * Derived in `_syncPaneVisibility` rather than toggled at each call site —
+     * the class used to be added only in `_selectAgent`, so arriving at the view
+     * with a target already chosen left the pane hidden and the screen blank.
+     */
+    private _listVisible = false;
 
     private _historyLoaded = new Set<string>();
     private _selfDispatching = false;
@@ -72,7 +92,7 @@ export class DashboardChat {
         // Only messageable agents — mirrors the target <select> (see _populateSelect).
         agentNames: () => messageableNames(this.host.agents.values()),
         setTarget: (name: string) => this.setTarget(name),
-        send: (input, select) => this._sendMessage(input, select),
+        send: input => this._sendMessage(input),
     });
 
     private _evChat: EventListener | null = null;
@@ -92,10 +112,36 @@ export class DashboardChat {
         return this.host.root;
     }
 
-    /** Switch the open thread to `agent` (wactor-card "Chat" button). */
+    /**
+     * Switch the conversation to `name` — the one owner of a target change.
+     *
+     * Every way of choosing an agent lands here (wactor-card "Chat" button, the
+     * target `<select>`, the `@mention` panel, the sidebar). It used to set the
+     * field and stop, so each caller re-rendered whatever it remembered — in
+     * practice only the composer placeholder — and the pane header and thread
+     * went on showing the previous conversation.
+     */
     setTarget(name: string): void {
         this.chatTarget = name;
-        this._userPicked = true;
+        this._claimTarget(name);
+        this._refreshForTarget();
+        void this.loadHistory(name);
+        this.updateTargetSelect();
+    }
+
+    /**
+     * Mark the target as the user's own: remembered, and no longer movable.
+     *
+     * The two ways in are picking an agent and sending to one. Not the third:
+     * an agent going away moves the conversation by assigning the field
+     * directly, and remembering that would bring it back next load as though
+     * they had chosen it.
+     */
+    private _claimTarget(name: string): void {
+        this._targetSettled = true;
+        if (name) {
+            safeStorage.set(CHAT_TARGET_KEY, name);
+        }
     }
 
     /** Release the mic if a recording was in progress (dashboard hidden). */
@@ -107,7 +153,7 @@ export class DashboardChat {
     clearAll(): void {
         this.chatMessages = [];
         this._historyLoaded.clear();
-        this._dropPendingAttachments();
+        this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
     }
 
     /** Forget that an agent's history was loaded (so it re-fetches if re-added). */
@@ -117,9 +163,17 @@ export class DashboardChat {
 
     /** Build the chat view element (sidebar + pane); renders run again in afterMount once attached. */
     buildChatView(): HTMLElement {
+        // Building the view is the first moment there is something to open on.
+        this.resolveDefaultTarget();
         const chat = document.createElement("div");
         chat.className = "af-chat";
-        chat.append(this._buildChatSidebar(), this._buildChatPane());
+        chat.append(
+            buildChatSidebar(this.sidebarFilter, value => {
+                this.sidebarFilter = value;
+                this.renderSidebar();
+            }),
+            buildChatPane(),
+        );
 
         this.renderSidebar();
         this.renderChatPaneHeader();
@@ -133,74 +187,69 @@ export class DashboardChat {
         this.renderChatPaneHeader();
         this.renderChatThread();
         this._renderAttachTray();
+        this._syncPaneVisibility();
+        // Shown a real conversation, so it is theirs from here: a late-arriving
+        // remembered agent must not take it over while they are reading it.
+        // Guarded on there being one — mounting with nothing to open on has
+        // shown them nothing, and the preference has not had its chance yet.
+        if (this.chatTarget) {
+            this._targetSettled = true;
+        }
         void this.loadHistory(this.chatTarget);
     }
 
     /** Render the pending-attachment chips into the iobar tray. */
     private _renderAttachTray(): void {
-        renderAttachTray(this.root, this._pendingAttachments, att => this._removeAttachment(att));
-    }
-
-    private _removeAttachment(att: Attachment): void {
-        this._pendingAttachments = this._pendingAttachments.filter(a => a !== att);
-        if (att.url?.startsWith("blob:")) {
-            URL.revokeObjectURL(att.url);
-        }
-        this._renderAttachTray();
-    }
-
-    /** Discard all pending attachments (send/wipe), revoking dev-stub blob URLs. */
-    private _dropPendingAttachments(): void {
-        this._pendingAttachments.forEach(a => {
-            if (a.url?.startsWith("blob:")) {
-                URL.revokeObjectURL(a.url);
-            }
+        renderAttachTray(this.root, this._pendingAttachments, att => {
+            this._pendingAttachments = withoutAttachment(this._pendingAttachments, att);
+            this._renderAttachTray();
         });
-        this._pendingAttachments = [];
     }
 
-    private _buildChatSidebar(): HTMLElement {
-        const sidebar = document.createElement("div");
-        sidebar.className = "af-chat-sidebar";
-
-        const searchWrap = document.createElement("div");
-        searchWrap.className = "af-chat-sidebar-search";
-        const searchInput = document.createElement("input");
-        // Keep the default text type — `type="search"` adds browser chrome (a
-        // clear button / WebKit rounding) that would change this field's look.
-        searchInput.id = "af-agent-filter";
-        searchInput.name = "agent-filter";
-        searchInput.placeholder = "Filter agents…";
-        searchInput.setAttribute("aria-label", "Filter agents");
-        searchInput.value = this.sidebarFilter;
-        searchInput.addEventListener("input", () => {
-            this.sidebarFilter = searchInput.value.toLowerCase();
-            this.renderSidebar();
-        });
-        searchWrap.appendChild(searchInput);
-        sidebar.appendChild(searchWrap);
-
-        const agentList = document.createElement("div");
-        agentList.className = "af-chat-agent-list";
-        agentList.id = "af-chat-agent-list";
-        sidebar.appendChild(agentList);
-        return sidebar;
+    /**
+     * Point the chat view at `target` and open it.
+     *
+     * Sending a message is a request to see that conversation, so it overrides
+     * an earlier Back. Without this, "@catalog spawn weather agent" typed on
+     * Overview arrives in the chat view showing the agent list, with the reply
+     * already on its way to an agent the user cannot see.
+     */
+    private _focusConversation(target: string): void {
+        this.chatTarget = target;
+        // Sending is a choice too. Both callers are a message going out — an
+        // `@mention` routes it elsewhere and the view follows, so reopening on
+        // the agent left behind contradicts what the screen last showed.
+        this._claimTarget(target);
+        this._listVisible = false;
+        // The composer names its recipient, and nothing on the send paths
+        // refreshed it — an `@mention` left it advertising the previous agent,
+        // "Message @main…" while replies went to catalog.
+        this._updateComposerPlaceholder();
     }
 
-    private _buildChatPane(): HTMLElement {
-        const pane = document.createElement("div");
-        pane.className = "af-chat-pane";
+    /**
+     * Entering the chat view opens a conversation rather than the agent list.
+     *
+     * Back is a choice within one visit, not a lasting preference: without this
+     * a single Back changed what the Chat tab means until the user happened to
+     * select an agent or send something, with nothing on screen saying so.
+     */
+    showConversation(): void {
+        this._listVisible = false;
+    }
 
-        const paneHdr = document.createElement("div");
-        paneHdr.className = "af-chat-pane-header";
-        paneHdr.id = "af-chat-pane-header";
+    /** Re-render everything that names the current target, together. */
+    private _refreshForTarget(): void {
+        this.renderSidebar();
+        this.renderChatPaneHeader();
+        this.renderChatThread();
+        this._updateComposerPlaceholder();
+    }
 
-        const thread = document.createElement("div");
-        thread.className = "af-chat-thread";
-        thread.id = "af-chat-thread";
-
-        pane.append(paneHdr, thread);
-        return pane;
+    /** Show the chat pane, or the agent list when the user asked for it. */
+    private _syncPaneVisibility(): void {
+        const open = !this._listVisible && Boolean(this.chatTarget);
+        this.root.querySelector(".af-chat")?.classList.toggle("agent-selected", open);
     }
 
     /** Render the agent list in the chat sidebar (honouring the current search filter). */
@@ -220,15 +269,10 @@ export class DashboardChat {
         if (!latest || !canDirectMessage(latest)) {
             return;
         }
-        this.chatTarget = name;
-        this._userPicked = true;
-        this.renderSidebar();
-        this.renderChatPaneHeader();
-        this.renderChatThread();
-        void this.loadHistory(name);
-        this.updateTargetSelect();
-        // Mobile: switch to pane view.
-        this.root.querySelector(".af-chat")?.classList.add("agent-selected");
+        this.setTarget(name);
+        // Picking from the sidebar is also a request to see the conversation.
+        this._listVisible = false;
+        this._syncPaneVisibility();
     }
 
     /** Render the chat pane header (target agent name, state dot, back button). */
@@ -237,36 +281,11 @@ export class DashboardChat {
         if (!hdr) {
             return;
         }
-        hdr.innerHTML = "";
-        hdr.appendChild(this._buildChatBackBtn());
-
         const agent = [...this.host.agents.values()].find(a => a.name === this.chatTarget);
-        if (agent) {
-            const dot = document.createElement("span");
-            dot.className = "af-chat-agent-dot";
-            dot.style.background = stateColor(agent.state);
-            hdr.appendChild(dot);
-        }
-        const title = document.createElement("span");
-        title.className = "af-chat-pane-title";
-        title.textContent = `@${this.chatTarget}`;
-        hdr.appendChild(title);
-        if (agent) {
-            const st = document.createElement("span");
-            st.className = "af-chat-pane-state";
-            st.textContent = stateLabel(agent.state);
-            hdr.appendChild(st);
-        }
-    }
-
-    private _buildChatBackBtn(): HTMLButtonElement {
-        const backBtn = document.createElement("button");
-        backBtn.className = "af-chat-back-btn";
-        backBtn.textContent = "‹ Back";
-        backBtn.addEventListener("click", () => {
-            this.root.querySelector(".af-chat")?.classList.remove("agent-selected");
+        renderPaneHeader(hdr, this.chatTarget, agent, () => {
+            this._listVisible = true;
+            this._syncPaneVisibility();
         });
-        return backBtn;
     }
 
     /** True when `msg` belongs to the currently open agent thread. */
@@ -319,7 +338,8 @@ export class DashboardChat {
     /** Fetch and merge an agent's persisted chat history once, by agent NAME
      *  (history is keyed by name, not actor id; subsequent calls no-op). */
     async loadHistory(agentName: string): Promise<void> {
-        if (this._historyLoaded.has(agentName)) {
+        // No target chosen yet — there is no conversation to fetch.
+        if (!agentName || this._historyLoaded.has(agentName)) {
             return;
         }
         const incoming = await fetchChatHistory(agentName);
@@ -345,7 +365,7 @@ export class DashboardChat {
             target: () => this.chatTarget,
             setTarget: name => this.setTarget(name),
             populateSelect: select => this._populateSelect(select),
-            send: (input, select) => this._sendMessage(input, select),
+            send: input => this._sendMessage(input),
             stop: () => void this._stopGeneration(),
         });
     }
@@ -358,76 +378,136 @@ export class DashboardChat {
     }
 
     private _populateSelect(select: HTMLSelectElement): void {
-        select.innerHTML = "";
-        [...this.host.agents.values()]
-            .filter(canDirectMessage)
-            .sort((a, b) => {
-                const ai = MESSAGEABLE_PRIORITY.indexOf(a.name);
-                const bi = MESSAGEABLE_PRIORITY.indexOf(b.name);
-                if (ai !== -1 && bi !== -1) {
-                    return ai - bi;
-                }
-                if (ai !== -1) {
-                    return -1;
-                }
-                if (bi !== -1) {
-                    return 1;
-                }
-                return a.name.localeCompare(b.name);
-            })
-            .forEach(agent => {
-                const opt = document.createElement("option");
-                opt.value = agent.name;
-                opt.textContent = `@${agent.name}`;
-                select.appendChild(opt);
-            });
-        // Keep chatTarget a live, messageable agent and guarantee a selection.
-        this.syncChatTarget();
-        const hasTarget = [...select.options].some(o => o.value === this.chatTarget);
-        const first = select.options[0];
-        if (!hasTarget && first) {
-            this.chatTarget = first.value;
-        }
-        select.value = this.chatTarget;
+        renderTargetSelect(select, [...this.host.agents.values()], this.chatTarget);
     }
 
     /** Rebuild the target-agent `<select>` options from the current agent list. */
     updateTargetSelect(): void {
+        // Resolve first, or this renders the empty choice it was called to
+        // refresh. The composer is on screen from the first paint, before any
+        // agent has arrived, so the call that matters is the one made when the
+        // list first fills — and at that point nothing else has picked a target.
+        this.resolveDefaultTarget();
         const select = this.root.querySelector<HTMLSelectElement>("#af-target-select");
         if (select) {
             this._populateSelect(select);
         }
+        this._updateComposerPlaceholder();
+    }
+
+    /** Put the caret in the composer, if it is on the page yet. */
+    private _focusComposer(): void {
+        this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input")?.focus();
+    }
+
+    /** The composer names the agent it will send to; keep it on the target. */
+    private _updateComposerPlaceholder(): void {
         const input = this.root.querySelector<HTMLTextAreaElement>("#af-iobar-input");
         if (input) {
-            input.placeholder = `Message @${this.chatTarget}…`;
+            input.placeholder = composerPlaceholder(this.chatTarget);
         }
     }
 
-    /** Keep chatTarget on a live messageable agent (prefers main; never an id). */
-    syncChatTarget(): void {
-        this.chatTarget = pickChatTarget([...this.host.agents.values()], this.chatTarget, this._userPicked);
+    /**
+     * Move off a chat target that has left the list for good — and say so.
+     *
+     * Called only where "gone" is a fact: a reset frame carrying the settled
+     * survivors, or a `delete_agent` frame naming the agent. Both destroy the
+     * conversation rather than pausing it, so there is nothing to resume into
+     * and staying put would strand the user. A *stopped* agent is the opposite
+     * case — it keeps the choice, and the send blocks instead.
+     */
+    dropTargetIfGone(reason: "reset" | "deleted"): void {
+        const next = replacementTarget([...this.host.agents.values()], this.chatTarget);
+        if (next === null) {
+            return;
+        }
+        const lost = this.chatTarget;
+        this._targetSettled = true;
+        this.chatTarget = next;
+        this._refreshForTarget();
+        this.updateTargetSelect();
+        // The move always happens, or the chat is wrong when it is next opened.
+        // The toast explains a change on screen, so it is only owed to someone
+        // looking at the conversation that just changed.
+        if (this.host.getView() !== "chat") {
+            return;
+        }
+        const what = reason === "deleted" ? "was deleted" : "did not survive the reset";
+        toast.show({
+            type: "system",
+            title: "Chat moved",
+            message: `@${lost} ${what} — now messaging @${this.chatTarget}.`,
+        });
     }
 
-    private _sendMessage(input: HTMLTextAreaElement, select: HTMLSelectElement): void {
+    /**
+     * Fill an empty choice, and let a remembered one win the race it would lose.
+     *
+     * Never overwrites a *settled* target: one the user picked, or one they were
+     * moved to because theirs went away. Moving those under them is the whole
+     * class of bug the target split removed.
+     *
+     * The one exception is the load window, and it exists because agents arrive
+     * one frame at a time. Resolving against the first of them picks whatever
+     * that partial list defaults to — usually `main` — and "first resolution
+     * sticks" would then hold that against the remembered agent arriving a
+     * moment later. So an unsettled default steps aside when the remembered
+     * agent turns up. It is not a move under the user: it happens before they
+     * have chosen anything, and only ever towards the agent they last chose.
+     */
+    resolveDefaultTarget(): void {
+        const agents = [...this.host.agents.values()];
+        const remembered = safeStorage.get(CHAT_TARGET_KEY);
+        if (!this.chatTarget) {
+            this.chatTarget = preferredChatTarget(agents, remembered);
+            return;
+        }
+        if (this._targetSettled || !remembered || remembered === this.chatTarget) {
+            return;
+        }
+        if (agents.some(a => a.name === remembered && canDirectMessage(a))) {
+            this.chatTarget = remembered;
+        }
+    }
+
+    private _sendMessage(input: HTMLTextAreaElement): void {
         const content = input.value.trim();
         const attachments = this._pendingAttachments;
         if (!content && !attachments.length) {
             return;
         }
+        const prevTarget = this.chatTarget;
+        const agents = [...this.host.agents.values()];
+        // The choice, not the control. `select.value` is set programmatically on
+        // every redraw and shows a fallback when the choice is not among the
+        // options, so reading it here let drawing a dropdown decide where the
+        // message went.
+        const target = resolveSendTarget(
+            content,
+            agents.map(a => a.name),
+            this.chatTarget || MAIN_AGENT,
+        );
+
+        // Say so rather than sending somewhere else. Routing a message the user
+        // addressed to a stopped agent onwards to main is what the original
+        // complaint was, and a quiet fallback here would reproduce it.
+        const blocked = sendBlockedReason(agents, target);
+        if (blocked) {
+            toast.show({ type: "alert-error", title: "Agent unavailable", message: blocked });
+            return;
+        }
+
         if (content) {
             this._chatInput.recordSent(content, input);
         }
+        this._deliver(input, content, target, prevTarget);
+    }
 
-        const prevTarget = this.chatTarget;
-        const target = resolveSendTarget(
-            content,
-            [...this.host.agents.values()].map(a => a.name),
-            select.value || MAIN_AGENT,
-        );
-        this.chatTarget = target;
-        // An @mention that routes elsewhere is a deliberate pick — keep it sticky
-        // so syncChatTarget() won't snap the view back to main on the next reply.
-        this._userPicked ||= target !== prevTarget;
+    /** Show the message, clear the composer and put it on the wire. */
+    private _deliver(input: HTMLTextAreaElement, content: string, target: string, prevTarget: string): void {
+        const attachments = this._pendingAttachments;
+        this._focusConversation(target);
         this._lastSentTarget = target;
         // The leading @mention is the routing prefix; drop it from the displayed
         // bubble/feed (the transport re-adds the canonical one). Keep the original
@@ -442,7 +522,7 @@ export class DashboardChat {
             ...(attachments.length ? { attachments: [...attachments] } : {}),
         };
         this.chatMessages.push(msg);
-        this._dropPendingAttachments();
+        this._pendingAttachments = dropAllAttachments(this._pendingAttachments);
         this._renderAttachTray();
         this._showSentMessage(msg, prevTarget !== target);
         input.value = "";
@@ -466,6 +546,10 @@ export class DashboardChat {
             this.host.setView("chat");
             return;
         }
+        // Already in the chat view: `_focusConversation` cleared the list, but
+        // only a mount applies that. Sending from the agent list otherwise left
+        // the user on the list, with the reply arriving out of sight.
+        this._syncPaneVisibility();
         if (targetSwitched) {
             this.renderSidebar();
             this.renderChatPaneHeader();
@@ -483,12 +567,19 @@ export class DashboardChat {
     wire(): void {
         this._wireChatEvents();
         this._wireStreamEvents();
-        if (UPLOADS_ENABLED) {
-            this._evAttach = listen("af-attachment-added", detail => {
-                this._pendingAttachments.push(detail.attachment);
-                this._renderAttachTray();
-            });
-        }
+        // Wired unconditionally — `wire()` can run before /api/config answers.
+        // The event only originates from the drop zone and the paste handler,
+        // both of which check first, so with uploads off nothing ever arrives.
+        this._evAttach = listen("af-attachment-added", detail => {
+            this._pendingAttachments.push(detail.attachment);
+            this._renderAttachTray();
+            // Attaching a file is the first half of composing a message, so the
+            // caret belongs in the composer for the second half. No view switch:
+            // the iobar sits below every view, so a file dropped from the
+            // overview is already visible there — and sending moves to the chat
+            // view on its own.
+            this._focusComposer();
+        });
     }
 
     /** Remove all event listeners added by wire() (call when the dashboard is hidden). */
@@ -566,7 +657,7 @@ export class DashboardChat {
             }
             const { content, target } = detail;
             const switched = this.chatTarget !== target;
-            this.chatTarget = target;
+            this._focusConversation(target);
             this._lastSentTarget = target;
             const msg: ChatMessage = {
                 id: uid("user"),

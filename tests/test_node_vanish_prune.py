@@ -8,12 +8,18 @@ the counter, and an agent that never appeared (just spawned) or migrated away is
 never pruned.
 """
 
-from wactorz.agents.main_actor import VANISH_MISS_THRESHOLD, MainActor
+from wactorz.agents.main_actor import MainActor
+from wactorz.agents.manifests import ManifestRegistry
+from wactorz.agents.migration import Migration
+from wactorz.agents.nodes import VANISH_MISS_THRESHOLD, NodeManager
 
 
 def _bare_main(registry: dict) -> MainActor:
     """A MainActor with only what _agents_to_prune touches, stubbed."""
     m = MainActor.__new__(MainActor)
+    m.manifests = ManifestRegistry(m)
+    m.nodes = NodeManager(m, m.manifests)
+    m.migration = Migration(m, m.nodes)
     m.name = "main"
     m._node_agent_misses = {}
     m.recall = lambda *a, **k: registry  # the spawn registry

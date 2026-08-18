@@ -191,7 +191,10 @@ precommit-run: ## Run all configured pre-commit hooks across the repo
 test: test-py test-frontend ## Run all tests (Python + frontend)
 
 test-py: ## Run Python tests (pytest) + the remote runner's own self-test
-	$(PYTHON) -m pytest tests
+	@# -n auto here and not in pyproject's addopts: parallel wins on the whole
+	@# suite and loses on a single file, where worker start-up costs more than
+	@# the tests. A focused run should stay serial without having to opt out.
+	$(PYTHON) -m pytest tests -n auto
 	@# remote_runner.py ships to nodes without pytest or the wactorz package, so
 	@# it carries its own tests. Nothing ran them and they had rotted silently.
 	$(PYTHON) wactorz/remote_runner.py --test
@@ -202,10 +205,11 @@ test-frontend: ## Run frontend tests (vitest)
 coverage: coverage-py coverage-frontend ## Generate coverage (Python + frontend)
 
 coverage-py: ## Generate Python coverage XML + terminal report
+	@# pytest-cov rather than `coverage run -m pytest`: the latter measures only
+	@# the parent process, so under -n auto it reports a fraction of the truth
+	@# with every test still passing. pytest-cov collects from the workers.
 	mkdir -p coverage
-	$(PYTHON) -m coverage run -m pytest tests
-	$(PYTHON) -m coverage xml -o coverage/python-coverage.xml
-	$(PYTHON) -m coverage report
+	$(PYTHON) -m pytest tests -n auto --cov --cov-report=xml:coverage/python-coverage.xml --cov-report=term
 
 coverage-frontend: ## Generate frontend coverage (gated vitest v8 — fails below the floor)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run coverage

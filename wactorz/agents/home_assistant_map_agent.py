@@ -300,7 +300,11 @@ class HomeAssistantMapAgent(Actor):
             return
         try:
             await self._warm_latest_map_payload()
-        except (Exception, asyncio.CancelledError) as exc:
+        # Exception only (not Cancellation), deliberately. Nothing here cancels a task of its own,
+        # so a CancelledError arriving is the *caller's* — this runs inside
+        # `on_start`, and turning a shutdown into a logged warning would let
+        # start-up carry on believing it had never been interrupted.
+        except Exception as exc:
             self._last_error = str(exc)
             logger.warning("[%s] initial refresh failed: %s", self.name, exc)
 

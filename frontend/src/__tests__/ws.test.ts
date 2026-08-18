@@ -400,8 +400,8 @@ describe("WSClient", () => {
     });
 
     it("reset message calls onStatePatch and clears log_feed via onLogFeed", () => {
-        // A scoped (non-"all") reset applies the state patch; "all" early-returns
-        // through af-wipe-all and is covered separately below.
+        // A scoped (non-"all") reset applies the state patch; "all" wipes first
+        // and then applies the survivors its frame carries (covered below).
         const c = new WSClient();
         const patchSpy = vi.fn();
         const feedSpy = vi.fn();
@@ -433,15 +433,40 @@ describe("WSClient", () => {
         expect(eventSpy).toHaveBeenCalled();
     });
 
-    it("reset message with scope='all' dispatches af-wipe-all event", () => {
+    it("reset message with scope='all' wipes, then applies the survivors the frame carries", () => {
         const c = new WSClient();
+        const patchSpy = vi.fn();
+        c.onStatePatch(patchSpy);
         c.connect("ws://localhost/ws");
         const eventSpy = vi.fn();
         document.addEventListener("af-wipe-all", eventSpy, { once: true });
         ws().emit("message", {
-            data: JSON.stringify({ type: "reset", scope: "all", state: { agents: [] } }),
+            data: JSON.stringify({
+                type: "reset",
+                scope: "all",
+                state: { agents: [{ agent_id: "m1", name: "main" }] },
+            }),
         });
         expect(eventSpy).toHaveBeenCalled();
+        expect(patchSpy).toHaveBeenCalledWith([{ agent_id: "m1", name: "main" }], undefined, {});
+    });
+
+    it("a delete_agent frame settles the list too, so a dead chat target is judged", () => {
+        // Deletion is the other way the chat target can vanish for good. The
+        // frame names the agent, so it is a fact rather than reset churn.
+        const c = new WSClient();
+        c.connect("ws://localhost/ws");
+        const settled = vi.fn();
+        document.addEventListener("af-agents-settled", settled, { once: true });
+        ws().emit("message", {
+            data: JSON.stringify({
+                type: "delete_agent",
+                agent_id: "a1",
+                state: { agents: [{ agent_id: "m1", name: "main" }] },
+            }),
+        });
+        expect(settled).toHaveBeenCalledTimes(1);
+        expect((settled.mock.calls[0]![0] as CustomEvent).detail).toEqual({ reason: "deleted" });
     });
 
     it("reset message with scope='logs' does not dispatch af-reset-chat event", () => {

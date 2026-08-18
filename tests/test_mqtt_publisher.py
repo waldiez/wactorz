@@ -10,6 +10,7 @@ removed from it once the broker has actually taken it.
 import asyncio
 import logging
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import TracebackType
 from typing import Any
@@ -83,7 +84,9 @@ def broker_fixture(monkeypatch: pytest.MonkeyPatch) -> _FakeConnection:
 
 
 def _outbox(db_path: str | Path) -> list[tuple[Any]]:
-    with sqlite3.connect(db_path) as db:
+    # `closing`, because a connection used as a context manager commits and
+    # leaves the handle open — the same shape the publisher itself had.
+    with closing(sqlite3.connect(db_path)) as db, db:
         return db.execute("SELECT topic, payload, retain, qos FROM outbox ORDER BY id").fetchall()
 
 

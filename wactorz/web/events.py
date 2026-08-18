@@ -70,7 +70,60 @@ def update_agent(agent_id: str, key: str, data) -> None:
     runtime.state["agents"][agent_id]["last_update"] = time.time()
 
 
-def add_log(entry: dict) -> None:
+def record_heartbeat(agent_id: str, data: Any) -> None:
+    """Fold one heartbeat payload into an agent's dashboard entry.
+
+    Shared by the broker listener and the post-reset rebuild so the two cannot
+    describe an agent differently. The payload is whatever `Actor._build_heartbeat`
+    produces, which is what arrives over MQTT.
+    """
+    update_agent(agent_id, "heartbeat", data)
+    if not isinstance(data, dict) or agent_id not in runtime.state["agents"]:
+        return
+    ag = runtime.state["agents"][agent_id]
+    ag["name"] = data.get("name", agent_id[:8])
+    ag["cpu"] = data.get("cpu", 0)
+    ag["mem"] = data.get("memory_mb", 0)
+    ag["task"] = data.get("task", "idle")
+    ag["state"] = data.get("state", "unknown")
+    # Heartbeats have always carried this; nothing copied it out, so an entry's
+    # `protected` was set only by whichever other path happened to run first.
+    # `reset all` keeps an agent when it is protected OR an HA system agent, so
+    # a missing flag makes a protected agent look disposable — which is what
+    # api_reset's own comment warns about when it distrusts this field.
+    if "protected" in data:
+        ag["protected"] = bool(data["protected"])
+    # Remote agents' heartbeats include "node" — capture it so the dashboard
+    # delete path can route the stop to the right runner. Local agents don't set
+    # this field; absence means "local".
+    if data.get("node"):
+        ag["node"] = data["node"]
+
+
+def rebuild_from_registry(registry: Any) -> int:
+    """Repopulate the dashboard's agent list from the actors that are running.
+
+    A reset clears `state["agents"]` but does not stop the agents it keeps, so
+    the dashboard forgets actors that are alive and cannot ask about them — the
+    list only refills as each one next heartbeats, up to a full interval later.
+    The registry is authoritative and in memory, so it can answer immediately.
+
+    Returns how many agents were restored.
+    """
+    if registry is None:
+        return 0
+    restored = 0
+    for actor in registry.all_actors():
+        try:
+            record_heartbeat(actor.actor_id, actor._build_heartbeat())
+            restored += 1
+        except Exception as exc:
+            # One unhappy actor must not leave the rest of the list missing.
+            logger.warning("[reset] could not restore %s: %s", getattr(actor, "name", "?"), exc)
+    return restored
+
+
+def add_log(entry: dict[str, Any]) -> None:
     """Append to the bounded log feed shared with connected browsers.
 
     Stamps ``source`` here rather than at each of the call sites, so a later one
@@ -135,11 +188,13 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
             agent_state = data.get("state", "")
             if uptime < 10.0 and agent_state not in ("stopped", "failed"):
                 runtime.undelete(agent_id)
-                msg = (
-                    f"[MQTT] Re-admitting respawned agent {agent_id[:8]} "
-                    f"(uptime={uptime:.1f}s, state={agent_state}, previously deleted)"
+                logger.info(
+                    "[MQTT] Re-admitting respawned agent %s "
+                    "(uptime=%.1fs, state=%s, previously deleted)",
+                    agent_id[:8],
+                    uptime,
+                    agent_state,
                 )
-                logger.info(msg)
 
         # If the agent was just deleted, update_agent() refuses to recreate
         # the entry — so any direct state["agents"][agent_id] access below
@@ -168,23 +223,10 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
             )
 
         elif metric == "heartbeat":
-            update_agent(agent_id, "heartbeat", data)
-            if isinstance(data, dict) and agent_id in runtime.state["agents"]:
-                ag = runtime.state["agents"][agent_id]
-                ag["name"] = data.get("name", agent_id[:8])
-                ag["cpu"] = data.get("cpu", 0)
-                ag["mem"] = data.get("memory_mb", 0)
-                ag["task"] = data.get("task", "idle")
-                ag["state"] = data.get("state", "unknown")
-                # Remote agents' heartbeats include "node" — capture it so the
-                # dashboard delete path can route the stop to the right runner.
-                # Local agents don't set this field; absence means "local".
-                if data.get("node"):
-                    ag["node"] = data["node"]
+            record_heartbeat(agent_id, data)
             if agent_id in runtime.state["agents"]:
                 agent_name = runtime.state["agents"][agent_id].get("name", agent_id[:8])
-                msg = f"[MQTT] Heartbeat: {agent_name}"
-                logger.info(msg)
+                logger.info("[MQTT] Heartbeat: %s", agent_name)
 
         elif metric == "metrics":
             update_agent(agent_id, "metrics", data)
@@ -382,8 +424,8 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
     # coalesce the same three sources per agent. Summing only state["cost_usd"]
     # (or only iterating the local registry) dropped any on-screen agent whose
     # cost lives on the actor object / SQLite rather than in an MQTT metrics frame.
-    actors_by_id: dict = {}
-    actors_by_name: dict = {}
+    actors_by_id: dict[str, Any] = {}
+    actors_by_name: dict[str, Any] = {}
     if runtime.registry is not None:
         for a in runtime.registry.all_actors():
             actors_by_id[a.actor_id] = a

@@ -15,7 +15,7 @@ export interface ChatInputHost {
     /** Set the active chat target (when a mention is accepted). */
     setTarget(name: string): void;
     /** Send the current message. */
-    send(input: HTMLTextAreaElement, select: HTMLSelectElement): void;
+    send(input: HTMLTextAreaElement): void;
 }
 
 export class ChatInput {
@@ -40,7 +40,7 @@ export class ChatInput {
         if (this.mentionOpen && this._handleMentionKeydown(e, input, select, ghost, mentionPanel)) {
             return;
         }
-        if (this._trySendOnEnter(e, input, select, ghost, mentionPanel)) {
+        if (this._trySendOnEnter(e, input, ghost, mentionPanel)) {
             return;
         }
         // Tab or → at end-of-line accepts the ghost suggestion.
@@ -139,7 +139,6 @@ export class ChatInput {
     private _trySendOnEnter(
         e: KeyboardEvent,
         input: HTMLTextAreaElement,
-        select: HTMLSelectElement,
         ghost: HTMLElement,
         mentionPanel: HTMLElement,
     ): boolean {
@@ -148,7 +147,7 @@ export class ChatInput {
         }
         e.preventDefault();
         this.closePanel(mentionPanel);
-        this.host.send(input, select);
+        this.host.send(input);
         input.style.height = "auto";
         this._clearGhost(input, ghost);
         return true;
@@ -291,7 +290,6 @@ export class ChatInput {
         input.value = input.value.replace(/@\w*$/, "").trimEnd();
         select.value = opt.value;
         this.host.setTarget(opt.value);
-        input.placeholder = `Message @${name}…`;
         this.closePanel(panel);
         if (ghost) {
             this._clearGhost(input, ghost);

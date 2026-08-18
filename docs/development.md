@@ -136,7 +136,10 @@ WACTORZ_API_KEY=              # optional; mirrors API_KEY for REST auth
 # Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
-# Optional — set for a broker with allow_anonymous false; blank = anonymous
+# The dev broker authenticates, with defaults (wactorz / wactorz-dev) and bound
+# to loopback, so no setup is needed either way: compose injects them for the
+# containers, and run.sh applies the same ones when WACTORZ_DEV_MODE=1 for a
+# host-run backend. Fill these in to point at a broker of your own instead.
 MQTT_USERNAME=
 MQTT_PASSWORD=
 ```

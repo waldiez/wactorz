@@ -34,8 +34,10 @@ describe("buildHeader", () => {
         });
         expect(header.querySelector(".af-title")!.textContent).toBe("Wactorz");
         expect(header.querySelector(".af-conn-badge")!.classList.contains("af-conn-live")).toBe(true);
-        // 4 built-in view tabs + the Devices link + audio + reset icon buttons
-        expect(header.querySelectorAll(".af-view-btn").length).toBe(7);
+        // 4 built-in view tabs + the Devices link + audio, reset and sign-out
+        // icon buttons. Devices and sign-out are always built and hidden until
+        // /api/config says otherwise, so both are here whatever it will answer.
+        expect(header.querySelectorAll(".af-view-btn").length).toBe(8);
     });
 
     it("marks the current view active (class + aria-current)", () => {

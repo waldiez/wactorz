@@ -29,8 +29,8 @@
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+  gap: 10px;
+  padding: 9px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 .af-feed-item {
@@ -43,6 +43,14 @@
   font-size: 12px;
   cursor: default;
   transition: background 0.1s;
+}
+/* ⚠ `hidden` alone does not hide these rows. It works through the UA rule
+   `[hidden] { display: none }`, and *any* author rule beats the UA sheet — so
+   the `display: flex` above kept every filtered-out row on screen. Qualifying
+   the selector wins on specificity regardless of rule order. */
+.af-feed-item[hidden],
+.af-feed-empty[hidden] {
+  display: none;
 }
 .af-feed-item:hover {
   background: rgba(255, 255, 255, 0.06);
@@ -106,4 +114,118 @@
 .af-feed-mention {
   color: #93c5fd;
   font-weight: 600;
+}
+
+/* ── Application-log rows ─────────────────────────────────────────────────
+   Level is the visual axis for these rows the way type is for agent rows, so
+   it reuses the same left border rather than competing with the type icons. */
+.af-feed-lvl-debug {
+  border-left-color: rgba(255, 255, 255, 0.25);
+}
+.af-feed-lvl-info {
+  border-left-color: #38bdf8;
+}
+.af-feed-lvl-warning {
+  border-left-color: #fbbf24;
+}
+.af-feed-lvl-error {
+  border-left-color: #f87171;
+}
+.af-feed-lvl-critical {
+  border-left-color: #f43f5e;
+  background: rgba(244, 63, 94, 0.08);
+}
+/* Monospace distinguishes log text from chat without a badge on every row. */
+.af-feed-log-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.af-feed-expandable {
+  cursor: pointer;
+  /* The expanded <pre> is a flex child; wrapping puts it on its own line. */
+  flex-wrap: wrap;
+}
+.af-feed-expandable:focus-visible {
+  outline: 1px solid #38bdf8;
+  outline-offset: 1px;
+}
+.af-feed-full {
+  flex-basis: 100%;
+  margin: 6px 0 2px;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.8);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  /* Tracebacks are pre-formatted but can still run very wide. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Toolbar controls ────────────────────────────────────────────────────
+   Sized from .af-mini-btn (28px tall, 6px radius, same border and fill) so the
+   selects, the search box and the heartbeat toggle sit on one line as one set
+   of controls rather than three different heights. */
+.af-feed-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.af-feed-select,
+.af-feed-search {
+  /* ⚠ `min-height`, not `height`: a <select> clips its own overflow, so a
+     fixed height leaves the line box no room and shaves the ascenders off
+     letters like d and b. The generous vertical padding and 12px font are
+     what actually keep the glyphs intact — 11px in a 28px box was tight
+     enough that the platform's own control chrome ate the difference. */
+  min-height: 30px;
+  padding: 6px 9px;
+  line-height: 1.45;
+  box-sizing: border-box;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.7);
+  font-family: inherit;
+  font-size: 12px;
+  transition: background 0.12s;
+}
+.af-feed-select:hover,
+.af-feed-search:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+}
+/* ⚠ The dropdown list is drawn by the platform, not by the page, so it does
+   not inherit the dark fill above — only the light text colour. Without an
+   explicit pair here the options render white-on-white and the menu looks
+   empty. */
+.af-feed-select option {
+  background: #0f172a;
+  color: rgba(255, 255, 255, 0.85);
+}
+.af-feed-search {
+  width: 130px;
+}
+.af-feed-search::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+}
+.af-feed-search:focus,
+.af-feed-select:focus {
+  outline: none;
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+}
+/* A control the current source has no use for: still in place, visibly inert. */
+.af-feed-filter-off {
+  opacity: 0.4;
+}
+.af-feed-select:disabled,
+.af-mini-btn:disabled {
+  cursor: not-allowed;
 }

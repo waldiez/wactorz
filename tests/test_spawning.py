@@ -320,15 +320,6 @@ def test_install_fast_path_no_send(main_host):
 # ── Flags / wiring ───────────────────────────────────────────────────────────
 
 
-def test_trusted_flag_passthrough(main_host):
-    run(
-        main_host._spawn_local_from_config(
-            {"name": "cat", "type": "dynamic", "code": "x", "trusted": True}
-        )
-    )
-    assert main_host.spawn_calls[-1][1]["trusted"] is True
-
-
 def test_topiccontract_registered(monkeypatch, main_host):
     recorded = []
 
@@ -418,3 +409,102 @@ def test_native_recipes_are_json_safe_without_factory():
     for recipe in native.values():
         save_config = {k: v for k, v in recipe.items() if k != "factory"}
         json.dumps(save_config)  # must not raise for any native recipe
+
+
+# ── The `trusted` flag is earned, not declared ───────────────────────────────
+
+
+def _dynamic(**extra: object) -> dict:
+    """A minimal dynamic-agent spawn config, plus whatever the test is about."""
+    return {"name": "probe", "type": "dynamic", "code": "async def setup(a): pass", **extra}
+
+
+def _trusted_kwarg(host: MainHost) -> object:
+    cls, kwargs = host.spawn_calls[-1]
+    assert cls.__name__ == "DynamicAgent"
+    return kwargs["trusted"]
+
+
+def test_a_model_authored_config_cannot_grant_itself_trust(main_host: MainHost) -> None:
+    # `trusted` skips the sanitizer and the code validator outright, and a spawn
+    # config is routinely written by an LLM. Nothing but a restore may set it.
+    run(main_host._spawn_local_from_config(_dynamic(trusted=True)))
+
+    assert _trusted_kwarg(main_host) is False
+
+
+def test_a_restored_config_keeps_it(main_host: MainHost) -> None:
+    # The other half: catalog agents are stored trusted, and their code is not
+    # written to pass the validator, so losing the flag would break the restore.
+    run(main_host._spawn_local_from_config(_dynamic(trusted=True), from_registry=True))
+
+    assert _trusted_kwarg(main_host) is True
+
+
+def test_the_flag_cannot_be_laundered_through_the_registry(main_host: MainHost) -> None:
+    # Registration happens after the strip, so a rejected flag cannot be
+    # persisted and come back earned on the next restart.
+    run(main_host._spawn_local_from_config(_dynamic(trusted=True)))
+
+    assert main_host.registered
+    assert "trusted" not in main_host.registered[-1]
+
+
+def test_the_callers_own_config_is_left_alone(main_host: MainHost) -> None:
+    # Callers reuse the dict they passed — for a retry, or in an error message.
+    config = _dynamic(trusted=True)
+
+    run(main_host._spawn_local_from_config(config))
+
+    assert config["trusted"] is True
+
+
+def test_a_config_without_the_flag_is_passed_through_unchanged(main_host: MainHost) -> None:
+    config = _dynamic()
+
+    run(main_host._spawn_local_from_config(config))
+
+    assert _trusted_kwarg(main_host) is False
+
+
+def test_the_refusal_is_logged_with_the_agent_name(main_host: MainHost, caplog) -> None:
+    # Silent stripping would look like the validator rejecting good code.
+    with caplog.at_level("WARNING"):
+        run(main_host._spawn_local_from_config(_dynamic(trusted=True)))
+
+    assert "probe" in caplog.text
+    assert "trusted" in caplog.text
+
+
+def test_a_migrating_catalog_agent_gets_its_trust_back(tmp_path: Path) -> None:
+    # Sent out to a node, then migrated home. Without this the recipe's code
+    # meets the validator it was never written to pass, and a catalog agent
+    # that used to migrate fine stops migrating.
+    main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
+    main._save_to_spawn_registry({"name": "doc-to-pptx", "trusted": True})
+    local_cfg: dict = {"name": "doc-to-pptx"}
+
+    earned = main._restore_earned_trust("doc-to-pptx", local_cfg)
+
+    assert earned is True
+    assert local_cfg["trusted"] is True
+
+
+def test_a_node_cannot_claim_trust_the_registry_never_granted(tmp_path: Path) -> None:
+    # The config arrives over MQTT, where a publisher can say anything. Our own
+    # record is the evidence; the wire is not.
+    main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
+    main._save_to_spawn_registry({"name": "scraper"})
+    local_cfg: dict = {"name": "scraper", "trusted": True}
+
+    earned = main._restore_earned_trust("scraper", local_cfg)
+
+    # Left in place on purpose: the spawn path strips it and logs that it did.
+    assert earned is False
+    assert local_cfg["trusted"] is True
+
+
+def test_an_agent_main_never_registered_earns_nothing(tmp_path: Path) -> None:
+    main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
+
+    assert main._restore_earned_trust("never-seen", {"name": "never-seen"}) is False

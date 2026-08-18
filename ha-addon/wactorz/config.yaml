@@ -1,5 +1,5 @@
 name: Wactorz
-version: "0.5.2"
+version: "0.5.3"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz
@@ -29,14 +29,17 @@ webui: http://[HOST]:[PORT:8888]
 # Nothing is published to the host by default: the dashboard is reached through
 # the Wactorz panel (ingress), which goes through Home Assistant's own login.
 # Assign a host port below only if you need to reach these from outside Home
-# Assistant, and note that doing so puts them on your network directly.
+# Assistant, and note that doing so puts them on your network directly. Set
+# `api_key` if you do: the add-on tells Wactorz its exposure is already handled
+# by ingress, which is true until a port is published, and that also switches
+# off the refusal that would otherwise stop an unauthenticated wide bind.
 ports:
   8000/tcp: null
   8888/tcp: null
   1883/tcp: null
 ports_description:
-  8000/tcp: Wactorz REST + WebSocket API — not published by default
-  8888/tcp: Wactorz Monitor UI — not published by default; use the Wactorz panel
+  8000/tcp: Wactorz REST + WebSocket API — not published by default; set api_key first if you publish it
+  8888/tcp: Wactorz Monitor UI — not published by default; use the Wactorz panel, or set api_key first if you publish it
   1883/tcp: MQTT TCP broker (only active when mosquitto_embedded is true)
 
 # ── Persistent state ───────────────────────────────────────────────────────────
@@ -46,8 +49,6 @@ map:
 
 # ── User-configurable options ──────────────────────────────────────────────────
 options:
-  # API access key for the Wactorz REST API (leave blank to disable auth)
-  #api_key: ""
 
   # LLM backend
   llm_provider: anthropic
@@ -62,6 +63,13 @@ options:
   # real OpenAI API, or point to any compatible proxy/provider for communication
   # with it — e.g. a LiteLLM proxy, Groq, Together, vLLM, or LM Studio.
   openai_url: ""
+
+  # Only needed if you publish port 8000 or 8888 above. Reaching Wactorz
+  # through its panel goes via ingress, where Home Assistant has already
+  # signed you in and the request is verified as coming from the Supervisor —
+  # so the key is not consulted on that path and setting one changes nothing
+  # for panel users.
+  api_key: ""
 
   # MQTT broker — set to the Mosquitto addon host if using the official addon
   mqtt_host: core-mosquitto
@@ -78,9 +86,13 @@ options:
   # give the path as seen from inside the addon, e.g. /config/ssh/rpi_kitchen.
   #
   # A remote node connects back to the MQTT broker over the network, so it needs
-  # one it can reach and connect to anonymously. See "Remote edge nodes" in the
-  # documentation before adding entries here — mosquitto_embedded cannot serve
-  # remote nodes, and a broker requiring credentials is not yet supported.
+  # one it can reach. `/deploy` delivers the broker credentials to the node over
+  # SSH, so a broker requiring a username and password is fine; mosquitto_embedded
+  # can serve remote nodes only if you publish port 1883 under Network settings.
+  # A node uses its own broker_user/broker_password when set, and this addon's
+  # broker account otherwise — that default means a stolen node holds full
+  # broker access, so give a node its own account when that matters. See
+  # "Remote edge nodes" in the documentation before adding entries.
   deploy_targets: []
 
   # Home Assistant connection (used by HA agents inside Wactorz)
@@ -90,7 +102,7 @@ options:
   ha_token: ""
 
   # Embedded services — bundle Mosquitto inside this addon container
-  # (no external addon needed; data persisted to /share/mosquitto)
+  # (no external addon needed; data persisted to /data/mosquitto)
   mosquitto_embedded: false
 
   # Spend cap — set to 0 to disable. Period: daily, weekly, or monthly. Resets automatically.
@@ -122,14 +134,13 @@ options:
 
   # InfluxDB 2.x — leave influx_url blank to disable
   # Use the official InfluxDB HA addon (http://homeassistant:8086) or any external instance.
-  # pip install 'wactorz[influx]' is handled automatically when influx_url is set.
   #influx_url: ""
   #influx_token: ""
   #influx_org: "wactorz"
   #influx_bucket: "wactorz"
 
 schema:
-  #api_key: str?
+  api_key: str?
   llm_provider: list(anthropic|ollama|openai|gemini|nim)
   llm_model: str
   llm_api_key: str?
@@ -159,6 +170,8 @@ schema:
       password: password?
       broker: str?
       broker_port: port?
+      broker_user: str?
+      broker_password: password?
       ssh_port: port?
   #otel_endpoint: str?
   #otel_service_name: str?

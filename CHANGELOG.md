@@ -243,6 +243,197 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   matching device, the same as any other unmatched request, and the unusable output is logged
   instead of voiced.
 
+- **Agent command reliability.** Natural catalogue spawn requests now launch the
+  named recipe instead of merely listing the catalogue. Common yellow and
+  neutral-light requests resolve deterministically, and Home Assistant management
+  replies no longer collapse to a misleading "Done" or imply that a disabled
+  automation-creation flow succeeded.
+
+- **Reachy literal delivery speech.** "Tell my..." requests are spoken directly by
+  Reachy instead of being judged or role-played by Main, and can be combined with
+  a real dance. Name normalization also covers additional Ritsy/Rizzi STT variants.
+
+- **Reachy speaks complete replies and turns predictably.** Voice-friendly
+  sanitization no longer truncates long answers with a "rest in Wactorz chat"
+  announcement. Natural `turn left` / `turn right` commands rotate the body 45
+  degrees by default, while explicit angles are honored within the safe range.
+
+- **Reachy voice conversations respond like the physical robot again.** Normal
+  sessions no longer monitor the echo-prone microphone during TTS, so complete
+  replies play instead of stopping after one syllable; barge-in stays available
+  as an explicit experiment. "Riti", "Ritzy", "Lizzy", and similar STT variants
+  normalize to Reachy and cannot silently become the user's name. Camera questions
+  scan with Reachy's onboard camera, full replies appear before playback, complete
+  audio remains conversational, and debug receipts stay opt-in. Relative brightness
+  follow-ups now reuse the light controlled in the preceding conversation turn.
+  Natural room-view phrasing is routed to Reachy's onboard camera instead of
+  falling through to the bodiless main assistant.
+
+- **Social chat custom-spawn gate.** Discord, Telegram, and WhatsApp may
+  start maintained catalogue agents, but refuse LLM-authored custom agents that
+  cannot be inspected or stopped from those interfaces; custom spawning remains
+  available from the Wactorz dashboard.
+
+- **Reachy action traces and rear-view behavior now match conversational UX** -
+  Internal `ran N of N` execution receipts are hidden by default and can be toggled
+  with natural `enable debug` / `disable debug` commands. `turn around` now leaves
+  the body at a persistent, mechanically safe rear orientation, while `behind you`
+  turns first, captures without recentering, describes the rear camera view once,
+  and stays facing it. `face me` and `turn back` restore the forward orientation.
+
+- **Reachy speech chunks no longer replace one another mid-reply** - Reachy's
+  Edge TTS integration now requests word timing explicitly, accepts sentence timing,
+  and falls back to a conservative text-duration estimate when an older provider
+  returns no boundary metadata. Sequential clips wait through playback plus robot
+  transport latency, preventing replies such as ?Hello ?? from jumping directly to
+  their final sentence.
+
+- **Short Greek Reachy turns no longer become multilingual phonetic nonsense** -
+  Faster Whisper language probability is now preserved. Ambiguous short turns retry
+  in a configured fallback or confidently established session language, while
+  unresolved low-probability guesses are discarded before chat, routing, or memory.
+  Greek/English requests to change Reachy's own voice volume execute locally instead
+  of being misrouted to Home Assistant. Voice transcripts can no longer create
+  durable user facts without an explicit memory request, preventing hallucinated
+  names and household members.
+
+- **Reachy listening could become deaf and hallucinate speech from antenna noise** -
+  The original idle loop stepped directly between asymmetric antenna targets while
+  the microphone remained live. A shivering servo could repeatedly satisfy the VAD
+  onset detector, keeping Whisper busy on short noise clips until it invented fluent
+  speech. Physical motion is now off by default while the microphone is live; the
+  opt-in mode uses low-amplitude eased sweeps, stops at confirmed speech onset, and
+  recenters only after recording ends. VAD also requires the configured minimum
+  duration of actual voiced frames, so brief motor bursts never reach transcription.
+
+- **Reachy voice sessions now behave as one assistant instead of a second brain** -
+  Main owns the canonical conversation and Reachy is its embodied microphone,
+  speaker, and gesture surface. Current utterances are routed as pristine text while
+  recent turns travel as structured, non-executable context. Main receives generic
+  interface capabilities and can return allow-listed action blocks without delegating
+  back or exposing its internal identity; voice bubbles remain in Reachy's interface
+  thread. Planner internals and raw Home Assistant calls stay out of ordinary chat and
+  speech. Faster Whisper disables previous-text conditioning,
+  enables VAD, and exposes confidence/no-speech scores so likely hallucinations are
+  silently discarded. Deterministic light handling recognizes follow-up "then on",
+  cyan, and natural requests for full brightness.
+
+- **Clear light commands no longer fail on empty actuator JSON** - The one-shot
+  actuator previously passed an empty LLM response to `json.loads`, exposing
+  `Expecting value: line 1 column 1` in chat. Simple light commands now resolve
+  deterministically, including Reachy's `man light` transcription for `main light`.
+  Empty or invalid output for other commands becomes a safe no-match response.
+
+- **Reachy answered connection questions with an invented reconnection** - "reconnect"
+  was not a known command, so it fell through the robot planner to the main
+  orchestrator bridge, which has no robot state and replied with a confident,
+  fabricated "I'm here! Connection re-established." while the robot was still
+  offline and nothing had been dispatched. Connection phrasings are now
+  deterministic keywords that dispatch the real `reconnect` command and report what
+  actually happened.
+
+- **Removed unreliable Reachy sound-facing movement** - turn_to_sound and
+  track_sound are no longer exposed through MQTT, natural-language planning,
+  or direct dispatch because the linear microphone array cannot distinguish
+  front from behind reliably. Microphone capture (listen), DoA reporting
+  (doa), camera/vision, speech, and diagnostics remain available.
+
+- **Documented Reachy as a Wactorz interface** -
+  `@reachy-mini ask Wactorz ...` now bypasses the local robot planner and routes
+  deterministically through the main orchestrator; its answer is spoken by the
+  robot. The interface source is excluded from main's routing context so main
+  cannot delegate the request back to Reachy. A guard also rejects invented `say`
+  answers while explicit say/announce requests remain local robot actions. The
+  remaining hands-free input step is a separate speech-to-text layer.
+
+- **Dynamic-agent inter-agent calls deadlocked inside `handle_task()`** - dynamic
+  task handlers now execute as tracked background tasks, leaving their actor mailbox
+  free to receive the correlated `RESULT` that resolves `agent.send_to()`.
+
+- **MQTT chat fallback duplicated turns and crashed at completion** -
+  The monitor now defers `io/chat` handling to the live IO agent and uses an
+  awaitable no-op for the optional stream-end callback, preventing duplicate agent
+  execution and `NoneType` await errors.
+
+- **Reachy network DoA always reported no sound and NL chat hid the outcome** -
+  WebRTC clients now fall back to the robot daemon's `/api/state/doa` endpoint
+  because reachy_mini 1.8.0 probes for a ReSpeaker USB device on the client PC
+  instead of transporting the robot's DoA reading. Single-command natural-language
+  plans also return the handler's useful result instead of replacing it with
+  a generic execution receipt, and robot-only NL requests no longer wait for the
+  unrelated Home Assistant binding inventory.
+
+- **Reachy command events omitted their useful results** -
+  `custom/reachy/events` now retains the command handler's result fields for
+  commands such as `doa`, `listen`, and `diag`, while preserving the stable
+  `type` / `ok` / `ts` envelope and clear `ok:false` errors.
+
+- **Reachy turned barely at all toward sounds (DoA radians read as degrees)** -
+  reachy_mini 1.8.x reports direction-of-arrival in **radians** (the ReSpeaker
+  `DOA_VALUE_RADIANS` register), but the agent consumed `doa[0]` as **degrees**,
+  so a source at 90° (~1.57 rad) was treated as ~1.6° and `turn_to_sound` /
+  `track_sound` moved only a couple of degrees. A single conversion boundary
+  (`_doa_angle_deg`) now turns the SDK radians into degrees for `doa`, `listen`,
+  `turn_to_sound` and `track_sound`, so reported angles and head turns match the
+  real direction. A non-numeric or non-finite reading (NaN / ±inf) is rejected as
+  a clear `ok:false` error instead of reaching the motors.
+
+- **Reachy mic commands failed silently when the mic array wasn't usable** -
+  `listen`, `doa`, `turn_to_sound` and `track_sound` now check the microphone
+  input capability (`start_recording` / `get_audio_sample` / `get_DoA`) is
+  actually exposed before use, and every failed attempt returns `ok:false` with a
+  clear message ("Reachy microphone array is unavailable: required microphone
+  capability is not exposed by the current backend or SDK build") that names the
+  missing methods and suggests - without over-claiming - trying the blank/auto
+  `media_backend`. The check is judged only by the input methods the mic path
+  calls, not by the output/playback object, so a working mic isn't blocked by an
+  absent speaker path. `listen` no longer returns `ok:true` with a 0-second WAV
+  when the mic yields no samples - it fails clearly. `get_DoA` exceptions are
+  logged with backend context and surfaced rather than swallowed, empty DoA
+  readings (None / `()` / `[]`) are treated uniformly as "no sound localized",
+  and `turn_to_sound` validates the direction-of-arrival (NaN / unreadable
+  readings never reach the motors).
+
+- **Reachy talked but wouldn't move (motors never enabled)** - `wake_up()` and
+  `goto_target()` only stream target positions; they don't turn on motor torque. The
+  Reachy Mini control app enables the motors for you, so with the app running everything
+  moved - but driving the robot directly over `network` (no app), the daemon comes up with
+  motors DISABLED, so commands were accepted and sounds played while nothing physically
+  moved. The reachy-mini agent now calls `enable_motors()` on connect and on every wake,
+  and adds a `motors` command (`{"cmd":"motors","on":true|false}`, plus plain-English
+  "enable motors" / "go limp") to toggle torque like the app did. `motors_enabled` is
+  reported in `custom/reachy/state`.
+
+- **A generic "change the light colour" no longer lights up every colour bulb** -
+  the shared one-shot actuator (used by both main chat and Reachy) hands the
+  resolver every entity, so "turn the light pink" in a home with two
+  colour-capable lights (e.g. an LED strip and the main light) could come back as
+  a `turn_on` for BOTH. A generic, singular request now collapses to a single
+  colour light - preferring the room's main/overhead bulb over an accent strip -
+  while explicitly plural requests ("all/every/both lights") still control them
+  all. The colour / brightness / plurality keyword checks also now
+  ignore the `[AVAILABLE HA ENTITIES ...]` block main injects, so an entity named
+  "Living Room Lights" can't make a singular request look plural (nor a "Red Lamp"
+  look like a colour request).
+
+- **Reachy `say` no longer looks broken when `ffmpeg` is absent** - `ffmpeg` is
+  optional (it only boosts TTS loudness ~3-4x), but its absence logged a
+  `warning` reading `ffmpeg not found - playing raw (quieter) TTS` on *every*
+  utterance, which led a tester to think speech had failed. Reachy speaks fine
+  without `ffmpeg` - just quieter. The notice is now an `info` that states this
+  plainly and logs only once per session. It stays a host-side install rather
+  than something the add-on image carries: it exists for one optional catalogue
+  agent, and every add-on user would otherwise pay for it. The reachy-mini
+  recipe and its catalogue doc also now list `edge-tts` (required for `say`) and
+  `ffmpeg` (optional, loudness only) so a fresh host knows what is and isn't
+  needed.
+
+- **Reachy `say` no longer stomps itself in a sequence** — `play_sound` is fire-and-forget, so a
+  multi-step plan like "whisper X, then normally say Y, then shout Z" cut every utterance off
+  except the last (while the volume changes all flew by). `say` now measures each utterance's
+  length from the edge-tts word boundaries and waits it out before returning, so sequential
+  says (and their volume changes) play fully and in order. Opt out with `await_playback: false`.
+
 ## [0.5.3] - 2026-08-10
 
 ### Added
@@ -400,186 +591,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   recipe.
 
 ### Fixed
-
-- **Agent command reliability.** Natural catalogue spawn requests now launch the
-  named recipe instead of merely listing the catalogue. Common yellow and
-  neutral-light requests resolve deterministically, and Home Assistant management
-  replies no longer collapse to a misleading "Done" or imply that a disabled
-  automation-creation flow succeeded.
-- **Reachy literal delivery speech.** "Tell my..." requests are spoken directly by
-  Reachy instead of being judged or role-played by Main, and can be combined with
-  a real dance. Name normalization also covers additional Ritsy/Rizzi STT variants.
-
-- **Reachy speaks complete replies and turns predictably.** Voice-friendly
-  sanitization no longer truncates long answers with a "rest in Wactorz chat"
-  announcement. Natural `turn left` / `turn right` commands rotate the body 45
-  degrees by default, while explicit angles are honored within the safe range.
-
-- **Reachy voice conversations respond like the physical robot again.** Normal
-  sessions no longer monitor the echo-prone microphone during TTS, so complete
-  replies play instead of stopping after one syllable; barge-in stays available
-  as an explicit experiment. "Riti", "Ritzy", "Lizzy", and similar STT variants
-  normalize to Reachy and cannot silently become the user's name. Camera questions
-  scan with Reachy's onboard camera, full replies appear before playback, complete
-  audio remains conversational, and debug receipts stay opt-in. Relative brightness
-  follow-ups now reuse the light controlled in the preceding conversation turn.
-  Natural room-view phrasing is routed to Reachy's onboard camera instead of
-  falling through to the bodiless main assistant.
-
-- **Social chat custom-spawn gate.** Discord, Telegram, and WhatsApp may
-  start maintained catalogue agents, but refuse LLM-authored custom agents that
-  cannot be inspected or stopped from those interfaces; custom spawning remains
-  available from the Wactorz dashboard.
-
-- **Reachy action traces and rear-view behavior now match conversational UX** -
-  Internal `ran N of N` execution receipts are hidden by default and can be toggled
-  with natural `enable debug` / `disable debug` commands. `turn around` now leaves
-  the body at a persistent, mechanically safe rear orientation, while `behind you`
-  turns first, captures without recentering, describes the rear camera view once,
-  and stays facing it. `face me` and `turn back` restore the forward orientation.
-
-- **Reachy speech chunks no longer replace one another mid-reply** - Reachy's
-  Edge TTS integration now requests word timing explicitly, accepts sentence timing,
-  and falls back to a conservative text-duration estimate when an older provider
-  returns no boundary metadata. Sequential clips wait through playback plus robot
-  transport latency, preventing replies such as ?Hello ?? from jumping directly to
-  their final sentence.
-
-- **Short Greek Reachy turns no longer become multilingual phonetic nonsense** -
-  Faster Whisper language probability is now preserved. Ambiguous short turns retry
-  in a configured fallback or confidently established session language, while
-  unresolved low-probability guesses are discarded before chat, routing, or memory.
-  Greek/English requests to change Reachy's own voice volume execute locally instead
-  of being misrouted to Home Assistant. Voice transcripts can no longer create
-  durable user facts without an explicit memory request, preventing hallucinated
-  names and household members.
-
-
-- **Reachy listening could become deaf and hallucinate speech from antenna noise** -
-  The original idle loop stepped directly between asymmetric antenna targets while
-  the microphone remained live. A shivering servo could repeatedly satisfy the VAD
-  onset detector, keeping Whisper busy on short noise clips until it invented fluent
-  speech. Physical motion is now off by default while the microphone is live; the
-  opt-in mode uses low-amplitude eased sweeps, stops at confirmed speech onset, and
-  recenters only after recording ends. VAD also requires the configured minimum
-  duration of actual voiced frames, so brief motor bursts never reach transcription.
-
-- **Reachy voice sessions now behave as one assistant instead of a second brain** -
-  Main owns the canonical conversation and Reachy is its embodied microphone,
-  speaker, and gesture surface. Current utterances are routed as pristine text while
-  recent turns travel as structured, non-executable context. Main receives generic
-  interface capabilities and can return allow-listed action blocks without delegating
-  back or exposing its internal identity; voice bubbles remain in Reachy's interface
-  thread. Planner internals and raw Home Assistant calls stay out of ordinary chat and
-  speech. Faster Whisper disables previous-text conditioning,
-  enables VAD, and exposes confidence/no-speech scores so likely hallucinations are
-  silently discarded. Deterministic light handling recognizes follow-up "then on",
-  cyan, and natural requests for full brightness.
-
-- **Clear light commands no longer fail on empty actuator JSON** - The one-shot
-  actuator previously passed an empty LLM response to `json.loads`, exposing
-  `Expecting value: line 1 column 1` in chat. Simple light commands now resolve
-  deterministically, including Reachy's `man light` transcription for `main light`.
-  Empty or invalid output for other commands becomes a safe no-match response.
-
-- **Reachy answered connection questions with an invented reconnection** - "reconnect"
-  was not a known command, so it fell through the robot planner to the main
-  orchestrator bridge, which has no robot state and replied with a confident,
-  fabricated "I'm here! Connection re-established." while the robot was still
-  offline and nothing had been dispatched. Connection phrasings are now
-  deterministic keywords that dispatch the real `reconnect` command and report what
-  actually happened.
-- **Removed unreliable Reachy sound-facing movement** - turn_to_sound and
-  track_sound are no longer exposed through MQTT, natural-language planning,
-  or direct dispatch because the linear microphone array cannot distinguish
-  front from behind reliably. Microphone capture (listen), DoA reporting
-  (doa), camera/vision, speech, and diagnostics remain available.
-- **Documented Reachy as a Wactorz interface** -
-  `@reachy-mini ask Wactorz ...` now bypasses the local robot planner and routes
-  deterministically through the main orchestrator; its answer is spoken by the
-  robot. The interface source is excluded from main's routing context so main
-  cannot delegate the request back to Reachy. A guard also rejects invented `say`
-  answers while explicit say/announce requests remain local robot actions. The
-  remaining hands-free input step is a separate speech-to-text layer.
-- **Dynamic-agent inter-agent calls deadlocked inside `handle_task()`** - dynamic
-  task handlers now execute as tracked background tasks, leaving their actor mailbox
-  free to receive the correlated `RESULT` that resolves `agent.send_to()`.
-
-- **MQTT chat fallback duplicated turns and crashed at completion** -
-  The monitor now defers `io/chat` handling to the live IO agent and uses an
-  awaitable no-op for the optional stream-end callback, preventing duplicate agent
-  execution and `NoneType` await errors.
-- **Reachy network DoA always reported no sound and NL chat hid the outcome** -
-  WebRTC clients now fall back to the robot daemon's `/api/state/doa` endpoint
-  because reachy_mini 1.8.0 probes for a ReSpeaker USB device on the client PC
-  instead of transporting the robot's DoA reading. Single-command natural-language
-  plans also return the handler's useful result instead of replacing it with
-  a generic execution receipt, and robot-only NL requests no longer wait for the
-  unrelated Home Assistant binding inventory.
-- **Reachy command events omitted their useful results** -
-  `custom/reachy/events` now retains the command handler's result fields for
-  commands such as `doa`, `listen`, and `diag`, while preserving the stable
-  `type` / `ok` / `ts` envelope and clear `ok:false` errors.
-- **Reachy turned barely at all toward sounds (DoA radians read as degrees)** -
-  reachy_mini 1.8.x reports direction-of-arrival in **radians** (the ReSpeaker
-  `DOA_VALUE_RADIANS` register), but the agent consumed `doa[0]` as **degrees**,
-  so a source at 90° (~1.57 rad) was treated as ~1.6° and `turn_to_sound` /
-  `track_sound` moved only a couple of degrees. A single conversion boundary
-  (`_doa_angle_deg`) now turns the SDK radians into degrees for `doa`, `listen`,
-  `turn_to_sound` and `track_sound`, so reported angles and head turns match the
-  real direction. A non-numeric or non-finite reading (NaN / ±inf) is rejected as
-  a clear `ok:false` error instead of reaching the motors.
-- **Reachy mic commands failed silently when the mic array wasn't usable** -
-  `listen`, `doa`, `turn_to_sound` and `track_sound` now check the microphone
-  input capability (`start_recording` / `get_audio_sample` / `get_DoA`) is
-  actually exposed before use, and every failed attempt returns `ok:false` with a
-  clear message ("Reachy microphone array is unavailable: required microphone
-  capability is not exposed by the current backend or SDK build") that names the
-  missing methods and suggests - without over-claiming - trying the blank/auto
-  `media_backend`. The check is judged only by the input methods the mic path
-  calls, not by the output/playback object, so a working mic isn't blocked by an
-  absent speaker path. `listen` no longer returns `ok:true` with a 0-second WAV
-  when the mic yields no samples - it fails clearly. `get_DoA` exceptions are
-  logged with backend context and surfaced rather than swallowed, empty DoA
-  readings (None / `()` / `[]`) are treated uniformly as "no sound localized",
-  and `turn_to_sound` validates the direction-of-arrival (NaN / unreadable
-  readings never reach the motors).
-- **Reachy talked but wouldn't move (motors never enabled)** - `wake_up()` and
-  `goto_target()` only stream target positions; they don't turn on motor torque. The
-  Reachy Mini control app enables the motors for you, so with the app running everything
-  moved - but driving the robot directly over `network` (no app), the daemon comes up with
-  motors DISABLED, so commands were accepted and sounds played while nothing physically
-  moved. The reachy-mini agent now calls `enable_motors()` on connect and on every wake,
-  and adds a `motors` command (`{"cmd":"motors","on":true|false}`, plus plain-English
-  "enable motors" / "go limp") to toggle torque like the app did. `motors_enabled` is
-  reported in `custom/reachy/state`.
-- **A generic "change the light colour" no longer lights up every colour bulb** -
-  the shared one-shot actuator (used by both main chat and Reachy) hands the
-  resolver every entity, so "turn the light pink" in a home with two
-  colour-capable lights (e.g. an LED strip and the main light) could come back as
-  a `turn_on` for BOTH. A generic, singular request now collapses to a single
-  colour light - preferring the room's main/overhead bulb over an accent strip -
-  while explicitly plural requests ("all/every/both lights") still control them
-  all. The colour / brightness / plurality keyword checks also now
-  ignore the `[AVAILABLE HA ENTITIES ...]` block main injects, so an entity named
-  "Living Room Lights" can't make a singular request look plural (nor a "Red Lamp"
-  look like a colour request).
-- **Reachy `say` no longer looks broken when `ffmpeg` is absent** - `ffmpeg` is
-  optional (it only boosts TTS loudness ~3-4x), but its absence logged a
-  `warning` reading `ffmpeg not found - playing raw (quieter) TTS` on *every*
-  utterance, which led a tester to think speech had failed. Reachy speaks fine
-  without `ffmpeg` - just quieter. The notice is now an `info` that states this
-  plainly and logs only once per session. It stays a host-side install rather
-  than something the add-on image carries: it exists for one optional catalogue
-  agent, and every add-on user would otherwise pay for it. The reachy-mini
-  recipe and its catalogue doc also now list `edge-tts` (required for `say`) and
-  `ffmpeg` (optional, loudness only) so a fresh host knows what is and isn't
-  needed.
-- **Reachy `say` no longer stomps itself in a sequence** — `play_sound` is fire-and-forget, so a
-  multi-step plan like "whisper X, then normally say Y, then shout Z" cut every utterance off
-  except the last (while the volume changes all flew by). `say` now measures each utterance's
-  length from the edge-tts word boundaries and waits it out before returning, so sequential
-  says (and their volume changes) play fully and in order. Opt out with `await_playback: false`.
 
 - **The `mcp` extra now excludes the incompatible 2.x line (`mcp>=1.0.0,<2`).** `mcp` 2.0.0 removed
   `mcp.server.fastmcp`, so a fresh `pip install wactorz[mcp]` picked up a release the MCP interface

@@ -121,6 +121,44 @@ class WarningWithoutNaggingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(second), 1)
 
 
+class TheExpectedVoltageFaultTest(unittest.IsolatedAsyncioTestCase):
+    """Reachy Mini runs its motors above their own voltage threshold on purpose.
+
+    Pollen document this in their FAQ: "We are using a higher voltage on Reachy
+    Mini, it's on purpose". So the servos report an input-voltage fault on a
+    perfectly healthy robot, and warning about it would mean crying wolf on
+    every unit — which is how people learn to ignore the warnings that matter.
+    """
+
+    LINE = "Motor 'head_yaw' hardware errors: ['Input Voltage Error']"
+
+    async def test_it_is_not_raised_at_the_user(self):
+        agent = FakeAgent()
+
+        reported = await NS["_report_motor_faults"](agent, self.LINE, now=1000.0)
+
+        self.assertEqual(reported, [])
+        self.assertEqual(agent.chat, [])
+
+    async def test_it_is_still_written_to_the_log(self):
+        # Quiet is not the same as hidden.
+        agent = FakeAgent()
+
+        await NS["_report_motor_faults"](agent, self.LINE, now=1000.0)
+
+        self.assertTrue(any("motor note" in text for _level, text in agent.logs))
+        self.assertFalse(any(level == "warning" for level, _ in agent.logs))
+
+    async def test_a_real_fault_alongside_it_is_still_raised(self):
+        agent = FakeAgent()
+        both = "Motor 'head_yaw' hardware errors: ['Input Voltage Error', 'Overheating Error']"
+
+        reported = await NS["_report_motor_faults"](agent, both, now=1000.0)
+
+        self.assertEqual(len(reported), 1)
+        self.assertIn("overheating", reported[0])
+
+
 class WhereTheFaultStreamLivesTest(unittest.TestCase):
     def test_the_stream_url_is_derived_from_the_daemon(self):
         agent = FakeAgent(daemon_url="http://192.168.1.42:8000")

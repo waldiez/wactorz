@@ -439,10 +439,19 @@ _MOTOR_FAULT_ADVICE = {
         "A motor reported an electrical fault. Power-cycle the robot; if it "
         "comes back, stop using it and check the wiring."
     ),
+    # Deliberately not a warning. Pollen run Reachy Mini above the servos' own
+    # protection threshold on purpose, and say so in their FAQ, so this fires on
+    # a healthy robot. The daemon already drops it below 7.8V; above that it
+    # still logs, and treating it as a fault would mean crying wolf on every
+    # robot — which teaches people to ignore the ones that matter.
     "input voltage error": (
-        "A motor is seeing the wrong voltage. Check the power supply and cable."
+        "Expected on Reachy Mini: it runs the motors above their default "
+        "voltage threshold on purpose. Nothing to do."
     ),
 }
+
+#: Faults reported quietly rather than as warnings, because they are normal here.
+_MOTOR_FAULT_EXPECTED = frozenset({"input voltage error"})
 
 #: How long the same fault on the same motor stays quiet after being reported.
 #: The daemon re-reads the motors several times a second, so without this one
@@ -497,6 +506,10 @@ async def _report_motor_faults(agent, line, now=None):
         if not _fault_should_be_reported(agent, motor, fault, now=now):
             continue
         message = _describe_motor_fault(motor, fault)
+        if fault in _MOTOR_FAULT_EXPECTED:
+            # Logged so it is not invisible, but never raised at the user.
+            await agent.log(f"motor note — {message}")
+            continue
         reported.append(message)
         await agent.log(f"motor fault — {message}", level="warning")
         try:

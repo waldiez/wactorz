@@ -28,9 +28,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   next. `are you overheating` (also `health`, `how are you feeling`) reports the faults seen
   this session and the IMU's temperature. **Only the wireless robot serves that log stream**,
   so a Lite over USB is not watched and `health` says so rather than reporting a silence that
-  would read as "nothing wrong". **There is no battery level to report** — the SDK exposes
-  none on either model — and `health` says that outright instead of leaving an absent number
-  to look like a full charge.
+  would read as "nothing wrong". **There is no battery level to report**: Pollen state that checking
+  the battery is impossible by design and that the only indication is the LED on the foot going
+  green to orange to red, so `health` says so outright rather than leaving an absent number to
+  look like a full charge. An `Input Voltage Error` from a motor is deliberately not warned
+  about either — Reachy Mini runs its servos above their protection threshold on purpose, so it
+  appears on healthy robots, and warning about it would train people to ignore the faults that
+  matter; it goes to the log instead.
 
 - **A dashboard whose session has ended says so, instead of quietly freezing.** Sessions do not last forever, and one can be ended from another browser. That used to leave the page on screen and polling into refusals: cards stopped changing, the feed stopped, and nothing explained why — a page that looks alive and is not. It now returns to the sign-in page, and brings you back where you were once you are in. There is a sign-out control in the header too, which appears only when there is a session to end: an install with no key never had one, and under Home Assistant ingress you were signed in by Home Assistant, so ending a session here would end nothing.
 

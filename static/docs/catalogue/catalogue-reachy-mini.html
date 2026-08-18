@@ -229,8 +229,18 @@ connect and reconnects on its own, since the stream ends whenever the daemon res
 <p><strong>Only the wireless robot serves that stream</strong> — the daemon mounts the route behind its
 wireless flag — so a Lite over USB has no fault watch. <code>health</code> says so explicitly rather
 than reporting silence, which would otherwise read as "nothing wrong".</p>
-<p><strong>There is no battery level.</strong> The SDK exposes none, on either model, so <code>health</code> says that
-outright instead of leaving an absent number to be read as a full charge.</p>
+<p><strong>There is no battery level, and there is no way to add one.</strong> Pollen state it plainly in
+their FAQ: "We do not have the possibility to check the battery status, that's a known
+limitation of the design. We only have the led indication for low battery when it's time to
+charge it (green -&gt; orange -&gt; red)." The charge state is wired to that LED on the foot and
+reaches no software at all, so <code>health</code> says so outright rather than leaving an absent number
+to be read as a full charge. <strong>Watch the LED, not the dashboard</strong>: green is fine, orange means
+soon, red means charge it now.</p>
+<p><strong>An <code>Input Voltage Error</code> from a motor is not a fault here</strong> and is never raised as a warning.
+Reachy Mini runs its servos above their own protection threshold deliberately — Pollen's FAQ
+says "We are using a higher voltage on Reachy Mini, it's on purpose" — so it appears on healthy
+robots. It is written to the Wactorz log and left there; warning about it would train you to
+ignore the faults that matter.</p>
 <p>The one temperature available is the IMU's own, reported by <code>health</code> when the robot has an
 IMU. It is the inertial chip, not a motor, so treat it as the robot's internal ambient — the
 thing that actually overheats reports through the fault watch above.</p>

@@ -20,14 +20,11 @@ import json
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any
 
 from ..core.mqtt import mqtt_client
+from .hosts import NodeHost
 from .manifests import ManifestRegistry
-from .migration import Migration
-
-if TYPE_CHECKING:
-    from ..core.actor import ActorState
 
 logger = logging.getLogger(__name__)
 
@@ -60,37 +57,6 @@ def remote_actor_id(agent_name: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{agent_name}"))
 
 
-class NodeHost(Protocol):
-    """What the node collaborator needs from the actor that owns it.
-
-    Typing-only, in the spirit of `mixins/host.py`: nothing here runs, and the
-    listener reads these rather than being handed values because both the state
-    and the broker address can change after construction.
-    """
-
-    name: str
-    state: ActorState
-    _mqtt_broker: str
-    _mqtt_port: int
-    _registry: Any
-
-    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
-
-    def _remove_from_spawn_registry(self, name: str) -> None: ...
-
-    def _record_agent_deletion(self, name: str, reason: str = ...) -> None: ...
-
-    def _restore_earned_trust(self, agent_name: str, local_cfg: dict[str, Any]) -> bool: ...
-
-    async def _spawn_from_config(
-        self, config: dict[str, Any], save: bool = ..., *, from_registry: bool = ...
-    ) -> Any: ...
-
-    def _queue_notification(self, notice: dict[str, Any]) -> None: ...
-
-    async def _clear_agent_manifest(self, name: str, actor_id: str | None = ...) -> None: ...
-
-
 class NodeManager:
     """The known remote nodes, keyed by name.
 
@@ -99,13 +65,14 @@ class NodeManager:
     listener and read from here.
     """
 
-    def __init__(self, host: NodeHost | None = None) -> None:
+    def __init__(
+        self, host: NodeHost | None = None, manifests: ManifestRegistry | None = None
+    ) -> None:
         self.host = host
         self.known: dict[str, dict[str, Any]] = {}
-        #: The manifests, which the bootstrap below consults before filling a gap.
-        self.manifest_registry = ManifestRegistry(host)
-        #: Agents in flight to or from a node.
-        self.migration = Migration(host)
+        #: Consulted before filling a gap: a manifest, when one has arrived, is
+        #: better than anything a spawn config can say.
+        self.manifest_registry = manifests if manifests is not None else ManifestRegistry(host)
         #: (node, agent) -> consecutive heartbeats that agent has been missing.
         self.agent_misses: dict[tuple[str, str], int] = {}
 

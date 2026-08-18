@@ -20,6 +20,8 @@ from typing import Any
 import pytest
 
 from wactorz.agents.main_actor import MainActor
+from wactorz.agents.manifests import ManifestRegistry
+from wactorz.agents.migration import Migration
 from wactorz.agents.nodes import VANISH_MISS_THRESHOLD, NodeManager
 from wactorz.core.actor import ActorState
 
@@ -119,7 +121,9 @@ async def run_heartbeats(
     """Drive the real listener over `messages` until they are exhausted."""
     main = MainActor.__new__(MainActor)
     main.name = "main"
-    main.nodes = NodeManager(main)
+    main.manifests = ManifestRegistry(main)
+    main.nodes = NodeManager(main, main.manifests)
+    main.migration = Migration(main, main.nodes)
     main.state = ActorState.RUNNING
     main._mqtt_broker = "localhost"
     main._mqtt_port = 1883

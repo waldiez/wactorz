@@ -12,6 +12,8 @@ import time
 from typing import Any
 
 from wactorz.agents.main_actor import MainActor
+from wactorz.agents.manifests import ManifestRegistry
+from wactorz.agents.migration import Migration
 from wactorz.agents.nodes import NodeManager
 
 
@@ -23,7 +25,9 @@ def _bare_main(registry: dict, known_nodes: dict[str, Any]) -> MainActor:
     """
     published: list[tuple[str, Any]] = []
     m = MainActor()
-    m.nodes = NodeManager()
+    m.manifests = ManifestRegistry(m)
+    m.nodes = NodeManager(m, m.manifests)
+    m.migration = Migration(m, m.nodes)
     m.name = "main"
     m._known_nodes = known_nodes
     m._agent_manifests = {}

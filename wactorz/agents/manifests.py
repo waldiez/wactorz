@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 from ..core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
-    from .nodes import NodeHost
+    from .hosts import ManifestHost
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ RECONNECT_DELAY_S = 5.0
 class ManifestRegistry:
     """What every known agent says it publishes and subscribes to."""
 
-    def __init__(self, host: NodeHost | None = None) -> None:
+    def __init__(self, host: ManifestHost | None = None) -> None:
         self.host = host
         #: agent name -> its latest manifest, including declared schemas.
         self.manifests: dict[str, dict[str, Any]] = {}

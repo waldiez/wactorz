@@ -58,6 +58,11 @@ _IMPORT_NAME_MAP = {
     "typing-extensions": "typing_extensions",
     "opencv-python": "cv2",
     "scikit-image": "skimage",
+    # Ships the `webrtcvad` module under a different distribution name. Without
+    # this the check never finds it, so a fully installed robot was sent to the
+    # installer on every single spawn — the fast path exists to avoid exactly
+    # that wait.
+    "webrtcvad-wheels": "webrtcvad",
 }
 
 
@@ -412,7 +417,8 @@ def _build_catalog() -> dict:
             "docs": (
                 "Setup:\n"
                 "1. Install the recipe dependencies when prompted, or preinstall: "
-                f"pip install {_REACHY_MINI_REQUIREMENT} numpy edge-tts webrtcvad-wheels.\n"
+                f"pip install {_REACHY_MINI_REQUIREMENT} numpy edge-tts pillow "
+                "webrtcvad-wheels faster-whisper.\n"
                 "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
                 "3. For Reachy Mini Lite, start the local daemon first: "
@@ -465,6 +471,11 @@ def _build_catalog() -> dict:
                 "edge-tts",
                 "pillow",
                 "webrtcvad-wheels",
+                # Speech recognition for `ask_voice` and `conversation_start`,
+                # and the default STT backend. Listed because leaving it out
+                # meant every voice feature failed on a robot installed exactly
+                # as instructed, with nothing said until the first attempt.
+                "faster-whisper",
             ],
             "input_schema": {
                 "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",

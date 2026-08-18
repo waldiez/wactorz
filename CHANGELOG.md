@@ -203,6 +203,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A Reachy Mini installed exactly as instructed can now actually talk and listen.** The recipe
+  never listed `faster-whisper`, which is the default — and only local — speech recogniser behind
+  `ask_voice` and `conversation_start`, so on a fresh install every voice feature failed, and
+  nothing said why until the first attempt. It is now installed with the rest.
+
+- **Spawning Reachy Mini no longer waits on the dependency installer every time.** The check maps
+  a package name to the module it provides, and `webrtcvad-wheels` provides `webrtcvad` — with no
+  entry for it the check never found the package, so a host with everything already installed was
+  sent to the installer on every spawn, which is the wait the fast path exists to avoid. Verified
+  on a clean virtual environment built from the README: the recipe's dependencies now all resolve,
+  and the setup instructions name every package the recipe installs.
+
 - **Asking Reachy to stop talking politely now stops him, instead of getting an answer.** Stop and
   silence requests were matched exactly, so "stop talking" was recognised and "Stop talking,
   please!" was not — the polite version fell through and was handled as an ordinary question, so

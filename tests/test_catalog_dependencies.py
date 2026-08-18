@@ -3,6 +3,7 @@
 from unittest import mock
 
 from wactorz.agents.catalog_agent import (
+    _IMPORT_NAME_MAP,
     _REACHY_MINI_REQUIREMENT,
     CatalogAgent,
     _build_catalog,
@@ -74,3 +75,48 @@ async def test_natural_spawn_requests_do_not_degrade_to_catalog_list():
         "weather-agent",
         "weather-agent",
     ]
+
+
+def test_every_named_dependency_can_be_looked_up_by_import_name():
+    """A distribution whose module has another name needs a mapping entry.
+
+    Without one the check never finds the package, so a host with everything
+    installed is sent to the installer on every spawn — the wait the fast path
+    exists to avoid. `webrtcvad-wheels` imports as `webrtcvad`, and was missing.
+    """
+    import importlib.util
+
+    for recipe in _build_catalog().values():
+        for requirement in recipe.get("install", []):
+            pip_name = requirement.split("==")[0].split("[")[0].strip().lower()
+            import_name = _IMPORT_NAME_MAP.get(pip_name) or pip_name.replace("-", "_")
+            if importlib.util.find_spec(import_name) is not None:
+                continue
+            # Not installed here, so only the obvious mismatches can be caught:
+            # a name that differs from the dashed form must be mapped.
+            assert pip_name.replace("-", "_") == import_name or pip_name in _IMPORT_NAME_MAP, (
+                f"{requirement} resolves to import {import_name!r} with no mapping"
+            )
+
+
+def test_webrtcvad_wheels_is_recognised_when_installed():
+    assert _IMPORT_NAME_MAP["webrtcvad-wheels"] == "webrtcvad"
+
+
+def test_reachy_recipe_installs_the_speech_recogniser_it_defaults_to():
+    """`ask_voice` and `conversation_start` transcribe with faster-whisper.
+
+    It was not in the list, so every voice feature failed on a robot installed
+    exactly as instructed, and nothing said so until the first attempt.
+    """
+    install = _build_catalog()["reachy-mini"]["install"]
+
+    assert "faster-whisper" in install
+
+
+def test_the_reachy_setup_docs_name_everything_the_recipe_installs():
+    recipe = _build_catalog()["reachy-mini"]
+    docs = recipe["docs"]
+
+    for requirement in recipe["install"]:
+        assert requirement.split("==")[0] in docs, f"{requirement} missing from setup docs"

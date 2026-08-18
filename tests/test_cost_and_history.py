@@ -190,6 +190,25 @@ def _make_kv_db(entries: list[dict]) -> object:
     return types.SimpleNamespace(conn=conn)
 
 
+def _close_installed_db(original: object) -> None:
+    """Close the database a test put on `runtime.db`, if it installed one.
+
+    The stubs here are backed by in-memory SQLite held only by that name, so
+    restoring the original leaves nothing able to close the connection, and it
+    sits in a reference cycle — reclaimed on a later collection pass, and
+    reported against whichever unrelated test the collector happened to run in.
+
+    Stubs with no connection are left alone, so a class can call this whether or
+    not the database it installs is a real one.
+    """
+    installed = runtime.db
+    if installed is None or installed is original:
+        return
+    conn = getattr(installed, "conn", None)
+    if conn is not None:
+        conn.close()
+
+
 class HistoricalCostTest(unittest.TestCase):
     def setUp(self):
         # Reset module state between tests
@@ -197,15 +216,7 @@ class HistoricalCostTest(unittest.TestCase):
         self._orig_state = dict(runtime.state["agents"])
 
     def tearDown(self):
-        # Close the database the test installed before putting the original
-        # back. These are in-memory ones held only by `runtime.db`, so once it
-        # is reassigned nothing can reach the connection to close it, and it
-        # sits in a reference cycle until a collection pass finds it.
-        installed = runtime.db
-        if installed is not None and installed is not self._orig_db:
-            conn = getattr(installed, "conn", None)
-            if conn is not None:
-                conn.close()
+        _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         runtime.state["agents"] = self._orig_state
 
@@ -313,6 +324,7 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         runtime.db = _RoundTripKV()
 
     def tearDown(self):
+        _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         cost.lifetime_cost.clear()
         cost.lifetime_cost.update(self._orig_ledger)
@@ -413,6 +425,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         runtime.state["agents"] = {}
 
     def tearDown(self):
+        _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         runtime.registry = self._orig_reg
         runtime.state["agents"] = self._orig_agents

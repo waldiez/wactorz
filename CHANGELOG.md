@@ -203,6 +203,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Telling Reachy to stop, out loud, while he is talking, now stops him.** The interruption was
+  recorded — 4.3 seconds of it — and then thrown away by the recogniser's own voice filter, which
+  runs before decoding and removed every frame of a clip captured over the loudspeaker. An empty
+  transcript read as "nobody interrupted", so he talked over the person asking him to stop. That
+  filter is now off for the check (`stt_vad_filter`), since the clip has already been gated by
+  Reachy's own VAD and a second pass had nothing to protect and everything to lose. The words
+  recovered there are carried into the turn instead of being transcribed again, which would have
+  re-run the same filter and lost them a second time.
+
 - **Reachy no longer interrupts himself.** With `barge_in` on, speech onset ended the reply
   outright — and the microphone hears his own loudspeaker, so his voice ended it. A joke died
   at "why don't eg-". Onset is now only a suspicion: the sentence in progress finishes, and

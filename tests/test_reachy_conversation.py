@@ -1584,5 +1584,67 @@ class OwnVoiceRecognitionTest(unittest.TestCase):
         )
 
 
+class InterruptionSurvivesTheRecogniserTest(unittest.IsolatedAsyncioTestCase):
+    """A clip recorded over the loudspeaker must not be thrown away twice.
+
+    faster-whisper runs its own VAD before decoding. On a recording made while
+    Reachy was speaking it removed all 4.32 seconds of someone saying "stop
+    talking" and returned nothing — so the interruption looked unconfirmed and
+    he talked straight over the person asking him to stop.
+    """
+
+    def _capture(self):
+        return VoiceCapture(
+            np.full(16000, 0.2, np.float32), 16000, 1, 1.0, None, 4, voiced_duration_s=1.0
+        )
+
+    async def test_the_check_transcribes_without_the_recognisers_own_vad(self):
+        agent, seen = FakeAgent(), {}
+        capture = self._capture()
+
+        async def fake_transcribe(_agent, _wav, payload, _session):
+            seen.update(payload)
+            return Transcription("stop talking", "fake", "fake"), False
+
+        session = {"payload": {}, "cancel_event": None}
+        with mock.patch.dict(NS, {"_conversation_transcribe": fake_transcribe}):
+            verdict = await NS["_verified_barge_in"](agent, session, capture, "a long joke")
+
+        self.assertTrue(verdict)
+        self.assertIs(seen["stt_vad_filter"], False)
+
+    async def test_the_words_are_carried_into_the_turn_not_re_derived(self):
+        # Re-transcribing would run that VAD over the same clip and lose them.
+        agent = FakeAgent()
+        capture = self._capture()
+        heard = Transcription("stop talking", "fake", "fake")
+
+        async def fake_transcribe(_agent, _wav, _payload, _session):
+            return heard, False
+
+        session = {"payload": {}, "cancel_event": None}
+        with mock.patch.dict(NS, {"_conversation_transcribe": fake_transcribe}):
+            await NS["_verified_barge_in"](agent, session, capture, "a long joke")
+
+        carried = session["pending_transcript"]
+        self.assertIs(carried[0], capture)
+        self.assertIs(carried[1], heard)
+        self.assertIs(session["pending_capture"], capture)
+
+
+class SttVadFilterOptionTest(unittest.TestCase):
+    """The recogniser's VAD is on unless a caller that already gated the audio says otherwise."""
+
+    def test_it_defaults_to_on(self):
+        from wactorz.catalogue_agents.reachy_stt import STTConfig
+
+        self.assertTrue(STTConfig.resolve({}, {}).vad_filter)
+
+    def test_a_caller_can_turn_it_off(self):
+        from wactorz.catalogue_agents.reachy_stt import STTConfig
+
+        self.assertFalse(STTConfig.resolve({"stt_vad_filter": False}, {}).vad_filter)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -2904,7 +2904,14 @@ async def _verified_barge_in(agent, session, capture, spoken_text):
         return False
     import base64 as _b64
 
-    stt_payload = _conversation_stt_payload(payload)
+    stt_payload = dict(_conversation_stt_payload(payload))
+    # Our own VAD already found the voice in this clip and measured it, so the
+    # recogniser's VAD has nothing left to protect and a great deal to lose: run
+    # on a recording made while the loudspeaker was playing, it removed all
+    # 4.3 seconds of someone saying "stop talking" and returned an empty
+    # transcript — which read as "no interruption" and let Reachy talk over the
+    # person asking him to stop.
+    stt_payload["stt_vad_filter"] = False
     try:
         wav_b64, _frames = await _do(
             _pcm_to_wav_b64, capture.audio, capture.samplerate, capture.channels)
@@ -2932,6 +2939,10 @@ async def _verified_barge_in(agent, session, capture, spoken_text):
         )
         return False
     session["pending_capture"] = capture
+    # Paired with the clip it came from, so the turn that consumes the clip can
+    # reuse this instead of transcribing it a second time — which would re-run
+    # the recogniser's VAD over it and lose the words all over again.
+    session["pending_transcript"] = (capture, transcription)
     return True
 
 
@@ -4909,15 +4920,19 @@ async def _conversation_loop(agent, session):
                 continue
 
             turn["capture_duration_s"] = capture.duration_s
-            wav_b64, _frames = await _do(
-                _pcm_to_wav_b64, capture.audio, capture.samplerate, capture.channels)
-            wav_bytes = _b64.b64decode(wav_b64)
             await _conversation_publish(agent, session, "transcribing", turn)
             transcription_started = _time.time()
+            carried = session.pop("pending_transcript", None)
+            reused = carried[1] if carried is not None and carried[0] is capture else None
             try:
-                transcription, retried = await _conversation_transcribe(
-                    agent, wav_bytes, stt_payload, session
-                )
+                if reused is not None:
+                    transcription, retried = reused, False
+                else:
+                    wav_b64, _frames = await _do(
+                        _pcm_to_wav_b64, capture.audio, capture.samplerate, capture.channels)
+                    transcription, retried = await _conversation_transcribe(
+                        agent, _b64.b64decode(wav_b64), stt_payload, session
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

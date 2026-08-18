@@ -314,8 +314,12 @@ rather than a verdict: the sentence in progress finishes, and the recording is t
 checked before it counts. It has to carry at least `barge_verify_min_speech_s` (0.35 s)
 of voice, transcribe to something the recogniser stands behind, and not repeat the words
 Reachy was speaking — his own voice satisfies every acoustic test, so the only thing that
-separates it from a person's is what was said. A confirmed interruption stops the reply
-and is routed as the next turn; an unconfirmed one is discarded and he keeps talking.
+separates it from a person's is what was said. That check transcribes with the recogniser's own VAD switched off
+(`stt_vad_filter`): the clip was recorded while the loudspeaker was playing and has already
+been gated by Reachy's VAD, and running a second one over it discards the speech it was
+meant to protect. A confirmed interruption stops the reply and is routed as the next turn,
+carrying the transcript already made for the check rather than deriving it twice; an
+unconfirmed one is discarded and he keeps talking.
 The cost of a real interruption is the rest of one sentence, which reads as letting him
 finish rather than as ignoring you. A typed `stop`,
 `silence`, `quiet`, or `shut up` still cuts the current reply immediately without

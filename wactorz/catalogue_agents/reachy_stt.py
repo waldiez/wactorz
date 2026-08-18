@@ -43,6 +43,12 @@ class STTConfig:
     device: str = "auto"
     compute_type: str = "default"
     hotwords: str | None = None
+    #: Run the recogniser's own VAD before decoding. On by default, because a
+    #: clip recorded from an open microphone is mostly silence. Callers that
+    #: already gated the audio themselves turn it off: a second VAD, applied to
+    #: a recording made while the loudspeaker was playing, discards the speech
+    #: it was meant to protect and returns an empty transcript.
+    vad_filter: bool = True
 
     @classmethod
     def resolve(
@@ -83,7 +89,8 @@ class STTConfig:
             str(payload.get("stt_hotwords") or environ.get("REACHY_STT_HOTWORDS") or "").strip()
             or None
         )
-        return cls(backend, model, language, device, compute_type, hotwords)
+        vad_filter = bool(payload.get("stt_vad_filter", True))
+        return cls(backend, model, language, device, compute_type, hotwords, vad_filter)
 
 
 @dataclass(frozen=True)
@@ -142,7 +149,9 @@ class FasterWhisperBackend:
             path = _temporary_wav(wav_bytes)
             try:
                 kwargs = {"language": config.language} if config.language else {}
-                kwargs.update({"vad_filter": True, "condition_on_previous_text": False})
+                kwargs.update(
+                    {"vad_filter": config.vad_filter, "condition_on_previous_text": False}
+                )
                 if config.hotwords:
                     kwargs["hotwords"] = config.hotwords
                 segments, info = model.transcribe(str(path), **kwargs)

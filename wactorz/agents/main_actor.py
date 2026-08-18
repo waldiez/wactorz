@@ -13,7 +13,6 @@ import socket
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
 from typing import Any, ClassVar
 
 from ..config import (
@@ -22,10 +21,11 @@ from ..config import (
     deploy_target_help,
     deploy_target_names,
 )
-from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt import mqtt_client
+from .commands import CommandContext
+from .commands import registry as command_registry
 from .helpers.main_actor_helpers import (
-    PENDING_PLANS_KEY,
     SPAWN_REGISTRY_KEY,
     _normalize_agent_name,
     _parse_spawn_config,
@@ -588,251 +588,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         stripped = text.strip().rstrip("()")
 
         # ── /help ───────────────────────────────────────────────────────────
-        if stripped in ("/help", "help", "/?"):
-            return note_prefix + "\n".join(
-                [
-                    "**Wactorz commands**",
-                    "",
-                    "**Agents**",
-                    "  /agents                 — list all known agents with descriptions and schemas",
-                    "  /agents <keyword>       — filter agents by capability keyword",
-                    "  /capabilities           — alias for /agents",
-                    "  /delete <agent>         — stop an agent and remove it from the spawn registry",
-                    "  /stop <agent>           — stop an agent, keeping its state (reversible)",
-                    "  /start <agent>          — start a stopped agent back up",
-                    "  /pause <agent>          — pause a local agent (remote not supported)",
-                    "  /resume <agent>         — resume a paused local agent",
-                    "  @agent-name <msg>       — send a message directly to a named agent",
-                    "  @catalog list           — list available catalog recipes",
-                    "  @catalog spawn <n>      — spawn a catalog agent",
-                    "",
-                    "**Nodes**",
-                    "  /nodes                  — list local + remote nodes and their agents",
-                    "  /nodes restart <node>   — restart the runner process on a node",
-                    "  /nodes shutdown <node>  — stop all agents and shut down a node",
-                    "  /nodes remove <node>    — stop all agents on a node and remove it",
-                    "  /deploy <node>          — deploy a remote Wactorz node",
-                    "                            (a target configured via DEPLOY_TARGETS;",
-                    "                             run bare to list them. SSH credentials",
-                    "                             come from the environment, not chat)",
-                    "  /migrate <agent> <node> — move an agent to a different node (state preserved)",
-                    "  /agents restart <name>  — restart an agent (local or remote, state preserved)",
-                    "",
-                    "**Pipelines & Plans**",
-                    "  /plans                  — list pending pipeline proposals (dry-run)",
-                    "  /plans show <id>        — inspect a proposal's full code",
-                    "  /plans approve <id>     — execute a proposed pipeline",
-                    "  /plans reject <id>      — discard a proposed pipeline",
-                    "  /clear-plans            — clear the plan cache",
-                    "  /rules                  — list active pipeline rules",
-                    "  /rules delete <id>      — stop agents and remove a rule",
-                    "  pipeline! <task>        — bypass approval and execute immediately (power users)",
-                    "",
-                    "**Memory**",
-                    "  /memory                 — show stored user facts and conversation summary",
-                    "  /memory clear           — wipe all memory",
-                    "  /memory forget <key>    — remove one stored fact",
-                    "",
-                    "**Notifications**",
-                    "  /webhook                — list stored webhook URLs",
-                    "  /webhook discord <url>  — store a Discord webhook URL",
-                    "  /webhook telegram <url> — store a Telegram webhook URL",
-                    "",
-                    "**System & diagnostics**",
-                    "  /topics                 — list MQTT topics published by known agents",
-                    "  /topics <keyword>       — filter topics by keyword",
-                    "  /bus                    — TopicBus registry: contracts, data flows, wiring pairs",
-                    "  /mqtt                   — MQTT publisher status (connected, queue depth, outbox)",
-                    "  /registry               — diagnostic: compare live registry, spawn registry, manifest cache",
-                    "  /help                   — show this help",
-                ]
-            )
-        if stripped in ("main.list_nodes", "list_nodes", "/nodes"):
-            nodes = self.list_nodes()
-            # Local row first — matches the format users got from io_agent
-            local_agents = []
-            if self._registry:
-                local_agents = sorted(a.name for a in self._registry.all_actors())
-            local_str = ", ".join("@" + n for n in local_agents) or "(none)"
-            lines = [f"  {'local':22s} 🟢 online  |  agents: {local_str}"]
-
-            # Remote rows
-            for nd in sorted(nodes, key=lambda x: x["node"]):
-                status = "🟢 online " if nd["online"] else "🔴 offline"
-                agents = ", ".join("@" + a for a in nd["agents"]) or "(no agents)"
-                age = int(time.time() - nd["last_seen"])
-                lines.append(
-                    f"  {nd['node']:22s} {status}  |  agents: {agents}  |  last heartbeat: {age}s ago"
-                )
-
-            footer = ""
-            if not nodes:
-                footer = "\n(no remote nodes seen yet — deploy one with /deploy <node-name>)"
-            else:
-                footer = "\nTo remove a remote node: /nodes remove <node-name>"
-
-            return note_prefix + "Nodes:\n" + "\n".join(lines) + footer
-
-        if stripped.startswith("/topics"):
-            keyword = stripped[7:].strip().lstrip("(").rstrip(")")
-            topics = self.list_topics(keyword)
-            if not topics:
-                msg = "No topics found" + (f" matching '{keyword}'" if keyword else "") + "."
-                msg += (
-                    " Topics are registered automatically when agents publish for the first time."
-                )
-                return note_prefix + msg
-            lines = [f"Known MQTT topics{' matching ' + repr(keyword) if keyword else ''}:"]
-            for t in topics:
-                agent_strs = ", ".join(
-                    f"{a['name']}" + (f" ({a['node']})" if a.get("node") else "")
-                    for a in t["agents"]
-                )
-                lines.append(f"  {t['topic']:40s} ← {agent_strs}")
-            return note_prefix + "\n".join(lines)
-
-        if stripped == "/mqtt":
-            client = self._mqtt_client
-            if client is None:
-                return note_prefix + "MQTT publisher not initialised."
-            connected = getattr(client, "connected", False)
-            queue_depth = getattr(client, "queue_depth", 0)
-            client_id = getattr(client, "_client_id", "?")
-            db_path = getattr(client, "_db_path", "?")
-            status_icon = "🟢" if connected else "🔴"
-            lines = [
-                "MQTT Publisher Status:",
-                f"  {status_icon} connected   : {connected}",
-                f"  client_id   : {client_id}",
-                f"  queue_depth : {queue_depth} message(s) pending",
-                f"  outbox_db   : {db_path}",
-                "  QoS 1 topics: nodes/*, agents/by-name/*",
-                "  QoS 0 topics: */logs, */metrics, */status, */heartbeat",
-            ]
-            if queue_depth > 0:
-                lines.append(
-                    f"  ⚠️  {queue_depth} message(s) queued — will deliver when reconnected"
-                )
-            return note_prefix + "\n".join(lines)
-
-        if stripped == "/bus":
-            try:
-                from ..core.topic_bus import get_topic_bus
-
-                bus = get_topic_bus()
-                if not bus:
-                    return note_prefix + "TopicBus not initialised."
-                summary = bus.registry.summary()
-                lines = [
-                    "TopicBus — Reactive Pub/Sub Registry",
-                    f"  agents with contracts : {summary['total_agents']}",
-                    f"  published topics      : {summary['total_published']}",
-                    f"  subscribed topics     : {summary['total_subscribed']}",
-                    f"  auto-wiring pairs     : {summary['wiring_pairs']}",
-                    "",
-                ]
-                for c in sorted(summary["agents"], key=lambda x: x["name"]):
-                    lines.append(f"  [{c['name']}]" + (f" on {c['node']}" if c.get("node") else ""))
-                    if c["publishes"]:
-                        lines.append(f"    publishes : {', '.join(c['publishes'])}")
-                    if c["subscribes"]:
-                        lines.append(f"    subscribes: {', '.join(c['subscribes'])}")
-                    if c.get("triggers_when"):
-                        lines.append(f"    triggers  : {c['triggers_when']}")
-                pairs = bus.registry.find_wiring_opportunities()
-                if pairs:
-                    lines.append("\nAuto-wiring opportunities:")
-                    for prod, cons, topic in pairs:
-                        lines.append(f"  {prod.name} → {cons.name}  via {topic}")
-                return note_prefix + "\n".join(lines)
-            except Exception as e:
-                return note_prefix + f"TopicBus error: {e}"
+        # Commands that have moved to the registry are found here; the chain
+        # below still holds the rest. Registration order is dispatch order, so a
+        # command answers exactly where it did before.
+        found = command_registry.find(stripped)
+        if found is not None:
+            handler, argument = found[0].handler, found[1]
+            return note_prefix + await handler(CommandContext(actor=self), argument)
 
         # ── Webhook / notification URL management ───────────────────────────
-        if stripped.startswith("/memory"):
-            parts = stripped.split(None, 1)
-            sub = parts[1].strip() if len(parts) > 1 else ""
-            if sub == "clear":
-                self.persist("_user_facts", {})
-                self.persist("history_summary", "")
-                self._history_summary = ""
-                # Rebuild fresh — running agents block is preserved, facts are gone
-                self._rebuild_system_prompt()
-                return note_prefix + "Memory cleared — user facts and conversation summary reset."
-            if sub.startswith("forget "):
-                key = sub[7:].strip()
-                facts = self.get_user_facts()
-                if key in facts:
-                    del facts[key]
-                    self.persist("_user_facts", facts)
-                    self._inject_user_facts_into_prompt()
-                    return note_prefix + f"Forgotten: '{key}'"
-                return note_prefix + f"No fact found with key '{key}'."
-            # Default: show memory, grouped by bucket so it's easy to scan
-            facts = self.get_user_facts()
-            summary = self._history_summary
-            lines = []
-            if facts:
-                lines.append(f"User facts ({len(facts)}):")
-                buckets = [
-                    ("pref_", "Preferences & identity"),
-                    ("device_", "Devices & setup"),
-                    ("policy_", "Standing policies"),
-                ]
-                shown = set()
-                for prefix, heading in buckets:
-                    items = [(k, v) for k, v in facts.items() if k.startswith(prefix)]
-                    if items:
-                        lines.append(f"\n  [{heading}]")
-                        for k, v in sorted(items):
-                            lines.append(f"    {k[len(prefix) :]}: {v}")
-                            shown.add(k)
-                # Anything left over (legacy or unprefixed keys)
-                leftover = [(k, v) for k, v in facts.items() if k not in shown]
-                if leftover:
-                    lines.append("\n  [Other / legacy]")
-                    for k, v in sorted(leftover):
-                        lines.append(f"    {k}: {v}")
-            else:
-                lines.append("No user facts stored yet.")
-            if summary:
-                lines.append(
-                    f"\nConversation summary:\n  {summary[:300]}{'...' if len(summary) > 300 else ''}"
-                )
-            else:
-                lines.append("\nNo conversation summary yet.")
-            lines.append("\nCommands: /memory clear | /memory forget <key>")
-            return note_prefix + "\n".join(lines)
-
-        if stripped.startswith("/webhook"):
-            parts = stripped.split(None, 2)
-            if len(parts) == 1:
-                # /webhook — show stored URLs
-                urls = self.recall("_notification_urls") or {}
-                if not urls:
-                    return (
-                        note_prefix
-                        + "No notification URLs stored.\nUse: /webhook discord <url>  or  /webhook telegram <url>"
-                    )
-                lines = ["Stored notification URLs:"]
-                for svc, url in urls.items():
-                    lines.append(f"  {svc}: {url}")
-                return note_prefix + "\n".join(lines)
-            if len(parts) >= 3:
-                # /webhook discord <url>
-                service = parts[1].lower()
-                url = parts[2].strip()
-                urls = self.recall("_notification_urls") or {}
-                urls[service] = url
-                self.persist("_notification_urls", urls)
-                return (
-                    note_prefix
-                    + f"Saved {service} webhook URL. Pipelines will use it automatically."
-                )
-            return (
-                note_prefix
-                + "Usage: /webhook <service> <url>\nExample: /webhook discord https://discord.com/api/webhooks/..."
-            )
 
         # Auto-detect webhook URLs in any message and persist them
         _webhook_match = re.search(
@@ -850,78 +614,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             self.persist("_notification_urls", urls)
             logger.info("[%s] Auto-saved webhook URL from message", self.name)
 
-        if stripped in ("/rules", "rules"):
-            rules = self.get_pipeline_rules()
-            if not rules:
-                return (
-                    note_prefix
-                    + "No pipeline rules active.\nDescribe a reactive rule to create one, e.g. 'when the door opens send me a Discord message'."
-                )
-            lines = [f"Active pipeline rules ({len(rules)}):"]
-            for rule_id, rule in sorted(rules.items(), key=lambda x: x[1].get("created_at", 0)):
-                agents = rule.get("agents", [])
-                task = rule.get("task", "")[:]
-                ts = rule.get("created_at", 0)
-                created = (
-                    datetime.fromtimestamp(ts, tz=timezone.utc)
-                    .astimezone()
-                    .strftime("%Y-%m-%d %H:%M")
-                    if ts
-                    else "unknown"
-                )
-                # Check which agents are running
-                running_agents = []
-                stopped_agents = []
-                for a in agents:
-                    if self._registry and self._registry.find_by_name(a):
-                        running_agents.append(a)
-                    else:
-                        stopped_agents.append(a)
-                status = "🟢" if running_agents else "🔴"
-                lines.append(f"\n{status} [{rule_id}] — {task}")
-                lines.append(f"   agents  : {', '.join(agents)}")
-                if stopped_agents:
-                    lines.append(f"   stopped : {', '.join(stopped_agents)}")
-                lines.append(f"   created : {created}")
-            lines.append("\nTo delete a rule: /rules delete <rule_id>")
-            return note_prefix + "\n".join(lines)
-
-        if stripped.startswith("/rules delete "):
-            rule_id = stripped[len("/rules delete ") :].strip()
-            result = await self.delete_pipeline_rule(rule_id)
-            return note_prefix + result
-
         # ── /delete <agent>, /stop <agent> — direct shortcuts ──────────────
         # Same behaviour as `/agents delete <name>` / `/agents stop <name>`,
         # but as a top-level command so users (and main itself) don't need to
         # round-trip through the LLM. Reuses the unified handler below by
         # rewriting `stripped` and falling through.
-        for _short, _full in (("/delete ", "/agents delete "), ("/stop ", "/agents stop ")):
-            if stripped.startswith(_short):
-                stripped = _full + stripped[len(_short) :].strip()
-                break  # one match — fall through to the unified block
 
         # ── /migrate <agent> <node> ─────────────────────────────────────────
         # Moved here from io_agent so all interfaces (CLI, UI, Discord) share
         # one implementation. The actual work is done by self.migrate_agent().
-        if stripped.startswith("/migrate"):
-            parts = stripped.split()
-            if len(parts) < 3:
-                return note_prefix + (
-                    "Usage: /migrate <agent-name> <target-node>\n"
-                    "Examples:\n"
-                    "  /migrate temp-sensor rpi-bedroom   — remote to remote\n"
-                    "  /migrate temp-sensor local         — remote back to main node\n"
-                    "  /migrate temp-sensor rpi-a         — local to remote"
-                )
-            agent_name, target_node = parts[1], parts[2]
-            try:
-                result = await self.migrate_agent(agent_name, target_node)
-            except Exception as exc:
-                logger.exception("[main] /migrate failed for %r → %r", agent_name, target_node)
-                return note_prefix + f"Migrate failed: {exc}"
-            sym = "OK" if result.get("success") else "FAIL"
-            return note_prefix + f"[{sym}] {result.get('message', str(result))}"
 
         # ── /deploy (non-streaming path) ────────────────────────────────────
         # The streaming version yields progress chunks live; this version
@@ -929,82 +630,13 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # streaming (Discord, REST, CLI input()) get the full transcript at
         # the end. Implementation lives in _slash_deploy_stream so there is
         # exactly one source of truth for what /deploy does.
-        if stripped.startswith("/deploy"):
-            chunks: list[str] = []
-            async for chunk in self._slash_deploy_stream(stripped):
-                if isinstance(chunk, str):
-                    chunks.append(chunk)
-            return note_prefix + "\n".join(chunks)
 
         # ── /clear-plans ────────────────────────────────────────────────────
-        if stripped == "/clear-plans":
-            try:
-                self.persist("_plan_cache", {})
-            except Exception as exc:
-                logger.exception("[main] /clear-plans failed")
-                return note_prefix + f"Failed to clear plan cache: {exc}"
-            return note_prefix + "Plan cache cleared."
 
         # ── /pause <agent>, /resume <agent> ─────────────────────────────────
         # NOTE: the underlying remote_runner.py does not implement pause/resume
         # topics, so these only affect LOCAL agents. For remote agents we tell
         # the user honestly and suggest /stop instead.
-        for _cmd, _verb, _new_state in (
-            ("/start ", "start", ActorState.RUNNING),
-            ("/pause ", "pause", ActorState.PAUSED),
-            ("/resume ", "resume", ActorState.RUNNING),
-        ):
-            # Both spellings: `text` is already stripped, so a bare "/pause"
-            # never matched the prefix form and fell through to the LLM — the
-            # usage hint below could not be reached at all.
-            if stripped == _cmd.strip() or stripped.startswith(_cmd):
-                agent_name = stripped[len(_cmd) :].strip()
-                if not agent_name:
-                    return note_prefix + f"Usage: {_cmd.strip()} <agent-name>"
-
-                # Remote check first — fail fast with a clear message
-                reg = self._get_spawn_registry()
-                node = reg.get(agent_name, {}).get("node", "").strip()
-                if node:
-                    return note_prefix + (
-                        f"'{agent_name}' is running on remote node '{node}'. "
-                        f"Pause/resume is only supported for local agents. "
-                        f"Use /stop {agent_name} to stop it instead."
-                    )
-
-                if not self._registry:
-                    return note_prefix + "No actor registry available."
-
-                target = self._registry.find_by_name(agent_name)
-                if target is None:
-                    return note_prefix + f"Agent '{agent_name}' not found locally."
-
-                # Idempotent guards — be explicit so the user knows nothing changed
-                if _verb == "pause" and target.state == ActorState.PAUSED:
-                    return note_prefix + f"Agent '{agent_name}' is already paused."
-                if _verb == "resume" and target.state != ActorState.PAUSED:
-                    return note_prefix + (
-                        f"Agent '{agent_name}' is not paused (state: {target.state.name})."
-                    )
-                if _verb == "start" and target.state != ActorState.STOPPED:
-                    return note_prefix + (
-                        f"Agent '{agent_name}' is not stopped (state: {target.state.name})."
-                    )
-
-                try:
-                    # apply_command rather than target.pause()/resume(): it is the
-                    # one place the lifecycle rules live, including refusing to
-                    # pause a protected agent — which this path did not check —
-                    # and putting a started agent back under supervision.
-                    applied = await target.apply_command(_verb)
-                except Exception as exc:
-                    logger.exception("[main] /%s failed for %r", _verb, agent_name)
-                    return note_prefix + f"Failed to {_verb} '{agent_name}': {exc}"
-
-                if not applied:
-                    return note_prefix + f"'{agent_name}' refused {_verb} (it may be protected)."
-                _past = {"start": "started", "pause": "paused", "resume": "resumed"}[_verb]
-                return note_prefix + f"Agent '{agent_name}' {_past}."
 
         # ── /agents stop|delete|pause|remove <name> ─────────────────────────
         # NOTE: stop and pause are reversible (state preserved, spawn registry
@@ -1014,392 +646,22 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # entry from the spawn registry. Picking the wrong verb here is the
         # difference between "the agent comes back on next runner restart" and
         # "the agent is gone forever".
-        for _cmd in ("/agents stop ", "/agents delete ", "/agents pause ", "/agents remove "):
-            if stripped.startswith(_cmd):
-                agent_name = stripped[len(_cmd) :].strip()
-                verb = _cmd.strip().split()[-1]  # "stop" | "delete" | "pause" | "remove"
-                is_delete = verb in ("delete", "remove")
-
-                if is_delete:
-                    # Delegate to the canonical permanent-delete helper so the
-                    # chat path and the LLM <delete> path behave identically.
-                    try:
-                        await self.delete_spawned_agent(agent_name)
-                    except Exception as e:
-                        logger.exception(
-                            "[%s] delete_spawned_agent(%r) failed", self.name, agent_name
-                        )
-                        return note_prefix + f"Delete of '{agent_name}' failed: {e}"
-                    return note_prefix + (
-                        f"Agent '{agent_name}' permanently deleted "
-                        f"(state file removed, retained MQTT topics cleared)."
-                    )
-
-                # stop / pause — reversible. Keep state and spawn-registry entry.
-                reg = self._get_spawn_registry()
-                node = reg.get(agent_name, {}).get("node", "").strip()
-                # Past-tense rendering: stop → stopped, pause → paused.
-                # Both are double-the-consonant + ed (English regular doubling
-                # for monosyllabic CVC verbs); just hard-code the table.
-                past = {"stop": "stopped", "pause": "paused"}.get(verb, f"{verb}ped")
-
-                if node:
-                    # Remote agent — plain stop (no delete flag), keep registry
-                    # so /agents restart can resume it cleanly later.
-                    await self._mqtt_publish(f"nodes/{node}/stop", {"name": agent_name}, qos=1)
-                    self._record_agent_deletion(
-                        agent_name, reason=f"manually {past} via /agents on node '{node}'"
-                    )
-                    return note_prefix + (
-                        f"Stop signal sent to '{agent_name}' on node '{node}'. "
-                        f"State is preserved — use /agents restart {agent_name} to resume."
-                    )
-                # Local agent
-                if self._registry:
-                    target = self._registry.find_by_name(agent_name)
-                    if target:
-                        # apply_command, not stop(): this ran stop() for *both*
-                        # verbs, so `/agents pause` stopped the agent and then
-                        # reported it paused. It also skipped the supervision
-                        # release, which makes a deliberate stop look like a
-                        # crash to the watchdog, and unregistered before
-                        # stopping, leaving the actor unreachable while it was
-                        # still shutting down.
-                        if not await target.apply_command(verb):
-                            return note_prefix + (
-                                f"'{agent_name}' refused {verb} (it may be protected)."
-                            )
-                        self._record_agent_deletion(
-                            agent_name, reason=f"manually {past} via /agents"
-                        )
-                        return note_prefix + (
-                            f"Agent '{agent_name}' {past}. "
-                            f"State is preserved — use /agents restart {agent_name} to resume."
-                        )
-                return note_prefix + f"Agent '{agent_name}' not found locally."
 
         # ── /agents restart <name> ──────────────────────────────────────────
-        if stripped.startswith("/agents restart "):
-            agent_name = stripped[len("/agents restart ") :].strip()
-            if not agent_name:
-                return note_prefix + "Usage: /agents restart <agent-name>"
-            reg = self._get_spawn_registry()
-            node = reg.get(agent_name, {}).get("node", "").strip()
-            if node:
-                await self._mqtt_publish(f"nodes/{node}/restart_agent", {"name": agent_name}, qos=1)
-                return note_prefix + (
-                    f"Restart signal sent to '{agent_name}' on node '{node}'. "
-                    f"State is preserved — the agent will resume from its last saved state."
-                )
-            # Local agent — stop and re-spawn using config from spawn registry
-            config = reg.get(agent_name)
-            if not config:
-                return note_prefix + f"Agent '{agent_name}' not found in spawn registry."
-            if self._registry:
-                target = self._registry.find_by_name(agent_name)
-                if target:
-                    # Release from supervision and stop *before* unregistering.
-                    # Stopping a still-supervised actor looks like a crash, and
-                    # unregistering first leaves it unreachable while it shuts
-                    # down. Unlike the stop path above, the actor really does go
-                    # here — a fresh one replaces it below.
-                    await target.apply_command("stop")
-                    await self._registry.unregister(target.actor_id)
-            new_config = dict(config)
-            new_config["replace"] = True
-            # Straight from the registry a few lines up, so a catalog agent
-            # restarts trusted rather than failing the validator it never had
-            # to pass.
-            await self._spawn_from_config(new_config, save=True, from_registry=True)
-            return note_prefix + f"Agent '{agent_name}' restarted locally."
 
         # ── /nodes remove <node> ────────────────────────────────────────────
-        if stripped.startswith("/nodes remove "):
-            node_name = stripped[len("/nodes remove ") :].strip()
-            # Clear retained MQTT messages
-            await self._mqtt_publish(f"nodes/{node_name}/spawn", b"", retain=True)
-            await self._mqtt_publish(f"nodes/{node_name}/desired_state", b"", retain=True)
-            await self._mqtt_publish(f"nodes/{node_name}/stop_all", {"reason": "removed"}, qos=1)
-            # Remove all agents for this node from spawn registry
-            reg = self._get_spawn_registry()
-            removed = [n for n, c in reg.items() if c.get("node", "") == node_name]
-            for n in removed:
-                self._remove_from_spawn_registry(n)
-            self._known_nodes.pop(node_name, None)
-            return note_prefix + (
-                f"Node '{node_name}' removed. "
-                f"Cleared {len(removed)} agent(s): {', '.join(removed) or 'none'}. "
-                f"The node will disappear from /nodes within 30s."
-            )
 
         # ── /nodes restart <node> ───────────────────────────────────────────
-        if stripped.startswith("/nodes restart "):
-            node_name = stripped[len("/nodes restart ") :].strip()
-            if not node_name:
-                return note_prefix + "Usage: /nodes restart <node-name>"
-            info = self._known_nodes.get(node_name)
-            if not info:
-                return note_prefix + (
-                    f"Node '{node_name}' is not known. Check /nodes for online nodes."
-                )
-            await self._mqtt_publish(
-                f"nodes/{node_name}/restart", {"reason": "user request"}, qos=1
-            )
-            return note_prefix + (
-                f"Restart signal sent to node '{node_name}'. "
-                f"It will briefly drop offline then reappear within ~15s."
-            )
 
         # ── /nodes shutdown <node> ──────────────────────────────────────────
-        if stripped.startswith("/nodes shutdown "):
-            node_name = stripped[len("/nodes shutdown ") :].strip()
-            if not node_name:
-                return note_prefix + "Usage: /nodes shutdown <node-name>"
-            await self._mqtt_publish(
-                f"nodes/{node_name}/stop_all", {"reason": "user request"}, qos=1
-            )
-            return note_prefix + (
-                f"Shutdown signal sent to node '{node_name}'. "
-                f"All agents will stop. The node will disappear from /nodes within 30s. "
-                f"(If systemd manages the runner, it will restart automatically.)"
-            )
 
         # ── /agents / /capabilities ─────────────────────────────────────────
-        if stripped in ("/agents", "/capabilities") or stripped.startswith(
-            ("/agents ", "/capabilities ")
-        ):
-            keyword = ""
-            for prefix in ("/capabilities ", "/agents "):
-                if stripped.startswith(prefix):
-                    keyword = stripped[len(prefix) :].strip()
-                    break
-            caps = self.list_capabilities(keyword)
-            if not caps:
-                msg = "No agents found" + (f" matching {keyword!r}" if keyword else "") + "."
-                msg += " Agents publish their capabilities on startup."
-                return note_prefix + msg
-            lines = ["Agent capabilities" + (" matching " + repr(keyword) if keyword else "") + ":"]
-            for a in caps:
-                running = (
-                    "\U0001f7e2"
-                    if a["running"]
-                    else ("\U0001f4e6" if a["spawnable"] else "\U0001f534")
-                )
-                node_str = f" on {a['node']}" if a.get("node") else ""
-                lines.append("")
-                lines.append(f"  {running} [{a['name']}]{node_str}")
-                lines.append(f"    description : {a['description']}")
-                if a["capabilities"]:
-                    lines.append(f"    capabilities: {', '.join(a['capabilities'])}")
-                if a["input_schema"]:
-                    lines.append(f"    input       : {a['input_schema']}")
-                if a["output_schema"]:
-                    lines.append(f"    output      : {a['output_schema']}")
-                if a["spawnable"]:
-                    lines.append(f"    spawnable   : yes — @catalog spawn {a['name']}")
-            lines.append(
-                "\nLegend: \U0001f7e2 running  \U0001f4e6 spawnable (not yet running)  \U0001f534 stopped"
-            )
-            lines.append("Filter: /agents <keyword>   e.g. /agents discord")
-            return note_prefix + "\n".join(lines)
 
         # ── /registry — diagnostic: compare all three sources of truth ──────
-        if stripped == "/registry":
-            # 1. Live in-memory registry — what's actually running in this process
-            live_names = {a.name for a in self._registry.all_actors()} if self._registry else set()
-            # Skip housekeeping actors so the comparison focuses on user agents
-            housekeeping = {
-                "main",
-                "monitor",
-                "installer",
-                "home-assistant-agent",
-                "anomaly-detector",
-                "code-agent",
-            }
-            live_user = live_names - housekeeping
-
-            # 2. Spawn registry — what main intends to have running (persisted)
-            spawn_reg = self._get_spawn_registry()
-            spawn_names = set(spawn_reg.keys())
-
-            # 3. Manifest cache — every agent that has ever announced itself,
-            #    including remote ones on other nodes
-            manifest_names = set(self._agent_manifests.keys()) - housekeeping
-
-            # 4. Node heartbeats — what each remote node says it's running
-            heartbeat_names: set[str] = set()
-            for nd_info in self._known_nodes.values():
-                heartbeat_names.update(nd_info.get("agents", []))
-
-            lines = ["**Agent registry diagnostic**", ""]
-
-            # ── Live registry ──
-            lines.append("\U0001f7e2 **Live registry** (running NOW in this process):")
-            if live_user and self._registry:
-                for name in sorted(live_user):
-                    actor = self._registry.find_by_name(name)
-                    state = actor.state.name if actor else "?"
-                    lines.append(f"    {name}  ({state})")
-            else:
-                lines.append("    (none)")
-
-            # ── Spawn registry ──
-            lines.append("")
-            lines.append(
-                "\U0001f4be **Spawn registry** (auto-restore on restart, persisted to disk):"
-            )
-            if spawn_names:
-                for name in sorted(spawn_names):
-                    cfg = spawn_reg.get(name, {})
-                    node = cfg.get("node", "").strip() or "local"
-                    lines.append(f"    {name}  on {node}")
-            else:
-                lines.append("    (none)")
-
-            # ── Manifest cache ──
-            lines.append("")
-            lines.append(
-                "\U0001f4e6 **Manifest cache** (announced via MQTT — includes remote agents):"
-            )
-            if manifest_names:
-                for name in sorted(manifest_names):
-                    m = self._agent_manifests.get(name, {})
-                    node = m.get("node") or "local"
-                    lines.append(f"    {name}  on {node}")
-            else:
-                lines.append("    (none)")
-
-            # ── Discrepancy report — this is the value-add ──
-            issues = []
-            # Live but not in spawn registry → an ad-hoc spawn that won't survive restart
-            for name in sorted(live_user - spawn_names):
-                issues.append(
-                    f"\u26a0\ufe0f  '{name}' is RUNNING but NOT in spawn registry — won't auto-restore on restart"
-                )
-            # Spawn registry says local but not live → main thinks it should be running
-            for name in sorted(spawn_names - live_names):
-                cfg = spawn_reg.get(name, {})
-                if not cfg.get("node", "").strip():  # local-only check
-                    issues.append(
-                        f"\u26a0\ufe0f  '{name}' is in spawn registry but NOT running locally — start failed or was stopped without cleanup"
-                    )
-            # In manifest but not live and not in spawn registry → ghost
-            ghosts = manifest_names - live_user - spawn_names - heartbeat_names
-            for name in sorted(ghosts):
-                issues.append(
-                    f"\U0001f47b '{name}' is in manifest cache but nowhere else — stale entry, run `/agents delete {name}` to clean up"
-                )
-            # In spawn registry as remote, but the node is offline / not heartbeating
-            online_nodes = set(self.nodes.online_names())
-            for name, cfg in spawn_reg.items():
-                node = cfg.get("node", "").strip()
-                if node and node not in online_nodes:
-                    issues.append(
-                        f"\u26a0\ufe0f  '{name}' assigned to node '{node}' which is OFFLINE — agent unreachable"
-                    )
-
-            lines.append("")
-            if issues:
-                lines.append("**Discrepancies found:**")
-                for s in issues:
-                    lines.append(f"  {s}")
-            else:
-                lines.append("\u2705 All three sources agree — registry is consistent.")
-
-            return note_prefix + "\n".join(lines)
 
         # ── /plans — pending dry-run proposals ──────────────────────────────
-        if stripped == "/plans" or stripped.startswith("/plans "):
-            parts = stripped.split(None, 2)
-            sub = parts[1] if len(parts) > 1 else ""
 
-            # /plans show <id>
-            if sub == "show" and len(parts) == 3:
-                pid = parts[2]
-                p = self.get_pending_plans().get(pid)
-                if not p:
-                    return note_prefix + f"No plan with id `{pid}`."
-                envelope = p.get("envelope", {})
-                agents = envelope.get("plan", [])
-                lines = [self._format_plan_proposal(p), "", "**Full agent code:**"]
-                for step in agents:
-                    name = step.get("name", "?")
-                    code = (
-                        step.get("spawn_config", {}).get("code", "") or "(no code — pre-built type)"
-                    )
-                    lines.append(f"\n--- {name} ---")
-                    lines.append("```python")
-                    lines.append(code[:2000])
-                    if len(code) > 2000:
-                        lines.append(f"... ({len(code) - 2000} more chars truncated)")
-                    lines.append("```")
-                return note_prefix + "\n".join(lines)
-
-            # /plans approve <id>
-            if sub == "approve" and len(parts) == 3:
-                pid = parts[2]
-                p = self.get_pending_plans().get(pid)
-                if not p:
-                    return note_prefix + f"No plan with id `{pid}`."
-                if p.get("status") != "pending":
-                    return note_prefix + f"Plan `{pid}` is `{p.get('status')}`, not pending."
-                return note_prefix + await self._execute_pending_plan(p)
-
-            # /plans reject <id>
-            if sub == "reject" and len(parts) == 3:
-                pid = parts[2]
-                p = self.get_pending_plans().get(pid)
-                if not p:
-                    return note_prefix + f"No plan with id `{pid}`."
-                if p.get("status") != "pending":
-                    return note_prefix + f"Plan `{pid}` is `{p.get('status')}`, not pending."
-                return note_prefix + self._reject_pending_plan(p)
-
-            # /plans clear — drop all non-pending plans (housekeeping)
-            if sub == "clear":
-                plans = self.recall(PENDING_PLANS_KEY) or {}
-                kept = {pid: p for pid, p in plans.items() if p.get("status") == "pending"}
-                dropped = len(plans) - len(kept)
-                self.persist(PENDING_PLANS_KEY, kept)
-                return (
-                    note_prefix + f"Cleared {dropped} resolved plan(s). {len(kept)} still pending."
-                )
-
-            # /plans (no args) — list
-            plans = self.get_pending_plans()
-            pending = [p for p in plans.values() if p.get("status") == "pending"]
-            resolved = [p for p in plans.values() if p.get("status") != "pending"]
-            lines = []
-            if pending:
-                lines.append(f"**Pending plans ({len(pending)})** — awaiting your approval")
-                for p in sorted(pending, key=lambda x: -x.get("created_at", 0)):
-                    pid = p.get("plan_id", "?")
-                    task = p.get("task", "?")[:60]
-                    n_agents = len(p.get("envelope", {}).get("plan", []))
-                    age_s = int(time.time() - p.get("created_at", 0))
-                    lines.append(f"  `{pid}` ({n_agents} agent(s), {age_s}s ago) — {task}")
-                lines.append("\n  /plans show <id>      — see full plan with code")
-                lines.append("  /plans approve <id>   — execute the plan")
-                lines.append("  /plans reject <id>    — discard the plan")
-            else:
-                lines.append("No pending plans.")
-            if resolved:
-                lines.append(f"\n_Recent resolved plans ({len(resolved)})_:")
-                for p in sorted(resolved, key=lambda x: -x.get("created_at", 0))[:5]:
-                    pid = p.get("plan_id", "?")
-                    status = p.get("status", "?")
-                    task = p.get("task", "?")[:50]
-                    icon = {
-                        "approved": "\u2705",
-                        "rejected": "\u274c",
-                        "expired": "\u23f0",
-                        "superseded": "\u21bb",
-                    }.get(status, "?")
-                    lines.append(f"  {icon} `{pid}` ({status}) — {task}")
-                lines.append("\n  /plans clear          — drop resolved entries")
-            return note_prefix + "\n".join(lines)
-
-            # ── @mention direct routing ─────────────────────────────────────────
+        # ── @mention direct routing ─────────────────────────────────────────
         if text.startswith("@"):
             # Extract agent name and message: "@cpu-monitor-rpi-room what is the cpu?"
             parts = text.split(None, 1)

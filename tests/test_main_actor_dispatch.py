@@ -71,12 +71,28 @@ class _Main:
         m._persistence_api = None
         m._persistent_state = {}
         m._mqtt_client = None
+        m._history_summary = ""
+        m.get_user_facts = dict
+        m.get_pending_plans = dict
+        m.get_pipeline_rules = dict
         m.actor_id = "main-under-test"
-        self.calls: dict[str, Any] = {"capabilities": [], "classified": 0, "recorded": []}
+        self.calls: dict[str, Any] = {
+            "capabilities": [],
+            "topics": [],
+            "deleted": [],
+            "classified": 0,
+            "recorded": [],
+        }
 
         m._drain_notifications = lambda: notification
         m.list_nodes = list
+        m.list_topics = lambda keyword="": (self.calls["topics"].append(keyword), [])[1]
         m._get_spawn_registry = dict
+
+        async def _delete(name: str) -> None:
+            self.calls["deleted"].append(name)
+
+        m.delete_spawned_agent = _delete
 
         def _capabilities(keyword: str = "") -> list[Any]:
             self.calls["capabilities"].append(keyword)
@@ -129,6 +145,11 @@ def reply(text: str, **kwargs: Any) -> str:
     return _Main(**kwargs)(text)
 
 
+def main_reply(text: str, **kwargs: Any) -> str:
+    """The reply, for the cases where its exact wording is the behaviour."""
+    return _Main(**kwargs)(text)
+
+
 def went_to_the_model(text: str, **kwargs: Any) -> bool:
     """Whether `text` fell past every command branch."""
     main = _Main(**kwargs)
@@ -155,6 +176,128 @@ class TestCommandsWithoutASlash:
     @pytest.mark.parametrize("text", ["help", "list_nodes", "main.list_nodes"])
     def test_a_bare_alias_is_still_a_command(self, text: str) -> None:
         assert not went_to_the_model(text)
+
+
+class TestTheReadOnlyReports:
+    """Commands that only look things up and print them.
+
+    Each is pinned by the one thing that would break silently: that it is
+    handled here at all. A command that quietly stops matching becomes a
+    sentence for the model to answer, which reads like a plausible reply rather
+    than a missing feature.
+    """
+
+    @pytest.mark.parametrize("text", ["/topics", "/mqtt", "/bus", "/registry"])
+    def test_it_is_answered_without_the_model(self, text: str) -> None:
+        assert not went_to_the_model(text)
+
+    def test_topics_passes_its_keyword_through(self) -> None:
+        main = _Main()
+        main("/topics weather")
+
+        assert main.calls["topics"] == ["weather"]
+
+    def test_topics_with_no_keyword_asks_for_everything(self) -> None:
+        main = _Main()
+        main("/topics")
+
+        assert main.calls["topics"] == [""]
+
+    def test_topics_accepts_the_call_spelling(self) -> None:
+        # A model writing it as a function still reaches the command, and the
+        # brackets do not become part of the keyword.
+        main = _Main()
+        main("/topics(weather)")
+
+        assert main.calls["topics"] == ["weather"]
+
+    def test_a_near_miss_is_not_the_command(self) -> None:
+        assert went_to_the_model("/topic")
+
+
+class TestTheHeavyCommands:
+    """`/webhook`, `/migrate`, `/deploy` and the node sub-verbs.
+
+    None had a dispatch test. These do the most: deploy installs software on a
+    machine over SSH, migrate moves a running agent between hosts. A command
+    that stops matching becomes a sentence the model answers, which is a
+    plausible-sounding reply where an action was expected.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "/webhook",
+            "/webhook discord https://example.invalid/hook",
+            "/webhook telegram https://example.invalid/hook",
+            "/migrate",
+            "/migrate collector rpi",
+            "/deploy",
+            "/deploy rpi-kitchen",
+            "/nodes remove rpi",
+            "/nodes restart rpi",
+            "/nodes shutdown rpi",
+        ],
+    )
+    def test_it_is_handled_without_the_model(self, text: str) -> None:
+        assert not went_to_the_model(text)
+
+    def test_migrate_without_arguments_explains_itself(self) -> None:
+        # Two arguments are required; a bare call must say so rather than
+        # silently doing nothing or moving the wrong agent.
+        assert reply("/migrate") != reply("/migrate collector rpi")
+
+    def test_deploy_without_a_node_lists_the_targets(self) -> None:
+        assert reply("/deploy") != reply("/deploy rpi-kitchen")
+
+    @pytest.mark.parametrize("text", ["/webhoo", "/migrat", "/deplo", "/node remove rpi"])
+    def test_a_near_miss_is_not_the_command(self, text: str) -> None:
+        assert went_to_the_model(text)
+
+
+class TestCommandsThatChangeState:
+    """`/memory`, `/rules`, `/plans` and `/clear-plans`.
+
+    Pinned before they move because they had almost no dispatch coverage: the
+    only tests naming them assert a social channel cannot reach them, which
+    says nothing about whether the dashboard still can.
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "/memory",
+            "/memory clear",
+            "/memory forget colour",
+            "/rules",
+            "rules",
+            "/rules delete r1",
+            "/plans",
+            "/plans show p1",
+            "/plans approve p1",
+            "/plans reject p1",
+            "/clear-plans",
+        ],
+    )
+    def test_it_is_handled_without_the_model(self, text: str) -> None:
+        assert not went_to_the_model(text)
+
+    def test_the_bare_rules_listing_is_not_the_delete(self) -> None:
+        # `/rules` matches exactly and `/rules delete` by prefix; the exact one
+        # has to win, or listing rules would delete one named "delete".
+        assert reply("/rules delete r1") != reply("/rules")
+
+    def test_plans_takes_a_sub_verb(self) -> None:
+        assert reply("/plans show p1") != reply("/plans")
+
+    def test_clear_plans_is_its_own_command(self) -> None:
+        # It is not `/plans clear`: a near spelling must not reach it, since
+        # this one throws the pending proposals away.
+        assert reply("/clear-plans") != reply("/plans")
+
+    @pytest.mark.parametrize("text", ["/memor", "/plan", "/rule", "/clear-plan"])
+    def test_a_near_miss_is_not_the_command(self, text: str) -> None:
+        assert went_to_the_model(text)
 
 
 class TestRewriteAndFallThrough:
@@ -239,6 +382,32 @@ class TestOrderIsSemantic:
     Each case below is a pair where a later branch would also match, and the
     earlier one has to win.
     """
+
+    @pytest.mark.parametrize("verb", ["stop", "delete", "pause", "remove", "restart"])
+    def test_a_verb_is_never_read_as_a_search_term(self, verb: str) -> None:
+        # The general listing matches any `/agents …`, so ahead of the verbs it
+        # would report that no agent matches "stop" — having stopped nothing,
+        # and looking like an answer rather than a failure.
+        main = _Main()
+
+        main(f"/agents {verb} ghost")
+
+        assert not main.calls["capabilities"]
+
+    @pytest.mark.parametrize("verb", ["stop", "delete", "pause", "remove"])
+    def test_a_verb_with_no_agent_named_deletes_nothing(self, verb: str) -> None:
+        # An unfinished sentence, not a request to act on an agent called "".
+        # A command that accepts it answers that it deleted something.
+        main = _Main()
+
+        answer = main(f"/agents {verb}")
+
+        assert not main.calls["deleted"]
+        assert "permanently deleted" not in answer
+
+    @pytest.mark.parametrize("command", ["/start", "/pause", "/resume"])
+    def test_a_bare_lifecycle_verb_asks_for_an_agent(self, command: str) -> None:
+        assert main_reply(command) == f"Usage: {command} <agent-name>"
 
     def test_agents_restart_beats_the_general_agents_block(self) -> None:
         # `/agents restart x` matches the `/agents ` prefix too. If the general

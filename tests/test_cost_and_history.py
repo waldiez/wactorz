@@ -197,6 +197,15 @@ class HistoricalCostTest(unittest.TestCase):
         self._orig_state = dict(runtime.state["agents"])
 
     def tearDown(self):
+        # Close the database the test installed before putting the original
+        # back. These are in-memory ones held only by `runtime.db`, so once it
+        # is reassigned nothing can reach the connection to close it, and it
+        # sits in a reference cycle until a collection pass finds it.
+        installed = runtime.db
+        if installed is not None and installed is not self._orig_db:
+            conn = getattr(installed, "conn", None)
+            if conn is not None:
+                conn.close()
         runtime.db = self._orig_db
         runtime.state["agents"] = self._orig_state
 

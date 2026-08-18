@@ -29,7 +29,7 @@ jobs:
         run: pip install -e ".[all,dev]"
 
       - name: Test
-        run: python -m pytest tests
+        run: python -m pytest tests -n auto
 
   coverage-python:
     name: Python coverage

@@ -2116,7 +2116,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return clean, deleted, missing
 
     async def _spawn_from_config(
-        self, config: dict, save: bool = True, *, from_registry: bool = False
+        self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
     ) -> Actor | SpawnPlaceholder | None:
         """Spawn one agent from a config dict.
 
@@ -2562,158 +2562,8 @@ async def handle_task(agent, payload):
         await self.nodes.manifest_listener()
 
     async def _state_return_listener(self):
-        """Receive an agent's full config + persistent state from a remote node
-        during remote→local migration triggered with the '@main' sentinel.
-
-        Topic: nodes/+/state_return
-        Payload:
-          {
-            "agent":        "<name>",
-            "return_token": "<hex token>",          # must match a pending request
-            "config":       {... full spawn config ...},   # includes code
-            "state":        {... persistent state dict ...},
-            "timestamp":    <unix epoch>,
-          }
-
-        On a valid match we strip the remote-node field, attach the state,
-        and call _spawn_from_config() to bring the agent up locally. The 'config'
-        is authoritative — it's whatever the remote runner had in memory for
-        this agent, which already includes any runtime-learned contract data
-        that the remote runner copied into its manifest.
-
-        Tokens are single-use and expire after 5 minutes to keep the pending
-        map bounded if a remote node never replies.
-        """
-        TOKEN_TTL_S = 300
-        _last_exc_str: str | None = None
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe("nodes/+/state_return")
-                    logger.info("[main] Subscribed to state_return topics.")
-                    _last_exc_str = None
-                    async for msg in client.messages:
-                        # Drop empty retained messages (cleanup tombstones)
-                        raw = msg.payload
-                        if not raw:
-                            continue
-                        try:
-                            data = json.loads(raw.decode())
-                        except Exception:
-                            continue
-                        if not isinstance(data, dict):
-                            continue
-                        token = data.get("return_token", "")
-                        pending: dict = getattr(self, "_pending_state_returns", {})
-
-                        # Expire stale tokens before validating to keep the map tidy
-                        now = time.time()
-                        for t, info in list(pending.items()):
-                            if now - info.get("started_at", 0) > TOKEN_TTL_S:
-                                pending.pop(t, None)
-
-                        if not token or token not in pending:
-                            logger.warning(
-                                f"[main] state_return with unknown/expired token "
-                                f"'{token[:8]}…' from {msg.topic} — ignoring"
-                            )
-                            continue
-                        info = pending.pop(token)
-                        agent_name = data.get("agent") or info.get("agent_name", "?")
-                        from_node = info.get("from_node", "?")
-                        cfg = data.get("config") or {}
-                        state = data.get("state") or {}
-
-                        if not cfg or not isinstance(cfg, dict):
-                            logger.warning(
-                                f"[main] state_return for '{agent_name}' from "
-                                f"'{from_node}' has no config — cannot spawn locally"
-                            )
-                            continue
-
-                        # Build a local spawn config: strip the remote-node
-                        # field, attach state as _initial_state, force replace
-                        # so any leftover local instance is cleanly swapped.
-                        local_cfg = dict(cfg)
-                        local_cfg.pop("node", None)
-                        local_cfg.pop("_initial_state", None)
-                        if state:
-                            local_cfg["_initial_state"] = state
-                        local_cfg["replace"] = True
-                        local_cfg.setdefault("name", agent_name)
-
-                        # For LLM agents, drop the synthesized bridge code we
-                        # injected on the way out. Locally, type:"llm" routes
-                        # to LLMAgent and the code field is ignored anyway —
-                        # keeping it would just bloat the spawn registry and
-                        # confuse anyone inspecting it. Detect by the marker
-                        # comment in the synthesized template; user-written
-                        # code never carries this header.
-                        if local_cfg.get("type") == "llm" and "Auto-generated LLM bridge" in (
-                            local_cfg.get("code") or ""
-                        ):
-                            local_cfg.pop("code", None)
-
-                        earned = self._restore_earned_trust(agent_name, local_cfg)
-
-                        logger.info(
-                            f"[main] Received state_return for '{agent_name}' "
-                            f"from '{from_node}' "
-                            f"({len(state) if isinstance(state, dict) else 0} "
-                            f"state key(s)) — spawning locally"
-                        )
-                        try:
-                            await self._spawn_from_config(
-                                local_cfg, save=True, from_registry=earned
-                            )
-                            self._queue_notification(
-                                {
-                                    "_monitor_notification": True,
-                                    "message": (
-                                        f"Migration of '{agent_name}' from "
-                                        f"'{from_node}' → local succeeded."
-                                    ),
-                                    "severity": "info",
-                                    "timestamp": now,
-                                }
-                            )
-                        except Exception as exc:
-                            logger.exception(
-                                f"[main] Local re-spawn after state_return failed "
-                                f"for '{agent_name}': {exc}"
-                            )
-                            self._queue_notification(
-                                {
-                                    "_monitor_notification": True,
-                                    "message": (
-                                        f"Migration of '{agent_name}' from "
-                                        f"'{from_node}' → local FAILED: {exc}"
-                                    ),
-                                    "severity": "warning",
-                                    "timestamp": now,
-                                }
-                            )
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.state.value not in ("stopped", "failed"):
-                    exc_str = str(e)
-                    if exc_str != _last_exc_str:
-                        logger.warning(
-                            f"[main] state_return listener error: {e}. Reconnecting in 5s…"
-                        )
-                        _last_exc_str = exc_str
-                    else:
-                        logger.debug(
-                            "[main] state_return listener still unavailable — retrying in 5s…"
-                        )
-                    await asyncio.sleep(5)
-
-    # ── Node deployment ────────────────────────────────────────────────────
-    # /deploy lives here (not in io_agent) so every interface — CLI, UI,
-    # Discord, future REST — shares one implementation. The streaming variant
-    # is the canonical one; process_user_input collects its chunks for the
-    # non-streaming path.
+        """Receive agents returning from a node. Owned by `self.nodes`."""
+        await self.nodes.state_return_listener()
 
     async def _slash_deploy_stream(self, stripped: str):
         """Async generator implementing /deploy. Yields progress strings.
@@ -2930,8 +2780,7 @@ async def handle_task(agent, payload):
             return_token = secrets.token_hex(8)
             # Stash the token so the listener knows this return is ours
             # and not from some other concurrent migration.
-            self._pending_state_returns: dict = getattr(self, "_pending_state_returns", {})
-            self._pending_state_returns[return_token] = {
+            self.nodes.pending_returns[return_token] = {
                 "agent_name": agent_name,
                 "from_node": current_node,
                 "started_at": time.time(),

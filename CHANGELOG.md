@@ -16,6 +16,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy warns about overheating and other motor faults, and can be asked how it is doing.**
+  The daemon reads the servos' hardware-error byte several times a second and decodes
+  overheating, overload, electrical-shock and input-voltage faults — then writes them only to
+  its own log, not into any status the SDK can read, which is why nothing in Wactorz had ever
+  seen them. It now follows the daemon's log stream, the same source the official control app
+  shows its overheating warning from, and raises each fault in chat with what to do about it.
+  A given fault on a given motor is repeated at most every five minutes, since the daemon
+  re-reads the motors continuously. The watch starts on connect and reconnects by itself,
+  because the stream ends whenever the daemon restarts — which is when a fault is most likely
+  next. `are you overheating` (also `health`, `how are you feeling`) reports the faults seen
+  this session and the IMU's temperature. **Only the wireless robot serves that log stream**,
+  so a Lite over USB is not watched and `health` says so rather than reporting a silence that
+  would read as "nothing wrong". **There is no battery level to report** — the SDK exposes
+  none on either model — and `health` says that outright instead of leaving an absent number
+  to look like a full charge.
+
 - **A dashboard whose session has ended says so, instead of quietly freezing.** Sessions do not last forever, and one can be ended from another browser. That used to leave the page on screen and polling into refusals: cards stopped changing, the feed stopped, and nothing explained why — a page that looks alive and is not. It now returns to the sign-in page, and brings you back where you were once you are in. There is a sign-out control in the header too, which appears only when there is a session to end: an install with no key never had one, and under Home Assistant ingress you were signed in by Home Assistant, so ending a session here would end nothing.
 
 - **Guessing the key through the sign-in form gets expensive fast.** The form compared whatever it was given, as often as it was given it, so a key short enough to type was a key worth guessing at network speed. A wrong key now costs a second before the next attempt from that address is even looked at, doubling each time, and five failures close the door for fifteen minutes. Signing in successfully forgets the count, so a typo before the right key leaves nothing behind. The wait is on the address that asked, and cross-site attempts are refused before they are counted at all — otherwise a page somewhere else could spend your allowance and lock you out of your own dashboard. **Behind a reverse proxy** every request arrives from the proxy, so the wait is shared rather than per visitor: forwarded headers are set by whoever is closest to the server and would let a guesser hand themselves a fresh allowance each time. Startup also now says so when the configured `API_KEY` is short enough to be worth replacing.

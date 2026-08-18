@@ -442,7 +442,7 @@ def _build_catalog() -> dict:
                 "\n"
                 "For structured control, send a dict with cmd wake, sleep, pose, "
                 "antennas, look_at, camera, listen, ask_voice, conversation_start, "
-                "conversation_stop, doa, emotion, say, volume, ha, "
+                "conversation_stop, doa, emotion, say, volume, health, ha, "
                 "bind, unbind, or stop."
             ),
             "capabilities": [
@@ -478,7 +478,7 @@ def _build_catalog() -> dict:
                 "faster-whisper",
             ],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
                 "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
                 "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",

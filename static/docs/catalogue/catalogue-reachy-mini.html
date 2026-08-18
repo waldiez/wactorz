@@ -214,6 +214,26 @@ a link that looks alive but isn't behaving.</p>
 by <code>reconnect</code> re-targets a new host or mode without a restart. Values set in <code>.env</code>
 (<code>REACHY_ROBOT_HOST</code>, <code>REACHY_CONNECTION_MODE</code>, <code>REACHY_MEDIA_BACKEND</code>) are read only at
 spawn, so changing those still needs a restart.</p>
+<h2 id="hardware-warnings-and-what-reachy-can-tell-you-about-itself">Hardware warnings and what Reachy can tell you about itself</h2>
+<p>Say <code>are you overheating</code> (or <code>health</code>, <code>how are you feeling</code>, <code>battery</code>) for what the
+robot reports about its own condition.</p>
+<p><strong>Motor faults, including overheating, are watched automatically.</strong> The daemon reads the
+servos' hardware-error byte several times a second and decodes overheating, overload,
+electrical-shock and input-voltage faults — but it writes them to its own log and nowhere
+the SDK can read, not even into the status it serves. Wactorz therefore follows the
+daemon's log stream (<code>/logs/ws/daemon</code>, the same source the official control app shows its
+overheating warning from) and raises each fault in chat with what to do about it. The same
+fault on the same motor is repeated at most every five minutes, because the daemon re-reads
+the motors continuously and would otherwise produce a warning per read. The watch starts on
+connect and reconnects on its own, since the stream ends whenever the daemon restarts.</p>
+<p><strong>Only the wireless robot serves that stream</strong> — the daemon mounts the route behind its
+wireless flag — so a Lite over USB has no fault watch. <code>health</code> says so explicitly rather
+than reporting silence, which would otherwise read as "nothing wrong".</p>
+<p><strong>There is no battery level.</strong> The SDK exposes none, on either model, so <code>health</code> says that
+outright instead of leaving an absent number to be read as a full charge.</p>
+<p>The one temperature available is the IMU's own, reported by <code>health</code> when the robot has an
+IMU. It is the inertial chip, not a motor, so treat it as the robot's internal ambient — the
+thing that actually overheats reports through the fault watch above.</p>
 <h2 id="choose-a-connection-mode">Choose a connection mode</h2>
 <p>By default the SDK auto-detects: it probes <code>localhost</code> first, then the robot. If you
 run the robot wirelessly and do <strong>not</strong> have the Reachy Mini control app open, pin

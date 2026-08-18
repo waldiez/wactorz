@@ -421,6 +421,222 @@ async def _bring_up_robot(agent):
         await agent.alert(f"wake_up failed: {e}", severity="warning")
 
 
+#: Motor faults the daemon reads from the servos, with what to do about each.
+#: The daemon decodes these from the Dynamixel hardware-error byte and writes
+#: them to its log and nowhere else — not into the status the SDK can read — so
+#: the log stream is the only way to see them. That is also where the official
+#: control app gets its overheating warning from.
+_MOTOR_FAULT_ADVICE = {
+    "overheating error": (
+        "A motor is too hot. Let Reachy rest — it will cut its own torque to "
+        "protect itself if it gets hotter."
+    ),
+    "overload error": (
+        "A motor is straining. Check nothing is holding the head or antennas, "
+        "and that no pose is pushing against a limit."
+    ),
+    "electrical shock error": (
+        "A motor reported an electrical fault. Power-cycle the robot; if it "
+        "comes back, stop using it and check the wiring."
+    ),
+    "input voltage error": (
+        "A motor is seeing the wrong voltage. Check the power supply and cable."
+    ),
+}
+
+#: How long the same fault on the same motor stays quiet after being reported.
+#: The daemon re-reads the motors several times a second, so without this one
+#: hot motor would be a warning per read.
+_MOTOR_FAULT_QUIET_S = 300.0
+
+
+def _motor_faults_in_line(line):
+    """Faults named by one daemon log line, as (motor, fault) pairs.
+
+    The daemon logs `Motor 'head_yaw' hardware errors: ['Overheating Error']`,
+    wrapped in whatever prefix journalctl adds. Parsing rather than reading a
+    status field is not a shortcut: the status field does not carry them.
+    """
+    import re as _re
+
+    match = _re.search(r"Motor '([^']+)' hardware errors: \[([^\]]*)\]", str(line or ""))
+    if not match:
+        return []
+    motor = match.group(1).strip()
+    faults = [
+        fault.strip().strip("'\"").lower()
+        for fault in match.group(2).split(",")
+        if fault.strip().strip("'\"")
+    ]
+    return [(motor, fault) for fault in faults if fault]
+
+
+def _describe_motor_fault(motor, fault):
+    """One line a person can act on, for one fault on one motor."""
+    advice = _MOTOR_FAULT_ADVICE.get(
+        fault, "The motor reported a fault the daemon did not name."
+    )
+    return f"{motor}: {fault} — {advice}"
+
+
+def _fault_should_be_reported(agent, motor, fault, now=None):
+    """Whether this fault is new enough to be worth saying again."""
+    seen = agent.state.setdefault("_motor_faults_seen", {})
+    stamp = _time.time() if now is None else now
+    last = seen.get(f"{motor}/{fault}")
+    if last is not None and stamp - last < _MOTOR_FAULT_QUIET_S:
+        return False
+    seen[f"{motor}/{fault}"] = stamp
+    return True
+
+
+async def _report_motor_faults(agent, line, now=None):
+    """Warn about any fault named by a log line. Returns what was reported."""
+    reported = []
+    for motor, fault in _motor_faults_in_line(line):
+        if not _fault_should_be_reported(agent, motor, fault, now=now):
+            continue
+        message = _describe_motor_fault(motor, fault)
+        reported.append(message)
+        await agent.log(f"motor fault — {message}", level="warning")
+        try:
+            await agent.notify_user(
+                f"Reachy hardware warning. {message}",
+                **{"from": getattr(agent, "name", "reachy-mini"), "to": "user"},
+            )
+        except Exception:
+            pass
+    return reported
+
+
+def _daemon_log_ws_url(agent):
+    """WebSocket URL of the daemon's log stream, or None when unreachable.
+
+    Only the wireless robot serves it — the daemon mounts the route behind its
+    `wireless_version` flag — so a Lite over USB has no fault stream and simply
+    gets no watcher.
+    """
+    url = _daemon_url(agent)
+    if not url:
+        return None
+    base = str(url).rstrip("/")
+    if base.startswith("https://"):
+        return "wss://" + base[len("https://"):] + "/logs/ws/daemon"
+    if base.startswith("http://"):
+        return "ws://" + base[len("http://"):] + "/logs/ws/daemon"
+    return None
+
+
+async def _watch_motor_faults(agent, reconnect_s=20.0):
+    """Follow the daemon's log and warn about motor faults it only logs.
+
+    Reachy has no battery telemetry and no temperature the SDK will hand over —
+    the one thing the robot does report about its own health is the motors'
+    hardware-error byte, and the daemon writes that to its log and nowhere the
+    SDK can read. So this reads the log, which is the same source the official
+    control app shows its overheating warning from.
+
+    Reconnects rather than giving up: the stream ends whenever the daemon
+    restarts, which is exactly when a fault is most likely to appear next.
+    """
+    import aiohttp
+
+    while True:
+        url = _daemon_log_ws_url(agent)
+        if not url:
+            await asyncio.sleep(reconnect_s)
+            continue
+        try:
+            timeout = aiohttp.ClientTimeout(total=None, sock_read=None)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.ws_connect(url, heartbeat=30) as ws:
+                    await agent.log("watching the robot's log for motor faults")
+                    async for message in ws:
+                        if message.type is not aiohttp.WSMsgType.TEXT:
+                            continue
+                        await _report_motor_faults(agent, message.data)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Never fatal and never noisy: no fault stream is the normal state
+            # for a Lite, and a wireless robot that is simply off should not
+            # fill the log with connection failures.
+            await agent.log(f"motor fault watch unavailable: {exc}", level="debug")
+        await asyncio.sleep(reconnect_s)
+
+
+def _start_motor_fault_watch(agent):
+    """Start the fault watch once, if it is not already running."""
+    task = agent.state.get("_motor_fault_task")
+    if task is not None and not task.done():
+        return task
+    task = agent.run_in_background(_watch_motor_faults(agent))
+    agent.state["_motor_fault_task"] = task
+    return task
+
+
+async def _imu_temperature(agent):
+    """The IMU's own temperature in °C, or None when the robot has no IMU.
+
+    This is the inertial chip, not a motor, so it reads the robot's internal
+    ambient rather than the thing that actually overheats. Reported because it
+    is the only temperature the SDK exposes at all; the motors' own thermal
+    fault arrives through the log watch instead.
+    """
+    mini = agent.state.get("mini")
+    if mini is None:
+        return None
+    try:
+        data = await _do(mini.get_imu_data)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    value = data.get("temperature")
+    try:
+        return round(float(value), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _health(agent, payload=None):
+    """Report what the robot can actually say about its own condition."""
+    del payload
+    ok_link, link_reason = _is_connected(agent)
+    temperature = await _imu_temperature(agent) if ok_link else None
+    faults = sorted(agent.state.get("_motor_faults_seen") or {})
+    watching = bool(_daemon_log_ws_url(agent))
+
+    parts = []
+    if not ok_link:
+        parts.append(link_reason or "not connected")
+    if temperature is not None:
+        parts.append(f"internal temperature {temperature}°C")
+    if faults:
+        parts.append("motor faults seen this session: " + ", ".join(faults))
+    elif watching:
+        parts.append("no motor faults reported")
+    if not watching and ok_link:
+        # The Lite has no log stream, so silence there means "not watched",
+        # which must not be read as "nothing wrong".
+        parts.append(
+            "motor fault warnings need the wireless robot's daemon; this link does not serve them"
+        )
+    # Said plainly rather than left to be inferred from an absent number.
+    parts.append("Reachy reports no battery level — the SDK exposes none")
+
+    return {
+        "ok": True,
+        "cmd": "health",
+        "connected": ok_link,
+        "imu_temperature_c": temperature,
+        "motor_faults": faults,
+        "watching_faults": watching,
+        "battery": None,
+        "result": ". ".join(parts) + ".",
+    }
+
+
 async def setup(agent):
     # ---- Heavy imports inside setup (never at module level) ----
     import numpy as np
@@ -502,6 +718,11 @@ async def setup(agent):
     agent.state["np"] = np
     agent.state["create_head_pose"] = create_head_pose
     agent.state["mini"] = mini
+    # Motor faults are only ever written to the daemon's log, so nothing sees
+    # them unless something is reading it. Started here rather than on demand:
+    # a warning is worth having the moment it happens, not when next asked.
+    if mini is not None:
+        _start_motor_fault_watch(agent)
 
     if mini is None:
         # Stay alive in a "disconnected" mode so HA-only commands keep working
@@ -607,7 +828,7 @@ async def setup(agent):
                  "unbind", "list_emotions", "stop", "shutup", "say", "volume",
                  "camera", "describe", "look_behind", "look_around", "listen", "doa",
                  "ask_voice", "conversation_start", "conversation_stop", "debug",
-                 "face_forward"):
+                 "face_forward", "health"):
         def _make_cb(v):
             async def cb(payload):
                 p = dict(payload or {})
@@ -1303,6 +1524,12 @@ async def handle_task(agent, payload):
                 elif low in _AFFIRMATIVES and _pending_look_closer(agent):
                     agent.state["_pending_detail"] = None
                     payload = {"cmd": "describe", "detail": True}
+                elif low in ("health", "how are you feeling", "how do you feel",
+                              "are you ok", "are you okay", "are you overheating",
+                              "temperature", "what is your temperature", "are you hot",
+                              "battery", "battery level", "how is your battery",
+                              "hardware status", "any faults"):
+                    payload = {"cmd": "health"}
                 elif low in ("take a photo", "take a picture", "take a snapshot",
                              "snapshot", "photo", "picture", "capture", "camera"):
                     payload = {"cmd": "camera"}
@@ -2164,6 +2391,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         elif cmd == "list_emotions": result = {"emotions": agent.state.get("emotion_names", [])}
         elif cmd == "stop":          result = await _stop(agent)
         elif cmd == "shutup":        result = await _shutup(agent, payload)
+        elif cmd == "health":        result = await _health(agent, payload)
         elif cmd == "say":           result = await _say(agent, payload)
         elif cmd == "volume":        result = await _volume(agent, payload)
         elif cmd == "debug":         result = await _debug(agent, payload)

@@ -92,6 +92,32 @@ by `reconnect` re-targets a new host or mode without a restart. Values set in `.
 (`REACHY_ROBOT_HOST`, `REACHY_CONNECTION_MODE`, `REACHY_MEDIA_BACKEND`) are read only at
 spawn, so changing those still needs a restart.
 
+## Hardware warnings and what Reachy can tell you about itself
+
+Say `are you overheating` (or `health`, `how are you feeling`, `battery`) for what the
+robot reports about its own condition.
+
+**Motor faults, including overheating, are watched automatically.** The daemon reads the
+servos' hardware-error byte several times a second and decodes overheating, overload,
+electrical-shock and input-voltage faults — but it writes them to its own log and nowhere
+the SDK can read, not even into the status it serves. Wactorz therefore follows the
+daemon's log stream (`/logs/ws/daemon`, the same source the official control app shows its
+overheating warning from) and raises each fault in chat with what to do about it. The same
+fault on the same motor is repeated at most every five minutes, because the daemon re-reads
+the motors continuously and would otherwise produce a warning per read. The watch starts on
+connect and reconnects on its own, since the stream ends whenever the daemon restarts.
+
+**Only the wireless robot serves that stream** — the daemon mounts the route behind its
+wireless flag — so a Lite over USB has no fault watch. `health` says so explicitly rather
+than reporting silence, which would otherwise read as "nothing wrong".
+
+**There is no battery level.** The SDK exposes none, on either model, so `health` says that
+outright instead of leaving an absent number to be read as a full charge.
+
+The one temperature available is the IMU's own, reported by `health` when the robot has an
+IMU. It is the inertial chip, not a motor, so treat it as the robot's internal ambient — the
+thing that actually overheats reports through the fault watch above.
+
 ## Choose a connection mode
 
 By default the SDK auto-detects: it probes `localhost` first, then the robot. If you

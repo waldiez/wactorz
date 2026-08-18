@@ -1883,5 +1883,62 @@ class DiscardPreparedTest(unittest.IsolatedAsyncioTestCase):
         await NS["_discard_prepared"](asyncio.create_task(boom()))
 
 
+class AskingForSilencePolitelyStillWorksTest(unittest.TestCase):
+    """ "Stop talking, please!" is a request for silence, not a new question.
+
+    Matching was exact, so the polite forms missed and were routed as ordinary
+    turns — Reachy answering "Of course, I'll be quiet!" out loud, which is the
+    very thing being asked to stop, and then "Okay." to the next attempt.
+    """
+
+    def silence(self, text):
+        return NS["_conversation_silence_phrase"](text)
+
+    def ends(self, text):
+        return NS["_conversation_stop_phrase"](text)
+
+    def test_the_polite_forms_are_understood(self):
+        for text in (
+            "Stop talking, please!",
+            "you can stop talking right now",
+            "Reachy, stop talking",
+            "just be quiet please",
+            "can you be quiet",
+            "stop it",
+            "that's enough",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(self.silence(text))
+
+    def test_the_bare_forms_still_are(self):
+        for text in ("stop", "shut up", "be quiet", "silence", "hush", "enough"):
+            with self.subTest(text=text):
+                self.assertTrue(self.silence(text))
+
+    def test_trimming_never_eats_a_phrase_of_its_own(self):
+        # "up" is deliberately not filler, or "shut up" would become "shut".
+        self.assertTrue(self.silence("shut up please"))
+
+    def test_merely_mentioning_stopping_is_not_a_command(self):
+        for text in (
+            "stop the music",
+            "I couldn't stop talking about it yesterday",
+            "don't stop the story",
+            "tell me a story",
+            "please",
+            "thanks",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(self.silence(text))
+
+    def test_ending_the_session_tolerates_politeness_too(self):
+        for text in ("goodbye Reachy please", "stop listening now", "that's all", "αντίο reachy"):
+            with self.subTest(text=text):
+                self.assertTrue(self.ends(text))
+
+    def test_a_greek_stop_still_ends_it(self):
+        self.assertTrue(self.ends("σταμάτα"))
+
+
 if __name__ == "__main__":
     unittest.main()

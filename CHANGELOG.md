@@ -203,6 +203,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Asking Reachy to stop talking politely now stops him, instead of getting an answer.** Stop and
+  silence requests were matched exactly, so "stop talking" was recognised and "Stop talking,
+  please!" was not — the polite version fell through and was handled as an ordinary question, so
+  he replied "Of course, I'll be quiet!" out loud, which is the thing being asked to stop, and
+  "Okay." to the next attempt. Padding words are now trimmed from the ends of a request before it
+  is matched, so "you can stop talking right now" and "Reachy, stop talking" are understood.
+  Only from the ends, and only padding: "stop the music" and "I couldn't stop talking about it"
+  stay ordinary requests, and "shut up" keeps its "up". "stop it" and "that's enough" were added
+  to the phrases that ask for quiet, and the polite forms of ending the session are understood
+  the same way.
+
 - **The pause between the sentences of one spoken reply is gone.** A reply is spoken sentence by
   sentence so the first words reach the speaker quickly, but each sentence was synthesized only
   once the previous one had finished playing — and every sentence is its own edge-tts request

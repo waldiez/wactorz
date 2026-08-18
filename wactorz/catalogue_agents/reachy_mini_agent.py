@@ -4408,12 +4408,46 @@ _CONVERSATION_STOP_PHRASES = {
 }
 
 
-def _conversation_stop_phrase(text):
+#: Words that pad a request without changing it. Stripped from the ends only,
+#: so "you can stop talking right now" reaches "stop talking" while "stop the
+#: music" reaches nothing and stays an ordinary request. None of the phrases
+#: below begin or end with one of these, so trimming can never eat a real one —
+#: "shut up" keeps its "up" because "up" is not here.
+_PHRASE_EDGE_FILLER = frozenset({
+    "please", "ok", "okay", "now", "just", "right", "reachy", "hey", "well",
+    "you", "can", "could", "would", "will", "i", "need", "want", "to",
+    "thanks", "thank", "for", "me", "a", "second", "moment", "λοιπόν",
+    "σε", "παρακαλώ", "τώρα", "ρίτσι",
+})
+
+
+def _phrase_forms(text):
+    """The request as said, then with politeness trimmed off either end.
+
+    Matching was exact, so "Stop talking, please!" missed "stop talking" and was
+    answered as a new question — Reachy replying "Of course, I'll be quiet!"
+    instead of going quiet. Trimming only the ends, and only these words, adds
+    the polite forms without letting a sentence that merely mentions stopping
+    become a command.
+    """
     import re as _re
+
     normalized = _re.sub(r"[^\w ]+", " ", str(text or "").lower(), flags=_re.UNICODE)
-    normalized = normalized.replace("_", " ")
-    normalized = " ".join(normalized.split())
-    return normalized in _CONVERSATION_STOP_PHRASES
+    normalized = " ".join(normalized.replace("_", " ").split())
+    forms = [normalized]
+    words = normalized.split()
+    while words and words[0] in _PHRASE_EDGE_FILLER:
+        words.pop(0)
+    while words and words[-1] in _PHRASE_EDGE_FILLER:
+        words.pop()
+    trimmed = " ".join(words)
+    if trimmed and trimmed != normalized:
+        forms.append(trimmed)
+    return forms
+
+
+def _conversation_stop_phrase(text):
+    return any(form in _CONVERSATION_STOP_PHRASES for form in _phrase_forms(text))
 
 
 _CONVERSATION_SILENCE_PHRASES = {
@@ -4424,16 +4458,16 @@ _CONVERSATION_SILENCE_PHRASES = {
     "shut up",
     "stop talking",
     "stop speaking",
+    "stop it",
     "hush",
     "enough",
+    "that s enough",
 }
 
 
 def _conversation_silence_phrase(text):
     """True when the user wants silence without ending the voice session."""
-    import re as _re
-    normalized = _re.sub(r"[^\w ]+", " ", str(text or "").lower(), flags=_re.UNICODE)
-    return " ".join(normalized.replace("_", " ").split()) in _CONVERSATION_SILENCE_PHRASES
+    return any(form in _CONVERSATION_SILENCE_PHRASES for form in _phrase_forms(text))
 
 
 def _conversation_stt_payload(payload):
@@ -5118,8 +5152,9 @@ async def _conversation_loop(agent, session):
                 session["stop_reason"] = "stop_phrase"
                 break
             if _conversation_silence_phrase(turn["transcript"]):
-                # Barge-in already cut playback at speech onset. Do not answer
-                # a request for silence with another spoken acknowledgement.
+                # Playback has already stopped by the time this is read. Asking
+                # for silence must not be answered out loud: replying "Of
+                # course, I'll be quiet!" is the thing being asked to stop.
                 session["consecutive_errors"] = 0
                 continue
 

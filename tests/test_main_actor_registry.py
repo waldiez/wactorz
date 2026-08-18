@@ -16,7 +16,8 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import SPAWN_REGISTRY_KEY, VANISH_MISS_THRESHOLD, MainActor
+from wactorz.agents.main_actor import SPAWN_REGISTRY_KEY, MainActor
+from wactorz.agents.nodes import VANISH_MISS_THRESHOLD
 from wactorz.core.actor import ActorState
 
 

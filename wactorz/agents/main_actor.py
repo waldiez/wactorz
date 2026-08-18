@@ -7,11 +7,13 @@ import contextlib
 import json
 import logging
 import re
+import secrets
 import shutil
 import socket
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime
 from typing import Any, ClassVar
 
 from ..config import (
@@ -47,11 +49,6 @@ from .prompts.main_actor_prompts import (
 
 logger = logging.getLogger(__name__)
 
-# Consecutive node heartbeats a registry-claimed agent must be absent from before
-# it is pruned as a silent loss. A single miss is a transient discovery gap; pruning
-# on it drops a live agent from the registry (breaking delete + node-reboot recovery).
-VANISH_MISS_THRESHOLD = 3
-
 
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     DESCRIPTION = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
@@ -81,10 +78,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
         self.nodes = NodeManager(self)
         self.llm_bridge = LLMBridge(self)
-        # Consecutive heartbeats a registry-claimed agent has been absent from its
-        # node — (node_name, agent_name) → count. Prune only past the threshold so a
-        # single missed heartbeat (a transient gap) doesn't drop a live agent.
-        self._node_agent_misses: dict[tuple[str, str], int] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -142,38 +135,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             del reg[name]
             self.persist(SPAWN_REGISTRY_KEY, reg)
             logger.info(f"[{self.name}] Removed '{name}' from spawn registry.")
-
-    def _agents_to_prune(
-        self, node_name: str, curr_agents: set[str], prev_agents: set[str]
-    ) -> list[str]:
-        """Registry agents on ``node_name`` that have now missed
-        ``VANISH_MISS_THRESHOLD`` consecutive heartbeats, so they count as a real
-        silent loss rather than a transient gap. Updates the miss counters:
-        presence resets, absence increments. Never starts counting an agent that
-        has not yet appeared on the node (e.g. just spawned, first heartbeat
-        pending); migrated-away agents (registry now names a different node) are
-        skipped like before.
-        """
-        reg = self._get_spawn_registry()
-        to_prune: list[str] = []
-        for agent_name, cfg in list(reg.items()):
-            if (cfg.get("node", "") or "").strip() != node_name:
-                continue
-            key = (node_name, agent_name)
-            if agent_name in curr_agents:
-                self._node_agent_misses.pop(key, None)
-                continue
-            # Absent this heartbeat — only count it if the agent was present last
-            # heartbeat or is already mid-count; ignore one that never appeared.
-            if key not in self._node_agent_misses and agent_name not in prev_agents:
-                continue
-            misses = self._node_agent_misses.get(key, 0) + 1
-            if misses >= VANISH_MISS_THRESHOLD:
-                self._node_agent_misses.pop(key, None)
-                to_prune.append(agent_name)
-            else:
-                self._node_agent_misses[key] = misses
-        return to_prune
 
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None):
         """Clear an agent's manifest from main's in-memory caches AND from the
@@ -358,7 +319,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Fire-and-forget fact extraction — same as chat()
         asyncio.create_task(self._extract_and_save_facts(user_message, str(assistant_response)))
 
-    def _queue_notification(self, notice: dict) -> None:
+    def _queue_notification(self, notice: dict[str, Any]) -> None:
         """Queue a system notice for the next chat reply, keeping the newest.
 
         The queue drains only when someone chats, so an idle system with a
@@ -660,9 +621,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             )
 
         # Auto-detect webhook URLs in any message and persist them
-        import re as _re
-
-        _webhook_match = _re.search(
+        _webhook_match = re.search(
             r"https?://(?:discord\.com/api/webhooks|hooks\.slack\.com|api\.telegram\.org)/\S+", text
         )
         if _webhook_match:
@@ -688,14 +647,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             for rule_id, rule in sorted(rules.items(), key=lambda x: x[1].get("created_at", 0)):
                 agents = rule.get("agents", [])
                 task = rule.get("task", "")[:]
-                import datetime
-
                 ts = rule.get("created_at", 0)
-                created = (
-                    datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
-                    if ts
-                    else "unknown"
-                )
+                created = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "unknown"
                 # Check which agents are running
                 running_agents = []
                 stopped_agents = []
@@ -1692,9 +1645,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         delegated = await self._execute_llm_delegations(full_response)
         if delegated != full_response:
             # Find what changed and yield just the new parts
-            import re as _re
-
-            results = _re.findall(r"[✅❌]\s+\S+.*", delegated)
+            results = re.findall(r"[✅❌]\s+\S+.*", delegated)
             if results:
                 yield "\n" + "\n".join(results)
         full_response = delegated
@@ -2206,7 +2157,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 # ── Auto-generated LLM bridge (synthesized by main when this agent was spawned
 # remotely with type: "llm"). Do not edit; replace the agent if you need to
 # change behavior. ─────────────────────────────────────────────────────────
-import time as _t
+import time
 
 _SYSTEM_PROMPT = {system_prompt_literal}
 _MAX_HISTORY   = {max_history}
@@ -2249,7 +2200,7 @@ async def handle_task(agent, payload):
     else:
         text = str(payload) if payload is not None else ""
 
-    started = _t.time()
+    started = time.time()
     history = agent.state.setdefault("history", [])
     history.append({{"role": "user", "content": text, "ts": started}})
 
@@ -2261,9 +2212,9 @@ async def handle_task(agent, payload):
     ]
 
     response = await agent.chat(safe_history, system=_now_block() + _SYSTEM_PROMPT)
-    duration = _t.time() - started
+    duration = time.time() - started
 
-    history.append({{"role": "assistant", "content": response, "ts": _t.time()}})
+    history.append({{"role": "assistant", "content": response, "ts": time.time()}})
     # Trim in-memory list too so it doesn't grow forever between persists.
     if len(history) > _MAX_HISTORY * 2:
         del history[: len(history) - _MAX_HISTORY * 2]
@@ -2292,12 +2243,10 @@ async def handle_task(agent, payload):
         if (config.get("type") or "").strip().lower() != "llm":
             return config
 
-        import json as _json
-
         system_prompt = config.get("system_prompt", "You are a helpful assistant.")
         max_history = int(config.get("max_history", 32) or 32)
         bridge = self._LLM_BRIDGE_CODE_TEMPLATE.format(
-            system_prompt_literal=_json.dumps(system_prompt),
+            system_prompt_literal=json.dumps(system_prompt),
             max_history=max_history,
         )
 
@@ -2479,6 +2428,21 @@ async def handle_task(agent, payload):
     # ── Node registry ──────────────────────────────────────────────────────
 
     @property
+    def _node_agent_misses(self) -> dict[tuple[str, str], int]:
+        """Consecutive heartbeats each agent has been missing, owned by `self.nodes`."""
+        return self.nodes.agent_misses
+
+    @_node_agent_misses.setter
+    def _node_agent_misses(self, value: dict[tuple[str, str], int]) -> None:
+        self.nodes.agent_misses = value
+
+    def _agents_to_prune(
+        self, node_name: str, curr_agents: set[str], prev_agents: set[str]
+    ) -> list[str]:
+        """Agents on `node_name` that have missed enough heartbeats to count as gone."""
+        return self.nodes.agents_to_prune(node_name, curr_agents, prev_agents)
+
+    @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:
         """Latest manifest per agent, owned by `self.nodes`.
 
@@ -2620,11 +2584,6 @@ async def handle_task(agent, payload):
         Tokens are single-use and expire after 5 minutes to keep the pending
         map bounded if a remote node never replies.
         """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return
-
         TOKEN_TTL_S = 300
         _last_exc_str: str | None = None
         while self.state.value not in ("stopped", "failed"):
@@ -2648,9 +2607,7 @@ async def handle_task(agent, payload):
                         pending: dict = getattr(self, "_pending_state_returns", {})
 
                         # Expire stale tokens before validating to keep the map tidy
-                        import time as _t
-
-                        now = _t.time()
+                        now = time.time()
                         for t, info in list(pending.items()):
                             if now - info.get("started_at", 0) > TOKEN_TTL_S:
                                 pending.pop(t, None)
@@ -2970,9 +2927,6 @@ async def handle_task(agent, payload):
                 f"'{current_node}' → local (via @main sentinel; "
                 f"{'spawn-registry code available as fallback' if have_code else 'no local code, fully remote-driven'})"
             )
-
-            import secrets
-
             return_token = secrets.token_hex(8)
             # Stash the token so the listener knows this return is ours
             # and not from some other concurrent migration.
@@ -3145,178 +3099,8 @@ async def handle_task(agent, payload):
         return {"success": True, "message": msg}
 
     async def _node_heartbeat_listener(self):
-        """Subscribe to nodes/+/heartbeat so main knows which remote nodes are online.
-        Updates self._known_nodes which is used by list_nodes() and the LLM context.
-
-        Also detects agents that silently vanished from a node (crash, OOM kill,
-        manual kill, deploy gone wrong) by diffing each heartbeat's agent list
-        against what we last saw. Anything that disappeared and is still in the
-        spawn registry as belonging to this node is treated as a deletion event:
-        manifest cleared, registry entry removed, history note added.
-        """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.warning("[main] aiomqtt not available — node heartbeat tracking disabled.")
-            return
-
-        _last_exc_str: str | None = None
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe("nodes/+/heartbeat")
-                    await client.subscribe("nodes/+/migrate_result")
-                    logger.info("[main] Subscribed to node heartbeats.")
-                    _last_exc_str = None
-                    async for msg in client.messages:
-                        topic = str(msg.topic)
-                        try:
-                            data = json.loads(msg.payload.decode())
-                        except Exception:
-                            continue
-
-                        parts = topic.split("/")
-                        if len(parts) < 3:
-                            continue
-                        node_name = parts[1]
-
-                        if topic.endswith("/heartbeat"):
-                            new_agents = data.get("agents", [])
-                            # ── Diff against previous snapshot for this node ──
-                            prev = self._known_nodes.get(node_name, {})
-                            prev_agents = set(prev.get("agents", []))
-                            curr_agents = set(new_agents)
-                            # Prune only agents absent for several consecutive
-                            # heartbeats — a single miss is a transient gap and must
-                            # not drop a live agent. _agents_to_prune tracks the miss
-                            # counts and skips migrated-away / never-appeared agents.
-                            for agent_name in self._agents_to_prune(
-                                node_name, curr_agents, prev_agents
-                            ):
-                                logger.warning(
-                                    f"[main] Agent '{agent_name}' silently disappeared "
-                                    f"from node '{node_name}' (crash/kill suspected)"
-                                )
-                                # Same cleanup as a manual delete, minus the node-side
-                                # stop signal (it's already gone there).
-                                self._remove_from_spawn_registry(agent_name)
-                                await self._clear_agent_manifest(agent_name)
-                                self._record_agent_deletion(
-                                    agent_name,
-                                    reason=f"vanished from node '{node_name}' (crash or external kill)",
-                                )
-                            self._known_nodes[node_name] = {
-                                "last_seen": time.time(),
-                                "agents": new_agents,
-                                "node_id": data.get("node_id", ""),
-                                "pid": data.get("pid"),
-                                "uptime_s": data.get("uptime_s"),
-                                "cpu_pct": data.get("cpu_pct"),
-                                "mem_used_mb": data.get("mem_used_mb"),
-                                "mem_free_mb": data.get("mem_free_mb"),
-                            }
-                            # Bootstrap TopicContracts for remote agents whose
-                            # retained manifest hasn't been delivered yet (e.g.
-                            # main just restarted, or the remote node is mid-
-                            # reconnect). The MQTT manifest listener is the
-                            # source of truth for remote contracts — it carries
-                            # the agent's REAL publishes/subscribes/schemas and
-                            # observed_samples. The spawn-config we have here
-                            # only reflects what was REQUESTED at spawn time
-                            # and may be wrong/empty, so we must NEVER overwrite
-                            # a manifest-derived contract with it.
-                            try:
-                                from ..core.topic_bus import TopicContract, get_topic_bus
-
-                                bus = get_topic_bus()
-                                if bus:
-                                    spawn_reg = self._get_spawn_registry()
-                                    for aname in new_agents:
-                                        # Skip if the manifest listener has
-                                        # already registered a contract for
-                                        # this agent — that one is authoritative.
-                                        if bus.registry.get(aname) is not None:
-                                            continue
-                                        # Skip if a manifest is already cached
-                                        # in main — the listener will register
-                                        # it imminently; no need to race.
-                                        if aname in self._agent_manifests:
-                                            continue
-                                        cfg = spawn_reg.get(aname)
-                                        if not cfg:
-                                            continue
-                                        # Only bootstrap if the spawn config
-                                        # actually declared topics — an empty
-                                        # contract would just pollute the bus.
-                                        if not (cfg.get("publishes") or cfg.get("subscribes")):
-                                            continue
-                                        contract = TopicContract.from_spawn_config(
-                                            {
-                                                **cfg,
-                                                "node": node_name,
-                                                "actor_id": str(
-                                                    uuid.uuid5(
-                                                        uuid.NAMESPACE_DNS,
-                                                        f"wactorz.actor.{aname}",
-                                                    )
-                                                ),
-                                            }
-                                        )
-                                        bus.register_contract(contract)
-                                        logger.debug(
-                                            f"[main] Bootstrapped TopicContract for "
-                                            f"'{aname}' from spawn config (manifest pending)."
-                                        )
-                            except Exception as _e:
-                                logger.debug(f"[main] TopicContract bootstrap failed: {_e}")
-                            # P1: keep monitor's heartbeat tracker in sync for remote agents
-                            # so it raises alerts when a remote agent goes silent, exactly
-                            # as it does for local ones.
-                            if self._registry:
-                                mon = self._registry.find_by_name("monitor")
-                                if mon and hasattr(mon, "_last_seen"):
-                                    for aname in new_agents:
-                                        # Build the same deterministic actor_id used by _RemoteAgent
-                                        remote_id = str(
-                                            uuid.uuid5(
-                                                uuid.NAMESPACE_DNS,
-                                                f"wactorz.actor.{aname}",
-                                            )
-                                        )
-                                        mon._last_seen[remote_id] = time.time()  # pyright: ignore[reportAttributeAccessIssue]
-                        elif topic.endswith("/migrate_result"):
-                            success = data.get("success", False)
-                            agent = data.get("agent", "?")
-                            to_node = data.get("to_node", "?")
-                            sev = "info" if success else "warning"
-                            self._queue_notification(
-                                {
-                                    "_monitor_notification": True,
-                                    "message": (
-                                        f"Migration of '{agent}' to '{to_node}' succeeded."
-                                        if success
-                                        else f"Migration of '{agent}' failed: {data.get('error', '?')}"
-                                    ),
-                                    "severity": sev,
-                                    "timestamp": time.time(),
-                                }
-                            )
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.state.value not in ("stopped", "failed"):
-                    exc_str = str(e)
-                    if exc_str != _last_exc_str:
-                        logger.warning(
-                            f"[main] Node heartbeat listener error: {e}. Reconnecting in 5s…"
-                        )
-                        _last_exc_str = exc_str
-                    else:
-                        logger.debug(
-                            "[main] Node heartbeat listener still unavailable — retrying in 5s…"
-                        )
-                    await asyncio.sleep(5)
+        """Follow node heartbeats. Owned by `self.nodes`."""
+        await self.nodes.heartbeat_listener()
 
     async def _node_offline_watcher(self):
         """Periodically check for nodes that have gone silent. If a node has not
@@ -3401,10 +3185,6 @@ async def handle_task(agent, payload):
           sensors/#          — common IoT namespace
         Additional topic patterns can be added as needed.
         """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return
 
         # Build a reverse map: topic prefix → agent name, kept fresh from spawn registry
         def _topic_to_agent(topic: str) -> str | None:

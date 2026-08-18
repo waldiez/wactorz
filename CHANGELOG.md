@@ -28,40 +28,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Files can be attached to a chat message, and the agent reads them.** The composer has accepted attachments for a while, but nothing was ever sent with the message. Images now reach every supported provider, PDFs are read inline by Anthropic and Gemini (elsewhere the file is named and its contents omitted, as those formats have no document part), text files of any kind are inlined under their name, and audio is named but not transcribed. What a file is gets decided by its content, not by what the upload claimed, and a file that cannot be carried is named rather than silently dropped. Storage is on by default and turns off with `WACTORZ_UPLOADS=0`; uploads are capped at 25 MB, and clearing the chat history (or wiping everything) deletes the stored files with it.
 - **`WACTORZ_BIND_HOST` chooses which network interface the servers listen on.** The dashboard, the REST API and the WhatsApp webhook all read it, so one setting moves all three rather than three hardcoded addresses. See the breaking entry above for the new default and what it means for an install reached from another machine. Not useful inside a container: a published port cannot reach a process bound to the container's own loopback, which is why the supplied Compose file and both add-ons set it explicitly. The REST API also now logs the address it actually bound rather than a fixed one.
 
-### Changed
-
-- **Signing in survives a restart.** Sessions were held in memory, so every restart — an update, a crash, a `docker compose up -d` — signed every browser out and asked for the key again. They are now kept in the state directory and last the full thirty days, which is what the window always claimed. **A stolen file is not a way in**: what is stored cannot be turned back into a cookie, and it is written readable only by the account running Wactorz. **Changing `API_KEY` still ends every session**, with nothing extra to do — the stored sessions stop matching the moment the key does. Signing out, here or everywhere, still means it, and now stays meant after a restart. **Wiping agents does not sign you out**, and an install with no key writes no file at all, since there is nothing there to guard. If the file is ever unreadable, the worst that happens is you sign in again.
-- **The dashboard is sent only the broker messages it uses.** The server subscribes to whole topic subtrees because agents publish freely within them, and forwarded every message inside them to every open browser — so whatever any agent happened to publish crossed the wire, including topics nothing on the page reads. Only the topics the dashboard acts on are forwarded now. Nothing on screen changes, and this does not affect what the server itself takes in: an agent's metrics update the dashboard exactly as before. **If you have written a custom agent whose own topics you were reading from the browser**, they are no longer relayed.
-- **A web page on another site can no longer act on your Wactorz.** Every response carried `Access-Control-Allow-Origin: *` and every preflight was approved, so any page you visited while Wactorz was running could delete your agents, reset your system, or read your agent names, chat log and spend. Requests from another origin are now refused when they would change something, and responses to them are no longer readable by the calling page. The WebSocket is checked the same way — it is exempt from CORS entirely, so without this a page could still open it, watch the live feed and send commands. Requests carrying no `Origin` at all are unaffected, so `curl`, scripts and the Python client keep working. A dashboard hosted on another origin needs `WACTORZ_CORS_ORIGINS`.
-- **A host name nobody configured is refused, closing DNS rebinding.** Checking the origin alone cannot see that attack: the attacker's page and the address it resolves to share a name, so they agree while the request reaches a server on your own machine. Loopback names and IP addresses are always accepted, so `localhost` and `192.168.1.5` are unaffected. **If you reach the dashboard by an mDNS or LAN name** such as `wactorz.local`, add it to `WACTORZ_ALLOWED_HOSTS`; the refusal is logged with the name to add. The Home Assistant add-on is unaffected — requests arriving through its panel are recognised as such.
-
-### Fixed
-
-- **Chat history reaches the persistent feed again.** Every turn handled by an LLM agent was written to the chat log by calling a method that does not exist, so each write raised and was swallowed by a handler that reported it at debug level — the turn was lost and nothing said so. Restarting therefore came back to an empty feed for those conversations even though the agent's own memory of them survived. The turns are now stored, and a write that genuinely fails is reported as a warning instead of disappearing.
-
-- **A remote agent that answers quickly is heard.** Delegating a task to an agent on another machine published the request and only then started listening for the answer, so a fast reply arrived before anything was there to receive it and was dropped. The caller then waited out its full timeout and reported a failure for work that had actually been done — which looks like an unreliable node rather than a bug. The reply channel is opened before the request goes out now.
-
-- **A broker that is away no longer costs memory without limit.** Messages waiting to be published were held in a queue with no ceiling, so a broker that was slow or absent grew it until the process ran out of memory. The queue is capped, and what gives way is telemetry — heartbeats, metrics and status, where the next sample replaces the last, so the newest is kept. Anything queued for guaranteed delivery is written to disk before it is queued and is never discarded to make room; at worst it waits for the reconnect that reloads it. Discards are reported, not silent.
-
-- **An agent cannot keep its state outside the state directory.** Agent names become directory names, and while `/` and `\` were replaced, `..` contains neither — so an agent called `..` stored its state one level up, and a reset naming it reached the same place. It is refused now, at every store that turns a name into a path. Nothing changes for ordinary names: an existing directory keeps exactly the name it has, because renaming one would silently orphan that agent's state.
-
-- **A failing request no longer answers with the exception it hit.** Errors from the database and from the speech service were returned verbatim, which meant a caller could be handed the state file's path or a third-party URL by asking for something that fails. The reply now says what went wrong in the service's own words, and the detail goes to the log where an operator can see it.
-
-- **A reset now clears what it says it clears.** Agent state used to be one pickle file per agent; it is stored per key now, and the old file is still read at startup so nothing was lost in the move. What nobody noticed is that it was read *back* whenever the new store had no answer — so a reset emptied the store, the next read found it empty, fell through to the old file, and returned the very thing that had just been deleted. That lasted as long as the process ran, and on the old write path it put the deleted file back on disk. Clearing the chat only appeared to work: it leaves an empty conversation behind, and an empty conversation is still an answer, so the old file was never consulted — while a full wipe leaves nothing at all, which is what let it through. **If a conversation, a fact or a setting kept coming back after a reset, this is why.** Resets now reach the old file too, in the running process and on disk.
-
-- **The composer names the agent it will send to as soon as the page loads.** It said a plain "Message…" until you picked someone yourself, because the input is built with the rest of the shell — before the chat view exists and so before there is an agent to name — and nothing refreshed it once there was one.
-
-- **Edge nodes install packages by name only, and without a shell.** The runner built its `pip install` as a single string and handed it to a shell, with the package names taken straight from the spawn payload — so a name carrying `;` or backticks ran commands on the node, and one shaped like `--index-url=…` pointed the install at somebody else's package index. Names are now checked against what a package name may look like and passed as separate arguments, with no shell involved. A request naming anything else is refused whole rather than partly installed, the agent is not started, and the reason — naming the rejected values — is reported to the dashboard instead of being left in the node's own log, where nobody is looking when an agent fails to appear. **Edge nodes must be redeployed** to pick this up — the runner is a file copied to each node, so an old node keeps the old behaviour until it is updated.
-
-- **A spawn config can no longer exempt its own code from the safety checks.** Agent configs carry a `trusted` flag that skips both the code sanitizer and the validator; it exists for the packaged catalog agents, whose code is written by us and does not have to pass a check aimed at generated code. But the flag was honoured on any config, and spawn configs are routinely written by a model — so a request that asked for an agent could ask for an unexamined one, and the flag was then saved and restored on every start afterwards. It is now accepted only for agents being restored from the spawn registry; anywhere else it is dropped, logged, and the code is validated as usual. Catalog agents are unaffected.
-
-- **A state file that cannot be read is kept instead of overwritten.** Every load path treated an unreadable file as absent — log it, start empty, carry on — which is the right call for keeping an agent running, but the agent's next save then wrote straight over the file. The only copy of whatever it remembered was destroyed moments after the single log line about it scrolled past, so an agent that had quietly lost everything looked perfectly healthy. Such a file is now moved aside first, to `<name>.corrupt.<timestamp>` beside the original, and the failure is reported with the path it was kept at. The remote node runner did this worst of all: it discarded the error silently, leaving no record anywhere that anything had been lost.
-- **A framework migration that failed is retried on the next start.** The stored version stood for two separate things — that the database schema was at version N, and that agent state data had been migrated to N — so when a schema migration succeeded and its paired data migration failed, the version was stamped anyway. The following start saw an up-to-date version, skipped everything, and the half-migrated data stayed that way permanently, with the one warning about it never appearing again. Data migrations are now tracked by what has actually completed, so a failed one is attempted on every start until it succeeds, and it no longer holds back the schema version, which is genuinely up to date. The schema version now also records how far the schema really got rather than assuming a run that stopped part-way finished.
-
-## [0.5.3] - 2026-08-10
-
-### Added
-
 - **Reachy Mini echo-safe conversation audio** - Reachy now applies the compatible
   XVF3800 conversation audio tuning through the robot daemon for wireless
   connections or the SDK for local connections. Automatic barge-in remains
@@ -107,6 +73,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   rejected. A failed reconnect reports `ok:false` with the retry hint rather than a
   success envelope. Disconnected errors, connect-failure logs, and `config` updates
   now point at `reconnect` instead of telling users to restart the agent.
+
 - **Reachy Mini opt-in conversation mode** - Chat `start conversation` / `stop
   conversation` and MQTT `conversation_start` / `conversation_stop` run one
   cancellable VAD-driven session through the existing STT, main routing, and TTS
@@ -116,6 +83,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   turn, state, transcript/response, timing, stop-reason, and error fields. A
   configurable RMS floor rejects quiet WebRTC codec noise that the binary VAD can
   otherwise misclassify as speech.
+
 - **Reachy Mini push-to-talk Wactorz interface** - `@reachy-mini listen and ask
   Wactorz` and MQTT `custom/reachy/cmd/ask_voice` now capture one bounded WAV,
   transcribe it with a configurable local `faster-whisper` / `whisper` provider
@@ -136,12 +104,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   capture-from-current-pose behaviour. Each look waits for the head move to finish before
   grabbing the frame (goto_target is fire-and-forget), so the shot is sharp, not blurred
   mid-turn.
+
 - **Reachy `look_around`** - a new command that pans the head across several angles
   (left / ahead / right / up by default), captures a sharp frame at each (waiting out each
   move so it isn't motion-blurred), and describes the whole room in one combined vision
   call, then re-centres. "look around" / "what's in the room" /
   "scan the room" route here (they used to collapse to a single-frame `describe`). Tune with
   `angles`, `question`, `quality`, `look_duration`.
+
 - **Reachy `describe` is brief by default** - "what do you see?" now gets one short spoken
   sentence (the gist) that ends by offering a closer look, instead of a whole paragraph
   monologue every glance. Ask for more with `{"cmd":"describe","detail":true}` or plain
@@ -149,6 +119,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   right after the "Want me to look closer?" offer now does the detailed look (the offer is
   remembered for 60s) instead of being echoed back. A specific question ("how many people?")
   is answered concisely with no nudge, and unreadable/black frames skip the offer.
+
 - **Reachy `shutup` / "stop talking"** - cut the current utterance immediately, instead
   of being stuck listening to a long spoken reply with no way to stop it. `{"cmd":"shutup"}`
   (or "shut up" / "stop talking" / "be quiet") stops playback now; `{"cmd":"stop"}` also
@@ -157,6 +128,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   non-blocking so a "shut up" typed while Reachy is talking actually gets through - the
   actor mailbox is serial, so a blocking utterance used to freeze it until it finished.
   Verbose command output (e.g. `diag`) is returned to chat only and never spoken.
+
 - **Reachy `diag` command** - diagnoses "the robot won't move". Motion commands are
   fire-and-forget over the websocket, so a clean `goto_target` only means the daemon
   RECEIVED the command. `{"cmd":"diag"}` (or "why won't you move") reports the SDK vs
@@ -164,6 +136,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   still works), then runs a real self-test: enable torque, read joint angles, command a
   small move, re-read, and report whether the angles actually changed - so you find out
   it's a version mismatch / torque / hardware issue instead of guessing.
+
 - **Reachy without the Reachy Mini control app** - the reachy-mini agent can now connect
   straight to a powered-on robot over WiFi with no control app running on your machine:
   set `REACHY_CONNECTION_MODE=network` plus the new `REACHY_ROBOT_HOST=<ip|hostname>` env
@@ -172,6 +145,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   longer an opaque "no SDK handle": the real connect error and the exact env vars to set
   now appear in the startup log AND in the "reachy not connected: ..." reply to any robot
   command, so you don't have to hunt logs. `.env.template` documents the new keys.
+
 - **Reachy as a Wactorz interface (text bridge)** - anything you say to the reachy-mini
   agent that it can't turn into a robot or Home Assistant command is now piped through the
   MAIN orchestrator (full intent routing, HA, and sub-agent delegation - not just a bare
@@ -183,6 +157,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   loop) and replies on the caller's correlation id. Speaking to the robot out loud
   (speech-to-text) layers on top of this later; for now the bridge is reached via
   chat/delegation to the agent.
+
 - **Reachy continuous sound tracking (`track_sound`)** — an opt-in mode that keeps turning Reachy
   toward whoever is currently speaking, not just once like `turn_to_sound`. "Keep turning toward
   whoever's talking", "follow the speaker", "track the voices as we present" start it; "stop
@@ -193,20 +168,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `max_head_yaw` arc a head turn alone reaches. `require_voice` (default on) ignores non-speech
   noise. Tuning knobs: `interval`, `deadband_deg`, `duration`, `max_head_yaw`, `max_body_yaw`,
   `offset_deg`, `invert`.
+
 - **Reachy sound localization (`turn_to_sound`)** — turns the head toward the direction the mic
   array localizes a sound (`doa` angle → head yaw, clamped, with `offset_deg`/`invert` calibration).
   "Turn toward the sound", "face the speaker", and "who's talking?" route here. Sensing works
   whenever the mic is live; the turn itself needs the motors. `listen`/`camera`/`doa` now also
   return a short human-readable `result` summary so the base64 blob no longer floods the chat.
+
 - **Reachy vision (`describe`)** — a new `describe` command captures a camera frame, sends it to
   the vision-capable LLM, and speaks the real description of what the robot sees. "What do you
   see?", "what's in front of you?", "look around", and questions about the view now route here
   (deterministically and via the NL planner) instead of the old capture-then-invent-a-line path.
   Optional `question` asks something specific; `say: false` returns the text without speaking.
+
 - **Reachy connection mode toggle** — a `connection_mode` config (via `custom/reachy/config` or
   `REACHY_CONNECTION_MODE`) selects `network` (wireless: connect straight to the robot, skip the
   localhost probe, no control app needed), `local` (the Reachy Mini control app or simulator on
   localhost), or the default auto-detect. The active mode is reported in `custom/reachy/state`.
+
 - **Reachy camera & microphone access** — new `camera`, `listen`, and `doa` commands on the
   reachy-mini agent read the robot's onboard sensors through the SDK media manager. `camera`
   returns one still frame as base64 (JPEG/PNG); `listen` records a short mic-array clip as base64
@@ -214,6 +193,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Each can also save to a file (`path`) or emit a one-shot event (`publish` →
   `custom/reachy/camera` / `custom/reachy/audio`); the blobs never enter the retained state
   heartbeat. Plain English ("take a photo", "listen") and the NL planner both reach them.
+
+### Changed
+
+- **Signing in survives a restart.** Sessions were held in memory, so every restart — an update, a crash, a `docker compose up -d` — signed every browser out and asked for the key again. They are now kept in the state directory and last the full thirty days, which is what the window always claimed. **A stolen file is not a way in**: what is stored cannot be turned back into a cookie, and it is written readable only by the account running Wactorz. **Changing `API_KEY` still ends every session**, with nothing extra to do — the stored sessions stop matching the moment the key does. Signing out, here or everywhere, still means it, and now stays meant after a restart. **Wiping agents does not sign you out**, and an install with no key writes no file at all, since there is nothing there to guard. If the file is ever unreadable, the worst that happens is you sign in again.
+- **The dashboard is sent only the broker messages it uses.** The server subscribes to whole topic subtrees because agents publish freely within them, and forwarded every message inside them to every open browser — so whatever any agent happened to publish crossed the wire, including topics nothing on the page reads. Only the topics the dashboard acts on are forwarded now. Nothing on screen changes, and this does not affect what the server itself takes in: an agent's metrics update the dashboard exactly as before. **If you have written a custom agent whose own topics you were reading from the browser**, they are no longer relayed.
+- **A web page on another site can no longer act on your Wactorz.** Every response carried `Access-Control-Allow-Origin: *` and every preflight was approved, so any page you visited while Wactorz was running could delete your agents, reset your system, or read your agent names, chat log and spend. Requests from another origin are now refused when they would change something, and responses to them are no longer readable by the calling page. The WebSocket is checked the same way — it is exempt from CORS entirely, so without this a page could still open it, watch the live feed and send commands. Requests carrying no `Origin` at all are unaffected, so `curl`, scripts and the Python client keep working. A dashboard hosted on another origin needs `WACTORZ_CORS_ORIGINS`.
+- **A host name nobody configured is refused, closing DNS rebinding.** Checking the origin alone cannot see that attack: the attacker's page and the address it resolves to share a name, so they agree while the request reaches a server on your own machine. Loopback names and IP addresses are always accepted, so `localhost` and `192.168.1.5` are unaffected. **If you reach the dashboard by an mDNS or LAN name** such as `wactorz.local`, add it to `WACTORZ_ALLOWED_HOSTS`; the refusal is logged with the name to add. The Home Assistant add-on is unaffected — requests arriving through its panel are recognised as such.
+
+### Fixed
+
+- **Chat history reaches the persistent feed again.** Every turn handled by an LLM agent was written to the chat log by calling a method that does not exist, so each write raised and was swallowed by a handler that reported it at debug level — the turn was lost and nothing said so. Restarting therefore came back to an empty feed for those conversations even though the agent's own memory of them survived. The turns are now stored, and a write that genuinely fails is reported as a warning instead of disappearing.
+
+- **A remote agent that answers quickly is heard.** Delegating a task to an agent on another machine published the request and only then started listening for the answer, so a fast reply arrived before anything was there to receive it and was dropped. The caller then waited out its full timeout and reported a failure for work that had actually been done — which looks like an unreliable node rather than a bug. The reply channel is opened before the request goes out now.
+
+- **A broker that is away no longer costs memory without limit.** Messages waiting to be published were held in a queue with no ceiling, so a broker that was slow or absent grew it until the process ran out of memory. The queue is capped, and what gives way is telemetry — heartbeats, metrics and status, where the next sample replaces the last, so the newest is kept. Anything queued for guaranteed delivery is written to disk before it is queued and is never discarded to make room; at worst it waits for the reconnect that reloads it. Discards are reported, not silent.
+
+- **An agent cannot keep its state outside the state directory.** Agent names become directory names, and while `/` and `\` were replaced, `..` contains neither — so an agent called `..` stored its state one level up, and a reset naming it reached the same place. It is refused now, at every store that turns a name into a path. Nothing changes for ordinary names: an existing directory keeps exactly the name it has, because renaming one would silently orphan that agent's state.
+
+- **A failing request no longer answers with the exception it hit.** Errors from the database and from the speech service were returned verbatim, which meant a caller could be handed the state file's path or a third-party URL by asking for something that fails. The reply now says what went wrong in the service's own words, and the detail goes to the log where an operator can see it.
+
+- **A reset now clears what it says it clears.** Agent state used to be one pickle file per agent; it is stored per key now, and the old file is still read at startup so nothing was lost in the move. What nobody noticed is that it was read *back* whenever the new store had no answer — so a reset emptied the store, the next read found it empty, fell through to the old file, and returned the very thing that had just been deleted. That lasted as long as the process ran, and on the old write path it put the deleted file back on disk. Clearing the chat only appeared to work: it leaves an empty conversation behind, and an empty conversation is still an answer, so the old file was never consulted — while a full wipe leaves nothing at all, which is what let it through. **If a conversation, a fact or a setting kept coming back after a reset, this is why.** Resets now reach the old file too, in the running process and on disk.
+
+- **The composer names the agent it will send to as soon as the page loads.** It said a plain "Message…" until you picked someone yourself, because the input is built with the rest of the shell — before the chat view exists and so before there is an agent to name — and nothing refreshed it once there was one.
+
+- **Edge nodes install packages by name only, and without a shell.** The runner built its `pip install` as a single string and handed it to a shell, with the package names taken straight from the spawn payload — so a name carrying `;` or backticks ran commands on the node, and one shaped like `--index-url=…` pointed the install at somebody else's package index. Names are now checked against what a package name may look like and passed as separate arguments, with no shell involved. A request naming anything else is refused whole rather than partly installed, the agent is not started, and the reason — naming the rejected values — is reported to the dashboard instead of being left in the node's own log, where nobody is looking when an agent fails to appear. **Edge nodes must be redeployed** to pick this up — the runner is a file copied to each node, so an old node keeps the old behaviour until it is updated.
+
+- **A spawn config can no longer exempt its own code from the safety checks.** Agent configs carry a `trusted` flag that skips both the code sanitizer and the validator; it exists for the packaged catalog agents, whose code is written by us and does not have to pass a check aimed at generated code. But the flag was honoured on any config, and spawn configs are routinely written by a model — so a request that asked for an agent could ask for an unexamined one, and the flag was then saved and restored on every start afterwards. It is now accepted only for agents being restored from the spawn registry; anywhere else it is dropped, logged, and the code is validated as usual. Catalog agents are unaffected.
+
+- **A state file that cannot be read is kept instead of overwritten.** Every load path treated an unreadable file as absent — log it, start empty, carry on — which is the right call for keeping an agent running, but the agent's next save then wrote straight over the file. The only copy of whatever it remembered was destroyed moments after the single log line about it scrolled past, so an agent that had quietly lost everything looked perfectly healthy. Such a file is now moved aside first, to `<name>.corrupt.<timestamp>` beside the original, and the failure is reported with the path it was kept at. The remote node runner did this worst of all: it discarded the error silently, leaving no record anywhere that anything had been lost.
+- **A framework migration that failed is retried on the next start.** The stored version stood for two separate things — that the database schema was at version N, and that agent state data had been migrated to N — so when a schema migration succeeded and its paired data migration failed, the version was stamped anyway. The following start saw an up-to-date version, skipped everything, and the half-migrated data stayed that way permanently, with the one warning about it never appearing again. Data migrations are now tracked by what has actually completed, so a failed one is attempted on every start until it succeeds, and it no longer holds back the schema version, which is genuinely up to date. The schema version now also records how far the schema really got rather than assuming a run that stopped part-way finished.
+
+- **Telling Reachy to shut up now ends the whole answer, not one sentence of it.** A spoken reply
+  is delivered as one utterance per sentence, and only the sentence already playing was cut: the
+  next one started immediately and cleared the stop request on its way in, so the rest of the
+  answer played out and "shut up" looked like it had barely worked. The stop is now carried across
+  the sentences of a reply and reported separately from someone talking over Reachy, which keeps
+  the barge-in behaviour it already had.
+
+- **The pause between Reachy's sentences is no longer long enough to sound like a stall.** Every
+  sentence was followed by the same gap used between separate utterances, on top of waiting out the
+  sentence's own measured length — so a three-sentence answer carried well over a second of dead
+  air in the middle of it. Mid-reply the gap now only covers the delay in starting the next
+  sentence; the full pause remains at the end, where it separates the answer from what follows.
+
+- **A device request Reachy could not resolve is spoken as an answer rather than an error.** When
+  the resolver returned something with no usable JSON in it, the failure travelled back as the
+  reply text — so the robot read out a raw parser error. It now says it could not identify a
+  matching device, the same as any other unmatched request, and the unusable output is logged
+  instead of voiced.
+
+## [0.5.3] - 2026-08-10
+
+### Added
 
 - **Images in an agent's reply are shown as images.** An agent answering with a camera snapshot or a generated chart sends it inline, and the chat rendered that as a wall of base64 text. Such images now appear in the message, bounded so a full-resolution frame cannot stretch the conversation, and clicking one opens it full size. Only real image formats are accepted — PNG, JPEG, GIF, WebP and AVIF, whether inline or fetched over http(s) — and anything else is left as the text it was rather than silently dropped. SVG is excluded on purpose, because it can carry scripts.
 - **A stopped agent can be started again.** Stopping one left deleting it as the only remaining action, so stopping was effectively permanent. Agent cards now offer **Start** for a stopped agent, `/start <agent>` does the same from chat, and the agent goes back under supervision — without that it would run unwatched, crashing and staying down. This is not the same as `/agents restart`, which re-creates an agent from its saved spawn configuration; Start resumes the one that is already there, including built-in agents that were never spawned from chat.
@@ -272,22 +304,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   workflow used `CHANGELOG.md` verbatim, so every release page carried `[Unreleased]` plus every
   past version — an endless scroll. It now extracts only the section matching the tag, and fails
   the job if no section for that version exists rather than publishing empty notes.
-- **Telling Reachy to shut up now ends the whole answer, not one sentence of it.** A spoken reply
-  is delivered as one utterance per sentence, and only the sentence already playing was cut: the
-  next one started immediately and cleared the stop request on its way in, so the rest of the
-  answer played out and "shut up" looked like it had barely worked. The stop is now carried across
-  the sentences of a reply and reported separately from someone talking over Reachy, which keeps
-  the barge-in behaviour it already had.
-- **The pause between Reachy's sentences is no longer long enough to sound like a stall.** Every
-  sentence was followed by the same gap used between separate utterances, on top of waiting out the
-  sentence's own measured length — so a three-sentence answer carried well over a second of dead
-  air in the middle of it. Mid-reply the gap now only covers the delay in starting the next
-  sentence; the full pause remains at the end, where it separates the answer from what follows.
-- **A device request Reachy could not resolve is spoken as an answer rather than an error.** When
-  the resolver returned something with no usable JSON in it, the failure travelled back as the
-  reply text — so the robot read out a raw parser error. It now says it could not identify a
-  matching device, the same as any other unmatched request, and the unusable output is logged
-  instead of voiced.
 
 ## [0.5.2] - 2026-07-30
 

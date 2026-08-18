@@ -203,6 +203,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy no longer pauses for seconds between every sentence.** Checking whether an
+  interruption was real costs a recogniser pass — around two seconds on the robot — and his own
+  voice trips the check on nearly every sentence, so with `barge_in` on that pause landed in
+  every gap and made him sound slow. The check now runs alongside the next sentence instead of
+  in front of it, and its answer is taken as soon as that sentence ends, so he still stops at
+  the next sentence boundary rather than at the end of the reply. Only one check runs at a
+  time: a second would queue another pass and overwrite the answer the first was about to give.
+
 - **A short spoken interruption is no longer discarded for being short.** Checking a suspected
   interruption required more voice than the capture layer had needed to call it an utterance at
   all — 0.35 s against 0.12 s — so "stop", about 0.2 s of speech and trimmed further by the echo

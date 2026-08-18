@@ -1757,6 +1757,32 @@ def _speech_chunks(text, max_chars=180):
     return chunks
 
 
+def _barge_check_verdict(session):
+    """Take a finished interruption check's answer, or False while it still runs."""
+    task = (session or {}).get("barge_check")
+    if task is None or not task.done():
+        return False
+    session["barge_check"] = None
+    try:
+        return bool(task.result())
+    except (asyncio.CancelledError, Exception):
+        return False
+
+
+async def _barge_check_settled(session, timeout=6.0):
+    """Wait out a check still running when the reply ends, then take its answer."""
+    task = (session or {}).get("barge_check")
+    if task is None:
+        return False
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        pass
+    return _barge_check_verdict(session)
+
+
 async def _speak_reply(agent, text, *, await_playback=False, session=None):
     """Speak a voice-friendly answer in chunks and preserve a barged-in turn."""
     chunks = _speech_chunks(text) if await_playback else [text]
@@ -1785,6 +1811,17 @@ async def _speak_reply(agent, text, *, await_playback=False, session=None):
         if result.get("stopped"):
             stopped = True
             break
+        # A check started during this sentence may have finished while it was
+        # still playing. Taking the answer here is what keeps interruption
+        # responsive now that checking no longer blocks the sentence.
+        if _barge_check_verdict(session):
+            interrupted = True
+            break
+    # The last sentence has nowhere to hand a late answer on to, so this one is
+    # waited for: without it, talking over the final sentence would be noticed
+    # only after the reply had already been treated as finished.
+    if not interrupted and not stopped and await _barge_check_settled(session):
+        interrupted = True
     return {
         "spoke": bool(spoken),
         "interrupted": interrupted,
@@ -2954,6 +2991,33 @@ async def _verified_barge_in(agent, session, capture, spoken_text):
     return True
 
 
+async def _check_barge_in_later(agent, session, monitor, spoken_text):
+    """Judge a suspected interruption without holding the next sentence up.
+
+    Waiting for the recording to close and then transcribing it is seconds of
+    work, and it would otherwise land between every pair of sentences, because
+    Reachy's own voice trips the onset almost every time. Speaking continues
+    while this runs; the cost of being wrong is that he finishes one more
+    sentence than he strictly had to.
+    """
+    try:
+        capture = await _finish_barge_in_monitor(session, monitor, True)
+        if capture is None:
+            return False
+        if not await _verified_barge_in(agent, session, capture, spoken_text):
+            return False
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await agent.log(f"could not check a suspected interruption: {exc}", level="warning")
+        return False
+    try:
+        await _conversation_publish(agent, session, "listening", {"interrupted": True})
+    except Exception:
+        pass
+    return True
+
+
 async def _finish_barge_in_monitor(session, monitor, onset_seen):
     """Stop a playback monitor and return any completed capture for checking.
 
@@ -3147,15 +3211,22 @@ async def _say(agent, payload):
         # Cancellation (conversation_stop) must never leave the microphone
         # gate believing Reachy is still speaking.
         agent.state["_speaking"] = False
-        capture = await _finish_barge_in_monitor(session, monitor, onset_seen)
-        if capture is not None and not stopped:
-            interrupted = await _verified_barge_in(agent, session, capture, text)
-            if interrupted:
-                try:
-                    await _conversation_publish(
-                        agent, session, "listening", {"interrupted": True})
-                except Exception:
-                    pass
+        pending_check = session.get("barge_check") if session else None
+        if pending_check is not None and pending_check.done():
+            pending_check = None
+        if monitor is not None and onset_seen and not stopped and pending_check is None:
+            # Checking costs a recogniser pass — about two seconds on the robot
+            # — and his own voice trips the onset on nearly every sentence, so
+            # doing it here put that pause between all of them and made him
+            # sound slow. It runs alongside the next sentence instead, and
+            # `_speak_reply` stops as soon as it comes back confirmed.
+            session["barge_check"] = asyncio.create_task(
+                _check_barge_in_later(agent, session, monitor, text))
+        else:
+            # A check already running is looking at an interruption; a second
+            # one would queue another recogniser pass and, worse, replace the
+            # answer the first is about to give.
+            await _finish_barge_in_monitor(session, monitor, False)
 
     # Clean up the previous utterance now that a new one is playing.
     prev = agent.state.get("_say_tmp")

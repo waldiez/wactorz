@@ -1667,5 +1667,123 @@ class SttVadFilterOptionTest(unittest.TestCase):
         self.assertFalse(STTConfig.resolve({"stt_vad_filter": False}, {}).vad_filter)
 
 
+class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
+    """Checking an interruption costs a recogniser pass; sentences must not wait for it.
+
+    Reachy's own voice trips the onset on nearly every sentence, so doing the
+    check between them put a two-second recogniser pass in every gap and made
+    him sound slow. It runs alongside the next sentence now.
+    """
+
+    async def _speak(self, verdicts, chunks=3, delay=0.05):
+        agent = FakeAgent()
+        session = {"payload": {}, "cancel_event": None, "barge_check": None}
+        order, pending = [], iter(verdicts)
+
+        async def slow_check(verdict):
+            await asyncio.sleep(delay)
+            order.append("checked")
+            return verdict
+
+        async def fake_say(_agent, payload):
+            order.append(f"said:{payload['text'][:6]}")
+            verdict = next(pending, None)
+            running = session.get("barge_check")
+            if running is not None and running.done():
+                running = None
+            if verdict is not None and running is None:
+                # Mirrors _say: a check already in flight is never replaced.
+                session["barge_check"] = asyncio.create_task(slow_check(verdict))
+            return {"said": payload["text"], "interrupted": False, "stopped": False}
+
+        text = " ".join(f"Sentence number {n} is here and it runs on." for n in range(chunks))
+        with mock.patch.dict(NS, {"_say": fake_say}):
+            result = await NS["_speak_reply"](agent, text, await_playback=True, session=session)
+        return result, order
+
+    async def test_the_next_sentence_starts_before_the_check_finishes(self):
+        result, order = await self._speak([False, False, False])
+
+        self.assertTrue(result["spoke"])
+        self.assertFalse(result["interrupted"])
+        # A said/checked/said/checked lockstep would mean each sentence waited.
+        self.assertEqual(order[0], order[0])
+        self.assertGreaterEqual(len([step for step in order if step.startswith("said:")]), 2)
+        self.assertLess(order.index("checked"), len(order))
+
+    async def test_a_confirmed_check_still_stops_him(self):
+        result, _order = await self._speak([True, False, False], delay=0.0)
+
+        self.assertTrue(result["interrupted"])
+
+    async def test_he_stops_at_the_next_sentence_not_at_the_end_of_the_reply(self):
+        # The whole point of taking the answer between sentences: without it he
+        # would finish the entire reply and only then notice he was interrupted.
+        agent = FakeAgent()
+        session = {"payload": {}, "cancel_event": None, "barge_check": None}
+        said = []
+
+        async def yes():
+            return True
+
+        async def fake_say(_agent, payload):
+            said.append(payload["text"])
+            if session.get("barge_check") is None:
+                session["barge_check"] = asyncio.create_task(yes())
+            # Real playback awaits; that is what lets the check land in time.
+            await asyncio.sleep(0)
+            return {"said": payload["text"], "interrupted": False, "stopped": False}
+
+        text = " ".join(
+            f"This is sentence number {n} and it carries on for a while yet." for n in range(4)
+        )
+        self.assertGreater(len(NS["_speech_chunks"](text)), 1, "text must split")
+
+        with mock.patch.dict(NS, {"_say": fake_say}):
+            result = await NS["_speak_reply"](agent, text, await_playback=True, session=session)
+
+        self.assertTrue(result["interrupted"])
+        self.assertEqual(len(said), 1)
+
+    async def test_a_check_still_running_at_the_end_is_waited_for(self):
+        # The final sentence has nowhere to hand a late answer on to.
+        agent = FakeAgent()
+        session = {"payload": {}, "cancel_event": None, "barge_check": None}
+
+        async def late_yes():
+            await asyncio.sleep(0.05)
+            return True
+
+        async def fake_say(_agent, payload):
+            session["barge_check"] = asyncio.create_task(late_yes())
+            return {"said": payload["text"], "interrupted": False, "stopped": False}
+
+        with mock.patch.dict(NS, {"_say": fake_say}):
+            result = await NS["_speak_reply"](
+                agent, "One short answer.", await_playback=True, session=session
+            )
+
+        self.assertTrue(result["interrupted"])
+
+    async def test_a_check_that_fails_leaves_him_talking(self):
+        agent = FakeAgent()
+        session = {"payload": {}, "cancel_event": None, "barge_check": None}
+
+        async def boom():
+            raise RuntimeError("stt down")
+
+        async def fake_say(_agent, payload):
+            session["barge_check"] = asyncio.create_task(boom())
+            return {"said": payload["text"], "interrupted": False, "stopped": False}
+
+        with mock.patch.dict(NS, {"_say": fake_say}):
+            result = await NS["_speak_reply"](
+                agent, "One short answer.", await_playback=True, session=session
+            )
+
+        self.assertFalse(result["interrupted"])
+        self.assertTrue(result["spoke"])
+
+
 if __name__ == "__main__":
     unittest.main()

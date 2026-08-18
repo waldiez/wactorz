@@ -401,7 +401,11 @@ Reachy was speaking — his own voice satisfies every acoustic test, so the only
 separates it from a person's is what was said. That check transcribes with the recogniser's own VAD switched off
 (<code>stt_vad_filter</code>): the clip was recorded while the loudspeaker was playing and has already
 been gated by Reachy's VAD, and running a second one over it discards the speech it was
-meant to protect. A confirmed interruption stops the reply and is routed as the next turn,
+meant to protect. The check runs alongside the next sentence rather than
+between sentences: it costs a recogniser pass — seconds on the robot — and Reachy's own
+voice trips the onset on nearly every sentence, so waiting for it put that pause into every
+gap. One check runs at a time, and its answer is taken as soon as the sentence in progress
+ends. A confirmed interruption stops the reply and is routed as the next turn,
 carrying the transcript already made for the check rather than deriving it twice; an
 unconfirmed one is discarded and he keeps talking.
 The cost of a real interruption is the rest of one sentence, which reads as letting him

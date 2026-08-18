@@ -203,6 +203,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Saying "stop conversation" now ends the conversation, as typing it always did.** The typed
+  commands and the spoken phrases were two separate lists that had drifted: chat understood
+  "stop conversation" and the voice session did not, so saying it was handled as an ordinary
+  question — Reachy answering "Goodbye!" out loud while the microphone stayed on and the session
+  ran. Only typing it stopped anything. The spoken phrases are now built from the typed ones, so
+  a wording that works in one cannot fail in the other, and `stop the conversation` and `end the
+  conversation` are understood aloud too.
+
 - **A Reachy Mini installed exactly as instructed can now actually talk and listen.** The recipe
   never listed `faster-whisper`, which is the default — and only local — speech recogniser behind
   `ask_voice` and `conversation_start`, so on a fresh install every voice feature failed, and

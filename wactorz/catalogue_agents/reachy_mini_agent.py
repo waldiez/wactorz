@@ -1321,8 +1321,7 @@ async def handle_task(agent, payload):
                 elif low in ("start conversation", "start a conversation",
                               "conversation mode", "begin conversation"):
                     payload = {"cmd": "conversation_start"}
-                elif low in ("stop conversation", "end conversation",
-                              "stop the conversation", "end the conversation"):
+                elif low in _CONVERSATION_STOP_COMMANDS:
                     payload = {"cmd": "conversation_stop"}
                 elif low in ("listen and ask wactorz", "listen then ask wactorz",
                               "ask wactorz by voice", "voice ask wactorz",
@@ -4392,9 +4391,20 @@ async def _ask_voice(agent, payload):
 
 
 
+#: Ways of typing "end the conversation" in chat. The spoken phrases below are
+#: built from these, so a wording that works typed cannot fail when said —
+#: which is what happened to "stop conversation": chat understood it and the
+#: voice session did not, so saying it was answered with "Goodbye!" while the
+#: microphone stayed on.
+_CONVERSATION_STOP_COMMANDS = (
+    "stop conversation",
+    "end conversation",
+    "stop the conversation",
+    "end the conversation",
+)
+
 _CONVERSATION_STOP_PHRASES = {
     "stop listening",
-    "end conversation",
     "goodbye reachy",
     "bye",
     "goodbye",
@@ -4405,7 +4415,7 @@ _CONVERSATION_STOP_PHRASES = {
     "τέλος συζήτησης",
     "αντίο",
     "αντίο reachy",
-}
+} | set(_CONVERSATION_STOP_COMMANDS)
 
 
 #: Words that pad a request without changing it. Stripped from the ends only,

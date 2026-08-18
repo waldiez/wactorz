@@ -333,7 +333,8 @@ ending the conversation. Spoken stop phrases work while Reachy is listening, but
 reliable spoken interruption during TTS requires a true full-duplex realtime audio
 pipeline rather than this cascaded STT -> LLM -> TTS path.
 
-Stop with `stop listening`, `end conversation`, `goodbye Reachy`, `goodbye`, `bye`,
+Stop with `stop conversation`, `stop the conversation`, `stop listening`,
+`end conversation`, `end the conversation`, `goodbye Reachy`, `goodbye`, `bye`,
 `that's all`, `σταμάτα`, `σταμάτα να ακούς`, `τέλος συζήτησης`, or `αντίο`.
 You can also stop from chat or MQTT at any stage:
 

@@ -414,7 +414,8 @@ finish rather than as ignoring you. A typed <code>stop</code>,
 ending the conversation. Spoken stop phrases work while Reachy is listening, but
 reliable spoken interruption during TTS requires a true full-duplex realtime audio
 pipeline rather than this cascaded STT -&gt; LLM -&gt; TTS path.</p>
-<p>Stop with <code>stop listening</code>, <code>end conversation</code>, <code>goodbye Reachy</code>, <code>goodbye</code>, <code>bye</code>,
+<p>Stop with <code>stop conversation</code>, <code>stop the conversation</code>, <code>stop listening</code>,
+<code>end conversation</code>, <code>end the conversation</code>, <code>goodbye Reachy</code>, <code>goodbye</code>, <code>bye</code>,
 <code>that's all</code>, <code>σταμάτα</code>, <code>σταμάτα να ακούς</code>, <code>τέλος συζήτησης</code>, or <code>αντίο</code>.
 You can also stop from chat or MQTT at any stage:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">stop</span><span class="w"> </span><span class="n">conversation</span>

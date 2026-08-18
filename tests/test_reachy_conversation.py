@@ -1940,5 +1940,35 @@ class AskingForSilencePolitelyStillWorksTest(unittest.TestCase):
         self.assertTrue(self.ends("σταμάτα"))
 
 
+class TypedAndSpokenAgreeTest(unittest.TestCase):
+    """A wording that ends the conversation typed must end it when said.
+
+    They were two separate lists. Chat knew "stop conversation"; the voice
+    session did not, so saying it was routed to the orchestrator as an ordinary
+    turn — answered "Goodbye!" out loud while the microphone stayed on — and
+    only typing it actually stopped anything.
+    """
+
+    def test_every_typed_stop_command_is_also_heard_as_one(self):
+        for command in NS["_CONVERSATION_STOP_COMMANDS"]:
+            with self.subTest(command=command):
+                self.assertTrue(NS["_conversation_stop_phrase"](command))
+
+    def test_the_wording_that_failed_now_works_said_aloud(self):
+        for text in ("stop conversation", "Stop Conversation", "stop conversation please"):
+            with self.subTest(text=text):
+                self.assertTrue(NS["_conversation_stop_phrase"](text))
+
+    def test_talking_about_a_conversation_does_not_end_it(self):
+        for text in ("tell me about our conversation", "conversation", "stop the music"):
+            with self.subTest(text=text):
+                self.assertFalse(NS["_conversation_stop_phrase"](text))
+
+    def test_the_spoken_only_phrases_are_still_there(self):
+        for text in ("stop listening", "goodbye", "bye", "σταμάτα", "αντίο"):
+            with self.subTest(text=text):
+                self.assertTrue(NS["_conversation_stop_phrase"](text))
+
+
 if __name__ == "__main__":
     unittest.main()

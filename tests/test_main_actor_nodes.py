@@ -2,9 +2,7 @@
 
 Four readers share one dict of heartbeats: the node listing the dashboard and
 `/nodes` render, the online predicate, the sorted online-name list, and the
-lookup that decides which node an agent is running on. Between them they hold
-the whole of "is this node up", and the freshness window they agree on is
-written as a bare `30` in three separate places.
+lookup that decides which node an agent is running on.
 
 These tests describe current behaviour so the shared state can be moved to a
 collaborator as a move: the same answers, the same boundary, the same keys. The
@@ -17,6 +15,7 @@ from typing import Any
 import pytest
 
 from wactorz.agents.main_actor import MainActor
+from wactorz.agents.nodes import NodeManager
 
 #: The window every "is it online" reader uses. Written as a literal `30` at
 #: three call sites rather than shared, which is the thing worth watching.
@@ -41,9 +40,15 @@ def node(*, seen_ago: float = 0.0, agents: tuple[str, ...] = (), **extra: Any) -
 
 
 def make_main(**nodes: dict[str, Any]) -> MainActor:
-    """A MainActor holding `nodes` and nothing else the node readers touch."""
+    """A MainActor holding `nodes` and nothing else the node readers touch.
+
+    `__new__` skips `__init__`, so the collaborator that owns the heartbeat
+    table is built here. Assignment still goes through `_known_nodes`, which is
+    the name the planner, the CLI and the chat router reach for.
+    """
     m = MainActor.__new__(MainActor)
     m.name = "main"
+    m.nodes = NodeManager()
     m._known_nodes = dict(nodes)
     return m
 
@@ -190,6 +195,34 @@ class TestWhichNodeRunsAnAgent:
 
     def test_a_local_only_agent_belongs_to_no_node(self) -> None:
         assert make_main()._node_running_agent("main") == ""
+
+
+class TestWhichAgentsAreRunningRemotely:
+    """The union across online nodes, which decides what counts as remote."""
+
+    def test_it_names_agents_on_online_nodes(self) -> None:
+        main = make_main(
+            alpha=node(agents=("collector",)),
+            beta=node(agents=("optimizer", "watcher")),
+        )
+
+        assert main.nodes.running_agents() == {"collector", "optimizer", "watcher"}
+
+    def test_a_stale_node_contributes_nothing(self) -> None:
+        main = make_main(
+            fresh=node(agents=("collector",)),
+            stale=node(seen_ago=ONLINE_WINDOW_S + 1, agents=("ghost",)),
+        )
+
+        assert main.nodes.running_agents() == {"collector"}
+
+    def test_an_agent_on_two_nodes_is_named_once(self) -> None:
+        main = make_main(alpha=node(agents=("shared",)), beta=node(agents=("shared",)))
+
+        assert main.nodes.running_agents() == {"shared"}
+
+    def test_nothing_runs_remotely_when_no_node_is_known(self) -> None:
+        assert not make_main().nodes.running_agents()
 
 
 class TestTheTwoWindowsAreDifferentOnPurpose:

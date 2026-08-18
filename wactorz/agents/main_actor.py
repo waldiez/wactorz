@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import re
+import shutil
 import socket
 import time
 import uuid
@@ -37,6 +38,7 @@ from .mixins import (
     SpawnMixin,
     SpawnPlaceholder,
 )
+from .nodes import NodeManager
 from .one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from .prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
@@ -76,7 +78,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._pending_notifications: list[dict] = []
         self.protected = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
-        self._known_nodes: dict[str, dict] = {}
+        self.nodes = NodeManager()
         # Consecutive heartbeats a registry-claimed agent has been absent from its
         # node — (node_name, agent_name) → count. Prune only past the threshold so a
         # single missed heartbeat (a transient gap) doesn't drop a live agent.
@@ -475,8 +477,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             )
         if stripped in ("main.list_nodes", "list_nodes", "/nodes"):
             nodes = self.list_nodes()
-            import time as _t
-
             # Local row first — matches the format users got from io_agent
             local_agents = []
             if self._registry:
@@ -488,7 +488,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             for nd in sorted(nodes, key=lambda x: x["node"]):
                 status = "🟢 online " if nd["online"] else "🔴 offline"
                 agents = ", ".join("@" + a for a in nd["agents"]) or "(no agents)"
-                age = int(_t.time() - nd["last_seen"])
+                age = int(time.time() - nd["last_seen"])
                 lines.append(
                     f"  {nd['node']:22s} {status}  |  agents: {agents}  |  last heartbeat: {age}s ago"
                 )
@@ -1120,11 +1120,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                     f"\U0001f47b '{name}' is in manifest cache but nowhere else — stale entry, run `/agents delete {name}` to clean up"
                 )
             # In spawn registry as remote, but the node is offline / not heartbeating
-            online_nodes = {
-                n
-                for n, info in self._known_nodes.items()
-                if (time.time() - info.get("last_seen", 0)) < 30
-            }
+            online_nodes = set(self.nodes.online_names())
             for name, cfg in spawn_reg.items():
                 node = cfg.get("node", "").strip()
                 if node and node not in online_nodes:
@@ -1290,8 +1286,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
             if remote_node:
                 # Send via MQTT and wait for reply
-                import time as _t
-
                 async with self._reply_topic() as (reply_topic, future):
                     await self._mqtt_publish(
                         f"agents/by-name/{target_name}/task",
@@ -2487,40 +2481,33 @@ async def handle_task(agent, payload):
 
     # ── Node registry ──────────────────────────────────────────────────────
 
-    def list_nodes(self) -> list[dict]:
-        """Return all known remote nodes with their last-seen time, running agents, and system metrics."""
-        import time as _time
+    @property
+    def _known_nodes(self) -> dict[str, dict]:
+        """The heartbeat table, which `self.nodes` owns.
 
-        now = _time.time()
-        return [
-            {
-                "node": name,
-                "agents": info.get("agents", []),
-                "last_seen": info.get("last_seen", 0),
-                "online": (now - info.get("last_seen", 0)) < 30,
-                "pid": info.get("pid"),
-                "uptime_s": info.get("uptime_s"),
-                "cpu_pct": info.get("cpu_pct"),
-                "mem_used_mb": info.get("mem_used_mb"),
-                "mem_free_mb": info.get("mem_free_mb"),
-            }
-            for name, info in self._known_nodes.items()
-        ]
+        Kept as a name on MainActor because several modules read it directly off
+        the main actor — the planner, the CLI, the chat router and the dynamic
+        agents all walk it to find where an agent is running.
+        """
+        return self.nodes.known
+
+    @_known_nodes.setter
+    def _known_nodes(self, value: dict[str, dict[str, Any]]) -> None:
+        self.nodes.known = value
+
+    def list_nodes(self) -> list[dict[str, Any]]:
+        """Return all known remote nodes with their last-seen time, running agents, and system metrics."""
+        return self.nodes.list_nodes()
 
     def _node_is_online(self, node_name: str) -> bool:
-        """True if ``node_name`` sent a heartbeat within the last 30s — the same
-        freshness window used by list_nodes() and _node_running_agent().
-        """
-        import time as _time
-
-        info = self._known_nodes.get(node_name)
-        return bool(info and (_time.time() - info.get("last_seen", 0)) < 30)
+        """True if ``node_name`` sent a heartbeat inside the freshness window."""
+        return self.nodes.is_online(node_name)
 
     def _online_node_names(self) -> list[str]:
-        """Names of all nodes currently considered online (30s heartbeat window)."""
-        return sorted(name for name in self._known_nodes if self._node_is_online(name))
+        """Names of all nodes currently considered online."""
+        return self.nodes.online_names()
 
-    def list_topics(self, keyword: str = "") -> list[dict]:
+    def list_topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
         Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}
 
@@ -2549,7 +2536,7 @@ async def handle_task(agent, payload):
             )
         return sorted(results, key=lambda x: x["topic"])
 
-    def list_capabilities(self, keyword: str = "") -> list[dict]:
+    def list_capabilities(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known agents with their full capability profile:
         name, description, capabilities, input_schema, output_schema.
 
@@ -2558,13 +2545,7 @@ async def handle_task(agent, payload):
         local ones). The `running` flag is True for both local registry actors
         AND agents currently listed in a live node's heartbeat.
         """
-        # Build the set of remotely-running agent names from live node heartbeats
-        import time as _time
-
-        remote_running: set = set()
-        for nd in self._known_nodes.values():
-            if _time.time() - nd.get("last_seen", 0) < 30:
-                remote_running.update(nd.get("agents", []))
+        remote_running = self.nodes.running_agents()
 
         results = []
         kw = keyword.lower().strip()
@@ -3011,8 +2992,6 @@ async def handle_task(agent, payload):
 
         Returns {"success": bool, "message": str}
         """
-        import time as _time
-
         reg = self._get_spawn_registry()
         config = reg.get(agent_name)
         have_code = bool(config and config.get("code"))
@@ -3027,15 +3006,9 @@ async def handle_task(agent, payload):
         if not current_node and manifest:
             current_node = (manifest.get("node") or "").strip()
         if not current_node:
-            # Last resort — scan live heartbeats for which node lists this agent
-            import time as _t
-
-            for nd_name, nd in self._known_nodes.items():
-                if _t.time() - nd.get("last_seen", 0) >= 30:
-                    continue
-                if agent_name in nd.get("agents", []):
-                    current_node = nd_name
-                    break
+            # Last resort — the live heartbeats, which may know a node the spawn
+            # registry does not record.
+            current_node = self.nodes.running_agent(agent_name)
 
         # ── Verify the agent exists *somewhere* ───────────────────────────────
         # If we found nothing — not in registry, not in manifest, not heart-
@@ -3140,7 +3113,7 @@ async def handle_task(agent, payload):
             self._pending_state_returns[return_token] = {
                 "agent_name": agent_name,
                 "from_node": current_node,
-                "started_at": _time.time(),
+                "started_at": time.time(),
             }
             await self._mqtt_publish(
                 f"nodes/{current_node}/migrate",
@@ -3181,9 +3154,7 @@ async def handle_task(agent, payload):
                         dropped = []
                         for k, v in raw.items():
                             try:
-                                import json as _json
-
-                                _json.dumps(v)
+                                json.dumps(v)
                                 initial_state[k] = v
                             except (TypeError, ValueError):
                                 dropped.append(k)
@@ -3343,8 +3314,6 @@ async def handle_task(agent, payload):
                         node_name = parts[1]
 
                         if topic.endswith("/heartbeat"):
-                            import time as _t
-
                             new_agents = data.get("agents", [])
                             # ── Diff against previous snapshot for this node ──
                             prev = self._known_nodes.get(node_name, {})
@@ -3370,7 +3339,7 @@ async def handle_task(agent, payload):
                                     reason=f"vanished from node '{node_name}' (crash or external kill)",
                                 )
                             self._known_nodes[node_name] = {
-                                "last_seen": _t.time(),
+                                "last_seen": time.time(),
                                 "agents": new_agents,
                                 "node_id": data.get("node_id", ""),
                                 "pid": data.get("pid"),
@@ -3447,7 +3416,7 @@ async def handle_task(agent, payload):
                                                 f"wactorz.actor.{aname}",
                                             )
                                         )
-                                        mon._last_seen[remote_id] = _t.time()  # pyright: ignore[reportAttributeAccessIssue]
+                                        mon._last_seen[remote_id] = time.time()  # pyright: ignore[reportAttributeAccessIssue]
                         elif topic.endswith("/migrate_result"):
                             success = data.get("success", False)
                             agent = data.get("agent", "?")
@@ -3492,15 +3461,13 @@ async def handle_task(agent, payload):
         indicator stays at 30s for snappy UX; this watcher waits long enough
         to be sure the node is genuinely down.
         """
-        import time as _t
-
         NODE_OFFLINE_GRACE_S = 90.0
         CHECK_INTERVAL_S = 15.0
 
         while self.state.value not in ("stopped", "failed"):
             try:
                 await asyncio.sleep(CHECK_INTERVAL_S)
-                now = _t.time()
+                now = time.time()
                 # Snapshot to avoid mutation-during-iteration
                 stale_nodes = [
                     (name, info)
@@ -3749,9 +3716,7 @@ async def handle_task(agent, payload):
         if not installer:
             return {"error": "installer agent not found"}
 
-        import uuid as _uuid
-
-        task_id = f"inst_{_uuid.uuid4().hex[:8]}"
+        task_id = f"inst_{uuid.uuid4().hex[:8]}"
         future: asyncio.Future = asyncio.get_event_loop().create_future()
         self._result_futures[task_id] = future
 
@@ -3908,20 +3873,11 @@ async def handle_task(agent, payload):
             await self.send(target.actor_id, command)
 
     def _node_running_agent(self, name: str) -> str:
-        """Return the live remote node currently running ``name``, from heartbeat
-        telemetry, or "" if none recently claims it.
+        """The live remote node running ``name``, or "" if none claims it.
 
-        Fallback for when the spawn registry doesn't record the node. Mirrors the
-        freshness window used by ``migrate_agent``.
+        Fallback for when the spawn registry does not record the node.
         """
-        import time as _t
-
-        for nd_name, nd in self._known_nodes.items():
-            if _t.time() - nd.get("last_seen", 0) >= 30:
-                continue
-            if name in nd.get("agents", []):
-                return nd_name
-        return ""
+        return self.nodes.running_agent(name)
 
     async def delete_spawned_agent(self, name: str):
         """Permanently delete an agent.
@@ -4053,8 +4009,6 @@ async def handle_task(agent, payload):
         pdir = getattr(actor, "_persistence_dir", None)
         if pdir is not None:
             try:
-                import shutil
-
                 pdir_path = str(pdir)
                 shutil.rmtree(pdir_path, ignore_errors=True)
                 logger.info(

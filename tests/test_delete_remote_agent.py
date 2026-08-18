@@ -15,11 +15,13 @@ import types
 from unittest.mock import AsyncMock, Mock
 
 from wactorz.agents.main_actor import MainActor
+from wactorz.agents.nodes import NodeManager
 
 
 def _bare_main() -> MainActor:
     """A MainActor with just the surface delete_spawned_agent touches, stubbed."""
     m = MainActor.__new__(MainActor)
+    m.nodes = NodeManager()
     m.name = "main"
     m.recall = lambda *a, **k: {}  # empty spawn registry (no node recorded)
     m.persist = lambda *a, **k: None

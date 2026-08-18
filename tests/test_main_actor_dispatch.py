@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from wactorz.agents.main_actor import MainActor
+from wactorz.agents.nodes import NodeManager
 
 
 class _Registry:
@@ -56,7 +57,8 @@ class _Main:
     ) -> None:
         m = MainActor.__new__(MainActor)
         m.name = "main"
-        m._registry = _Registry(agents)
+        m._registry = _Registry(agents)  # pyright: ignore[reportAttributeAccessIssue]
+        m.nodes = NodeManager()
         m._known_nodes = {}
         m._agent_manifests = {}
         # Real `Actor` attributes the branches reach through: `recall` consults
@@ -81,36 +83,36 @@ class _Main:
         async def _record(text: str, reply: str) -> None:
             self.calls["recorded"].append((text, reply))
 
-        m._record_external_exchange = _record
+        m._record_external_exchange = _record  # pyright: ignore[reportAttributeAccessIssue]
 
         async def _pending_plan(_text: str) -> str | None:
             self.calls["plan_checked"] = True
             return plan_reply
 
-        m._handle_pending_plan_response = _pending_plan
+        m._handle_pending_plan_response = _pending_plan  # pyright: ignore[reportAttributeAccessIssue]
 
         def _collision(_text: str) -> str | None:
             return collision_warning
 
-        m._warn_if_pending_plan_collision = _collision
+        m._warn_if_pending_plan_collision = _collision  # pyright: ignore[reportAttributeAccessIssue]
 
         async def _classify(_text: str) -> str:
             self.calls["classified"] += 1
             return "OTHER"
 
-        m._classify_intent = _classify
+        m._classify_intent = _classify  # pyright: ignore[reportAttributeAccessIssue]
 
         async def _chat(text: str, attachments: Any = None) -> str:
             return f"<model answered {text!r}>"
 
-        m.chat = _chat
+        m.chat = _chat  # pyright: ignore[reportAttributeAccessIssue]
 
         # The tail of the fall-through path, past the command chain. Stubbed so
         # "went to the model" is observable rather than an exception, without
         # these tests taking a position on what the model path then does.
         m._conversation_history = []
         m._rebuild_system_prompt = lambda: None
-        m._prefix_with_live_context = lambda text: text
+        m._prefix_with_live_context = lambda text: text  # pyright: ignore[reportAttributeAccessIssue]
         m.persist = lambda key, value: None
         self.actor = m
 

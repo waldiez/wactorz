@@ -1790,13 +1790,29 @@ async def _speak_reply(agent, text, *, await_playback=False, session=None):
     # survive into the next one, or it only silences the sentence in progress.
     agent.state["stop_speaking"] = False
     spoken, interrupted, stopped = [], False, False
+    # One sentence is always being synthesized while another is being spoken, so
+    # the network round trip stops landing in the gap between them. Only one
+    # runs ahead: any further and a reply cut short would have paid for
+    # sentences nobody hears.
+    ahead = (
+        asyncio.create_task(_prepare_speech(agent, chunks[0], {}))
+        if chunks
+        else None
+    )
     for index, chunk in enumerate(chunks):
         last = index == len(chunks) - 1
+        prepared = await ahead if ahead is not None else None
+        ahead = (
+            None
+            if last
+            else asyncio.create_task(_prepare_speech(agent, chunks[index + 1], {}))
+        )
         payload = {
             "text": chunk,
             "await_playback": await_playback,
             "_barge_in_session": session,
             "_continuation": index > 0,
+            "_prepared": prepared,
         }
         if not last:
             # Mid-reply the gap is heard as a pause in one answer, so it only has
@@ -1817,6 +1833,9 @@ async def _speak_reply(agent, text, *, await_playback=False, session=None):
         if _barge_check_verdict(session):
             interrupted = True
             break
+    # A sentence prepared for a reply that stopped early is never spoken; drop
+    # it rather than leave its file behind.
+    await _discard_prepared(ahead)
     # The last sentence has nowhere to hand a late answer on to, so this one is
     # waited for: without it, talking over the final sentence would be noticed
     # only after the reply had already been treated as finished.
@@ -3047,6 +3066,91 @@ async def _finish_barge_in_monitor(session, monitor, onset_seen):
     return None
 
 
+async def _prepare_speech(agent, text, payload):
+    """Turn one sentence into a file ready for play_sound.
+
+    Split out of `_say` so a reply's next sentence can be synthesized while the
+    current one is still playing. Every sentence is its own edge-tts request —
+    a network round trip, and on the robot the loudness boost on top of it — so
+    doing this between sentences put the whole of it into every gap. That is the
+    pause heard as "Sure! ... I'm Reachy ... I love a good chat".
+    """
+    import os, tempfile, uuid
+
+    # Voice precedence: explicit payload voice > script auto-detect > configured default.
+    # Auto-detect matters because an English voice fed literal Greek text spells out
+    # the Unicode letter names ("kappa alpha lambda...") instead of pronouncing the
+    # word. Picking a voice that matches the text's script fixes that.
+    default_voice = (agent.state.get("tts_voice")
+                     or os.environ.get("TTS_VOICE", "en-US-JennyNeural"))
+    voice = payload.get("voice") or _voice_for_text(text, default_voice)
+
+    # -- Synthesize to a temp MP3 file (path-based, GStreamer playbin decodes it) --
+    try:
+        import edge_tts
+    except ImportError:
+        raise RuntimeError("edge-tts not installed — pip install edge-tts")
+
+    raw_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
+    communicate = _edge_tts_communicate(edge_tts, text, voice)
+    # Stream (what .save() does internally) so we can capture the total speech
+    # duration from the WordBoundary offsets for free — used to wait out
+    # playback so sequential says don't cut each other off.
+    speech_ticks = 0
+    with open(raw_path, "wb") as _f:
+        async for chunk in communicate.stream():
+            if chunk.get("type") == "audio":
+                _f.write(chunk["data"])
+            elif chunk.get("type") in ("WordBoundary", "SentenceBoundary"):
+                speech_ticks = max(
+                    speech_ticks,
+                    int(chunk.get("offset", 0)) + int(chunk.get("duration", 0)),
+                )
+    # edge-tts uses 100-ns ticks. Some versions default to SentenceBoundary
+    # metadata while older versions may emit no timing metadata at all. Never
+    # let an unknown duration become a zero wait: the next play_sound call would
+    # then replace this clip while it is still speaking.
+    speech_seconds = _speech_duration_seconds(text, speech_ticks)
+
+    # -- Loudness boost (default on) --------------------------------------------
+    # The boost compresses + limits the TTS file to the digital ceiling (loudest
+    # the file can be). Robot speaker loudness on top of that is the persistent
+    # volume (daemon gain, set via cmd=volume). per-call gain_db (<=0) trims this
+    # one utterance quieter at the file level without touching the volume setting.
+    trim_db = min(0.0, float(payload.get("gain_db", 0)))
+    play_path = raw_path
+    if payload.get("loud", True):
+        boosted = await _boost_audio(agent, raw_path, trim_db)
+        if boosted:
+            try:
+                os.unlink(raw_path)   # raw is consumed by the boost step
+            except Exception:
+                pass
+            play_path = boosted
+    return {"raw_path": raw_path, "play_path": play_path, "voice": voice,
+            "speech_seconds": speech_seconds, "trim_db": trim_db}
+
+
+async def _discard_prepared(task):
+    """Throw away a sentence prepared for a reply that stopped before reaching it."""
+    import os
+
+    if task is None:
+        return
+    task.cancel()
+    prepared = (await asyncio.gather(task, return_exceptions=True))[0]
+    if not isinstance(prepared, dict):
+        return
+    for key in ("play_path", "raw_path"):
+        path = prepared.get(key)
+        if not path:
+            continue
+        try:
+            os.unlink(path)
+        except Exception:
+            pass
+
+
 async def _say(agent, payload):
     """Speak text through Reachy's speaker using edge-tts for synthesis.
 
@@ -3107,57 +3211,13 @@ async def _say(agent, payload):
             level="warning",
         )
 
-    # Voice precedence: explicit payload voice > script auto-detect > configured default.
-    # Auto-detect matters because an English voice fed literal Greek text spells out
-    # the Unicode letter names ("kappa alpha lambda...") instead of pronouncing the
-    # word. Picking a voice that matches the text's script fixes that.
-    default_voice = (agent.state.get("tts_voice")
-                     or os.environ.get("TTS_VOICE", "en-US-JennyNeural"))
-    voice = payload.get("voice") or _voice_for_text(text, default_voice)
-
-    # -- Synthesize to a temp MP3 file (path-based, GStreamer playbin decodes it) --
-    try:
-        import edge_tts
-    except ImportError:
-        raise RuntimeError("edge-tts not installed — pip install edge-tts")
-
-    raw_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
-    communicate = _edge_tts_communicate(edge_tts, text, voice)
-    # Stream (what .save() does internally) so we can capture the total speech
-    # duration from the WordBoundary offsets for free — used below to wait out
-    # playback so sequential says don't cut each other off.
-    speech_ticks = 0
-    with open(raw_path, "wb") as _f:
-        async for chunk in communicate.stream():
-            if chunk.get("type") == "audio":
-                _f.write(chunk["data"])
-            elif chunk.get("type") in ("WordBoundary", "SentenceBoundary"):
-                speech_ticks = max(
-                    speech_ticks,
-                    int(chunk.get("offset", 0)) + int(chunk.get("duration", 0)),
-                )
-    # edge-tts uses 100-ns ticks. Some versions default to SentenceBoundary
-    # metadata while older versions may emit no timing metadata at all. Never
-    # let an unknown duration become a zero wait: the next play_sound call would
-    # then replace this clip while it is still speaking.
-    speech_seconds = _speech_duration_seconds(text, speech_ticks)
-
-    # -- Loudness boost (default on) --------------------------------------------
-    # The boost compresses + limits the TTS file to the digital ceiling (loudest
-    # the file can be). Robot speaker loudness on top of that is the persistent
-    # volume (daemon gain, set via cmd=volume). per-call gain_db (<=0) trims this
-    # one utterance quieter at the file level without touching the volume setting.
-    loud = payload.get("loud", True)
-    trim_db = min(0.0, float(payload.get("gain_db", 0)))
-    play_path = raw_path
-    if loud:
-        boosted = await _boost_audio(agent, raw_path, trim_db)
-        if boosted:
-            try:
-                os.unlink(raw_path)   # raw is consumed by the boost step
-            except Exception:
-                pass
-            play_path = boosted
+    # Already synthesized by the sentence before this one, when there was one.
+    prepared = payload.get("_prepared") or await _prepare_speech(agent, text, payload)
+    raw_path = prepared["raw_path"]
+    play_path = prepared["play_path"]
+    speech_seconds = prepared["speech_seconds"]
+    voice = prepared["voice"]
+    trim_db = prepared["trim_db"]
 
     # Clear any stale 'shutup' request from a previous utterance before we start.
     # NOT for a continuation chunk: the sentences of one reply are separate says,

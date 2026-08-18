@@ -203,6 +203,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The pause between the sentences of one spoken reply is gone.** A reply is spoken sentence by
+  sentence so the first words reach the speaker quickly, but each sentence was synthesized only
+  once the previous one had finished playing — and every sentence is its own edge-tts request
+  over the network, with the loudness boost on top. That round trip landed in every gap, so
+  "Sure! I'm Reachy, your friendly robot companion. I love a good chat." arrived in pieces with
+  a wait between each. Each sentence is now synthesized while the previous one is still playing,
+  which removes the gap without giving up the quick start: only one runs ahead, so a reply cut
+  short has not paid for sentences nobody hears, and the unused one is discarded with its file.
+
 - **Reachy no longer pauses for seconds between every sentence.** Checking whether an
   interruption was real costs a recogniser pass — around two seconds on the robot — and his own
   voice trips the check on nearly every sentence, so with `barge_in` on that pause landed in

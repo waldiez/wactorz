@@ -61,6 +61,17 @@ class FakeAgent:
         return asyncio.create_task(coro)
 
 
+async def fake_prepare(_agent, text, _payload):
+    """Stand in for edge-tts: unit tests must not synthesize over the network."""
+    return {
+        "raw_path": f"/tmp/{abs(hash(text))}.mp3",
+        "play_path": f"/tmp/{abs(hash(text))}.mp3",
+        "voice": "test-voice",
+        "speech_seconds": 0.0,
+        "trim_db": 0.0,
+    }
+
+
 def captured(reason=None):
     audio = np.zeros(0, np.float32) if reason else np.full(1600, 0.2, np.float32)
     return VoiceCapture(audio, 16000, 1, 0.1 if audio.size else 0.0, reason, 4)
@@ -1288,7 +1299,7 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
                 "stopped": bool(_agent.state.get("stop_speaking")),
             }
 
-        with mock.patch.dict(NS, {"_say": fake_say}):
+        with mock.patch.dict(NS, {"_say": fake_say, "_prepare_speech": fake_prepare}):
             result = await NS["_speak_reply"](agent, self.REPLY, await_playback=True)
 
         # Only the sentence that was already playing — not the whole bubble.
@@ -1311,7 +1322,7 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
                 "stopped": bool(_agent.state.get("stop_speaking")),
             }
 
-        with mock.patch.dict(NS, {"_say": fake_say}):
+        with mock.patch.dict(NS, {"_say": fake_say, "_prepare_speech": fake_prepare}):
             result = await NS["_speak_reply"](agent, self.REPLY, await_playback=True)
 
         self.assertEqual(len(said), 3)
@@ -1325,7 +1336,7 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
             pads.append(payload.get("tail_pad"))
             return {"said": payload["text"], "interrupted": False, "stopped": False}
 
-        with mock.patch.dict(NS, {"_say": fake_say}):
+        with mock.patch.dict(NS, {"_say": fake_say, "_prepare_speech": fake_prepare}):
             await NS["_speak_reply"](agent, self.REPLY, await_playback=True)
 
         # Short gap mid-reply; the last chunk keeps _say's own default, which
@@ -1697,7 +1708,7 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
             return {"said": payload["text"], "interrupted": False, "stopped": False}
 
         text = " ".join(f"Sentence number {n} is here and it runs on." for n in range(chunks))
-        with mock.patch.dict(NS, {"_say": fake_say}):
+        with mock.patch.dict(NS, {"_say": fake_say, "_prepare_speech": fake_prepare}):
             result = await NS["_speak_reply"](agent, text, await_playback=True, session=session)
         return result, order
 
@@ -1739,7 +1750,7 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertGreater(len(NS["_speech_chunks"](text)), 1, "text must split")
 
-        with mock.patch.dict(NS, {"_say": fake_say}):
+        with mock.patch.dict(NS, {"_say": fake_say, "_prepare_speech": fake_prepare}):
             result = await NS["_speak_reply"](agent, text, await_playback=True, session=session)
 
         self.assertTrue(result["interrupted"])
@@ -1758,7 +1769,7 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
             session["barge_check"] = asyncio.create_task(late_yes())
             return {"said": payload["text"], "interrupted": False, "stopped": False}
 
-        with mock.patch.dict(NS, {"_say": fake_say}):
+        with mock.patch.dict(NS, {"_say": fake_say, "_prepare_speech": fake_prepare}):
             result = await NS["_speak_reply"](
                 agent, "One short answer.", await_playback=True, session=session
             )
@@ -1776,13 +1787,100 @@ class CheckingDoesNotSlowTheTalkingTest(unittest.IsolatedAsyncioTestCase):
             session["barge_check"] = asyncio.create_task(boom())
             return {"said": payload["text"], "interrupted": False, "stopped": False}
 
-        with mock.patch.dict(NS, {"_say": fake_say}):
+        with mock.patch.dict(NS, {"_say": fake_say, "_prepare_speech": fake_prepare}):
             result = await NS["_speak_reply"](
                 agent, "One short answer.", await_playback=True, session=session
             )
 
         self.assertFalse(result["interrupted"])
         self.assertTrue(result["spoke"])
+
+
+class SentencesArePreparedAheadTest(unittest.IsolatedAsyncioTestCase):
+    """The next sentence is synthesized while this one is still playing.
+
+    Each sentence is its own edge-tts request. Doing them one after another put
+    that round trip in every gap, which is the pause heard as
+    "Sure! ... I'm Reachy ... I love a good chat".
+    """
+
+    TEXT = " ".join(
+        f"This is sentence number {n} and it carries on for a while yet." for n in range(3)
+    )
+
+    async def _run(self, stop_after=None):
+        agent, order = FakeAgent(), []
+        chunks = NS["_speech_chunks"](self.TEXT)
+        self.assertGreater(len(chunks), 2, "text must split into several sentences")
+        index_of = {chunk: n for n, chunk in enumerate(chunks)}
+
+        async def fake_prepare(_agent, text, _payload):
+            order.append(f"prep:{index_of[text]}")
+            return {
+                "raw_path": "/tmp/x.mp3",
+                "play_path": "/tmp/x.mp3",
+                "voice": "v",
+                "speech_seconds": 0.0,
+                "trim_db": 0.0,
+            }
+
+        async def fake_say(_agent, payload):
+            n = index_of[payload["text"]]
+            order.append(f"say-start:{n}")
+            await asyncio.sleep(0.02)
+            order.append(f"say-end:{n}")
+            stopped = stop_after is not None and n == stop_after
+            return {"said": payload["text"], "interrupted": False, "stopped": stopped}
+
+        with mock.patch.dict(NS, {"_say": fake_say, "_prepare_speech": fake_prepare}):
+            result = await NS["_speak_reply"](agent, self.TEXT, await_playback=True)
+        return result, order, chunks
+
+    async def test_the_next_one_is_prepared_before_this_one_finishes(self):
+        _result, order, _chunks = await self._run()
+
+        # Serial would read: say-start:0, say-end:0, prep:1. Pipelined puts the
+        # preparation inside the first sentence's playback.
+        self.assertLess(order.index("prep:1"), order.index("say-end:0"))
+        self.assertLess(order.index("prep:2"), order.index("say-end:1"))
+
+    async def test_the_first_sentence_still_starts_without_waiting_for_the_rest(self):
+        # Preparing everything up front would trade these gaps for a slow start.
+        _result, order, _chunks = await self._run()
+
+        self.assertEqual(order[0], "prep:0")
+        self.assertEqual(order[1], "say-start:0")
+
+    async def test_a_sentence_prepared_for_a_reply_that_stops_is_discarded(self):
+        result, order, chunks = await self._run(stop_after=0)
+
+        self.assertTrue(result["stopped"])
+        self.assertEqual(result["spoken_result"], chunks[0])
+        # It was prepared during the first sentence, then never spoken.
+        self.assertIn("prep:1", order)
+        self.assertNotIn("say-start:1", order)
+
+
+class DiscardPreparedTest(unittest.IsolatedAsyncioTestCase):
+    """Dropping an unspoken sentence must not raise, whatever state it is in."""
+
+    async def test_nothing_to_discard_is_fine(self):
+        await NS["_discard_prepared"](None)
+
+    async def test_a_running_preparation_is_cancelled(self):
+        async def never():
+            await asyncio.sleep(30)
+
+        task = asyncio.create_task(never())
+        await NS["_discard_prepared"](task)
+
+        self.assertTrue(task.cancelled() or task.done())
+
+    async def test_a_failed_preparation_is_swallowed(self):
+        async def boom():
+            raise RuntimeError("edge-tts down")
+
+        await NS["_discard_prepared"](asyncio.create_task(boom()))
 
 
 if __name__ == "__main__":

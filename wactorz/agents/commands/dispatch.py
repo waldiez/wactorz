@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from ..main_actor import MainActor
 
 #: Short forms, and the commands they stand for.
 #:
@@ -106,7 +109,7 @@ class CommandContext:
     #: The actor the command was typed at. Phase 1 keeps this while handlers
     #: still call back into it; each batch that moves a command replaces one
     #: more use with a named member above it.
-    actor: Any
+    actor: MainActor
     #: True when the caller is a social channel, where the admin surface is
     #: refused at the action rather than by reading the text.
     restricted: bool = False

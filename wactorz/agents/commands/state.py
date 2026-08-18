@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timezone
+from typing import Any
 
 from ..helpers.main_actor_helpers import PENDING_PLANS_KEY
 from .dispatch import CommandContext, command
@@ -25,25 +26,37 @@ logger = logging.getLogger(__name__)
     summary="show or clear stored user facts and summary",
 )
 async def manage_memory(ctx: CommandContext, argument: str) -> str:
-    """Show or clear stored user facts and summary."""
-    sub = argument
-    if sub == "clear":
-        ctx.actor.persist("_user_facts", {})
-        ctx.actor.persist("history_summary", "")
-        ctx.actor._history_summary = ""
-        # Rebuild fresh — running agents block is preserved, facts are gone
-        ctx.actor._rebuild_system_prompt()
-        return "Memory cleared — user facts and conversation summary reset."
-    if sub.startswith("forget "):
-        key = sub[7:].strip()
-        facts = ctx.actor.get_user_facts()
-        if key in facts:
-            del facts[key]
-            ctx.actor.persist("_user_facts", facts)
-            ctx.actor._inject_user_facts_into_prompt()
-            return f"Forgotten: '{key}'"
+    """Show, clear, or forget one item of stored memory."""
+    if argument == "clear":
+        return _clear_memory(ctx)
+    if argument.startswith("forget "):
+        return _forget_fact(ctx, argument[len("forget ") :].strip())
+    return _show_memory(ctx)
+
+
+def _clear_memory(ctx: CommandContext) -> str:
+    """Drop every stored fact and the rolling summary."""
+    ctx.actor.persist("_user_facts", {})
+    ctx.actor.persist("history_summary", "")
+    ctx.actor._history_summary = ""
+    # Rebuilt fresh: the running-agents block is regenerated, the facts are not.
+    ctx.actor._rebuild_system_prompt()
+    return "Memory cleared — user facts and conversation summary reset."
+
+
+def _forget_fact(ctx: CommandContext, key: str) -> str:
+    """Remove one stored fact by key."""
+    facts = ctx.actor.get_user_facts()
+    if key not in facts:
         return f"No fact found with key '{key}'."
-    # Default: show memory, grouped by bucket so it's easy to scan
+    del facts[key]
+    ctx.actor.persist("_user_facts", facts)
+    ctx.actor._inject_user_facts_into_prompt()
+    return f"Forgotten: '{key}'"
+
+
+def _show_memory(ctx: CommandContext) -> str:
+    """Everything remembered, grouped by bucket so it is easy to scan."""
     facts = ctx.actor.get_user_facts()
     summary = ctx.actor._history_summary
     lines = []
@@ -155,55 +168,64 @@ async def manage_plans(ctx: CommandContext, argument: str) -> str:
     sub = parts[0] if parts else ""
     target = parts[1].strip() if len(parts) > 1 else ""
 
-    # /plans show <id>
     if sub == "show" and target:
-        pid = target
-        p = ctx.actor.get_pending_plans().get(pid)
-        if not p:
-            return f"No plan with id `{pid}`."
-        envelope = p.get("envelope", {})
-        agents = envelope.get("plan", [])
-        lines = [ctx.actor._format_plan_proposal(p), "", "**Full agent code:**"]
-        for step in agents:
-            name = step.get("name", "?")
-            code = step.get("spawn_config", {}).get("code", "") or "(no code — pre-built type)"
-            lines.append(f"\n--- {name} ---")
-            lines.append("```python")
-            lines.append(code[:2000])
-            if len(code) > 2000:
-                lines.append(f"... ({len(code) - 2000} more chars truncated)")
-            lines.append("```")
-        return "\n".join(lines)
-
-    # /plans approve <id>
+        return _show_plan(ctx, target)
     if sub == "approve" and target:
-        pid = target
-        p = ctx.actor.get_pending_plans().get(pid)
-        if not p:
-            return f"No plan with id `{pid}`."
-        if p.get("status") != "pending":
-            return f"Plan `{pid}` is `{p.get('status')}`, not pending."
-        return await ctx.actor._execute_pending_plan(p)
-
-    # /plans reject <id>
+        plan, refusal = _plan_awaiting_decision(ctx, target)
+        return refusal if plan is None else await ctx.actor._execute_pending_plan(plan)
     if sub == "reject" and target:
-        pid = target
-        p = ctx.actor.get_pending_plans().get(pid)
-        if not p:
-            return f"No plan with id `{pid}`."
-        if p.get("status") != "pending":
-            return f"Plan `{pid}` is `{p.get('status')}`, not pending."
-        return ctx.actor._reject_pending_plan(p)
-
-    # /plans clear — drop all non-pending plans (housekeeping)
+        plan, refusal = _plan_awaiting_decision(ctx, target)
+        return refusal if plan is None else ctx.actor._reject_pending_plan(plan)
     if sub == "clear":
-        plans = ctx.actor.recall(PENDING_PLANS_KEY) or {}
-        kept = {pid: p for pid, p in plans.items() if p.get("status") == "pending"}
-        dropped = len(plans) - len(kept)
-        ctx.actor.persist(PENDING_PLANS_KEY, kept)
-        return f"Cleared {dropped} resolved plan(s). {len(kept)} still pending."
+        return _drop_resolved_plans(ctx)
+    return _list_plans(ctx)
 
-    # /plans (no args) — list
+
+def _plan_awaiting_decision(ctx: CommandContext, pid: str) -> tuple[dict[str, Any] | None, str]:
+    """The plan `pid` is waiting on, or why it cannot be decided.
+
+    Approve and reject ask the same two questions and differ only in what they
+    then do, so asking them twice is how the two answers drift apart.
+    """
+    plan = ctx.actor.get_pending_plans().get(pid)
+    if not plan:
+        return None, f"No plan with id `{pid}`."
+    if plan.get("status") != "pending":
+        return None, f"Plan `{pid}` is `{plan.get('status')}`, not pending."
+    return plan, ""
+
+
+def _show_plan(ctx: CommandContext, pid: str) -> str:
+    """One proposal in full, including the code each agent would run."""
+    plan = ctx.actor.get_pending_plans().get(pid)
+    if not plan:
+        return f"No plan with id `{pid}`."
+    plan_lines = [ctx.actor._format_plan_proposal(plan), "", "**Full agent code:**"]
+    envelope = plan.get("envelope", {})
+    agents = envelope.get("plan", [])
+    for step in agents:
+        name = step.get("name", "?")
+        code = step.get("spawn_config", {}).get("code", "") or "(no code — pre-built type)"
+        plan_lines.append(f"\n--- {name} ---")
+        plan_lines.append("```python")
+        plan_lines.append(code[:2000])
+        if len(code) > 2000:
+            plan_lines.append(f"... ({len(code) - 2000} more chars truncated)")
+        plan_lines.append("```")
+    return "\n".join(plan_lines)
+
+
+def _drop_resolved_plans(ctx: CommandContext) -> str:
+    """Forget the plans already approved or rejected, keeping the pending ones."""
+    plans = ctx.actor.recall(PENDING_PLANS_KEY) or {}
+    kept = {pid: p for pid, p in plans.items() if p.get("status") == "pending"}
+    dropped = len(plans) - len(kept)
+    ctx.actor.persist(PENDING_PLANS_KEY, kept)
+    return f"Cleared {dropped} resolved plan(s). {len(kept)} still pending."
+
+
+def _list_plans(ctx: CommandContext) -> str:
+    """What is waiting for a decision, and what recently stopped waiting."""
     plans = ctx.actor.get_pending_plans()
     pending = [p for p in plans.values() if p.get("status") == "pending"]
     resolved = [p for p in plans.values() if p.get("status") != "pending"]

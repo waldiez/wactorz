@@ -8,6 +8,7 @@ text still matches.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from .dispatch import CommandContext, command
 
@@ -245,7 +246,27 @@ async def show_registry(ctx: CommandContext, _argument: str) -> str:
     for nd_info in ctx.actor._known_nodes.values():
         heartbeat_names.update(nd_info.get("agents", []))
 
-    lines = ["**Agent registry diagnostic**", ""]
+    return "\n".join(
+        [
+            "**Agent registry diagnostic**",
+            "",
+            *_registry_sections(ctx, live_user, spawn_reg, spawn_names, manifest_names),
+            *_registry_discrepancies(
+                ctx, live_names, live_user, spawn_reg, spawn_names, manifest_names, heartbeat_names
+            ),
+        ]
+    )
+
+
+def _registry_sections(
+    ctx: CommandContext,
+    live_user: set[str],
+    spawn_reg: dict[str, Any],
+    spawn_names: set[str],
+    manifest_names: set[str],
+) -> list[str]:
+    """What each of the three sources currently holds."""
+    lines: list[str] = []
 
     # ── Live registry ──
     lines.append("\U0001f7e2 **Live registry** (running NOW in this process):")
@@ -278,8 +299,20 @@ async def show_registry(ctx: CommandContext, _argument: str) -> str:
             lines.append(f"    {name}  on {node}")
     else:
         lines.append("    (none)")
+    return lines
 
-    # ── Discrepancy report — this is the value-add ──
+
+def _registry_discrepancies(
+    ctx: CommandContext,
+    live_names: set[str],
+    live_user: set[str],
+    spawn_reg: dict[str, Any],
+    spawn_names: set[str],
+    manifest_names: set[str],
+    heartbeat_names: set[str],
+) -> list[str]:
+    """Where the three sources disagree — the point of the report."""
+    lines: list[str] = []
     issues = []
     # Live but not in spawn registry → an ad-hoc spawn that won't survive restart
     for name in sorted(live_user - spawn_names):
@@ -316,4 +349,4 @@ async def show_registry(ctx: CommandContext, _argument: str) -> str:
     else:
         lines.append("\u2705 All three sources agree — registry is consistent.")
 
-    return "\n".join(lines)
+    return lines

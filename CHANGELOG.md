@@ -203,6 +203,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Reachy's spoken answer and the one in chat are the same answer again.** Ask him to
+  actuate something and main replies with a machine acknowledgement — `Done: light.turn_on ->
+  light.tapo_l920.` Reachy already turned that into a sentence before speaking it, but chat
+  was handed the raw string, so you heard "Okay, the light is green" and read a service call.
+  Worse, the acknowledgement names no colour or brightness, so three differently worded
+  requests all read identically and there was no way to tell from chat what had been applied.
+  Chat now shows the sentence he spoke. Only for those acknowledgements: a long answer's
+  spoken form is truncated and ends "I've put the rest in Wactorz chat", which has to stay
+  true, so everything else is still displayed whole.
+
+- **Interruption can be asked for in words, and Reachy says whether it is on.** Talking over
+  him did nothing and nothing explained why: barge-in is opt-in — the microphone hears his own
+  speaker well enough that a cascaded pipeline cannot tell an echo from a real interruption —
+  and the only way to request it was hand-written JSON, which the plain `start conversation`
+  phrase had no way to carry. `start conversation with interruption` now sets it, and both
+  forms answer with the mode they started in, so a robot that will not be talked over no
+  longer reads as one that is ignoring you.
+
 - **Chat history reaches the persistent feed again.** Every turn handled by an LLM agent was written to the chat log by calling a method that does not exist, so each write raised and was swallowed by a handler that reported it at debug level — the turn was lost and nothing said so. Restarting therefore came back to an empty feed for those conversations even though the agent's own memory of them survived. The turns are now stored, and a write that genuinely fails is reported as a warning instead of disappearing.
 
 - **A remote agent that answers quickly is heard.** Delegating a task to an agent on another machine published the request and only then started listening for the answer, so a fast reply arrived before anything was there to receive it and was dropped. The caller then waited out its full timeout and reported a failure for work that had actually been done — which looks like an unreliable node rather than a bug. The reply channel is opened before the request goes out now.

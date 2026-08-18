@@ -386,7 +386,11 @@ speaker utterance, so a simple VAD monitor cannot reliably distinguish Reachy's
 voice from a human interruption. Automatic barge-in therefore defaults off and
 normal replies play to completion.</p>
 <p>Set <code>"barge_in": true</code> only as an experiment on hardware with verified acoustic echo
-cancellation. In that mode the monitor ignores the first 450 ms of speaker startup,
+cancellation. In chat, <code>start conversation with interruption</code> (also <code>start interruptible
+conversation</code> or <code>start conversation with barge in</code>) sets the same flag without hand-writing
+JSON; plain <code>start conversation</code> leaves it off. Either way the reply to the start command
+says which mode you are in, so a robot that will not be talked over is distinguishable from
+one that is ignoring you. In that mode the monitor ignores the first 450 ms of speaker startup,
 then requires about 210 ms of sustained voice onset; confirmed speech stops playback,
 retains the interrupting audio, and routes it as the next turn. A typed <code>stop</code>,
 <code>silence</code>, <code>quiet</code>, or <code>shut up</code> still cuts the current reply immediately without

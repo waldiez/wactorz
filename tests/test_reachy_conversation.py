@@ -1335,5 +1335,142 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertLess(NS["_CHUNK_TAIL_PAD"], 0.55)
 
 
+class BridgeReplyShownInChatTest(unittest.IsolatedAsyncioTestCase):
+    """What Reachy says and what chat shows are the same answer.
+
+    Main answers an actuation with a machine acknowledgement naming a service
+    and an entity id. Reachy already spoke a human sentence built from it; chat
+    was being handed the raw string, so the user heard one thing and read
+    another — and three differently-worded requests all read identically,
+    because the acknowledgement carries no colour or brightness.
+    """
+
+    class BridgeAgent(FakeAgent):
+        def __init__(self, reply, connected=False):
+            super().__init__()
+            self.reply = reply
+            self.sent = []
+            if not connected:
+                # Skips playback, so the test is about the displayed text only.
+                self.state["mini"] = None
+
+        async def send_to(self, name, payload, timeout=None):
+            self.sent.append((name, payload))
+            return {"result": self.reply}
+
+    async def _display(self, reply, user_text):
+        agent = self.BridgeAgent(reply)
+        shown = []
+
+        async def before_speak(text):
+            shown.append(text)
+
+        result = await NS["_bridge_to_main"](agent, user_text, "task-1", before_speak=before_speak)
+        return shown, result
+
+    async def test_an_actuation_is_shown_as_the_sentence_it_was_spoken_as(self):
+        shown, result = await self._display(
+            "Done: light.turn_on -> light.tapo_l920.",
+            "Please turn the LED light green at maximum brightness",
+        )
+
+        self.assertEqual(shown, ["Okay, the light is green."])
+        self.assertEqual(result["result"], "Okay, the light is green.")
+
+    async def test_the_raw_acknowledgement_is_still_returned_untouched(self):
+        # The technical string is what a caller inspecting the turn wants; it is
+        # only the *displayed* text that changes.
+        _, result = await self._display(
+            "Done: light.turn_off -> light.tapo_l920.", "turn the lamp off"
+        )
+
+        self.assertEqual(result["raw_result"], "Done: light.turn_off -> light.tapo_l920.")
+        self.assertEqual(result["result"], "Okay, the light is off.")
+
+    async def test_two_differently_worded_requests_no_longer_read_alike(self):
+        green, _ = await self._display(
+            "Done: light.turn_on -> light.tapo_l920.", "turn the LED light green"
+        )
+        blue, _ = await self._display(
+            "Done: light.turn_on -> light.tapo_l920.", "turn the LED light blue"
+        )
+
+        self.assertEqual(green, ["Okay, the light is green."])
+        self.assertEqual(blue, ["Okay, the light is blue."])
+        self.assertNotEqual(green, blue)
+
+    async def test_an_ordinary_answer_keeps_its_full_text(self):
+        # The spoken form of a long answer is truncated and ends "I've put the
+        # rest in Wactorz chat". Showing that in chat would point it at itself,
+        # so anything that is not an acknowledgement is displayed whole.
+        answer = "The living room is 21 degrees and the hallway sensor is offline."
+
+        shown, result = await self._display(answer, "what is the temperature")
+
+        self.assertEqual(shown, [answer])
+        self.assertEqual(result["result"], answer)
+
+
+class ConversationInterruptionPhraseTest(unittest.IsolatedAsyncioTestCase):
+    """Interruption is reachable in words, not only as hand-written JSON."""
+
+    async def _payload_for(self, text):
+        agent, seen = FakeAgent(), {}
+
+        async def fake_start(_agent, payload):
+            seen.update(payload)
+            return {"started": True, "result": "ok"}
+
+        with mock.patch.dict(NS, {"_conversation_start": fake_start}):
+            await NS["handle_task"](agent, {"text": text})
+        return seen
+
+    async def test_asking_for_interruption_turns_barge_in_on(self):
+        for phrase in (
+            "start conversation with interruption",
+            "start interruptible conversation",
+            "start conversation with barge in",
+        ):
+            with self.subTest(phrase=phrase):
+                self.assertIs((await self._payload_for(phrase)).get("barge_in"), True)
+
+    async def test_the_plain_phrase_still_leaves_it_off(self):
+        # The mic hears Reachy's own speaker, so barge-in stays opt-in.
+        self.assertFalse((await self._payload_for("start conversation")).get("barge_in"))
+
+
+class ConversationStartMessageTest(unittest.IsolatedAsyncioTestCase):
+    """Starting a conversation says which mode it started in.
+
+    Not knowing interruption was off reads as a robot that ignores you, rather
+    than as a setting nobody asked for.
+    """
+
+    async def _start(self, payload):
+        agent = FakeAgent()
+
+        async def fake_loop(_agent, _session):
+            return None
+
+        with mock.patch.dict(NS, {"_conversation_loop": fake_loop}):
+            result = await NS["_conversation_start"](agent, payload)
+            session = agent.state["conversation_session"]
+            if session and session.get("task"):
+                await session["task"]
+        return result
+
+    async def test_it_says_how_to_cut_in_when_interruption_is_off(self):
+        result = await self._start({})
+
+        self.assertFalse(result["barge_in"])
+        self.assertIn("stop talking", result["result"])
+
+    async def test_it_says_you_can_talk_over_it_when_interruption_is_on(self):
+        result = await self._start({"barge_in": True})
+
+        self.assertTrue(result["barge_in"])
+        self.assertIn("Talk over me", result["result"])
+
+
 if __name__ == "__main__":
     unittest.main()

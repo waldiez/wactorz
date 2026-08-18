@@ -1306,6 +1306,18 @@ async def handle_task(agent, payload):
                 elif low in ("take a photo", "take a picture", "take a snapshot",
                              "snapshot", "photo", "picture", "capture", "camera"):
                     payload = {"cmd": "camera"}
+                # Interruptible conversation is opt-in: the mic hears Reachy's
+                # own speaker, so barge-in is only safe where echo cancellation
+                # works. Asking for it in words beats hand-writing the JSON,
+                # which was the only way to reach the flag.
+                elif low in ("start conversation with interruption",
+                              "start a conversation with interruption",
+                              "conversation mode with interruption",
+                              "start interruptible conversation",
+                              "start conversation with barge in",
+                              "start conversation with barge-in",
+                              "begin conversation with interruption"):
+                    payload = {"cmd": "conversation_start", "barge_in": True}
                 elif low in ("start conversation", "start a conversation",
                               "conversation mode", "begin conversation"):
                     payload = {"cmd": "conversation_start"}
@@ -1875,7 +1887,16 @@ async def _bridge_to_main(agent, text, task_id=None, *, await_playback=False,
     spoke = False
     interrupted = False
     spoken_reply = _voice_friendly_reply(reply, user_text=text) if voice_friendly else reply
-    display_reply = reply
+    # An actuation acknowledgement — "Done: light.turn_on -> light.tapo_l920." —
+    # is the one answer whose raw form is worse than its spoken one in every
+    # channel: it names a service and an entity id, and drops the colour or
+    # brightness that was actually asked for, so three different requests all
+    # read identically. Chat gets the human sentence for those.
+    #
+    # Deliberately only for those. A long answer's spoken form is truncated and
+    # ends "I've put the rest in Wactorz chat" — show that in chat and the
+    # sentence points at itself, so everything else keeps its full text.
+    display_reply = _natural_actuation_speech(reply, text) or reply
     spoken_result = ""
     speech_error = None
     if before_speak is not None:
@@ -4675,10 +4696,21 @@ async def _conversation_start(agent, payload):
     agent.state["conversation_state"] = "idle"
     session["task"] = agent.run_in_background(_conversation_loop(agent, session))
     result = _conversation_turn(session)
+    barge_in = bool(resolved_payload["barge_in"])
+    # Say which mode it is. Not knowing interruption was off reads as a broken
+    # robot that ignores you, rather than a setting you did not ask for.
+    interruption = (
+        "Talk over me to interrupt."
+        if barge_in
+        else "Wait for me to finish, or say \"stop talking\" to cut me off."
+    )
     result.update({
         "started": True,
-        "barge_in": bool(resolved_payload["barge_in"]),
-        "result": "Conversation started. Speak normally; voice turns appear under Reachy.",
+        "barge_in": barge_in,
+        "result": (
+            "Conversation started. Speak normally; voice turns appear under "
+            f"Reachy. {interruption}"
+        ),
     })
     return result
 

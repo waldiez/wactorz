@@ -304,7 +304,11 @@ voice from a human interruption. Automatic barge-in therefore defaults off and
 normal replies play to completion.
 
 Set `"barge_in": true` only as an experiment on hardware with verified acoustic echo
-cancellation. In that mode the monitor ignores the first 450 ms of speaker startup,
+cancellation. In chat, `start conversation with interruption` (also `start interruptible
+conversation` or `start conversation with barge in`) sets the same flag without hand-writing
+JSON; plain `start conversation` leaves it off. Either way the reply to the start command
+says which mode you are in, so a robot that will not be talked over is distinguishable from
+one that is ignoring you. In that mode the monitor ignores the first 450 ms of speaker startup,
 then requires about 210 ms of sustained voice onset; confirmed speech stops playback,
 retains the interrupting audio, and routes it as the next turn. A typed `stop`,
 `silence`, `quiet`, or `shut up` still cuts the current reply immediately without

@@ -78,16 +78,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._pending_notifications: list[dict] = []
         self.protected = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
-        self.nodes = NodeManager()
+        self.nodes = NodeManager(self)
         # Consecutive heartbeats a registry-claimed agent has been absent from its
         # node — (node_name, agent_name) → count. Prune only past the threshold so a
         # single missed heartbeat (a transient gap) doesn't drop a live agent.
         self._node_agent_misses: dict[tuple[str, str], int] = {}
-        # Topic registry: topic → [manifest, ...] — built from agents/+/manifest
-        self._topic_registry: dict[str, list] = {}  # topic → list of agent manifests
-        self._agent_manifests: dict[
-            str, dict
-        ] = {}  # agent name → latest manifest (includes schemas)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -2482,7 +2477,30 @@ async def handle_task(agent, payload):
     # ── Node registry ──────────────────────────────────────────────────────
 
     @property
-    def _known_nodes(self) -> dict[str, dict]:
+    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+        """Latest manifest per agent, owned by `self.nodes`.
+
+        Kept as a name here because the catalog agent writes recipe manifests
+        straight into it, and the chat router, the dynamic agents and the spawn
+        mixin all read it off the main actor.
+        """
+        return self.nodes.manifests
+
+    @_agent_manifests.setter
+    def _agent_manifests(self, value: dict[str, dict[str, Any]]) -> None:
+        self.nodes.manifests = value
+
+    @property
+    def _topic_registry(self) -> dict[str, list[dict[str, Any]]]:
+        """Topic to publishing agents, owned by `self.nodes`."""
+        return self.nodes.topic_registry
+
+    @_topic_registry.setter
+    def _topic_registry(self, value: dict[str, list[dict[str, Any]]]) -> None:
+        self.nodes.topic_registry = value
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
         """The heartbeat table, which `self.nodes` owns.
 
         Kept as a name on MainActor because several modules read it directly off
@@ -2574,161 +2592,8 @@ async def handle_task(agent, payload):
         return sorted(results, key=lambda x: x["name"])
 
     async def _manifest_listener(self):
-        """Subscribe to agents/+/manifest and build a searchable topic registry.
-        Retained manifests are delivered immediately on subscribe so the registry
-        is populated even for agents that started before main restarted.
-
-        An EMPTY retained payload is a tombstone — it means the agent has been
-        deleted. We extract the agent_id from the topic and drop any matching
-        manifest from both the agent registry and the topic registry. Without
-        this, _agent_manifests would grow forever and stale entries would be
-        reported as still-existing (with running=false but never disappearing).
-
-        IMPORTANT: This listener is the SOURCE OF TRUTH for remote agents'
-        TopicContracts. Local agents register themselves with the TopicBus
-        directly (via DynamicAgent.declare_contract / publish / subscribe),
-        but remote agents live in another process — main only learns about
-        their real publish/subscribe topics through these MQTT manifests.
-        Every accepted manifest is therefore mirrored into the TopicBus so
-        the planner can auto-wire local and remote agents uniformly.
-        """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return
-
-        # Imported lazily once — cheap on subsequent uses.
-        from ..core.topic_bus import TopicContract, get_topic_bus
-
-        _last_exc_str: str | None = None
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe("agents/+/manifest")
-                    logger.info("[main] Subscribed to agent manifests.")
-                    _last_exc_str = None
-                    async for msg in client.messages:
-                        # ── Tombstone: empty payload means agent was deleted ──
-                        raw_payload = msg.payload
-                        if raw_payload is None or len(raw_payload) == 0:
-                            # Topic format: agents/{actor_id}/manifest
-                            topic_str = str(msg.topic)
-                            try:
-                                target_id = topic_str.split("/")[1]
-                            except IndexError:
-                                continue
-                            # Find the manifest entry for this actor_id and drop it.
-                            # Manifests are keyed by name, but each contains an actor_id.
-                            removed_name = None
-                            for name, manifest in list(self._agent_manifests.items()):
-                                if manifest.get("actor_id") == target_id or name == target_id:
-                                    self._agent_manifests.pop(name, None)
-                                    removed_name = name
-                                    break
-                            if removed_name:
-                                # Also drop from topic registry
-                                for topic, entries in list(self._topic_registry.items()):
-                                    self._topic_registry[topic] = [
-                                        m for m in entries if m.get("name") != removed_name
-                                    ]
-                                    if not self._topic_registry[topic]:
-                                        self._topic_registry.pop(topic, None)
-                                # And drop from the TopicBus so the planner stops
-                                # seeing this agent as a potential wiring target.
-                                try:
-                                    bus = get_topic_bus()
-                                    if bus:
-                                        bus.unregister(removed_name)
-                                except Exception as _e:
-                                    logger.debug(
-                                        f"[main] TopicBus unregister failed for "
-                                        f"'{removed_name}': {_e}"
-                                    )
-                                logger.info(f"[main] Manifest tombstone — removed '{removed_name}'")
-                            continue
-
-                        try:
-                            data = json.loads(raw_payload.decode())
-                        except Exception:
-                            continue
-                        if not isinstance(data, dict):
-                            continue
-                        agent_name = data.get("name", "?")
-                        published = data.get("publishes", [])
-                        # Update topic registry
-                        for topic in published:
-                            existing = self._topic_registry.setdefault(topic, [])
-                            # Replace existing entry for this agent or append
-                            updated = False
-                            for i, m in enumerate(existing):
-                                if m.get("name") == agent_name:
-                                    existing[i] = data
-                                    updated = True
-                                    break
-                            if not updated:
-                                existing.append(data)
-                        # Also store full manifest by agent name for capability queries
-                        self._agent_manifests[agent_name] = data
-
-                        # ── Mirror into the TopicBus ──────────────────────────
-                        # This is what makes remote agents visible to the planner's
-                        # auto-wiring. Local agents register their own contracts
-                        # directly; for remote agents the manifest is the only
-                        # channel main has, so it MUST drive TopicBus state here.
-                        # We honour observed_samples when present — those reflect
-                        # the real field names the remote code publishes, which
-                        # take precedence over LLM-declared produces_schema.
-                        try:
-                            bus = get_topic_bus()
-                            if bus and agent_name and agent_name != "?":
-                                observed = data.get("observed_samples", {}) or {}
-                                produces = dict(data.get("produces_schema", {}) or {})
-                                # Fold observed field names into produces_schema so
-                                # the planner sees the actual wire format.
-                                for _topic, sample in observed.items():
-                                    if isinstance(sample, dict):
-                                        for k, v in (sample.get("fields") or {}).items():
-                                            produces[k] = v
-                                contract = TopicContract(
-                                    name=agent_name,
-                                    publishes=list(published or []),
-                                    subscribes=list(data.get("subscribes", []) or []),
-                                    triggers_when=data.get("triggers_when", {}) or {},
-                                    produces_schema=produces,
-                                    consumes_schema=dict(
-                                        data.get(
-                                            "consumes_schema", data.get("input_schema", {}) or {}
-                                        )
-                                    ),
-                                    actor_id=data.get("actor_id"),
-                                    node=data.get("node"),
-                                )
-                                # Carry observed_samples through if the dataclass
-                                # supports the field (it does on TopicContract).
-                                if hasattr(contract, "observed_samples") and observed:
-                                    try:
-                                        contract.observed_samples = dict(observed)
-                                    except Exception:
-                                        pass
-                                bus.register_contract(contract)
-                        except Exception as _e:
-                            logger.debug(
-                                f"[main] TopicBus register from manifest "
-                                f"failed for '{agent_name}': {_e}"
-                            )
-
-                        logger.debug(f"[main] Manifest from '{agent_name}': {published}")
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.state.value not in ("stopped", "failed"):
-                    exc_str = str(e)
-                    if exc_str != _last_exc_str:
-                        logger.warning(f"[main] Manifest listener error: {e}. Reconnecting in 5s…")
-                        _last_exc_str = exc_str
-                    else:
-                        logger.debug("[main] Manifest listener still unavailable — retrying in 5s…")
-                    await asyncio.sleep(5)
+        """Follow agent manifests. Owned by `self.nodes`."""
+        await self.nodes.manifest_listener()
 
     async def _state_return_listener(self):
         """Receive an agent's full config + persistent state from a remote node

@@ -115,7 +115,7 @@ async def run_listener(
     main.state = ActorState.RUNNING
     main._mqtt_broker = "localhost"
     main._mqtt_port = 1883
-    main.nodes.pending_returns = dict(pending or {})
+    main.nodes.migration.pending_returns = dict(pending or {})
 
     run = _Run(main)
     run.spawn_error = spawn_error
@@ -134,7 +134,7 @@ async def run_listener(
         main.state = ActorState.STOPPED
 
     broker = _Broker(messages, _stop)
-    monkeypatch.setattr("wactorz.agents.nodes.mqtt_client", broker)
+    monkeypatch.setattr("wactorz.agents.migration.mqtt_client", broker)
 
     await asyncio.wait_for(main._state_return_listener(), timeout=5)
     return run
@@ -199,12 +199,12 @@ class TestTheToken:
         # the process.
         run = await run_listener(monkeypatch, [state_return()], pending=waiting(age_s=301))
 
-        assert not run.main.nodes.pending_returns
+        assert not run.main.nodes.migration.pending_returns
 
     async def test_a_refusal_is_logged(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level(logging.WARNING, logger="wactorz.agents.nodes"):
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.migration"):
             await run_listener(monkeypatch, [state_return(token="forged")], pending=waiting())
 
         assert "token" in caplog.text

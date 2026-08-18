@@ -2450,20 +2450,20 @@ async def handle_task(agent, payload):
         straight into it, and the chat router, the dynamic agents and the spawn
         mixin all read it off the main actor.
         """
-        return self.nodes.manifests
+        return self.nodes.manifest_registry.manifests
 
     @_agent_manifests.setter
     def _agent_manifests(self, value: dict[str, dict[str, Any]]) -> None:
-        self.nodes.manifests = value
+        self.nodes.manifest_registry.manifests = value
 
     @property
     def _topic_registry(self) -> dict[str, list[dict[str, Any]]]:
         """Topic to publishing agents, owned by `self.nodes`."""
-        return self.nodes.topic_registry
+        return self.nodes.manifest_registry.topic_registry
 
     @_topic_registry.setter
     def _topic_registry(self, value: dict[str, list[dict[str, Any]]]) -> None:
-        self.nodes.topic_registry = value
+        self.nodes.manifest_registry.topic_registry = value
 
     @property
     def _known_nodes(self) -> dict[str, dict[str, Any]]:
@@ -2559,11 +2559,11 @@ async def handle_task(agent, payload):
 
     async def _manifest_listener(self):
         """Follow agent manifests. Owned by `self.nodes`."""
-        await self.nodes.manifest_listener()
+        await self.nodes.manifest_registry.manifest_listener()
 
     async def _state_return_listener(self):
         """Receive agents returning from a node. Owned by `self.nodes`."""
-        await self.nodes.state_return_listener()
+        await self.nodes.migration.state_return_listener()
 
     async def _slash_deploy_stream(self, stripped: str):
         """Async generator implementing /deploy. Yields progress strings.
@@ -2780,7 +2780,7 @@ async def handle_task(agent, payload):
             return_token = secrets.token_hex(8)
             # Stash the token so the listener knows this return is ours
             # and not from some other concurrent migration.
-            self.nodes.pending_returns[return_token] = {
+            self.nodes.migration.pending_returns[return_token] = {
                 "agent_name": agent_name,
                 "from_node": current_node,
                 "started_at": time.time(),

@@ -80,6 +80,12 @@ class ProbeActor(Actor):
         return None
 
 
+#: How often the Supervisor under test sweeps for actors to restart. Named
+#: because settling has to outlast it: a group restart that has begun but not
+#: finished looks exactly like a settled system until the next sweep lands.
+SUPERVISOR_POLL = 0.05
+
+
 def _make_system() -> ActorSystem:
     system = ActorSystem()
 
@@ -91,13 +97,56 @@ def _make_system() -> ActorSystem:
             return None
 
     system._mqtt_client = _NoOpMQTT()  # pyright: ignore[reportAttributeAccessIssue]
-    system._supervisor = Supervisor(system.registry, system._inject, poll_interval=0.05)
+    system._supervisor = Supervisor(system.registry, system._inject, poll_interval=SUPERVISOR_POLL)
     return system
 
 
 def _normalize_state(actor) -> str:
     value = actor.state.value
     return "running" if value == "running" else value.lower()
+
+
+async def _settled(
+    system, trackers: dict[str, ActorTracker], poll: float = 0.02, timeout: float = 10.0
+) -> None:
+    """Wait until the supervisor has finished restarting things, then return.
+
+    This replaced a flat 0.35s sleep. Crash-and-restart is work, not a duration,
+    so a fixed wait encodes how fast the machine happened to be: run the suite
+    across every core (`make test` uses `-n auto`) and the wait that was ample
+    on an idle machine expires mid-restart, reporting a short start count as a
+    contract violation.
+
+    Settled means every actor is running again with its scripted crashes spent —
+    read from the harness's own inputs, never from the fixture's expected
+    numbers, which would leave the check marking its own work. That alone is not
+    enough under the group strategies: `one_for_all` and `rest_for_one` restart
+    siblings too, and between the crashed actor coming back and its siblings
+    going down the system briefly looks finished. So the state also has to hold
+    still across more than one supervisor sweep before it is believed.
+
+    The timeout is only a backstop against a supervisor that never settles, so
+    it is far longer than the work can need.
+    """
+    quiet_polls = max(3, int(SUPERVISOR_POLL * 2 / poll))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    last: tuple | None = None
+    stable = 0
+    while loop.time() < deadline:
+        await asyncio.sleep(poll)
+        states = {actor.name: _normalize_state(actor) for actor in system.registry.all_actors()}
+        snapshot = (
+            tuple(t.starts for t in trackers.values()),
+            tuple(sorted((r["name"], int(r["restarts_used"])) for r in system.supervisor.status())),
+        )
+        stable = stable + 1 if snapshot == last else 0
+        last = snapshot
+        done = all(t.crash_remaining == 0 for t in trackers.values()) and all(
+            states.get(name) == "running" for name in trackers
+        )
+        if done and stable >= quiet_polls:
+            return
 
 
 async def _run_scenario(scenario: dict) -> dict:
@@ -124,7 +173,7 @@ async def _run_scenario(scenario: dict) -> dict:
         )
 
     await system.supervisor.start()
-    await asyncio.sleep(0.35)
+    await _settled(system, trackers)
 
     status_rows = {row["name"]: row for row in system.supervisor.status()}
     registry_rows = {actor.name: actor for actor in system.registry.all_actors()}

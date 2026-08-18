@@ -31,6 +31,7 @@ from .helpers.main_actor_helpers import (
     starts_with_bypass,
 )
 from .llm_agent import LLMAgent, LLMProvider
+from .llm_bridge import LLMBridge
 from .mixins import (
     MemoryMixin,
     PlanningMixin,
@@ -79,6 +80,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.protected = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
         self.nodes = NodeManager(self)
+        self.llm_bridge = LLMBridge(self)
         # Consecutive heartbeats a registry-claimed agent has been absent from its
         # node — (node_name, agent_name) → count. Prune only past the threshold so a
         # single missed heartbeat (a transient gap) doesn't drop a live agent.
@@ -3382,121 +3384,8 @@ async def handle_task(agent, payload):
     # ── Delegation ─────────────────────────────────────────────────────────
 
     async def _llm_bridge_listener(self):
-        """Listens on main/llm_request for LLM calls from remote agents.
-
-        Remote agents call agent.ask_llm(prompt) or agent.chat(messages).
-        The request arrives here with a _reply_topic; we run the LLM call
-        using this node's configured provider and API key, then publish the
-        text response back to _reply_topic so the remote agent's future resolves.
-
-        This keeps API keys on the main machine — edge devices never need them.
-
-        Request payload:
-          prompt        — str (single-turn)    OR
-          messages      — list of {role, content} (multi-turn)
-          system        — optional system prompt override
-          _reply_topic  — where to send the result
-          agent         — name of requesting agent (for logging)
-          node          — node name (for logging)
-        """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.warning("[main] aiomqtt not available — LLM bridge disabled.")
-            return
-
-        _last_exc_str: str | None = None
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe("main/llm_request")
-                    logger.info("[main] LLM bridge listening on main/llm_request")
-                    _last_exc_str = None
-                    async for msg in client.messages:
-                        try:
-                            data = json.loads(msg.payload.decode())
-                        except Exception:
-                            continue
-
-                        reply_topic = data.get("_reply_topic")
-                        agent_name = data.get("agent", "remote-agent")
-                        node_name = data.get("node", "?")
-                        system_over = data.get("system", "")
-                        prompt = data.get("prompt", "")
-                        messages_in = data.get("messages")  # multi-turn path
-
-                        if not reply_topic:
-                            continue
-
-                        logger.info(
-                            f"[main] LLM bridge: request from '{agent_name}' on '{node_name}'"
-                        )
-
-                        try:
-                            # Build message list — either multi-turn or single prompt
-                            if messages_in and isinstance(messages_in, list):
-                                llm_messages = messages_in
-                            else:
-                                llm_messages = [{"role": "user", "content": prompt}]
-
-                            system = system_over or (
-                                f"You are {agent_name}, an AI agent running on node {node_name}."
-                            )
-
-                            # Use this node's LLM provider
-                            if self.llm is None:
-                                text = "[LLM error: no provider configured on main]"
-                                logger.warning(
-                                    f"[main] LLM bridge: request from "
-                                    f"'{agent_name}' but main has no LLM "
-                                    f"provider"
-                                )
-                            else:
-                                # LLMProvider.complete() returns (text, usage)
-                                response, usage = await self.llm.complete(
-                                    messages=llm_messages,
-                                    system=system,
-                                )
-                                text = response if isinstance(response, str) else str(response)
-                                # Roll bridge usage into main's totals so cost
-                                # tracking on this node stays accurate. Per-
-                                # agent attribution lives on the agent metrics
-                                # path — adding that here would need the
-                                # remote agent's actor_id, which we don't
-                                # require in the bridge request schema today.
-                                try:
-                                    self.total_input_tokens += usage.get("input_tokens", 0)
-                                    self.total_output_tokens += usage.get("output_tokens", 0)
-                                    self.total_cost_usd += usage.get("cost_usd", 0.0)
-                                    self._persist_cost()
-                                except Exception:
-                                    pass
-
-                        except Exception as e:
-                            logger.error(f"[main] LLM bridge error for '{agent_name}': {e}")
-                            text = f"LLM error: {e}"
-
-                        await self._mqtt_publish(reply_topic, {"text": text})
-                        logger.info(
-                            f"[main] LLM bridge: replied to '{agent_name}' "
-                            f"({len(text)} chars) → {reply_topic}"
-                        )
-
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.state.value not in ("stopped", "failed"):
-                    exc_str = str(e)
-                    if exc_str != _last_exc_str:
-                        logger.warning(
-                            f"[main] LLM bridge listener error: {e}. Reconnecting in 5s…"
-                        )
-                        _last_exc_str = exc_str
-                    else:
-                        logger.debug(
-                            "[main] LLM bridge listener still unavailable — retrying in 5s…"
-                        )
-                    await asyncio.sleep(5)
+        """Serve LLM calls for remote agents. Owned by `self.llm_bridge`."""
+        await self.llm_bridge.listen()
 
     async def _remote_observed_samples_listener(self):
         """Subscribe to all MQTT topics published by remote agents and update

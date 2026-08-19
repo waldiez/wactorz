@@ -53,7 +53,7 @@ def main_fixture(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     def _client(_host: str, _port: int, **_kw: Any) -> _Client:
         return _Client(order)
 
-    monkeypatch.setattr("wactorz.agents.main_actor.mqtt_client", _client)
+    monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _client)
     actor._mqtt_publish = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
         side_effect=lambda topic, *_a, **_kw: order.append(f"publish {topic}")
     )
@@ -63,7 +63,7 @@ def main_fixture(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 class TestTheReplyChannel:
     async def test_it_subscribes_before_the_caller_publishes(self, main: Any) -> None:
-        async with main._reply_topic() as (topic, _future):
+        async with main.delegation._reply_topic() as (topic, _future):
             await main._mqtt_publish("agents/by-name/rpi/task", {"_reply_topic": topic})
 
         assert [step.split()[0] for step in main.order] == ["subscribe", "publish"]
@@ -71,13 +71,13 @@ class TestTheReplyChannel:
     async def test_the_topic_it_yields_is_the_one_it_subscribed(self, main: Any) -> None:
         # Or the reply lands somewhere nobody is listening, which is the same
         # failure wearing a different shape.
-        async with main._reply_topic() as (topic, _future):
+        async with main.delegation._reply_topic() as (topic, _future):
             pass
 
         assert main.order == [f"subscribe {topic}"]
 
     async def test_a_reply_that_arrives_resolves_the_caller(self, main: Any) -> None:
-        async with main._reply_topic() as (_topic, future):
+        async with main.delegation._reply_topic() as (_topic, future):
             future.set_result({"result": "done"})
 
             assert await asyncio.wait_for(future, timeout=1) == {"result": "done"}
@@ -85,7 +85,7 @@ class TestTheReplyChannel:
     async def test_the_topic_is_forgotten_afterwards(self, main: Any) -> None:
         # It is keyed per call, so leaving them behind grows the dict for the
         # life of the process.
-        async with main._reply_topic() as (topic, _future):
+        async with main.delegation._reply_topic() as (topic, _future):
             assert topic in main._result_futures
 
         assert topic not in main._result_futures
@@ -96,14 +96,14 @@ class TestTheReplyChannel:
         # Publishing anyway is the deliberate choice: the task still gets done,
         # and losing the answer beats losing the work. Waiting forever for a
         # subscription that is not coming would do neither.
-        monkeypatch.setattr(MainActor, "_SUBSCRIBE_TIMEOUT", 0.05)
+        monkeypatch.setattr("wactorz.agents.delegation.SUBSCRIBE_TIMEOUT_S", 0.05)
 
         def _hangs(_host: str, _port: int, **_kw: Any) -> Any:
             raise ConnectionRefusedError("no broker")
 
-        monkeypatch.setattr("wactorz.agents.main_actor.mqtt_client", _hangs)
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _hangs)
 
-        async with main._reply_topic() as (topic, future):
+        async with main.delegation._reply_topic() as (topic, future):
             assert topic  # reached at all, rather than blocking until the timeout
 
         # The listener puts the connection error on the future, and in the real

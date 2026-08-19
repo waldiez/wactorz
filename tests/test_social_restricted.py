@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from wactorz.agents.delegation import DelegationManager
 from wactorz.agents.helpers.main_actor_helpers import BYPASS_MARKERS, starts_with_bypass
 from wactorz.agents.main_actor import MainActor
 
@@ -36,6 +37,7 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
     m.name = "main"
     m._conversation_history = []
     m._registry = _Registry(agents)
+    m.delegation = DelegationManager(m)
     m.calls = {"actuate": 0, "chat": 0, "delegated": [], "classified": 0}
 
     m._drain_notifications = lambda: ""
@@ -64,7 +66,7 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
     async def _delegate_task(_name, _text, timeout=0):
         return {"result": "home-assistant says ok"}
 
-    m.delegate_task = _delegate_task
+    m.delegation.delegate_task = _delegate_task
 
     async def _chat(_t):
         m.calls["chat"] += 1
@@ -76,7 +78,7 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
         m.calls["delegated"].append(name)
         return f"[{name} handled it]"
 
-    m._run_delegation = _run_delegation
+    m.delegation._run_delegation = _run_delegation
 
     async def _boom_spawn(_resp):
         raise AssertionError("spawn executor reached on a restricted channel!")

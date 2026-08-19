@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from wactorz.agents.delegation import DelegationManager
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
 from wactorz.agents.nodes import NodeManager
@@ -133,6 +134,7 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        main.delegation = DelegationManager(main)
         main._known_nodes = dict(known_nodes or {})
         main._mqtt_broker = "localhost"
         main._mqtt_port = 1883
@@ -158,10 +160,10 @@ class _Main:
         self.actor = main
 
     async def delegate(self, name: str, task: str = "do it", timeout: float = 5.0) -> Any:
-        return await self.actor.delegate_task(name, task, timeout=timeout)
+        return await self.actor.delegation.delegate_task(name, task, timeout=timeout)
 
     async def install(self, payload: dict[str, Any], timeout: float = 5.0) -> dict[str, Any]:
-        return await self.actor.delegate_to_installer(payload, timeout=timeout)
+        return await self.actor.delegation.delegate_to_installer(payload, timeout=timeout)
 
 
 class TestChoosingWhereTheTaskGoes:
@@ -308,9 +310,9 @@ class TestTheReplyTopic:
         # whole timeout on work that succeeded.
         main = _Main()
         broker = _Broker(subscribe_delay=0.05)
-        monkeypatch.setattr("wactorz.agents.main_actor.mqtt_client", broker)
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", broker)
 
-        async with main.actor._reply_topic() as (topic, _future):
+        async with main.actor.delegation._reply_topic() as (topic, _future):
             # Checked the instant the topic is handed over, with no chance for
             # the listener to catch up: the subscription must already exist.
             assert broker.client is not None
@@ -320,18 +322,18 @@ class TestTheReplyTopic:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         main = _Main()
-        monkeypatch.setattr("wactorz.agents.main_actor.mqtt_client", _Broker())
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
 
-        async with main.actor._reply_topic() as (topic, future):
+        async with main.actor.delegation._reply_topic() as (topic, future):
             assert main.actor._result_futures[topic] is future
 
     async def test_the_topic_is_forgotten_on_the_way_out(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         main = _Main()
-        monkeypatch.setattr("wactorz.agents.main_actor.mqtt_client", _Broker())
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
 
-        async with main.actor._reply_topic() as (_topic, _future):
+        async with main.actor.delegation._reply_topic() as (_topic, _future):
             pass
 
         assert not main.actor._result_futures
@@ -339,9 +341,9 @@ class TestTheReplyTopic:
     async def test_a_reply_lands_in_the_future(self, monkeypatch: pytest.MonkeyPatch) -> None:
         main = _Main()
         broker = _Broker(replies=[_Message(json.dumps({"answer": 42}).encode())])
-        monkeypatch.setattr("wactorz.agents.main_actor.mqtt_client", broker)
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", broker)
 
-        async with main.actor._reply_topic() as (_topic, future):
+        async with main.actor.delegation._reply_topic() as (_topic, future):
             assert await asyncio.wait_for(future, timeout=1) == {"answer": 42}
 
     async def test_the_caller_still_gets_a_topic_when_the_broker_refuses(
@@ -351,9 +353,9 @@ class TestTheReplyTopic:
         # anyway, and the reason is logged so the timeout that follows is
         # explained rather than mysterious.
         main = _Main()
-        monkeypatch.setattr("wactorz.agents.main_actor.mqtt_client", _Broker(fails=True))
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker(fails=True))
 
-        async with main.actor._reply_topic() as (topic, future):
+        async with main.actor.delegation._reply_topic() as (topic, future):
             assert topic.startswith("main/reply/main-id/")
             # The failure is carried on the future rather than raised here, so
             # the caller still has somewhere to publish. Retrieved because an
@@ -364,11 +366,11 @@ class TestTheReplyTopic:
 
     async def test_every_topic_is_its_own(self, monkeypatch: pytest.MonkeyPatch) -> None:
         main = _Main()
-        monkeypatch.setattr("wactorz.agents.main_actor.mqtt_client", _Broker())
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
         seen = []
 
         for _ in range(3):
-            async with main.actor._reply_topic() as (topic, _f):
+            async with main.actor.delegation._reply_topic() as (topic, _f):
                 seen.append(topic)
 
         assert len(set(seen)) == 3

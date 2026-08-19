@@ -20,6 +20,10 @@ delegation. That is enforced on the name before anything is resolved.
 import json
 from typing import Any
 
+from wactorz.agents.delegation import (
+    RESTRICTED_DELEGATION_ALLOW,
+    DelegationManager,
+)
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
 from wactorz.agents.nodes import NodeManager
@@ -63,6 +67,7 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        main.delegation = DelegationManager(main)
         setattr(main, "_registry", _Registry(running))
 
         self.dispatched: list[tuple[str, Any]] = []
@@ -85,17 +90,17 @@ class _Main:
             return result if result is not None else {"text": "done"}
 
         setattr(main, "_resolve_or_spawn", _resolve)
-        setattr(main, "delegate_task", _delegate)
+        setattr(main.delegation, "delegate_task", _delegate)
         self.actor = main
 
     async def blocks(self, response: str, restricted: bool = False) -> tuple[str, list[str]]:
-        return await self.actor._process_delegate_commands(response, restricted)
+        return await self.actor.delegation._process_delegate_commands(response, restricted)
 
     async def mentions(self, response: str) -> str:
-        return await self.actor._execute_llm_delegations(response)
+        return await self.actor.delegation._execute_llm_delegations(response)
 
     async def run_one(self, name: str, payload: Any) -> str:
-        return await self.actor._run_delegation(name, payload)
+        return await self.actor.delegation._run_delegation(name, payload)
 
     @property
     def names(self) -> list[str]:
@@ -214,7 +219,7 @@ class TestDelegatingFromASocialChannel:
         assert "isn't available" in results[0]
 
     async def test_an_allow_listed_agent_still_works(self) -> None:
-        allowed = next(iter(MainActor._RESTRICTED_DELEGATION_ALLOW))
+        allowed = next(iter(RESTRICTED_DELEGATION_ALLOW))
         main = _Main(running=(allowed,))
 
         await main.blocks(delegate(agent=allowed, task="go"), restricted=True)
@@ -224,7 +229,7 @@ class TestDelegatingFromASocialChannel:
     async def test_an_allow_listed_agent_that_is_not_running_is_not_spawned(self) -> None:
         # Restricted delegation resolves only. Spawning to satisfy a social
         # message would let one arrange for code to run.
-        allowed = next(iter(MainActor._RESTRICTED_DELEGATION_ALLOW))
+        allowed = next(iter(RESTRICTED_DELEGATION_ALLOW))
         main = _Main(auto_spawns=(allowed,))
 
         _, results = await main.blocks(delegate(agent=allowed, task="go"), restricted=True)
@@ -236,7 +241,7 @@ class TestDelegatingFromASocialChannel:
     async def test_an_unrestricted_caller_may_spawn_the_same_agent(self) -> None:
         # The contrast is the point: the allow-list is not what stops the
         # spawn, the resolve-only lookup is.
-        allowed = next(iter(MainActor._RESTRICTED_DELEGATION_ALLOW))
+        allowed = next(iter(RESTRICTED_DELEGATION_ALLOW))
         main = _Main(auto_spawns=(allowed,))
 
         await main.blocks(delegate(agent=allowed, task="go"))
@@ -328,12 +333,24 @@ class TestReadingAnAtMention:
         assert not main.dispatched
 
     async def test_one_mention_is_not_read_twice(self) -> None:
-        # The JSON form owns its span, so the bare-mention pass has to skip it.
+        # The bare-mention pass skips anything followed by a brace, so this
+        # alone does not need the span check.
         main = _Main(running=("weather",))
 
         await main.mentions('@weather {"city": "Athens"}')
 
         assert len(main.dispatched) == 1
+
+    async def test_a_mention_inside_a_payload_is_not_a_second_delegation(self) -> None:
+        # It is text the model wrote for the target agent to read, and the
+        # sentence boundary inside the string is what makes it look like an
+        # instruction. Only the span already claimed by the JSON form rules it
+        # out, so this is the case that needs it.
+        main = _Main(running=("weather", "other"))
+
+        await main.mentions('@weather {"note": "done. @other go"}')
+
+        assert main.names == ["weather"]
 
 
 class TestWhenAMentionedAgentIsMissing:

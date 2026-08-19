@@ -90,6 +90,39 @@ class SpawnHost(Protocol):
     ) -> Any: ...
 
 
+class DelegationHost(Protocol):
+    """What handing a task to another agent needs from the actor.
+
+    The broker address is read rather than passed: a reply topic opens its own
+    connection each time, and the address can change after construction.
+
+    `_resolve_or_spawn` is the one surprising entry. Delegation resolves a name
+    before sending to it, and an unrestricted caller is allowed to have the
+    catalogue spawn what it named — so delegation reaches the spawn machinery,
+    and the restricted path exists precisely to not.
+    """
+
+    name: str
+    actor_id: str
+    _registry: Any
+    _result_futures: dict[str, Any]
+    _mqtt_broker: str
+    _mqtt_port: int
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        """Read-only here: consulted for which node claims an agent."""
+        ...
+
+    async def send(self, target_id: str, msg_type: Any, payload: dict[str, Any]) -> bool: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+    async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]: ...
+
+
 class NodeHost(ListenerHost, Protocol):
     """What the node collaborator needs beyond a connection.
 

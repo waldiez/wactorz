@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from wactorz.agents.delegation import RESTRICTED_DELEGATION_ALLOW, DelegationManager
 from wactorz.agents.main_actor import MainActor
 
 
@@ -34,6 +35,7 @@ def make_main(*, intent="OTHER", chat_response="ok", agents=()):
     m.name = "main"
     m._conversation_history = []
     m._registry = _Registry(agents)
+    m.delegation = DelegationManager(m)
     m.log = {"actuate": 0, "chat": 0, "ha": 0, "delegated": [], "classified": 0}
 
     m._drain_notifications = lambda: ""
@@ -64,7 +66,7 @@ def make_main(*, intent="OTHER", chat_response="ok", agents=()):
         m.log["ha"] += 1
         return {"result": "the garage is closed"}
 
-    m.delegate_task = _delegate_task
+    m.delegation.delegate_task = _delegate_task
 
     async def _chat(_t):
         m.log["chat"] += 1
@@ -76,7 +78,7 @@ def make_main(*, intent="OTHER", chat_response="ok", agents=()):
         m.log["delegated"].append(name)
         return f"[{name} handled it]"
 
-    m._run_delegation = _run_delegation
+    m.delegation._run_delegation = _run_delegation
 
     async def _boom_spawn(_r):
         raise AssertionError("SPAWN executed on a restricted channel!")
@@ -93,7 +95,7 @@ def assert_no_dangerous_side_effects(m):
     """Spawn/delete never ran (they'd raise), and nothing outside the delegation
     allow-list was ever dispatched."""
     for name in m.log["delegated"]:
-        assert name in MainActor._RESTRICTED_DELEGATION_ALLOW, f"laundered delegation to {name!r}"
+        assert name in RESTRICTED_DELEGATION_ALLOW, f"laundered delegation to {name!r}"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -126,7 +128,7 @@ def test_ha_query_allowed():
     assert "garage is closed" in out
 
 
-@pytest.mark.parametrize("agent", sorted(MainActor._RESTRICTED_DELEGATION_ALLOW))
+@pytest.mark.parametrize("agent", sorted(RESTRICTED_DELEGATION_ALLOW))
 def test_delegation_to_allowlisted_agent_works(agent):
     m = make_main(
         chat_response=f'<delegate>{{"agent":"{agent}","task":"do a safe thing"}}</delegate>',

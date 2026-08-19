@@ -3,7 +3,6 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
-import contextlib
 import json
 import logging
 import re
@@ -24,6 +23,7 @@ from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt import mqtt_client
 from .commands import CommandContext
 from .commands import registry as command_registry
+from .delegation import DelegationManager
 from .helpers.main_actor_helpers import (
     _normalize_agent_name,
     _strip_live_context,
@@ -101,6 +101,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.migration = Migration(self, self.nodes)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
+        self.delegation = DelegationManager(self)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -426,7 +427,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
             if remote_node:
                 # Send via MQTT and wait for reply
-                async with self._reply_topic() as (reply_topic, future):
+                async with self.delegation._reply_topic() as (reply_topic, future):
                     await self._mqtt_publish(
                         f"agents/by-name/{target_name}/task",
                         {
@@ -582,7 +583,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     # Delegation allow-list for social channels. A deny-list won't hold: any
     # DynamicAgent or code-agent runs code, so delegating to one launders code
     # execution. Allow only bounded native agents; fail closed.
-    _RESTRICTED_DELEGATION_ALLOW = frozenset({"weather-agent", "home-assistant-agent"})
 
     @staticmethod
     def _neutralize_action_blocks(response: str) -> tuple[str, bool]:
@@ -921,197 +921,15 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return await self.spawns._resolve_or_spawn(agent_name)
 
     async def _run_delegation(self, agent_name: str, payload: Any) -> str:
-        """Dispatch one already-resolved delegation and format the result string.
-        Shared by @mention delegations and <delegate> blocks.
-        """
-        json_str = json.dumps(payload)
-        logger.info("[%s] Executing LLM delegation → @%s %s", self.name, agent_name, json_str[:80])
-        try:
-            result = await self.delegate_task(agent_name, json_str, timeout=300.0)
-        except Exception as e:
-            return f"[{agent_name} error: {e}]"
-        # Formatting the reply is outside the guard on purpose: only the
-        # delegation can fail, and reporting a formatting bug as an agent error
-        # would send the reader looking at the wrong machine.
-        if not result:
-            return f"[{agent_name} did not respond]"
-        if not isinstance(result, dict):
-            return f"✅ {agent_name}: {result}"
-        error = result.get("error")
-        if error:
-            return f"❌ {agent_name} failed: {error}"
-        for key in ("pptx_path", "image_path", "result", "message", "output", "text"):
-            if result.get(key):
-                return f"✅ {agent_name} completed: {key}={result[key]}"
-        return f"✅ {agent_name} completed: {result}"
+        return await self.delegation._run_delegation(agent_name, payload)
 
     async def _process_delegate_commands(
         self, response: str, restricted: bool = False
     ) -> tuple[str, list[str]]:
-        """Scan the LLM response for structured delegation blocks and execute them:
-
-            <delegate>{"agent": "manual-agent", "task": "search for the Philips 2200 manual"}</delegate>
-            <delegate>{"agent": "weather-agent", "payload": {"city": "Athens"}}</delegate>
-
-        This is the orchestrator-side counterpart of <spawn>/<delete> and the
-        PREFERRED way for the LLM to delegate: unlike a free-text @mention it is
-        unambiguous, never truncated, and carries a structured payload.
-
-        Accepted block fields:
-          - "agent"  (required) — target agent name
-          - "task"   — free-text task; wrapped as {"text": task}
-          - "payload"— explicit dict payload (takes precedence over "task")
-
-        Returns (cleaned_response, [result_strings]). The <delegate> block is
-        replaced in-place with its result so the user sees the outcome.
-        """
-        pattern = r"<delegate>(.*?)</delegate>"
-        results: list[str] = []
-
-        matches = list(re.finditer(pattern, response, re.DOTALL))
-        for m in matches:
-            block = m.group(1).strip()
-            try:
-                cfg = json.loads(block)
-            except json.JSONDecodeError:
-                logger.exception(
-                    "[%s] Invalid <delegate> JSON\nRaw block: %s", self.name, block[:200]
-                )
-                response = response.replace(m.group(0), "[delegate: malformed block]")
-                continue
-
-            agent_name = (cfg.get("agent") or cfg.get("name") or "").strip()
-            if not agent_name:
-                logger.warning("[%s] <delegate> block missing 'agent': %s", self.name, block[:200])
-                response = response.replace(m.group(0), "[delegate: no agent named]")
-                continue
-            if agent_name == self.name:
-                response = response.replace(m.group(0), "")
-                continue
-
-            if isinstance(cfg.get("payload"), dict):
-                payload = cfg["payload"]
-            else:
-                payload = {"text": str(cfg.get("task", "")).strip()}
-
-            if restricted:
-                # Resolve-only (no spawn), allow-listed targets only.
-                if agent_name.lower() not in self._RESTRICTED_DELEGATION_ALLOW:
-                    result_str = f"[{agent_name} isn't available from this channel]"
-                    results.append(result_str)
-                    response = response.replace(m.group(0), result_str)
-                    continue
-                target = self._registry.find_by_name(agent_name) if self._registry else None
-            else:
-                target, _spawnable = await self._resolve_or_spawn(agent_name)
-            if not target:
-                result_str = f"[Could not reach {agent_name}]"
-            else:
-                # Use the resolved actor's real name so delegation lands even
-                # when the LLM used a fuzzy alias ('smart energy agent').
-                result_str = await self._run_delegation(target.name, payload)
-
-            results.append(result_str)
-            response = response.replace(m.group(0), result_str)
-
-        return response, results
+        return await self.delegation._process_delegate_commands(response, restricted)
 
     async def _execute_llm_delegations(self, response: str) -> str:
-        """Scan the LLM response for @agent-name delegation patterns and execute them.
-        Replaces the matched pattern in the response with the actual result.
-
-        Prefer <delegate>{...}</delegate> blocks (see _process_delegate_commands).
-        This handles the looser @mention forms the LLM still produces:
-
-          1. Explicit JSON payload, anywhere in the text (original behavior — the
-             form that already worked):
-                 @weather-agent {"city": "Athens"}
-
-          2. Bare conversational mention at the start of a line OR a sentence:
-                 ...sending that now.  @manual-agent search for the Philips 2200 manual.
-             The text from the mention up to the next sentence terminator / newline
-             is wrapped as {"text": "..."}.
-
-        Previously only form (1) was recognized, so a bare mention matched nothing,
-        was streamed to the user verbatim, and was never dispatched — which is why
-        nothing showed up in the logs.
-        """
-        # (full_match_str, agent_name, payload_dict, is_bare)
-        delegations = []
-        json_spans = []  # char spans consumed by form (1), so form (2) skips them
-
-        # ── Form 1: @agent-name {json} — ANYWHERE. Brace-scan the matching close
-        #    over the full response (payload may span lines / contain } in strings).
-        for m in re.finditer(r"@([\w][\w\-]*)\s+(\{)", response):
-            agent_name = m.group(1)
-            if agent_name == self.name:
-                continue
-            start = m.start(2)
-            depth = 0
-            end = start
-            for i, ch in enumerate(response[start:], start):
-                if ch == "{":
-                    depth += 1
-                elif ch == "}":
-                    depth -= 1
-                    if depth == 0:
-                        end = i + 1
-                        break
-            if depth != 0:
-                continue  # unmatched braces — skip
-            try:
-                payload = json.loads(response[start:end])
-            except json.JSONDecodeError:
-                continue
-            delegations.append((response[m.start() : end], agent_name, payload, False))
-            json_spans.append((m.start(), end))
-
-        # ── Form 2: bare mention at a line OR sentence boundary. The '@' must be
-        #    preceded by start-of-text, a newline, or sentence-ending punctuation,
-        #    so an @name buried mid-sentence ("you can use @x to ...") — which the
-        #    prompt treats as the WRONG, user-instructing pattern — is ignored.
-        trigger = re.compile(r"(?:^|\n|[.!?:]\s+)(@([\w][\w\-]*)[ \t]+)")
-        for m in trigger.finditer(response):
-            agent_name = m.group(2)
-            if agent_name == self.name:
-                continue
-            at_start = m.start(1)  # index of the '@'
-            payload_start = m.end(1)  # first char after "@name "
-            if any(s <= at_start < e for s, e in json_spans):
-                continue  # already captured as the JSON form
-            if payload_start < len(response) and response[payload_start] == "{":
-                continue  # JSON form — owned by form (1)
-            tail = response[payload_start:]
-            stop = re.search(r"[.!?\n]", tail)
-            cut = stop.start() if stop else len(tail)
-            task = tail[:cut].strip()
-            if not task:
-                continue
-            end = payload_start + cut
-            delegations.append((response[at_start:end], agent_name, {"text": task}, True))
-
-        replacements = []
-        for full_match, agent_name, payload, is_bare in delegations:
-            target, spawnable = await self._resolve_or_spawn(agent_name)
-            if not target:
-                # A bare prose mention of an unknown, non-spawnable name is almost
-                # certainly ordinary text (or an agent the LLM only imagined), so
-                # leave the line untouched rather than clobbering the reply. The
-                # explicit JSON form is unambiguous machine intent — surface it.
-                if is_bare and not spawnable:
-                    logger.debug(
-                        "[%s] Ignoring bare mention of unknown agent %r", self.name, agent_name
-                    )
-                    continue
-                replacements.append((full_match, f"[Could not reach {agent_name}]"))
-                continue
-            result_str = await self._run_delegation(target.name, payload)
-            replacements.append((full_match, result_str))
-
-        for original, replacement in replacements:
-            response = response.replace(original, replacement)
-
-        return response
+        return await self.delegation._execute_llm_delegations(response)
 
     async def _process_spawn_commands(self, response: str) -> tuple[str, list[Any]]:
         return await self.spawns._process_spawn_commands(response)
@@ -1616,162 +1434,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def delegate_to_installer(
         self, payload: dict[str, Any], timeout: float = 300.0
     ) -> dict[str, Any]:
-        """Send a task to the installer agent and wait for the result.
-        Handles node_deploy, node_install, node_run, install, check actions.
-        timeout is generous (300s) because deploys involve SSH + pip installs.
-        """
-        if not self._registry:
-            return {"error": "No registry available"}
-        installer = self._registry.find_by_name("installer")
-        if not installer:
-            return {"error": "installer agent not found"}
-
-        task_id = f"inst_{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
-        self._result_futures[task_id] = future
-
-        payload = dict(payload)
-        payload["_task_id"] = task_id
-        payload["task"] = task_id
-
-        await self.send(installer.actor_id, MessageType.TASK, payload)
-        try:
-            return await asyncio.wait_for(future, timeout=timeout)
-        except asyncio.TimeoutError:
-            return {"error": f"Installer timed out after {timeout}s"}
-        finally:
-            self._result_futures.pop(task_id, None)
+        return await self.delegation.delegate_to_installer(payload, timeout)
 
     async def delegate_task(
         self, target_name: str, task: str, timeout: float = 60.0
-    ) -> dict | None:
-        """Send a task to a named agent and wait for its result.
-
-        Routing priority:
-          1. Local registry — fast in-process mailbox path
-          2. Remote node   — MQTT request/reply via agents/by-name/{name}/task
-          3. Returns None if the agent is unknown in both
-        """
-        if not self._registry:
-            return None
-
-        target = self._registry.find_by_name(target_name)
-        if target:
-            # ── Local path (fast, in-process) ────────────────────────────────
-            task_id = uuid.uuid4().hex
-            future = asyncio.get_event_loop().create_future()
-            self._result_futures[task_id] = future
-            await self.send(
-                target.actor_id,
-                MessageType.TASK,
-                {
-                    "text": task,
-                    "_task_id": task_id,
-                    "task": task_id,
-                    "reply_to": self.actor_id,
-                },
-            )
-            try:
-                return await asyncio.wait_for(future, timeout=timeout)
-            except asyncio.TimeoutError:
-                return None
-            finally:
-                self._result_futures.pop(task_id, None)
-
-        # ── Remote path: check if agent is on a known node ───────────────────
-        remote_node = None
-        for node_name, nd in self._known_nodes.items():
-            if target_name in nd.get("agents", []):
-                remote_node = node_name
-                break
-
-        if not remote_node:
-            logger.warning(
-                "[%s] delegate_task: %r not found locally or remotely", self.name, target_name
-            )
-            return None
-
-        async with self._reply_topic() as (reply_topic, future):
-            await self._mqtt_publish(
-                f"agents/by-name/{target_name}/task",
-                {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
-            )
-            try:
-                return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[%s] delegate_task: %r on %r timed out after %ss",
-                    self.name,
-                    target_name,
-                    remote_node,
-                    timeout,
-                )
-                return None
+    ) -> dict[str, Any] | None:
+        return await self.delegation.delegate_task(target_name, task, timeout)
 
     #: How long to wait for the reply subscription before publishing anyway.
     #: Short: a broker that is up answers a subscribe immediately, and one that
     #: is not will not answer at all.
-    _SUBSCRIBE_TIMEOUT = 5.0
-
-    @contextlib.asynccontextmanager
-    async def _reply_topic(self) -> AsyncGenerator[tuple[str, asyncio.Future]]:
-        """A reply topic that is already subscribed, and the future its answer lands in.
-
-        ⚠ **Subscribing before the caller publishes is the whole point.** Both
-        call sites used to publish first and subscribe after, so an agent that
-        answered quickly answered into nothing: the reply was published to a
-        topic with no subscriber, dropped by the broker, and the caller waited
-        out its full timeout for a task that had in fact succeeded. It reads as
-        a flaky node, which is why it survived so long. The monitor's own copy
-        of this logic was corrected years ago and the fix was never brought back
-        here.
-
-        Publishes anyway if the subscription does not come up in time. The task
-        still gets done, and its side effects are usually what the caller wanted;
-        losing the answer is worse than losing the work. The reason is logged, so
-        a timeout that follows is explained rather than mysterious.
-        """
-        topic = f"main/reply/{self.actor_id}/{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._result_futures[topic] = future
-        subscribed = asyncio.Event()
-
-        async def _listen() -> None:
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe(topic)
-                    subscribed.set()
-                    async for msg in client.messages:
-                        try:
-                            if not future.done():
-                                future.set_result(json.loads(msg.payload.decode()))
-                        except Exception as exc:
-                            logger.debug("[%s] Undecodable reply on %r: %s", self.name, topic, exc)
-                        return
-            except Exception as exc:
-                if not future.done():
-                    future.set_exception(exc)
-            finally:
-                # Whatever happened, stop the caller waiting on a listener that
-                # is no longer going to subscribe.
-                subscribed.set()
-
-        task = asyncio.create_task(_listen())
-        try:
-            try:
-                await asyncio.wait_for(subscribed.wait(), timeout=self._SUBSCRIBE_TIMEOUT)
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[%s] reply subscription for %s did not come up in %.0fs — sending anyway, "
-                    "so a reply may be missed",
-                    self.name,
-                    topic,
-                    self._SUBSCRIBE_TIMEOUT,
-                )
-            yield topic, future
-        finally:
-            task.cancel()
-            self._result_futures.pop(topic, None)
 
     async def list_agents(self) -> list[dict]:
         if not self._registry:

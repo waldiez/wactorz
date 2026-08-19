@@ -39,6 +39,24 @@ INSTALL_TIMEOUT_S = 180.0
 CATALOGUE_SETTLE_S = 0.5
 
 
+#: The body given to a `type: "llm"` agent spawned on another machine.
+#:
+#: A node's runner only knows how to run DynamicAgent-shaped source: it compiles
+#: what it is sent and looks for `handle_task`. An LLM agent has no code of its
+#: own, so this is synthesized to give it one.
+#:
+#: **No API key leaves main.** The generated agent calls `agent.chat(...)`, which
+#: on the node is an RPC back over `main/llm_request` — the whole reason the
+#: bridge exists rather than shipping credentials to the edge.
+#:
+#: It persists through `agent.persist`/`recall`, which reach the node's own state
+#: file. A history sent along as `_initial_state` is picked up by the first
+#: `recall`, so an agent keeps its memory across a migrate and back again.
+#:
+#: The system prompt is baked in at synthesis time rather than looked up at
+#: runtime, quoted with `json.dumps` so a quote or newline in it cannot end the
+#: string early. History is bounded, or the prompt grows for as long as the agent
+#: lives.
 LLM_BRIDGE_CODE_TEMPLATE = """
 # ── Auto-generated LLM bridge (synthesized by main when this agent was spawned
 # remotely with type: "llm"). Do not edit; replace the agent if you need to

@@ -42,6 +42,7 @@ from .prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
 )
 from .spawns import SpawnService
+from .turn_actions import TurnActions
 
 logger = logging.getLogger(__name__)
 
@@ -310,10 +311,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # ── Direct API intercepts — handle without LLM round-trip ──────────
         stripped = text.strip().rstrip("()")
 
-        # ── /help ───────────────────────────────────────────────────────────
-        # Commands that have moved to the registry are found here; the chain
-        # below still holds the rest. Registration order is dispatch order, so a
-        # command answers exactly where it did before.
+        # ── Commands ────────────────────────────────────────────────────────
+        # Every command lives in the registry; registration order is dispatch
+        # order, so a command answers where the chain this replaced answered it.
         found = command_registry.find(stripped)
         if found is not None:
             handler, argument = found[0].handler, found[1]
@@ -418,27 +418,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             {"type": "user_interaction", "input": text[:100], "response": clean[:200]},
         )
 
-        # Build a system footer summarizing spawn/delete actions
-        footer_parts = []
-        if spawned:
-            bg_names = [a.name for a in spawned if isinstance(a, SpawnPlaceholder)]
-            live_names = [a.name for a in spawned if not isinstance(a, SpawnPlaceholder)]
-            if live_names:
-                replaced = '"replace": true' in response or '"replace":true' in response
-                action = "Replaced" if replaced else "Spawned"
-                footer_parts.append(
-                    f"{action} {', '.join(live_names)} — will auto-restore on restart"
-                )
-            if bg_names:
-                footer_parts.append(
-                    f"Installing packages for {', '.join(bg_names)} — will appear shortly"
-                )
-        if deleted:
-            footer_parts.append(f"Deleted {', '.join(deleted)}")
-        if missing:
-            footer_parts.append(f"Could not delete {', '.join(missing)} — not currently registered")
-        if footer_parts:
-            clean += f"\n\n[System: {' | '.join(footer_parts)}]"
+        summary = TurnActions(tuple(spawned), tuple(deleted), tuple(missing)).summary(response)
+        if summary:
+            clean += f"\n\n[System: {summary}]"
 
         return note_prefix + clean
 
@@ -669,26 +651,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 yield "\n" + "\n".join(results)
         full_response = delegated
 
-        system_msg_parts = []
-        if spawned:
-            names = ", ".join(f"'{a.name}'" for a in spawned if not isinstance(a, SpawnPlaceholder))
-            bg_names = [a.name for a in spawned if isinstance(a, SpawnPlaceholder)]
-            if names:
-                replaced = '"replace": true' in full_response or '"replace":true' in full_response
-                system_msg_parts.append(
-                    f"{'Replaced' if replaced else 'Spawned'} {names} — will auto-restore on restart"
-                )
-            if bg_names:
-                system_msg_parts.append(
-                    f"Installing packages for {', '.join(bg_names)} — will appear shortly"
-                )
-        if deleted:
-            system_msg_parts.append(f"Deleted {', '.join(deleted)}")
-        if missing:
-            system_msg_parts.append(
-                f"Could not delete {', '.join(missing)} — not currently registered"
-            )
-        system_msg = " | ".join(system_msg_parts)
+        system_msg = TurnActions(tuple(spawned), tuple(deleted), tuple(missing)).summary(
+            full_response
+        )
 
         # Also surface the concrete spawn/delete outcome for stream consumers
         # that ignore the final done dict.
@@ -769,25 +734,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     ) -> Actor | SpawnPlaceholder | None:
         return await self.spawns._spawn_from_config(config, save, from_registry=from_registry)
 
-    # Synthetic bridge code shipped with type:"llm" agents when they're spawned
-    # on a remote node. The runner compiles this and finds handle_task, so the
-    # agent can actually respond to tasks instead of returning the "no
-    # handle_task function" error.
-    #
-    # Design points:
-    #   - All persistence is via agent.persist / agent.recall (these write to
-    #     the remote node's JSON state file under conversation_history).
-    #     conversation_history shipped via _initial_state from main is picked
-    #     up by recall() on first use, so memory survives migrate-back too.
-    #   - LLM calls go through agent.chat(messages, system=...) — on the remote
-    #     side this is _RemoteAgentAPI.chat, which RPCs back to main via the
-    #     main/llm_request bridge. No API key leaves main.
-    #   - System prompt is interpolated as a string literal at synthesis time
-    #     so the agent code doesn't need to look it up from config at runtime.
-    #     We use json.dumps to safely escape quotes / newlines / backslashes.
-    #   - History gets bounded at max_history turns (32 by default, matches
-    #     LLMAgent's default) so the prompt doesn't grow without bound.
-
     def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
         return self.spawns._inject_llm_bridge_code(config)
 
@@ -818,7 +764,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     @property
     def _agent_manifests(self) -> dict[str, dict[str, Any]]:
-        """Latest manifest per agent, owned by `self.nodes`.
+        """Latest manifest per agent, owned by `self.manifests`.
 
         Kept as a name here because the catalog agent writes recipe manifests
         straight into it, and the chat router, the dynamic agents and the spawn
@@ -832,7 +778,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     @property
     def _topic_registry(self) -> dict[str, list[dict[str, Any]]]:
-        """Topic to publishing agents, owned by `self.nodes`."""
+        """Topic to publishing agents, owned by `self.manifests`."""
         return self.manifests.topic_registry
 
     @_topic_registry.setter
@@ -932,11 +878,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return sorted(results, key=lambda x: x["name"])
 
     async def _manifest_listener(self) -> None:
-        """Follow agent manifests. Owned by `self.nodes`."""
+        """Follow agent manifests. Owned by `self.manifests`."""
         await self.manifests.manifest_listener()
 
     async def _state_return_listener(self) -> None:
-        """Receive agents returning from a node. Owned by `self.nodes`."""
+        """Receive agents returning from a node. Owned by `self.migration`."""
         await self.migration.state_return_listener()
 
     async def _slash_deploy_stream(self, stripped: str) -> AsyncGenerator[str]:

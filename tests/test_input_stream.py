@@ -22,6 +22,7 @@ from wactorz.agents.delegation import DelegationManager
 from wactorz.agents.lifecycle import LifecycleService
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
+from wactorz.agents.mixins.spawning import SpawnPlaceholder
 from wactorz.agents.nodes import NodeManager
 from wactorz.agents.spawns import SpawnService
 
@@ -299,6 +300,24 @@ class TestWhatTheModelWroteBeingActedOn:
         yielded = await _Main(spawned=(_Agent("kettle-watcher"),)).run("make me an agent")
 
         assert "Spawned 'kettle-watcher'" in final(yielded)["system_msg"]
+
+    async def test_an_agent_still_installing_is_announced_as_such(self) -> None:
+        # It will appear once its packages are in. Saying nothing about it reads
+        # as the spawn having failed, and the user spawns it again.
+        yielded = await _Main(spawned=(SpawnPlaceholder("chart-maker"),)).run("make me an agent")
+
+        summary = final(yielded)["system_msg"]
+        assert "Installing packages for 'chart-maker'" in summary
+        assert "auto-restore" not in summary
+
+    async def test_a_running_agent_and_an_installing_one_are_told_apart(self) -> None:
+        yielded = await _Main(
+            spawned=(_Agent("kettle-watcher"), SpawnPlaceholder("chart-maker"))
+        ).run("make me two agents")
+
+        summary = final(yielded)["system_msg"]
+        assert "Spawned 'kettle-watcher'" in summary
+        assert "Installing packages for 'chart-maker'" in summary
 
     async def test_a_deletion_is_announced(self) -> None:
         yielded = await _Main(deleted=("old-agent",)).run("delete it")

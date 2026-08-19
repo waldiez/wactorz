@@ -192,8 +192,11 @@ class TestChoosingWhereTheTaskGoes:
 
         assert main.sent[0][2]["reply_to"] == "main-id"
 
-    async def test_an_agent_on_a_node_is_reached_over_mqtt(self) -> None:
+    async def test_an_agent_on_a_node_is_reached_over_mqtt(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}})
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
 
         await main.delegate("sensor", timeout=0.05)
 
@@ -243,8 +246,13 @@ class TestWaitingForTheAnswer:
 
         assert not main.actor._result_futures
 
-    async def test_a_remote_agent_that_never_answers_times_out(self) -> None:
+    async def test_a_remote_agent_that_never_answers_times_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A broker that connects and stays quiet, rather than one that refuses:
+        # the timeout under test is the agent not replying, not the connection.
         main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}})
+        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
 
         assert await main.delegate("sensor", timeout=0.05) is None
 

@@ -114,6 +114,11 @@ class DelegationHost(Protocol):
         """Read-only here: consulted for which node claims an agent."""
         ...
 
+    @property
+    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+        """Read-only here: says whether a name is a catalogue recipe."""
+        ...
+
     async def send(self, target_id: str, msg_type: Any, payload: dict[str, Any]) -> bool: ...
 
     async def _mqtt_publish(

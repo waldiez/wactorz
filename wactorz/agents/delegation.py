@@ -63,6 +63,29 @@ RESTRICTED_DELEGATION_ALLOW = frozenset({"weather-agent", "home-assistant-agent"
 #: the work. The reason is logged, so a timeout that follows is explained.
 SUBSCRIBE_TIMEOUT_S = 5.0
 
+#: How long a node is given to answer a task the user addressed to it by name.
+#:
+#: Shorter than a delegation the model made, because someone is watching this
+#: one arrive.
+REMOTE_MENTION_TIMEOUT_S = 30.0
+
+#: How long an agent in this process is given to answer the same.
+LOCAL_MENTION_TIMEOUT_S = 60.0
+
+#: How long a freshly spawned catalogue recipe is given to appear.
+CATALOGUE_SETTLE_S = 0.5
+
+
+def _readable(result: Any) -> str:
+    """The part of a reply worth showing, whichever field it arrived in.
+
+    Falls back to the whole thing rather than to silence: an agent that
+    answered in an unexpected shape still answered.
+    """
+    if isinstance(result, dict):
+        return str(result.get("result") or result.get("response") or result)
+    return str(result)
+
 
 class DelegationManager:
     """Sends tasks to other agents and turns their replies into text."""
@@ -418,3 +441,110 @@ class DelegationManager:
         for original, replacement in replacements:
             response = response.replace(original, replacement)
         return response
+
+    async def _spawn_from_catalogue(self, target_name: str) -> tuple[Any, str | None]:
+        """Bring a catalogue recipe up so it can be asked, if there is one.
+
+        Returns the agent and no error, or nothing and why. A name with no
+        recipe is neither: there was nothing to try.
+        """
+        registry = self.host._registry
+        manifest = self.host._agent_manifests.get(target_name, {})
+        if not (manifest.get("spawnable") and manifest.get("catalog")) or not registry:
+            return None, None
+
+        catalogue = registry.find_by_name(manifest["catalog"])
+        if not (catalogue and hasattr(catalogue, "_action_spawn")):
+            return None, None
+
+        logger.info(
+            "[%s] %r not running — auto-spawning via %s...",
+            self.host.name,
+            target_name,
+            manifest["catalog"],
+        )
+        try:
+            result = await catalogue._action_spawn(target_name, {})  # pyright: ignore[reportAttributeAccessIssue]
+        except Exception as exc:
+            return None, str(exc)
+        if not (result and result.get("ok")):
+            return None, (result.get("message", "unknown error") if result else "no response")
+
+        await asyncio.sleep(CATALOGUE_SETTLE_S)
+        logger.info("[%s] %r spawned, routing task...", self.host.name, target_name)
+        return registry.find_by_name(target_name), None
+
+    async def _ask_here(self, target_name: str, message: str) -> str:
+        """Ask an agent running in this process, and format what it said."""
+        result = await self.delegate_task(target_name, message, timeout=LOCAL_MENTION_TIMEOUT_S)
+        if not result:
+            return f"{target_name} did not respond."
+        return f"**{target_name}**: {_readable(result)}"
+
+    async def _ask_node(self, target_name: str, node: str, message: str) -> str:
+        """Ask an agent on another machine, over the broker."""
+        async with self._reply_topic() as (reply_topic, future):
+            await self.host._mqtt_publish(
+                f"agents/by-name/{target_name}/task",
+                {
+                    "text": message,
+                    "_reply_topic": reply_topic,
+                    "_remote_task": True,
+                    "payload": message,
+                },
+            )
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.shield(future), timeout=REMOTE_MENTION_TIMEOUT_S
+                )
+            except asyncio.TimeoutError:
+                return (
+                    f"{target_name} on {node} did not respond within "
+                    f"{REMOTE_MENTION_TIMEOUT_S:.0f}s."
+                )
+            return f"**{target_name}** (on {node}): {_readable(result)}"
+
+    def _node_claiming(self, target_name: str) -> str | None:
+        """The node whose last heartbeat listed this agent, if any."""
+        for node_name, info in self.host._known_nodes.items():
+            if target_name in info.get("agents", []):
+                return node_name
+        return None
+
+    async def route_mention(self, text: str) -> str:
+        """Hand a task the user addressed to a named agent, and report the reply.
+
+        Tried in order of how cheaply the agent can be reached: running in this
+        process, spawnable from the catalogue, or running on another machine.
+        The reply names the node when one answered, because the same agent name
+        can exist in more than one place.
+
+        Distinct from the mentions a model writes into its own reply, which are
+        guessed at rather than typed — see `_execute_llm_delegations`.
+        """
+        parts = text.split(None, 1)
+        target_name = parts[0].lstrip("@").rstrip(":,")
+        # Nothing after the name means there is no task to separate out, so the
+        # agent is given what was typed rather than an empty string.
+        message = parts[1].strip() if len(parts) > 1 else text
+
+        registry = self.host._registry
+        target = registry.find_by_name(target_name) if registry else None
+        if not target:
+            target, refusal = await self._spawn_from_catalogue(target_name)
+            if refusal is not None:
+                return f"Could not spawn '{target_name}': {refusal}"
+
+        if target:
+            return await self._ask_here(target_name, message)
+
+        node = self._node_claiming(target_name)
+        if node:
+            return await self._ask_node(target_name, node, message)
+
+        # Naming the agents that do exist turns "not found" into something the
+        # reader can act on: the usual cause is a name typed from memory.
+        known = [a for info in self.host._known_nodes.values() for a in info.get("agents", [])]
+        if known:
+            return f"Agent '{target_name}' not found. Remote agents: {', '.join(known)}"
+        return f"Agent '{target_name}' not found."

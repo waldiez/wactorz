@@ -13,10 +13,26 @@ however thoroughly the defining module is patched.
 """
 
 import importlib
+import sys
 
 import pytest
 
+from tests.conftest import real_mqtt_client
 from wactorz.core import mqtt
+
+#: A sample of the modules that bind `mqtt_client` into their own namespace.
+#:
+#: Imported so the derived check below has something to find even when the
+#: worker running this file has not loaded them for other reasons. Not a
+#: complete roster, and not meant to be.
+_MODULES_THAT_IMPORT_IT = (
+    "wactorz.agents.delegation",
+    "wactorz.agents.manifests",
+    "wactorz.agents.nodes",
+    "wactorz.agents.migration",
+    "wactorz.agents.llm_bridge",
+    "wactorz.web.mqtt",
+)
 
 
 class TestTheGuardReachesEveryBinding:
@@ -26,18 +42,28 @@ class TestTheGuardReachesEveryBinding:
         with pytest.raises(ConnectionRefusedError):
             mqtt.mqtt_client("localhost", 1883)
 
-    @pytest.mark.parametrize(
-        "module_name",
-        [
-            "wactorz.agents.delegation",
-            "wactorz.agents.manifests",
-            "wactorz.agents.nodes",
-            "wactorz.agents.migration",
-            "wactorz.agents.llm_bridge",
-            "wactorz.agents.main_actor",
-        ],
-    )
-    def test_a_module_that_imported_the_name_is_patched_too(self, module_name: str) -> None:
+    def test_no_module_is_left_holding_the_real_factory(self) -> None:
+        """Derived rather than listed, because a list goes stale.
+
+        Which modules import the name changes as code moves between them — one
+        stopped importing it in this very refactor. Asking the question of
+        whatever is loaded keeps the guard honest without anyone maintaining a
+        roster of importers.
+        """
+        for name in _MODULES_THAT_IMPORT_IT:
+            importlib.import_module(name)
+
+        leaked = [
+            name
+            for name, module in list(sys.modules.items())
+            if name.startswith("wactorz")
+            and getattr(module, "mqtt_client", None) is real_mqtt_client
+        ]
+
+        assert not leaked
+
+    @pytest.mark.parametrize("module_name", _MODULES_THAT_IMPORT_IT)
+    def test_a_module_that_imported_the_name_is_patched(self, module_name: str) -> None:
         # These hold their own binding. Left alone, anything they open reaches
         # whatever is listening on the machine running the tests.
         module = importlib.import_module(module_name)
@@ -59,6 +85,4 @@ class TestOptingOut:
     def test_the_marker_leaves_the_factory_alone(self) -> None:
         # Not called: the point is that the real factory is in place, and
         # calling it here would try to connect.
-        from tests.conftest import real_mqtt_client
-
         assert mqtt.mqtt_client is real_mqtt_client

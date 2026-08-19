@@ -15,23 +15,11 @@ from typing import Any
 import pytest
 
 from wactorz.agents.main_actor import MainActor
-from wactorz.agents.nodes import NodeManager
+from wactorz.agents.nodes import OFFLINE_GRACE_S, NodeManager
 
 #: The window every "is it online" reader uses. Written as a literal `30` at
 #: three call sites rather than shared, which is the thing worth watching.
 ONLINE_WINDOW_S = 30
-
-
-def prune_grace_seconds() -> float:
-    """The watcher's grace period, read out of the function that defines it.
-
-    It is a local, so there is nothing to import. Read from the compiled
-    constants rather than restated here: a copy in this file would let the two
-    numbers drift apart while the test that exists to compare them kept
-    passing.
-    """
-    consts = [c for c in MainActor._node_offline_watcher.__code__.co_consts if isinstance(c, float)]
-    return max(consts)
 
 
 def node(*, seen_ago: float = 0.0, agents: tuple[str, ...] = (), **extra: Any) -> dict[str, Any]:
@@ -236,14 +224,14 @@ class TestTheTwoWindowsAreDifferentOnPurpose:
     """
 
     def test_the_prune_grace_is_longer_than_the_online_window(self) -> None:
-        assert prune_grace_seconds() > ONLINE_WINDOW_S
+        assert OFFLINE_GRACE_S > ONLINE_WINDOW_S
 
     def test_a_node_can_read_offline_without_being_prunable(self) -> None:
         # The gap between the two windows is where a blip lives: the node shows
         # as offline while its agents are left alone. If the two ever became one
         # number this gap would close and there would be no such state.
-        seen_ago = (ONLINE_WINDOW_S + prune_grace_seconds()) / 2
+        seen_ago = (ONLINE_WINDOW_S + OFFLINE_GRACE_S) / 2
         main = make_main(alpha=node(seen_ago=seen_ago, agents=("collector",)))
 
         assert not main._node_is_online("alpha")
-        assert seen_ago < prune_grace_seconds()
+        assert seen_ago < OFFLINE_GRACE_S

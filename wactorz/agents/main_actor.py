@@ -3,11 +3,9 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
-import json
 import logging
 import re
 import socket
-import time
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
@@ -18,7 +16,6 @@ from ..config import (
     deploy_target_names,
 )
 from ..core.actor import Actor, Message, MessageType
-from ..core.mqtt import mqtt_client
 from .commands import CommandContext
 from .commands import registry as command_registry
 from .delegation import DelegationManager
@@ -47,22 +44,6 @@ from .prompts.main_actor_prompts import (
 from .spawns import SpawnService
 
 logger = logging.getLogger(__name__)
-
-
-def _decoded_json(payload: bytes | None) -> Any | None:
-    """The payload decoded as JSON, or None if it is not.
-
-    Used where the subscription is a wildcard over every agent topic and an
-    agent may publish whatever it likes: a payload that is not JSON is ordinary
-    traffic rather than a fault, and reporting each one would bury the listener
-    in its own output.
-    """
-    if not payload:
-        return None
-    try:
-        return json.loads(payload.decode())
-    except Exception:
-        return None
 
 
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
@@ -1159,144 +1140,14 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         await self.nodes.heartbeat_listener()
 
     async def _node_offline_watcher(self) -> None:
-        """Periodically check for nodes that have gone silent. If a node has not
-        sent a heartbeat in NODE_OFFLINE_GRACE_S, treat all its agents as gone
-        and drop the node from our tracking.
-
-        Uses a longer threshold (90s) than the visual "offline" indicator (30s)
-        so brief network blips don't trigger false deletion notes. The visual
-        indicator stays at 30s for snappy UX; this watcher waits long enough
-        to be sure the node is genuinely down.
-        """
-        NODE_OFFLINE_GRACE_S = 90.0
-        CHECK_INTERVAL_S = 15.0
-
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                await asyncio.sleep(CHECK_INTERVAL_S)
-                now = time.time()
-                # Snapshot to avoid mutation-during-iteration
-                stale_nodes = [
-                    (name, info)
-                    for name, info in list(self._known_nodes.items())
-                    if (now - info.get("last_seen", 0)) > NODE_OFFLINE_GRACE_S
-                ]
-                if not stale_nodes:
-                    continue
-
-                reg = self._get_spawn_registry()
-                for node_name, _info in stale_nodes:
-                    logger.warning(
-                        "[main] Node %r has been silent for >%.0fs — treating as offline",
-                        node_name,
-                        NODE_OFFLINE_GRACE_S,
-                    )
-                    # Find all agents that belong to this node according to the
-                    # spawn registry (the heartbeat's last-known agent list may
-                    # be stale).
-                    lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
-                    for agent_name in lost:
-                        self._remove_from_spawn_registry(agent_name)
-                        await self._clear_agent_manifest(agent_name)
-                        self._record_agent_deletion(
-                            agent_name,
-                            reason=f"node '{node_name}' went offline",
-                        )
-                    # Drop the node from our tracking. If it comes back, the
-                    # heartbeat listener will re-add it as a fresh entry.
-                    self._known_nodes.pop(node_name, None)
-                    if lost:
-                        self._queue_notification(
-                            {
-                                "_monitor_notification": True,
-                                "message": (
-                                    f"Node '{node_name}' is offline. "
-                                    f"Lost agents: {', '.join(lost)}."
-                                ),
-                                "severity": "warning",
-                                "timestamp": now,
-                            }
-                        )
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning("[main] Node offline watcher error: %s", e)
+        await self.nodes._node_offline_watcher()
 
     async def _llm_bridge_listener(self) -> None:
         """Serve LLM calls for remote agents. Owned by `self.llm_bridge`."""
         await self.llm_bridge.listen()
 
     async def _remote_observed_samples_listener(self) -> None:
-        """Subscribe to all MQTT topics published by remote agents and update
-        their TopicContract.observed_samples with real payload field names.
-
-        This is what gives the planner accurate schema context for remote
-        agents — the declared produces_schema may use wrong field names, but
-        the observed_samples reflect what the code ACTUALLY publishes.
-
-        We subscribe to:
-          agents/+/data/#    — agent.publish_data() calls from remote agents
-          custom/#           — agent-to-agent data streams
-          sensors/#          — common IoT namespace
-        Additional topic patterns can be added as needed.
-        """
-
-        # Build a reverse map: topic prefix → agent name, kept fresh from spawn registry
-        def _topic_to_agent(topic: str) -> str | None:
-            """Best-effort: find which remote agent publishes to this topic."""
-            try:
-                from ..core.topic_bus import get_topic_bus
-
-                bus = get_topic_bus()
-                if bus:
-                    producers = bus.registry.producers_of(topic)
-                    if producers:
-                        return producers[0].name
-            except Exception as exc:
-                logger.debug("[%s] TopicBus producer lookup failed: %s", self.name, exc)
-            return None
-
-        while self.state.value not in ("stopped", "failed"):
-            try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    for pattern in ("agents/+/data/#", "custom/#", "sensors/#"):
-                        await client.subscribe(pattern)
-                    async for msg in client.messages:
-                        topic = str(msg.topic)
-                        # Skip internal wactorz topics
-                        if any(topic.startswith(p) for p in ("agents/by-name", "nodes/", "main/")):
-                            continue
-                        payload = _decoded_json(msg.payload)
-                        if payload is None:
-                            continue
-                        if not isinstance(payload, dict):
-                            continue
-
-                        agent_name = _topic_to_agent(topic)
-                        if not agent_name:
-                            continue
-
-                        try:
-                            from ..core.topic_bus import get_topic_bus
-
-                            bus = get_topic_bus()
-                            if bus:
-                                contract = bus.registry.get(agent_name)
-                                if contract:
-                                    contract.update_observed(topic, payload)
-                        except Exception as exc:
-                            logger.debug(
-                                "[%s] Recording observed sample for %r failed: %s",
-                                self.name,
-                                agent_name,
-                                exc,
-                            )
-
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                if self.state.value not in ("stopped", "failed"):
-                    await asyncio.sleep(5)
+        await self.manifests._remote_observed_samples_listener()
 
     async def delegate_to_installer(
         self, payload: dict[str, Any], timeout: float = 300.0

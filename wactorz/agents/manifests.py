@@ -25,8 +25,32 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Where a remote agent's data might turn up. Broad on purpose: an agent picks
+#: its own topics, and the point is to learn what it actually publishes.
+OBSERVED_TOPIC_PATTERNS = ("agents/+/data/#", "custom/#", "sensors/#")
+
+#: Traffic that is machinery rather than data. Recording it would teach the
+#: planner that an agent publishes spawn commands.
+INTERNAL_TOPIC_PREFIXES = ("agents/by-name", "nodes/", "main/")
+
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
+
+
+def _decoded_json(payload: bytes | None) -> Any | None:
+    """The payload decoded as JSON, or None if it is not.
+
+    Used where the subscription is a wildcard over every agent topic and an
+    agent may publish whatever it likes: a payload that is not JSON is ordinary
+    traffic rather than a fault, and reporting each one would bury the listener
+    in its own output.
+    """
+    if not payload:
+        return None
+    try:
+        return json.loads(payload.decode())
+    except Exception:
+        return None
 
 
 class ManifestRegistry:
@@ -195,3 +219,87 @@ class ManifestRegistry:
                 bus.unregister(name)
         except Exception as exc:
             logger.debug("[main] TopicBus unregister failed for %r: %s", name, exc)
+
+    @property
+    def host_name(self) -> str:
+        """The owning actor's name, for log lines, or a placeholder without one."""
+        return self.host.name if self.host is not None else "main"
+
+    def _producer_of(self, topic: str) -> str | None:
+        """The agent the bus says publishes `topic`, or None.
+
+        Best-effort: an answer nobody can give is not a fault, and guessing an
+        owner would attribute one agent's fields to another.
+        """
+        try:
+            from ..core.topic_bus import get_topic_bus
+
+            bus = get_topic_bus()
+            if bus:
+                producers = bus.registry.producers_of(topic)
+                if producers:
+                    return producers[0].name
+        except Exception as exc:
+            logger.debug("[%s] TopicBus producer lookup failed: %s", self.host_name, exc)
+        return None
+
+    def _record_sample(self, agent_name: str, topic: str, payload: dict[str, Any]) -> None:
+        """Add one real payload to what `agent_name` is known to publish."""
+        try:
+            from ..core.topic_bus import get_topic_bus
+
+            bus = get_topic_bus()
+            if bus:
+                contract = bus.registry.get(agent_name)
+                if contract:
+                    contract.update_observed(topic, payload)
+        except Exception as exc:
+            logger.debug(
+                "[%s] Recording observed sample for %r failed: %s",
+                self.host_name,
+                agent_name,
+                exc,
+            )
+
+    def _sample_from(self, message: Any) -> tuple[str, str, dict[str, Any]] | None:
+        """The agent, topic and payload a message carries, if it carries one.
+
+        None for everything that is not a data sample: internal machinery, a
+        payload that is not a JSON object, or a topic no contract claims.
+        """
+        topic = str(message.topic)
+        if topic.startswith(INTERNAL_TOPIC_PREFIXES):
+            return None
+        payload = _decoded_json(message.payload)
+        if not isinstance(payload, dict):
+            return None
+        agent_name = self._producer_of(topic)
+        if not agent_name:
+            return None
+        return agent_name, topic, payload
+
+    async def _remote_observed_samples_listener(self) -> None:
+        """Record what remote agents actually publish, as they publish it.
+
+        An agent's declared `produces_schema` is written by whoever wrote the
+        agent and is often wrong. What arrives on the wire is not, so the
+        planner is given the observed field names instead.
+        """
+        host = self.host
+        if host is None:
+            return
+
+        while host.state.value not in ("stopped", "failed"):
+            try:
+                async with mqtt_client(host._mqtt_broker, host._mqtt_port) as client:
+                    for pattern in OBSERVED_TOPIC_PATTERNS:
+                        await client.subscribe(pattern)
+                    async for message in client.messages:
+                        found = self._sample_from(message)
+                        if found is not None:
+                            self._record_sample(*found)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                if host.state.value not in ("stopped", "failed"):
+                    await asyncio.sleep(RECONNECT_DELAY_S)

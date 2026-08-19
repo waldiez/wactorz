@@ -47,6 +47,16 @@ VANISH_MISS_THRESHOLD = 3
 #: a brief network gap costs a grey dot rather than a deletion.
 ONLINE_WINDOW_S = 30.0
 
+#: How long a node may stay silent before its agents are treated as lost.
+#:
+#: Longer than the window above on purpose. That one drives the indicator in the
+#: dashboard, where being quick to say "offline" costs nothing; this one deletes
+#: agents, where being quick would turn a network blip into a resurrection loop.
+OFFLINE_GRACE_S = 90.0
+
+#: How often the watcher looks for nodes that have gone quiet.
+OFFLINE_CHECK_INTERVAL_S = 15.0
+
 
 def remote_actor_id(agent_name: str) -> str:
     """The actor id a remote agent has, derived from its name.
@@ -353,3 +363,68 @@ class NodeManager:
                 "timestamp": time.time(),
             }
         )
+
+    async def _node_offline_watcher(self) -> None:
+        """Periodically check for nodes that have gone silent. If a node has not
+        sent a heartbeat in OFFLINE_GRACE_S, treat all its agents as gone
+        and drop the node from our tracking.
+
+        Uses a longer threshold (90s) than the visual "offline" indicator (30s)
+        so brief network blips don't trigger false deletion notes. The visual
+        indicator stays at 30s for snappy UX; this watcher waits long enough
+        to be sure the node is genuinely down.
+        """
+        host = self.host
+        if host is None:
+            return
+
+        while host.state.value not in ("stopped", "failed"):
+            try:
+                await asyncio.sleep(OFFLINE_CHECK_INTERVAL_S)
+                now = time.time()
+                # Snapshot to avoid mutation-during-iteration
+                stale_nodes = [
+                    (name, info)
+                    for name, info in list(self.known.items())
+                    if (now - info.get("last_seen", 0)) > OFFLINE_GRACE_S
+                ]
+                if not stale_nodes:
+                    continue
+
+                reg = host._get_spawn_registry()
+                for node_name, _info in stale_nodes:
+                    logger.warning(
+                        "[main] Node %r has been silent for >%.0fs — treating as offline",
+                        node_name,
+                        OFFLINE_GRACE_S,
+                    )
+                    # Find all agents that belong to this node according to the
+                    # spawn registry (the heartbeat's last-known agent list may
+                    # be stale).
+                    lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
+                    for agent_name in lost:
+                        host._remove_from_spawn_registry(agent_name)
+                        await host._clear_agent_manifest(agent_name)
+                        host._record_agent_deletion(
+                            agent_name,
+                            reason=f"node '{node_name}' went offline",
+                        )
+                    # Drop the node from our tracking. If it comes back, the
+                    # heartbeat listener will re-add it as a fresh entry.
+                    self.known.pop(node_name, None)
+                    if lost:
+                        host._queue_notification(
+                            {
+                                "_monitor_notification": True,
+                                "message": (
+                                    f"Node '{node_name}' is offline. "
+                                    f"Lost agents: {', '.join(lost)}."
+                                ),
+                                "severity": "warning",
+                                "timestamp": now,
+                            }
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning("[%s] Node offline watcher error: %s", host.name, e)

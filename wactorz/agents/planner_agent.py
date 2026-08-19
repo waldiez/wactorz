@@ -218,8 +218,6 @@ class PlannerAgent(Actor, SpawnMixin):
                 reply["spawned"] = self._spawned_by_planner
             await self.send(self._reply_to_id, MessageType.RESULT, reply)
 
-    # ── Core pipeline ──────────────────────────────────────────────────────
-
     # ── Pipeline registry ──────────────────────────────────────────────────
     # Each pipeline rule is stored here so users can list / delete them later.
     # Stored in persistent state under key "_pipeline_rules".

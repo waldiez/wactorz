@@ -21,6 +21,7 @@ from typing import Any
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
 from wactorz.agents.nodes import NodeManager
+from wactorz.agents.spawns import SpawnService
 
 _SPAWN_FAILED = "spawn failed"
 
@@ -86,6 +87,7 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        main.spawns = SpawnService(main)
         setattr(main, "_registry", registry if registry is not None else _Registry())
 
         self.configs: list[dict[str, Any]] = []
@@ -97,12 +99,12 @@ class _Main:
             self.configs.append(config)
             return _Agent(name)
 
-        setattr(main, "_spawn_from_config", _spawn)
+        setattr(main.spawns, "_spawn_from_config", _spawn)
         setattr(main, "_match_catalog_recipe", lambda name, capabilities=None: catalog_match)
         self.actor = main
 
     async def process(self, response: str) -> tuple[str, list[Any]]:
-        return await self.actor._process_spawn_commands(response)
+        return await self.actor.spawns._process_spawn_commands(response)
 
     @property
     def spawned_names(self) -> list[Any]:
@@ -264,6 +266,7 @@ class TestChoosingLocalOrRemote:
     async def _route(self, config: dict[str, Any]) -> tuple[list[Any], list[Any]]:
         main = MainActor.__new__(MainActor)
         main.name = "main"
+        main.spawns = SpawnService(main)
         local: list[Any] = []
         remote: list[Any] = []
 
@@ -274,8 +277,8 @@ class TestChoosingLocalOrRemote:
             remote.append((cfg, node, save))
 
         setattr(main, "_spawn_local_from_config", _local)
-        setattr(main, "_spawn_remote", _remote)
-        await main._spawn_from_config(config, save=True)
+        setattr(main.spawns, "_spawn_remote", _remote)
+        await main.spawns._spawn_from_config(config, save=True)
         return local, remote
 
     async def test_a_config_naming_a_node_goes_out_over_mqtt(self) -> None:

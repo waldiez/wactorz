@@ -12,6 +12,7 @@ from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
 from wactorz.agents.migration import Migration
 from wactorz.agents.nodes import VANISH_MISS_THRESHOLD, NodeManager
+from wactorz.agents.spawns import SpawnService
 
 
 def _bare_main(registry: dict) -> MainActor:
@@ -19,6 +20,7 @@ def _bare_main(registry: dict) -> MainActor:
     m = MainActor.__new__(MainActor)
     m.manifests = ManifestRegistry(m)
     m.nodes = NodeManager(m, m.manifests)
+    m.spawns = SpawnService(m)
     m.migration = Migration(m, m.nodes)
     m.name = "main"
     m._node_agent_misses = {}

@@ -22,6 +22,7 @@ from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
 from wactorz.agents.migration import Migration
 from wactorz.agents.nodes import NodeManager
+from wactorz.agents.spawns import SpawnService
 
 
 class _Registry:
@@ -56,6 +57,7 @@ class _Main:
         main.name = "main"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        main.spawns = SpawnService(main)
         main.migration = Migration(main, main.nodes)
         main.nodes.known = dict(nodes or {})
         main._agent_manifests = dict(manifests or {})

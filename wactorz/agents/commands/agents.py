@@ -88,7 +88,9 @@ async def _apply_lifecycle(ctx: CommandContext, verb: str, agent_name: str) -> s
     if not agent_name:
         return f"Usage: /{verb} <agent-name>"
 
-    # Remote check first — fail fast with a clear message
+    # Checked before anything else: the runner on a node implements no
+    # pause or resume topic, so there is nothing to send and the agent would
+    # be reported as paused while it kept running.
     reg = ctx.actor._get_spawn_registry()
     node = reg.get(agent_name, {}).get("node", "").strip()
     if node:

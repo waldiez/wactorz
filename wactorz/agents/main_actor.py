@@ -25,9 +25,7 @@ from ..core.mqtt import mqtt_client
 from .commands import CommandContext
 from .commands import registry as command_registry
 from .helpers.main_actor_helpers import (
-    SPAWN_REGISTRY_KEY,
     _normalize_agent_name,
-    _parse_spawn_config,
     _strip_live_context,
     starts_with_bypass,
 )
@@ -47,6 +45,7 @@ from .one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from .prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
 )
+from .spawns import SpawnService
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +100,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
         self.llm_bridge = LLMBridge(self)
+        self.spawns = SpawnService(self)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -125,7 +125,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     # ── Spawn registry ─────────────────────────────────────────────────────
 
     def _get_spawn_registry(self) -> dict[str, Any]:
-        return self.recall(SPAWN_REGISTRY_KEY) or {}
+        return self.spawns._get_spawn_registry()
 
     def _restore_earned_trust(self, agent_name: str, local_cfg: dict[str, Any]) -> bool:
         """Re-attach a migrating agent's ``trusted`` flag from our own registry.
@@ -147,17 +147,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return True
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
-        reg = self._get_spawn_registry()
-        reg[config["name"]] = config
-        self.persist(SPAWN_REGISTRY_KEY, reg)
-        logger.info("[%s] Spawn registry: %s", self.name, list(reg.keys()))
+        self.spawns._save_to_spawn_registry(config)
 
     def _remove_from_spawn_registry(self, name: str) -> None:
-        reg = self._get_spawn_registry()
-        if name in reg:
-            del reg[name]
-            self.persist(SPAWN_REGISTRY_KEY, reg)
-            logger.info("[%s] Removed %r from spawn registry.", self.name, name)
+        self.spawns._remove_from_spawn_registry(name)
 
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         """Clear an agent's manifest from main's in-memory caches AND from the
@@ -223,60 +216,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     # survive summarization and persist indefinitely.
 
     async def _restore_spawned_agents(self) -> None:
-        reg = self._get_spawn_registry()
-        if not reg:
-            return
-
-        # ── Skip names already brought up by the Supervisor's factories ─────
-        # Both the Supervisor (registry.py) and this method spawn user agents
-        # at startup. Without this guard they race: supervisor.start() spawns
-        # instance #1 via its stored factory, then on_start() runs us here and
-        # we spawn instance #2. Both register under the same deterministic
-        # actor_id (uuid5 of name) — the dict entry gets overwritten but the
-        # first instance's aiomqtt subscribe listeners keep running, causing
-        # every MQTT message to be delivered twice.
-        sup = getattr(self._registry, "_supervisor_ref", None) if self._registry else None
-        already_supervised: set[str] = set()
-        if sup is not None:
-            for sup_name, spec in sup._specs.items():
-                if spec.actor is not None and not spec.retired:
-                    already_supervised.add(sup_name)
-
-        if already_supervised:
-            skip = sorted(n for n in reg if n in already_supervised)
-            if skip:
-                logger.info(
-                    "[%s] Supervisor already restarted %s agent(s); skipping restore for: %s",
-                    self.name,
-                    len(skip),
-                    skip,
-                )
-
-        pending = {n: c for n, c in reg.items() if n not in already_supervised}
-        if not pending:
-            return
-
-        logger.info("[%s] Restoring %s agent(s): %s", self.name, len(pending), list(pending.keys()))
-        for name, config in pending.items():
-            node = config.get("node", "").strip()
-            if node:
-                # Remote agent — re-publish spawn to its node; no local object expected
-                logger.info("[%s] Re-spawning remote agent %r on node %r", self.name, name, node)
-                try:
-                    await self._spawn_remote(config, node, save=False)
-                except Exception:
-                    logger.exception(
-                        "[%s] Failed to restore remote %r on %r", self.name, name, node
-                    )
-                continue
-            if self._registry and self._registry.find_by_name(name):
-                logger.info("[%s] %r already running, skipping.", self.name, name)
-                continue
-            try:
-                await self._spawn_from_config(config, save=False, from_registry=True)
-                logger.info("[%s] Restored: %s", self.name, name)
-            except Exception:
-                logger.exception("[%s] Failed to restore %r", self.name, name)
+        await self.spawns._restore_spawned_agents()
 
     # ── Message handling ───────────────────────────────────────────────────
 
@@ -426,53 +366,6 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 urls["telegram"] = url
             self.persist("_notification_urls", urls)
             logger.info("[%s] Auto-saved webhook URL from message", self.name)
-
-        # ── /delete <agent>, /stop <agent> — direct shortcuts ──────────────
-        # Same behaviour as `/agents delete <name>` / `/agents stop <name>`,
-        # but as a top-level command so users (and main itself) don't need to
-        # round-trip through the LLM. Reuses the unified handler below by
-        # rewriting `stripped` and falling through.
-
-        # ── /migrate <agent> <node> ─────────────────────────────────────────
-        # Moved here from io_agent so all interfaces (CLI, UI, Discord) share
-        # one implementation. The actual work is done by self.migrate_agent().
-
-        # ── /deploy (non-streaming path) ────────────────────────────────────
-        # The streaming version yields progress chunks live; this version
-        # collects them and returns one joined string. Callers without
-        # streaming (Discord, REST, CLI input()) get the full transcript at
-        # the end. Implementation lives in _slash_deploy_stream so there is
-        # exactly one source of truth for what /deploy does.
-
-        # ── /clear-plans ────────────────────────────────────────────────────
-
-        # ── /pause <agent>, /resume <agent> ─────────────────────────────────
-        # NOTE: the underlying remote_runner.py does not implement pause/resume
-        # topics, so these only affect LOCAL agents. For remote agents we tell
-        # the user honestly and suggest /stop instead.
-
-        # ── /agents stop|delete|pause|remove <name> ─────────────────────────
-        # NOTE: stop and pause are reversible (state preserved, spawn registry
-        # entry kept if you ever want to /agents restart). delete and remove
-        # are PERMANENT — they go through delete_spawned_agent(), which wipes
-        # the on-disk state file, purges retained MQTT topics, and removes the
-        # entry from the spawn registry. Picking the wrong verb here is the
-        # difference between "the agent comes back on next runner restart" and
-        # "the agent is gone forever".
-
-        # ── /agents restart <name> ──────────────────────────────────────────
-
-        # ── /nodes remove <node> ────────────────────────────────────────────
-
-        # ── /nodes restart <node> ───────────────────────────────────────────
-
-        # ── /nodes shutdown <node> ──────────────────────────────────────────
-
-        # ── /agents / /capabilities ─────────────────────────────────────────
-
-        # ── /registry — diagnostic: compare all three sources of truth ──────
-
-        # ── /plans — pending dry-run proposals ──────────────────────────────
 
         # ── @mention direct routing ─────────────────────────────────────────
         if text.startswith("@"):
@@ -1025,49 +918,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return None
 
     async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]:
-        """Resolve an agent by name, auto-spawning it from a catalog recipe if it
-        isn't running yet. Shared by @mention delegations and <delegate> blocks.
-
-        Returns (target_actor_or_None, spawnable_bool).
-        """
-        target = self._registry.find_by_name(agent_name) if self._registry else None
-        spawnable = False
-        if not target:
-            manifest = self._agent_manifests.get(agent_name, {})
-            # Fall back to a fuzzy catalog match so 'smart energy agent' or
-            # 'smart-energy-agent' still resolve to the 'smart-energy' recipe.
-            if not manifest:
-                matched = self._match_catalog_recipe(agent_name)
-                if matched:
-                    agent_name = matched
-                    manifest = self._agent_manifests.get(matched, {})
-            spawnable = bool(manifest.get("spawnable") and manifest.get("catalog"))
-            if spawnable:
-                catalog_actor = (
-                    self._registry.find_by_name(manifest["catalog"]) if self._registry else None
-                )
-                if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
-                    logger.info("[%s] Auto-spawning %r via catalog...", self.name, agent_name)
-                    try:
-                        spawn_result = await catalog_actor._action_spawn(agent_name, {})  # pyright: ignore[reportAttributeAccessIssue]
-                        if spawn_result and spawn_result.get("ok"):
-                            await asyncio.sleep(0.5)
-                            target = (
-                                self._registry.find_by_name(agent_name) if self._registry else None
-                            )
-                            logger.info("[%s] %r spawned successfully", self.name, agent_name)
-                        else:
-                            err = (
-                                spawn_result.get("message", "unknown")
-                                if spawn_result
-                                else "no response"
-                            )
-                            logger.warning(
-                                "[%s] Spawn failed for %r: %s", self.name, agent_name, err
-                            )
-                    except Exception:
-                        logger.exception("[%s] Spawn error for %r", self.name, agent_name)
-        return target, spawnable
+        return await self.spawns._resolve_or_spawn(agent_name)
 
     async def _run_delegation(self, agent_name: str, payload: Any) -> str:
         """Dispatch one already-resolved delegation and format the result string.
@@ -1263,90 +1114,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return response
 
     async def _process_spawn_commands(self, response: str) -> tuple[str, list[Any]]:
-        spawned = []
-        pattern = r"<spawn>(.*?)</spawn>"
-
-        for match in re.findall(pattern, response, re.DOTALL):
-            try:
-                config = _parse_spawn_config(match.strip())
-
-                # ── Guard: don't let the LLM reimplement a catalog recipe ──────
-                # If the requested name maps to an existing catalog recipe, spawn
-                # THAT (the maintained, tested version) instead of the LLM's
-                # freshly-written duplicate. This is what stops "spawn the smart
-                # energy agent" from producing a brand-new 'smart-energy-agent'
-                # when the catalog already provides 'smart-energy'.
-                req_name = config.get("name", "")
-                if not config.get("replace"):
-                    recipe_name = self._match_catalog_recipe(req_name)
-                    # Log catalog recipe resolution for spawn-routing diagnostics.
-                    logger.info(
-                        "[%s] spawn %r: catalog-dedup match = %r", self.name, req_name, recipe_name
-                    )
-                    if recipe_name:
-                        existing = (
-                            self._registry.find_by_name(recipe_name) if self._registry else None
-                        )
-                        if existing:
-                            logger.info(
-                                "[%s] %r already covered by running catalog agent %r — skipping LLM reimplementation",
-                                self.name,
-                                req_name,
-                                recipe_name,
-                            )
-                            spawned.append(existing)
-                            continue
-                        catalog_actor = (
-                            self._registry.find_by_name("catalog") if self._registry else None
-                        )
-                        if catalog_actor and hasattr(catalog_actor, "_action_spawn"):
-                            logger.info(
-                                "[%s] LLM tried to write %r; spawning catalog recipe %r instead",
-                                self.name,
-                                req_name,
-                                recipe_name,
-                            )
-                            spawn_result = await catalog_actor._action_spawn(recipe_name, {})  # pyright: ignore[reportAttributeAccessIssue]
-                            if spawn_result and spawn_result.get("ok"):
-                                await asyncio.sleep(0.5)
-                                actor = (
-                                    self._registry.find_by_name(recipe_name)
-                                    if self._registry
-                                    else None
-                                )
-                                if actor:
-                                    spawned.append(actor)
-                                    continue
-                            logger.warning(
-                                "[%s] Catalog spawn of %r failed (%s); falling back to LLM code",
-                                self.name,
-                                recipe_name,
-                                spawn_result,
-                            )
-
-                # LLM agents have no "code" — only check for code if type is dynamic
-                agent_type = config.get("type", "dynamic")
-                has_code = bool(config.get("code", "").strip())
-                has_prompt = bool(config.get("system_prompt", "").strip())
-                if agent_type == "dynamic" and not has_code:
-                    logger.error(
-                        "[%s] Dynamic agent has no code: %s", self.name, config.get("name")
-                    )
-                    continue
-                if agent_type == "llm" and not has_prompt:
-                    logger.warning(
-                        "[%s] LLM agent has no system_prompt, using default: %s",
-                        self.name,
-                        config.get("name"),
-                    )
-                actor = await self._spawn_from_config(config, save=True)
-                if actor:
-                    spawned.append(actor)
-            except Exception:
-                logger.exception("[%s] Spawn failed\nRaw block:\n%s", self.name, match[:500])
-
-        clean = re.sub(pattern, "", response, flags=re.DOTALL).strip()
-        return clean, spawned
+        return await self.spawns._process_spawn_commands(response)
 
     async def _process_delete_commands(self, response: str) -> tuple[str, list[str], list[str]]:
         """Scan the LLM response for <delete>{"name": "agent-name"}</delete> blocks
@@ -1436,22 +1204,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _spawn_from_config(
         self, config: dict[str, Any], save: bool = True, *, from_registry: bool = False
     ) -> Actor | SpawnPlaceholder | None:
-        """Spawn one agent from a config dict.
-
-        Remote (node-targeted) spawns go out over MQTT via ``_spawn_remote``;
-        everything local is handled by the shared ``SpawnMixin`` so main and the
-        planner construct agents identically.
-
-        ``from_registry`` says the config was read back from the spawn registry,
-        which is what entitles it to a ``trusted`` flag. It defaults to False so
-        a new call site is untrusted until someone decides otherwise.
-        """
-        node = config.get("node", "").strip()
-        if node:
-            return await self._spawn_remote(config, node, save)
-        return await self._spawn_local_from_config(
-            config, register=save, from_registry=from_registry
-        )
+        return await self.spawns._spawn_from_config(config, save, from_registry=from_registry)
 
     # Synthetic bridge code shipped with type:"llm" agents when they're spawned
     # on a remote node. The runner compiles this and finds handle_task, so the
@@ -1471,255 +1224,12 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     #     We use json.dumps to safely escape quotes / newlines / backslashes.
     #   - History gets bounded at max_history turns (32 by default, matches
     #     LLMAgent's default) so the prompt doesn't grow without bound.
-    _LLM_BRIDGE_CODE_TEMPLATE = """
-# ── Auto-generated LLM bridge (synthesized by main when this agent was spawned
-# remotely with type: "llm"). Do not edit; replace the agent if you need to
-# change behavior. ─────────────────────────────────────────────────────────
-import time
-
-_SYSTEM_PROMPT = {system_prompt_literal}
-_MAX_HISTORY   = {max_history}
-
-
-def _now_block():
-    # Recomputed every task so the agent always sees the real present moment
-    # (process-local zone — honors the host TZ env var). Kept self-contained so
-    # the synthesized agent has no import dependency on llm_agent. Newlines are
-    # built with chr(10) to avoid backslash-escaping through the code template.
-    from datetime import datetime as _dt
-    _n = _dt.now().astimezone()
-    _nl = chr(10)
-    return (
-        "== CURRENT DATE & TIME (live) ==" + _nl
-        + "It is now " + _n.strftime("%A, %d %B %Y, %H:%M %Z")
-        + " (UTC" + _n.strftime("%z") + ")." + _nl
-        + "Trust this over training data; resolve 'today'/'tomorrow' against it."
-        + _nl + _nl
-    )
-
-async def setup(agent):
-    # Conversation history may have been shipped via _initial_state at spawn
-    # time — agent.recall() finds it. If this is a fresh spawn, default to
-    # an empty list.
-    agent.state["history"] = list(agent.recall("conversation_history", []) or [])
-
-async def handle_task(agent, payload):
-    # Accept the same shapes LLMAgent does: dict with text/task/message/query,
-    # or a bare string. Anything else gets str()'d so the LLM at least gets
-    # something to look at instead of crashing on a non-string.
-    if isinstance(payload, dict):
-        text = (
-            payload.get("text")
-            or payload.get("task")
-            or payload.get("message")
-            or payload.get("query")
-            or str(payload)
-        )
-    else:
-        text = str(payload) if payload is not None else ""
-
-    started = time.time()
-    history = agent.state.setdefault("history", [])
-    history.append({{"role": "user", "content": text, "ts": started}})
-
-    # Keep the prompt bounded — only send the last _MAX_HISTORY turns to the LLM.
-    safe_history = [
-        {{"role": m["role"], "content": str(m["content"])}}
-        for m in history[-_MAX_HISTORY:]
-        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
-    ]
-
-    response = await agent.chat(safe_history, system=_now_block() + _SYSTEM_PROMPT)
-    duration = time.time() - started
-
-    history.append({{"role": "assistant", "content": response, "ts": time.time()}})
-    # Trim in-memory list too so it doesn't grow forever between persists.
-    if len(history) > _MAX_HISTORY * 2:
-        del history[: len(history) - _MAX_HISTORY * 2]
-    agent.persist("conversation_history", history)
-
-    return {{"text": response, "task": text[:60], "duration": duration}}
-"""
 
     def _inject_llm_bridge_code(self, config: dict[str, Any]) -> dict[str, Any]:
-        """If ``config`` is for an LLM-typed agent without code, return a copy
-        with synthesized bridge code so the remote runner can actually run it.
-
-        No-op (returns the original config) when:
-          - the config already has code (caller provided their own logic)
-          - the config isn't type "llm" (DynamicAgent, ha_actuator, etc. are
-            handled directly by the runner already)
-
-        Why a copy: callers may pass the same config dict for multiple writes
-        (spawn registry, desired_state, MQTT publish) and we don't want to
-        mutate it under their feet.
-        """
-        if not isinstance(config, dict):
-            return config
-        if (config.get("code") or "").strip():
-            return config
-        if (config.get("type") or "").strip().lower() != "llm":
-            return config
-
-        system_prompt = config.get("system_prompt", "You are a helpful assistant.")
-        max_history = int(config.get("max_history", 32) or 32)
-        bridge = self._LLM_BRIDGE_CODE_TEMPLATE.format(
-            system_prompt_literal=json.dumps(system_prompt),
-            max_history=max_history,
-        )
-
-        out = dict(config)
-        out["code"] = bridge
-        # description and capabilities are commonly already set by the LLM
-        # at spawn time; fill in sensible defaults if not so list_capabilities
-        # still works on the remote side.
-        out.setdefault(
-            "description",
-            f"LLM-driven agent (remote bridge). System prompt: "
-            f"{system_prompt[:80].rstrip()}{'...' if len(system_prompt) > 80 else ''}",
-        )
-        out.setdefault("input_schema", {"text": "str — the question or request"})
-        out.setdefault("output_schema", {"text": "str — the LLM response"})
-        logger.info(
-            "[%s] Synthesized LLM bridge code for %r: %s chars, max_history=%s",
-            self.name,
-            out.get("name"),
-            len(bridge),
-            max_history,
-        )
-        return out
+        return self.spawns._inject_llm_bridge_code(config)
 
     async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
-        """Publish a spawn command to a remote node via MQTT.
-        The remote_runner.py on that machine will receive it and run the agent.
-        Remote agents appear in the dashboard exactly like local ones
-        because they connect to the same MQTT broker.
-
-        Also updates nodes/{node}/desired_state (retained) with ALL agents for
-        this node so the runner can self-heal after a reboot.
-
-        If the spawn config has an 'install' list, packages are installed on the
-        remote node via SSH BEFORE the agent is spawned — so setup() won't fail
-        with 'No module named X'.
-        """
-        # For LLM-type agents we ship a synthesized bridge code field over MQTT
-        # (the remote runner only knows how to run DynamicAgent-shaped code).
-        # We keep the registry-saved config CLEAN — just system_prompt, no code
-        # — so the bridge is re-synthesized fresh on every spawn / restart /
-        # migrate. This avoids carrying the bridge as dead baggage into local
-        # spawn configs on migrate-back, and keeps the spawn registry small.
-        wire_config = self._inject_llm_bridge_code(config)
-
-        name = wire_config.get("name", "remote-agent")
-        packages = wire_config.get("install", [])
-        if isinstance(packages, str):
-            packages = [p.strip() for p in packages.replace(",", " ").split()]
-
-        logger.info("[%s] Spawning %r on remote node %r", self.name, name, node)
-
-        # ── Install packages on remote node first ─────────────────────────────
-        if packages:
-            # Find the node's address — known_nodes, then the spawn registry,
-            # then what the installer recorded at deploy time. Only the address:
-            # the installer resolves the SSH user and credentials from the
-            # node's configured deploy target.
-            host = self._known_nodes.get(node, {}).get("host")
-            if not host:
-                reg = self._get_spawn_registry()
-                for cfg in reg.values():
-                    if cfg.get("node") == node and cfg.get("host"):
-                        host = cfg["host"]
-                        break
-            if not host and self._registry:
-                installer = self._registry.find_by_name("installer")
-                if installer:
-                    host = installer.recall(f"node_host_{node}")
-
-            if host and self._registry:
-                installer = self._registry.find_by_name("installer")
-                if installer:
-                    logger.info(
-                        "[%s] Installing %s on %s (%s) before spawn...",
-                        self.name,
-                        packages,
-                        node,
-                        host,
-                    )
-                    task_id = f"remote_install_{uuid.uuid4().hex[:8]}"
-                    future = asyncio.get_running_loop().create_future()
-                    self._result_futures[task_id] = future
-                    # No credentials in the payload: node_name is enough for the
-                    # installer to resolve the configured target itself. This
-                    # used to read the password out of the installer's persisted
-                    # state and send it back as message data.
-                    install_payload = {
-                        "action": "node_install",
-                        "host": host,
-                        "packages": packages,
-                        "node_name": node,
-                        "_task_id": task_id,
-                        "task": task_id,
-                    }
-                    await self.send(installer.actor_id, MessageType.TASK, install_payload)
-                    try:
-                        result = await asyncio.wait_for(future, timeout=180.0)
-                        if result.get("success"):
-                            logger.info("[%s] Remote install OK: %s", self.name, packages)
-                        else:
-                            logger.warning(
-                                "[%s] Remote install issue: %s", self.name, result.get("error", "?")
-                            )
-                    except asyncio.TimeoutError:
-                        logger.warning("[%s] Remote install timed out — spawning anyway", self.name)
-                    finally:
-                        self._result_futures.pop(task_id, None)
-                else:
-                    logger.warning(
-                        "[%s] installer not found — skipping remote package install for %r",
-                        self.name,
-                        name,
-                    )
-            else:
-                logger.warning(
-                    "[%s] No host known for node %r — cannot pre-install %s. Install manually: ssh into %s and run: pip install %s --break-system-packages",
-                    self.name,
-                    node,
-                    packages,
-                    node,
-                    " ".join(packages),
-                )
-
-        # Publish individual spawn (for immediate delivery).
-        # Uses wire_config so any LLM-bridge synthesis is included on the wire.
-        await self._mqtt_publish(
-            f"nodes/{node}/spawn",
-            wire_config,
-            retain=True,
-            qos=1,
-        )
-
-        # Update desired state for the whole node (retained — survives Pi reboot).
-        # Also uses wire_config so the runner can reconcile the agent into
-        # existence with usable bridge code after a reboot.
-        await self._update_node_desired_state(node, wire_config)
-
-        await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
-            {
-                "type": "spawned",
-                "message": f"Spawned '{name}' on node '{node}'",
-                "child_name": name,
-                "node": node,
-                "timestamp": time.time(),
-            },
-        )
-
-        if save:
-            # Persist the CLEAN config (no synthesized bridge code) so the
-            # registry stays small and bridge regenerates fresh per spawn.
-            self._save_to_spawn_registry(config)
-
-        return
+        await self.spawns._spawn_remote(config, node, save)
 
     async def _update_node_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None

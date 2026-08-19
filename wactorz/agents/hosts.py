@@ -42,6 +42,54 @@ class ManifestHost(ListenerHost, Protocol):
     """
 
 
+class SpawnHost(Protocol):
+    """What putting an agent somewhere needs from the actor.
+
+    Wider than the others, and that width is the finding rather than an
+    accident: spawning reaches persistence, the live registry, the broker, the
+    node table, the catalogue and the local spawn machinery, because it is the
+    one operation that touches every one of them. Listing them says so.
+
+    No connection is inherited from `ListenerHost` — nothing here holds a
+    subscription open. Publishing goes through the actor.
+    """
+
+    name: str
+    actor_id: str
+    _registry: Any
+    _result_futures: dict[str, Any]
+
+    @property
+    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+        """Read-only here: the actor owns this and hands it out."""
+        ...
+
+    @property
+    def _known_nodes(self) -> dict[str, dict[str, Any]]:
+        """Read-only here: consulted for a node's address before an install."""
+        ...
+
+    def recall(self, key: str) -> Any: ...
+
+    def persist(self, key: str, value: Any) -> None: ...
+
+    def _match_catalog_recipe(
+        self, name: str, capabilities: list[str] | None = ...
+    ) -> str | None: ...
+
+    async def send(self, target_id: str, msg_type: Any, payload: dict[str, Any]) -> bool: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+    async def _update_node_desired_state(self, node: str, new_config: dict[str, Any]) -> None: ...
+
+    async def _spawn_local_from_config(
+        self, config: dict[str, Any], *, register: bool = ..., from_registry: bool = ...
+    ) -> Any: ...
+
+
 class NodeHost(ListenerHost, Protocol):
     """What the node collaborator needs beyond a connection.
 

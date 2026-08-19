@@ -19,6 +19,7 @@ from typing import Any
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
 from wactorz.agents.nodes import NodeManager
+from wactorz.agents.spawns import SpawnService
 
 _SPAWN_FAILED = "agent failed to start"
 _NODE_UNREACHABLE = "node unreachable"
@@ -106,6 +107,7 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        main.spawns = SpawnService(main)
         main._agent_manifests = dict(manifests or {})
         setattr(main, "_registry", registry if registry is not None else _Registry())
 
@@ -124,17 +126,17 @@ class _Main:
                 raise RuntimeError(_NODE_UNREACHABLE)
             self.remotely_spawned.append((name, node, save))
 
-        setattr(main, "_get_spawn_registry", lambda: dict(spawn_registry or {}))
-        setattr(main, "_spawn_from_config", _local)
-        setattr(main, "_spawn_remote", _remote)
+        setattr(main.spawns, "_get_spawn_registry", lambda: dict(spawn_registry or {}))
+        setattr(main.spawns, "_spawn_from_config", _local)
+        setattr(main.spawns, "_spawn_remote", _remote)
         setattr(main, "_match_catalog_recipe", lambda name, capabilities=None: catalog_match)
         self.actor = main
 
     async def restore(self) -> None:
-        await self.actor._restore_spawned_agents()
+        await self.actor.spawns._restore_spawned_agents()
 
     async def resolve(self, name: str) -> tuple[Any, bool]:
-        return await self.actor._resolve_or_spawn(name)
+        return await self.actor.spawns._resolve_or_spawn(name)
 
     @property
     def restored_names(self) -> list[str]:

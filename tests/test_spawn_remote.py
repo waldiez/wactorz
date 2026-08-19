@@ -25,6 +25,7 @@ import pytest
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
 from wactorz.agents.nodes import NodeManager
+from wactorz.agents.spawns import SpawnService
 from wactorz.core.actor import MessageType
 
 
@@ -67,6 +68,7 @@ class _Main:
         main.actor_id = "main-id"
         main.manifests = ManifestRegistry(main)
         main.nodes = NodeManager(main, main.manifests)
+        main.spawns = SpawnService(main)
         main._known_nodes = dict(known_nodes or {})
         setattr(main, "_registry", _Registry(installer))
 
@@ -93,13 +95,13 @@ class _Main:
 
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_update_node_desired_state", _desired)
-        setattr(main, "_get_spawn_registry", lambda: dict(self._spawn_registry))
-        setattr(main, "_save_to_spawn_registry", self.saved.append)
+        setattr(main.spawns, "_get_spawn_registry", lambda: dict(self._spawn_registry))
+        setattr(main.spawns, "_save_to_spawn_registry", self.saved.append)
         setattr(main, "send", _send)
         self.actor = main
 
     async def spawn(self, config: dict[str, Any], node: str = "rpi", save: bool = True) -> None:
-        await self.actor._spawn_remote(config, node, save)
+        await self.actor.spawns._spawn_remote(config, node, save)
 
     def published_to(self, suffix: str) -> tuple[str, Any, dict[str, Any]]:
         """The one publish whose topic ends in `suffix`."""
@@ -181,6 +183,31 @@ class TestReachingTheNode:
         await main.spawn(llm_agent(install=["httpx"]))
 
         assert main.sent[0][2]["host"] == "10.0.0.5"
+
+    async def test_a_missing_installer_is_reported_as_such(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The node's address is known, so telling the operator to go and find
+        # one sends them after the wrong thing: what is missing is the agent
+        # that does the installing.
+        main = _Main(known_nodes={"rpi": {"host": "10.0.0.9"}}, installer=None)
+
+        with caplog.at_level("WARNING"):
+            await main.spawn(llm_agent(install=["httpx"]))
+
+        assert "installer not found" in caplog.text
+        assert "No host known" not in caplog.text
+
+    async def test_an_unreachable_node_says_the_address_is_missing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        main = _Main(installer=_Installer())
+
+        with caplog.at_level("WARNING"):
+            await main.spawn(llm_agent(install=["httpx"]))
+
+        assert "No host known" in caplog.text
+        assert "installer not found" not in caplog.text
 
     async def test_an_unreachable_node_still_gets_the_agent(self) -> None:
         # Nothing knows the address, so the packages cannot be installed. The
@@ -294,7 +321,7 @@ class TestSynthesizingTheBridge:
     """`_inject_llm_bridge_code` decides whether a config needs code at all."""
 
     def _inject(self, config: dict[str, Any]) -> dict[str, Any]:
-        return _Main().actor._inject_llm_bridge_code(config)
+        return _Main().actor.spawns._inject_llm_bridge_code(config)
 
     def test_an_llm_config_without_code_gets_some(self) -> None:
         assert self._inject(llm_agent())["code"]

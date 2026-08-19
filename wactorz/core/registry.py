@@ -299,8 +299,6 @@ class Supervisor:
         self._watch_task = asyncio.create_task(self._watch_loop())
         logger.info("[Supervisor] Started. Supervising: %s", list(self._specs))
 
-    # ── Watch loop ────────────────────────────────────────────────────────────
-
     # ── Watchdog thresholds ───────────────────────────────────────────────────
     # An actor is considered "silent" if its heartbeat is older than this.
     # (Actor heartbeats every 10s by default; allow 3× grace period.)

@@ -363,6 +363,48 @@ class TestTheHistoryItLeaves:
 
         assert seen == ["[live] what agents exist"]
 
+    async def test_history_keeps_what_the_user_typed(self) -> None:
+        # Left prefixed, every turn would carry the agent list of the moment it
+        # was sent, and the context window would fill with stale copies.
+        main = _Main()
+        main.actor._conversation_history = [
+            {"role": "user", "content": "[live] what agents exist"},
+            {"role": "assistant", "content": "these ones"},
+        ]
+
+        await main.run("what agents exist")
+
+        assert main.actor._conversation_history[0]["content"] == "what agents exist"
+
+    async def test_only_this_turn_is_rewritten(self) -> None:
+        # The same question asked twice must not have its earlier answer's
+        # question rewritten along with this one.
+        main = _Main()
+        main.actor._conversation_history = [
+            {"role": "user", "content": "[live] what agents exist"},
+            {"role": "assistant", "content": "an older answer"},
+            {"role": "user", "content": "[live] what agents exist"},
+        ]
+
+        await main.run("what agents exist")
+
+        contents = [m["content"] for m in main.actor._conversation_history]
+        assert contents == [
+            "[live] what agents exist",
+            "an older answer",
+            "what agents exist",
+        ]
+
+    async def test_the_assistant_turn_is_left_alone(self) -> None:
+        main = _Main()
+        main.actor._conversation_history = [
+            {"role": "assistant", "content": "[live] what agents exist"},
+        ]
+
+        await main.run("what agents exist")
+
+        assert main.actor._conversation_history[0]["content"] == "[live] what agents exist"
+
     async def test_attachments_reach_the_model(self) -> None:
         main = _Main()
 

@@ -72,6 +72,10 @@ REMOTE_MENTION_TIMEOUT_S = 30.0
 #: How long an agent in this process is given to answer the same.
 LOCAL_MENTION_TIMEOUT_S = 60.0
 
+#: How long the Home Assistant agent is given. Longer than the rest: it may be
+#: waiting on the house to answer.
+HOME_ASSISTANT_TIMEOUT_S = 120.0
+
 #: How long a freshly spawned catalogue recipe is given to appear.
 CATALOGUE_SETTLE_S = 0.5
 
@@ -510,6 +514,23 @@ class DelegationManager:
             if target_name in info.get("agents", []):
                 return node_name
         return None
+
+    async def ask_home_assistant(self, text: str) -> str:
+        """Put a question to the Home Assistant agent, and say what came back.
+
+        Three callers ask it the same way — the plain turn, the streaming one,
+        and the social one — so the three answers it can give are written once.
+        A missing agent and a silent one read differently on purpose: one is
+        something to go and fix, the other is worth retrying.
+        """
+        result = await self.delegate_task(
+            "home-assistant-agent", text, timeout=HOME_ASSISTANT_TIMEOUT_S
+        )
+        if result and isinstance(result, dict) and result.get("result"):
+            return str(result["result"])
+        if not result:
+            return "I could not reach the Home Assistant agent right now. Please retry."
+        return "The Home Assistant agent did not return a result. Please retry."
 
     async def route_mention(self, text: str) -> str:
         """Hand a task the user addressed to a named agent, and report the reply.

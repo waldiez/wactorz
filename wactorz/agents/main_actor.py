@@ -45,6 +45,23 @@ from .spawns import SpawnService
 
 logger = logging.getLogger(__name__)
 
+#: Openings that mean the planner, whatever the intent classifier would say.
+#:
+#: Checked before classification rather than after: someone who writes
+#: "pipeline:" has told you what they want, and a classifier that disagrees is
+#: overruling them rather than helping.
+PLANNER_PREFIXES = (
+    "coordinate:",
+    "coordinate ",
+    "plan:",
+    "pipeline:",
+    "pipeline ",
+    "@planner",
+    "set up a pipeline",
+    "create a rule",
+    "set up a rule",
+)
+
 
 class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     DESCRIPTION = "Main orchestrator: spawns agents, routes tasks, manages the multi-agent system"
@@ -244,6 +261,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._pending_notifications.clear()
         return "\n".join(lines) + "\n\n---\n\n"
 
+    def _restore_unprefixed_turn(self, prefixed_text: str, text: str) -> None:
+        """Put the user's own words back into history after the model saw more.
+
+        The model is given the live agent list ahead of the message, because it
+        trusts what is in the message over what is in the system prompt. History
+        keeps what was actually typed: left prefixed, every turn would carry the
+        agent list of the moment it was sent, and the context window would fill
+        with stale copies of it.
+
+        Searched from the end because that is where this turn is, and only the
+        first match is replaced — the same question asked twice should not have
+        its earlier answer rewritten.
+        """
+        for entry in reversed(self._conversation_history):
+            if entry.get("role") == "user" and entry.get("content") == prefixed_text:
+                entry["content"] = text
+                break
+        self.persist("conversation_history", self._conversation_history)
+
     async def process_user_input(self, text: str) -> str:
         note_prefix = self._drain_notifications()
 
@@ -307,20 +343,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Explicit planner prefix always wins
         lowered = text.lower()
-        if any(
-            lowered.startswith(p)
-            for p in (
-                "coordinate:",
-                "coordinate ",
-                "plan:",
-                "pipeline:",
-                "pipeline ",
-                "@planner",
-                "set up a pipeline",
-                "create a rule",
-                "set up a rule",
-            )
-        ):
+        if any(lowered.startswith(p) for p in PLANNER_PREFIXES):
             result = await self._run_planner(text)
             response = result or "Planner did not return a result. Please retry."
             await self._record_external_exchange(text, response)
@@ -341,13 +364,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             return note_prefix + response
 
         if intent == "HA":
-            result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
-            if result and isinstance(result, dict) and result.get("result"):
-                response = str(result["result"])
-            elif not result:
-                response = "I could not reach the Home Assistant agent right now. Please retry."
-            else:
-                response = "The Home Assistant agent did not return a result. Please retry."
+            response = await self.delegation.ask_home_assistant(text)
             await self._record_external_exchange(text, response)
             return note_prefix + response
 
@@ -366,12 +383,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Find the most recent user message in history that matches the prefixed
         # text and replace it with the user's original. The assistant turn after
         # it remains unchanged.
-        for i in range(len(self._conversation_history) - 1, -1, -1):
-            m = self._conversation_history[i]
-            if m.get("role") == "user" and m.get("content") == prefixed_text:
-                m["content"] = text
-                break
-        self.persist("conversation_history", self._conversation_history)
+        self._restore_unprefixed_turn(prefixed_text, text)
 
         # If the LLM wrote agent code but forgot the <spawn> wrapper, remind it once
         has_spawn = "<spawn>" in response
@@ -492,13 +504,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             return note_prefix + response
 
         if intent == "HA":
-            result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
-            if result and isinstance(result, dict) and result.get("result"):
-                response = str(result["result"])
-            elif not result:
-                response = "I could not reach the Home Assistant agent right now. Please retry."
-            else:
-                response = "The Home Assistant agent did not return a result. Please retry."
+            response = await self.delegation.ask_home_assistant(text)
             await self._record_external_exchange(text, response)
             return note_prefix + response
 
@@ -506,12 +512,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._rebuild_system_prompt()
         prefixed_text = self._prefix_with_live_context(text)
         response = await self.chat(prefixed_text)
-        for i in range(len(self._conversation_history) - 1, -1, -1):
-            m = self._conversation_history[i]
-            if m.get("role") == "user" and m.get("content") == prefixed_text:
-                m["content"] = text
-                break
-        self.persist("conversation_history", self._conversation_history)
+        self._restore_unprefixed_turn(prefixed_text, text)
 
         # The prose around a spawn/delete block asserts the action happened, so
         # stripping the block would leave a false claim. Discard the whole reply.
@@ -590,20 +591,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Explicit planner prefix always wins
         _lowered = text.lower()
-        if any(
-            _lowered.startswith(p)
-            for p in (
-                "coordinate:",
-                "coordinate ",
-                "plan:",
-                "pipeline:",
-                "pipeline ",
-                "@planner",
-                "set up a pipeline",
-                "create a rule",
-                "set up a rule",
-            )
-        ):
+        if any(_lowered.startswith(p) for p in PLANNER_PREFIXES):
             result = await self._run_planner(text)
             response = result or "Planner did not return a result. Please retry."
             await self._record_external_exchange(text, response)
@@ -630,13 +618,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             return
 
         if intent == "HA":
-            result = await self.delegate_task("home-assistant-agent", text, timeout=120.0)
-            if result and isinstance(result, dict) and result.get("result"):
-                response = str(result["result"])
-            elif not result:
-                response = "I could not reach the Home Assistant agent right now. Please retry."
-            else:
-                response = "The Home Assistant agent did not return a result. Please retry."
+            response = await self.delegation.ask_home_assistant(text)
             await self._record_external_exchange(text, response)
             yield response
             yield {"done": True, "spawned": [], "system_msg": ""}
@@ -660,12 +642,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Replace the prefixed user message in history with the clean original
         # so future turns aren't polluted with stale prefixes.
-        for i in range(len(self._conversation_history) - 1, -1, -1):
-            m = self._conversation_history[i]
-            if m.get("role") == "user" and m.get("content") == prefixed_text:
-                m["content"] = text
-                break
-        self.persist("conversation_history", self._conversation_history)
+        self._restore_unprefixed_turn(prefixed_text, text)
 
         full_response = "".join(full_chunks)
 

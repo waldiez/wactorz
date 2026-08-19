@@ -14,6 +14,7 @@ import time
 import types
 from unittest.mock import AsyncMock, Mock
 
+from wactorz.agents.lifecycle import LifecycleService
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.nodes import NodeManager
 from wactorz.agents.spawns import SpawnService
@@ -24,6 +25,7 @@ def _bare_main() -> MainActor:
     m = MainActor.__new__(MainActor)
     m.nodes = NodeManager()
     m.spawns = SpawnService(m)
+    m.lifecycle = LifecycleService(m)
     m.name = "main"
     m.recall = lambda *a, **k: {}  # empty spawn registry (no node recorded)
     m.persist = lambda *a, **k: None
@@ -31,9 +33,11 @@ def _bare_main() -> MainActor:
     m._known_nodes = {}
     m._update_node_desired_state = AsyncMock()
     m._mqtt_publish = AsyncMock()
-    m._clear_agent_manifest = AsyncMock()
-    m._purge_agent_retained_topics = AsyncMock()
-    m._record_agent_deletion = Mock()
+    # On the service, because that is what `delete_spawned_agent` calls: put
+    # them on the actor and the real ones run instead, silently.
+    m.lifecycle._clear_agent_manifest = AsyncMock()
+    m.lifecycle._purge_agent_retained_topics = AsyncMock()
+    m.lifecycle._record_agent_deletion = Mock()
     return m
 
 

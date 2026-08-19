@@ -144,6 +144,46 @@ class NodeHost(ListenerHost, Protocol):
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = ...) -> None: ...
 
 
+class LifecycleHost(Protocol):
+    """What deleting an agent needs from the actor.
+
+    Reads the three places an agent can be known from — the live registry, the
+    manifest cache, the spawn registry — because a delete has to clear all of
+    them, and a name present in only one is still worth deleting.
+    """
+
+    name: str
+    _registry: Any
+
+    @property
+    def _agent_manifests(self) -> dict[str, dict[str, Any]]:
+        """Read-write here: an entry is dropped when its agent is deleted."""
+        ...
+
+    @property
+    def _topic_registry(self) -> dict[str, list[dict[str, Any]]]:
+        """Read-write here: the deleted agent stops claiming its topics."""
+        ...
+
+    _conversation_history: list[dict[str, Any]]
+
+    def persist(self, key: str, value: Any) -> None: ...
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+
+    def _remove_from_spawn_registry(self, name: str) -> None: ...
+
+    def _node_running_agent(self, name: str) -> str: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+    async def _update_node_desired_state(
+        self, node: str, new_config: dict[str, Any] | None = ..., remove_name: str | None = ...
+    ) -> None: ...
+
+
 class NodeReaders(Protocol):
     """The live node view a migration consults.
 

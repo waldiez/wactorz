@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 if TYPE_CHECKING:
-    from .host import MemoryHost
+    from ..mixins.host import MemoryHost
 
     # Typing-only base: states what the host must provide, and is
     # gone at runtime so the real MRO is exactly what it was.

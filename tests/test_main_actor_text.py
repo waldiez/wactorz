@@ -11,7 +11,7 @@ deliberate change breaks a test that explains what it was guarding.
 
 from typing import Any
 
-from wactorz.agents.main_actor import _normalize_agent_name, _strip_live_context
+from wactorz.agents.main.actor import _normalize_agent_name, _strip_live_context
 
 
 class TestNormalizeAgentName:

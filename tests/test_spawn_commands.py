@@ -20,10 +20,10 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.nodes import NodeManager
-from wactorz.agents.spawns import SpawnService, _parse_spawn_config
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawns import SpawnService, _parse_spawn_config
 
 _SPAWN_FAILED = "spawn failed"
 

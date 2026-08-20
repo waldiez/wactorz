@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
 from wactorz.web import api_reset, cost, runtime
 
 

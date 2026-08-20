@@ -16,10 +16,10 @@ name was spawnable so it can say which of the two happened.
 
 from typing import Any
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.nodes import NodeManager
-from wactorz.agents.spawns import SpawnService
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawns import SpawnService
 
 _SPAWN_FAILED = "agent failed to start"
 _NODE_UNREACHABLE = "node unreachable"

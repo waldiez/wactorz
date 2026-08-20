@@ -14,8 +14,8 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.nodes import OFFLINE_GRACE_S, NodeManager
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.nodes import OFFLINE_GRACE_S, NodeManager
 
 #: The window every "is it online" reader uses. Written as a literal `30` at
 #: three call sites rather than shared, which is the thing worth watching.

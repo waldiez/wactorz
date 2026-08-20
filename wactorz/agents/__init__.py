@@ -11,7 +11,7 @@ from .home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
 from .installer_agent import InstallerAgent
 from .io_agent import IOAgent
 from .llm_agent import AnthropicProvider, LLMAgent, NIMProvider, OllamaProvider, OpenAIProvider
-from .main_actor import MainActor
+from .main import MainActor
 from .monitor_agent import MonitorActor
 from .one_off_actuator_agent import OneOffActuatorAgent
 from .planner_agent import PlannerAgent

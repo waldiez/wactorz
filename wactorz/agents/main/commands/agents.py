@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from ...core.actor import ActorState
+from ....core.actor import ActorState
 from .dispatch import CommandContext, command
 
 logger = logging.getLogger(__name__)

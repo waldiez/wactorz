@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
 
 

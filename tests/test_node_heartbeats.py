@@ -19,10 +19,10 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.migration import Migration
-from wactorz.agents.nodes import VANISH_MISS_THRESHOLD, NodeManager
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD, NodeManager
 from wactorz.core.actor import ActorState
 
 
@@ -149,7 +149,7 @@ async def run_heartbeats(
         main.state = ActorState.STOPPED
 
     broker = _Broker(messages, _stop)
-    monkeypatch.setattr("wactorz.agents.nodes.mqtt_client", broker)
+    monkeypatch.setattr("wactorz.agents.main.nodes.mqtt_client", broker)
     monkeypatch.setattr("wactorz.core.topic_bus.get_topic_bus", lambda: run.bus)
 
     await asyncio.wait_for(main._node_heartbeat_listener(), timeout=5)
@@ -299,7 +299,7 @@ class TestPruningAnAgentThatStoppedAppearing:
     ) -> None:
         absent = [heartbeat(agents=[]) for _ in range(VANISH_MISS_THRESHOLD)]
 
-        with caplog.at_level(logging.WARNING, logger="wactorz.agents.nodes"):
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.main.nodes"):
             await run_heartbeats(
                 monkeypatch,
                 [heartbeat(agents=["collector"]), *absent],

@@ -179,7 +179,7 @@ async def show_mqtt_status(ctx: CommandContext, _argument: str) -> str:
 async def show_bus(ctx: CommandContext, _argument: str) -> str:
     """TopicBus registry: contracts, data flows, wiring pairs."""
     try:
-        from ...core.topic_bus import get_topic_bus
+        from ....core.topic_bus import get_topic_bus
 
         bus = get_topic_bus()
         if not bus:

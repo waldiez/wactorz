@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from ..core.actor import ActorState
+    from ...core.actor import ActorState
 
 
 class ListenerHost(Protocol):

@@ -18,7 +18,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..core.mqtt import mqtt_client
+from ...core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
     from .hosts import ManifestHost
@@ -179,7 +179,7 @@ class ManifestRegistry:
         are folded over the declared schema because they are what the code
         actually puts on the wire.
         """
-        from ..core.topic_bus import TopicContract, get_topic_bus
+        from ...core.topic_bus import TopicContract, get_topic_bus
 
         try:
             bus = get_topic_bus()
@@ -211,7 +211,7 @@ class ManifestRegistry:
     @staticmethod
     def _drop_contract(name: str) -> None:
         """Stop the planner seeing a deleted agent as a wiring target."""
-        from ..core.topic_bus import get_topic_bus
+        from ...core.topic_bus import get_topic_bus
 
         try:
             bus = get_topic_bus()
@@ -232,7 +232,7 @@ class ManifestRegistry:
         owner would attribute one agent's fields to another.
         """
         try:
-            from ..core.topic_bus import get_topic_bus
+            from ...core.topic_bus import get_topic_bus
 
             bus = get_topic_bus()
             if bus:
@@ -246,7 +246,7 @@ class ManifestRegistry:
     def _record_sample(self, agent_name: str, topic: str, payload: dict[str, Any]) -> None:
         """Add one real payload to what `agent_name` is known to publish."""
         try:
-            from ..core.topic_bus import get_topic_bus
+            from ...core.topic_bus import get_topic_bus
 
             bus = get_topic_bus()
             if bus:

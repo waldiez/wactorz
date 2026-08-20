@@ -13,8 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from wactorz.agents.delegation import RESTRICTED_DELEGATION_ALLOW, DelegationManager
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.delegation import RESTRICTED_DELEGATION_ALLOW, DelegationManager
 
 
 def run(coro):

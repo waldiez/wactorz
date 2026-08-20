@@ -83,7 +83,7 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.installer_agent import InstallerAgent
     from wactorz.agents.io_agent import IOAgent
     from wactorz.agents.llm_agent import LLMProvider
-    from wactorz.agents.main_actor import MainActor
+    from wactorz.agents.main.actor import MainActor
     from wactorz.agents.monitor_agent import MonitorActor
     from wactorz.core.actor import Actor, SupervisorStrategy
     from wactorz.core.mqtt import broker_exposure_warning

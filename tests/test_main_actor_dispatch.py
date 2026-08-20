@@ -22,13 +22,13 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.delegation import DelegationManager
-from wactorz.agents.lifecycle import LifecycleService
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.migration import Migration
-from wactorz.agents.nodes import NodeManager
-from wactorz.agents.spawns import SpawnService
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.delegation import DelegationManager
+from wactorz.agents.main.lifecycle import LifecycleService
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawns import SpawnService
 
 
 class _Registry:

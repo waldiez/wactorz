@@ -22,7 +22,7 @@ import time
 import uuid
 from typing import Any
 
-from ..core.mqtt import mqtt_client
+from ...core.mqtt import mqtt_client
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
 
@@ -295,7 +295,7 @@ class NodeManager:
         have been true, so it is used where there is nothing better and never
         over a manifest-derived contract.
         """
-        from ..core.topic_bus import TopicContract, get_topic_bus
+        from ...core.topic_bus import TopicContract, get_topic_bus
 
         host = self.host
         if host is None:

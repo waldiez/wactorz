@@ -18,7 +18,7 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any
 
-from ..core.mqtt import mqtt_client
+from ...core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -429,7 +429,7 @@ class Migration:
             # would publish a manifest missing them — breaking auto-wiring.
             live_contract: dict[str, Any] = {}
             try:
-                from ..core.topic_bus import get_topic_bus
+                from ...core.topic_bus import get_topic_bus
 
                 bus = get_topic_bus()
                 if bus:

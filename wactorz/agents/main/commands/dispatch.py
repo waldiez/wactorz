@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ..main_actor import MainActor
+    from ..actor import MainActor
 
 #: Short forms, and the commands they stand for.
 #:

@@ -28,8 +28,8 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ..core.actor import MessageType
-from ..core.mqtt import mqtt_client
+from ...core.actor import MessageType
+from ...core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
     from .hosts import DelegationHost

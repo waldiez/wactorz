@@ -22,10 +22,10 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ..core.mqtt import mqtt_client
+from ...core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
-    from ..core.actor import ActorState
+    from ...core.actor import ActorState
 
 logger = logging.getLogger(__name__)
 

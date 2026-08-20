@@ -17,7 +17,7 @@ from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...monitoring import PrometheusMonitor
 
 if TYPE_CHECKING:
-    from ...agents.main_actor import MainActor
+    from ...agents.main import MainActor
     from ...core.actor import Actor
 
 logger = logging.getLogger(__name__)

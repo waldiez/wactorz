@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .mixins import SpawnPlaceholder
+from ..mixins import SpawnPlaceholder
 
 
 @dataclass(frozen=True)

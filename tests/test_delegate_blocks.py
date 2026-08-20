@@ -20,13 +20,13 @@ delegation. That is enforced on the name before anything is resolved.
 import json
 from typing import Any
 
-from wactorz.agents.delegation import (
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.delegation import (
     RESTRICTED_DELEGATION_ALLOW,
     DelegationManager,
 )
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.nodes import NodeManager
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.nodes import NodeManager
 
 _MAILBOX_CLOSED = "mailbox closed"
 

@@ -22,10 +22,10 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.delegation import DelegationManager
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.nodes import NodeManager
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.delegation import DelegationManager
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.nodes import NodeManager
 from wactorz.core.actor import MessageType
 
 _SUBSCRIBE_FAILED = "broker refused the subscription"
@@ -196,7 +196,7 @@ class TestChoosingWhereTheTaskGoes:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}})
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
 
         await main.delegate("sensor", timeout=0.05)
 
@@ -252,7 +252,7 @@ class TestWaitingForTheAnswer:
         # A broker that connects and stays quiet, rather than one that refuses:
         # the timeout under test is the agent not replying, not the connection.
         main = _Main(known_nodes={"rpi": {"agents": ["sensor"]}})
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
 
         assert await main.delegate("sensor", timeout=0.05) is None
 
@@ -318,7 +318,7 @@ class TestTheReplyTopic:
         # whole timeout on work that succeeded.
         main = _Main()
         broker = _Broker(subscribe_delay=0.05)
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", broker)
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", broker)
 
         async with main.actor.delegation._reply_topic() as (topic, _future):
             # Checked the instant the topic is handed over, with no chance for
@@ -330,7 +330,7 @@ class TestTheReplyTopic:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         main = _Main()
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
 
         async with main.actor.delegation._reply_topic() as (topic, future):
             assert main.actor._result_futures[topic] is future
@@ -339,7 +339,7 @@ class TestTheReplyTopic:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         main = _Main()
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
 
         async with main.actor.delegation._reply_topic() as (_topic, _future):
             pass
@@ -349,7 +349,7 @@ class TestTheReplyTopic:
     async def test_a_reply_lands_in_the_future(self, monkeypatch: pytest.MonkeyPatch) -> None:
         main = _Main()
         broker = _Broker(replies=[_Message(json.dumps({"answer": 42}).encode())])
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", broker)
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", broker)
 
         async with main.actor.delegation._reply_topic() as (_topic, future):
             assert await asyncio.wait_for(future, timeout=1) == {"answer": 42}
@@ -361,7 +361,7 @@ class TestTheReplyTopic:
         # anyway, and the reason is logged so the timeout that follows is
         # explained rather than mysterious.
         main = _Main()
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker(fails=True))
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker(fails=True))
 
         async with main.actor.delegation._reply_topic() as (topic, future):
             assert topic.startswith("main/reply/main-id/")
@@ -374,7 +374,7 @@ class TestTheReplyTopic:
 
     async def test_every_topic_is_its_own(self, monkeypatch: pytest.MonkeyPatch) -> None:
         main = _Main()
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _Broker())
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
         seen = []
 
         for _ in range(3):

@@ -22,12 +22,12 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from ..core.actor import MessageType
+from ...core.actor import MessageType
 
 if TYPE_CHECKING:
-    from ..core.actor import Actor
+    from ...core.actor import Actor
+    from ..mixins.spawning import SpawnPlaceholder
     from .hosts import SpawnHost
-    from .mixins.spawning import SpawnPlaceholder
 
 logger = logging.getLogger(__name__)
 

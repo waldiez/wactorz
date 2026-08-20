@@ -18,11 +18,11 @@ listening loses the agent, so the checks that come first are pinned first.
 import time
 from typing import Any
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.migration import Migration
-from wactorz.agents.nodes import NodeManager
-from wactorz.agents.spawns import SpawnService
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.nodes import NodeManager
+from wactorz.agents.main.spawns import SpawnService
 
 
 class _Registry:

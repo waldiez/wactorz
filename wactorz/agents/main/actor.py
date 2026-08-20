@@ -9,34 +9,30 @@ import socket
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
-from ..config import (
+from ...config import (
     deploy_env_prefix,
     deploy_target,
     deploy_target_help,
     deploy_target_names,
 )
-from ..core.actor import Actor, Message, MessageType
+from ...core.actor import Actor, Message, MessageType
+from ..llm_agent import LLMAgent, LLMProvider
+from ..mixins import SpawnMixin, SpawnPlaceholder
+from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
+from ..prompts.main_actor_prompts import (
+    ORCHESTRATOR_PROMPT,
+)
 from .commands import CommandContext
 from .commands import registry as command_registry
 from .delegation import DelegationManager
 from .lifecycle import LifecycleService
-from .llm_agent import LLMAgent, LLMProvider
 from .llm_bridge import LLMBridge
 from .manifests import ManifestRegistry
+from .memory import MemoryMixin
 from .migration import Migration
-from .mixins import (
-    MemoryMixin,
-    PlanningMixin,
-    RoutingMixin,
-    SpawnMixin,
-    SpawnPlaceholder,
-)
-from .mixins.planning import starts_with_bypass
 from .nodes import NodeManager
-from .one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
-from .prompts.main_actor_prompts import (
-    ORCHESTRATOR_PROMPT,
-)
+from .planning import PlanningMixin, starts_with_bypass
+from .routing import RoutingMixin
 from .spawns import SpawnService
 from .turn_actions import TurnActions
 

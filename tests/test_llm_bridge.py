@@ -17,11 +17,11 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.llm_bridge import LLMBridge
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.migration import Migration
-from wactorz.agents.nodes import NodeManager
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.llm_bridge import LLMBridge
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.nodes import NodeManager
 from wactorz.core.actor import ActorState
 
 
@@ -156,7 +156,7 @@ async def run_bridge(
         main.state = ActorState.STOPPED
 
     broker = _Broker(messages, _stop)
-    monkeypatch.setattr("wactorz.agents.llm_bridge.mqtt_client", broker)
+    monkeypatch.setattr("wactorz.agents.main.llm_bridge.mqtt_client", broker)
 
     await asyncio.wait_for(main._llm_bridge_listener(), timeout=5)
     run.persisted = sum(1 for topic, _ in run.published if topic == PERSISTED)
@@ -285,7 +285,7 @@ class TestRequestsThatAreNotAnswered:
     ) -> None:
         # One publisher sending the wrong shape must not make the bridge
         # reconnect, which would drop every request in flight with it.
-        with caplog.at_level(logging.WARNING, logger="wactorz.agents.llm_bridge"):
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.main.llm_bridge"):
             run = await run_bridge(monkeypatch, [_Message(b"[1, 2]"), request()], llm=_LLM())
 
         assert len(run.replies) == 1
@@ -332,7 +332,7 @@ class TestWhatIsSaidAboutIt:
     async def test_a_request_is_logged_with_its_origin(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level(logging.INFO, logger="wactorz.agents.llm_bridge"):
+        with caplog.at_level(logging.INFO, logger="wactorz.agents.main.llm_bridge"):
             await run_bridge(monkeypatch, [request()], llm=_LLM())
 
         assert "collector" in caplog.text

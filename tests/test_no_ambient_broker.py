@@ -26,11 +26,11 @@ from wactorz.core import mqtt
 #: worker running this file has not loaded them for other reasons. Not a
 #: complete roster, and not meant to be.
 _MODULES_THAT_IMPORT_IT = (
-    "wactorz.agents.delegation",
-    "wactorz.agents.manifests",
-    "wactorz.agents.nodes",
-    "wactorz.agents.migration",
-    "wactorz.agents.llm_bridge",
+    "wactorz.agents.main.delegation",
+    "wactorz.agents.main.manifests",
+    "wactorz.agents.main.nodes",
+    "wactorz.agents.main.migration",
+    "wactorz.agents.main.llm_bridge",
     "wactorz.web.mqtt",
 )
 

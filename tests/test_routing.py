@@ -1,4 +1,4 @@
-"""Tests for ``wactorz.agents.mixins.routing.RoutingMixin``.
+"""Tests for ``wactorz.agents.main.routing.RoutingMixin``.
 
 Exercises intent classification and the one-off actuation path against a fake
 LLMAgent host. No broker or real agents required.
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.agents.mixins.routing import RoutingMixin
+from wactorz.agents.main.routing import RoutingMixin
 
 
 def run(coro):
@@ -134,7 +134,7 @@ def test_is_ha_false():
 def test_actuate_unconfigured_returns_message(monkeypatch):
     # Force HA unconfigured so the test doesn't depend on the local .env.
     monkeypatch.setattr(
-        "wactorz.agents.mixins.routing.CONFIG",
+        "wactorz.agents.main.routing.CONFIG",
         types.SimpleNamespace(ha_url="", ha_token=""),
     )
     msg = run(RoutingHost(llm=FakeLLM("ACTUATE"))._handle_actuate_intent("turn on light"))
@@ -143,7 +143,7 @@ def test_actuate_unconfigured_returns_message(monkeypatch):
 
 def test_actuate_happy_path(monkeypatch):
     monkeypatch.setattr(
-        "wactorz.agents.mixins.routing.CONFIG",
+        "wactorz.agents.main.routing.CONFIG",
         types.SimpleNamespace(ha_url="http://ha", ha_token="tok"),
     )
     h = RoutingHost(

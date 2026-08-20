@@ -19,9 +19,9 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.nodes import NodeManager
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.nodes import NodeManager
 from wactorz.core.actor import ActorState
 
 
@@ -129,7 +129,7 @@ async def run_listener(
 
     bus = _Bus(producers)
     broker = _Broker(messages, _stop)
-    monkeypatch.setattr("wactorz.agents.manifests.mqtt_client", broker)
+    monkeypatch.setattr("wactorz.agents.main.manifests.mqtt_client", broker)
     monkeypatch.setattr("wactorz.core.topic_bus.get_topic_bus", lambda: bus)
 
     await asyncio.wait_for(main.manifests._remote_observed_samples_listener(), timeout=5)

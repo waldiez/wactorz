@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.registry import ActorRegistry
-    from .main_actor import MainActor
+    from .main import MainActor
 
 #: The registry name the orchestrator is always registered under.
 MAIN_ACTOR_NAME = "main"
@@ -34,7 +34,7 @@ def find_main_actor(registry: "ActorRegistry | None") -> "MainActor | None":
     a helper that made each of them write the same guard would not have saved
     them anything.
     """
-    from .main_actor import MainActor  # local: main_actor imports this package
+    from .main import MainActor  # local: the main package imports this module
 
     actor = registry.find_by_name(MAIN_ACTOR_NAME) if registry else None
     return actor if isinstance(actor, MainActor) else None

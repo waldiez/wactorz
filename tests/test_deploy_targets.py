@@ -219,7 +219,7 @@ async def _collect(agent, command: str) -> str:
 
 @pytest.fixture
 def main_actor(tmp_path: Path):
-    from wactorz.agents.main_actor import MainActor
+    from wactorz.agents.main.actor import MainActor
 
     return MainActor(llm_provider=None, persistence_dir=str(tmp_path))
 

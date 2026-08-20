@@ -1,4 +1,4 @@
-"""Tests for ``wactorz.agents.mixins.planning.PlanningMixin``.
+"""Tests for ``wactorz.agents.main.planning.PlanningMixin``.
 
 Covers the pure / cheaply-testable surface: pipeline-rule and pending-plan
 persistence, the approval/rejection/correction predicates, dry-run gating, the
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.agents.mixins.planning import (
+from wactorz.agents.main.planning import (
     BYPASS_MARKERS,
     PlanningMixin,
     _parse_plan_envelope,

@@ -18,7 +18,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
 
 
 class _Client:
@@ -53,7 +53,7 @@ def main_fixture(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     def _client(_host: str, _port: int, **_kw: Any) -> _Client:
         return _Client(order)
 
-    monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _client)
+    monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _client)
     actor._mqtt_publish = AsyncMock(  # pyright: ignore[reportAttributeAccessIssue]
         side_effect=lambda topic, *_a, **_kw: order.append(f"publish {topic}")
     )
@@ -96,12 +96,12 @@ class TestTheReplyChannel:
         # Publishing anyway is the deliberate choice: the task still gets done,
         # and losing the answer beats losing the work. Waiting forever for a
         # subscription that is not coming would do neither.
-        monkeypatch.setattr("wactorz.agents.delegation.SUBSCRIBE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr("wactorz.agents.main.delegation.SUBSCRIBE_TIMEOUT_S", 0.05)
 
         def _hangs(_host: str, _port: int, **_kw: Any) -> Any:
             raise ConnectionRefusedError("no broker")
 
-        monkeypatch.setattr("wactorz.agents.delegation.mqtt_client", _hangs)
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _hangs)
 
         async with main.delegation._reply_topic() as (topic, future):
             assert topic  # reached at all, rather than blocking until the timeout

@@ -8,7 +8,7 @@ Renders a live dashboard as HTML/CSS card components driven by real-time server-
 | Layer | Library | Purpose |
 | ----- | ------- | ------- |
 | Transport | WebSocket (native) | One `/ws` connection: live server events + chat |
-| IDs | `@waldiez/wid` | Time-ordered collision-resistant IDs |
+| IDs | vendored HLC-WID (`src/vendor/hlcWid.ts`) | Time-ordered collision-resistant IDs |
 | Build | Vite 8 + TypeScript 6 | Strict mode, ES2022 target |
 
 ## Directory layout

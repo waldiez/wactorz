@@ -83,7 +83,7 @@ PLANNER_REPLY_GRACE_S = 15.0
 
 
 if TYPE_CHECKING:
-    from ..mixins.host import PlanningHost
+    from .hosts import PlanningHost
 
     # Typing-only base: states what the host must provide, and is
     # gone at runtime so the real MRO is exactly what it was.

@@ -21,7 +21,7 @@ from ...core.actor import MessageType
 from ..prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT
 
 if TYPE_CHECKING:
-    from ..mixins.host import RoutingHost
+    from .hosts import RoutingHost
 
     # Typing-only base: it states what the host must provide, and disappears at
     # runtime so the real MRO is exactly what it was.

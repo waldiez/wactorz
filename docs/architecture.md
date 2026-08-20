@@ -218,6 +218,31 @@ dropped it, and learns the rest the first time one refuses — that request is r
 parameter, and it is omitted for the remainder of the process. Those models are effectively pinned
 to their own default, so pinning a temperature no longer makes runs comparable against them.
 
+### The `fake` provider
+
+`LLM_PROVIDER=fake` selects a provider that answers from a script and never calls
+a model. It is a real provider reached through the same factory, so it streams,
+reports token counts and a (tiny, non-zero) cost, and is subject to the same
+spend cap — the system around it behaves exactly as it would against a paid
+model.
+
+It is **not a small or offline model**. It does not reason about anything: the
+intent classifier is told a fixed answer, fact extraction is told there is
+nothing to store, and everything else matches the request against a script.
+Useful for running the dashboard without an API key, for end-to-end runs that
+need the same answer twice, and for recording a walkthrough without paying per
+take. Useless for anything that depends on the reply being *right*.
+
+```bash
+LLM_PROVIDER=fake
+LLM_FAKE_SCRIPT='{"weather": "It is 22 degrees and clear."}'   # substring → reply
+LLM_FAKE_INTENT=OTHER                                          # ACTUATE | HA | PIPELINE | OTHER
+```
+
+Both are optional; the defaults answer every request. Unmatched messages get a
+default reply that is deliberately obviously synthetic, so a recording made
+against it cannot be mistaken for a real session.
+
 ### Per-call-site overrides
 
 `LLM_OVERRIDES` routes individual call sites to different providers/models, falling back to the global `LLM_PROVIDER` for any site not listed (`wactorz/llm_factory.py`):

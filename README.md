@@ -77,7 +77,7 @@ pip install -e ".[all]"
 docker compose up -d mosquitto
 
 # Set your provider, model, and key (or put them in .env)
-export LLM_PROVIDER=anthropic   # anthropic | openai | ollama | nim | gemini
+export LLM_PROVIDER=anthropic   # anthropic | openai | ollama | nim | gemini | fake
 export LLM_MODEL=claude-sonnet-4-6
 export LLM_API_KEY=your-key-here
 
@@ -155,7 +155,8 @@ flowchart LR
 Set these three env vars in `.env` or export them in your shell:
 
 ```bash
-# Options: anthropic | openai | ollama | nim | gemini | none
+# Options: anthropic | openai | ollama | nim | gemini | none | fake
+#   none = no provider at all; fake = deterministic canned replies, calls nothing
 LLM_PROVIDER=anthropic
 
 # Model ID — examples:

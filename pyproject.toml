@@ -266,7 +266,9 @@ exclude_also = [
     "if __name__ == .__main__.:",
     "\\.\\.\\.",               # ellipsis / stub bodies
 ]
-# fail_under = 90
+# A ratchet, not a target. 
+# Let's try to increase it a lot (aim ~90% like frontend)
+fail_under = 55
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

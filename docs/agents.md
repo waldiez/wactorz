@@ -12,7 +12,7 @@ Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ON
 
 ### MainActor `[core]` `[LLM]`
 
-**File:** `wactorz/agents/main_actor.py`
+**File:** `wactorz/agents/main/actor.py` (the `wactorz/agents/main/` package)
 
 | | |
 |---|---|

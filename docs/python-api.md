@@ -176,7 +176,7 @@ Providers (all implement `complete(messages, system)` and `stream(messages, syst
 | `NIMProvider` | `nim` | `NIM_API_KEY` | `LLM_API_KEY` |
 | `GeminiProvider` | `gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `LLM_API_KEY` |
 
-### `wactorz.agents.main_actor.MainActor`
+### `wactorz.agents.main.MainActor`
 
 LLM orchestrator. Classifies every user message into `ACTUATE / HA / PIPELINE / OTHER`,
 routes to the appropriate agent, and streams replies. Manages the spawn registry

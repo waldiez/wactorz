@@ -527,4 +527,4 @@ User says: *"spawn an agent to log the mean of the last 5 temperature values"*
 | `agents/planner_agent.py` | `_sample_live_topics()` — fallback MQTT sampling for schema capture |
 | `agents/planner_agent.py` | `_decompose_pipeline()` — injects schema context into LLM prompt |
 | `agents/planner_agent.py` | `_validate_pipeline_code()` — post-generation code validator |
-| `agents/main_actor.py` | `_manifest_listener()` — subscribes to `agents/+/manifest` for schema propagation |
+| `agents/main/actor.py` | `_manifest_listener()` — subscribes to `agents/+/manifest` for schema propagation |

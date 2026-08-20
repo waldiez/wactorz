@@ -356,7 +356,7 @@ wactorz/                         ← repo root
 │   │   └── migrations.py        ← Migration to nodes
 │   │   ├── topic_bus.py         ← Reactive Pub/Sub Coordination Layer
 │   ├── agents/
-│   │   ├── main_actor.py        ← LLM orchestrator
+│   │   ├── main/                ← LLM orchestrator package (actor.py + its machinery)
 │   │   ├── llm_agent.py         ← LLM base + all providers
 │   │   ├── home_assistant_agent.py
 │   │   ├── prompts/

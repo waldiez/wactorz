@@ -89,7 +89,7 @@ This replaces all previous keyword heuristics with a single LLM classification s
 | `core/actor.py` | Core | Base Actor class — mailbox, lifecycle, heartbeat, spawn, send, persist/recall |
 | `core/registry.py` | Core | ActorSystem & ActorRegistry — actor registration, message routing, broadcast |
 | `core/topic_bus.py` | Core | TopicBus — reactive pub/sub coordination layer: TopicContract with observed schema introspection, TopicRegistry for topic-based agent discovery, SharedStateHub for retained world state, StreamWindow for temporal reasoning |
-| `agents/main_actor.py` | Agent | The LLM orchestrator — intent classification, spawns agents, routes requests, memory & user facts |
+| `agents/main/` | Package | The LLM orchestrator (`actor.py`) and the machinery only it uses — commands, delegation, lifecycle, nodes, spawns, manifests, migration, the LLM bridge |
 | `agents/monitor_agent.py` | Agent | Health watcher — detects crashes, fires recovery actions, notifies user |
 | `agents/llm_agent.py` | Agent | Base LLM agent with rolling history summarization, cost tracking, streaming, and 5 providers |
 | `agents/dynamic_agent.py` | Agent | Runtime-generated agents — executes LLM-written Python code in a sandboxed namespace |
@@ -1353,7 +1353,7 @@ wactorz/
 │
 ├── agents/
 │   ├── llm_agent.py                           LLMAgent — 5 providers, rolling summarization, cost tracking
-│   ├── main_actor.py                          MainActor — intent routing, memory, user facts, pipeline rules
+│   ├── main/                                  MainActor package — actor.py plus its commands and collaborators
 │   ├── dynamic_agent.py                       DynamicAgent — runtime code executor, error events
 │   ├── planner_agent.py                       PlannerAgent — task planning + reactive pipeline builder
 │   ├── monitor_agent.py                       MonitorAgent — heartbeat, error registry, recovery

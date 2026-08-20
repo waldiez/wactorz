@@ -41,7 +41,6 @@ The `[all]` extra installs everything except the ML stack (heavy torch dependenc
 | `wactorz[discord]` | `discord.py` | `--interface discord` |
 | `wactorz[whatsapp]` | `twilio` | `--interface whatsapp` |
 | `wactorz[mcp]` | `mcp` | MCP-compatible clients |
-| `wactorz[otel]` | OpenTelemetry SDK/exporter | OTLP tracing |
 | `wactorz[tts]` | `edge-tts` | text-to-speech support |
 | `wactorz[ml]` | `ultralytics`, `torch`, `numpy` | webcam detection pipelines |
 | `wactorz[all]` | all of the above except `ml` | recommended starting point |

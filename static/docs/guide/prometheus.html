@@ -154,7 +154,6 @@
 <li>process/runtime metrics from the Python process</li>
 <li>Prometheus in Docker Compose</li>
 <li>optional Mosquitto availability probe controlled by <code>.env</code></li>
-<li>optional OpenTelemetry Collector scrape target controlled by <code>.env</code></li>
 </ul>
 <h2 id="what-is-monitored">What Is Monitored</h2>
 <h3 id="python-app">Python app</h3>
@@ -179,21 +178,19 @@
 <div class="highlight"><pre><span></span><code>GET /metrics
 </code></pre></div>
 
-<h3 id="mosquitto-and-opentelemetry-collector">Mosquitto and OpenTelemetry Collector</h3>
+<h3 id="mosquitto">Mosquitto</h3>
 <p>Mosquitto is an <strong>optional</strong> Prometheus target.</p>
 <p>It is monitored with the Blackbox Exporter:</p>
 <ul>
 <li>Mosquitto: TCP connect probe to <code>mosquitto:1883</code></li>
 </ul>
 <p>This is availability monitoring, not deep service-specific exporter telemetry.</p>
-<p>The OpenTelemetry Collector is also an optional direct scrape target at <code>otelcol:8889</code>.</p>
 <h2 id="environment-flags">Environment Flags</h2>
 <p>Add or adjust these in <code>.env</code>:</p>
 <div class="highlight"><pre><span></span><code>PROMETHEUS_EXTERNAL_PORT=9090
 PROMETHEUS_SCRAPE_INTERVAL=15s
 PROMETHEUS_PYTHON_TARGET=wactorz-python
 PROMETHEUS_MONITOR_MOSQUITTO=0
-PROMETHEUS_MONITOR_OTELCOL=0
 REST_EXTERNAL_PORT=8000
 </code></pre></div>
 
@@ -203,7 +200,6 @@ REST_EXTERNAL_PORT=8000
 <li>If Wactorz runs in Compose, use the service name such as <code>wactorz-python</code> or <code>wactorz</code>.</li>
 <li>If Wactorz runs from the terminal on the host, use <code>host.docker.internal</code>.</li>
 <li><code>PROMETHEUS_MONITOR_MOSQUITTO=1</code> enables the Mosquitto TCP probe.</li>
-<li><code>PROMETHEUS_MONITOR_OTELCOL=1</code> enables the OpenTelemetry Collector scrape target.</li>
 </ul>
 <h2 id="docker-compose">Docker Compose</h2>
 <h3 id="main-stack">Main stack</h3>

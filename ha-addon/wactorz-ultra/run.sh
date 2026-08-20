@@ -186,12 +186,6 @@ export DEPLOY_TARGETS
 if [ -n "$DEPLOY_TARGETS" ]; then
     bashio::log.info "Deploy targets configured: ${DEPLOY_TARGETS}"
 fi
-OTEL_ENDPOINT=$(get_config_safe 'otel_endpoint' '')
-if [ -n "$OTEL_ENDPOINT" ]; then
-    export OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_ENDPOINT"
-    OTEL_SERVICE_NAME=$(get_config_safe 'otel_service_name' 'wactorz')
-    export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME}"
-fi
 
 # Embedded services
 MOSQUITTO_EMBEDDED=$(get_config_safe 'mosquitto_embedded' 'false')

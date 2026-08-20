@@ -41,8 +41,6 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `telegram_allowed_user_id` | `0` | Older single-ID form of the above; still honoured. `0` means unset. |
 | `social_rate_limit_per_min` | `12` | Max messages per minute per sender on the bots. `0` disables the limit. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
-| `otel_endpoint` | *(blank)* | OTLP HTTP collector URL (e.g. `http://192.168.1.10:4318`). Leave blank to disable OpenTelemetry. |
-| `otel_service_name` | `wactorz` | Service name reported to the OTLP collector. |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
 > default: the panel reaches Wactorz through ingress, where Home Assistant has

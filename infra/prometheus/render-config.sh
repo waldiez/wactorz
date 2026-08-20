@@ -10,7 +10,6 @@ else
     python_target="wactorz:8000"
 fi
 monitor_mosquitto="${PROMETHEUS_MONITOR_MOSQUITTO:-1}"
-monitor_otelcol="${PROMETHEUS_MONITOR_OTELCOL:-0}"
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 template_file="${PROMETHEUS_TEMPLATE_FILE:-${script_dir}/prometheus.yml}"
 
@@ -43,14 +42,5 @@ cat >>"$out_file" <<'EOF'
         target_label: instance
       - target_label: __address__
         replacement: blackbox-exporter:9115
-EOF
-fi
-
-if is_enabled "$monitor_otelcol"; then
-cat >>"$out_file" <<'EOF'
-
-  - job_name: otelcol
-    static_configs:
-      - targets: ["otelcol:8889"]
 EOF
 fi

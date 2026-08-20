@@ -142,30 +142,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── OpenTelemetry Collector ──────────────────────────────────────────────────
-  # docker compose --profile otel up -d
-  # Add to python profile:  --profile python --profile otel
-  # Receives OTLP HTTP on 4318; exposes /metrics on 8889 for Prometheus.
-  # Set OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4318 in .env to activate.
-  otelcol:
-    profiles: [otel]
-    image: otel/opentelemetry-collector-contrib:0.104.0
-    container_name: wactorz-otelcol
-    restart: unless-stopped
-    command: ["--config=/etc/otelcol/config.yaml"]
-    volumes:
-      - ./infra/otelcol/otel_config.yaml:/etc/otelcol/config.yaml:ro
-    ports:
-      - "${OTELCOL_OTLP_PORT:-4318}:4318"
-      - "${OTELCOL_METRICS_PORT:-8889}:8889"
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null", "http://localhost:13133/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
   prometheus:
     profiles: [python]
     image: prom/prometheus:v2.54.1
@@ -178,7 +154,6 @@ services:
       PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz-python}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
-      PROMETHEUS_MONITOR_OTELCOL: "${PROMETHEUS_MONITOR_OTELCOL:-0}"
       REST_EXTERNAL_PORT: "${REST_EXTERNAL_PORT:-8000}"
     # Loopback-bound: the Prometheus UI has no auth and exposes agent names and
     # spend. Scraping happens over the internal network, not this port.

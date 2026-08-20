@@ -250,7 +250,7 @@ rather than opening a public issue.
 | `frontend/` | Vite + TypeScript card dashboard |
 | `ha-addon/` | Home Assistant Supervisor addon |
 | `docs/` | Markdown docs source |
-| `infra/` | Mosquitto, Prometheus, OpenTelemetry, nginx, and HA configs |
+| `infra/` | Mosquitto, Prometheus, nginx, and HA configs |
 | `tests/` | Python test suite |
 
 ---

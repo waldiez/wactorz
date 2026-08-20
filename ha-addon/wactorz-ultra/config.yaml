@@ -127,11 +127,6 @@ options:
   # Max messages per minute per sender on social channels (0 disables).
   social_rate_limit_per_min: 12
 
-  # OpenTelemetry — leave blank to disable
-  # Point to any OTLP HTTP collector (e.g. http://192.168.1.10:4318)
-  #otel_endpoint: ""
-  #otel_service_name: "wactorz"
-
 
 schema:
   api_key: str?
@@ -167,8 +162,6 @@ schema:
       broker_user: str?
       broker_password: password?
       ssh_port: port?
-  #otel_endpoint: str?
-  #otel_service_name: str?
 
 # ── Environment variables injected into the container ─────────────────────────
 # The run.sh entrypoint reads OPTIONS_PATH and maps these to env vars.

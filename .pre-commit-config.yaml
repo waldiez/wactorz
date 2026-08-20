@@ -15,7 +15,7 @@ repos:
         types: [python]
       - id: python-tests
         name: python tests
-        entry: python3 -m pytest tests
+        entry: python3 -m pytest tests -n auto
         language: system
         pass_filenames: false
         files: \.py$

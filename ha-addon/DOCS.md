@@ -43,10 +43,6 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
 | `otel_endpoint` | *(blank)* | OTLP HTTP collector URL (e.g. `http://192.168.1.10:4318`). Leave blank to disable OpenTelemetry. |
 | `otel_service_name` | `wactorz` | Service name reported to the OTLP collector. |
-| `influx_url` | *(blank)* | InfluxDB 2.x base URL (e.g. `http://homeassistant:8086`). Leave blank to disable. |
-| `influx_token` | *(blank)* | InfluxDB API token. |
-| `influx_org` | `wactorz` | InfluxDB organisation name. |
-| `influx_bucket` | `wactorz` | InfluxDB bucket name. |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
 > default: the panel reaches Wactorz through ingress, where Home Assistant has

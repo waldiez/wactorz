@@ -55,9 +55,6 @@ otel      = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
 ]
-influx    = [
-    "influxdb-client>=1.44.0",
-]
 tts       = [
     "edge-tts>=6.1.9",
 ]
@@ -103,7 +100,6 @@ all = [
     "wactorz[whatsapp]",
     "wactorz[mcp]",
     "wactorz[otel]",
-    "wactorz[influx]",
     "wactorz[tts]",
 ]
 

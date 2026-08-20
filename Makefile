@@ -80,7 +80,7 @@ dev: ## Start the MQTT broker only (mosquitto on 1883)
 	$(COMPOSE_DEV) up
 
 dev-down: ## Stop the dev compose stack (all profiles)
-	$(COMPOSE_DEV) --profile app --profile influx --profile full down
+	$(COMPOSE_DEV) --profile app --profile full down
 
 dev-app: ## Run the backend + metrics in containers (compose 'app' profile, UI on :8888)
 	$(COMPOSE_DEV) --profile app up

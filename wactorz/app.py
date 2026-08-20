@@ -386,11 +386,9 @@ async def app(args: argparse.Namespace):
     system, main_actor, _db = await build_system(args)
 
     from wactorz.core.persistence import close_persistence
-    from wactorz.monitoring.influx import setup_influx, shutdown_influx
     from wactorz.monitoring.otel import setup_otel, shutdown_otel
 
     setup_otel(lambda: system.registry)
-    setup_influx()
 
     if not getattr(args, "no_monitor", False):
         _print_ready_banner(args.monitor_port)
@@ -471,7 +469,6 @@ async def app(args: argparse.Namespace):
         logger.error(f"System error: {exc}", exc_info=True)
     finally:
         shutdown_otel()
-        shutdown_influx()
         await system.stop_all()
         # Last: actors write state as they stop, so the connection has to outlive
         # them. Closing checkpoints the WAL rather than leaving -wal/-shm behind

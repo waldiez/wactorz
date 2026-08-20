@@ -219,39 +219,6 @@ services:
     networks:
       - wactorz-net
 
-  # ── InfluxDB 2.x (optional — chat log + time-series) ────────────────────────
-  # docker compose --profile influx up -d              (standalone)
-  # docker compose --profile full --profile influx up -d  (with Python)
-  influxdb:
-    profiles: [influx]
-    image: influxdb:2.7
-    container_name: wactorz-influxdb
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${INFLUX_EXTERNAL_PORT:-8086}:8086"
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      # No fallback values: these seed a real admin account and API token, and a
-      # default would be a published credential. Left unset, InfluxDB's own setup
-      # refuses to initialise — set INFLUX_USERNAME / INFLUX_PASSWORD /
-      # INFLUX_TOKEN in .env before enabling this profile. (A `:?` guard here
-      # would break `docker compose up -d` for everyone, since compose
-      # interpolates every service regardless of the active profile.)
-      DOCKER_INFLUXDB_INIT_USERNAME: "${INFLUX_USERNAME:-}"
-      DOCKER_INFLUXDB_INIT_PASSWORD: "${INFLUX_PASSWORD:-}"
-      DOCKER_INFLUXDB_INIT_ORG: "${INFLUX_ORG:-wactorz}"
-      DOCKER_INFLUXDB_INIT_BUCKET: "${INFLUX_BUCKET:-wactorz}"
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-}"
-    volumes:
-      - influxdb-data:/var/lib/influxdb2
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # ── Home Assistant ───────────────────────────────────────────────────────────
   # docker compose --profile full up -d
   homeassistant:
@@ -285,5 +252,4 @@ networks:
 volumes:
   mosquitto-data:
   mosquitto-logs:
-  influxdb-data:
   prometheus-data:

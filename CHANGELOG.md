@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Removed — breaking
+
+- **The InfluxDB integration is gone**, along with the `wactorz[influx]` extra, the `influx` Compose profile and service, the `INFLUX_*` environment variables, and the add-on's four `influx_*` options. It wrote one measurement — a point per chat turn — and nothing in the project ever read it back: there was no query path, no dashboard and no Grafana. What it did do was send message bodies to a store that is routinely another machine, which was the only path that took conversation text off the host. **If you were using it**, the chat log in SQLite holds the same turns and is unaffected; point your own collector at that instead. Nothing else changes — Prometheus, OpenTelemetry and the chat log are all untouched.
+
 ### Changed — breaking
 
 - **The bundled MQTT broker no longer accepts anonymous connections, and `docker compose` will not start without `MQTT_PASSWORD`.** The broker is the control plane — agent commands, chat, and the code spawned agents run all cross it — and its port is published to the host, so anonymous access was publish access to all of it from anywhere that could reach the port. **Set `MQTT_PASSWORD` in `.env`** (`MQTT_USERNAME` defaults to `wactorz`); compose stops with a message naming the variable rather than coming up open. There is no `mosquitto_passwd` step: the broker's password file is written at container start from those variables, so an existing deployment needs only the `.env` line, and changing the credential later is an edit and a restart. The development stack (`compose.dev.yaml`) needs no setup — it defaults to `wactorz` / `wactorz-dev` and now binds its broker to loopback, because a known password on a network-reachable broker is barely better than the anonymous one it replaces. **If you run your own broker**, nothing here applies; these are the settings the bundled one is configured from.

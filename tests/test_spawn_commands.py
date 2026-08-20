@@ -18,10 +18,12 @@ no code is a model that stopped mid-sentence, not an agent.
 import json
 from typing import Any
 
+import pytest
+
 from wactorz.agents.main_actor import MainActor
 from wactorz.agents.manifests import ManifestRegistry
 from wactorz.agents.nodes import NodeManager
-from wactorz.agents.spawns import SpawnService
+from wactorz.agents.spawns import SpawnService, _parse_spawn_config
 
 _SPAWN_FAILED = "spawn failed"
 
@@ -300,3 +302,76 @@ class TestChoosingLocalOrRemote:
 
         assert not remote
         assert local
+
+
+class TestParseSpawnConfig:
+    """Three strategies, tried in order, for a config carrying raw agent code."""
+
+    def test_strategy_one_plain_json(self) -> None:
+        config = _parse_spawn_config('{"name": "x", "code": "print(1)"}')
+        assert config == {"name": "x", "code": "print(1)"}
+
+    def test_surrounding_whitespace_is_stripped_first(self) -> None:
+        assert _parse_spawn_config('\n  {"name": "x", "code": "y"}  \n')["name"] == "x"
+
+    def test_strategy_two_backtick_delimited_code(self) -> None:
+        config = _parse_spawn_config('{"name": "x", "code": `line1\nline2`}')
+        assert config["code"] == "line1\nline2"
+        assert config["name"] == "x"
+
+    def test_strategy_three_raw_multiline_code(self) -> None:
+        """Unescaped newlines defeat strategies 1 and 2; the quote scan handles it."""
+        config = _parse_spawn_config('{"name": "x", "code": "def f():\n    return 1\n"}')
+        assert config["code"] == "def f():\n    return 1\n"
+
+    def test_code_containing_double_quotes_is_not_truncated(self) -> None:
+        """The reason the scan runs right-to-left.
+
+        A forward scan stops at the first inner quote and truncates the code —
+        this is the case that motivated the current implementation, so it is
+        pinned rather than left to a comment.
+        """
+        raw = '{"name": "x", "code": "print(\'phrases like "Vamos!"\')\n"}'
+        assert "Vamos!" in _parse_spawn_config(raw)["code"]
+
+    def test_a_field_after_code_is_silently_swallowed(self) -> None:
+        """KNOWN DEFECT, pinned as-is: a key after `code` is absorbed into it.
+
+        The right-most quote here is the one closing `"trailing"`, and dropping
+        the placeholder in at that point yields `{"code": "__CODE__"}` — valid
+        JSON — so the scan stops on its first try and everything between the two
+        outermost quotes becomes the code value.
+
+        The `name` key does not survive, and the corruption is silent: the agent
+        spawns with JSON fragments inside its source and fails at exec time, far
+        from here. Convention says code is the last field, which is why this
+        rarely bites — but these configs are model-authored, so the convention is
+        a hope rather than a guarantee.
+
+        This test pins the defect, it does not endorse it. Fixing it needs a
+        decision about what a config with a trailing field should mean; when
+        that is made, this test is the one to invert.
+        """
+        raw = '{"code": "a\nb", "name": "trailing"}'
+        config = _parse_spawn_config(raw)
+        assert "name" not in config
+        assert config["code"] == 'a\nb", "name": "trailing'
+
+    def test_escape_sequences_in_raw_code_are_decoded_once(self) -> None:
+        r"""`\n` and `\t` become real characters and `\\` collapses to one."""
+        raw = '{"name": "x", "code": "a\\nb\\tc\\\\d\ne"}'
+        assert _parse_spawn_config(raw)["code"] == "a\nb\tc\\d\ne"
+
+    def test_a_missing_code_key_is_refused_by_name(self) -> None:
+        """Note the input must also defeat strategy 1 to reach the check.
+
+        A raw newline *between* tokens is legal JSON whitespace, so
+        `{"name": "x"\\n}` parses cleanly and never reaches strategy 3. The
+        newline has to sit inside a string value for that to happen.
+        """
+        with pytest.raises(ValueError, match="No 'code' key"):
+            _parse_spawn_config('{"name": "x", "nope": "y\n"}')
+
+    def test_code_that_never_yields_valid_json_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="no closing quote"):
+            _parse_spawn_config('{"name": , "code": "x\n')

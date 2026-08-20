@@ -14,8 +14,8 @@ from types import SimpleNamespace
 import pytest
 
 from wactorz.agents.delegation import DelegationManager
-from wactorz.agents.helpers.main_actor_helpers import BYPASS_MARKERS, starts_with_bypass
 from wactorz.agents.main_actor import MainActor
+from wactorz.agents.mixins.planning import BYPASS_MARKERS, starts_with_bypass
 
 
 def run(coro):

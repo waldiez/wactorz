@@ -19,11 +19,6 @@ from ..core.actor import Actor, Message, MessageType
 from .commands import CommandContext
 from .commands import registry as command_registry
 from .delegation import DelegationManager
-from .helpers.main_actor_helpers import (
-    _normalize_agent_name,
-    _strip_live_context,
-    starts_with_bypass,
-)
 from .lifecycle import LifecycleService
 from .llm_agent import LLMAgent, LLMProvider
 from .llm_bridge import LLMBridge
@@ -36,6 +31,7 @@ from .mixins import (
     SpawnMixin,
     SpawnPlaceholder,
 )
+from .mixins.planning import starts_with_bypass
 from .nodes import NodeManager
 from .one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from .prompts.main_actor_prompts import (
@@ -45,6 +41,38 @@ from .spawns import SpawnService
 from .turn_actions import TurnActions
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_agent_name(name: str) -> str:
+    """Canonicalise an agent name for fuzzy matching.
+
+    Lowercases, turns spaces/underscores into dashes, and strips a redundant
+    trailing '-agent' suffix so 'Smart Energy Agent', 'smart_energy_agent',
+    and 'smart-energy' all collapse to 'smart-energy'.
+    """
+    norm = (name or "").lower().strip().replace("_", "-").replace(" ", "-")
+    while "--" in norm:
+        norm = norm.replace("--", "-")
+    norm = norm.strip("-")
+    if norm.endswith("-agent") and norm != "-agent":
+        norm = norm[: -len("-agent")]
+    return norm
+
+
+def _strip_live_context(message: str) -> str:
+    """Remove the [CURRENT SYSTEM STATE...][END SYSTEM STATE] prefix if present.
+    Used before fact extraction so the auto-injected agent list doesn't get
+    treated as user-stated facts.
+    """
+    if not isinstance(message, str) or "[CURRENT SYSTEM STATE" not in message:
+        return message
+    end_marker = "[END SYSTEM STATE]"
+    idx = message.find(end_marker)
+    if idx == -1:
+        return message
+    # Skip past the marker and any whitespace following it
+    return message[idx + len(end_marker) :].lstrip("\n").lstrip()
+
 
 #: Openings that mean the planner, whatever the intent classifier would say.
 #:

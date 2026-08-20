@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from ..helpers.main_actor_helpers import PENDING_PLANS_KEY
+from ..mixins.planning import PENDING_PLANS_KEY
 from .dispatch import CommandContext, command
 
 logger = logging.getLogger(__name__)

@@ -10,6 +10,7 @@ self._result_futures).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -17,15 +18,64 @@ from typing import TYPE_CHECKING, ClassVar
 
 from wactorz.llm_factory import provider_for
 
-from ..helpers.main_actor_helpers import (
-    PENDING_PLANS_KEY,
-    PIPELINE_RULES_KEY,
-    _parse_plan_envelope,
-    _strip_dryrun_bypass,
-    starts_with_bypass,
-)
-
 logger = logging.getLogger(__name__)
+
+#: Persistence key for the rules that shape how a pipeline is planned.
+PIPELINE_RULES_KEY = "_pipeline_rules"
+
+#: Persistence key for dry-run proposals awaiting user approval.
+#:
+#: Public because the `/plans` command reads the same store: a plan proposed
+#: here is listed and cleared from there, so the two must name one key.
+PENDING_PLANS_KEY = "_pending_plans"
+
+#: Prefixes that skip dry-run and approval for PIPELINE intent.
+#:
+#: One tuple because three places act on them — the gate below deciding whether
+#: to hold a request for approval, the stripper that keeps the marker out of the
+#: task text, and the restricted channel refusing the admin surface. A marker
+#: added to one of those and missed by another is a guard that catches some
+#: spellings of the same thing. Add a marker here, not at a call site.
+BYPASS_MARKERS = ("pipeline!", "coordinate!", "@planner!")
+
+
+def starts_with_bypass(text: str) -> bool:
+    """Whether `text` opens with a bypass marker, whatever its case or spacing."""
+    return text.lower().lstrip().startswith(BYPASS_MARKERS)
+
+
+def _strip_dryrun_bypass(text: str) -> str:
+    """Strip the bypass marker from the user's text so the planner does not see
+    it as part of the task.
+    """
+    if not text:
+        return text
+    lowered = text.lower().lstrip()
+    for bypass in BYPASS_MARKERS:
+        if lowered.startswith(bypass):
+            # Find the bypass in the original (case-insensitive) and skip it
+            idx = text.lower().find(bypass)
+            if idx != -1:
+                return text[idx + len(bypass) :].lstrip(" :,-")
+    return text
+
+
+def _parse_plan_envelope(planner_result: str) -> dict | None:
+    """Try to parse a planner result string as a plan envelope (the JSON dict
+    returned by plan_only mode). Returns the envelope dict if it's a valid
+    proposal, or None if the result is a regular answer (e.g. error message,
+    feasibility failure, or fallback prose).
+    """
+    if not planner_result or not planner_result.strip().startswith("{"):
+        return None
+    try:
+        envelope = json.loads(planner_result)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(envelope, dict) and envelope.get("_plan_proposal") is True:
+        return envelope
+    return None
+
 
 #: Head-room over the planner's lifetime cap for a reply produced just before it
 #: to reach us. Not time for the planner to keep working — it has already gone.

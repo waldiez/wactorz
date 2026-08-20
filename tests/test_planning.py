@@ -18,7 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.agents.mixins.planning import PlanningMixin
+from wactorz.agents.mixins.planning import (
+    BYPASS_MARKERS,
+    PlanningMixin,
+    _parse_plan_envelope,
+    _strip_dryrun_bypass,
+    starts_with_bypass,
+)
 
 
 def run(coro):
@@ -223,3 +229,77 @@ def test_format_plan_proposal():
     assert "monitor cpu and alert" in out
     assert "cpu-mon" in out
     assert "1 agent" in out
+
+
+class TestParsePlanEnvelope:
+    """Telling a planner's dry-run proposal from an ordinary prose answer."""
+
+    def test_a_proposal_comes_back_whole(self) -> None:
+        envelope = _parse_plan_envelope('{"_plan_proposal": true, "steps": [1, 2]}')
+        assert envelope == {"_plan_proposal": True, "steps": [1, 2]}
+
+    def test_leading_whitespace_does_not_hide_a_proposal(self) -> None:
+        assert _parse_plan_envelope('  \n {"_plan_proposal": true}') is not None
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            "",
+            "Sorry, I can't do that.",
+            '{"steps": []}',
+            "[1, 2, 3]",
+            '{"broken": ',
+        ],
+        ids=["empty", "prose", "no-marker", "json-array", "malformed"],
+    )
+    def test_everything_else_is_an_ordinary_answer(self, result: str) -> None:
+        assert _parse_plan_envelope(result) is None
+
+    def test_the_marker_must_be_the_boolean_not_a_lookalike(self) -> None:
+        """`is True` is deliberate — a string "true" is not a proposal.
+
+        A model that quotes the value produces prose, not an unapproved plan
+        running, so the strict check is the safe direction.
+        """
+        assert _parse_plan_envelope('{"_plan_proposal": "true"}') is None
+        assert _parse_plan_envelope('{"_plan_proposal": 1}') is None
+
+
+class TestBypassMarkers:
+    """The dry-run bypass, and stripping it off the task text."""
+
+    def test_the_marker_set_is_the_one_three_call_sites_share(self) -> None:
+        """Pinned as a set so a marker cannot be added to a call site instead.
+
+        The three call sites — the dry-run gate, the task-text stripper, and the
+        restricted channel's refusal — must agree on the whole family. They once
+        did not: the guard knew one spelling and the planner knew three, so two
+        markers walked past a check written to catch exactly them.
+        """
+        assert set(BYPASS_MARKERS) == {"pipeline!", "coordinate!", "@planner!"}
+
+    @pytest.mark.parametrize("marker", BYPASS_MARKERS)
+    def test_every_marker_is_recognised_whatever_its_case_or_spacing(self, marker: str) -> None:
+        assert starts_with_bypass(marker)
+        assert starts_with_bypass(f"   {marker.upper()} do the thing")
+
+    def test_ordinary_text_is_not_a_bypass(self) -> None:
+        assert not starts_with_bypass("please build a pipeline!")
+        assert not starts_with_bypass("")
+
+    @pytest.mark.parametrize("marker", BYPASS_MARKERS)
+    def test_stripping_removes_the_marker_and_its_punctuation(self, marker: str) -> None:
+        assert _strip_dryrun_bypass(f"{marker} : make coffee") == "make coffee"
+        assert _strip_dryrun_bypass(f"  {marker.title()}, make coffee") == "make coffee"
+
+    def test_text_without_a_marker_survives_unchanged(self) -> None:
+        assert _strip_dryrun_bypass("make coffee") == "make coffee"
+
+    def test_empty_text_is_returned_rather_than_indexed(self) -> None:
+        assert not _strip_dryrun_bypass("")
+
+    def test_a_later_occurrence_is_left_in_place(self) -> None:
+        """Only the opening marker is a bypass; a repeat is part of the task."""
+        assert _strip_dryrun_bypass("pipeline! build a pipeline! thing") == (
+            "build a pipeline! thing"
+        )

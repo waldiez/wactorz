@@ -479,8 +479,8 @@ class PlannerAgent(Actor, SpawnMixin):
         self, plan: list[dict], task: str, resolution_note: str = ""
     ) -> str:
         """Spawn each agent in the plan, register with main, build the final summary.
-        Extracted from _run_pipeline so dry-run can reuse the same execution path
-        after a user approval.
+        The single execution path: a plan reaches it directly, and an approved
+        dry-run reaches it too, so the two cannot diverge in what they run.
 
         resolution_note: optional preamble describing what topic/entity the planner
         resolved the user's vague reference to. Empty for pre-approved plans where

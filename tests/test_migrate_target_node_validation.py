@@ -48,7 +48,7 @@ def _bare_main(registry: dict, known_nodes: dict[str, Any]) -> MainActor:
 
 
 def _registry_with_agent_on(node: str) -> dict:
-    from wactorz.agents.helpers.main_actor_helpers import SPAWN_REGISTRY_KEY  # noqa: F401
+    from wactorz.agents.spawns import SPAWN_REGISTRY_KEY  # noqa: F401
 
     return {"temp-sensor": {"name": "temp-sensor", "node": node, "type": "dynamic", "code": "x"}}
 

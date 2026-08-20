@@ -23,7 +23,6 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..core.actor import MessageType
-from .helpers.main_actor_helpers import SPAWN_REGISTRY_KEY, _parse_spawn_config
 
 if TYPE_CHECKING:
     from ..core.actor import Actor
@@ -31,6 +30,103 @@ if TYPE_CHECKING:
     from .mixins.spawning import SpawnPlaceholder
 
 logger = logging.getLogger(__name__)
+
+#: Persistence key for what main remembers about the agents it spawned.
+#:
+#: Public because it is the restart contract: this service writes it and the
+#: dashboard, migration and `/agents restart` all read the same store.
+SPAWN_REGISTRY_KEY = "_spawned_agents"
+
+
+def _parse_spawn_config(raw: str) -> dict:
+    """Robustly parse a spawn config that may contain raw multiline code strings.
+    Uses character scanning to correctly handle } and " inside the code value.
+    """
+    raw = raw.strip()
+
+    # Strategy 1: standard JSON (works when LLM properly escapes newlines)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: backtick-delimited code (rare but some LLMs use it)
+    bt_match = re.search(r'"code"\s*:\s*`(.*?)`', raw, re.DOTALL)
+    if bt_match:
+        code_raw = bt_match.group(1)
+        placeholder = re.sub(r'"code"\s*:\s*`.*?`', '"code": "__CODE__"', raw, flags=re.DOTALL)
+        config = json.loads(placeholder)
+        config["code"] = code_raw
+        return config
+
+    # Strategy 3: locate the code value's bounds, then swap it out for a
+    # placeholder so the surrounding object parses as normal JSON.
+    #
+    # We can't find the value's end by scanning forward for the first unescaped
+    # '"': the code is raw (that's why strategies 1/2 failed) and legitimately
+    # contains its own double quotes — e.g. a Python string like
+    # 'phrases like "Vamos!"'. A forward scan stops at that first inner quote,
+    # truncates the code, and corrupts the placeholder ("Expecting ',' delimiter").
+    #
+    # Instead, treat every '"' after the opening one as a candidate closing
+    # quote, right-most first, and keep the first that makes the REST of the
+    # object valid JSON.
+    #
+    # NB the right-most candidate wins whenever it parses, so a key written
+    # *after* `code` is absorbed into the code value and silently lost. Code is
+    # the last field by convention, which is why that rarely bites — but these
+    # configs are model-authored, so the convention is a hope, not a guarantee.
+    # `test_a_field_after_code_is_silently_swallowed` pins the current answer.
+    key_match = re.search(r'"code"\s*:\s*"', raw)
+    if not key_match:
+        msg = f"No 'code' key found in spawn config:\n{raw[:200]}"
+        raise ValueError(msg)
+
+    code_start = key_match.end()  # index right after the opening "
+    prefix = raw[: key_match.start()]
+    quote_positions = [code_start + m.start() for m in re.finditer(r'"', raw[code_start:])]
+
+    config = None
+    code_raw = ""
+    for close in reversed(quote_positions):
+        placeholder = prefix + '"code": "__CODE__"' + raw[close + 1 :]
+        try:
+            config = json.loads(placeholder)
+        except json.JSONDecodeError:
+            continue
+        code_raw = raw[code_start:close]
+        break
+
+    if config is None:
+        msg = (
+            "Spawn config JSON invalid after code extraction: no closing quote for "
+            f"the code value produced parseable JSON.\nRaw:\n{raw[:300]}"
+        )
+        raise ValueError(msg)
+
+    # Unescape sequences the LLM may have added. Decode as a real JSON string in
+    # one correct pass (json.loads handles \\, \n, \t, \", \uXXXX, … together and,
+    # crucially, collapses an escaped backslash instead of leaving it doubled).
+    # strict=False tolerates the raw newlines/tabs that made the top-level
+    # json.loads fail in the first place. Falling back to sequential .replace()
+    # would re-introduce the original bug: a Python escape like \' arrives here as
+    # \\' (JSON-escaped), and without collapsing \\ the string literal terminates
+    # early — stranding any following non-ASCII char (e.g. an em-dash) outside the
+    # string and raising SyntaxError only once the runner compiles it.
+    try:
+        config["code"] = json.loads('"' + code_raw + '"', strict=False)
+    except json.JSONDecodeError:
+        # Best-effort fallback for genuinely invalid escapes (e.g. a bare \');
+        # collapse the common sequences with the backslash LAST so it doesn't
+        # corrupt the ones decoded before it.
+        config["code"] = (
+            code_raw.replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace('\\"', '"')
+            .replace("\\\\", "\\")
+        )
+    return config
+
 
 #: How long to wait for a node's packages before spawning without them.
 INSTALL_TIMEOUT_S = 180.0

@@ -1,54 +1,15 @@
 import argparse
 import asyncio
-import importlib.util
 import json
 import pathlib
-import sys
 import tempfile
-import types
 from dataclasses import dataclass
-
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-FIXTURE_PATH = ROOT / "tests" / "parity_fixtures" / "backend_supervisor_parity.json"
-
-
-def _ensure_importable(name: str) -> None:
-    """Guarantee ``name`` can be imported by the hand-loaded core modules.
-
-    ``actor.py`` and ``registry.py`` import ``aiomqtt`` / ``psutil`` at load
-    time. Both are core dependencies so they are normally installed; only when
-    one is genuinely missing do we insert an empty placeholder so ``_load``
-    below can still exec the module. We never replace a real, importable module:
-    leaving a bare stub in ``sys.modules`` would shadow it for every other test
-    in this shared process.
-    """
-    if name in sys.modules:
-        return
-    try:
-        importlib.import_module(name)
-    except Exception:
-        sys.modules[name] = types.ModuleType(name)
-
-
-for _module in ("aiomqtt", "psutil"):
-    _ensure_importable(_module)
-
-
-def _load(name: str, path: pathlib.Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
-_load("wactorz.core.actor", ROOT / "wactorz" / "core" / "actor.py")
-_load("wactorz.core.registry", ROOT / "wactorz" / "core" / "registry.py")
 
 from wactorz.core.actor import Actor, ActorState, Message, SupervisorStrategy
 from wactorz.core.registry import ActorSystem, Supervisor
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+FIXTURE_PATH = ROOT / "tests" / "parity_fixtures" / "backend_supervisor_parity.json"
 
 
 @dataclass

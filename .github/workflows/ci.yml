@@ -9,6 +9,16 @@ on:
   # checks a pull request does rather than a second, drifting copy of them.
   workflow_call:
 
+# Least privilege: nothing here writes to the repository, and the default
+# token grants more than that.
+#
+# Action pinning, across every workflow: first-party `actions/*` by version
+# tag, everything else by commit sha with the tag kept as a comment. A tag is
+# a moving reference — for a third party that means code can change after it
+# was reviewed. The exception is documented at its own use site.
+permissions:
+  contents: read
+
 jobs:
   test-python:
     name: Python ${{ matrix.python-version }}
@@ -19,9 +29,9 @@ jobs:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -35,9 +45,9 @@ jobs:
     name: Python coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.12'
 
@@ -48,7 +58,7 @@ jobs:
         run: make coverage-py
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: python-coverage
           path: coverage/python-coverage.xml
@@ -57,9 +67,9 @@ jobs:
     name: Python lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.12'
 
@@ -91,13 +101,13 @@ jobs:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
       # Pinned from package.json's "packageManager" so the build below is
       # byte-reproducible — the staleness check compares its output against
       # committed bytes, and an unpinned toolchain would fail PRs on a hash
       # that changed for no reason of theirs.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: frontend/package.json
 

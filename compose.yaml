@@ -26,6 +26,9 @@ services:
   # ── MQTT broker ─────────────────────────────────────────────────────────────
   mosquitto:
     image: eclipse-mosquitto:2.0
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-mosquitto
     restart: unless-stopped
     hostname: mosquitto
@@ -145,6 +148,8 @@ services:
   prometheus:
     profiles: [python]
     image: prom/prometheus:v2.54.1
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-prometheus
     restart: unless-stopped
     entrypoint:
@@ -185,6 +190,9 @@ services:
   blackbox-exporter:
     profiles: [python]
     image: prom/blackbox-exporter:v0.25.0
+    cap_drop: [ALL]
+    read_only: true
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-blackbox
     restart: unless-stopped
     command:

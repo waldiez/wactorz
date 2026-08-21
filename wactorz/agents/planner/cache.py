@@ -7,6 +7,7 @@ the entry was written.
 
 import logging
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +18,8 @@ CACHE_TTL_S = 86400  # 24 hours
 
 
 def select_cached_plan(
-    raw: dict[str, dict], cache_key: str, alive: set[str], log_name: str
-) -> list | None:
+    raw: dict[str, dict[str, Any]], cache_key: str, alive: set[str], log_name: str
+) -> list[Any] | None:
     """Return the cached plan for ``cache_key``, or None if it cannot be reused."""
     entry = raw.get(cache_key)
     if not entry:
@@ -45,8 +46,8 @@ def select_cached_plan(
 
 
 def with_plan_cached(
-    raw: dict[str, dict], cache_key: str, task: str, plan: list
-) -> dict[str, dict]:
+    raw: dict[str, dict[str, Any]], cache_key: str, task: str, plan: list[dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     """Return ``raw`` plus this plan, with entries past the TTL dropped."""
     now = time.time()
     fresh = {k: v for k, v in raw.items() if now - v.get("timestamp", 0) < CACHE_TTL_S}

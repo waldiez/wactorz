@@ -8,6 +8,7 @@ fail at spawn time. Anything that cannot be corrected is logged and left alone.
 
 import logging
 import re
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ HA_API_PATTERNS = (
 )
 
 
-def _strip_spurious_awaits(spawn_config: dict) -> str | None:
+def _strip_spurious_awaits(spawn_config: dict[str, Any]) -> str | None:
     """Drop `await` from synchronous agent calls. Returns a note if it changed."""
     fixed, count = _SYNC_AWAIT_RE.subn(r"\1", spawn_config["code"])
     if not count:
@@ -108,7 +109,7 @@ def _strip_spurious_awaits(spawn_config: dict) -> str | None:
     return f"removed {count} spurious await(s) on sync agent methods"
 
 
-def _replace_raw_aiomqtt(spawn_config: dict, log_name: str, step_name: str) -> str | None:
+def _replace_raw_aiomqtt(spawn_config: dict[str, Any], log_name: str, step_name: str) -> str | None:
     """Rewire raw aiomqtt to agent.subscribe. Returns a note if the code used it."""
     code = spawn_config["code"]
     if "aiomqtt.Client(" not in code and "aiomqtt.connect(" not in code:
@@ -143,7 +144,7 @@ def _flag_direct_ha_api(code: str, log_name: str, step_name: str) -> str | None:
     return None
 
 
-def validate_pipeline_code(plan: list[dict], log_name: str) -> list[dict]:
+def validate_pipeline_code(plan: list[dict[str, Any]], log_name: str) -> list[dict[str, Any]]:
     """Repair the mistakes an LLM commonly makes in generated agent code.
 
     Edits each dynamic step's code in place and returns the same plan. What

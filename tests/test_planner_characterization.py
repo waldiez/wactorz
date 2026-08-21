@@ -15,12 +15,11 @@ from typing import Any
 import pytest
 
 from wactorz.agents.llm.providers.fake import FakeProvider
-from wactorz.agents.planner.agent import (
-    _CACHE_TTL_S,
-    _PLAN_CACHE_KEY,
-    PlannerAgent,
-    _task_hash,
-)
+from wactorz.agents.planner.agent import PlannerAgent
+from wactorz.agents.planner.cache import CACHE_TTL_S, PLAN_CACHE_KEY
+from wactorz.agents.planner.detection import is_pipeline_request
+from wactorz.agents.planner.parsing import extract_json_array, extract_json_object, task_hash
+from wactorz.agents.planner.validation import rewrite_aiomqtt_to_subscribe
 
 PIPELINE_REQUESTS = [
     "when the door opens, send me a discord message",
@@ -59,12 +58,12 @@ MISREAD_AS_PIPELINE = [
 
 @pytest.mark.parametrize("task", PIPELINE_REQUESTS)
 def test_pipeline_requests_are_detected(task: str) -> None:
-    assert PlannerAgent._is_pipeline_request(task) is True
+    assert is_pipeline_request(task) is True
 
 
 @pytest.mark.parametrize("task", ONE_SHOT_REQUESTS)
 def test_one_shot_requests_are_not_pipelines(task: str) -> None:
-    assert PlannerAgent._is_pipeline_request(task) is False
+    assert is_pipeline_request(task) is False
 
 
 @pytest.mark.parametrize(("task", "why"), MISREAD_AS_PIPELINE)
@@ -74,42 +73,42 @@ def test_one_shot_questions_currently_misread_as_pipelines(task: str, why: str) 
     Each spawns a persistent agent to answer a question that wanted one reply.
     Fixing any of them means changing this assertion on purpose.
     """
-    assert PlannerAgent._is_pipeline_request(task) is True, why
+    assert is_pipeline_request(task) is True, why
 
 
 def test_the_pipeline_prefix_wins_over_everything() -> None:
     """An explicit prefix is checked before the patterns and short-circuits them."""
-    assert PlannerAgent._is_pipeline_request("pipeline: do nothing") is True
-    assert PlannerAgent._is_pipeline_request("PIPELINE: do nothing") is True
+    assert is_pipeline_request("pipeline: do nothing") is True
+    assert is_pipeline_request("PIPELINE: do nothing") is True
 
 
 def test_detection_is_case_insensitive() -> None:
-    assert PlannerAgent._is_pipeline_request("MONITOR THE TEMPERATURE") is True
+    assert is_pipeline_request("MONITOR THE TEMPERATURE") is True
 
 
 class TestExtractJsonArray:
     """The extractor both decompose paths share, so they parse identically."""
 
     def test_a_bare_array_is_returned_unchanged(self) -> None:
-        assert PlannerAgent._extract_json_array('[{"a": 1}]') == '[{"a": 1}]'
+        assert extract_json_array('[{"a": 1}]') == '[{"a": 1}]'
 
     def test_a_fenced_array_is_unwrapped(self) -> None:
-        assert PlannerAgent._extract_json_array('```json\n[{"a": 1}]\n```') == '[{"a": 1}]'
+        assert extract_json_array('```json\n[{"a": 1}]\n```') == '[{"a": 1}]'
 
     def test_prose_on_either_side_is_sliced_away(self) -> None:
         response = 'Sure! Here you go:\n[{"a": 1}]\nHope that helps.'
-        assert json.loads(PlannerAgent._extract_json_array(response)) == [{"a": 1}]
+        assert json.loads(extract_json_array(response)) == [{"a": 1}]
 
     def test_nested_arrays_keep_their_outermost_brackets(self) -> None:
-        assert PlannerAgent._extract_json_array("[[1],[2]]") == "[[1],[2]]"
+        assert extract_json_array("[[1],[2]]") == "[[1],[2]]"
 
     @pytest.mark.parametrize("response", ["", "```", "```json"])
     def test_empty_and_fence_only_responses_yield_nothing(self, response: str) -> None:
-        assert not PlannerAgent._extract_json_array(response)
+        assert not extract_json_array(response)
 
     def test_none_is_tolerated(self) -> None:
         """Callers pass an LLM response that can be absent."""
-        assert not PlannerAgent._extract_json_array(None)  # pyright: ignore[reportArgumentType]
+        assert not extract_json_array(None)  # pyright: ignore[reportArgumentType]
 
     def test_text_with_no_array_is_returned_verbatim_despite_the_docstring(self) -> None:
         """The docstring promises '' here; the code returns the prose instead.
@@ -117,50 +116,50 @@ class TestExtractJsonArray:
         Harmless today only because all three call sites wrap the json.loads in
         try/except, so the decode error is caught and handled.
         """
-        assert PlannerAgent._extract_json_array("no array here at all") == "no array here at all"
+        assert extract_json_array("no array here at all") == "no array here at all"
 
     def test_reversed_delimiters_are_left_alone(self) -> None:
         """The slice needs the closing bracket after the opening one."""
-        assert PlannerAgent._extract_json_array("] backwards [") == "] backwards ["
+        assert extract_json_array("] backwards [") == "] backwards ["
 
 
 class TestExtractJsonObject:
     def test_a_bare_object_is_returned_unchanged(self) -> None:
-        assert PlannerAgent._extract_json_object('{"a":1}') == '{"a":1}'
+        assert extract_json_object('{"a":1}') == '{"a":1}'
 
     def test_prose_on_either_side_is_sliced_away(self) -> None:
-        assert PlannerAgent._extract_json_object('prose {"a":1} prose') == '{"a":1}'
+        assert extract_json_object('prose {"a":1} prose') == '{"a":1}'
 
     def test_a_fenced_object_is_unwrapped(self) -> None:
-        assert PlannerAgent._extract_json_object('```json\n{"a":1}\n```') == '{"a":1}'
+        assert extract_json_object('```json\n{"a":1}\n```') == '{"a":1}'
 
     def test_text_with_no_object_is_returned_verbatim(self) -> None:
-        assert PlannerAgent._extract_json_object("no object") == "no object"
+        assert extract_json_object("no object") == "no object"
 
 
 class TestTaskHash:
     def test_it_is_stable_for_the_same_task(self) -> None:
-        assert _task_hash("do the thing") == _task_hash("do the thing")
+        assert task_hash("do the thing") == task_hash("do the thing")
 
     @pytest.mark.parametrize(
         "variant", ["Do The Thing", "DO THE THING", "  do   the   thing  ", "do\tthe\nthing"]
     )
     def test_case_and_whitespace_are_normalized_away(self, variant: str) -> None:
         """Cache hits must survive retyping the same request differently."""
-        assert _task_hash(variant) == _task_hash("do the thing")
+        assert task_hash(variant) == task_hash("do the thing")
 
     def test_different_tasks_hash_differently(self) -> None:
-        assert _task_hash("do the thing") != _task_hash("do the other thing")
+        assert task_hash("do the thing") != task_hash("do the other thing")
 
     def test_it_is_twelve_characters(self) -> None:
         """The width is a cache-key contract; widening it invalidates every key."""
-        assert len(_task_hash("anything")) == 12
+        assert len(task_hash("anything")) == 12
 
 
 class TestRewriteAiomqttToSubscribe:
     def test_code_it_cannot_parse_yields_nothing(self) -> None:
         """An empty return tells the caller to keep the original code."""
-        assert not PlannerAgent._rewrite_aiomqtt_to_subscribe("print('hi')", "sensors/x")
+        assert not rewrite_aiomqtt_to_subscribe("print('hi')", "sensors/x")
 
     def test_a_recognised_subscription_loop_is_rewritten(self) -> None:
         code = (
@@ -169,7 +168,7 @@ class TestRewriteAiomqttToSubscribe:
             "        data = json.loads(msg.payload)\n"
             "        print(data)\n"
         )
-        rewritten = PlannerAgent._rewrite_aiomqtt_to_subscribe(code, "sensors/x")
+        rewritten = rewrite_aiomqtt_to_subscribe(code, "sensors/x")
 
         assert rewritten
         assert "aiomqtt" not in rewritten
@@ -327,12 +326,12 @@ class TestPlanCache:
 
     def test_an_entry_past_its_ttl_is_a_miss(self, planner: PlannerAgent) -> None:
         planner.persist(
-            _PLAN_CACHE_KEY,
+            PLAN_CACHE_KEY,
             {
                 "k1": {
                     "task": "t",
                     "plan": [{"agent": "main"}],
-                    "timestamp": time.time() - _CACHE_TTL_S - 1,
+                    "timestamp": time.time() - CACHE_TTL_S - 1,
                 }
             },
         )
@@ -371,17 +370,17 @@ class TestPlanCache:
 
     def test_saving_evicts_entries_that_are_already_stale(self, planner: PlannerAgent) -> None:
         planner.persist(
-            _PLAN_CACHE_KEY,
+            PLAN_CACHE_KEY,
             {"old": {"task": "t", "plan": [{"agent": "main"}], "timestamp": 0.0}},
         )
         planner._save_plan_cache("new", "t", [{"agent": "main"}])
-        stored = planner.recall(_PLAN_CACHE_KEY)
+        stored = planner.recall(PLAN_CACHE_KEY)
 
         assert set(stored) == {"new"}
 
     def test_the_stored_task_string_is_truncated(self, planner: PlannerAgent) -> None:
         """Cache entries hold a label, not a whole prompt."""
         planner._save_plan_cache("k1", "x" * 500, [{"agent": "main"}])
-        stored = planner.recall(_PLAN_CACHE_KEY)
+        stored = planner.recall(PLAN_CACHE_KEY)
 
         assert len(stored["k1"]["task"]) == 200

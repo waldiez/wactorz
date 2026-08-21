@@ -28,6 +28,16 @@ from ...core.mqtt import mqtt_client
 from ..llm_agent import LLMProvider, accumulate_global_cost
 from ..lookup import find_main_actor
 from ..mixins.spawning import SpawnMixin, SpawnPlaceholder
+from ..prompts.planner_prompts import (
+    DECOMPOSE_PROMPT,
+    HA_FEASIBILITY_PROMPT,
+    PIPELINE_DESIGN_PROMPT,
+    RULE_CONFLICT_PROMPT,
+)
+from .cache import PLAN_CACHE_KEY, select_cached_plan, with_plan_cached
+from .detection import is_pipeline_request
+from .parsing import extract_json_array, extract_json_object, task_hash
+from .validation import validate_pipeline_code
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +51,6 @@ _SKIP_AGENTS = {
     "anomaly-detector",
     "code-agent",
 }
-_PLAN_CACHE_KEY = "_plan_cache"
-_CACHE_TTL_S = 86400  # 24 hours
 
 
 class PlannerAgent(Actor, SpawnMixin):
@@ -242,74 +250,6 @@ class PlannerAgent(Actor, SpawnMixin):
 
     # ── Pipeline detection & dispatch ──────────────────────────────────────
 
-    @staticmethod
-    def _is_pipeline_request(task: str) -> bool:
-        """Detect reactive/persistent pipeline requests vs one-shot tasks.
-        Pipelines use conditional/temporal language: if/when/whenever/monitor/watch/notify.
-        Also catches explicit spawn/continuous-agent requests like:
-          "spawn an agent to log the mean..."
-          "create an agent that subscribes to..."
-          "I want an agent to send to a topic random temp..."
-        """
-        lowered = task.lower()
-
-        # Explicit pipeline prefix always wins
-        if lowered.startswith(("pipeline:", "pipeline ")):
-            return True
-
-        patterns = [
-            r"\bif\b.*\bthen\b",
-            r"\bif\b.*\b(send|notify|alert|turn|open|close|post|message|say|tell|warn|log|print|publish|emit)\b",
-            r"\bwhen\b.*\b(detect|open|turn|send|notify|alert|is|becomes|goes|changes|say|warn|log)\b",
-            r"\bwhenever\b",
-            r"\bmonitor\b",
-            r"\bwatch\b",
-            r"\bcheck\b.*\b(every|continuously|periodically|if|when)\b",
-            r"\balert me\b",
-            r"\bnotify me\b",
-            r"\btell me\b.*\bif\b",
-            r"\bsend me\b.*\b(when|if|discord|message|notification)\b",
-            r"\bsend me a\b",
-            r"\bautomatically\b",
-            r"\bevery time\b",
-            r"\bon detection\b",
-            r"\bis turned on\b",
-            r"\bis turned off\b",
-            r"\bturns on\b",
-            r"\bturns off\b",
-            r"\bopens\b.*\b(send|notify|alert|light|turn)\b",
-            r"\b(door|window|sensor|lamp|light|temperature|humidity|motion)\b.*\b(send|notify|discord|message)\b",
-            # camera/detect + action = pipeline
-            r"\b(camera|detect|yolo|webcam)\b.*\b(turn|open|send|notify|alert)\b",
-            r"\b(person|motion|object)\b.*\bdetect.*\b(turn|open|light|send)\b",
-            # ── Spawn / continuous agent / app requests ──
-            # "spawn an agent to...", "create an agent that...", "I want an agent to...",
-            # "spawn an app that...", "build a service that...", etc.
-            # NB: matches "agent" OR "app" OR "bot" OR "service" OR "monitor" OR "rule"
-            r"\b(spawn|create|make|start|run|launch|deploy|build|set\s+up)\b.*\b(agent|app|bot|service|monitor|rule|pipeline|listener|handler|watcher)\b",
-            r"\b(i\s+want|i\s+need|i'd\s+like)\b.*\b(agent|app|bot|service|rule|something)\b.*\b(to|that|which)\b",
-            # Periodic / continuous language
-            r"\bevery\s+\d+\s*(sec|min|hour|s\b|m\b|h\b)",
-            r"\bcontinuously\b",
-            r"\bconstantly\b",
-            r"\bperiodically\b",
-            r"\bkeep\s+(running|publishing|logging|sending|checking)\b",
-            r"\b(subscribe|listen)\s+(to|for|on)\b",
-            r"\blog\s+(the|every|each|all)\b",
-            # ── Clock-time triggers (5pm, 7am, 17:00, every weekday, etc.) ──
-            # These should always be pipelines because they need a ScheduledAgent.
-            r"\bat\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b",  # 'at 5pm', 'at 09:30', 'at 7 am'
-            r"\b(every|each)\s+(mon|tue|wed|thu|fri|sat|sun|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
-            r"\b(every|each)\s+(weekday|weekend|day|morning|evening|night|afternoon|hour|minute)\b",
-            r"\bdaily\b.*\b(at|on|when)\b",
-            r"\bweekly\b",
-            r"\bnightly\b",
-            r"\btomorrow\b.*\b(at|morning|evening|night)\b",
-            r"\bremind\s+me\b",
-            r"\bschedule\b.*\b(to|for|every|at)\b",
-        ]
-        return any(re.search(p, lowered) for p in patterns)
-
     async def _run_plan(self, task: str) -> str:
         workers = self._discover_workers()
         await self._log(f"Workers available: {[w['name'] for w in workers]}")
@@ -347,7 +287,7 @@ class PlannerAgent(Actor, SpawnMixin):
             return await self._run_pipeline(task, workers)
 
         # Detect pipeline vs one-shot
-        is_pipeline = PlannerAgent._is_pipeline_request(task)
+        is_pipeline = is_pipeline_request(task)
         if is_pipeline:
             await self._log("Pipeline request detected — spawning persistent agents...")
             return await self._run_pipeline(task, workers)
@@ -366,7 +306,7 @@ class PlannerAgent(Actor, SpawnMixin):
             return await self._run_pipeline(task, workers)
 
         # ── 1. Check cache ─────────────────────────────────────────────────
-        cache_key = _task_hash(task)
+        cache_key = task_hash(task)
         cached = self._load_cached_plan(cache_key, workers)
         if cached:
             await self._log(f"Cache hit — reusing plan ({len(cached)} steps)")
@@ -631,15 +571,7 @@ class PlannerAgent(Actor, SpawnMixin):
             return ""
 
         prompt = (
-            "You are reviewing a NEW home-automation rule against rules that "
-            "are ALREADY ACTIVE. Flag only two things:\n"
-            "  1. DUPLICATE — the new rule does essentially the same thing as "
-            "an existing one (same trigger AND same action).\n"
-            "  2. CONTRADICTION — the new rule fires on the same or overlapping "
-            "condition but takes an OPPOSING action (e.g. one turns a device "
-            "ON, the other turns it OFF under the same condition).\n\n"
-            f"NEW RULE:\n{task}\n\n"
-            "ALREADY-ACTIVE RULES:\n" + "\n".join(existing_lines) + "\n\n"
+            RULE_CONFLICT_PROMPT.format(task=task) + "\n".join(existing_lines) + "\n\n"
             "Respond with ONLY a JSON object:\n"
             '{"conflict": <true|false>, "items": [{"rule_id": "<id>", '
             '"kind": "duplicate|contradiction", "reason": "<one short sentence>"}]}\n'
@@ -653,7 +585,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 max_tokens=400,
             )
             self._accrue_usage(_usage)
-            data = json.loads(self._extract_json_object(response))
+            data = json.loads(extract_json_object(response))
         except Exception as e:
             logger.debug(f"[{self.name}] Rule-conflict check failed: {e}")
             return ""
@@ -1348,27 +1280,7 @@ class PlannerAgent(Actor, SpawnMixin):
         _skip_feasibility = has_skip_kw and not has_ha_verb
 
         if ha_available and ha_entities_text and not _skip_feasibility:
-            feas_prompt = (
-                "You are checking whether a reactive HA automation can be built with the available entities.\n\n"
-                f"USER REQUEST: {task}\n\n"
-                f"AVAILABLE HA ENTITIES:\n{ha_section}\n\n"
-                "Return JSON only:\n"
-                '{"feasible": true/false, "reason": "<one sentence if not feasible>", "relevant_entities": ["entity_id", ...]}\n\n'
-                "Rules — be PERMISSIVE, default to feasible=true:\n"
-                "- Match by FUZZY SUBSTRING. 'lamp' matches 'light.wiz_rgbw_*' or "
-                "any entity_id/name containing 'lamp', 'light', or 'lamp'-like words.\n"
-                "- 'door' matches binary_sensor.*_door, sensor.*_door, etc.\n"
-                "- 'occupancy'/'motion'/'presence' match any binary_sensor with those words.\n"
-                "- 'temperature' matches sensor.*_temperature.\n"
-                "- 'my <X>' / 'the <X>' just means the user's <X> — if ANY entity plausibly matches, feasible=true.\n"
-                "- feasible=false ONLY when there is genuinely NO entity whose entity_id, name, or "
-                "platform plausibly matches the requested target. If unsure, return feasible=true.\n"
-                "- relevant_entities should list the matching entity_ids you'd use.\n"
-                "- Camera/webcam/Discord/notification requests: always feasible=true.\n"
-                "- Pure logging / observability tasks (no HA target): always feasible=true. "
-                "Examples: 'log a heartbeat every hour', 'write a warning when X', 'print uptime'.\n"
-                "- Time-based triggers without HA action (just logging or publishing): always feasible=true."
-            )
+            feas_prompt = HA_FEASIBILITY_PROMPT.format(task=task, ha_section=ha_section)
             try:
                 feas_resp, _usage = await self.llm.complete(
                     messages=[{"role": "user", "content": feas_prompt}],
@@ -1398,277 +1310,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
         # Build the prompt as a list of parts to avoid f-string escape issues
         prompt_parts = [
-            "You are designing reactive automation pipelines for a multi-agent IoT system.",
-            "Output ONLY a valid JSON array — no explanation, no markdown, no code fences.",
-            "",
-            "═══ SYSTEM ARCHITECTURE ═══",
-            "",
-            "HomeAssistantStateBridgeAgent (ALWAYS running, NEVER spawn again):",
-            "  Publishes every HA state change to MQTT.",
-            "  Topic format depends on HA_STATE_BRIDGE_PER_ENTITY config — can be either:",
-            "    Flat:       homeassistant/state_changes                          (all entities, one topic)",
-            "    Per-entity: homeassistant/state_changes/{domain}/{full_entity_id} (one topic per entity)",
-            "  ALWAYS subscribe to the wildcard: homeassistant/state_changes/#",
-            "  This catches BOTH formats and never breaks regardless of config.",
-            '  Payload always contains: {"entity_id": "light.wiz_...", "domain": "light", "new_state": {"state": "on", ...}, "old_state": {...}}',
-            "  Filter by entity_id IN THE PAYLOAD — never rely on the topic path for filtering.",
-            "  NOTE: 'state' is NESTED inside new_state — check payload['new_state']['state'].",
-            "",
-            "═══ AGENT TYPES ═══",
-            "",
-            'TYPE 1 — "ha_actuator"',
-            "  Purpose: call any Home Assistant service (turn_on, turn_off, set_temperature, open_cover, etc.)",
-            "  No code needed. Subscribes to an MQTT trigger topic and calls the HA service.",
-            "  detection_filter matches TOP-LEVEL keys of the incoming payload only.",
-            "  spawn_config schema:",
-            '    "type": "ha_actuator"',
-            '    "automation_id": "<unique-kebab-id>"',
-            '    "description": "<what this does>"',
-            '    "mqtt_topics": ["<trigger-topic>"]',
-            '    "actions": [{"domain": "<ha-domain>", "service": "<ha-service>", "entity_id": "<entity_id-from-list>", "service_data": {}}]',
-            '    "conditions": []',
-            '    "detection_filter": {"<top-level-key>": <value>} or null',
-            '    "cooldown_seconds": <number>',
-            "",
-            'TYPE 2 — "scheduled"',
-            "  Purpose: fire an event at a SPECIFIC time or interval. THE ONLY correct way",
-            "  to express any time-based trigger (5pm, every weekday, every 30 minutes).",
-            "  No code. No polling loop. The framework wakes precisely at fire time.",
-            "  CRITICAL — when to use scheduled vs dynamic:",
-            "    'at 5pm', 'every day at 7am', 'every Monday', 'every 30 minutes',",
-            "    'tomorrow at 9am', 'every hour' → ALWAYS use type=scheduled.",
-            "    NEVER write a dynamic agent that polls datetime.now() in a loop.",
-            "    NEVER write a dynamic agent with `while True: asyncio.sleep(60)` to check time.",
-            "  Schedule spec — dict with one of these shapes:",
-            '    Daily:    {"type": "daily",    "at": "17:00"}',
-            '    Weekly:   {"type": "weekly",   "at": "07:30", "days": ["mon","tue","wed","thu","fri"]}',
-            '    Interval: {"type": "interval", "seconds": 1800}',
-            '    Once:     {"type": "once",     "at": "2026-12-25T09:00:00"}',
-            "  spawn_config schema:",
-            '    "type": "scheduled"',
-            '    "description": "<what this fires>"',
-            '    "schedule": <one of the dicts above>',
-            '    "publish_topic": "schedule/<name>/fired"   (optional — defaults to this anyway)',
-            "  When the schedule fires, payload published is:",
-            '    {"fired_at": "<ISO-8601 UTC>", "schedule_type": "<type>", "agent": "<name>", "manual": false}',
-            "  Pair with a downstream consumer (ha_actuator or dynamic agent) that subscribes",
-            "  to the publish_topic and performs the actual action. See PATTERN 5 below.",
-            "",
-            'TYPE 3 — "dynamic"',
-            "  Purpose: any logic that needs code — state filtering, webcam, timers, HTTP webhooks, Discord, etc.",
-            "  Define these async functions (all optional except at least one must exist):",
-            "    async def setup(agent)   — runs once on start, good for subscriptions and init",
-            "    async def process(agent) — runs in a loop every poll_interval seconds",
-            "  Available APIs (ONLY these — no other agent methods exist):",
-            '    await agent.log("message")                        — structured log (ASYNC, must await)',
-            '    await agent.publish("topic", {dict})              — publish to MQTT (ASYNC, must await)',
-            '    await agent.alert("message")                      — trigger alert (ASYNC, must await)',
-            '    await agent.send_to("name", payload)              — delegate to agent (ASYNC, must await)',
-            '    await agent.mqtt_get("topic")                     — one-shot MQTT read (ASYNC, must await)',
-            '    agent.subscribe("topic", async_callback)          — subscribe to MQTT (SYNC, NO await!)',
-            "                                                        callback(payload_dict) per message",
-            "                                                        runs as background task, setup() returns immediately",
-            '    agent.window("topic", seconds=N)                  — sliding window (SYNC, NO await!)',
-            '    agent.recall("key")                               — load persisted value (SYNC, NO await!)',
-            '    agent.persist("key", value)                       — save persisted value (SYNC, NO await!)',
-            "    agent.declare_contract(...)                        — register topic contract (SYNC, NO await!)",
-            '    agent.state["key"]                                — in-memory dict (cleared on restart)',
-            "  CRITICAL RULES FOR DYNAMIC AGENT CODE:",
-            "    NEVER use await on agent.subscribe(), agent.window(), agent.persist(), agent.recall(), agent.declare_contract()",
-            "    NEVER import or use aiomqtt directly — use agent.subscribe() instead",
-            "    NEVER hardcode MQTT broker hostnames or ports — agent.subscribe() handles this automatically",
-            "    NEVER use asyncio.create_task() for MQTT — agent.subscribe() already creates the background task",
-            "    agent.subscribe() is non-blocking — call it in setup() and return immediately",
-            "  spawn_config schema:",
-            '    "type": "dynamic"',
-            '    "description": "<what this does>"',
-            '    "install": ["<pip-package>", ...]       — packages to install before running',
-            '    "poll_interval": <seconds>              — how often process(agent) runs',
-            '    "code": "<full python source as single string with \\n for newlines>"',
-            "",
-            "═══ CANONICAL WIRING PATTERNS ═══",
-            "",
-            "PATTERN 1 — HA sensor triggers HA action (door → light, motion → switch, temp → AC):",
-            "  Problem: HA state is nested in new_state.state, ha_actuator can only filter top-level keys.",
-            "  Solution: use a dynamic filter agent to extract and re-publish the trigger.",
-            "  Agent 1 (dynamic, name: '<slug>-state-filter'):",
-            "    setup(agent): use agent.subscribe() to listen to homeassistant/state_changes/{domain}/{entity_id}",
-            "      Check new_state['state'] against condition, if met: await agent.publish('custom/triggers/<slug>', {'triggered': True})",
-            "    agent.subscribe() runs as a background task — setup() must return immediately after calling it.",
-            "  Agent 2 (ha_actuator, name: '<slug>-actuator'):",
-            "    mqtt_topics: ['custom/triggers/<slug>']",
-            "    detection_filter: {'triggered': True}",
-            "    actions: [the HA service call with the correct entity_id]",
-            "  CONDITION EXAMPLES:",
-            "    Binary sensor (door/window/motion): new_state['state'] == 'on'",
-            "    Numeric sensor (temperature/humidity): float(new_state.get('state', 0)) > threshold",
-            "    Switch/light: new_state['state'] == 'on' or 'off'",
-            "  PATTERN 1 CODE TEMPLATE:",
-            "    async def setup(agent):",
-            "        async def on_state(payload):",
-            "            if payload.get('entity_id') != 'light.wiz_rgbw_tunable_02cba0': return",
-            "            state = payload.get('new_state', {}).get('state', '')",
-            "            if state == 'on':  # adapt condition to user request",
-            "                await agent.publish('custom/triggers/<slug>', {'triggered': True, 'state': state})",
-            "        # Use wildcard — works regardless of per-entity or flat topic config",
-            "        agent.subscribe('homeassistant/state_changes/#', on_state)",
-            "",
-            "PATTERN 2 — HA sensor triggers notification (Discord, Slack, HTTP webhook):",
-            "  ONE dynamic agent using agent.subscribe():",
-            "    async def setup(agent):",
-            "        async def on_state(payload):",
-            "            if payload.get('entity_id') != 'light.wiz_rgbw_tunable_02cba0': return",
-            "            state = payload.get('new_state', {}).get('state', '')",
-            "            if state == 'on':  # adapt condition",
-            "                import httpx",
-            "                async with httpx.AsyncClient() as c:",
-            "                    await c.post('<WEBHOOK_URL>', json={'content': 'Lamp turned on!'})",
-            "                await agent.log('Discord notification sent')",
-            "        # Use wildcard — works regardless of per-entity or flat topic config",
-            "        agent.subscribe('homeassistant/state_changes/#', on_state)",
-            "  Install: httpx",
-            "  IMPORTANT: use the exact webhook URL from NOTIFICATION URLS section below.",
-            "",
-            "PATTERN 3 — Webcam/camera object detection triggers HA action:",
-            "  Agent 1 (dynamic, name: '<slug>-camera-detect'):",
-            "    setup(agent): the CAMERA STREAM URLS below are mjpeg_proxy URLs (/api/camera_proxy_stream/...)",
-            "      and REQUIRE the HA token as a Bearer header. Before calling cv2.VideoCapture, set:",
-            "        import os",
-            "        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = f\"headers;Authorization: Bearer {os.environ['HA_TOKEN']}\\r\\n\"",
-            "      Then load YOLO model and open the stream with cv2.VideoCapture(<url>)",
-            "      using the EXACT URL from CAMERA STREAM URLS below — never /dev/video0 or a guessed proxy path",
-            "      IMPORTANT: read the token from os.environ['HA_TOKEN'] — NEVER hardcode the token value.",
-            "    process(agent): capture frame, run inference, determine if target object is detected,",
-            "      publish {'detected': bool, 'target': '<object-name>', 'objects': [list-of-all-detected]}",
-            "      to custom/detections/<slug>",
-            "    Install: ultralytics, opencv-python",
-            "    poll_interval: 1",
-            "  Agent 2 (ha_actuator, name: '<slug>-actuator'):",
-            "    mqtt_topics: ['custom/detections/<slug>']",
-            "    detection_filter: {'detected': True}",
-            "    actions: [HA service call]",
-            "  IMPORTANT: publish {'detected': bool} not {'person_detected': bool} — generic for any object.",
-            "  IMPORTANT: use the exact camera stream URL from CAMERA STREAM URLS section below.",
-            "  In code: target = '<object-name-from-user-request>'; detected = target in set(detected_labels)",
-            "",
-            "PATTERN 4 — Webcam detection triggers notification:",
-            "  Agent 1: same as Pattern 3 agent 1",
-            "  Agent 2 (dynamic, name: '<slug>-notify'):",
-            "    setup(agent): use agent.subscribe() on custom/detections/<slug>",
-            "      When detected=True: POST notification via httpx",
-            "",
-            "PATTERN 5 — Time-based trigger (clock time, recurring, or once):",
-            "  ALWAYS use type=scheduled for ANY clock-time trigger. Two-agent pattern:",
-            "  Agent 1 (scheduled, name: '<slug>-trigger'):",
-            '    schedule: {"type": "daily", "at": "17:00"} (or weekly/interval/once)',
-            "    publish_topic: 'schedule/<slug>-trigger/fired'  (or omit for default)",
-            "  Agent 2 (ha_actuator OR dynamic, name: '<slug>-action'):",
-            "    Subscribes to 'schedule/<slug>-trigger/fired'",
-            "    For HA actions: type=ha_actuator, mqtt_topics=['schedule/<slug>-trigger/fired'],",
-            "      detection_filter null (no filtering needed — every fire is a trigger),",
-            "      actions=[the HA service call].",
-            "    For notifications/custom code: type=dynamic, setup() subscribes via agent.subscribe(),",
-            "      callback does the work (POST to webhook, log, etc.)",
-            "  EXAMPLES of correct user-request → schedule mapping:",
-            '    "turn on lights at 5pm"          → {"type": "daily", "at": "17:00"}',
-            '    "every weekday at 7am"           → {"type": "weekly", "at": "07:00", "days": ["mon","tue","wed","thu","fri"]}',
-            '    "every Saturday morning"         → {"type": "weekly", "at": "08:00", "days": ["sat"]}',
-            '    "every 30 minutes"               → {"type": "interval", "seconds": 1800}',
-            '    "every hour"                     → {"type": "interval", "seconds": 3600}',
-            '    "tomorrow at 9am, remind me"     → {"type": "once", "at": "<tomorrow>T09:00:00"}',
-            "  CRITICAL: NEVER express a clock time as a dynamic agent that polls datetime.now().",
-            "  NEVER use 'while True: sleep(60)' to wait for a time. Always use type=scheduled.",
-            "",
-            "PATTERN 6 — MQTT sensor data + condition → HA action (e.g. 'if temp > 20 turn off lamp'):",
-            "  This combines multiple data sources and triggers an HA action. NEVER use httpx for HA!",
-            "  Agent 1 (dynamic, name: '<slug>-monitor'):",
-            "    setup(agent): subscribe to relevant MQTT topics using agent.subscribe()",
-            "      In callback: check conditions, if met → await agent.publish('custom/triggers/<slug>', {'triggered': True})",
-            "    Example: subscribe to sensor topic AND HA state topic, check both conditions",
-            "  Agent 2 (ha_actuator, name: '<slug>-actuator'):",
-            "    mqtt_topics: ['custom/triggers/<slug>']",
-            "    detection_filter: {'triggered': True}",
-            "    actions: [{'domain': 'light', 'service': 'turn_off', 'entity_id': 'light.xxx'}]",
-            "  PATTERN 6 CODE TEMPLATE:",
-            "    async def setup(agent):",
-            "        agent.state['lamp_on'] = False",
-            "        agent.state['temp'] = 0",
-            "        async def on_temp(payload):",
-            "            agent.state['temp'] = payload.get('temp', 0)  # use EXACT field name from OBSERVED samples",
-            "            await check_and_trigger()",
-            "        async def on_lamp(payload):",
-            "            agent.state['lamp_on'] = payload.get('state') == 'on'",
-            "            await check_and_trigger()",
-            "        async def check_and_trigger():",
-            "            if agent.state['lamp_on'] and agent.state['temp'] > 20:",
-            "                await agent.publish('custom/triggers/lamp-temp', {'triggered': True})",
-            "                await agent.log('Condition met! Trigger published.')",
-            "        agent.subscribe('custom/sensors/temp_humidity', on_temp)",
-            "        agent.subscribe('lamp/status', on_lamp)",
-            "",
-            "PATTERN 7 — One-shot camera snapshot (e.g. 'take a snapshot of the office camera'):",
-            "  Use this instead of PATTERN 3 when the task needs a SINGLE still image,",
-            "  not a continuous detection loop.",
-            "  Agent (dynamic, name: '<slug>-snapshot'):",
-            "    setup(agent) or process(agent): fetch the EXACT URL from CAMERA SNAPSHOT URLS below.",
-            "    Install: httpx",
-            "  PATTERN 7 CODE TEMPLATE:",
-            "    async def setup(agent):",
-            "        import httpx, os",
-            "        headers = {'Authorization': f\"Bearer {os.environ['HA_TOKEN']}\"}",
-            "        async with httpx.AsyncClient() as client:",
-            "            resp = await client.get('<snapshot-url-from-CAMERA-SNAPSHOT-URLS>', headers=headers)",
-            "            image_bytes = resp.content",
-            "        # ... process image_bytes (e.g. run YOLO on it once, save to disk, etc.)",
-            "  IMPORTANT: read the token from os.environ['HA_TOKEN'] — NEVER hardcode the token value.",
-            "  If the result feeds an HA action (e.g. 'if there is a desk, turn on the light'),",
-            "  publish the detection result to a topic and pair with an ha_actuator (see PATTERN 3 agent 2).",
-            "",
-            "═══ GENERAL RULES ═══",
-            "",
-            "╔══════════════════════════════════════════════════════════════════╗",
-            "║  CRITICAL — HOME ASSISTANT ACTIONS                              ║",
-            "║  NEVER call HA REST API directly from dynamic agent code!       ║",
-            "║  NEVER use httpx/requests to POST to /api/services/*.           ║",
-            "║  ALWAYS use an ha_actuator agent for ANY HA service call.       ║",
-            "║                                                                 ║",
-            "║  CORRECT: dynamic agent publishes trigger → ha_actuator acts    ║",
-            "║  WRONG:   dynamic agent calls httpx.post('http://ha/api/...')   ║",
-            "╚══════════════════════════════════════════════════════════════════╝",
-            "",
-            "  If a dynamic agent needs to turn on/off a light, switch, or any HA device:",
-            "    1. The dynamic agent publishes a trigger: await agent.publish('custom/triggers/<slug>', {'triggered': True})",
-            "    2. A SEPARATE ha_actuator agent subscribes to that trigger and executes the HA service call",
-            "  This is Patterns 1 and 5 — ALWAYS follow this two-agent pattern for HA actions.",
-            "",
-            "- Use EXACT entity_id values from the HA entities list — never invent entity IDs",
-            "- For HA service calls (in ha_actuator config, NOT in dynamic agent code):",
-            "  light → light.turn_on / light.turn_off",
-            "  switch → switch.turn_on / switch.turn_off",
-            "  climate → climate.set_temperature / climate.set_hvac_mode",
-            "  cover → cover.open_cover / cover.close_cover",
-            "  script → script.turn_on",
-            "- Multiple rules in one request → output ALL agents for ALL rules",
-            "- Each agent does exactly ONE job — keep it minimal",
-            "- Replace <slug> consistently across paired agents with a short descriptive kebab-case id",
-            "- ALWAYS subscribe to homeassistant/state_changes/# (wildcard) — NEVER to a specific sub-topic",
-            "  Filter by entity_id in the payload: if payload.get('entity_id') != 'light.xyz': return",
-            "  This works regardless of whether HA_STATE_BRIDGE_PER_ENTITY is on or off",
-            "- If user provides a Discord webhook URL, use it directly in code",
-            "- If user provides a condition threshold (e.g. 'above 28 degrees'), encode it in the filter agent code",
-            "- Dynamic agent code must be a single string with actual \\n newlines (not literal backslash-n)",
-            "- TOPIC-BASED WIRING: if LIVE DATA FLOWS shows an agent already publishing relevant data,",
-            "  subscribe to that topic instead of spawning a duplicate agent.",
-            "  Example: if 'person-detector' publishes 'rpi-kitchen/camera/detections',",
-            "  a notification agent should subscribe to that topic, not spawn its own camera agent.",
-            "- Use agent.declare_contract() in setup() to declare what topics an agent publishes/subscribes.",
-            "  This makes the agent discoverable for future auto-wiring.",
-            "- Use agent.window(topic, seconds=N) for temporal reasoning:",
-            "  'if motion detected 3+ times in 5 minutes' → agent.window('motion/events', seconds=300).event_count() >= 3",
-            "- Use agent.read_world_state(topic) to read retained shared state without subscribing.",
-            "- Use agent.publish_world_state(key, data) to share state that other agents can read.",
-            "",
-            "═══ LIVE DATA FLOWS (topic contracts) ═══",
+            PIPELINE_DESIGN_PROMPT,
             topic_bus_section,
             "",
             *(  # Include live topic samples if available
@@ -1714,7 +1356,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
-            plan = json.loads(self._extract_json_array(response))
+            plan = json.loads(extract_json_array(response))
             if isinstance(plan, list):
                 # Validate generated code — catch common LLM mistakes
                 plan = self._validate_pipeline_code(plan)
@@ -1733,195 +1375,17 @@ class PlannerAgent(Actor, SpawnMixin):
     # ── Pipeline code validator ────────────────────────────────────────────
 
     def _validate_pipeline_code(self, plan: list[dict]) -> list[dict]:
-        """Scan generated dynamic agent code for common LLM mistakes and fix them.
-        Currently catches:
-          - Raw aiomqtt.Client() usage (should use agent.subscribe() instead)
-          - Hardcoded MQTT broker hostnames
-          - `await` on synchronous agent API methods (subscribe, window, persist, etc.)
-        Logs warnings so the user knows what was fixed.
-        """
-        # Synchronous agent API methods that must NOT be awaited
-        _SYNC_METHODS = (
-            "subscribe",
-            "window",
-            "persist",
-            "recall",
-            "declare_contract",
-            "agents",
-            "nodes",
-            "topics",
-            "capabilities",
-            "increment_processed",
-            "increment_errors",
-        )
-        _sync_pat = r"\bawait\s+(agent\.(?:" + "|".join(_SYNC_METHODS) + r")\s*\()"
-
-        for step in plan:
-            sc = step.get("spawn_config", {})
-            if sc.get("type") != "dynamic":
-                continue
-            code = sc.get("code", "")
-            if not code:
-                continue
-
-            issues = []
-
-            # Strip `await` on sync agent methods
-            fixed_code, n_subs = re.subn(_sync_pat, r"\1", code)
-            if n_subs:
-                issues.append(f"removed {n_subs} spurious await(s) on sync agent methods")
-                sc["code"] = fixed_code
-                code = fixed_code
-
-            # Detect raw aiomqtt.Client() — LLM should use agent.subscribe()
-            if "aiomqtt.Client(" in code or "aiomqtt.connect(" in code:
-                issues.append("raw aiomqtt.Client() — should use agent.subscribe()")
-                # Attempt to rewrite: extract topic and replace entire aiomqtt block
-                # with agent.subscribe() pattern
-                topics = re.findall(r'await\s+client\.subscribe\(["\']([^"\']+)["\']', code)
-                if topics:
-                    topic = topics[0]
-                    # Build replacement code using agent.subscribe()
-                    fixed = self._rewrite_aiomqtt_to_subscribe(code, topic)
-                    if fixed:
-                        sc["code"] = fixed
-                        code = fixed
-                        logger.info(
-                            f"[{self.name}] Auto-fixed raw aiomqtt in '{step.get('name')}' → agent.subscribe('{topic}')"
-                        )
-
-            # Detect direct HA REST API calls — should use ha_actuator instead
-            _ha_api_patterns = [
-                r"/api/services/",
-                r"/api/states/",
-                r"httpx.*api/services",
-                r"requests\.(post|put|get).*api/services",
-                r"aiohttp.*api/services",
-            ]
-            for pat in _ha_api_patterns:
-                if re.search(pat, code):
-                    issues.append(
-                        f"DIRECT HA API CALL detected ('{pat[:30]}...') — "
-                        f"should use ha_actuator agent instead"
-                    )
-                    logger.warning(
-                        f"[{self.name}] '{step.get('name')}' calls HA API directly! "
-                        f"This will likely fail. Should use ha_actuator pattern: "
-                        f"dynamic agent publishes trigger → ha_actuator executes HA service call."
-                    )
-                    break
-
-            if issues:
-                logger.warning(
-                    f"[{self.name}] Code issues in '{step.get('name')}': {'; '.join(issues)}"
-                )
-
-        return plan
-
-    @staticmethod
-    def _rewrite_aiomqtt_to_subscribe(code: str, topic: str) -> str:
-        """Best-effort rewrite of raw aiomqtt MQTT subscription code to use agent.subscribe().
-        Extracts the message handling callback and rewires it.
-        Returns empty string if rewrite fails (original code kept).
-        """
-        # Try to extract the callback body — look for the inner async for loop body
-        # Pattern: async for msg/message in client.messages: ... payload handling ...
-        match = re.search(
-            r"async\s+for\s+\w+\s+in\s+client\.messages:\s*\n(.*?)(?=\n\s*except|\n\s*$)",
-            code,
-            re.DOTALL,
-        )
-        if not match:
-            return ""
-
-        callback_body = match.group(1)
-
-        # Detect how payload is parsed — json.loads(msg.payload) or similar
-        payload_parse = ""
-        if "json.loads" in callback_body:
-            payload_parse = "    # payload is already a dict (parsed by agent.subscribe)\n"
-
-        # Strip leading indentation from callback body
-        lines = callback_body.splitlines()
-        min_indent = min((len(ln) - len(ln.lstrip()) for ln in lines if ln.strip()), default=4)
-        dedented = "\n".join("    " + ln[min_indent:] for ln in lines if ln.strip())
-
-        # Extract any setup code before the aiomqtt block
-        pre_match = re.split(r"async\s+with\s+aiomqtt\.Client", code)[0]
-        pre_lines = [
-            ln
-            for ln in pre_match.splitlines()
-            if ln.strip()
-            and not ln.strip().startswith("import aiomqtt")
-            and not ln.strip().startswith("async def setup")
-        ]
-        pre_code = (
-            "\n".join("    " + ln.strip() for ln in pre_lines if ln.strip()) + "\n"
-            if pre_lines
-            else ""
-        )
-
-        rewritten = (
-            f"async def setup(agent):\n"
-            f"{pre_code}"
-            f"    async def _on_message(payload):\n"
-            f"{payload_parse}"
-            f"{dedented}\n"
-            f"    agent.subscribe('{topic}', _on_message)\n"
-            f"    await agent.log('Subscribed to {topic}')\n"
-        )
-
-        # Preserve any process() or handle_task() that existed
-
-        for fn in ("process", "handle_task"):
-            fn_match = re.search(rf"async\s+def\s+{fn}\s*\(", code)
-            if fn_match:
-                rewritten += "\n" + code[fn_match.start() :]
-                break
-
-        return rewritten
+        return validate_pipeline_code(plan, self.name)
 
     # ── Plan cache ─────────────────────────────────────────────────────────
 
     def _load_cached_plan(self, cache_key: str, workers: list[dict]) -> list | None:
-        """Load a cached plan if it exists, is fresh, and all required agents are alive."""
-        raw = self.recall(_PLAN_CACHE_KEY) or {}
-        entry = raw.get(cache_key)
-        if not entry:
-            return None
-
-        # TTL check
-        age = time.time() - entry.get("timestamp", 0)
-        if age > _CACHE_TTL_S:
-            logger.info(f"[{self.name}] Cache expired ({age / 3600:.1f}h old)")
-            return None
-
-        plan = entry.get("plan", [])
-        if not plan:
-            return None
-
-        # Validate all agents in the plan are still running
         alive = {w["name"] for w in workers} | {"main", self.name}
-        for step in plan:
-            agent = step.get("agent", "")
-            if agent not in alive and not step.get("spawn_config"):
-                logger.info(f"[{self.name}] Cache invalid — agent '{agent}' no longer running")
-                return None
+        return select_cached_plan(self.recall(PLAN_CACHE_KEY) or {}, cache_key, alive, self.name)
 
-        return plan
-
-    def _save_plan_cache(self, cache_key: str, task: str, plan: list):
-        """Persist the plan so future similar tasks can reuse it."""
-        raw = self.recall(_PLAN_CACHE_KEY) or {}
-        # Evict entries older than TTL
-        now = time.time()
-        raw = {k: v for k, v in raw.items() if now - v.get("timestamp", 0) < _CACHE_TTL_S}
-        raw[cache_key] = {
-            "task": task[:200],
-            "plan": plan,
-            "timestamp": now,
-        }
-        self.persist(_PLAN_CACHE_KEY, raw)
+    def _save_plan_cache(self, cache_key: str, task: str, plan: list) -> None:
+        raw = self.recall(PLAN_CACHE_KEY) or {}
+        self.persist(PLAN_CACHE_KEY, with_plan_cached(raw, cache_key, task, plan))
 
     # ── Worker discovery ───────────────────────────────────────────────────
 
@@ -1997,43 +1461,6 @@ class PlannerAgent(Actor, SpawnMixin):
 
     # ── Decomposition ──────────────────────────────────────────────────────
 
-    @staticmethod
-    def _extract_json_array(response: str) -> str:
-        """Pull a JSON array out of an LLM response that may be fenced or padded
-        with prose. Strips a leading ``` / ```json fence and any trailing fence,
-        then slices the outermost [...] so stray commentary on either side does
-        not break json.loads(). Returns '' if no array delimiters are found.
-
-        Shared by both decompose paths so they parse identically.
-        """
-        clean = (response or "").strip()
-        # Drop an opening fence line (``` or ```json) if present.
-        if clean.startswith("```"):
-            clean = clean.split("\n", 1)[1] if "\n" in clean else ""
-        # Drop everything from a trailing fence onward.
-        if "```" in clean:
-            clean = clean[: clean.rfind("```")]
-        # Slice to the outermost array.
-        start = clean.find("[")
-        end = clean.rfind("]")
-        if start != -1 and end != -1 and end > start:
-            clean = clean[start : end + 1]
-        return clean.strip()
-
-    @staticmethod
-    def _extract_json_object(response: str) -> str:
-        """Like _extract_json_array but slices the outermost {...} object."""
-        clean = (response or "").strip()
-        if clean.startswith("```"):
-            clean = clean.split("\n", 1)[1] if "\n" in clean else ""
-        if "```" in clean:
-            clean = clean[: clean.rfind("```")]
-        start = clean.find("{")
-        end = clean.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            clean = clean[start : end + 1]
-        return clean.strip()
-
     async def _decompose(self, task: str, workers: list[dict]) -> list[dict]:
         """LLM breaks task into steps. Can declare missing agents with spawn configs."""
         if not self.llm:
@@ -2089,112 +1516,11 @@ class PlannerAgent(Actor, SpawnMixin):
         except Exception:
             pass
 
-        prompt = f"""You are a task planner for a multi-agent system.
-Break the task into steps. Each step is handled by one agent.
-
-AVAILABLE AGENTS (with input/output contracts):
-{workers_desc}
-{topic_schema_ctx}
-DELEGATING TO EXISTING AGENTS — strongly preferred over raw MQTT:
-- When an existing agent has its own LLM/NL planner (look for phrases like
-  "internal LLM planner", "PREFERRED interface", or "send_to" in its description),
-  any new spawned agent should drive it by:
-    result = await agent.send_to('<agent-name>', '<natural language request>')
-  rather than guessing topic names and crafting raw {{"cmd":...}} payloads.
-- This is especially true for reachy-mini: it owns motion params, HA entity
-  resolution, expressive gestures, and standing rules. A bare publish to
-  custom/reachy/cmd with {{"cmd":"antennas"}} and no params is a NO-OP.
-- Only fall back to raw publishes when you genuinely need a structured
-  payload (e.g. high-frequency control) AND the description gives you the
-  exact topic + full payload schema.
-
-TASK: {task}
-
-OUTPUT RULES:
-- Respond ONLY with a valid JSON array. No explanation, no markdown.
-- Each step object:
-  {{
-    "step": <int>,
-    "agent": "<agent-name>",
-    "task": "<what to ask this agent>",
-    "parallel": <true|false>,
-    "depends_on": [<step ints>],
-    "spawn_config": <null or spawn object if agent needs to be created>
-  }}
-- "parallel": true if this step can run concurrently with other parallel steps
-- "depends_on": step numbers whose results this step needs (empty list if none)
-- "spawn_config": if the ideal agent for a step does NOT exist in the available list,
-  include a spawn config to create it.
-  AGENT TYPE RULES:
-    Use "llm" ONLY for pure conversation/Q&A/explanation agents (no external APIs or tools).
-    Use "dynamic" for anything that fetches data, calls APIs, runs searches, or uses libraries.
-
-    CRITICAL — sync vs async agent API methods:
-      SYNCHRONOUS (NO await):
-        agent.subscribe(topic, callback)  — fire-and-forget background task
-        agent.window(topic, seconds=N)    — returns StreamWindow immediately
-        agent.persist(key, val)           — save to disk
-        agent.recall(key)                 — load from disk
-        agent.declare_contract(...)       — register topic contract
-        agent.agents()                    — list running agents
-        agent.topics(keyword)             — list known topics
-      ASYNC (MUST await):
-        await agent.publish(topic, data)  — publish to MQTT
-        await agent.log(msg)              — log a message
-        await agent.alert(msg)            — trigger alert
-        await agent.send_to(name, payload)— delegate to another agent
-        await agent.mqtt_get(topic)       — one-shot MQTT read
-
-    NEVER use agent.logger — it does not exist. Use await agent.log(msg) instead.
-
-    CRITICAL — HOME ASSISTANT ACTIONS:
-      NEVER call HA REST API directly from dynamic agent code (no httpx/requests to /api/services/).
-      For ANY HA device action (turn on/off lights, switches, climate, etc.):
-        Use "type": "ha_actuator" — NOT a dynamic agent with httpx.
-        If a condition must be checked first, use TWO agents:
-          1. Dynamic agent checks condition → publishes trigger to custom/triggers/<slug>
-          2. ha_actuator agent subscribes to trigger → executes HA service call
-      ha_actuator spawn_config example:
-      {{
-        "name": "lamp-off-actuator",
-        "type": "ha_actuator",
-        "description": "Turns off the lamp when triggered",
-        "mqtt_topics": ["custom/triggers/lamp-temp"],
-        "detection_filter": {{"triggered": true}},
-        "actions": [{{"domain": "light", "service": "turn_off", "entity_id": "light.wiz_rgbw_tunable_02cba0"}}]
-      }}
-  LLM agent example:
-  {{
-    "name": "translator-agent",
-    "type": "llm",
-    "system_prompt": "You are an expert translator. Translate text accurately."
-  }}
-  Dynamic agent example (for weather, news, search, APIs):
-  {{
-    "name": "weather-agent",
-    "type": "dynamic",
-    "description": "Fetches live weather data for a city",
-    "input_schema":  {{"city": "str — city name to fetch weather for"}},
-    "output_schema": {{"city": "str", "temp_c": "str", "description": "str"}},
-    "poll_interval": 3600,
-    "code": "async def setup(agent):\n    await agent.log('ready')\nasync def process(agent):\n    import asyncio\n    await asyncio.sleep(3600)\nasync def handle_task(agent, payload):\n    import httpx\n    city = payload.get('city', 'Athens')\n    async with httpx.AsyncClient(timeout=10) as c:\n        r = await c.get(f'https://wttr.in/{{city}}?format=j1')\n        d = r.json()\n    cur = d['current_condition'][0]\n    return {{'city': city, 'temp_c': cur['temp_C'], 'description': cur['weatherDesc'][0]['value']}}"
-  }}
-- The FINAL synthesis step should ALWAYS be assigned to "main" (not any other agent).
-  Main will combine results using its LLM. Never assign synthesis to a domain agent.
-- Only create new agents when TRULY necessary — prefer existing agents.
-- If one agent can handle everything, output a single-step plan.
-- Keep it minimal — avoid unnecessary steps.
-- IMPORTANT: For any step that combines, summarizes, synthesizes or compares results
-  from other steps, ALWAYS use "agent": "main" — never a domain agent.
-- Domain agents (weather, news, manual, etc.) are for DATA RETRIEVAL only.
-  "main" handles all reasoning, summarization and synthesis.
-
-Example:
-[
-  {{"step": 1, "agent": "weather-agent", "task": "Get weather in Athens", "parallel": true, "depends_on": [], "spawn_config": null}},
-  {{"step": 2, "agent": "news-agent", "task": "Get AI news today", "parallel": true, "depends_on": [], "spawn_config": null}},
-  {{"step": 3, "agent": "main", "task": "Summarize the weather and news results", "parallel": false, "depends_on": [1, 2], "spawn_config": null}}
-]"""
+        prompt = DECOMPOSE_PROMPT.format(
+            workers_desc=workers_desc,
+            topic_schema_ctx=topic_schema_ctx,
+            task=task,
+        )
 
         try:
             response, _usage = await self.llm.complete(
@@ -2204,7 +1530,7 @@ Example:
                 max_tokens=1500,
             )
             self._accrue_usage(_usage)
-            plan = json.loads(self._extract_json_array(response))
+            plan = json.loads(extract_json_array(response))
             if isinstance(plan, list) and plan:
                 return plan
         except Exception as e:
@@ -2723,12 +2049,3 @@ Example:
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": msg, "timestamp": time.time()},
         )
-
-
-# ── Utility ────────────────────────────────────────────────────────────────
-
-
-def _task_hash(task: str) -> str:
-    """Stable short hash of a normalized task string for cache keying."""
-    normalized = " ".join(task.lower().split())
-    return hashlib.md5(normalized.encode()).hexdigest()[:12]

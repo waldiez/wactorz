@@ -1,4 +1,12 @@
 repos:
+  # Secret scanning runs before the linters: a commit that leaks a credential
+  # is not made better by being well formatted, and rewriting history after the
+  # fact does not unpublish it.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
   - repo: local
     hooks:
       # Gated Python lint + format (Ruff). Advisory rules (docstrings, typing) are

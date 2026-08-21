@@ -19,6 +19,16 @@ from . import chat, events, lifecycle, origins, runtime, uploads
 
 logger = logging.getLogger(__name__)
 
+#: Seconds between server pings on an open socket.
+#:
+#: Without one, a connection dropped without a close frame — a laptop lid, a
+#: NAT timeout, a dead router — stays in `ws_clients` forever: the server keeps
+#: queueing broadcasts to a socket nobody is reading, and the browser is not
+#: told to reconnect. The ping is what turns that into a detected close.
+#: Answered by the browser's own protocol handling, so no client code is
+#: involved.
+HEARTBEAT_SECONDS = 30.0
+
 
 # How many frames a client may fall behind before it is resynchronised rather
 # than fed a backlog. Large enough that an ordinary hiccup rides through; small
@@ -173,7 +183,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     if refusal is not None:
         raise web.HTTPForbidden(text=refusal.text, content_type="application/json")
 
-    ws = web.WebSocketResponse()
+    ws = web.WebSocketResponse(heartbeat=HEARTBEAT_SECONDS)
     await ws.prepare(request)
     channel = Channel(ws)
     runtime.ws_clients.add(channel)

@@ -160,6 +160,9 @@ services:
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz-python}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
       REST_EXTERNAL_PORT: "${REST_EXTERNAL_PORT:-8000}"
+      # The scrape authenticates when the app is keyed. Without it the
+      # wactorz-python target answers 401 and goes quietly down.
+      API_KEY: "${API_KEY:-}"
     # Loopback-bound: the Prometheus UI has no auth and exposes agent names and
     # spend. Scraping happens over the internal network, not this port.
     ports:

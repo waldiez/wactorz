@@ -50,6 +50,38 @@ It is monitored with the Blackbox Exporter:
 This is availability monitoring, not deep service-specific exporter telemetry.
 
 
+## Authentication
+
+`/metrics` is served by the API on port 8000, and once `API_KEY` is set every
+route there except `/health` requires it. An unauthenticated scrape gets `401`
+and the target goes down with nothing written to the log, so a keyed install
+loses its metrics silently unless the scrape carries the key.
+
+The endpoint accepts either `X-API-Key` or `Authorization: Bearer`.
+
+**Bundled Prometheus** needs no setup: the compose stack passes `API_KEY`
+through and the scrape config is rendered with the header when a key is set.
+
+**Your own Prometheus** must be told:
+
+```yaml
+  - job_name: wactorz-python
+    static_configs:
+      - targets: ["wactorz:8000"]
+    authorization:
+      type: Bearer
+      credentials: 'your-api-key'
+```
+
+Prefer `credentials_file` where the scraper reads its configuration from a
+shared location — Prometheus redacts `credentials` from its own config API, but
+a file keeps the key out of the config entirely.
+
+⚠ The key is the only credential there is, so a scraper holding it can reach
+every API route, not only `/metrics`. That is reasonable where Prometheus runs
+beside the app and inside the same trust boundary; it is worth more thought
+across a network.
+
 ## Environment Flags
 
 Add or adjust these in `.env`:
@@ -130,6 +162,9 @@ This starts only the monitoring containers and points Prometheus at the Wactorz 
 
 ```bash
 curl -fsS http://localhost:8000/metrics | head
+
+# With API_KEY set:
+curl -fsS -H "Authorization: Bearer $API_KEY" http://localhost:8000/metrics | head
 ```
 
 You should see Prometheus-formatted output such as `wactorz_actors_total`, `wactorz_http_requests_total`, and process metrics.

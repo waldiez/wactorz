@@ -12,9 +12,13 @@ get_config_safe() {
     local default="$2"
     local val=""
 
-    # Attempt 1: Direct read from options.json (FAST & SILENT)
-    if [ -f /data/options.json ]; then
-        val=$(jq -r ".$key" /data/options.json 2>/dev/null)
+    # Attempt 1: Direct read from options.json (FAST & SILENT).
+    # OPTIONS_PATH overrides the location so the add-on can be run outside
+    # Home Assistant against a sample file; unset it is the Supervisor's path,
+    # which is what runs in production.
+    local options_file="${OPTIONS_PATH:-/data/options.json}"
+    if [ -f "$options_file" ]; then
+        val=$(jq -r ".$key" "$options_file" 2>/dev/null)
     fi
 
     # Attempt 2: Fallback to bashio if not in file
@@ -156,18 +160,21 @@ export SOCIAL_RATE_LIMIT_PER_MIN="${SOCIAL_RATE_LIMIT_PER_MIN}"
 # recorded in the conversation history. Absent or empty leaves DEPLOY_TARGETS
 # unset, which simply means `/deploy` has nothing to offer.
 DEPLOY_TARGETS=""
-if [ -f /data/options.json ]; then
-    deploy_count=$(jq -r '(.deploy_targets // []) | length' /data/options.json 2>/dev/null || echo 0)
+# Same override as get_config_safe: the documented local-test invocation
+# must reach deploy targets too, or it silently loads none of them.
+options_file="${OPTIONS_PATH:-/data/options.json}"
+if [ -f "$options_file" ]; then
+    deploy_count=$(jq -r '(.deploy_targets // []) | length' "$options_file" 2>/dev/null || echo 0)
     deploy_i=0
     while [ "$deploy_i" -lt "$deploy_count" ]; do
-        deploy_name=$(jq -r ".deploy_targets[$deploy_i].name // \"\"" /data/options.json)
+        deploy_name=$(jq -r ".deploy_targets[$deploy_i].name // \"\"" "$options_file")
         if [ -n "$deploy_name" ]; then
             # Same slug rule as config.py's _env_slug: upper-case, and every run
             # of non-alphanumerics becomes a single underscore.
             deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
                 | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
             for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password; do
-                deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" /data/options.json)
+                deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" "$options_file")
                 if [ -n "$deploy_value" ]; then
                     deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"
                     export "$deploy_var=$deploy_value"

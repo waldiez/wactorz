@@ -741,10 +741,10 @@ class GlobalCostAccumulationTest(unittest.TestCase):
             self.assertEqual(self.L._period_key("weekly"), "2026-W01")
 
     def test_planner_usage_feeds_period_spend(self):
-        from wactorz.agents.planner_agent import PlannerAgent
+        from wactorz.agents.planner.agent import PlannerAgent
 
         agent = PlannerAgent(llm_provider=None)
-        with patch("wactorz.agents.planner_agent.accumulate_global_cost") as accrue:
+        with patch("wactorz.agents.planner.agent.accumulate_global_cost") as accrue:
             agent._accrue_usage({"input_tokens": 2, "output_tokens": 3, "cost_usd": 0.0123})
             agent._accrue_usage({"input_tokens": 4, "output_tokens": 5, "cost_usd": 0.004})
 

@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from wactorz.agents.llm.providers.fake import FakeProvider
-from wactorz.agents.planner_agent import (
+from wactorz.agents.planner.agent import (
     _CACHE_TTL_S,
     _PLAN_CACHE_KEY,
     PlannerAgent,
@@ -183,7 +183,7 @@ def planner_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PlannerA
     ``accumulate_global_cost`` is stubbed because it writes to process-wide cost
     state that would otherwise carry between tests.
     """
-    monkeypatch.setattr("wactorz.agents.planner_agent.accumulate_global_cost", lambda _d: None)
+    monkeypatch.setattr("wactorz.agents.planner.agent.accumulate_global_cost", lambda _d: None)
     return PlannerAgent(
         llm_provider=FakeProvider(), task="do a thing", persistence_dir=str(tmp_path)
     )
@@ -210,7 +210,7 @@ class TestAccrueUsage:
     ) -> None:
         """The global total must not be charged the running sum every time."""
         deltas: list[float] = []
-        monkeypatch.setattr("wactorz.agents.planner_agent.accumulate_global_cost", deltas.append)
+        monkeypatch.setattr("wactorz.agents.planner.agent.accumulate_global_cost", deltas.append)
 
         planner._accrue_usage({"cost_usd": 0.20})
         planner._accrue_usage({"cost_usd": 0.05})
@@ -221,7 +221,7 @@ class TestAccrueUsage:
         self, planner: PlannerAgent, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         deltas: list[float] = []
-        monkeypatch.setattr("wactorz.agents.planner_agent.accumulate_global_cost", deltas.append)
+        monkeypatch.setattr("wactorz.agents.planner.agent.accumulate_global_cost", deltas.append)
 
         planner._accrue_usage({"input_tokens": 5, "output_tokens": 5})
 

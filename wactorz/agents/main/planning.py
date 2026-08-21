@@ -403,7 +403,7 @@ class PlanningMixin(_Host):
         executes the supplied plan directly. Used after the user approves a
         previously-generated plan.
         """
-        from ..planner_agent import PlannerAgent
+        from ..planner import PlannerAgent
 
         # Enrich vague follow-up tasks with recent conversation context
         # so the planner has the full picture (e.g. which entity was found).

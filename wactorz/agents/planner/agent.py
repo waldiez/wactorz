@@ -19,14 +19,15 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any
 
-from ..core.actor import Actor, Message, MessageType
-from ..core.mqtt import mqtt_client
-from .llm_agent import LLMProvider, accumulate_global_cost
-from .lookup import find_main_actor
-from .mixins.spawning import SpawnMixin, SpawnPlaceholder
+from ...core.actor import Actor, Message, MessageType
+from ...core.mqtt import mqtt_client
+from ..llm_agent import LLMProvider, accumulate_global_cost
+from ..lookup import find_main_actor
+from ..mixins.spawning import SpawnMixin, SpawnPlaceholder
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +175,7 @@ class PlannerAgent(Actor, SpawnMixin):
                     user_tz = main.get_user_facts().get("pref_timezone")
                 except Exception:
                     pass
-        from .llm_agent import current_time_context
+        from ..llm_agent import current_time_context
 
         return current_time_context(user_tz)
 
@@ -250,8 +251,6 @@ class PlannerAgent(Actor, SpawnMixin):
           "create an agent that subscribes to..."
           "I want an agent to send to a topic random temp..."
         """
-        import re
-
         lowered = task.lower()
 
         # Explicit pipeline prefix always wins
@@ -322,7 +321,7 @@ class PlannerAgent(Actor, SpawnMixin):
         # are not in the local registry but their contracts are valid and
         # must NOT be pruned.
         try:
-            from ..core.topic_bus import get_topic_bus
+            from ...core.topic_bus import get_topic_bus
 
             bus = get_topic_bus()
             if bus and self._registry:
@@ -330,10 +329,8 @@ class PlannerAgent(Actor, SpawnMixin):
                 # Add remotely-running agents from main's known_nodes
                 main = find_main_actor(self._registry)
                 if main:
-                    import time as _pt
-
                     for nd in main._known_nodes.values():
-                        if _pt.time() - nd.get("last_seen", 0) < 30:
+                        if time.time() - nd.get("last_seen", 0) < 30:
                             live.update(nd.get("agents", []))
                 pruned = bus.registry.prune_stale(live)
                 if pruned:
@@ -564,9 +561,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
         # Persist this rule into main's pipeline rules registry
         if rule_agents:
-            import hashlib as _hl
-
-            rule_id = _hl.md5(task.encode()).hexdigest()[:8]
+            rule_id = hashlib.md5(task.encode()).hexdigest()[:8]
             rule = {
                 "rule_id": rule_id,
                 "task": task,
@@ -715,8 +710,6 @@ class PlannerAgent(Actor, SpawnMixin):
           enriched_task   — task with concrete topic/entity appended as context
           resolution_note — human-readable summary of what was found (shown to user)
         """
-        import re
-
         # ── Data concept keywords → search terms ──────────────────────────
         # Maps natural language concepts to TopicRegistry search keywords
         CONCEPT_MAP = {
@@ -752,7 +745,7 @@ class PlannerAgent(Actor, SpawnMixin):
 
         # ── Search TopicRegistry first ─────────────────────────────────────
         try:
-            from ..core.topic_bus import get_topic_bus
+            from ...core.topic_bus import get_topic_bus
 
             bus = get_topic_bus()
             if bus:
@@ -950,8 +943,6 @@ class PlannerAgent(Actor, SpawnMixin):
         doesn't block planning. Topics that don't publish within the window
         are silently skipped.
         """
-        import json as _json
-
         try:
             import aiomqtt  # noqa: F401
         except ImportError:
@@ -986,7 +977,7 @@ class PlannerAgent(Actor, SpawnMixin):
                         t = str(msg.topic)
                         if t not in received:
                             try:
-                                payload = _json.loads(msg.payload.decode())
+                                payload = json.loads(msg.payload.decode())
                             except Exception:
                                 payload = msg.payload.decode()
                             if isinstance(payload, dict):
@@ -1080,8 +1071,8 @@ class PlannerAgent(Actor, SpawnMixin):
         # Fallback: fetch directly if HA agent is unavailable
         if not ha_available:
             try:
-                from ..config import CONFIG
-                from ..core.integrations.home_assistant.ha_helper import (
+                from ...config import CONFIG
+                from ...core.integrations.home_assistant.ha_helper import (
                     fetch_devices_entities_with_location,
                 )
 
@@ -1125,8 +1116,6 @@ class PlannerAgent(Actor, SpawnMixin):
         camera_stream_urls: dict[str, str] = {}
         camera_snapshot_urls: dict[str, str] = {}
         try:
-            import re as _re_cam
-
             camera_entity_ids = []
             camera_lines = []
             for line in ha_entities_text.splitlines():
@@ -1137,7 +1126,7 @@ class PlannerAgent(Actor, SpawnMixin):
                         camera_entity_ids.append(token)
 
             if camera_entity_ids:
-                task_words = {w for w in _re_cam.findall(r"[a-z0-9]+", task.lower()) if len(w) >= 3}
+                task_words = {w for w in re.findall(r"[a-z0-9]+", task.lower()) if len(w) >= 3}
                 candidates = [
                     eid for eid in camera_entity_ids if any(w in eid.lower() for w in task_words)
                 ]
@@ -1226,7 +1215,7 @@ class PlannerAgent(Actor, SpawnMixin):
         topic_bus_section = ""
         topic_samples_section = ""
         try:
-            from ..core.topic_bus import get_topic_bus
+            from ...core.topic_bus import get_topic_bus
 
             bus = get_topic_bus()
             if bus and bus.registry.all_contracts():
@@ -1278,9 +1267,8 @@ class PlannerAgent(Actor, SpawnMixin):
                 notification_urls = main.get_notification_urls()
 
         # Also extract any URL directly mentioned in the task
-        import re as _re
 
-        _url_match = _re.search(
+        _url_match = re.search(
             r"https?://(?:discord\.com/api/webhooks|hooks\.slack\.com|api\.telegram\.org)/\S+", task
         )
         if _url_match:
@@ -1752,8 +1740,6 @@ class PlannerAgent(Actor, SpawnMixin):
           - `await` on synchronous agent API methods (subscribe, window, persist, etc.)
         Logs warnings so the user knows what was fixed.
         """
-        import re as _re
-
         # Synchronous agent API methods that must NOT be awaited
         _SYNC_METHODS = (
             "subscribe",
@@ -1781,7 +1767,7 @@ class PlannerAgent(Actor, SpawnMixin):
             issues = []
 
             # Strip `await` on sync agent methods
-            fixed_code, n_subs = _re.subn(_sync_pat, r"\1", code)
+            fixed_code, n_subs = re.subn(_sync_pat, r"\1", code)
             if n_subs:
                 issues.append(f"removed {n_subs} spurious await(s) on sync agent methods")
                 sc["code"] = fixed_code
@@ -1792,7 +1778,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 issues.append("raw aiomqtt.Client() — should use agent.subscribe()")
                 # Attempt to rewrite: extract topic and replace entire aiomqtt block
                 # with agent.subscribe() pattern
-                topics = _re.findall(r'await\s+client\.subscribe\(["\']([^"\']+)["\']', code)
+                topics = re.findall(r'await\s+client\.subscribe\(["\']([^"\']+)["\']', code)
                 if topics:
                     topic = topics[0]
                     # Build replacement code using agent.subscribe()
@@ -1813,7 +1799,7 @@ class PlannerAgent(Actor, SpawnMixin):
                 r"aiohttp.*api/services",
             ]
             for pat in _ha_api_patterns:
-                if _re.search(pat, code):
+                if re.search(pat, code):
                     issues.append(
                         f"DIRECT HA API CALL detected ('{pat[:30]}...') — "
                         f"should use ha_actuator agent instead"
@@ -1838,14 +1824,12 @@ class PlannerAgent(Actor, SpawnMixin):
         Extracts the message handling callback and rewires it.
         Returns empty string if rewrite fails (original code kept).
         """
-        import re as _re
-
         # Try to extract the callback body — look for the inner async for loop body
         # Pattern: async for msg/message in client.messages: ... payload handling ...
-        match = _re.search(
+        match = re.search(
             r"async\s+for\s+\w+\s+in\s+client\.messages:\s*\n(.*?)(?=\n\s*except|\n\s*$)",
             code,
-            _re.DOTALL,
+            re.DOTALL,
         )
         if not match:
             return ""
@@ -1863,7 +1847,7 @@ class PlannerAgent(Actor, SpawnMixin):
         dedented = "\n".join("    " + ln[min_indent:] for ln in lines if ln.strip())
 
         # Extract any setup code before the aiomqtt block
-        pre_match = _re.split(r"async\s+with\s+aiomqtt\.Client", code)[0]
+        pre_match = re.split(r"async\s+with\s+aiomqtt\.Client", code)[0]
         pre_lines = [
             ln
             for ln in pre_match.splitlines()
@@ -1888,10 +1872,9 @@ class PlannerAgent(Actor, SpawnMixin):
         )
 
         # Preserve any process() or handle_task() that existed
-        import re as _re2
 
         for fn in ("process", "handle_task"):
-            fn_match = _re2.search(rf"async\s+def\s+{fn}\s*\(", code)
+            fn_match = re.search(rf"async\s+def\s+{fn}\s*\(", code)
             if fn_match:
                 rewritten += "\n" + code[fn_match.start() :]
                 break
@@ -1985,10 +1968,8 @@ class PlannerAgent(Actor, SpawnMixin):
 
         # ── Remote agents from live node heartbeats ───────────────────────────
         if main:
-            import time as _dt
-
             for node_name, nd in main._known_nodes.items():
-                if _dt.time() - nd.get("last_seen", 0) > 30:
+                if time.time() - nd.get("last_seen", 0) > 30:
                     continue  # node offline — skip
                 for aname in nd.get("agents", []):
                     if aname in seen or aname in _SKIP_AGENTS:
@@ -2083,7 +2064,7 @@ class PlannerAgent(Actor, SpawnMixin):
         # ── Gather live topic samples for schema context ──────────────────
         topic_schema_ctx = ""
         try:
-            from ..core.topic_bus import get_topic_bus
+            from ...core.topic_bus import get_topic_bus
 
             bus = get_topic_bus()
             if bus:
@@ -2554,7 +2535,6 @@ Example:
           3. spawn_config["mqtt_topics"] — per-entity topic path segments
           4. The enriched task string    — [HA entity: sensor.xxx] annotations
         """
-        import re
         import uuid
 
         HA_DOMAINS = {

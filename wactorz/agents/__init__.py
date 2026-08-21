@@ -14,7 +14,7 @@ from .llm_agent import AnthropicProvider, LLMAgent, NIMProvider, OllamaProvider,
 from .main import MainActor
 from .monitor_agent import MonitorActor
 from .one_off_actuator_agent import OneOffActuatorAgent
-from .planner_agent import PlannerAgent
+from .planner import PlannerAgent
 from .scheduled_agent import ScheduledAgent
 
 __all__ = [

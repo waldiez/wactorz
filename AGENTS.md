@@ -68,8 +68,9 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
   cost nothing at module scope, and hiding them there conceals what a module actually depends on
   and complicates patching in tests. When one is load-bearing, say which of the two reasons
   applies on the line itself.
-- A linter/formatter/type-checker is being introduced via `pyproject.toml` `[tool.ruff]` — run it
-  before pushing once it lands. Until then, match the style of the file you're editing.
+- Ruff is the gated linter and formatter (`pyproject.toml` `[tool.ruff]`). `make lint-py` runs it,
+  plus an advisory pass that reports but never blocks. Pre-commit and CI both enforce the gated
+  rules, so a push that skips them fails rather than merging.
 
 ## Safety
 

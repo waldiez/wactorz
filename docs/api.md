@@ -204,9 +204,21 @@ Recent activity feed events.
 
 ---
 
-### `POST /api/ha/sync`
+### `POST /api/chat/stop`
 
-Trigger a Home Assistant snapshot/sync.
+Cancel every in-flight generation. Takes no request body, and stops all of them
+rather than one agent's — there is no per-agent targeting.
+
+```bash
+curl -X POST http://localhost:8888/api/chat/stop
+```
+
+```json
+{ "status": "stopped", "cancelled": 2 }
+```
+
+`cancelled` is how many generations were running. Each cancelled stream
+finalises and posts `⏹ Stopped.` over the WebSocket.
 
 ---
 
@@ -247,7 +259,9 @@ Started with `wactorz --interface rest --port 8000`. Endpoints are at bare paths
 
 #### Authentication
 
-Set `API_KEY` in `.env` to require a key on `/chat`:
+Set `API_KEY` in `.env` to require a key on **every** route except `/health`. Both
+`X-API-Key` and `Authorization: Bearer` are accepted. With no key set the API is
+open, which is why the default bind is loopback:
 
 ```bash
 curl -X POST http://localhost:8000/chat \

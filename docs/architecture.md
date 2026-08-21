@@ -21,8 +21,8 @@ The framework is built on three ideas: every agent is an independent **actor** w
 │  ActorRegistry  ──  name → actor lookup, MQTT publisher                │
 │                                                                        │
 │  MainActor                  LLM orchestrator, intent routing, spawn reg│
-│  MonitorAgent               heartbeat watchdog, alerts main on failure │
-│  IOAgent                    MQTT↔UI gateway, routes chat to main      │
+│  MonitorActor               heartbeat watchdog, alerts main on failure │
+│  IOAgent                    MQTT↔UI gateway, routes chat to main       │
 │  CatalogAgent               pre-built recipe library, spawns on demand │
 │  InstallerAgent             pip installs deps for dynamic agents       │
 │  HomeAssistantAgent         HA REST API — entities, services, automa…  │
@@ -71,7 +71,7 @@ See the [Agents reference](agents.md) for full documentation. A summary of the c
 | **CatalogAgent** | Pre-built recipe library. Loads agents from `catalogue_agents/` and spawns them on request. |
 | **HomeAssistantAgent** | Wraps the HA REST API — entities, services, automations. Uses internal LLM calls for classification. |
 | **HomeAssistantStateBridgeAgent** | Streams HA state changes to MQTT so pipeline agents can react to device events in real time. |
-| **MonitorAgent** | Tracks heartbeats from all actors. Alerts main when an agent is unresponsive for >60 s. |
+| **MonitorActor** | Tracks heartbeats from all actors. Alerts main when an agent is unresponsive for >60 s. |
 | **InstallerAgent** | Runs `pip install` in a subprocess. Called automatically before spawning a recipe with declared dependencies. |
 | **LLMAgent** | Base class for LLM-backed agents. Handles conversation history, rolling summarisation, and cost tracking across all providers. |
 
@@ -130,7 +130,7 @@ On first startup after upgrading from an older version, `migrate_from_pickle()` 
 |---------------|-----------|------------|---------|
 | `io/chat` | IOAgent / UI | main | `{from, content}` |
 | `agents/{id}/chat` | any actor | UI / IOAgent | `{role, content, interface}` |
-| `agents/{id}/heartbeat` | every actor | MonitorAgent | `{name, state, ts, ...}` |
+| `agents/{id}/heartbeat` | every actor | MonitorActor | `{name, state, ts, ...}` |
 | `agents/{id}/logs` | any actor | dashboard | `{type, message, ts}` |
 | `agents/{id}/manifest` | any actor | main | capabilities, input/output schema |
 | `homeassistant/state_changes/#` | HA state bridge | pipeline agents | `{entity_id, domain, new_state, old_state}` |

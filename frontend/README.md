@@ -176,7 +176,7 @@ The same bundle serves two targets, distinguished at runtime:
 | Home Assistant add-on | The Python add-on injects `window.__WACTORZ_INGRESS_PATH`; all API/WS URLs are rebased onto that ingress prefix |
 
 `__WACTORZ_INGRESS_PATH` is typed in `src/types/global.d.ts` and read wherever a
-same-origin URL is built (e.g. `main.ts`, `chatHistory.ts`, `popovers.ts`, `haConfig`).
+same-origin URL is built (e.g. `main.ts`, `chatHistory.ts`, `popovers.ts`).
 It defaults to `""`, so standalone builds need no configuration.
 
 The dashboard does **not** talk to Home Assistant directly: the "Devices" nav button

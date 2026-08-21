@@ -162,8 +162,8 @@
 <span class="err">│</span><span class="w">  </span><span class="nx">ActorRegistry</span><span class="w">  </span><span class="err">──</span><span class="w">  </span><span class="nx">name</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">actor</span><span class="w"> </span><span class="nx">lookup</span><span class="p">,</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">publisher</span><span class="w">                </span><span class="err">│</span>
 <span class="err">│</span><span class="w">                                                                        </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">MainActor</span><span class="w">                  </span><span class="nx">LLM</span><span class="w"> </span><span class="nx">orchestrator</span><span class="p">,</span><span class="w"> </span><span class="nx">intent</span><span class="w"> </span><span class="nx">routing</span><span class="p">,</span><span class="w"> </span><span class="nx">spawn</span><span class="w"> </span><span class="nx">reg</span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">MonitorAgent</span><span class="w">               </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w"> </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">IOAgent</span><span class="w">                    </span><span class="nx">MQTT</span><span class="err">↔</span><span class="nx">UI</span><span class="w"> </span><span class="nx">gateway</span><span class="p">,</span><span class="w"> </span><span class="nx">routes</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">main</span><span class="w">      </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">MonitorActor</span><span class="w">               </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w"> </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">IOAgent</span><span class="w">                    </span><span class="nx">MQTT</span><span class="err">↔</span><span class="nx">UI</span><span class="w"> </span><span class="nx">gateway</span><span class="p">,</span><span class="w"> </span><span class="nx">routes</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">main</span><span class="w">       </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">CatalogAgent</span><span class="w">               </span><span class="nx">pre</span><span class="o">-</span><span class="nx">built</span><span class="w"> </span><span class="nx">recipe</span><span class="w"> </span><span class="kn">library</span><span class="p">,</span><span class="w"> </span><span class="nx">spawns</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">demand</span><span class="w"> </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">InstallerAgent</span><span class="w">             </span><span class="nx">pip</span><span class="w"> </span><span class="nx">installs</span><span class="w"> </span><span class="nx">deps</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nx">dynamic</span><span class="w"> </span><span class="nx">agents</span><span class="w">       </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">HomeAssistantAgent</span><span class="w">         </span><span class="nx">HA</span><span class="w"> </span><span class="nx">REST</span><span class="w"> </span><span class="nx">API</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">entities</span><span class="p">,</span><span class="w"> </span><span class="nx">services</span><span class="p">,</span><span class="w"> </span><span class="nx">automa</span><span class="err">…</span><span class="w">  </span><span class="err">│</span>
@@ -249,7 +249,7 @@
 <td>Streams HA state changes to MQTT so pipeline agents can react to device events in real time.</td>
 </tr>
 <tr>
-<td><strong>MonitorAgent</strong></td>
+<td><strong>MonitorActor</strong></td>
 <td>Tracks heartbeats from all actors. Alerts main when an agent is unresponsive for &gt;60 s.</td>
 </tr>
 <tr>
@@ -345,7 +345,7 @@
 <tr>
 <td><code>agents/{id}/heartbeat</code></td>
 <td>every actor</td>
-<td>MonitorAgent</td>
+<td>MonitorActor</td>
 <td><code>{name, state, ts, ...}</code></td>
 </tr>
 <tr>

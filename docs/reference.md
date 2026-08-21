@@ -93,7 +93,7 @@ This replaces all previous keyword heuristics with a single LLM classification s
 | `agents/monitor_agent.py` | Agent | Health watcher — detects crashes, fires recovery actions, notifies user |
 | `agents/llm_agent.py` | Agent | Base LLM agent with rolling history summarization, cost tracking, streaming, and 5 providers |
 | `agents/dynamic_agent.py` | Agent | Runtime-generated agents — executes LLM-written Python code in a sandboxed namespace |
-| `agents/planner_agent.py` | Agent | Multi-step task planner + reactive pipeline builder — decomposes tasks, fans out to workers, synthesizes results |
+| `agents/planner/` | Agent | Multi-step task planner + reactive pipeline builder — decomposes tasks, fans out to workers, synthesizes results |
 | `agents/installer_agent.py` | Agent | Package manager — installs pip packages locally and on remote nodes via SSH |
 | `agents/catalog_agent.py` | Agent | Recipe library — holds pre-built agent configs and spawns them on request without requiring code |
 | `agents/manual_agent.py` | Agent | PDF specialist — 3-layer search strategy to find and extract manual content |
@@ -1355,7 +1355,7 @@ wactorz/
 │   ├── llm_agent.py                           LLMAgent — 5 providers, rolling summarization, cost tracking
 │   ├── main/                                  MainActor package — actor.py plus its commands and collaborators
 │   ├── dynamic_agent.py                       DynamicAgent — runtime code executor, error events
-│   ├── planner_agent.py                       PlannerAgent — task planning + reactive pipeline builder
+│   ├── planner/                               PlannerAgent package — agent.py plus detection, parsing, cache, validation
 │   ├── monitor_agent.py                       MonitorAgent — heartbeat, error registry, recovery
 │   ├── installer_agent.py                     InstallerAgent — pip install locally + SSH deploy to remote nodes
 │   ├── catalog_agent.py                       CatalogAgent — pre-built recipe library, spawns agents by name

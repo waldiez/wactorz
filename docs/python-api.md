@@ -200,7 +200,7 @@ notifies main when an actor's last heartbeat is older than `heartbeat_timeout` (
 MQTT ↔ UI gateway. Bridges `io/chat` MQTT messages from the web dashboard to
 MainActor and relays responses back to the browser over WebSocket.
 
-### `wactorz.agents.planner_agent.PlannerAgent`
+### `wactorz.agents.planner.PlannerAgent`
 
 On-demand orchestrator. Spawned per `PIPELINE`-classified request. Discovers
 available agents and generates a multi-step plan via LLM. By default MainActor

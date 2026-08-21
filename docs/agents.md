@@ -63,7 +63,7 @@ Every DynamicAgent spawned during the session is saved to the `_spawned_agents` 
 
 ### PlannerAgent `[core]` `[LLM]`
 
-**File:** `wactorz/agents/planner_agent.py`
+**File:** `wactorz/agents/planner/` (`agent.py` plus its extracted concerns)
 
 | | |
 |---|---|

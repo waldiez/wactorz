@@ -23,12 +23,13 @@ import logging
 import time
 import traceback
 import types
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, Message, MessageType
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
-from .api import _AgentAPI
+from .api import AgentAPI
+from .cv2_shim import resilient_cv2_module
 from .safety import extract_function_body, validate_code_safety
 from .sanitize import sanitize_code
 
@@ -71,7 +72,7 @@ class DynamicAgent(Actor):
         # Namespace shared across all calls (agent can store state here)
         self._ns: dict = {}
 
-        # Cost tracking (populated by _LLMInterface if LLM is used)
+        # Cost tracking (populated by LLMInterface if LLM is used)
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.total_cost_usd = 0.0
@@ -84,7 +85,7 @@ class DynamicAgent(Actor):
         self._error_phase: str = ""  # compile|setup|process|handle_task
 
         # Public API exposed to generated code via `agent` parameter
-        # Owned here rather than grafted on by _AgentAPI at first use: a
+        # Owned here rather than grafted on by AgentAPI at first use: a
         # collaborator creating attributes on its host hides them from every
         # reader and from the type checker.
         #: Per-topic timestamp of the last callback error, for backoff.
@@ -95,7 +96,7 @@ class DynamicAgent(Actor):
         self._subscribed_topics: dict[tuple[str, int], Any] = {}
         #: The last contract this agent declared, published in its manifest.
         self._topic_contract: Any = None
-        self._api = _AgentAPI(self)
+        self._api = AgentAPI(self)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -106,7 +107,7 @@ class DynamicAgent(Actor):
 
         if error_msg:
             for attempt in range(1, self._MAX_COMPILE_RETRIES + 1):
-                logger.warning(f"[{self.name}] Compile error (attempt {attempt}): {error_msg}")
+                logger.warning("[%s] Compile error (attempt %s): %s", self.name, attempt, error_msg)
                 fixed = await self._fix_syntax_with_llm(current_code, error_msg)
                 if fixed is None:
                     # LLM unavailable — no point retrying
@@ -117,7 +118,7 @@ class DynamicAgent(Actor):
                     # Fix worked — update stored code so restarts use the good version
                     self._code = fixed
                     error_msg = None
-                    logger.info(f"[{self.name}] Code fixed by LLM after {attempt} attempt(s).")
+                    logger.info("[%s] Code fixed by LLM after %s attempt(s).", self.name, attempt)
                     # ── Write fixed code back to spawn registry so restart uses it ──
                     self._persist_fixed_code(fixed)
                     await self._mqtt_publish(
@@ -136,7 +137,7 @@ class DynamicAgent(Actor):
         if error_msg:
             # All attempts exhausted — publish fatal and stop
             err_exc = SyntaxError(error_msg)
-            logger.error(f"[{self.name}] Code compilation failed permanently: {error_msg}")
+            logger.error("[%s] Code compilation failed permanently: %s", self.name, error_msg)
             # ── Erlang/OTP: mark FAILED so Supervisor's watch_loop detects us ──
             self.state = ActorState.FAILED
             await self._publish_error(
@@ -200,7 +201,7 @@ class DynamicAgent(Actor):
             bus = get_topic_bus()
             if bus:
                 bus.unregister(self.name)
-                logger.debug(f"[{self.name}] Unregistered from TopicBus")
+                logger.debug("[%s] Unregistered from TopicBus", self.name)
         except Exception:
             pass  # TopicBus unavailable — not fatal
 
@@ -210,9 +211,9 @@ class DynamicAgent(Actor):
             try:
                 await asyncio.wait_for(cleanup(self._api), timeout=10.0)
             except asyncio.TimeoutError:
-                logger.warning(f"[{self.name}] cleanup() timed out after 10s")
+                logger.warning("[%s] cleanup() timed out after 10s", self.name)
             except Exception as e:
-                logger.warning(f"[{self.name}] cleanup() error: {e}")
+                logger.warning("[%s] cleanup() error: %s", self.name, e)
 
         # ── Force-release common resources that LLM code may have opened ───
         # Even if cleanup() didn't run or missed something, we try to release
@@ -244,7 +245,7 @@ class DynamicAgent(Actor):
                 try:
                     if obj.isOpened():
                         obj.release()
-                        logger.info(f"[{self.name}] Released camera handle '{key}'")
+                        logger.info("[%s] Released camera handle '%s'", self.name, key)
                 except Exception:
                     pass
             # Open file handles
@@ -252,7 +253,7 @@ class DynamicAgent(Actor):
                 try:
                     if not obj.closed:
                         obj.close()
-                        logger.debug(f"[{self.name}] Closed file handle '{key}'")
+                        logger.debug("[%s] Closed file handle '%s'", self.name, key)
                 except Exception:
                     pass
 
@@ -318,7 +319,7 @@ class DynamicAgent(Actor):
             if safety_error:
                 return safety_error
         else:
-            logger.info(f"[{self.name}] Trusted agent — skipping safety validator")
+            logger.info("[%s] Trusted agent — skipping safety validator", self.name)
 
         # Pre-inject the LLM shim so generated code can call agent.llm directly
         def _get_llm_shim(*args, **kwargs):
@@ -343,134 +344,9 @@ class DynamicAgent(Actor):
         import re as _re
 
         if _re.search(r"\bcv2\b", clean):
-            try:
-                import types as _types
-
-                import cv2 as _real_cv2
-
-                _agent_name_for_shim = self.name  # capture for closure
-
-                class _ResilientVideoCapture(_real_cv2.VideoCapture):
-                    """Drop-in replacement for cv2.VideoCapture that retries the open
-                    with backoff when the MSMF backend grabs the device index but
-                    then immediately fails to deliver frames.
-
-                    Transparent to LLM code — same API, same isinstance() checks.
-                    """
-
-                    _RETRY_DELAYS: ClassVar[list[float]] = [
-                        1.0,
-                        2.0,
-                        4.0,
-                        8.0,
-                    ]  # seconds between retries
-                    # Time to wait after a successful open() before probing read().
-                    # MSMF/DSHOW source readers need ~200-300ms to start streaming
-                    # even after isOpened() returns True. Probing too soon yields
-                    # the cyclic "opened but read failed" log we used to see.
-                    _POST_OPEN_SETTLE = 0.3  # seconds
-
-                    def __init__(self, index_or_path, *args, **kwargs):
-                        import sys as _sys
-
-                        super().__init__()
-                        # ── Windows: force DSHOW for integer indices ──────────
-                        # MSMF (the OpenCV default on Windows) is flaky on
-                        # consumer laptop / cheap USB cameras and produces
-                        # error -1072873821 (MF_E_HW_MFT_FAILED_START_STREAMING)
-                        # in a flap loop. DSHOW (DirectShow) is older but far
-                        # more reliable for this hardware class. Only override
-                        # when the LLM didn't pass an explicit backend.
-                        if (
-                            _sys.platform == "win32"
-                            and isinstance(index_or_path, int)
-                            and not args
-                            and "apiPreference" not in kwargs
-                        ):
-                            try:
-                                args = (_real_cv2.CAP_DSHOW,)
-                                logger.info(
-                                    f"[{_agent_name_for_shim}] Windows detected — "
-                                    f"forcing CAP_DSHOW backend for camera index "
-                                    f"{index_or_path} (more reliable than MSMF)"
-                                )
-                            except Exception:
-                                pass
-                        self._index = index_or_path
-                        self._args = args
-                        self._kwargs = kwargs
-                        self._do_open()
-
-                    def read(self):
-                        # Return the probe frame captured during open verification
-                        # so the first cap.read() in process() is not lost.
-                        if hasattr(self, "_probe_frame") and self._probe_frame is not None:
-                            frame, self._probe_frame = self._probe_frame, None
-                            return True, frame
-                        return super().read()
-
-                    def _do_open(self):
-                        for attempt, delay in enumerate([0.0, *self._RETRY_DELAYS], start=1):
-                            if delay:
-                                import time as _t
-
-                                # Release before retrying so MSMF frees the device
-                                try:
-                                    super().release()
-                                except Exception:
-                                    pass
-                                logger.info(
-                                    f"[{_agent_name_for_shim}] Camera open retry "
-                                    f"{attempt}/{len(self._RETRY_DELAYS) + 1} "
-                                    f"— waiting {delay:.0f}s for OS to release device"
-                                )
-                                _t.sleep(delay)
-
-                            super().open(self._index, *self._args, **self._kwargs)
-                            if not super().isOpened():
-                                continue
-
-                            # Give the source reader time to start streaming
-                            # before the probe. MSMF/DSHOW both need a beat
-                            # after isOpened() returns True; probing immediately
-                            # produces -1072873821 even when the device is fine.
-                            import time as _t
-
-                            _t.sleep(self._POST_OPEN_SETTLE)
-
-                            # Verify we can actually grab a frame — MSMF sometimes
-                            # reports isOpened()=True but then immediately errors.
-                            # Use read() and stash the probe frame on the instance so
-                            # the first cap.read() in process() doesn't get an empty
-                            # result (grab() is destructive and has no unread()).
-                            ok, probe = super().read()
-                            if ok and probe is not None:
-                                self._probe_frame = probe
-                                logger.info(
-                                    f"[{_agent_name_for_shim}] Camera opened successfully "
-                                    f"on attempt {attempt}"
-                                )
-                                return  # success
-
-                            logger.warning(
-                                f"[{_agent_name_for_shim}] Camera opened but read() failed "
-                                f"on attempt {attempt} — device may not be fully released yet"
-                            )
-
-                        logger.error(
-                            f"[{_agent_name_for_shim}] Camera could not be opened after "
-                            f"{len(self._RETRY_DELAYS) + 1} attempts"
-                        )
-
-                # Wrap in a module proxy so `import cv2` inside agent code still works,
-                # and `cv2.VideoCapture` transparently becomes the resilient version.
-                _cv2_shim: Any = _types.ModuleType("cv2")
-                _cv2_shim.__dict__.update(_real_cv2.__dict__)
-                _cv2_shim.VideoCapture = _ResilientVideoCapture
-                self._ns["cv2"] = _cv2_shim
-
-            except ImportError:
-                pass  # cv2 not installed — no shim needed
+            shim = resilient_cv2_module(self.name)
+            if shim is not None:
+                self._ns["cv2"] = shim
 
         try:
             exec(compile(clean, f"<{self.name}>", "exec"), self._ns)
@@ -478,9 +354,9 @@ class DynamicAgent(Actor):
             self._fn_process = self._ns.get("process")
             self._fn_handle_task = self._ns.get("handle_task")
             fns = [f for f in ["setup", "process", "handle_task", "cleanup"] if f in self._ns]
-            logger.info(f"[{self.name}] Code compiled OK. Functions: {fns}")
+            logger.info("[%s] Code compiled OK. Functions: %s", self.name, fns)
             if not fns:
-                logger.warning(f"[{self.name}] No functions found in compiled code.")
+                logger.warning("[%s] No functions found in compiled code.", self.name)
             return None  # success
         except Exception as e:
             return f"{type(e).__name__}: {e}"
@@ -503,7 +379,7 @@ class DynamicAgent(Actor):
             "no markdown fences, no commentary.\n\n"
             f"```python\n{bad_code}\n```"
         )
-        logger.info(f"[{self.name}] Asking LLM to fix syntax error: {error_msg[:120]}")
+        logger.info("[%s] Asking LLM to fix syntax error: %s", self.name, error_msg[:120])
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {
@@ -532,7 +408,7 @@ class DynamicAgent(Actor):
             return fixed  # caller validates with _compile_code()
 
         except Exception as e:
-            logger.warning(f"[{self.name}] LLM fix call failed: {e}")
+            logger.warning("[%s] LLM fix call failed: %s", self.name, e)
             return None  # only None when LLM is truly unreachable
 
     # ── Setup wrapper ───────────────────────────────────────────────────────
@@ -562,7 +438,7 @@ class DynamicAgent(Actor):
             try:
                 await setup(self._api)
                 if attempt > 0:
-                    logger.info(f"[{self.name}] setup() succeeded after {attempt} fix(es).")
+                    logger.info("[%s] setup() succeeded after %s fix(es).", self.name, attempt)
                     # ── Write fixed code back to spawn registry so restart uses it ──
                     self._persist_fixed_code(self._code)
                     await self._mqtt_publish(
@@ -574,7 +450,7 @@ class DynamicAgent(Actor):
                         },
                     )
                 else:
-                    logger.info(f"[{self.name}] setup() completed.")
+                    logger.info("[%s] setup() completed.", self.name)
                 last_error = None
                 break
             except asyncio.CancelledError:
@@ -582,7 +458,7 @@ class DynamicAgent(Actor):
             except Exception as e:
                 last_error = e
                 err = traceback.format_exc()
-                logger.error(f"[{self.name}] setup() failed (attempt {attempt + 1}): {e}")
+                logger.error("[%s] setup() failed (attempt %s): %s", self.name, attempt + 1, e)
 
                 if attempt >= self._MAX_SETUP_RETRIES:
                     break  # exhausted retries
@@ -590,14 +466,16 @@ class DynamicAgent(Actor):
                 # Ask LLM to fix the runtime error
                 fixed = await self._fix_runtime_with_llm(current_code, str(e), err)
                 if fixed is None:
-                    logger.warning(f"[{self.name}] LLM unavailable — cannot fix setup() error")
+                    logger.warning("[%s] LLM unavailable — cannot fix setup() error", self.name)
                     break
 
                 # Recompile the fixed code
                 self._ns = {}
                 compile_err = self._compile_code(fixed)
                 if compile_err:
-                    logger.warning(f"[{self.name}] LLM fix introduced compile error: {compile_err}")
+                    logger.warning(
+                        "[%s] LLM fix introduced compile error: %s", self.name, compile_err
+                    )
                     # Try to fix the compile error too
                     fixed2 = await self._fix_syntax_with_llm(fixed, compile_err)
                     if fixed2:
@@ -615,12 +493,14 @@ class DynamicAgent(Actor):
                 self._code = fixed
                 current_code = fixed
                 logger.info(
-                    f"[{self.name}] Retrying setup() with LLM-fixed code (attempt {attempt + 1})..."
+                    "[%s] Retrying setup() with LLM-fixed code (attempt %s)...",
+                    self.name,
+                    attempt + 1,
                 )
 
         if last_error is not None:
             err = traceback.format_exc()
-            logger.error(f"[{self.name}] setup() failed permanently: {last_error}")
+            logger.error("[%s] setup() failed permanently: %s", self.name, last_error)
             # ── Erlang/OTP: mark FAILED so Supervisor's watch_loop can see us ──
             self.state = ActorState.FAILED
             await self._publish_error(
@@ -674,7 +554,7 @@ class DynamicAgent(Actor):
             "no markdown fences, no commentary.\n\n"
             f"```python\n{code}\n```"
         )
-        logger.info(f"[{self.name}] Asking LLM to fix runtime error: {error_msg[:120]}")
+        logger.info("[%s] Asking LLM to fix runtime error: %s", self.name, error_msg[:120])
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {
@@ -703,7 +583,7 @@ class DynamicAgent(Actor):
             return fixed
 
         except Exception as e:
-            logger.warning(f"[{self.name}] LLM runtime-fix call failed: {e}")
+            logger.warning("[%s] LLM runtime-fix call failed: %s", self.name, e)
             return None
 
     # ── Process loop ───────────────────────────────────────────────────────
@@ -749,8 +629,9 @@ class DynamicAgent(Actor):
             except asyncio.TimeoutError:
                 self.metrics.errors += 1
                 logger.error(
-                    f"[{self.name}] process() timed out after {self._PROCESS_TIMEOUT}s "
-                    f"— likely a blocking call without run_in_executor"
+                    "[%s] process() timed out after %ss — likely a blocking call without run_in_executor",
+                    self.name,
+                    self._PROCESS_TIMEOUT,
                 )
                 await self._publish_error(
                     phase="process",
@@ -762,8 +643,9 @@ class DynamicAgent(Actor):
                 # Erlang: escalate to FAILED after too many timeouts — Supervisor takes over
                 if self._consecutive_errors >= self._PROCESS_FAIL_THRESHOLD:
                     logger.critical(
-                        f"[{self.name}] process() timed out {self._consecutive_errors}x "
-                        f"— setting FAILED so Supervisor can restart cleanly."
+                        "[%s] process() timed out %sx — setting FAILED so Supervisor can restart cleanly.",
+                        self.name,
+                        self._consecutive_errors,
                     )
                     self.state = ActorState.FAILED
                     return
@@ -774,7 +656,7 @@ class DynamicAgent(Actor):
             except Exception as e:
                 self.metrics.errors += 1
                 tb = traceback.format_exc()
-                logger.error(f"[{self.name}] process() error: {e}\n{tb}")
+                logger.error("[%s] process() error: %s\n%s", self.name, e, tb)
                 await self._publish_error(phase="process", error=e, traceback_str=tb)
 
                 # ── LLM self-healing: try to fix the code in-place ────────────
@@ -785,8 +667,9 @@ class DynamicAgent(Actor):
                 ):
                     _llm_fix_attempted = True
                     logger.warning(
-                        f"[{self.name}] {self._consecutive_errors} consecutive process() "
-                        f"errors — asking LLM to fix code in-place."
+                        "[%s] %s consecutive process() errors — asking LLM to fix code in-place.",
+                        self.name,
+                        self._consecutive_errors,
                     )
                     fixed = await self._fix_runtime_with_llm(self._code, str(e), tb)
                     if fixed is not None:
@@ -798,8 +681,8 @@ class DynamicAgent(Actor):
                             # ── Write fixed code back to spawn registry so restart uses it ──
                             self._persist_fixed_code(fixed)
                             logger.info(
-                                f"[{self.name}] LLM fixed process() code — "
-                                f"resuming with patched version."
+                                "[%s] LLM fixed process() code — resuming with patched version.",
+                                self.name,
                             )
                             await self._mqtt_publish(
                                 f"agents/{self.actor_id}/logs",
@@ -812,14 +695,15 @@ class DynamicAgent(Actor):
                             await asyncio.sleep(self.poll_interval)
                             continue
                         logger.warning(
-                            f"[{self.name}] LLM fix introduced compile error: {compile_err}"
+                            "[%s] LLM fix introduced compile error: %s", self.name, compile_err
                         )
 
                 # ── Erlang: too many errors → FAILED → Supervisor restarts us ──
                 if self._consecutive_errors >= self._PROCESS_FAIL_THRESHOLD:
                     logger.critical(
-                        f"[{self.name}] {self._consecutive_errors} consecutive process() "
-                        f"errors — setting FAILED so Supervisor can restart cleanly."
+                        "[%s] %s consecutive process() errors — setting FAILED so Supervisor can restart cleanly.",
+                        self.name,
+                        self._consecutive_errors,
                     )
                     self.state = ActorState.FAILED
                     await self._publish_error(
@@ -865,7 +749,9 @@ class DynamicAgent(Actor):
                         await self.send(msg.sender_id, MessageType.RESULT, _with_corr(result))
                 except asyncio.TimeoutError:
                     logger.error(
-                        f"[{self.name}] handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s"
+                        "[%s] handle_task() timed out after %ss",
+                        self.name,
+                        self._HANDLE_TASK_TIMEOUT,
                     )
                     await self._publish_error(
                         phase="handle_task",
@@ -886,7 +772,7 @@ class DynamicAgent(Actor):
                         )
                 except Exception as e:
                     tb = traceback.format_exc()
-                    logger.error(f"[{self.name}] handle_task() error: {e}\n{tb}")
+                    logger.error("[%s] handle_task() error: %s\n%s", self.name, e, tb)
                     await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
                     if msg.sender_id:
                         await self.send(
@@ -972,7 +858,7 @@ class DynamicAgent(Actor):
         A successful process() call doesn't mean the callback is fixed.
         """
         if self._consecutive_errors > 0:
-            logger.info(f"[{self.name}] Recovered — resetting error counter.")
+            logger.info("[%s] Recovered — resetting error counter.", self.name)
             self._consecutive_errors = 0
             self._error_phase = ""
 
@@ -999,8 +885,9 @@ class DynamicAgent(Actor):
                             entry["_code_fixed_at"] = time.time()
                             main._save_to_spawn_registry(entry)
                             logger.info(
-                                f"[{self.name}] Fixed code written to spawn registry "
-                                f"({len(fixed_code)} chars)."
+                                "[%s] Fixed code written to spawn registry (%s chars).",
+                                self.name,
+                                len(fixed_code),
                             )
 
             # ── 2. Update Supervisor factory (survives Supervisor-driven restart) ─
@@ -1034,10 +921,10 @@ class DynamicAgent(Actor):
                         return actor
 
                     spec.factory = _fixed_factory
-                    logger.info(f"[{self.name}] Supervisor factory updated with fixed code.")
+                    logger.info("[%s] Supervisor factory updated with fixed code.", self.name)
 
         except Exception as exc:
-            logger.warning(f"[{self.name}] Could not persist fixed code: {exc}")
+            logger.warning("[%s] Could not persist fixed code: %s", self.name, exc)
 
     def get_status(self) -> dict:
         s = super().get_status()

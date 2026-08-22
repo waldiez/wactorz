@@ -14,7 +14,7 @@ import pytest
 from wactorz.agents.llm.providers.fake import FakeProvider
 from wactorz.agents.planner import pipeline as pipeline_mod
 from wactorz.agents.planner.agent import PlannerAgent
-from wactorz.agents.planner.pipeline import _pipeline_summary
+from wactorz.agents.planner.pipeline import pipeline_summary
 
 SPAWN_ERROR = "no module named cv2"
 
@@ -198,15 +198,15 @@ class TestPipelineRulePersistence:
 
 class TestPipelineSummary:
     def test_nothing_spawned_says_so(self) -> None:
-        assert "no agents could be spawned" in _pipeline_summary([], [], "")
+        assert "no agents could be spawned" in pipeline_summary([], [], "")
 
     def test_a_resolution_note_leads_the_summary(self) -> None:
-        out = _pipeline_summary(["**a** — does a"], ["a"], "topic `sensors/x`")
+        out = pipeline_summary(["**a** — does a"], ["a"], "topic `sensors/x`")
 
         assert out.splitlines()[0].endswith("topic `sensors/x`")
 
     def test_spawned_agents_are_named_with_the_restore_promise(self) -> None:
-        out = _pipeline_summary(["**a** — does a"], ["a"], "")
+        out = pipeline_summary(["**a** — does a"], ["a"], "")
 
         assert "auto-restore on restart" in out
         assert "a" in out

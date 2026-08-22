@@ -38,7 +38,7 @@ from .validation import validate_pipeline_code
 
 logger = logging.getLogger(__name__)
 
-_SKIP_AGENTS = {
+SKIP_AGENTS = {
     "main",
     "monitor",
     "installer",
@@ -358,7 +358,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         if not self._registry:
             return workers
         for actor in self._registry.all_actors():
-            if actor.name in _SKIP_AGENTS or actor.name == self.name:
+            if actor.name in SKIP_AGENTS or actor.name == self.name:
                 continue
             if actor.name.startswith("planner-"):
                 continue
@@ -395,7 +395,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
                 if time.time() - nd.get("last_seen", 0) > 30:
                     continue  # node offline — skip
                 for aname in nd.get("agents", []):
-                    if aname in seen or aname in _SKIP_AGENTS:
+                    if aname in seen or aname in SKIP_AGENTS:
                         continue
                     seen.add(aname)
                     manifest = manifest_map.get(aname, {})

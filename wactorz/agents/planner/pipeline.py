@@ -154,9 +154,9 @@ class PipelineMixin(_Host):
             self._persist_pipeline_rule(task, rule_agents)
 
         self._auto_terminate = False
-        return _pipeline_summary(wired, spawned, resolution_note)
+        return pipeline_summary(wired, spawned, resolution_note)
 
-    async def _spawn_pipeline_step(self, step: dict[str, Any], task: str) -> _StepOutcome:
+    async def _spawn_pipeline_step(self, step: dict[str, Any], task: str) -> StepOutcome:
         """Bring one step's agent into being, recording why if it cannot be.
 
         Every outcome is written to `_spawn_results` so the reply to main can
@@ -166,12 +166,12 @@ class PipelineMixin(_Host):
         name = step.get("name", "").strip()
         if not name:
             await self._log("Step missing name — skipping")
-            return _StepOutcome()
+            return StepOutcome()
 
         if self._registry and self._registry.find_by_name(name):
             await self._log(f"'{name}' already running — skipping")
             self._spawn_results[name] = {"ok": True, "status": "already_running"}
-            return _StepOutcome(wired=f"**{name}** (already active)", rule_agent=name)
+            return StepOutcome(wired=f"**{name}** (already active)", rule_agent=name)
 
         spawn_cfg = step.get("spawn_config")
         if not spawn_cfg:
@@ -181,7 +181,7 @@ class PipelineMixin(_Host):
                 "status": "no_config",
                 "error": "missing spawn_config",
             }
-            return _StepOutcome()
+            return StepOutcome()
 
         spawn_cfg = dict(spawn_cfg)
         spawn_cfg["name"] = name
@@ -191,11 +191,11 @@ class PipelineMixin(_Host):
         except Exception as e:
             await self._log(f"Spawn failed for '{name}': {e}")
             self._spawn_results[name] = {"ok": False, "status": "spawn_failed", "error": str(e)}
-            return _StepOutcome(wired=f"**{name}** — spawn failed: {e}")
+            return StepOutcome(wired=f"**{name}** — spawn failed: {e}")
 
         if not actor:
             self._spawn_results[name] = {"ok": False, "status": "spawn_returned_none"}
-            return _StepOutcome(wired=f"**{name}** — failed to spawn")
+            return StepOutcome(wired=f"**{name}** — failed to spawn")
 
         self._spawned_by_planner.append(name)
         self._spawn_results[name] = {"ok": True, "status": "spawned"}
@@ -206,7 +206,7 @@ class PipelineMixin(_Host):
         if topics:
             label += "\n  listens: " + ", ".join(topics)
         await asyncio.sleep(0.3)
-        return _StepOutcome(wired=label, spawned=name, rule_agent=name)
+        return StepOutcome(wired=label, spawned=name, rule_agent=name)
 
     def _register_for_restore(self, spawn_cfg: dict[str, Any], name: str, task: str) -> None:
         """Record the agent in main's spawn registry so a restart brings it back."""
@@ -255,7 +255,7 @@ class PipelineMixin(_Host):
         if not self.llm:
             return ""
 
-        existing_lines, by_id = _active_rule_lines(self._active_rules())
+        existing_lines, by_id = active_rule_lines(self._active_rules())
         if not existing_lines:
             return ""
 
@@ -279,7 +279,7 @@ class PipelineMixin(_Host):
             logger.debug("[%s] Rule-conflict check failed: %s", self.name, e)
             return ""
 
-        return _describe_rule_conflicts(data, by_id)
+        return describe_rule_conflicts(data, by_id)
 
     def _active_rules(self) -> list[dict[str, Any]]:
         """Rules already in force, read from main as the authoritative store."""
@@ -316,7 +316,7 @@ class PipelineMixin(_Host):
 
         notif_section = await self._gather_notification_urls(task)
 
-        if ha_available and ha_entities_text and not _skips_ha_feasibility(task):
+        if ha_available and ha_entities_text and not skips_ha_feasibility(task):
             verdict = await self._check_ha_feasibility(task, ha_section)
             if verdict is not None:
                 return verdict
@@ -494,7 +494,7 @@ class PipelineMixin(_Host):
         camera_stream_urls, camera_snapshot_urls = await self._fetch_camera_urls(
             task, ha_entities_text
         )
-        camera_section, camera_snapshot_section = _camera_sections(
+        camera_section, camera_snapshot_section = camera_sections(
             camera_stream_urls, camera_snapshot_urls
         )
 
@@ -614,7 +614,7 @@ class PipelineMixin(_Host):
                         camera_entity_ids.append(token)
 
             if camera_entity_ids:
-                candidates = _camera_candidates(camera_entity_ids, task)
+                candidates = camera_candidates(camera_entity_ids, task)
 
                 logger.debug(
                     "[%s] Camera candidates for '%s': %s", self.name, task[:60], candidates
@@ -723,7 +723,7 @@ class PipelineMixin(_Host):
         current states are fetched and republished to
         homeassistant/state_changes/# as a bootstrap event.
         """
-        entity_ids = _ha_entity_ids_in(plan, task)
+        entity_ids = ha_entity_ids_in(plan, task)
         await self._log(f"Bootstrap — entity IDs found: {entity_ids}")
 
         if not entity_ids:
@@ -767,7 +767,7 @@ class PipelineMixin(_Host):
             self._result_futures.pop(task_id, None)
 
 
-def _active_rule_lines(
+def active_rule_lines(
     existing: list[dict[str, Any]],
 ) -> tuple[list[str], dict[str, dict[str, Any]]]:
     """One prompt line per active rule, capped so the prompt stays bounded."""
@@ -782,7 +782,7 @@ def _active_rule_lines(
     return lines, by_id
 
 
-def _describe_rule_conflicts(data: object, by_id: dict[str, dict[str, Any]]) -> str:
+def describe_rule_conflicts(data: object, by_id: dict[str, dict[str, Any]]) -> str:
     """Render the checker's verdict, or "" when it found nothing clear."""
     if not isinstance(data, dict) or not data.get("conflict"):
         return ""
@@ -846,7 +846,7 @@ HA_DOMAINS = frozenset(
 _HA_ENTITY_RE = re.compile(r"\b([a-z_][a-z0-9_]*\.[a-z0-9_]+)\b")
 
 
-def _ha_entity_ids_in(plan: list[dict[str, Any]] | None, task: str) -> list[str]:
+def ha_entity_ids_in(plan: list[dict[str, Any]] | None, task: str) -> list[str]:
     """Entity ids a spawned pipeline will react to, most reliable source first.
 
     Generated code carries the literal entity_id, so it is read before the
@@ -879,7 +879,7 @@ def _ha_entity_ids_in(plan: list[dict[str, Any]] | None, task: str) -> list[str]
     return entity_ids
 
 
-class _StepOutcome(NamedTuple):
+class StepOutcome(NamedTuple):
     """What one pipeline step contributed, empty fields meaning "nothing"."""
 
     wired: str | None = None
@@ -887,7 +887,7 @@ class _StepOutcome(NamedTuple):
     rule_agent: str | None = None
 
 
-def _pipeline_summary(wired: list[str], spawned: list[str], resolution_note: str) -> str:
+def pipeline_summary(wired: list[str], spawned: list[str], resolution_note: str) -> str:
     """The reply the user sees once the pipeline is up."""
     if not wired:
         return "Pipeline plan generated but no agents could be spawned. Check logs."
@@ -905,7 +905,7 @@ def _pipeline_summary(wired: list[str], spawned: list[str], resolution_note: str
 
 #: Words meaning the pipeline does not touch Home Assistant: vision pipelines
 #: (they need cv2) and external webhook integrations.
-_NON_HA_KEYWORDS = (
+NON_HA_KEYWORDS = (
     "camera",
     "webcam",
     "laptop camera",
@@ -919,7 +919,7 @@ _NON_HA_KEYWORDS = (
 )
 
 #: Verbs that mean an HA service call is coming, so a real entity must exist.
-_HA_ACTION_VERBS = (
+HA_ACTION_VERBS = (
     "turn on",
     "turn off",
     "open",
@@ -940,7 +940,7 @@ _HA_ACTION_VERBS = (
 )
 
 
-def _skips_ha_feasibility(task: str) -> bool:
+def skips_ha_feasibility(task: str) -> bool:
     """True when the request clearly asks for nothing of Home Assistant.
 
     Deliberately narrow. An earlier version also skipped on "message" and
@@ -952,12 +952,12 @@ def _skips_ha_feasibility(task: str) -> bool:
     because the lamp half needs an entity.
     """
     lowered = task.lower()
-    has_ha_verb = any(v in lowered for v in _HA_ACTION_VERBS)
-    has_skip_kw = any(kw in lowered for kw in _NON_HA_KEYWORDS)
+    has_ha_verb = any(v in lowered for v in HA_ACTION_VERBS)
+    has_skip_kw = any(kw in lowered for kw in NON_HA_KEYWORDS)
     return has_skip_kw and not has_ha_verb
 
 
-def _camera_sections(
+def camera_sections(
     camera_stream_urls: dict[str, str], camera_snapshot_urls: dict[str, str]
 ) -> tuple[str, str]:
     """Render the resolved camera URLs for the prompt."""
@@ -999,7 +999,7 @@ def _camera_sections(
     return camera_section, camera_snapshot_section
 
 
-def _camera_candidates(camera_entity_ids: list[str], task: str) -> list[str]:
+def camera_candidates(camera_entity_ids: list[str], task: str) -> list[str]:
     """Camera entities the task plausibly refers to, or all of them.
 
     A task that clearly means a camera but names no particular one still gets

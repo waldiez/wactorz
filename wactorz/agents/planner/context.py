@@ -96,7 +96,7 @@ class ContextMixin(_Host):
 
             bus = get_topic_bus()
             if bus:
-                resolved = _describe_topic_source(task, _topic_candidates(bus, matched_concepts))
+                resolved = describe_topic_source(task, topic_candidates(bus, matched_concepts))
                 if resolved:
                     return resolved
         except Exception as e:
@@ -106,8 +106,8 @@ class ContextMixin(_Host):
         # No registered agent topics found — check if HA has relevant sensors
         try:
             entities_raw = await self._fetch_ha_entities()
-            resolved = _describe_ha_source(
-                task, _ha_entity_candidates(entities_raw, matched_concepts)
+            resolved = describe_ha_source(
+                task, ha_entity_candidates(entities_raw, matched_concepts)
             )
             if resolved:
                 return resolved
@@ -178,17 +178,17 @@ class ContextMixin(_Host):
         doesn't block planning. Topics that don't publish within the window
         are silently skipped.
         """
-        topics_to_sample = _topics_worth_sampling(bus)
+        topics_to_sample = topics_worth_sampling(bus)
         if not topics_to_sample:
             return []
 
-        received = await _collect_one_payload_per_topic(
+        received = await collect_one_payload_per_topic(
             getattr(self, "_mqtt_broker", "localhost"),
             getattr(self, "_mqtt_port", 1883),
             topics_to_sample,
             self.name,
         )
-        sample_lines = _describe_samples(bus, received, dict(topics_to_sample))
+        sample_lines = describe_samples(bus, received, dict(topics_to_sample))
 
         if sample_lines:
             logger.info(
@@ -199,7 +199,7 @@ class ContextMixin(_Host):
         return sample_lines
 
 
-def _topics_worth_sampling(bus: Any) -> list[tuple[str, str]]:
+def topics_worth_sampling(bus: Any) -> list[tuple[str, str]]:
     """Up to ten distinct published topics, with the agent publishing each."""
     topics: list[tuple[str, str]] = []
     for contract in bus.registry.all_contracts():
@@ -211,7 +211,7 @@ def _topics_worth_sampling(bus: Any) -> list[tuple[str, str]]:
     return topics
 
 
-async def _collect_one_payload_per_topic(
+async def collect_one_payload_per_topic(
     broker: str, port: int, topics: list[tuple[str, str]], log_name: str
 ) -> dict[str, dict[str, Any]]:
     """First dict payload seen on each topic, within one shared deadline.
@@ -250,7 +250,7 @@ async def _collect_one_payload_per_topic(
     return received
 
 
-def _describe_samples(
+def describe_samples(
     bus: Any, received: dict[str, dict[str, Any]], topic_to_agent: dict[str, str]
 ) -> list[str]:
     """Render each sample for the prompt, and remember it on its contract."""
@@ -270,7 +270,7 @@ def _describe_samples(
     return lines
 
 
-def _topic_candidates(bus: Any, matched_concepts: list[str]) -> list[dict[str, Any]]:
+def topic_candidates(bus: Any, matched_concepts: list[str]) -> list[dict[str, Any]]:
     """Registered topics published by agents claiming any of these capabilities."""
     seen: set[str] = set()
     candidates: list[dict[str, Any]] = []
@@ -293,7 +293,7 @@ def _topic_candidates(bus: Any, matched_concepts: list[str]) -> list[dict[str, A
     return candidates
 
 
-def _describe_topic_source(task: str, candidates: list[dict[str, Any]]) -> tuple[str, str] | None:
+def describe_topic_source(task: str, candidates: list[dict[str, Any]]) -> tuple[str, str] | None:
     """Task text plus a user-facing note, or None when nothing matched.
 
     One candidate is resolved outright; several are all handed to the model,
@@ -332,7 +332,7 @@ def _describe_topic_source(task: str, candidates: list[dict[str, Any]]) -> tuple
     return enriched, note
 
 
-def _ha_entity_candidates(
+def ha_entity_candidates(
     entities_raw: list[Any], matched_concepts: list[str]
 ) -> list[dict[str, Any]]:
     """Entities whose id or name mentions any matched concept.
@@ -367,7 +367,7 @@ def _ha_entity_candidates(
     return candidates
 
 
-def _describe_ha_source(task: str, candidates: list[dict[str, Any]]) -> tuple[str, str] | None:
+def describe_ha_source(task: str, candidates: list[dict[str, Any]]) -> tuple[str, str] | None:
     """Task text plus a user-facing note, or None when nothing matched."""
     if not candidates:
         return None

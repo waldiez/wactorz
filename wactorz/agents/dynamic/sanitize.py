@@ -125,7 +125,7 @@ def sanitize_code(code: str) -> str:
 
     # ── Strip spurious `await` on known synchronous agent API methods ──
     # LLMs write `await agent.subscribe(...)` because setup() is async.
-    # These methods already return _AwaitableNone so the code won't crash,
+    # These methods already return AwaitableNone so the code won't crash,
     # but stripping `await` keeps the code clean and avoids confusion.
     _SYNC_METHODS = (
         "subscribe",

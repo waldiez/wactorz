@@ -782,7 +782,7 @@ class CatalogAgent(Actor):
                     return {"ok": True, "message": msg, "agent": resolved}
                 return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
-            from .dynamic_agent import DynamicAgent
+            from .dynamic import DynamicAgent
 
             install = recipe.get("install", [])
             if install:

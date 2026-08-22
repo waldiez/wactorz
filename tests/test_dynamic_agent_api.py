@@ -10,7 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.agents.dynamic_agent import DynamicAgent, _AgentAPI
+from wactorz.agents.dynamic.agent import DynamicAgent
+from wactorz.agents.dynamic.api import _AgentAPI
 from wactorz.agents.planner.validation import SYNC_METHODS
 
 

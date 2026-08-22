@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.agents.dynamic_agent import DynamicAgent
+from wactorz.agents.dynamic.agent import DynamicAgent
 
 BLOCKED = [
     ("os.system('ls')", "os.system"),

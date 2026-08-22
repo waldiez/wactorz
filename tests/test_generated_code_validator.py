@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from wactorz.agents.dynamic_agent import DynamicAgent
+from wactorz.agents.dynamic.agent import DynamicAgent
 
 
 @pytest.fixture(name="validate")

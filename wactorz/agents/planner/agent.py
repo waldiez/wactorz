@@ -342,7 +342,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
 
     # ── Plan cache ─────────────────────────────────────────────────────────
 
-    def _load_cached_plan(self, cache_key: str, workers: list[dict[str, Any]]) -> list | None:
+    def _load_cached_plan(self, cache_key: str, workers: list[dict[str, Any]]) -> list[Any] | None:
         alive = {w["name"] for w in workers} | {"main", self.name}
         return select_cached_plan(self.recall(PLAN_CACHE_KEY) or {}, cache_key, alive, self.name)
 

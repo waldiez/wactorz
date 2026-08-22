@@ -63,7 +63,7 @@ class TestExecuteScheduling:
         """Replace step execution with a recorder, keeping the scheduler real."""
         order: list[Any] = []
 
-        async def _fake_step(step: dict[str, Any], prior: dict[str | int, Any]) -> dict:
+        async def _fake_step(step: dict[str, Any], prior: dict[str | int, Any]) -> dict[str, Any]:
             order.append(step["step"])
             return {"result": f"step {step['step']} done"}
 
@@ -128,7 +128,7 @@ class TestExecuteScheduling:
     async def test_a_step_that_raises_becomes_an_error_entry(self, planner: PlannerAgent) -> None:
         """One failing parallel step must not take the whole gather down."""
 
-        async def _boom(step: dict[str, Any], prior: dict[str | int, Any]) -> dict:
+        async def _boom(step: dict[str, Any], prior: dict[str | int, Any]) -> dict[str, Any]:
             if step["step"] == 1:
                 raise RuntimeError(BOOM)
             return {"result": "ok"}
@@ -192,7 +192,7 @@ class TestRunPlanRouting:
     def _spy(planner: PlannerAgent) -> list[str]:
         taken: list[str] = []
 
-        async def _pipeline(task: str, workers: list[dict]) -> str:
+        async def _pipeline(task: str, workers: list[dict[str, Any]]) -> str:
             taken.append("pipeline")
             return "pipeline-result"
 

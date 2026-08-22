@@ -767,7 +767,9 @@ class PipelineMixin(_Host):
             self._result_futures.pop(task_id, None)
 
 
-def _active_rule_lines(existing: list[dict[str, Any]]) -> tuple[list[str], dict[str, dict]]:
+def _active_rule_lines(
+    existing: list[dict[str, Any]],
+) -> tuple[list[str], dict[str, dict[str, Any]]]:
     """One prompt line per active rule, capped so the prompt stays bounded."""
     lines: list[str] = []
     by_id: dict[str, dict[str, Any]] = {}

@@ -259,7 +259,7 @@ exclude_also = [
 ]
 # A ratchet, not a target. 
 # Let's try to increase it a lot (aim ~90% like frontend)
-fail_under = 58
+fail_under = 60
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

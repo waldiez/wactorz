@@ -621,16 +621,16 @@ Auto-wiring opportunities:
 <td><code>TopicContract</code>, <code>TopicRegistry</code>, <code>SharedStateHub</code>, <code>StreamWindow</code>, <code>TopicBus</code></td>
 </tr>
 <tr>
-<td><code>agents/dynamic_agent.py</code></td>
-<td><code>_AgentAPI.publish()</code> — auto-registers contracts and captures schemas</td>
+<td><code>agents/dynamic/messaging.py</code></td>
+<td><code>AgentAPI.publish()</code> — auto-registers contracts and captures schemas</td>
 </tr>
 <tr>
-<td><code>agents/dynamic_agent.py</code></td>
-<td><code>_AgentAPI.subscribe()</code> — auto-registers subscription in TopicBus</td>
+<td><code>agents/dynamic/streams.py</code></td>
+<td><code>AgentAPI.subscribe()</code> — auto-registers subscription in TopicBus</td>
 </tr>
 <tr>
-<td><code>agents/dynamic_agent.py</code></td>
-<td><code>_AgentAPI.declare_contract()</code> — explicit contract declaration with kwarg aliases</td>
+<td><code>agents/dynamic/streams.py</code></td>
+<td><code>AgentAPI.declare_contract()</code> — explicit contract declaration with kwarg aliases</td>
 </tr>
 <tr>
 <td><code>agents/planner/agent.py</code></td>

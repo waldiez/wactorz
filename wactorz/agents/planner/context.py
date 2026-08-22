@@ -167,7 +167,7 @@ class ContextMixin(_Host):
             self._result_futures.pop(task_id, None)
         return entities_raw
 
-    async def _sample_live_topics(self, bus) -> list[str]:
+    async def _sample_live_topics(self, bus: Any) -> list[str]:
         """Peek at one live MQTT message from each registered publish topic.
         Returns formatted lines with actual field names and an example value.
 

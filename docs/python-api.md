@@ -182,7 +182,7 @@ LLM orchestrator. Classifies every user message into `ACTUATE / HA / PIPELINE / 
 routes to the appropriate agent, and streams replies. Manages the spawn registry
 (persisted to SQLite), pipeline rules, user facts, and conversation history.
 
-### `wactorz.agents.dynamic_agent.DynamicAgent`
+### `wactorz.agents.dynamic.DynamicAgent`
 
 Executes LLM-generated Python at runtime. Takes a `code` string defining
 `setup(agent)`, `process(agent)`, `handle_task(agent, payload)` and runs them in an

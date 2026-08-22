@@ -425,7 +425,7 @@ TS_BATCH_INTERVAL=5.0      # flush to SQLite every N seconds (default: 5)
 
 ## DynamicAgent
 
-**File:** `wactorz/agents/dynamic_agent.py`
+**File:** `wactorz/agents/dynamic/` (`agent.py` plus its extracted concerns)
 
 | | |
 |---|---|

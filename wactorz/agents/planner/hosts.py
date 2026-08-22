@@ -14,18 +14,25 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ..mixins.host import LLMHost, SpawnHost
+from ..mixins.host import SpawnHost
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
     from ..mixins.spawning import SpawnPlaceholder
 
 
-class PlannerHost(LLMHost, SpawnHost, Protocol):
-    """State and helpers every planner mixin reads off the agent."""
+class PlannerHost(SpawnHost, Protocol):
+    """State and helpers every planner mixin reads off the agent.
+
+    Built on ActorHost rather than LLMHost even though the planner uses an LLM:
+    LLMHost also promises `_persist_cost`, which belongs to LLMAgent, and
+    PlannerAgent extends Actor directly. Inheriting it would have the protocol
+    assert something about the host that is not true. SpawnHost already carries
+    `llm` and `_result_futures`, which is the whole LLM surface these mixins use.
+    """
 
     _plan_only: bool
-    _approved_plan: dict | None
+    _approved_plan: dict[str, Any] | None
     _auto_terminate: bool
     _spawned_by_planner: list[str]
     _spawn_results: dict[str, dict[str, Any]]

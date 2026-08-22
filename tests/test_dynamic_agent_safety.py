@@ -270,15 +270,25 @@ class TestCompileCode:
         for name in ("get_llm", "setup_llm", "create_llm"):
             assert name in agent._ns
 
-    def test_the_cv2_shim_is_injected_only_when_the_code_uses_cv2(self, tmp_path: Path) -> None:
+    def test_code_that_never_mentions_cv2_gets_no_shim(self, tmp_path: Path) -> None:
         """A chat agent should not pay for a camera shim it never touches."""
-        with_cv2 = self._agent(tmp_path, "import cv2\nasync def setup(agent):\n    pass\n")
-        with_cv2._compile_code()
-        without = self._agent(tmp_path, "async def setup(agent):\n    pass\n")
-        without._compile_code()
+        agent = self._agent(tmp_path, "async def setup(agent):\n    pass\n")
+        agent._compile_code()
 
-        assert "cv2" in with_cv2._ns
-        assert "cv2" not in without._ns
+        assert "cv2" not in agent._ns
+
+    def test_code_that_uses_cv2_gets_the_resilient_shim(self, tmp_path: Path) -> None:
+        """Skipped where cv2 is absent: the shim subclasses the real VideoCapture.
+
+        cv2 is not a declared dependency -- a vision agent installs it when it
+        spawns -- so CI has no reason to carry it and this cannot assert
+        unconditionally.
+        """
+        pytest.importorskip("cv2")
+        agent = self._agent(tmp_path, "import cv2\nasync def setup(agent):\n    pass\n")
+        agent._compile_code()
+
+        assert "cv2" in agent._ns
 
     def test_explicit_code_overrides_the_constructor_code(self, tmp_path: Path) -> None:
         """The repair path recompiles a fixed version without rebuilding the agent."""

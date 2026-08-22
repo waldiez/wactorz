@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from ...core.mqtt import mqtt_client
@@ -13,6 +15,7 @@ if TYPE_CHECKING:
     pass
 
 from .awaitable import AWAITABLE_NONE
+from .listener import run_subscription_listener
 
 if TYPE_CHECKING:
     from .hosts import ApiHost
@@ -25,11 +28,34 @@ else:
 
 logger = logging.getLogger(__name__)
 
+#: Shown to generated code that calls subscribe() without a usable callback.
+#: These messages are the contract: the model reads them and repairs its own
+#: code, so they say what to write rather than only what went wrong.
+CALLBACK_REQUIRED = (
+    "agent.subscribe('{topic}', callback) requires a callable callback. "
+    "Got: {got}. "
+    "Define: async def on_msg(payload): ... then call agent.subscribe('{topic}', on_msg). "
+    "For a one-shot read use: data = await agent.mqtt_get('{topic}')"
+)
+
+#: Shown when the callback exists but takes no payload argument.
+CALLBACK_NEEDS_PAYLOAD = (
+    "Subscribe callback must accept one argument (the payload dict). "
+    "Got a function with no required parameters. "
+    "Fix: async def {name}(payload): ..."
+)
+
+#: Shown when generated code awaits agent.window(), which is synchronous.
+WINDOW_NOT_AWAITABLE = (
+    "agent.window() is not a coroutine - do not use 'await'. "
+    "Correct: agent.state['w'] = agent.window('topic', seconds=60)  # no await"
+)
+
 
 class StreamsMixin(_Host):
     """Mixed into AgentAPI; reads the actor through `self._actor`."""
 
-    def subscribe(self, topic: str, callback):
+    def subscribe(self, topic: str, callback: Any) -> Any:
         """Subscribe to an MQTT topic and call callback(payload_dict) for each message.
         Runs as a background task — setup() returns immediately.
 
@@ -43,28 +69,21 @@ class StreamsMixin(_Host):
             agent.subscribe('sensors/temperature', on_message)
         """
         if callback is None or not callable(callback):
-            raise TypeError(
-                f"agent.subscribe('{topic}', callback) requires a callable callback. "
-                f"Got: {type(callback).__name__}. "
-                f"Define: async def on_msg(payload): ... then call agent.subscribe('{topic}', on_msg). "
-                f"For a one-shot read use: data = await agent.mqtt_get('{topic}')"
-            )
+            raise TypeError(CALLBACK_REQUIRED.format(topic=topic, got=type(callback).__name__))
 
         # Validate callback accepts exactly one argument (the payload)
-        import inspect
 
+        # Only signature() is guarded: a callback that cannot be inspected is
+        # allowed through, but one we *can* inspect and that takes no payload is
+        # refused. Raising inside the try would have been caught by it.
         try:
             sig = inspect.signature(callback)
-            params = [p for p in sig.parameters.values() if p.default is inspect.Parameter.empty]
-            if len(params) == 0:
-                raise TypeError(
-                    f"Subscribe callback must accept one argument (the payload dict). "
-                    f"Got a function with no required parameters. "
-                    f"Fix: async def {callback.__name__}(payload): ..."
-                )
-        except (TypeError, ValueError):
-            pass  # Can't inspect — proceed and let runtime catch it
-        import asyncio
+        except (TypeError, ValueError) as exc:
+            logger.debug("[%s] Cannot inspect callback: %s", self.name, exc)
+        else:
+            required = [p for p in sig.parameters.values() if p.default is inspect.Parameter.empty]
+            if not required:
+                raise TypeError(CALLBACK_NEEDS_PAYLOAD.format(name=callback.__name__))
 
         actor = self._actor
 
@@ -72,23 +91,6 @@ class StreamsMixin(_Host):
         # (e.g. `await agent.persist(...)`) don't crash the listener.
         # We log the first occurrence, then silently suppress subsequent ones.
         _await_warned = False
-
-        async def _safe_invoke(cb, payload):
-            nonlocal _await_warned
-            try:
-                await cb(payload)
-            except TypeError as e:
-                if "NoneType" in str(e) and "await" in str(e):
-                    if not _await_warned:
-                        logger.warning(
-                            "[%s] subscribe callback has 'await None' error (suppressed): %s",
-                            actor.name,
-                            e,
-                        )
-                        _await_warned = True
-                    # Swallow: a sync API method was awaited, harmless
-                else:
-                    raise
 
         # ── Callback error tracking (actor-level, survives reconnects) ──────
         # Stored on the actor so:
@@ -99,78 +101,6 @@ class StreamsMixin(_Host):
         _cb_attr = f"_cb_err_{topic.replace('/', '_').replace('#', 'x').replace('+', 'y')}"
         # After this many escalations without recovery, stop the listener entirely
         # and mark the actor FAILED so the Supervisor can restart with fresh code.
-        _CB_MAX_ESCALATIONS = 5
-        _CB_ERROR_REPORT_INTERVAL = 30.0  # seconds between escalations per error key
-
-        async def _listener():
-            try:
-                import aiomqtt  # noqa: F401
-            except ImportError:
-                logger.error("[%s] aiomqtt not installed", actor.name)
-                return
-            while True:
-                try:
-                    async with mqtt_client(actor._mqtt_broker, actor._mqtt_port) as client:
-                        await client.subscribe(topic)
-                        logger.info("[%s] Subscribed to %s", actor.name, topic)
-                        async for msg in client.messages:
-                            try:
-                                payload = json.loads(msg.payload.decode())
-                            except Exception:
-                                payload = {"raw": msg.payload.decode()}
-                            try:
-                                await _safe_invoke(callback, payload)
-                                # Successful invocation — reset this topic's error budget
-                                actor._cb_error_count.pop(topic, None)
-                                actor._cb_error_last.pop(topic, None)
-                            except Exception as e:
-                                import time as _t
-                                import traceback as _tb
-
-                                now = _t.time()
-                                last = actor._cb_error_last.get(topic, 0)
-                                escalations = actor._cb_error_count.get(topic, 0)
-
-                                logger.error(
-                                    "[%s] subscribe callback error (escalation #%s/%s, topic=%s): %s",
-                                    actor.name,
-                                    escalations + 1,
-                                    _CB_MAX_ESCALATIONS,
-                                    topic,
-                                    e,
-                                )
-
-                                # Rate-limit escalation to supervision
-                                if (now - last) >= _CB_ERROR_REPORT_INTERVAL:
-                                    escalations += 1
-                                    actor._cb_error_count[topic] = escalations
-                                    actor._cb_error_last[topic] = now
-
-                                    fatal = escalations >= _CB_MAX_ESCALATIONS
-                                    await actor._publish_error(
-                                        phase="subscribe_callback",
-                                        error=e,
-                                        traceback_str=_tb.format_exc(),
-                                        fatal=fatal,
-                                    )
-
-                                    if fatal:
-                                        # Budget exhausted — stop looping, let Supervisor restart
-                                        logger.critical(
-                                            "[%s] subscribe callback on '%s' failed %sx — marking FAILED for Supervisor.",
-                                            actor.name,
-                                            topic,
-                                            escalations,
-                                        )
-                                        from ...core.actor import ActorState
-
-                                        actor.state = ActorState.FAILED
-                                        return  # exits _listener task
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    logger.warning("[%s] MQTT subscribe error: %s — retrying in 5s", actor.name, e)
-                    await asyncio.sleep(5)
 
         # Deduplication guard — prevent double-subscription if setup() is called
         # more than once (e.g. on reconnect). Same topic+callback combo gets one listener.
@@ -184,7 +114,7 @@ class StreamsMixin(_Host):
             return AWAITABLE_NONE
         actor._subscribed_topics[sub_key] = callback
 
-        task = asyncio.create_task(_listener())
+        task = asyncio.create_task(run_subscription_listener(actor, topic, callback))
         actor._tasks.append(task)
 
         # Auto-register subscription in TopicBus
@@ -206,20 +136,23 @@ class StreamsMixin(_Host):
                         node=getattr(actor, "_node", None),
                     )
                     bus.register_contract(contract)
-        except Exception:
-            pass  # TopicBus unavailable — not fatal
+        except Exception as exc:
+            logger.debug(
+                "[%s] Could not register the %s subscription with TopicBus: %s",
+                self.name,
+                topic,
+                exc,
+            )
 
         # Return an awaitable no-op so `await agent.subscribe(...)` doesn't crash.
         # LLMs frequently add `await` because setup() is async — this makes it safe.
         return AWAITABLE_NONE
 
-    async def _publish_manifest(self):
+    async def _publish_manifest(self) -> None:
         """Publish retained capability manifest so main/planner can discover this agent.
         Now includes full TopicContract (publishes, subscribes, triggers_when, schemas)
         so the planner can wire agents by data compatibility, not just by name.
         """
-        import time as _t
-
         actor = self._actor
         # Include TopicContract fields if declared
         contract = getattr(actor, "_topic_contract", None)
@@ -239,7 +172,7 @@ class StreamsMixin(_Host):
             "consumes_schema": contract.consumes_schema if contract else {},
             # Observed payload schemas — auto-captured from real publishes
             "observed_samples": contract.observed_samples if contract else {},
-            "timestamp": _t.time(),
+            "timestamp": time.time(),
         }
         await actor._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 
@@ -251,8 +184,6 @@ class StreamsMixin(_Host):
             stats = await agent.mqtt_get('rpi-room/cpu')
             cpu = stats.get('cpu_percent') if stats else None
         """
-        import asyncio
-
         try:
             import aiomqtt  # noqa: F401
         except ImportError:
@@ -260,7 +191,7 @@ class StreamsMixin(_Host):
         actor = self._actor
         result = []
 
-        async def _fetch():
+        async def _fetch() -> None:
             try:
                 async with mqtt_client(actor._mqtt_broker, actor._mqtt_port) as client:
                     await client.subscribe(topic)
@@ -270,16 +201,16 @@ class StreamsMixin(_Host):
                         except Exception:
                             result.append(msg.payload.decode())
                         return
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[%s] mqtt_get(%s) read failed: %s", self.name, topic, exc)
 
         try:
             await asyncio.wait_for(_fetch(), timeout=timeout)
         except asyncio.TimeoutError:
-            pass
+            logger.debug("[%s] mqtt_get(%s) timed out after %ss", self.name, topic, timeout)
         return result[0] if result else None
 
-    def window(self, topic: str, seconds: float = 300, max_size: int = 1000):
+    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> Any:
         """Create a sliding time window over an MQTT topic stream.
 
         IMPORTANT: window() is synchronous — do NOT use await.
@@ -305,37 +236,7 @@ class StreamsMixin(_Host):
         """
         from ...core.topic_bus import StreamWindow, get_topic_bus
 
-        class _UnAwaitableWindow:
-            """Wraps StreamWindow and raises a clear TypeError if accidentally awaited.
-
-            We do NOT implement __await__ here. Yielding a StreamWindow from
-            __await__ violates the awaitable protocol and causes
-            `RuntimeError: Task got bad yield` in CPython's event loop.
-
-            Instead, accidental `await agent.window(...)` is handled by:
-              - Layer 2 (sanitizer): strips `await` from `agent.window()` at compile time
-              - Layer 4 (_safe_invoke): catches TypeError in subscribe callbacks
-            This wrapper exists solely for a clear error message if those layers miss it.
-            """
-
-            def __init__(self, inner):
-                self._inner = inner
-
-            def __getattr__(self, name):
-                return getattr(self._inner, name)
-
-            def __repr__(self):
-                return f"StreamWindow(topic={getattr(self._inner, 'topic', '?')}, seconds={getattr(self._inner, 'seconds', '?')})"
-
-            def __await__(self):
-                raise TypeError(
-                    "agent.window() is not a coroutine — do not use 'await'. "
-                    "Correct: agent.state['w'] = agent.window('topic', seconds=60)  # no await"
-                )
-                # Make this a generator so __await__ is syntactically valid
-                return
-                yield  # pragma: no cover
-
+        w = None
         try:
             bus = get_topic_bus()
             if bus:
@@ -343,28 +244,29 @@ class StreamsMixin(_Host):
             else:
                 w = StreamWindow(topic, seconds=seconds, max_size=max_size)
                 w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
-            if w is None:
-                raise ValueError("StreamWindow construction returned None")
-            return _UnAwaitableWindow(w)
-        except Exception as e:
-            # Last resort fallback — return a minimal no-op window that won't crash
-            logger.error("[%s] agent.window() failed: %s — returning fallback window", self.name, e)
+        except Exception:
+            logger.exception("[%s] agent.window() failed - using a local window", self.name)
+
+        if w is None:
+            # Last resort: a window fed directly from the broker, so generated
+            # code gets something with the right shape rather than an exception.
             w = StreamWindow(topic, seconds=seconds, max_size=max_size)
             try:
                 w.start(self._actor._mqtt_broker, self._actor._mqtt_port)
-            except Exception:
-                pass
-            return _UnAwaitableWindow(w)
+            except Exception as exc:
+                logger.debug("[%s] Local window could not start: %s", self.name, exc)
+
+        return UnAwaitableWindow(w)
 
     def declare_contract(
         self,
-        publishes=None,
-        subscribes=None,
-        triggers_when: dict | None = None,
-        produces_schema: dict | None = None,
-        consumes_schema: dict | None = None,
-        **kwargs,
-    ):
+        publishes: Any = None,
+        subscribes: Any = None,
+        triggers_when: dict[str, Any] | None = None,
+        produces_schema: dict[str, Any] | None = None,
+        consumes_schema: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
         """Declare this agent's topic contract — what it produces and consumes.
 
         Call from setup() to make this agent discoverable by the planner
@@ -427,7 +329,7 @@ class StreamsMixin(_Host):
         asyncio.ensure_future(self._publish_manifest())
         return AWAITABLE_NONE  # safe to await
 
-    def wiring_opportunities(self) -> list[dict]:
+    def wiring_opportunities(self) -> list[dict[str, Any]]:
         """Return a list of other agents this agent can be auto-wired to,
         based on topic contract compatibility.
 
@@ -447,3 +349,32 @@ class StreamsMixin(_Host):
             for p, c, t in pairs
             if p.name == self.name or c.name == self.name
         ]
+
+
+class UnAwaitableWindow:
+    """Wraps StreamWindow and raises a clear TypeError if accidentally awaited.
+
+    We do NOT implement __await__ here. Yielding a StreamWindow from
+    __await__ violates the awaitable protocol and causes
+    `RuntimeError: Task got bad yield` in CPython's event loop.
+
+    Instead, accidental `await agent.window(...)` is handled by:
+      - Layer 2 (sanitizer): strips `await` from `agent.window()` at compile time
+      - Layer 4 (_safe_invoke): catches TypeError in subscribe callbacks
+    This wrapper exists solely for a clear error message if those layers miss it.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: Any) -> Any:
+        return getattr(self._inner, name)
+
+    def __repr__(self) -> str:
+        return f"StreamWindow(topic={getattr(self._inner, 'topic', '?')}, seconds={getattr(self._inner, 'seconds', '?')})"
+
+    def __await__(self) -> Any:
+        raise TypeError(WINDOW_NOT_AWAITABLE)
+        # Make this a generator so __await__ is syntactically valid
+        return
+        yield  # pragma: no cover

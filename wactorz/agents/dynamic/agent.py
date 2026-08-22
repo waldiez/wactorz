@@ -20,9 +20,9 @@ The `agent` parameter gives access to:
 import asyncio
 import inspect
 import logging
+import re
 import time
 import traceback
-import types
 from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, Message, MessageType
@@ -30,6 +30,7 @@ from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
 from .api import AgentAPI
 from .cv2_shim import resilient_cv2_module
+from .resources import release_open_resources
 from .safety import extract_function_body, validate_code_safety
 from .sanitize import sanitize_code
 
@@ -51,10 +52,10 @@ class DynamicAgent(Actor):
         description: str = "",  # what this agent does
         input_schema: dict[str, Any] | None = None,  # expected task payload fields
         output_schema: dict[str, Any] | None = None,  # returned result fields
-        llm_provider=None,  # optional LLM for agent.llm.chat()
+        llm_provider: Any = None,  # optional LLM for agent.llm.chat()
         trusted: bool = False,  # True = catalog agent, skip safety validator
         **kwargs: Any,
-    ):
+    ) -> None:
         super().__init__(**kwargs)
         self._code = code
         self.poll_interval = poll_interval
@@ -100,7 +101,7 @@ class DynamicAgent(Actor):
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         # ── Compile with LLM self-correction on syntax errors ─────────────
         current_code = self._code
         error_msg = self._compile_code(current_code)
@@ -158,23 +159,8 @@ class DynamicAgent(Actor):
         # even if it never calls publish() (pure handle_task agents, etc.)
         await self._api._publish_manifest()
 
-    async def on_stop(self):
-        # ── Persist final cost metrics so they survive agent deletion ──────
-        # Without this, cost data dies with the agent object and the UI
-        # can't show lifetime costs for deleted agents.
-        if hasattr(self, "total_cost_usd") and self.total_cost_usd > 0:
-            self.persist(
-                "_final_cost",
-                {
-                    "input_tokens": self.total_input_tokens,
-                    "output_tokens": self.total_output_tokens,
-                    "cost_usd": round(self.total_cost_usd, 6),
-                    "name": self.name,
-                    "stopped_at": time.time(),
-                },
-            )
-
-        # ── Publish final metrics before heartbeat loop is cancelled ───────
+    async def _publish_final_metrics(self) -> None:
+        """The last metrics before the heartbeat loop stops, flagged final."""
         try:
             await self._mqtt_publish(
                 f"agents/{self.actor_id}/metrics",
@@ -191,10 +177,11 @@ class DynamicAgent(Actor):
                     "final": True,  # signals UI this is the last metrics msg
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[%s] Final metrics publish failed: %s", self.name, exc)
 
-        # ── Unregister from TopicBus so stale contracts don't accumulate ───
+    def _unregister_from_bus(self) -> None:
+        """Drop this agent's contracts so stale ones do not accumulate."""
         try:
             from ...core.topic_bus import get_topic_bus
 
@@ -202,10 +189,11 @@ class DynamicAgent(Actor):
             if bus:
                 bus.unregister(self.name)
                 logger.debug("[%s] Unregistered from TopicBus", self.name)
-        except Exception:
-            pass  # TopicBus unavailable — not fatal
+        except Exception as exc:
+            logger.debug("[%s] Could not unregister from TopicBus: %s", self.name, exc)
 
-        # ── Give generated code a chance to clean up ───────────────────────
+    async def _run_generated_cleanup(self) -> None:
+        """Give the generated code its chance to let go, under a timeout."""
         cleanup = self._ns.get("cleanup")
         if cleanup:
             try:
@@ -215,58 +203,29 @@ class DynamicAgent(Actor):
             except Exception as e:
                 logger.warning("[%s] cleanup() error: %s", self.name, e)
 
-        # ── Force-release common resources that LLM code may have opened ───
-        # Even if cleanup() didn't run or missed something, we try to release
-        # known resource types stored in agent.state OR in module-level globals
-        # inside the compiled namespace (_ns). LLM-generated code frequently uses
-        # globals like `_cap = None` instead of agent.state, so we must check both.
-        state = getattr(self._api, "state", {}) if self._api else {}
+    async def on_stop(self) -> None:
+        # ── Persist final cost metrics so they survive agent deletion ──────
+        # Without this, cost data dies with the agent object and the UI
+        # can't show lifetime costs for deleted agents.
+        if hasattr(self, "total_cost_usd") and self.total_cost_usd > 0:
+            self.persist(
+                "_final_cost",
+                {
+                    "input_tokens": self.total_input_tokens,
+                    "output_tokens": self.total_output_tokens,
+                    "cost_usd": round(self.total_cost_usd, 6),
+                    "name": self.name,
+                    "stopped_at": time.time(),
+                },
+            )
 
-        # Skip builtins/modules/functions — only look at plain objects
-        _SKIP_TYPES = (
-            type(None),
-            bool,
-            int,
-            float,
-            str,
-            bytes,
-            type,
-            types.ModuleType,
-            types.FunctionType,
-            types.CoroutineType,
-        )
+        await self._publish_final_metrics()
 
-        def _release_obj(key, obj):
-            """Release a single resource object, logging the result."""
-            if obj is None or isinstance(obj, _SKIP_TYPES):
-                return
-            # cv2.VideoCapture (and anything with release/isOpened)
-            if hasattr(obj, "release") and hasattr(obj, "isOpened"):
-                try:
-                    if obj.isOpened():
-                        obj.release()
-                        logger.info("[%s] Released camera handle '%s'", self.name, key)
-                except Exception:
-                    pass
-            # Open file handles
-            elif hasattr(obj, "close") and hasattr(obj, "closed"):
-                try:
-                    if not obj.closed:
-                        obj.close()
-                        logger.debug("[%s] Closed file handle '%s'", self.name, key)
-                except Exception:
-                    pass
+        self._unregister_from_bus()
 
-        # Scan agent.state (preferred pattern)
-        for key in list(state.keys()):
-            _release_obj(key, state.get(key))
+        await self._run_generated_cleanup()
 
-        # Scan module-level globals in the compiled namespace (common LLM pattern)
-        # e.g. `_cap = None` / `_model = None` at module level
-        for key, obj in list(self._ns.items()):
-            if key.startswith("__") or key in ("setup", "process", "cleanup", "handle_task"):
-                continue
-            _release_obj(key, obj)
+        release_open_resources(self._api, self._ns, self.name)
 
         # ── Cancel any tasks spawned inside setup/process code ─────────────
         # Generated code may have called asyncio.create_task() directly without
@@ -322,7 +281,7 @@ class DynamicAgent(Actor):
             logger.info("[%s] Trusted agent — skipping safety validator", self.name)
 
         # Pre-inject the LLM shim so generated code can call agent.llm directly
-        def _get_llm_shim(*args, **kwargs):
+        def _get_llm_shim(*args: Any, **kwargs: Any) -> Any:
             from ...llm_factory import provider_for
 
             # The shim hands generated code the agent's own interface, which
@@ -341,9 +300,8 @@ class DynamicAgent(Actor):
         # by the OS yet, so the first open succeeds but grabFrame() immediately
         # fails with -1072873821. The shim retries with increasing delays so the
         # agent recovers without manual intervention.
-        import re as _re
 
-        if _re.search(r"\bcv2\b", clean):
+        if re.search(r"\bcv2\b", clean):
             shim = resilient_cv2_module(self.name)
             if shim is not None:
                 self._ns["cv2"] = shim
@@ -357,9 +315,10 @@ class DynamicAgent(Actor):
             logger.info("[%s] Code compiled OK. Functions: %s", self.name, fns)
             if not fns:
                 logger.warning("[%s] No functions found in compiled code.", self.name)
-            return None  # success
         except Exception as e:
             return f"{type(e).__name__}: {e}"
+        else:
+            return None  # success
 
     async def _fix_syntax_with_llm(self, bad_code: str, error_msg: str) -> str | None:
         """Ask the configured LLM to fix a syntax error in agent code.
@@ -405,35 +364,20 @@ class DynamicAgent(Actor):
                     ln for ln in fixed.split("\n") if not ln.strip().startswith("```")
                 ).strip()
 
-            return fixed  # caller validates with _compile_code()
-
         except Exception as e:
             logger.warning("[%s] LLM fix call failed: %s", self.name, e)
             return None  # only None when LLM is truly unreachable
+        else:
+            return fixed  # caller validates with _compile_code()
 
     # ── Setup wrapper ───────────────────────────────────────────────────────
 
     # Max times _run_setup will ask the LLM to fix a runtime error before giving up
     _MAX_SETUP_RETRIES = 2
 
-    async def _run_setup(self):
-        """Run setup() as a background task with LLM self-correction on failure.
-
-        If setup() raises a runtime error (e.g. TypeError from await on sync call,
-        NameError, AttributeError), the LLM is asked to fix the code and the whole
-        compile-then-setup cycle is retried up to _MAX_SETUP_RETRIES times.
-
-        - If process() is also defined, it is started AFTER setup() returns.
-          For agents whose setup() never returns (e.g. aiomqtt subscription loops),
-          process() is simply not started — the subscription loop IS the process.
-        """
-        current_code = self._code
+    async def _attempt_setup_with_repair(self, setup: Any, current_code: str) -> Any:
+        """Run setup(), asking the model to repair the code between attempts."""
         last_error = None
-
-        setup = self._fn_setup
-        if setup is None:  # the caller checks this; kept so the type is honest
-            return
-
         for attempt in range(1 + self._MAX_SETUP_RETRIES):
             try:
                 await setup(self._api)
@@ -454,11 +398,11 @@ class DynamicAgent(Actor):
                 last_error = None
                 break
             except asyncio.CancelledError:
-                return
+                return None
             except Exception as e:
                 last_error = e
                 err = traceback.format_exc()
-                logger.error("[%s] setup() failed (attempt %s): %s", self.name, attempt + 1, e)
+                logger.exception("[%s] setup() failed (attempt %s)", self.name, attempt + 1)
 
                 if attempt >= self._MAX_SETUP_RETRIES:
                     break  # exhausted retries
@@ -497,6 +441,26 @@ class DynamicAgent(Actor):
                     self.name,
                     attempt + 1,
                 )
+        return last_error
+
+    async def _run_setup(self) -> None:
+        """Run setup() as a background task with LLM self-correction on failure.
+
+        If setup() raises a runtime error (e.g. TypeError from await on sync call,
+        NameError, AttributeError), the LLM is asked to fix the code and the whole
+        compile-then-setup cycle is retried up to _MAX_SETUP_RETRIES times.
+
+        - If process() is also defined, it is started AFTER setup() returns.
+          For agents whose setup() never returns (e.g. aiomqtt subscription loops),
+          process() is simply not started — the subscription loop IS the process.
+        """
+        current_code = self._code
+
+        setup = self._fn_setup
+        if setup is None:  # the caller checks this; kept so the type is honest
+            return
+
+        last_error = await self._attempt_setup_with_repair(setup, current_code)
 
         if last_error is not None:
             err = traceback.format_exc()
@@ -580,11 +544,12 @@ class DynamicAgent(Actor):
                 fixed = "\n".join(
                     ln for ln in fixed.split("\n") if not ln.strip().startswith("```")
                 ).strip()
-            return fixed
 
         except Exception as e:
             logger.warning("[%s] LLM runtime-fix call failed: %s", self.name, e)
             return None
+        else:
+            return fixed
 
     # ── Process loop ───────────────────────────────────────────────────────
 
@@ -598,23 +563,9 @@ class DynamicAgent(Actor):
     # How many consecutive process() errors trigger state=FAILED (Supervisor sees this)
     _PROCESS_FAIL_THRESHOLD = 5
 
-    async def _process_loop(self):
-        """Continuously call the generated process() function.
-
-        Erlang/OTP semantics:
-        - Each error increments _consecutive_errors.
-        - At _PROCESS_LLM_FIX_THRESHOLD consecutive errors, ask the LLM to fix the code
-          and recompile in-place (self-healing).
-        - At _PROCESS_FAIL_THRESHOLD consecutive errors (or after LLM fix fails),
-          set state=FAILED — the Supervisor's _watch_loop will detect this and restart us.
-          This is the "let it crash" principle: don't spin in degraded mode forever.
-        """
-        process = self._fn_process
-        if process is None:  # the caller checks this; kept so the type is honest
-            return
-
-        _llm_fix_attempted = False  # only try the LLM fix once per process_loop lifetime
-
+    async def _run_process_forever(self, process: Any) -> None:
+        """Call process() on each tick until the agent stops or fails."""
+        _llm_fix_attempted = False
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             if self.state == ActorState.PAUSED:
                 await asyncio.sleep(self.poll_interval)
@@ -628,7 +579,7 @@ class DynamicAgent(Actor):
                 _llm_fix_attempted = False  # reset after a clean run
             except asyncio.TimeoutError:
                 self.metrics.errors += 1
-                logger.error(
+                logger.exception(
                     "[%s] process() timed out after %ss — likely a blocking call without run_in_executor",
                     self.name,
                     self._PROCESS_TIMEOUT,
@@ -656,7 +607,7 @@ class DynamicAgent(Actor):
             except Exception as e:
                 self.metrics.errors += 1
                 tb = traceback.format_exc()
-                logger.error("[%s] process() error: %s\n%s", self.name, e, tb)
+                logger.exception("[%s] process() error", self.name)
                 await self._publish_error(phase="process", error=e, traceback_str=tb)
 
                 # ── LLM self-healing: try to fix the code in-place ────────────
@@ -713,11 +664,90 @@ class DynamicAgent(Actor):
 
                 backoff = min(2**self._consecutive_errors, 30)
                 await asyncio.sleep(backoff)
+
             await asyncio.sleep(self.poll_interval)
+
+    async def _process_loop(self) -> None:
+        """Continuously call the generated process() function.
+
+        Erlang/OTP semantics:
+        - Each error increments _consecutive_errors.
+        - At _PROCESS_LLM_FIX_THRESHOLD consecutive errors, ask the LLM to fix the code
+          and recompile in-place (self-healing).
+        - At _PROCESS_FAIL_THRESHOLD consecutive errors (or after LLM fix fails),
+          set state=FAILED — the Supervisor's _watch_loop will detect this and restart us.
+          This is the "let it crash" principle: don't spin in degraded mode forever.
+        """
+        process = self._fn_process
+        if process is None:  # the caller checks this; kept so the type is honest
+            return
+
+        _llm_fix_attempted = False  # only try the LLM fix once per process_loop lifetime
+
+        await self._run_process_forever(process)
 
     # ── Message handling ───────────────────────────────────────────────────
 
-    async def handle_message(self, msg: Message):
+    async def _invoke_handle_task(
+        self, msg: Message, _incoming: Any, _corr: Any, _with_corr: Any
+    ) -> Any:
+        """Call the generated handle_task(), tagging the reply with its id."""
+        if self._fn_handle_task:
+            try:
+                result = await asyncio.wait_for(
+                    self._fn_handle_task(self._api, msg.payload or {}),
+                    timeout=self._HANDLE_TASK_TIMEOUT,
+                )
+                if msg.sender_id and result is not None:
+                    await self.send(msg.sender_id, MessageType.RESULT, _with_corr(result))
+            except asyncio.TimeoutError:
+                logger.exception(
+                    "[%s] handle_task() timed out after %ss", self.name, self._HANDLE_TASK_TIMEOUT
+                )
+                await self._publish_error(
+                    phase="handle_task",
+                    error=TimeoutError(f"handle_task() exceeded {self._HANDLE_TASK_TIMEOUT}s"),
+                    traceback_str="",
+                )
+                if msg.sender_id:
+                    await self.send(
+                        msg.sender_id,
+                        MessageType.RESULT,
+                        _with_corr(
+                            {
+                                "error": f"handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s",
+                                "error_phase": "handle_task",
+                                "agent": self.name,
+                            }
+                        ),
+                    )
+            except Exception as e:
+                tb = traceback.format_exc()
+                logger.exception("[%s] handle_task() error", self.name)
+                await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
+                if msg.sender_id:
+                    await self.send(
+                        msg.sender_id,
+                        MessageType.RESULT,
+                        _with_corr(
+                            {
+                                "error": str(e),
+                                "error_phase": "handle_task",
+                                "agent": self.name,
+                            }
+                        ),
+                    )
+        else:
+            if msg.sender_id:
+                await self.send(
+                    msg.sender_id,
+                    MessageType.RESULT,
+                    _with_corr({"info": f"{self.name} has no handle_task defined"}),
+                )
+        return None
+
+    async def _handle_task_message(self, msg: Message) -> Any:
+        """Run one task through the generated handle_task(), or explain why not."""
         if msg.type == MessageType.TASK:
             self.metrics.messages_processed += 1
 
@@ -731,7 +761,7 @@ class DynamicAgent(Actor):
             _incoming = msg.payload if isinstance(msg.payload, dict) else {}
             _corr = _incoming.get("_task_id")
 
-            def _with_corr(r):
+            def _with_corr(r: Any) -> Any:
                 if _corr is None:
                     return r
                 if isinstance(r, dict):
@@ -739,60 +769,13 @@ class DynamicAgent(Actor):
                 # non-dict result (str/number) — wrap so the id can ride along
                 return {"result": r, "_task_id": _corr}
 
-            if self._fn_handle_task:
-                try:
-                    result = await asyncio.wait_for(
-                        self._fn_handle_task(self._api, msg.payload or {}),
-                        timeout=self._HANDLE_TASK_TIMEOUT,
-                    )
-                    if msg.sender_id and result is not None:
-                        await self.send(msg.sender_id, MessageType.RESULT, _with_corr(result))
-                except asyncio.TimeoutError:
-                    logger.error(
-                        "[%s] handle_task() timed out after %ss",
-                        self.name,
-                        self._HANDLE_TASK_TIMEOUT,
-                    )
-                    await self._publish_error(
-                        phase="handle_task",
-                        error=TimeoutError(f"handle_task() exceeded {self._HANDLE_TASK_TIMEOUT}s"),
-                        traceback_str="",
-                    )
-                    if msg.sender_id:
-                        await self.send(
-                            msg.sender_id,
-                            MessageType.RESULT,
-                            _with_corr(
-                                {
-                                    "error": f"handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s",
-                                    "error_phase": "handle_task",
-                                    "agent": self.name,
-                                }
-                            ),
-                        )
-                except Exception as e:
-                    tb = traceback.format_exc()
-                    logger.error("[%s] handle_task() error: %s\n%s", self.name, e, tb)
-                    await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
-                    if msg.sender_id:
-                        await self.send(
-                            msg.sender_id,
-                            MessageType.RESULT,
-                            _with_corr(
-                                {
-                                    "error": str(e),
-                                    "error_phase": "handle_task",
-                                    "agent": self.name,
-                                }
-                            ),
-                        )
-            else:
-                if msg.sender_id:
-                    await self.send(
-                        msg.sender_id,
-                        MessageType.RESULT,
-                        _with_corr({"info": f"{self.name} has no handle_task defined"}),
-                    )
+            return await self._invoke_handle_task(msg, _incoming, _corr, _with_corr)
+        return None
+
+    async def handle_message(self, msg: Message) -> Any:
+        if msg.type == MessageType.TASK:
+            return await self._handle_task_message(msg)
+        return None
 
     async def _publish_error(
         self,
@@ -800,7 +783,7 @@ class DynamicAgent(Actor):
         error: Exception,
         traceback_str: str = "",
         fatal: bool = False,
-    ):
+    ) -> None:
         """Publish a structured error event to agents/{id}/errors AND send
         a direct actor message to MonitorAgent so it works without MQTT.
         """
@@ -836,8 +819,10 @@ class DynamicAgent(Actor):
                             "_monitor_error_event": True,
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug(
+                        "[%s] Could not publish the monitor error event: %s", self.name, exc
+                    )
         # Mirror to /alert so the dashboard picks it up immediately
         await self._mqtt_publish(
             f"agents/{self.actor_id}/alert",
@@ -850,7 +835,7 @@ class DynamicAgent(Actor):
             },
         )
 
-    def _reset_error_count(self):
+    def _reset_error_count(self) -> None:
         """Reset the process()/setup() error counter after a clean run.
 
         Deliberately does NOT touch _cb_error_count / _cb_error_last — those
@@ -862,7 +847,7 @@ class DynamicAgent(Actor):
             self._consecutive_errors = 0
             self._error_phase = ""
 
-    def _persist_fixed_code(self, fixed_code: str):
+    def _persist_fixed_code(self, fixed_code: str) -> Any:
         """Write the LLM-fixed code back to:
           1. main's spawn registry  — so system restarts use the fixed code
           2. Supervisor's factory   — so Supervisor-driven restarts use the fixed code
@@ -908,12 +893,12 @@ class DynamicAgent(Actor):
                     _registry = self._registry
 
                     async def _fixed_factory(
-                        old_f=_old_factory,
-                        code=_fixed,
-                        mc=_mqtt_client,
-                        mb=_mqtt_broker,
-                        mp=_mqtt_port,
-                    ):
+                        old_f: Any = _old_factory,
+                        code: Any = _fixed,
+                        mc: Any = _mqtt_client,
+                        mb: Any = _mqtt_broker,
+                        mp: Any = _mqtt_port,
+                    ) -> Any:
                         # Call the original factory to get a correctly configured instance
                         actor = await old_f() if inspect.iscoroutinefunction(old_f) else old_f()
                         # Patch in the fixed code before the actor starts
@@ -926,14 +911,14 @@ class DynamicAgent(Actor):
         except Exception as exc:
             logger.warning("[%s] Could not persist fixed code: %s", self.name, exc)
 
-    def get_status(self) -> dict:
+    def get_status(self) -> dict[str, Any]:
         s = super().get_status()
         s["description"] = self.description
         s["code"] = self._code
         s["agent_type"] = "dynamic"
         return s
 
-    def _build_heartbeat(self) -> dict:
+    def _build_heartbeat(self) -> dict[str, Any]:
         hb = super()._build_heartbeat()
         hb["code"] = self._code  # include code in every heartbeat
         hb["description"] = self.description
@@ -943,7 +928,7 @@ class DynamicAgent(Actor):
     def _current_task_description(self) -> str:
         return self.description or "running dynamic code"
 
-    def _accrue_usage(self, usage: dict) -> None:
+    def _accrue_usage(self, usage: dict[str, Any]) -> None:
         if not isinstance(usage, dict):
             return
         self.total_input_tokens += usage.get("input_tokens", 0)

@@ -7,6 +7,7 @@ points at the right place in the code the model wrote.
 """
 
 import re
+from typing import Any
 
 
 def sanitize_code(code: str) -> str:
@@ -17,33 +18,6 @@ def sanitize_code(code: str) -> str:
     - call_llm/call_openai/call_ollama functions -> agent.llm shim
     - standalone bad lines
     """
-    LLM_PATTERNS = [
-        r"\bimport\s+(openai|anthropic|ollama|langchain)\b",
-        r"\bfrom\s+(openai|anthropic|ollama|langchain)\b",
-        r"\b(OPENAI_API_KEY|ANTHROPIC_API_KEY)\b",
-        r"os\.environ.*API_KEY",
-        r"\b(openai|anthropic|ollama)\.(OpenAI|Anthropic|Client|AsyncOpenAI|AsyncAnthropic)\b",
-        # api_key as a variable assignment (not as a dict key like 'api_key': ...)
-        r"^\s*api_key\s*=",
-        # llm_backend as a variable assignment only
-        r"^\s*agent\.state\[.llm_backend.\]\s*=",
-    ]
-
-    def line_is_bad(line):
-        return any(re.search(p, line) for p in LLM_PATTERNS)
-
-    def collect_block(lines, start, base_indent, conts=("except", "else", "finally", "elif")):
-        j, block = start, []
-        pat = r"\s*(" + "|".join(conts) + r")\b" if conts else r"(?!x)x"
-        while j < len(lines):
-            bl = lines[j]
-            bl_ind = len(bl) - len(bl.lstrip()) if bl.strip() else base_indent + 4
-            if bl.strip() and bl_ind <= base_indent and not re.match(pat, bl):
-                break
-            block.append(bl)
-            j += 1
-        return block, j
-
     lines = code.split("\n")
     result = []
     i = 0
@@ -127,18 +101,61 @@ def sanitize_code(code: str) -> str:
     # LLMs write `await agent.subscribe(...)` because setup() is async.
     # These methods already return AwaitableNone so the code won't crash,
     # but stripping `await` keeps the code clean and avoids confusion.
-    _SYNC_METHODS = (
-        "subscribe",
-        "window",
-        "persist",
-        "recall",
-        "declare_contract",
-        "agents",
-        "nodes",
-        "topics",
-        "capabilities",
-        "increment_processed",
-        "increment_errors",
-    )
-    _sync_pat = r"\bawait\s+(agent\.(?:" + "|".join(_SYNC_METHODS) + r")\s*\()"
-    return re.sub(_sync_pat, r"\1", sanitized)
+    return strip_sync_awaits(sanitized)
+
+
+LLM_PATTERNS = [
+    r"\bimport\s+(openai|anthropic|ollama|langchain)\b",
+    r"\bfrom\s+(openai|anthropic|ollama|langchain)\b",
+    r"\b(OPENAI_API_KEY|ANTHROPIC_API_KEY)\b",
+    r"os\.environ.*API_KEY",
+    r"\b(openai|anthropic|ollama)\.(OpenAI|Anthropic|Client|AsyncOpenAI|AsyncAnthropic)\b",
+    # api_key as a variable assignment (not as a dict key like 'api_key': ...)
+    r"^\s*api_key\s*=",
+    # llm_backend as a variable assignment only
+    r"^\s*agent\.state\[.llm_backend.\]\s*=",
+]
+
+
+def line_is_bad(line: str) -> bool:
+    """True when the line is LLM self-setup rather than agent logic."""
+    return any(re.search(p, line) for p in LLM_PATTERNS)
+
+
+def collect_block(
+    lines: list[str],
+    start: int,
+    base_indent: int,
+    conts: tuple[str, ...] = ("except", "else", "finally", "elif"),
+) -> Any:
+    j, block = start, []
+    pat = r"\s*(" + "|".join(conts) + r")\b" if conts else r"(?!x)x"
+    while j < len(lines):
+        bl = lines[j]
+        bl_ind = len(bl) - len(bl.lstrip()) if bl.strip() else base_indent + 4
+        if bl.strip() and bl_ind <= base_indent and not re.match(pat, bl):
+            break
+        block.append(bl)
+        j += 1
+    return block, j
+
+
+SYNC_METHODS = (
+    "subscribe",
+    "window",
+    "persist",
+    "recall",
+    "declare_contract",
+    "agents",
+    "nodes",
+    "topics",
+    "capabilities",
+    "increment_processed",
+    "increment_errors",
+)
+
+
+def strip_sync_awaits(code: str) -> str:
+    """Drop `await` from agent calls that are synchronous."""
+    pattern = r"\bawait\s+(agent\.(?:" + "|".join(SYNC_METHODS) + r")\s*\()"
+    return re.sub(pattern, r"\1", code)

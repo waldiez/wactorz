@@ -97,3 +97,29 @@ class TestDiscovery:
 
     def test_nodes_returns_a_list_without_a_registry(self, api: AgentAPI) -> None:
         assert isinstance(api.nodes(), list)
+
+
+class TestSubscribeCallbackContract:
+    """subscribe() refuses a callback it can prove will not work.
+
+    The arity check used to raise inside a `try` whose `except (TypeError,
+    ValueError)` caught its own raise, so it never reached a caller. These pin
+    the check now that it does.
+    """
+
+    def test_a_callback_taking_no_payload_is_refused(self, api: AgentAPI) -> None:
+        def takes_nothing() -> None:
+            return None
+
+        with pytest.raises(TypeError, match="one argument"):
+            api.subscribe("sensors/x", takes_nothing)
+
+    def test_a_missing_callback_is_refused(self, api: AgentAPI) -> None:
+        with pytest.raises(TypeError, match="requires a callable"):
+            api.subscribe("sensors/x", None)  # pyright: ignore[reportArgumentType]
+
+    async def test_a_callback_that_cannot_be_inspected_is_allowed_through(
+        self, api: AgentAPI
+    ) -> None:
+        """Only what we can prove wrong is refused; the rest fails at runtime."""
+        api.subscribe("sensors/x", print)

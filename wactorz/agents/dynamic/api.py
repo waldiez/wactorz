@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from ..lookup import find_main_actor
@@ -31,7 +32,7 @@ class LLMInterface:
     Tracks token usage and cost just like LLMAgent does.
     """
 
-    def __init__(self, actor: DynamicAgent, agent_state: dict):
+    def __init__(self, actor: DynamicAgent, agent_state: dict[str, Any]) -> None:
         self._actor = actor
         self._agent_state = agent_state  # reference to AgentAPI.state
 
@@ -51,12 +52,13 @@ class LLMInterface:
                     f"agents/{self._actor.actor_id}/metrics",
                     self._actor._build_metrics(),
                 )
-            return response
         except Exception as e:
-            logger.error("[%s] agent.llm.chat() failed: %s", self._actor.name, e)
+            logger.exception("[%s] agent.llm.chat() failed", self._actor.name)
             return f"[LLM error: {e}]"
+        else:
+            return response
 
-    async def complete(self, messages: list, system: str = "") -> str:
+    async def complete(self, messages: list[Any], system: str = "") -> str:
         """Multi-turn version — pass a full messages list."""
         provider = self._actor._llm_provider
         if provider is None:
@@ -90,7 +92,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
     Wraps the actual Actor internals so generated code can't break the framework.
     """
 
-    def __init__(self, actor: DynamicAgent):
+    def __init__(self, actor: DynamicAgent) -> None:
         self._actor = actor
         self.name = actor.name
         self.actor_id = actor.actor_id
@@ -138,7 +140,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
     # environments. Both forms — agent.chat(...) and agent.llm.chat(...) —
     # are valid; pick whichever feels cleaner in your code.
 
-    async def chat(self, messages, system: str = "", timeout: float = 60.0) -> str:
+    async def chat(self, messages: Any, system: str = "", timeout: float = 60.0) -> str:
         """Multi-turn LLM call — mirrors _RemoteAgentAPI.chat() so the same
         generated code runs locally and remotely.
 
@@ -153,7 +155,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
             messages = [{"role": "user", "content": messages}]
         return await self.llm.complete(messages, system=system)
 
-    async def complete(self, messages, system: str = "", timeout: float = 60.0) -> str:
+    async def complete(self, messages: Any, system: str = "", timeout: float = 60.0) -> str:
         """Alias for chat() — matches LLMInterface.complete() naming."""
         return await self.chat(messages, system=system, timeout=timeout)
 
@@ -162,26 +164,26 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
     # ── Logging / alerting ─────────────────────────────────────────────────
 
     @property
-    def logger(self):
+    def logger(self) -> Any:
         """Compatibility shim — allows agent.logger.info/warning/error in generated code."""
         api = self
 
         class _LoggerShim:
-            def info(self, msg):
+            def info(self, msg: Any) -> None:
                 asyncio.ensure_future(api.log(msg, "info"))
 
-            def warning(self, msg):
+            def warning(self, msg: Any) -> None:
                 asyncio.ensure_future(api.log(msg, "warning"))
 
-            def error(self, msg):
+            def error(self, msg: Any) -> None:
                 asyncio.ensure_future(api.log(msg, "error"))
 
-            def debug(self, msg):
+            def debug(self, msg: Any) -> None:
                 asyncio.ensure_future(api.log(msg, "debug"))
 
         return _LoggerShim()
 
-    def run_in_background(self, coro):
+    def run_in_background(self, coro: Any) -> Any:
         """Schedule a coroutine on the actor's event loop and track it on the actor
         so it is cancelled cleanly on stop (same lifecycle as subscribe()).
         Returns the asyncio.Task.
@@ -193,13 +195,13 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         task = asyncio.create_task(coro)
         try:
             self._actor._tasks.append(task)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[%s] Could not track a background task: %s", self.name, exc)
         return task
 
     # ── Persistence ────────────────────────────────────────────────────────
 
-    def persist(self, key: str, value: Any):
+    def persist(self, key: str, value: Any) -> Any:
         self._actor.persist(key, value)
         return AWAITABLE_NONE  # safe to await
 
@@ -224,7 +226,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
 
     # ── Inter-agent messaging ──────────────────────────────────────────────
 
-    def agents(self) -> list[dict]:
+    def agents(self) -> list[dict[str, Any]]:
         """Return all running agents — both local and remote.
 
         Local agents come from the registry. Remote agents are sourced from
@@ -263,10 +265,8 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         # ── Remote agents from live node heartbeats ───────────────────────────
         main = find_main_actor(registry)
         if main:
-            import time as _t
-
             for node_name, nd in main._known_nodes.items():
-                if _t.time() - nd.get("last_seen", 0) > 30:
+                if time.time() - nd.get("last_seen", 0) > 30:
                     continue  # node is offline — skip
                 for aname in nd.get("agents", []):
                     if aname in seen:
@@ -286,7 +286,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
 
         return result
 
-    def nodes(self) -> list[dict]:
+    def nodes(self) -> list[dict[str, Any]]:
         """Return all known remote nodes with online status and running agents.
         Only available when the agent is running under a MainActor system.
 
@@ -300,7 +300,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
             return main.list_nodes()
         return []
 
-    def topics(self, keyword: str = "") -> list[dict]:
+    def topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
         Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}
 
@@ -315,7 +315,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
             return main.list_topics(keyword)
         return []
 
-    def capabilities(self, keyword: str = "") -> list[dict]:
+    def capabilities(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known agents with their full capability profile.
         Each entry: {"name", "description", "capabilities", "input_schema", "output_schema"}
 
@@ -336,8 +336,8 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
 
     # ── Metrics ────────────────────────────────────────────────────────────
 
-    def increment_processed(self):
+    def increment_processed(self) -> None:
         self._actor.metrics.messages_processed += 1
 
-    def increment_errors(self):
+    def increment_errors(self) -> None:
         self._actor.metrics.errors += 1

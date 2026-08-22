@@ -5,6 +5,8 @@ code. Returning this instead of None means the stray await is harmless rather
 than a TypeError the model then tries to repair.
 """
 
+from typing import Any
+
 
 class AwaitableNone:
     """Sentinel that can be safely awaited (returns None) or used in bool context (False).
@@ -15,13 +17,13 @@ class AwaitableNone:
     in await expression' — the #1 runtime failure in LLM-generated agent code.
     """
 
-    def __await__(self):
+    def __await__(self) -> Any:
         return iter([])  # completes immediately, yields None
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return False
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "None"
 
 

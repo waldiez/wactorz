@@ -45,7 +45,7 @@ def resilient_cv2_module(agent_name: str) -> Any | None:
         # the cyclic "opened but read failed" log we used to see.
         _POST_OPEN_SETTLE = 0.3  # seconds
 
-        def __init__(self, index_or_path, *args, **kwargs):
+        def __init__(self, index_or_path: Any, *args: Any, **kwargs: Any) -> None:
             super().__init__()
             # ── Windows: force DSHOW for integer indices ──────────
             # MSMF (the OpenCV default on Windows) is flaky on
@@ -67,14 +67,14 @@ def resilient_cv2_module(agent_name: str) -> Any | None:
                         agent_name,
                         index_or_path,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[%s] Could not force the DSHOW backend: %s", agent_name, exc)
             self._index = index_or_path
             self._args = args
             self._kwargs = kwargs
             self._do_open()
 
-        def read(self):
+        def read(self) -> Any:
             # Return the probe frame captured during open verification
             # so the first cap.read() in process() is not lost.
             if hasattr(self, "_probe_frame") and self._probe_frame is not None:
@@ -82,57 +82,56 @@ def resilient_cv2_module(agent_name: str) -> Any | None:
                 return True, frame
             return super().read()
 
-        def _do_open(self):
+        def _do_open(self) -> None:
+            attempts = len(self._RETRY_DELAYS) + 1
             for attempt, delay in enumerate([0.0, *self._RETRY_DELAYS], start=1):
-                if delay:
-                    # Release before retrying so MSMF frees the device
-                    try:
-                        super().release()
-                    except Exception:
-                        pass
-                    logger.info(
-                        f"[{agent_name}] Camera open retry "
-                        f"{attempt}/{len(self._RETRY_DELAYS) + 1} "
-                        f"— waiting {delay:.0f}s for OS to release device"
-                    )
-                    time.sleep(delay)
+                if self._open_attempt(attempt, delay, attempts):
+                    return
 
-                super().open(self._index, *self._args, **self._kwargs)
-                if not super().isOpened():
-                    continue
+            logger.error("[%s] Camera could not be opened after %s attempts", agent_name, attempts)
 
-                # Give the source reader time to start streaming
-                # before the probe. MSMF/DSHOW both need a beat
-                # after isOpened() returns True; probing immediately
-                # produces -1072873821 even when the device is fine.
-                time.sleep(self._POST_OPEN_SETTLE)
-
-                # Verify we can actually grab a frame — MSMF sometimes
-                # reports isOpened()=True but then immediately errors.
-                # Use read() and stash the probe frame on the instance so
-                # the first cap.read() in process() doesn't get an empty
-                # result (grab() is destructive and has no unread()).
-                ok, probe = super().read()
-                if ok and probe is not None:
-                    self._probe_frame = probe
-                    logger.info(
-                        "[%s] Camera opened successfully on attempt %s",
-                        agent_name,
-                        attempt,
-                    )
-                    return  # success
-
-                logger.warning(
-                    "[%s] Camera opened but read() failed on attempt %s — device may not be fully released yet",
+        def _open_attempt(self, attempt: int, delay: float, attempts: int) -> bool:
+            """One open, settle and probe. True when the camera really works."""
+            if delay:
+                # Release before retrying so MSMF frees the device
+                try:
+                    super().release()
+                except Exception as exc:
+                    logger.debug("[%s] Release before retry failed: %s", agent_name, exc)
+                logger.info(
+                    "[%s] Camera open retry %s/%s - waiting %.0fs for OS to release device",
                     agent_name,
                     attempt,
+                    attempts,
+                    delay,
                 )
+                time.sleep(delay)
 
-            logger.error(
-                "[%s] Camera could not be opened after %s attempts",
+            super().open(self._index, *self._args, **self._kwargs)
+            if not super().isOpened():
+                return False
+
+            # Give the source reader time to start streaming before the probe.
+            # MSMF/DSHOW both need a beat after isOpened() returns True; probing
+            # immediately produces -1072873821 even when the device is fine.
+            time.sleep(self._POST_OPEN_SETTLE)
+
+            # Verify we can actually grab a frame — MSMF sometimes reports
+            # isOpened()=True but then immediately errors. Stash the probe frame
+            # so the first cap.read() in process() is not handed an empty result
+            # (grab() is destructive and there is no unread()).
+            ok, probe = super().read()
+            if ok and probe is not None:
+                self._probe_frame = probe
+                logger.info("[%s] Camera opened successfully on attempt %s", agent_name, attempt)
+                return True
+
+            logger.warning(
+                "[%s] Camera opened but read() failed on attempt %s - device may not be ready",
                 agent_name,
-                len(self._RETRY_DELAYS) + 1,
+                attempt,
             )
+            return False
 
     # Wrap in a module proxy so `import cv2` inside agent code still works,
     # and `cv2.VideoCapture` transparently becomes the resilient version.

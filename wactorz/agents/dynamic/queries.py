@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class QueriesMixin(_Host):
     """Mixed into AgentAPI; reads the actor through `self._actor`."""
 
-    async def publish_world_state(self, key: str, data: Any, retain: bool = True):
+    async def publish_world_state(self, key: str, data: Any, retain: bool = True) -> None:
         """Publish a piece of world state to the shared retained state hub.
         Other agents can read this without making a request — it's always there.
 
@@ -186,7 +186,7 @@ class QueriesMixin(_Host):
                 return rows
         return rows
 
-    def ts_stats(self) -> dict:
+    def ts_stats(self) -> dict[str, Any]:
         """Return row counts for all time-series tables.
         Useful for checking how much data is available before training.
 

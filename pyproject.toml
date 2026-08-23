@@ -86,6 +86,17 @@ dev       = [
     "twine>=7.0.0",
 ]
 
+# Drives the browser in the end-to-end suite (e2e/). Its own extra rather than
+# part of `dev`: a contributor running unit tests has no use for it, and the
+# browser it drives is a separate ~150MB download (`make e2e-setup`).
+#
+# Pinned exactly, not floored. The pip package and the browser build it fetches
+# are version-matched, so a floating floor silently changes the browser under the
+# suite - and with no dependency lock in this project, nothing else would catch
+# that. Same reasoning as the `docs` extra above pins markdown and pygments: the
+# dependency decides the thing being compared.
+e2e       = ["playwright==1.62.0"]
+
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
     "wactorz[anthropic]",

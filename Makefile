@@ -1,6 +1,7 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt lint format clean \
         up down logs shell \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
+        e2e e2e-setup e2e-release e2e-rehearse e2e-demo e2e-clean \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
 # ── Windows shell setup ──────────────────────────────────────────────────────
@@ -60,7 +61,9 @@ FRONTEND_DIR := frontend
 PKG_MGR      := $(shell command -v bun >/dev/null 2>&1 && echo bun || (command -v pnpm >/dev/null 2>&1 && echo pnpm || echo npm))
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | \
+	@# The character class includes digits, or targets like `e2e` are absent from
+	@# their own help output.
+	@grep -E '^[a-zA-Z0-9_-]+:.*##' $(MAKEFILE_LIST) | \
 		awk 'BEGIN{FS=":.*## "}{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}' | sort
 
 # ── Runtime ─────────────────────────────────────────────────────────────────
@@ -129,15 +132,15 @@ fmt: ## Format TypeScript
 format: fmt ## Format TypeScript
 
 fmt-py: ## Format Python (ruff format + safe autofixes) — run this to pass the gate
-	$(PYTHON) -m ruff format wactorz tests scripts
-	$(PYTHON) -m ruff check wactorz tests scripts --fix
+	$(PYTHON) -m ruff format wactorz tests scripts e2e
+	$(PYTHON) -m ruff check wactorz tests scripts e2e --fix
 
 lint: ## Full frontend lint (typecheck + prettier + eslint)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint
 
 lint-py: ## Lint Python — gated ruff (fails) + advisory docstrings/typing (reports only)
-	$(PYTHON) -m ruff check wactorz tests scripts
-	$(PYTHON) -m ruff format --check wactorz tests scripts
+	$(PYTHON) -m ruff check wactorz tests scripts e2e
+	$(PYTHON) -m ruff format --check wactorz tests scripts e2e
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
 	-$(PYTHON) -m ruff check wactorz --extend-select G,LOG,TRY,C90,PTH,S,T20,DTZ --statistics
 	@echo "── advisory (non-blocking): basedpyright (basic) ──"
@@ -205,6 +208,46 @@ test-py: ## Run Python tests (pytest) + the remote runner's own self-test
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test
+
+# ── End-to-end ──────────────────────────────────────────────────────────────
+# Real processes, a real broker and a browser. Not part of `test`, and not a
+# required check: it has more ways to be non-deterministic than the unit suite,
+# so it runs on demand and before a tag. See e2e/README.md.
+#
+# Every target unsets WACTORZ_STATE_DIR. The suite mints a fresh state directory
+# per run, and a value exported for ordinary work would otherwise decide where a
+# run wrote — the leak the suite refuses at startup when it arrives by the other
+# door (a direct `pytest e2e/`).
+E2E := WACTORZ_STATE_DIR= $(PYTHON) -m pytest e2e
+
+e2e-setup: ## One-time: install the Playwright browser the e2e suite drives
+	@# The extra rather than a version repeated here — pyproject pins it, and a
+	@# second copy of the number is a second thing to forget to bump.
+	$(PYTHON) -m pip install -e ".[e2e]"
+	$(PYTHON) -m playwright install chromium
+
+e2e: ## Run the e2e regression core + demo scenarios (headless, fake model)
+	@# release/ is excluded rather than listed the other way round: the core and
+	@# the demos are what must always pass, and release scenarios are a revolving
+	@# door that would otherwise make an ordinary run red for a feature in flight.
+	$(E2E) --ignore=e2e/scenarios/release
+
+e2e-release: ## Run everything before a tag: core + release/ + demo/
+	$(E2E)
+
+e2e-rehearse: ## Headed, paced, fake model — for iterating on demo pacing
+	$(E2E) --profile rehearse
+
+e2e-demo: ## Headed, paced, real model — for the take you keep
+	$(E2E) --profile demo
+
+e2e-clean: ## Delete every e2e artefact (state, logs, videos, traces)
+	@# Everything under out/ is evidence about a run, and a run keeps only what
+	@# it needs to explain a failure. A suite trims older runs itself; this is
+	@# for reclaiming the lot, including recordings worth keeping — so it says
+	@# what it removed rather than doing it silently.
+	rm -rf e2e/out
+	@echo "removed e2e/out"
 
 coverage: coverage-py coverage-frontend ## Generate coverage (Python + frontend)
 

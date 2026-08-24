@@ -48,7 +48,7 @@ def test_a_stopped_agent_is_kept_and_refused_not_switched(
     good outcome; a silent redirect to `main` is the bug.
     """
     dashboard.choose_target(spare_agent)
-    app.rest.stop(spare_agent)
+    assert app.rest.command(spare_agent, "stop").ok, f"stopping {spare_agent!r} was refused"
     waiting.until(
         lambda: app.rest.state_of(spare_agent) == "stopped",
         what=f"{spare_agent!r} to stop",

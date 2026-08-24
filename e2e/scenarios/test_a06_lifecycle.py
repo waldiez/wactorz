@@ -37,11 +37,8 @@ def test_a_paused_agent_can_be_resumed(app: backend.Backend) -> None:
 
 
 def test_an_agent_can_be_stopped(app: backend.Backend) -> None:
-    """Stopping is the one lifecycle command with no REST route - it goes over
-    the socket, the way the dashboard's stop button does. There is nothing to
-    assert on the way out, so the claim is entirely about the state afterwards.
-    """
-    app.rest.stop(AGENT)
+    response = app.rest.command(AGENT, "stop")
+    assert response.ok, f"stopping {AGENT!r} was refused: {response.status} {response.body[:200]}"
     _state_becomes(app, AGENT, "stopped")
 
 

@@ -194,20 +194,6 @@ class Rest:
         """
         return self.raw("POST", f"/api/actors/{urllib.parse.quote(agent)}/{action}")
 
-    def stop(self, agent: str) -> None:
-        """Stop an agent, which only the socket can do.
-
-        There is no `POST /actors/{id}/stop`: start, pause and resume have REST
-        routes and stop does not, so the dashboard's stop button sends a socket
-        frame. This goes the same way, because a harness that reached for a route
-        the product does not have would be testing an API nobody uses.
-
-        Nothing is returned, because nothing is sent back. A refused command
-        broadcasts no patch at all, so "did it work" is a question about the
-        agent's state afterwards - which is what the scenarios wait on.
-        """
-        self.socket_command(agent, "stop")
-
     def actor_id(self, agent: str) -> str:
         """The uuid the dashboard knows this agent by.
 
@@ -221,6 +207,11 @@ class Rest:
 
     def socket_command(self, agent: str, command: str) -> None:
         """One lifecycle command over the dashboard socket, sent as the page sends it.
+
+        Every verb has a REST route now, including `stop`, so this is no longer
+        the only way to reach one - it is the *dashboard's* way. Both paths run
+        the same server-side bookkeeping, and a scenario that wants to prove that
+        of the socket half has to actually send a frame.
 
         By id, not by name. The command *runs* either way - the dispatcher
         resolves both - but the server then records the new state under the id it

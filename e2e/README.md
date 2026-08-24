@@ -113,7 +113,7 @@ have been written as a unit test, it should have been.
 | `a05_talk_to_it` | a message reaches the agent and its reply reaches the page |
 | `a06_lifecycle` | pause, resume, stop, start, delete, and `main` refusing to be paused |
 | `a07_counters` | after two stop/start cycles, message count and cost are unchanged |
-| `a08_broker_down` | a local command takes effect with the broker stopped |
+| `a08_broker_down` | a local command takes effect with the broker stopped, over REST and over the socket |
 | `a09_shutdown` | one interrupt, exits in well under a second |
 | `a10_reset` | `wactorz-reset` leaves a clean state directory and the system restarts empty |
 | `chat_target` | the chosen agent survives a reload; a stopped one is refused rather than silently switched |

@@ -41,16 +41,47 @@ def test_a_local_command_lands_with_the_broker_stopped(
 ) -> None:
     broker.stop()
 
-    # Sent over the dashboard socket, which is the path the pause button uses and
-    # has nothing to do with the broker. Deliberately not the REST route: that one
-    # pauses the actor and leaves the reported state to arrive by MQTT, so with the
-    # broker down it succeeds and is invisible - which would make this scenario
-    # fail against a working system.
-    app.rest.socket_command(spare_agent, "pause")
+    # The REST route, which is what a script or an integration reaches for. It
+    # used to be the wrong instrument here: it paused the actor and left the
+    # reported state to arrive by MQTT, so with the broker down the command
+    # worked and nothing ever said so. Both paths now do that bookkeeping in one
+    # place, which is exactly what this asserts.
+    response = app.rest.command(spare_agent, "pause")
+    assert response.ok, (
+        f"pausing with the broker down was refused: {response.status} {response.body[:200]}"
+    )
 
     waiting.until(
         lambda: app.rest.state_of(spare_agent) == "paused",
         what=f"{spare_agent!r} to actually pause with the broker down",
+        timeout=60.0,
+        interval=0.25,
+    )
+
+
+def test_the_dashboard_path_lands_with_the_broker_stopped_too(
+    app: backend.Backend, spare_agent: str
+) -> None:
+    """The same command over the socket, which is how the dashboard sends it.
+
+    Both routes share one function server-side now, and this is the condition
+    where sharing it matters: with the broker away, nothing arrives later to
+    paper over a path that forgot to report what it did. Asserting only one of
+    them would leave the other free to drift back.
+    """
+    assert app.rest.command(spare_agent, "resume").ok, "resume before the socket check was refused"
+    waiting.until(
+        lambda: app.rest.state_of(spare_agent) == "running",
+        what=f"{spare_agent!r} to be running again",
+        timeout=60.0,
+        interval=0.25,
+    )
+
+    app.rest.socket_command(spare_agent, "pause")
+
+    waiting.until(
+        lambda: app.rest.state_of(spare_agent) == "paused",
+        what=f"{spare_agent!r} to pause over the socket with the broker down",
         timeout=60.0,
         interval=0.25,
     )

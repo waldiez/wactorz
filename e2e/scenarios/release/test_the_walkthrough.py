@@ -130,7 +130,7 @@ def test_the_new_agent_is_visible_and_addressable(page: browser.Dashboard) -> No
 
 
 def test_the_agent_can_be_stopped_and_started_again(walkthrough: backend.Backend) -> None:
-    walkthrough.rest.stop(AGENT)
+    assert walkthrough.rest.command(AGENT, "stop").ok, f"stopping {AGENT!r} was refused"
     waiting.until(
         lambda: walkthrough.rest.state_of(AGENT) == "stopped",
         what=f"{AGENT!r} to stop",

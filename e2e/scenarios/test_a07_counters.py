@@ -37,7 +37,7 @@ def agent_fixture(app: backend.Backend, spare_agent: str) -> str:
 
 def _cycle(app: backend.Backend, agent: str) -> None:
     """One stop and one start, each waited out before the next begins."""
-    app.rest.stop(agent)
+    assert app.rest.command(agent, "stop").ok, f"stopping {agent!r} was refused"
     waiting.until(
         lambda: app.rest.state_of(agent) == "stopped",
         what=f"{agent!r} to stop",

@@ -10,23 +10,59 @@ permissions:
   id-token: write
 
 jobs:
+  # The whole of CI, on the tagged commit. A tag is not proof anything passed:
+  # it can be cut from a commit CI never ran on, or from one where it failed.
+  verify:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Publish to PyPI
+    needs: verify
     runs-on: ubuntu-latest
     environment: release
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v5
+      # Before anything is built. The wheel takes its version from
+      # _version.py (hatch reads it), never from the tag, so the two can
+      # disagree and every later step still passes: the notes step only checks
+      # the tag against the CHANGELOG, the build succeeds at the old version,
+      # and `skip-existing` turns the upload of an already-published version
+      # into a no-op. The result is a release that looks green and carries the
+      # previous version's artifacts under the new tag.
+      #
+      # The add-on may legitimately be ahead within one library version
+      # (0.5.3.1 is a rebuild of 0.5.3), so only its first three parts are
+      # compared — that is what catches a release where sync_versions was
+      # never run.
+      - name: Assert the tag, the package and the add-ons agree
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg=$(grep -oP '__version__ = "\K[^"]+' wactorz/_version.py)
+          if [ "$pkg" != "$tag" ]; then
+            echo "::error::tag $tag does not match wactorz/_version.py ($pkg)"
+            exit 1
+          fi
+          for manifest in ha-addon/*/config.yaml; do
+            addon=$(grep -oP '^version: "\K[^"]+' "$manifest")
+            if [ "$(echo "$addon" | cut -d. -f1-3)" != "$tag" ]; then
+              echo "::error::$manifest is at $addon, which is not a release of $tag"
+              exit 1
+            fi
+          done
+          echo "tag $tag matches the package and both add-on manifests."
+
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.12'
 
       # Pinned from package.json's "packageManager": this build's output is
       # published, so it must match the assets CI verified against the tree.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: frontend/package.json
 
@@ -42,11 +78,6 @@ jobs:
 
       - name: Validate
         run: twine check dist/*
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true
 
       # Only this version's section — the whole CHANGELOG makes the release
       # page an endless scroll of every past version.
@@ -64,8 +95,21 @@ jobs:
           fi
           cat release-notes.md
 
+      # Kept, now that the version is asserted above: what it covers is a
+      # re-run after a later step failed, where the upload already succeeded.
+      # Without that assertion it was the thing that made a mis-tagged release
+      # silent rather than loud.
+      # The one action here left on a moving ref, deliberately. It holds the
+      # OIDC trusted-publishing exchange, and PyPA maintain `release/v1` so a
+      # fix to that exchange reaches every publisher without intervention.
+      # Pinning a sha would opt out of exactly the updates most worth having.
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           body_path: release-notes.md
           files: dist/*

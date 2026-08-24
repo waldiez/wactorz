@@ -1,4 +1,4 @@
-"""Tests for ``wactorz.agents.mixins.memory.MemoryMixin``.
+"""Tests for ``wactorz.agents.main.memory.MemoryMixin``.
 
 Exercises the real mixin against a fake host that supplies the Actor/LLMAgent
 surface it needs (recall/persist, registry, ``llm.complete``, token counters).
@@ -10,7 +10,7 @@ Run with ``pytest`` (or ``make test-py``). Async methods are driven through
 
 import asyncio
 
-from wactorz.agents.mixins.memory import MemoryMixin
+from wactorz.agents.main.memory import MemoryMixin
 
 
 def run(coro):

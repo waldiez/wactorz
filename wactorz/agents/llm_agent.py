@@ -508,21 +508,30 @@ class LLMAgent(Actor):
         yield usage
 
     def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
-        """Write both halves of a turn to SQLite chat_log and InfluxDB (if enabled)."""
+        """Write both halves of a turn to the SQLite chat_log."""
         db = get_db()
         if db is not None:
             try:
-                db.log_chat(self.name, "user", user_msg, ts=ts_user, session_id=self.actor_id)
-                db.log_chat(self.name, "assistant", reply, ts=ts_reply, session_id=self.actor_id)
+                db.write_chat_log(
+                    ts=ts_user,
+                    agent_name=self.name,
+                    role="user",
+                    content=user_msg,
+                    session_id=self.actor_id,
+                )
+                db.write_chat_log(
+                    ts=ts_reply,
+                    agent_name=self.name,
+                    role="assistant",
+                    content=reply,
+                    session_id=self.actor_id,
+                )
             except Exception as exc:
-                logger.debug("[%s] chat_log SQLite write failed: %s", self.name, exc)
-        try:
-            from ..monitoring.influx import write_chat as _influx_chat
-
-            _influx_chat(self.name, "user", user_msg, ts=ts_user)
-            _influx_chat(self.name, "assistant", reply, ts=ts_reply)
-        except Exception as exc:
-            logger.debug("[%s] chat_log InfluxDB write failed: %s", self.name, exc)
+                # Warning, not debug: this branch swallowed an AttributeError for
+                # every chat turn (the call named a method that does not exist),
+                # and at debug level nothing ever surfaced. Losing chat history is
+                # worth a log line even though it must not break the turn.
+                logger.warning("[%s] chat_log SQLite write failed: %s", self.name, exc)
 
     def _persist_cost(self):
         """Write lifetime cost to durable SQLite storage after each exchange."""

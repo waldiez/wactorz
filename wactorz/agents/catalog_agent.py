@@ -25,14 +25,14 @@ import asyncio
 import logging
 import pathlib
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
 from .lookup import find_main_actor
 
 if TYPE_CHECKING:
-    from .main_actor import MainActor
+    from .main import MainActor
 
 logger = logging.getLogger(__name__)
 
@@ -754,7 +754,10 @@ class CatalogAgent(Actor):
                 factory = recipe.get("factory")
                 if not factory:
                     return {"ok": False, "message": f"Native recipe '{resolved}' has no factory"}
-                native_kwargs = {"name": resolved, "persistence_dir": persistence_dir}
+                native_kwargs: dict[str, Any] = {
+                    "name": resolved,
+                    "persistence_dir": persistence_dir,
+                }
                 if llm_provider:
                     native_kwargs["llm_provider"] = llm_provider
                 actor = await self.spawn(factory, **native_kwargs)
@@ -779,7 +782,7 @@ class CatalogAgent(Actor):
                     return {"ok": True, "message": msg, "agent": resolved}
                 return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
-            from .dynamic_agent import DynamicAgent
+            from .dynamic import DynamicAgent
 
             install = recipe.get("install", [])
             if install:

@@ -1116,7 +1116,7 @@ async def _ask(agent, question: str) -> dict:
         f"If the manual doesn't contain the answer, say so."
     )
 
-    # agent.llm is a _LLMInterface wrapper around the underlying provider.
+    # agent.llm is a LLMInterface wrapper around the underlying provider.
     # Both .complete() and .chat() return just a string — the wrapper handles
     # the (response, usage) tuple unpacking internally and tracks tokens/cost.
     try:
@@ -1142,7 +1142,7 @@ async def _ask(agent, question: str) -> dict:
             "result": f"Sorry — the LLM call failed: {e}",
         }
 
-    # The _LLMInterface returns "[LLM error: ...]" as the response string on
+    # The LLMInterface returns "[LLM error: ...]" as the response string on
     # provider failure rather than raising. Treat that as an error too so the
     # caller sees a proper error field instead of a fake answer.
     if isinstance(response, str) and response.startswith("[") and response.endswith("]"):

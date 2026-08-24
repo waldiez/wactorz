@@ -83,10 +83,6 @@ services:
       MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
       MQTT_PASSWORD: "${MQTT_PASSWORD:-wactorz-dev}"
       MQTT_PORT: "1883"
-      INFLUX_URL: "${INFLUX_URL:-}"
-      INFLUX_TOKEN: "${INFLUX_TOKEN:-}"
-      INFLUX_ORG: "${INFLUX_ORG:-wactorz}"
-      INFLUX_BUCKET: "${INFLUX_BUCKET:-wactorz}"
       INTERFACE: rest
     # See compose.yaml for why these three, and only these three: the entrypoint
     # needs them to chown the state directory before dropping to uid 1000.
@@ -169,35 +165,6 @@ services:
     networks:
       - wactorz-net
 
-  # ── InfluxDB 2.x ─────────────────────────────────────────────────────────────
-  influxdb:
-    profiles: [influx]
-    image: influxdb:2.7
-    container_name: wactorz-influxdb
-    restart: unless-stopped
-    ports:
-      - "${INFLUX_EXTERNAL_PORT:-8086}:8086"
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      # No fallback values: these seed a real admin account and API token, and a
-      # default would be a published credential. Left unset, InfluxDB's own setup
-      # refuses to initialise — set INFLUX_USERNAME / INFLUX_PASSWORD /
-      # INFLUX_TOKEN in .env before enabling this profile.
-      DOCKER_INFLUXDB_INIT_USERNAME: "${INFLUX_USERNAME:-}"
-      DOCKER_INFLUXDB_INIT_PASSWORD: "${INFLUX_PASSWORD:-}"
-      DOCKER_INFLUXDB_INIT_ORG: "${INFLUX_ORG:-wactorz}"
-      DOCKER_INFLUXDB_INIT_BUCKET: "${INFLUX_BUCKET:-wactorz}"
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-}"
-    volumes:
-      - influxdb-data:/var/lib/influxdb2
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   homeassistant:
     profiles: [full]
     image: homeassistant/home-assistant:stable
@@ -224,7 +191,6 @@ services:
 volumes:
   mosquitto-data:
   mosquitto-logs:
-  influxdb-data:
   prometheus-data:
 
 networks:

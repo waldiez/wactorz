@@ -51,13 +51,6 @@ telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
-otel      = [
-    "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
-]
-influx    = [
-    "influxdb-client>=1.44.0",
-]
 tts       = [
     "edge-tts>=6.1.9",
 ]
@@ -102,8 +95,13 @@ desktop-gtk = [
     "pillow>=10.0;    sys_platform == 'linux'",
 ]
 docs      = [
-    "markdown>=3.10.2",
-    "pygments>=2.19.2",
+    # Pinned exactly, not floored: both decide the bytes of the HTML committed
+    # under static/docs, which CI checks against the sources. Pygments in
+    # particular classifies box-drawing characters differently between minor
+    # versions, so a floating floor makes the freshness check fail on every pull
+    # request the day a new one is released, for a page nobody touched.
+    "markdown==3.10.2",
+    "pygments==2.20.0",
     "watchdog>=6.0.0",
     "pdoc>=16.0.0",
 ]
@@ -113,12 +111,14 @@ dev       = [
     "wactorz[docs]",
     "pre-commit>=4.5.1",
     "coverage>=7.13.5",
-    "twine>=6.2.0",
     "watchdog>=6.0.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-cov>=7.1.0",
     "pytest-timeout>=2.4.0",
     "pytest-randomly>=4.1.0",
+    "pytest-xdist>=3.8.0",
+    "pyyaml>=6.0",
     "ruff>=0.15.0",
     "basedpyright>=1.20.0",
     "hatchling>=1.27.0",
@@ -135,8 +135,6 @@ all = [
     "wactorz[telegram]",
     "wactorz[whatsapp]",
     "wactorz[mcp]",
-    "wactorz[otel]",
-    "wactorz[influx]",
     "wactorz[tts]",
     "wactorz[desktop]",
 ]
@@ -301,7 +299,9 @@ exclude_also = [
     "if __name__ == .__main__.:",
     "\\.\\.\\.",               # ellipsis / stub bodies
 ]
-# fail_under = 90
+# A ratchet, not a target. 
+# Let's try to increase it a lot (aim ~90% like frontend)
+fail_under = 60
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

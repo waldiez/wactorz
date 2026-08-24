@@ -10,7 +10,7 @@ from ...config import CONFIG, MAX_REQUEST_BYTES
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
-    from ...agents.main_actor import MainActor
+    from ...agents.main import MainActor
 
 logger = logging.getLogger(__name__)
 

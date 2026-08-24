@@ -37,6 +37,7 @@ import os
 from collections.abc import Callable
 
 from .agents.llm.providers.anthropic import AnthropicProvider
+from .agents.llm.providers.fake import INTENTS, FakeProvider, parse_script
 from .agents.llm.providers.gemini import GeminiProvider
 from .agents.llm.providers.nim import NIMProvider
 from .agents.llm.providers.ollama import OllamaProvider
@@ -120,6 +121,23 @@ def _build_gemini(model: str | None) -> LLMProvider:
     )
 
 
+def _build_fake(model: str | None) -> LLMProvider:
+    """The deterministic provider, configured from the environment.
+
+    Registered like any other backend so it is reached through the same factory
+    and the same spend accounting rather than by patching something at runtime.
+    ``LLM_FAKE_SCRIPT`` is a JSON object of substring → reply and
+    ``LLM_FAKE_INTENT`` names what the classifier is told; both are optional and
+    the defaults answer every request.
+    """
+    intent = (os.getenv("LLM_FAKE_INTENT") or "OTHER").strip().upper()
+    return FakeProvider(
+        model=model or CONFIG.llm_model,
+        script=parse_script(os.getenv("LLM_FAKE_SCRIPT", "")),
+        intent=intent if intent in INTENTS else "OTHER",
+    )
+
+
 # Provider name → constructor. Adding a backend means adding its module under
 # ``agents/llm/providers/`` and one entry here; nothing else selects on name.
 _PROVIDERS: dict[str, Callable[[str | None], LLMProvider]] = {
@@ -128,6 +146,11 @@ _PROVIDERS: dict[str, Callable[[str | None], LLMProvider]] = {
     "ollama": _build_ollama,
     "nim": _build_nim,
     "gemini": _build_gemini,
+    # Answers deterministically and never calls out. Shipped rather than kept in
+    # the test tree so an end-to-end run reaches it the way a user would, and so
+    # the dashboard is usable without an API key. It is not a degraded model —
+    # it does not think at all, and `docs/` says so where the option is listed.
+    "fake": _build_fake,
 }
 
 

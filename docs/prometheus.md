@@ -11,7 +11,6 @@ Included:
 - process/runtime metrics from the Python process
 - Prometheus in Docker Compose
 - optional Mosquitto availability probe controlled by `.env`
-- optional OpenTelemetry Collector scrape target controlled by `.env`
 
 ## What Is Monitored
 
@@ -40,7 +39,7 @@ The app exposes these at:
 GET /metrics
 ```
 
-### Mosquitto and OpenTelemetry Collector
+### Mosquitto
 
 Mosquitto is an **optional** Prometheus target.
 
@@ -50,7 +49,38 @@ It is monitored with the Blackbox Exporter:
 
 This is availability monitoring, not deep service-specific exporter telemetry.
 
-The OpenTelemetry Collector is also an optional direct scrape target at `otelcol:8889`.
+
+## Authentication
+
+`/metrics` is served by the API on port 8000, and once `API_KEY` is set every
+route there except `/health` requires it. An unauthenticated scrape gets `401`
+and the target goes down with nothing written to the log, so a keyed install
+loses its metrics silently unless the scrape carries the key.
+
+The endpoint accepts either `X-API-Key` or `Authorization: Bearer`.
+
+**Bundled Prometheus** needs no setup: the compose stack passes `API_KEY`
+through and the scrape config is rendered with the header when a key is set.
+
+**Your own Prometheus** must be told:
+
+```yaml
+  - job_name: wactorz-python
+    static_configs:
+      - targets: ["wactorz:8000"]
+    authorization:
+      type: Bearer
+      credentials: 'your-api-key'
+```
+
+Prefer `credentials_file` where the scraper reads its configuration from a
+shared location — Prometheus redacts `credentials` from its own config API, but
+a file keeps the key out of the config entirely.
+
+⚠ The key is the only credential there is, so a scraper holding it can reach
+every API route, not only `/metrics`. That is reasonable where Prometheus runs
+beside the app and inside the same trust boundary; it is worth more thought
+across a network.
 
 ## Environment Flags
 
@@ -61,7 +91,6 @@ PROMETHEUS_EXTERNAL_PORT=9090
 PROMETHEUS_SCRAPE_INTERVAL=15s
 PROMETHEUS_PYTHON_TARGET=wactorz-python
 PROMETHEUS_MONITOR_MOSQUITTO=0
-PROMETHEUS_MONITOR_OTELCOL=0
 REST_EXTERNAL_PORT=8000
 ```
 
@@ -71,7 +100,6 @@ Notes:
 - If Wactorz runs in Compose, use the service name such as `wactorz-python` or `wactorz`.
 - If Wactorz runs from the terminal on the host, use `host.docker.internal`.
 - `PROMETHEUS_MONITOR_MOSQUITTO=1` enables the Mosquitto TCP probe.
-- `PROMETHEUS_MONITOR_OTELCOL=1` enables the OpenTelemetry Collector scrape target.
 
 ## Docker Compose
 
@@ -134,6 +162,9 @@ This starts only the monitoring containers and points Prometheus at the Wactorz 
 
 ```bash
 curl -fsS http://localhost:8000/metrics | head
+
+# With API_KEY set:
+curl -fsS -H "Authorization: Bearer $API_KEY" http://localhost:8000/metrics | head
 ```
 
 You should see Prometheus-formatted output such as `wactorz_actors_total`, `wactorz_http_requests_total`, and process metrics.

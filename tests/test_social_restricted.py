@@ -13,7 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.delegation import DelegationManager
+from wactorz.agents.main.planning import BYPASS_MARKERS, starts_with_bypass
 
 
 def run(coro):
@@ -35,6 +37,7 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
     m.name = "main"
     m._conversation_history = []
     m._registry = _Registry(agents)
+    m.delegation = DelegationManager(m)
     m.calls = {"actuate": 0, "chat": 0, "delegated": [], "classified": 0}
 
     m._drain_notifications = lambda: ""
@@ -63,7 +66,7 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
     async def _delegate_task(_name, _text, timeout=0):
         return {"result": "home-assistant says ok"}
 
-    m.delegate_task = _delegate_task
+    m.delegation.delegate_task = _delegate_task
 
     async def _chat(_t):
         m.calls["chat"] += 1
@@ -75,7 +78,7 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
         m.calls["delegated"].append(name)
         return f"[{name} handled it]"
 
-    m._run_delegation = _run_delegation
+    m.delegation._run_delegation = _run_delegation
 
     async def _boom_spawn(_resp):
         raise AssertionError("spawn executor reached on a restricted channel!")
@@ -114,6 +117,48 @@ def test_admin_commands_refused_without_reaching_llm(cmd):
     out = run(m.process_user_input_restricted(cmd))
     assert "aren't available" in out
     assert m.calls["chat"] == 0 and m.calls["classified"] == 0  # never reached routing
+
+
+@pytest.mark.parametrize("marker", BYPASS_MARKERS)
+def test_every_bypass_marker_is_refused(marker: str) -> None:
+    """Driven off the constant, so a marker added later is covered by this test
+    on the day it is added rather than the day someone notices.
+
+    The planner treats these as equivalent — each one skips dry-run and approval
+    for PIPELINE intent — so a guard that names only the first of them is a
+    guard that reads as covering the family and does not.
+    """
+    m = make_main()
+
+    out = run(m.process_user_input_restricted(f"{marker} do x"))
+
+    assert "aren't available" in out
+    assert m.calls["chat"] == 0 and m.calls["classified"] == 0
+
+
+@pytest.mark.parametrize("marker", BYPASS_MARKERS)
+def test_a_marker_is_refused_whatever_its_case_and_spacing(marker: str) -> None:
+    m = make_main()
+
+    out = run(m.process_user_input_restricted(f"  {marker.upper()} do x"))
+
+    assert "aren't available" in out
+
+
+def test_the_planner_and_the_guard_agree_on_the_set() -> None:
+    """The two halves that must not drift apart.
+
+    `_dryrun_enabled` decides whether a marker skips approval; the restricted
+    channel decides whether it is refused. Both now read one tuple, and this
+    fails if a future edit gives either its own list.
+    """
+    m = make_main()
+
+    for marker in BYPASS_MARKERS:
+        assert starts_with_bypass(f"{marker} do x")
+        assert not MainActor._dryrun_enabled(m, f"{marker} do x")
+
+    assert not starts_with_bypass("just talking")
 
 
 def test_pipeline_intent_refused():

@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect } from "vitest";
-import { toMs } from "../time";
+import { toMs, timeLabel } from "../time";
 
 describe("toMs", () => {
     it("passes through millisecond timestamps (>= 1e10)", () => {
@@ -40,5 +40,47 @@ describe("toMs", () => {
 
     it("handles numeric strings", () => {
         expect(toMs("1700000000000")).toBe(1_700_000_000_000);
+    });
+});
+
+describe("timeLabel", () => {
+    // The thread loads the last 500 messages by count, not by age, so a bare
+    // clock time made last week indistinguishable from this morning. Local time
+    // throughout, which is correct because the wire carries epoch values.
+    const at = (y: number, m: number, d: number, h = 11, min = 54) => new Date(y, m, d, h, min).getTime();
+    const now = at(2026, 7, 24, 15, 0); // 24 Aug 2026, local
+
+    it("shows only the clock for today", () => {
+        const out = timeLabel(at(2026, 7, 24), { now });
+        expect(out).toMatch(/^\d{1,2}:\d{2}/);
+        expect(out).not.toMatch(/Aug|Yesterday/);
+    });
+
+    it("names yesterday rather than dating it", () => {
+        expect(timeLabel(at(2026, 7, 23), { now })).toMatch(/^Yesterday /);
+    });
+
+    it("dates anything older, without the year when it is this one", () => {
+        const out = timeLabel(at(2026, 7, 21), { now });
+        expect(out).toContain("Aug");
+        expect(out).not.toContain("2026");
+    });
+
+    it("adds the year once it is a different one", () => {
+        expect(timeLabel(at(2025, 11, 31), { now })).toContain("2025");
+    });
+
+    it("reads the calendar day locally, so just-after-midnight is today", () => {
+        const justAfterMidnight = at(2026, 7, 24, 0, 5);
+        expect(timeLabel(justAfterMidnight, { now })).not.toMatch(/Yesterday|Aug/);
+    });
+});
+
+describe("timeLabel seconds", () => {
+    it("adds seconds only when asked, for the feed's log rows", () => {
+        const now = new Date(2026, 7, 24, 15, 0).getTime();
+        const at = new Date(2026, 7, 24, 11, 54, 30).getTime();
+        expect(timeLabel(at, { now })).not.toMatch(/:\d{2}:\d{2}/);
+        expect(timeLabel(at, { now, seconds: true })).toMatch(/:\d{2}:\d{2}/);
     });
 });

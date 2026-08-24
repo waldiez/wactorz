@@ -12,6 +12,7 @@ import logging
 import socket
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from aiohttp import web
@@ -65,13 +66,13 @@ def parse_mention(content: str) -> tuple[str, str]:
 # ── Catalog / experimental-agent presentation ──────────────────────────────
 
 
-def catalog_agent_line(agent: dict) -> str:
+def catalog_agent_line(agent: dict[str, Any]) -> str:
     name = agent.get("name", "unknown")
     description = agent.get("description", "")
     return f"- `{name}` - {description}" if description else f"- `{name}`"
 
 
-def format_catalog_agents_response(payload: dict) -> str:
+def format_catalog_agents_response(payload: dict[str, Any]) -> str:
     agents = payload.get("agents", [])
     if not isinstance(agents, list):
         return str(payload)
@@ -333,7 +334,7 @@ def _install_reply_capture(target: Any) -> None:
     target._io_gateway_capture_installed = True
 
 
-def _takes_attachments(fn) -> bool:
+def _takes_attachments(fn: Callable[..., Any]) -> bool:
     """Whether `fn` accepts an `attachments` argument.
 
     The dispatch below reaches four differently-shaped entry points, and only
@@ -354,7 +355,7 @@ async def route_chat(
     stream_fn=None,
     stream_end_fn=None,
     attachments: list[dict[str, Any]] | None = None,
-):
+) -> None:
     """Core chat routing — slash commands, @mentions, or the orchestrator's stream.
 
     reply_fn(text)        — send a complete message (slash commands, errors)
@@ -438,8 +439,9 @@ async def route_chat(
                             f"agents/by-name/{target_name}/task",
                             payload,
                         )
-                        msg = f"[io-gateway] Routed @{target_name} → {remote_node} via MQTT"
-                        logger.info(msg)
+                        logger.info(
+                            "[io-gateway] Routed @%s → %s via MQTT", target_name, remote_node
+                        )
                         try:
 
                             async def _get_reply():
@@ -470,8 +472,7 @@ async def route_chat(
                             await _end_fn()
                             return
                 except Exception as exc:
-                    msg = f"[io-gateway] Remote @{target_name} routing failed: {exc}"
-                    logger.error(msg, exc_info=True)
+                    logger.exception("[io-gateway] Remote @%s routing failed", target_name)
                     await reply_fn(
                         f"[error] Could not reach @{target_name} on {remote_node}: {exc}"
                     )
@@ -501,8 +502,7 @@ async def route_chat(
         await _end_fn()
         return
 
-    msg = f"[io-gateway] → {target.name}: {text[:60]!r}"
-    logger.info(msg)
+    logger.info("[io-gateway] → %s: %r", target.name, text[:60])
 
     # First user message to an experimental/beta agent gets a one-time warning
     # banner, emitted through the same channel the reply will use.
@@ -548,8 +548,7 @@ async def route_chat(
                 result = await target.chat(text)  # pyright: ignore[reportAttributeAccessIssue]
                 await reply_fn(str(result))
             except Exception as exc:
-                msg = f"[io-gateway] chat() on {target.name} failed: {exc}"
-                logger.error(msg, exc_info=True)
+                logger.exception("[io-gateway] chat() on %s failed", target.name)
                 await reply_fn(f"[error] {target.name}: {exc}")
             await _end_fn()
             return
@@ -594,8 +593,7 @@ async def route_chat(
         except asyncio.TimeoutError:
             await reply_fn(f"[error] @{target_name} did not reply within 150s.")
         except Exception as exc:
-            msg = f"[io-gateway] task dispatch to {target.name} failed: {exc}"
-            logger.error(msg, exc_info=True)
+            logger.exception("[io-gateway] task dispatch to %s failed", target.name)
             await reply_fn(f"[error] {target.name}: {exc}")
         finally:
             _PENDING_REPLIES.pop(correlation_id, None)

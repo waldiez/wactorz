@@ -190,6 +190,25 @@ def _make_kv_db(entries: list[dict]) -> object:
     return types.SimpleNamespace(conn=conn)
 
 
+def _close_installed_db(original: object) -> None:
+    """Close the database a test put on `runtime.db`, if it installed one.
+
+    The stubs here are backed by in-memory SQLite held only by that name, so
+    restoring the original leaves nothing able to close the connection, and it
+    sits in a reference cycle — reclaimed on a later collection pass, and
+    reported against whichever unrelated test the collector happened to run in.
+
+    Stubs with no connection are left alone, so a class can call this whether or
+    not the database it installs is a real one.
+    """
+    installed = runtime.db
+    if installed is None or installed is original:
+        return
+    conn = getattr(installed, "conn", None)
+    if conn is not None:
+        conn.close()
+
+
 class HistoricalCostTest(unittest.TestCase):
     def setUp(self):
         # Reset module state between tests
@@ -197,6 +216,7 @@ class HistoricalCostTest(unittest.TestCase):
         self._orig_state = dict(runtime.state["agents"])
 
     def tearDown(self):
+        _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         runtime.state["agents"] = self._orig_state
 
@@ -304,6 +324,7 @@ class LifetimeCostLedgerTest(unittest.TestCase):
         runtime.db = _RoundTripKV()
 
     def tearDown(self):
+        _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         cost.lifetime_cost.clear()
         cost.lifetime_cost.update(self._orig_ledger)
@@ -404,6 +425,7 @@ class SnapshotTotalsTest(unittest.TestCase):
         runtime.state["agents"] = {}
 
     def tearDown(self):
+        _close_installed_db(self._orig_db)
         runtime.db = self._orig_db
         runtime.registry = self._orig_reg
         runtime.state["agents"] = self._orig_agents
@@ -719,10 +741,10 @@ class GlobalCostAccumulationTest(unittest.TestCase):
             self.assertEqual(self.L._period_key("weekly"), "2026-W01")
 
     def test_planner_usage_feeds_period_spend(self):
-        from wactorz.agents.planner_agent import PlannerAgent
+        from wactorz.agents.planner.agent import PlannerAgent
 
         agent = PlannerAgent(llm_provider=None)
-        with patch("wactorz.agents.planner_agent.accumulate_global_cost") as accrue:
+        with patch("wactorz.agents.planner.agent.accumulate_global_cost") as accrue:
             agent._accrue_usage({"input_tokens": 2, "output_tokens": 3, "cost_usd": 0.0123})
             agent._accrue_usage({"input_tokens": 4, "output_tokens": 5, "cost_usd": 0.004})
 

@@ -23,7 +23,7 @@ export default defineConfig({
             // Nothing is excluded. The composition root (main.ts) is covered by
             // main-bootstrap.test.ts, which mocks the transports and drives each
             // registered handler; its decision/transform logic lives in tested
-            // modules (agents/mapping, agents/deletionGuard, ui/haFeed, ui/dashboard/haConfig).
+            // modules (agents/mapping, agents/deletionGuard, ui/haFeed).
             exclude: [],
             // Floors derived from TARGET (see top of file). CI fails below these.
             thresholds: {

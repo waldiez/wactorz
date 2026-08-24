@@ -23,6 +23,7 @@ import { isAppLog } from "../../types/feed";
 import { SYSTEM_AGENT_NAMES } from "./agentState";
 import { nameFromWid, displayName } from "../../agents/naming";
 import { iconMarkup, type IconName } from "./icons";
+import { timeLabel } from "../../time";
 
 const TYPE_CLASS: Record<string, string> = {
     spawn: "af-feed-spawn",
@@ -122,11 +123,7 @@ function buildTextSpan(item: FeedItem): HTMLElement {
 function timeSpan(ms: number): HTMLElement {
     const time = document.createElement("span");
     time.className = "af-feed-time";
-    time.textContent = new Date(ms).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-    });
+    time.textContent = timeLabel(ms, { seconds: true });
     return time;
 }
 

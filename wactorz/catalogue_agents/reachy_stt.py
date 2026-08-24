@@ -131,7 +131,9 @@ class FasterWhisperBackend:
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> _BackendResult:
         def run() -> _BackendResult:
             try:
-                from faster_whisper import WhisperModel
+                from faster_whisper import (  # pyright: ignore[reportMissingImports]  # optional
+                    WhisperModel,
+                )
             except ImportError as exc:
                 raise RuntimeError(
                     "faster-whisper is not installed; run: pip install faster-whisper"
@@ -148,13 +150,15 @@ class FasterWhisperBackend:
                     _LOCAL_MODELS[key] = model
             path = _temporary_wav(wav_bytes)
             try:
-                kwargs = {"language": config.language} if config.language else {}
-                kwargs.update(
+                transcribe_kwargs: dict[str, Any] = (
+                    {"language": config.language} if config.language else {}
+                )
+                transcribe_kwargs.update(
                     {"vad_filter": config.vad_filter, "condition_on_previous_text": False}
                 )
                 if config.hotwords:
-                    kwargs["hotwords"] = config.hotwords
-                segments, info = model.transcribe(str(path), **kwargs)
+                    transcribe_kwargs["hotwords"] = config.hotwords
+                segments, info = model.transcribe(str(path), **transcribe_kwargs)
                 segment_list = list(segments)
                 text = " ".join(str(segment.text).strip() for segment in segment_list).strip()
                 log_probs = [
@@ -194,7 +198,7 @@ class WhisperBackend:
     async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> str:
         def run() -> str:
             try:
-                import whisper
+                import whisper  # pyright: ignore[reportMissingImports]  # optional backend
             except ImportError as exc:
                 raise RuntimeError(
                     "whisper is not installed; run: pip install openai-whisper"
@@ -203,13 +207,17 @@ class WhisperBackend:
             with _MODEL_LOCK:
                 model = _LOCAL_MODELS.get(key)
                 if model is None:
-                    kwargs = {} if config.device == "auto" else {"device": config.device}
-                    model = whisper.load_model(config.model, **kwargs)
+                    load_kwargs: dict[str, Any] = (
+                        {} if config.device == "auto" else {"device": config.device}
+                    )
+                    model = whisper.load_model(config.model, **load_kwargs)
                     _LOCAL_MODELS[key] = model
             path = _temporary_wav(wav_bytes)
             try:
-                kwargs = {"language": config.language} if config.language else {}
-                result = model.transcribe(str(path), **kwargs)
+                transcribe_kwargs: dict[str, Any] = (
+                    {"language": config.language} if config.language else {}
+                )
+                result = model.transcribe(str(path), **transcribe_kwargs)
                 return str((result or {}).get("text") or "").strip()
             finally:
                 path.unlink(missing_ok=True)
@@ -225,7 +233,7 @@ class OpenAIBackend:
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY is required when REACHY_STT_BACKEND=openai")
         try:
-            from openai import AsyncOpenAI
+            from openai import AsyncOpenAI  # pyright: ignore[reportMissingImports]  # optional
         except ImportError as exc:
             raise RuntimeError(
                 "openai is not installed; run: pip install 'wactorz[openai]'"

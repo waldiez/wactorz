@@ -41,10 +41,18 @@ from .turn_actions import TurnActions
 logger = logging.getLogger(__name__)
 
 
-_INTERFACE_SOURCE = contextvars.ContextVar("wactorz_interface_source", default="")
-_INTERFACE_HISTORY = contextvars.ContextVar("wactorz_interface_history", default=())
-_INTERFACE_VOICE = contextvars.ContextVar("wactorz_interface_voice", default=False)
-_INTERFACE_CONTEXT = contextvars.ContextVar("wactorz_interface_context", default=None)
+_INTERFACE_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "wactorz_interface_source", default=""
+)
+_INTERFACE_HISTORY: contextvars.ContextVar[tuple[dict[str, Any], ...]] = contextvars.ContextVar(
+    "wactorz_interface_history", default=()
+)
+_INTERFACE_VOICE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "wactorz_interface_voice", default=False
+)
+_INTERFACE_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "wactorz_interface_context", default=None
+)
 _INTERFACE_ACTION_RE = re.compile(
     r"<interface_action>\s*(\{.*?\})\s*</interface_action>",
     re.IGNORECASE | re.DOTALL,

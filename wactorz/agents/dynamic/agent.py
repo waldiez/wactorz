@@ -777,9 +777,8 @@ class DynamicAgent(Actor):
             # ``handle_task`` may await ``agent.send_to()``. Its RESULT must be
             # consumed by this actor's mailbox, so keep that mailbox free while
             # the generated handler is running.
-            if self._fn_handle_task and not getattr(msg, "_dynamic_task_background", False):
-                msg._dynamic_task_background = True
-                task = asyncio.create_task(self.handle_message(msg))
+            if self._fn_handle_task:
+                task = asyncio.create_task(self._handle_task_message(msg))
                 self._tasks.append(task)
                 task.add_done_callback(
                     lambda done: self._tasks.remove(done) if done in self._tasks else None

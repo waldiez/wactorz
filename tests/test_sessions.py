@@ -10,9 +10,12 @@ slow and flaky.
 """
 
 import hashlib
+import os
 import stat
 import time
 from pathlib import Path
+
+import pytest
 
 from wactorz.web.sessions import (
     ONE_TIME_TTL_SECONDS,
@@ -184,6 +187,15 @@ class TestSurvivingARestart:
 
         assert session_id not in written
 
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason=(
+            "Windows has no POSIX mode bits — it reflects only the read-only flag back "
+            "through stat(), so the file reports 0o666 whatever os.open was given. The "
+            "guarantee itself still holds there, but it is carried by the ACL the file "
+            "inherits rather than by a mode this can read."
+        ),
+    )
     def test_only_this_user_can_read_it(self, tmp_path: Path) -> None:
         store = SessionStore()
         store.bind(tmp_path, "the-configured-key")

@@ -42,6 +42,12 @@ class ProbeActor(Actor):
         return None
 
 
+#: How often the Supervisor under test sweeps for actors to restart. Named
+#: because settling has to outlast it: a group restart that has begun but not
+#: finished looks exactly like a settled system until the next sweep lands.
+SUPERVISOR_POLL = 0.05
+
+
 def _make_system() -> ActorSystem:
     system = ActorSystem()
 
@@ -53,7 +59,7 @@ def _make_system() -> ActorSystem:
             return None
 
     system._mqtt_client = _NoOpMQTT()  # pyright: ignore[reportAttributeAccessIssue]
-    system._supervisor = Supervisor(system.registry, system._inject, poll_interval=0.05)
+    system._supervisor = Supervisor(system.registry, system._inject, poll_interval=SUPERVISOR_POLL)
     return system
 
 

@@ -50,6 +50,9 @@ class SupervisorStrategy(str, Enum):
 
 logger = logging.getLogger(__name__)
 
+#: Objects the per-heartbeat size walk may visit before it stops descending.
+SIZE_WALK_BUDGET = 2000
+
 
 class ActorState(str, Enum):
     """Where an actor is in its lifecycle."""
@@ -487,12 +490,17 @@ class Actor(ABC):
 
     def _estimate_memory_mb(self) -> float:
         """Bounded deep-size walk over this actor's own data structures.
+
+        Bounded in breadth as well as depth: the walk runs on the event loop on
+        every heartbeat, so it stops after ``SIZE_WALK_BUDGET`` objects and its
+        cost stays flat however far the actor's state has grown. Past that point
+        the result is a lower bound rather than a full accounting.
         Uses only sys.getsizeof — no new deps, works on Windows.
         """
-        seen: set = set()
+        seen: set[int] = set()
 
         def _deep(obj: object, depth: int) -> int:
-            if depth > 5:
+            if depth > 5 or len(seen) >= SIZE_WALK_BUDGET:
                 return 0
             oid = id(obj)
             if oid in seen:

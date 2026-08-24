@@ -124,6 +124,7 @@
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
     </details>
@@ -202,16 +203,6 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <td><code>wactorz[mcp]</code></td>
 <td><code>mcp</code></td>
 <td>MCP-compatible clients</td>
-</tr>
-<tr>
-<td><code>wactorz[otel]</code></td>
-<td>OpenTelemetry SDK/exporter</td>
-<td>OTLP tracing</td>
-</tr>
-<tr>
-<td><code>wactorz[influx]</code></td>
-<td><code>influxdb-client</code></td>
-<td>InfluxDB time-series export</td>
 </tr>
 <tr>
 <td><code>wactorz[tts]</code></td>
@@ -303,7 +294,10 @@ HA_STATE_BRIDGE_PER_ENTITY=0 # 0 = flat topic (default), 1 = per-entity topics
 <div class="highlight"><pre><span></span><code><span class="gh">#</span> Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
-<span class="gh">#</span> Optional — set for a broker with allow_anonymous false; blank = anonymous
+<span class="gh">#</span> The dev broker authenticates, with defaults (wactorz / wactorz-dev) and bound
+<span class="gh">#</span> to loopback, so no setup is needed either way: compose injects them for the
+<span class="gh">#</span> containers, and run.sh applies the same ones when WACTORZ_DEV_MODE=1 for a
+<span class="gh">#</span> host-run backend. Fill these in to point at a broker of your own instead.
 MQTT_USERNAME=
 MQTT_PASSWORD=
 </code></pre></div>
@@ -532,7 +526,7 @@ MQTT_HOST=mosquitto         # container name, not localhost
 │   │   └── <span class="n">migrations</span>.<span class="n">py</span>        ← <span class="n">Migration</span> <span class="nb">to</span> <span class="n">nodes</span>
 │   │   ├── <span class="n">topic_bus</span>.<span class="n">py</span>         ← <span class="n">Reactive</span> <span class="n">Pub</span><span class="o">/</span><span class="nb">Sub</span> <span class="n">Coordination</span> <span class="n">Layer</span>
 │   ├── <span class="n">agents</span>/
-│   │   ├── <span class="n">main_actor</span>.<span class="n">py</span>        ← <span class="n">LLM</span> <span class="n">orchestrator</span>
+│   │   ├── <span class="n">main</span>/                ← <span class="n">LLM</span> <span class="n">orchestrator</span> <span class="nb">package</span> (<span class="n">actor</span>.<span class="n">py</span> + <span class="n">its</span> <span class="n">machinery</span>)
 │   │   ├── <span class="n">llm_agent</span>.<span class="n">py</span>         ← <span class="n">LLM</span> <span class="nb">base</span> + <span class="nb">all</span> <span class="n">providers</span>
 │   │   ├── <span class="n">home_assistant_agent</span>.<span class="n">py</span>
 │   │   ├── <span class="n">prompts</span>/

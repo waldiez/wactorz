@@ -9,6 +9,7 @@ their routes.
 import asyncio
 import logging
 import sys
+from typing import NoReturn
 
 from aiohttp import web
 from aiohttp.typedefs import Handler
@@ -42,7 +43,13 @@ logger = logging.getLogger(__name__)
 
 # ── Startup preconditions ──────────────────────────────────────────────────
 async def check_ws_port() -> bool:
-    """Return True if WS_PORT is free to bind."""
+    """Whether WS_PORT looks free.
+
+    Advisory only. It binds and releases, so the answer is already stale by the
+    time the real bind happens — the failure that matters is handled where the
+    server actually starts. This exists to fail early with a clear message
+    alongside the other preconditions, not to guarantee the port.
+    """
     try:
         server = await asyncio.start_server(lambda r, w: None, CONFIG.bind_host, runtime.WS_PORT)
         server.close()
@@ -118,6 +125,8 @@ def build_app() -> web.Application:
     app.router.add_post("/actors/{actor_id}/message", api_actors.send_message_handler)
     app.router.add_post("/api/actors/{actor_id}/start", api_actors.start_actor_handler)
     app.router.add_post("/actors/{actor_id}/start", api_actors.start_actor_handler)
+    app.router.add_post("/api/actors/{actor_id}/stop", api_actors.stop_actor_handler)
+    app.router.add_post("/actors/{actor_id}/stop", api_actors.stop_actor_handler)
     app.router.add_post("/api/actors/{actor_id}/pause", api_actors.pause_actor_handler)
     app.router.add_post("/actors/{actor_id}/pause", api_actors.pause_actor_handler)
     app.router.add_post("/api/actors/{actor_id}/resume", api_actors.resume_actor_handler)
@@ -179,6 +188,12 @@ def build_app() -> web.Application:
     return app
 
 
+def _abort_port_in_use(exc: OSError) -> NoReturn:
+    """Report a lost bind race as a startup failure rather than a traceback."""
+    logger.error("[startup] Port %d already in use — %s", runtime.WS_PORT, exc)
+    raise SystemExit(1) from exc
+
+
 async def main(exit_on_failure: bool = False) -> None:
     """Check preconditions, serve the app, then run the broker listener forever.
 
@@ -229,12 +244,18 @@ async def main(exit_on_failure: bool = False) -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, CONFIG.bind_host, runtime.WS_PORT)
-    await site.start()
-    msg = f"Monitor  → http://localhost:{runtime.WS_PORT}/"
-    logger.info(msg)
+    # The preflight above narrows this window but cannot close it: it binds,
+    # releases, and something else can take the port before this call. So the bind
+    # that matters reports for itself rather than raising through as a traceback
+    # from inside aiohttp.
+    try:
+        await site.start()
+    except OSError as exc:
+        await runner.cleanup()
+        _abort_port_in_use(exc)
+    logger.info("Monitor  → http://localhost:%s/", runtime.WS_PORT)
     if static_site.DOCS_SITE.is_dir():
-        msg = f"Docs     → http://localhost:{runtime.WS_PORT}/docs/"
-        logger.info(msg)
+        logger.info("Docs     → http://localhost:%s/docs/", runtime.WS_PORT)
 
     # Held in a local so the task is not garbage-collected mid-flight, and
     # cancelled below so shutdown does not leave it running.
@@ -252,6 +273,10 @@ async def main(exit_on_failure: bool = False) -> None:
         totals_task.cancel()
         log_task.cancel()
         await asyncio.gather(totals_task, log_task, return_exceptions=True)
+        # Closes the listening socket and every open connection. Without it the
+        # port stays bound until the process exits, so an embedding application
+        # that stops the monitor cannot start it again.
+        await runner.cleanup()
 
 
 def cli_main() -> None:

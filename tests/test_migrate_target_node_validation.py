@@ -9,38 +9,46 @@ the migration is refused and the agent stays where it is.
 """
 
 import time
+from typing import Any
 
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.nodes import NodeManager
 
 
-def _bare_main(registry: dict, known_nodes: dict) -> MainActor:
+def _bare_main(registry: dict, known_nodes: dict[str, Any]) -> MainActor:
     """A MainActor with only what migrate_agent touches, stubbed.
 
     Records every MQTT publish in ``m.published`` so tests can assert that a
     refused migration never sends the destructive migrate/spawn commands.
     """
-    m = MainActor.__new__(MainActor)
+    published: list[tuple[str, Any]] = []
+    m = MainActor()
+    m.manifests = ManifestRegistry(m)
+    m.nodes = NodeManager(m, m.manifests)
+    m.migration = Migration(m, m.nodes)
     m.name = "main"
     m._known_nodes = known_nodes
     m._agent_manifests = {}
     m._registry = None
     m.recall = lambda *a, **k: registry
     m.persist = lambda *a, **k: None
-    m.published = []
+    m.published = published  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _publish(topic, payload, **kwargs):
-        m.published.append((topic, payload))
+    async def _publish(topic: str, payload: Any, **kwargs) -> None:
+        m.published.append((topic, payload))  # pyright: ignore[reportAttributeAccessIssue]
 
-    async def _update_desired_state(node, config=None, remove_name=None):
+    async def _update_desired_state(node, config=None, remove_name=None) -> None:
         pass
 
-    m._mqtt_publish = _publish
-    m._update_node_desired_state = _update_desired_state
+    m._mqtt_publish = _publish  # pyright: ignore[reportAttributeAccessIssue]
+    m._update_node_desired_state = _update_desired_state  # pyright: ignore[reportAttributeAccessIssue]
     return m
 
 
 def _registry_with_agent_on(node: str) -> dict:
-    from wactorz.agents.helpers.main_actor_helpers import SPAWN_REGISTRY_KEY  # noqa: F401
+    from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY  # noqa: F401
 
     return {"temp-sensor": {"name": "temp-sensor", "node": node, "type": "dynamic", "code": "x"}}
 
@@ -50,7 +58,7 @@ async def test_migrate_to_unknown_node_is_refused():
     result = await m.migrate_agent("temp-sensor", "rpi-doesnotexist")
     assert result["success"] is False
     assert "does not exist" in result["message"]
-    assert m.published == []  # nothing destructive was sent
+    assert m.published == []  # pyright: ignore[reportAttributeAccessIssue] # nothing destructive was sent
 
 
 async def test_migrate_to_offline_node_is_refused():
@@ -64,7 +72,7 @@ async def test_migrate_to_offline_node_is_refused():
     result = await m.migrate_agent("temp-sensor", "rpi-b")
     assert result["success"] is False
     assert "offline" in result["message"]
-    assert m.published == []
+    assert m.published == []  # pyright: ignore[reportAttributeAccessIssue]
 
 
 async def test_refusal_lists_online_nodes():
@@ -92,7 +100,7 @@ async def test_migrate_to_online_node_proceeds():
     result = await m.migrate_agent("temp-sensor", "rpi-b")
     assert result["success"] is True
     # The migrate command reached the source node
-    assert any(topic == "nodes/rpi-a/migrate" for topic, _ in m.published)
+    assert any(topic == "nodes/rpi-a/migrate" for topic, _ in m.published)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 async def test_migrate_back_to_local_needs_no_node_check():
@@ -100,7 +108,7 @@ async def test_migrate_back_to_local_needs_no_node_check():
     m = _bare_main(_registry_with_agent_on("rpi-a"), {"rpi-a": {"last_seen": time.time()}})
     result = await m.migrate_agent("temp-sensor", "local")
     assert result["success"] is True
-    assert any(topic == "nodes/rpi-a/migrate" for topic, _ in m.published)
+    assert any(topic == "nodes/rpi-a/migrate" for topic, _ in m.published)  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_node_is_online_window():

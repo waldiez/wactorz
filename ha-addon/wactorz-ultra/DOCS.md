@@ -41,12 +41,6 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `telegram_allowed_user_id` | `0` | Older single-ID form of the above; still honoured. `0` means unset. |
 | `social_rate_limit_per_min` | `12` | Max messages per minute per sender on the bots. `0` disables the limit. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
-| `otel_endpoint` | *(blank)* | OTLP HTTP collector URL (e.g. `http://192.168.1.10:4318`). Leave blank to disable OpenTelemetry. |
-| `otel_service_name` | `wactorz` | Service name reported to the OTLP collector. |
-| `influx_url` | *(blank)* | InfluxDB 2.x base URL (e.g. `http://homeassistant:8086`). Leave blank to disable. `wactorz[influx]` is installed automatically when set. |
-| `influx_token` | *(blank)* | InfluxDB API token. |
-| `influx_org` | `wactorz` | InfluxDB organisation name. |
-| `influx_bucket` | `wactorz` | InfluxDB bucket name. |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
 > default: the panel reaches Wactorz through ingress, where Home Assistant has
@@ -63,7 +57,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 > the refusal off. **Set `api_key` before publishing a port**, and reach the API
 > with `X-API-Key: <your key>` or `Authorization: Bearer <your key>`. Something
 > like `openssl rand -hex 32` gives a key nobody has to remember.
-
+>
 > **The bots are capability-restricted.** Discord and Telegram allow conversation, Home Assistant
 > questions, and everyday device control (lights, switches, climate, covers, media players). They
 > cannot spawn or delete agents, run code, create automations, or reach Home Assistant service
@@ -89,11 +83,15 @@ deploy_targets:
     broker: 192.168.1.10
 ```
 
-Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`) and `ssh_port` (default `22`).
+Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`), `broker_user`, `broker_password` and `ssh_port` (default `22`).
+
+`user`, `key` and `password` are the **SSH** login. `broker_user` and
+`broker_password` are the node's **broker** account, and are separate on
+purpose — see below.
 
 Private keys go under `/config` or `/share` — both are mapped into the addon — and the path is given as the addon sees it, e.g. `/config/ssh/rpi_kitchen`. Then, from the chat:
 
-```
+```text
 /deploy rpi-kitchen
 ```
 
@@ -115,11 +113,27 @@ runner sources that file rather than taking them on a command line — so they
 appear in no process listing. They cannot travel over the broker itself, which
 is the one channel that is unauthenticated until they arrive.
 
-Every node gets the credentials this addon uses for its own broker connection.
-That is the workable default for a single broker with one account, and it means
-**a stolen edge device holds full broker access** — the broker carries the code
-spawned agents run, so treat a node as trusted hardware. Per-node accounts exist
-in Wactorz but are not configurable from this addon yet.
+A node uses its own `broker_user` / `broker_password` when you set them, and
+this addon's own broker account otherwise. That default is the workable one for
+a single broker with one account, but it means **a stolen edge device holds full
+broker access** — and the broker carries the code spawned agents run. Give a
+node its own account when that matters:
+
+```yaml
+deploy_targets:
+  - name: rpi-garage
+    host: 192.168.1.51
+    key: /config/ssh/rpi_garage
+    broker: 192.168.1.10
+    broker_user: rpi-garage
+    broker_password: "…"
+```
+
+The account has to exist on the broker already — this sets what the node
+presents, it does not create anything. With the **official Mosquitto addon**,
+add it as a Home Assistant user. With **`mosquitto_embedded`** you cannot yet:
+the addon generates a single `wactorz` account and rewrites its password file on
+every start, so an account added by hand does not survive a restart.
 
 If your broker accepts anonymous connections, nothing is sent and nothing needs
 to be. If you only need agents on the machine running Home Assistant, leave

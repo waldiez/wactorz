@@ -8,7 +8,7 @@ from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissi
 ensure_importable("openai")
 
 from wactorz.agents.llm_agent import OpenAIProvider
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
 from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
 
 

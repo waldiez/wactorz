@@ -15,6 +15,7 @@ import logging
 import os
 import sqlite3
 import time
+from contextlib import closing
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +107,16 @@ class MQTTPublisher:
     # ── SQLite outbox ──────────────────────────────────────────────────────
 
     def _init_db(self) -> None:
-        """Create outbox table if it doesn't exist."""
+        """Create outbox table if it doesn't exist.
+
+        Every connection here is wrapped in `closing`. A `sqlite3` connection
+        used as a context manager commits the transaction and leaves the handle
+        open, so `with connect(...) as db` alone hands the outbox a new
+        descriptor per publish and relies on the garbage collector to reclaim
+        it. `closing(...)` closes it; the inner `db` keeps the commit.
+        """
         os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
-        with sqlite3.connect(self._db_path) as db:
+        with closing(sqlite3.connect(self._db_path)) as db, db:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS outbox (
                     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,7 +132,7 @@ class MQTTPublisher:
     def _save_to_db(self, topic: str, payload: str, retain: bool, qos: int) -> int:
         """Persist a message to SQLite. Returns row id."""
         try:
-            with sqlite3.connect(self._db_path) as db:
+            with closing(sqlite3.connect(self._db_path)) as db, db:
                 cur = db.execute(
                     "INSERT INTO outbox (topic, payload, retain, qos, ts) VALUES (?,?,?,?,?)",
                     (
@@ -146,7 +154,7 @@ class MQTTPublisher:
     def _delete_from_db(self, row_id: int) -> None:
         """Remove a delivered message from the outbox."""
         try:
-            with sqlite3.connect(self._db_path) as db:
+            with closing(sqlite3.connect(self._db_path)) as db, db:
                 db.execute("DELETE FROM outbox WHERE id = ?", (row_id,))
                 db.commit()
         except Exception as e:
@@ -211,7 +219,7 @@ class MQTTPublisher:
     def _load_pending_from_db(self) -> None:
         """On startup, reload undelivered QoS 1 messages into the in-memory queue."""
         try:
-            with sqlite3.connect(self._db_path) as db:
+            with closing(sqlite3.connect(self._db_path)) as db, db:
                 rows = db.execute(
                     "SELECT id, topic, payload, retain, qos FROM outbox ORDER BY id"
                 ).fetchall()

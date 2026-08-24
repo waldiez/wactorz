@@ -370,7 +370,7 @@ replies on a per-request ephemeral topic.
 
 ### `main/llm_request`
 **Published by:** Remote agents (`remote_runner.py`)
-**Subscribed by:** MainActor (`main_actor.py`)
+**Subscribed by:** MainActor's LLM bridge (`agents/main/llm_bridge.py`)
 **Purpose:** Centralized LLM calls so no API key leaves `main`.
 
 ```json

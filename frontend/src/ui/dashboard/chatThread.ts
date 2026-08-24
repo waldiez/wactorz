@@ -14,6 +14,7 @@ import { iconMarkup } from "./icons";
 import { MAIN_AGENT } from "../../agents/naming";
 import { openLightbox } from "./lightbox";
 import { escapeHtml } from "../escapeHtml";
+import { timeLabel } from "../../time";
 
 /** Where a url is about to be used. The allow-list differs by destination, and
  *  a single list for both is what let `data:` reach an anchor href. */
@@ -150,16 +151,13 @@ export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
 
     const from = document.createElement("div");
     from.className = "af-chat-msg-from";
-    from.textContent = isUser ? `you · ${new Date(msg.timestampMs).toLocaleTimeString()}` : msg.from;
+    from.textContent = isUser ? `you · ${timeLabel(msg.timestampMs)}` : msg.from;
 
     row.append(from, buildMsgBubble(msg, isUser));
     if (!isUser) {
         const time = document.createElement("div");
         time.className = "af-chat-msg-time";
-        time.textContent = new Date(msg.timestampMs).toLocaleTimeString([], {
-            hour: "2-digit",
-            minute: "2-digit",
-        });
+        time.textContent = timeLabel(msg.timestampMs);
         row.append(time);
     }
     return row;

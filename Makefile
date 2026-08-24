@@ -80,7 +80,7 @@ dev: ## Start the MQTT broker only (mosquitto on 1883)
 	$(COMPOSE_DEV) up
 
 dev-down: ## Stop the dev compose stack (all profiles)
-	$(COMPOSE_DEV) --profile app --profile influx --profile full down
+	$(COMPOSE_DEV) --profile app --profile full down
 
 dev-app: ## Run the backend + metrics in containers (compose 'app' profile, UI on :8888)
 	$(COMPOSE_DEV) --profile app up
@@ -141,7 +141,11 @@ lint-py: ## Lint Python — gated ruff (fails) + advisory docstrings/typing (rep
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
 	-$(PYTHON) -m ruff check wactorz --extend-select G,LOG,TRY,C90,PTH,S,T20,DTZ --statistics
 	@echo "── advisory (non-blocking): basedpyright (basic) ──"
-	@command -v basedpyright >/dev/null 2>&1 && basedpyright wactorz || echo "(basedpyright not installed — run 'make install-dev')"
+	@if command -v basedpyright >/dev/null 2>&1; then \
+		basedpyright wactorz || true; \
+	else \
+		echo "(basedpyright not installed — run 'make install-dev')"; \
+	fi
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 
@@ -191,7 +195,10 @@ precommit-run: ## Run all configured pre-commit hooks across the repo
 test: test-py test-frontend ## Run all tests (Python + frontend)
 
 test-py: ## Run Python tests (pytest) + the remote runner's own self-test
-	$(PYTHON) -m pytest tests
+	@# -n auto here and not in pyproject's addopts: parallel wins on the whole
+	@# suite and loses on a single file, where worker start-up costs more than
+	@# the tests. A focused run should stay serial without having to opt out.
+	$(PYTHON) -m pytest tests -n auto
 	@# remote_runner.py ships to nodes without pytest or the wactorz package, so
 	@# it carries its own tests. Nothing ran them and they had rotted silently.
 	$(PYTHON) wactorz/remote_runner.py --test
@@ -202,10 +209,11 @@ test-frontend: ## Run frontend tests (vitest)
 coverage: coverage-py coverage-frontend ## Generate coverage (Python + frontend)
 
 coverage-py: ## Generate Python coverage XML + terminal report
+	@# pytest-cov rather than `coverage run -m pytest`: the latter measures only
+	@# the parent process, so under -n auto it reports a fraction of the truth
+	@# with every test still passing. pytest-cov collects from the workers.
 	mkdir -p coverage
-	$(PYTHON) -m coverage run -m pytest tests
-	$(PYTHON) -m coverage xml -o coverage/python-coverage.xml
-	$(PYTHON) -m coverage report
+	$(PYTHON) -m pytest tests -n auto --cov --cov-report=xml:coverage/python-coverage.xml --cov-report=term
 
 coverage-frontend: ## Generate frontend coverage (gated vitest v8 — fails below the floor)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run coverage

@@ -98,8 +98,8 @@ def _as_version_two(path: str) -> None:
 class TestTheUpgrade:
     def test_a_database_without_the_column_gains_it(self, tmp_path: Path, sql_only: None) -> None:
         path = str(tmp_path / "old.db")
-        WactorzDB(path).conn.close()  # fresh, then wound back
-        migrations.run_migrations(WactorzDB(path))
+        with WactorzDB(path) as fresh:
+            migrations.run_migrations(fresh)
         _as_version_two(path)
 
         database = WactorzDB(path)

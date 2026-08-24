@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Security — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Guide</summary>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="active">Security</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+      <a href="../guide/extensions.html" class="">Extensions</a>
+    </details>
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
+  </aside>
+  <main class="content">
+<h1 id="security">Security</h1>
+<p>Wactorz runs AI agents that hold your credentials, control your devices, and can
+write and run Python. This page describes what it protects, what it does not,
+and how to deploy it so the difference does not matter.</p>
+<p>Read it before you make Wactorz reachable from anything but the machine it runs
+on.</p>
+<hr />
+<h2 id="the-short-version">The short version</h2>
+<table>
+<thead>
+<tr>
+<th>Deployment</th>
+<th>What protects it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Default install</strong></td>
+<td>It listens on <code>127.0.0.1</code> only. Nothing off the machine can reach it.</td>
+</tr>
+<tr>
+<td><strong>Reachable install</strong></td>
+<td><code>API_KEY</code>. Binding to a reachable address without one refuses to start.</td>
+</tr>
+<tr>
+<td><strong>Home Assistant add-on</strong></td>
+<td>Home Assistant's own login. The panel goes through ingress, and requests are verified as coming from the Supervisor.</td>
+</tr>
+</tbody>
+</table>
+<p>The refusal is deliberate rather than a warning: a warning scrolls past in a
+container log while you believe you only changed an address. Three ways forward,
+and the message names all three — set <code>API_KEY</code>, bind to <code>127.0.0.1</code>, or set
+<code>WACTORZ_EXPOSED_OK=1</code> when the only route in is already authenticated.</p>
+<hr />
+<h2 id="trust-boundaries">Trust boundaries</h2>
+<table>
+<thead>
+<tr>
+<th>Inside the boundary</th>
+<th>Outside it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The Wactorz process and every agent in it</td>
+<td>The browser</td>
+</tr>
+<tr>
+<td>The MQTT broker and everything published on it</td>
+<td>Any machine that can reach the broker port</td>
+</tr>
+<tr>
+<td>Edge nodes reached by <code>/deploy</code></td>
+<td>The network between them</td>
+</tr>
+<tr>
+<td>The state directory and the SQLite database</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>Everything inside shares one privilege level. There is no separation between
+agents: an agent is a Python object in a process, not a principal. If two agents
+have different levels of trust in your head, they do not have different levels
+of access in Wactorz.</p>
+<hr />
+<h2 id="agents-run-code-in-the-wactorz-process">Agents run code in the Wactorz process</h2>
+<p>A spawned agent's body is Python, compiled and executed inside the running
+process. It has the same file access, the same network access, the same
+environment variables, and the same credentials as Wactorz itself — including
+your LLM keys and your Home Assistant token.</p>
+<p>Generated code is scanned for dangerous constructs before it runs, and obvious
+ones are rejected. <strong>That check is not a sandbox and is not intended as one.</strong>
+It reads source text; code that reaches the same capability by another route
+passes it. Treat it as a guard against mistakes, not against intent.</p>
+<p>The practical consequence:</p>
+<blockquote>
+<p><strong>Anyone who can make Wactorz spawn an agent can run arbitrary code as the
+Wactorz process.</strong> Granting that ability is equivalent to granting shell
+access to the machine, with the credentials attached.</p>
+</blockquote>
+<p>Spawning is reachable from the dashboard and the API, both of which sit behind
+<code>API_KEY</code> on a reachable install. It is deliberately <strong>not</strong> reachable from
+social channels — Discord and Telegram use a restricted entry point that refuses
+spawning, deletion, code and automation, at the action rather than by inspecting
+the text, so it cannot be talked around.</p>
+<p>If you need agents that cannot do this, run Wactorz in a container with only the
+credentials that deployment needs, and do not mount what it should not reach.</p>
+<hr />
+<h2 id="untrusted-input-is-not-just-what-a-user-types">Untrusted input is not just what a user types</h2>
+<p>The boundary that matters is not "someone typed into chat". It is <strong>any text any
+agent reads</strong>, because that text reaches a model that can act.</p>
+<p>Agents ingest, among other things:</p>
+<ul>
+<li>web pages and search results</li>
+<li>PDFs and device manuals downloaded from the internet</li>
+<li>email bodies and calendar entries</li>
+<li>MQTT payloads from devices and edge nodes</li>
+<li>Home Assistant entity names and attributes</li>
+</ul>
+<p>A concrete example that ships in the catalogue: the device-manual agent searches
+the web for a manual, downloads the PDF it finds, extracts the text, and puts
+that text into a prompt. Nothing about that PDF is under your control. It
+reaches that agent's own model first and the main agent's context only
+indirectly, through the reply — two hops rather than a direct line to the
+spawner, which is why it is worth stating plainly rather than assuming the
+distance protects you.</p>
+<p>Assume any document an agent reads can attempt to instruct it. Give agents the
+narrowest credentials that let them do their job.</p>
+<hr />
+<h2 id="the-mqtt-broker-is-the-control-plane">The MQTT broker is the control plane</h2>
+<p>Agent commands, chat, task delegation and the source of spawned agents all cross
+the broker. Anything that can publish to it can drive Wactorz.</p>
+<ul>
+<li><strong>Credentials are required.</strong> The bundled broker refuses anonymous
+  connections, and <code>docker compose</code> will not start without <code>MQTT_PASSWORD</code>.</li>
+<li><strong>There is no TLS in the client.</strong> Traffic is cleartext, so the broker and
+  everything talking to it belong on a network you trust. Do not route it across
+  the public internet without a tunnel or VPN.</li>
+<li><strong>Edge nodes hold broker credentials.</strong> <code>/deploy</code> writes them to the node over
+  SSH, and by default a node uses the server's own account. A stolen node
+  therefore holds full broker access; give a node its own account when that
+  matters.</li>
+</ul>
+<hr />
+<h2 id="secrets-logs-and-stored-data">Secrets, logs and stored data</h2>
+<ul>
+<li><strong>Logs are redacted</strong> as they are written — known credential shapes are
+  scrubbed before anything is stored or served. This is a floor, not a
+  guarantee: a log can carry a secret nobody chose to write into it. Treat the
+  log view as shareable with care.</li>
+<li><strong>Raising a library to <code>DEBUG</code></strong> puts request bodies and headers into that same
+  log. It is refused through the API unless <code>WACTORZ_LOG_DEBUG_CAPTURE=1</code> is set
+  on the host, so turning it on requires reaching the machine.</li>
+<li><strong>Chat history, uploaded files and agent state</strong> are stored unencrypted in the
+  state directory. Protect it with filesystem permissions; anyone who can read
+  it can read every conversation.</li>
+<li><strong>The browser is never given your API key.</strong> Signing in exchanges it for a
+  session cookie that can be revoked on its own, so signing out does not disturb
+  scripts and integrations using the key directly.</li>
+</ul>
+<hr />
+<h2 id="deployment-checklist">Deployment checklist</h2>
+<ol>
+<li>Keep the default <code>127.0.0.1</code> bind unless you need otherwise.</li>
+<li>If you need otherwise, set <code>API_KEY</code> to something generated —
+   <code>openssl rand -hex 32</code>.</li>
+<li>Put the broker on a trusted network segment, and set <code>MQTT_PASSWORD</code>.</li>
+<li>Give each edge node its own broker account if a stolen node would matter.</li>
+<li>Give Wactorz only the credentials the agents you run actually need.</li>
+<li>Restrict filesystem access to the state directory.</li>
+<li>Treat the ability to spawn agents as equivalent to shell access, and hand it
+   out on that basis.</li>
+</ol>
+<hr />
+<h2 id="reporting-a-problem">Reporting a problem</h2>
+<p>Please report security issues privately, by email to <code>development @ waldiez.io</code>,
+rather than in a public issue. The maintainers will work with you on a fix
+before any public disclosure.</p>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

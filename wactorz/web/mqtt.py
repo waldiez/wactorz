@@ -163,9 +163,11 @@ async def check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
             last = repr(exc)
             if i < attempts - 1:
                 await asyncio.sleep(delay)
-    msg = (
-        f"[startup] MQTT broker {runtime.MQTT_BROKER}:{runtime.MQTT_PORT} "
-        f"unreachable after {attempts} tries — {last}"
+    logger.error(
+        "[startup] MQTT broker %s:%s unreachable after %s tries — %s",
+        runtime.MQTT_BROKER,
+        runtime.MQTT_PORT,
+        attempts,
+        last,
     )
-    logger.error(msg)
     return False

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
-    from ...agents.main_actor import MainActor
+    from ...agents.main import MainActor
 
 logger = logging.getLogger(__name__)
 

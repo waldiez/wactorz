@@ -12,7 +12,7 @@ Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ON
 
 ### MainActor `[core]` `[LLM]`
 
-**File:** `wactorz/agents/main_actor.py`
+**File:** `wactorz/agents/main/actor.py` (the `wactorz/agents/main/` package)
 
 | | |
 |---|---|
@@ -63,7 +63,7 @@ Every DynamicAgent spawned during the session is saved to the `_spawned_agents` 
 
 ### PlannerAgent `[core]` `[LLM]`
 
-**File:** `wactorz/agents/planner_agent.py`
+**File:** `wactorz/agents/planner/` (`agent.py` plus its extracted concerns)
 
 | | |
 |---|---|
@@ -425,7 +425,7 @@ TS_BATCH_INTERVAL=5.0      # flush to SQLite every N seconds (default: 5)
 
 ## DynamicAgent
 
-**File:** `wactorz/agents/dynamic_agent.py`
+**File:** `wactorz/agents/dynamic/` (`agent.py` plus its extracted concerns)
 
 | | |
 |---|---|

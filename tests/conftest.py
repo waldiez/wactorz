@@ -7,6 +7,7 @@ confusing rather than loud: the test looks wrong, not the environment.
 """
 
 import pathlib
+import sys
 from collections.abc import Iterator
 from dataclasses import replace
 from typing import Any
@@ -96,6 +97,13 @@ def _no_ambient_broker(request: pytest.FixtureRequest, monkeypatch: pytest.Monke
     treat it as a broker that is down, which they already handle. A test that
     wants to drive the connection substitutes its own factory, and wins — this
     fixture only sets the default.
+
+    ⚠ **Every module that imported the name needs patching, not just the one
+    that defines it.** A dozen modules do ``from ..core.mqtt import
+    mqtt_client``, which binds the function into their own namespace; replacing
+    it on `wactorz.core.mqtt` leaves all of those pointing at the real one. That
+    gap is invisible on a machine with a broker running, where the test connects
+    and passes, and shows up only where nothing is listening.
     """
 
     if request.node.get_closest_marker("real_mqtt_client"):
@@ -105,6 +113,11 @@ def _no_ambient_broker(request: pytest.FixtureRequest, monkeypatch: pytest.Monke
         raise ConnectionRefusedError(f"no broker in tests ({hostname}:{port})")
 
     monkeypatch.setattr(mqtt, "mqtt_client", _refuse)
+    for module in list(sys.modules.values()):
+        # Only bindings still pointing at the real factory: a module that has
+        # already substituted its own is a test driving the connection.
+        if getattr(module, "mqtt_client", None) is real_mqtt_client:
+            monkeypatch.setattr(module, "mqtt_client", _refuse)
 
 
 def pytest_configure(config: pytest.Config) -> None:

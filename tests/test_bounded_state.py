@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
 from wactorz.agents.monitor_agent import MonitorActor
 from wactorz.web import events, runtime
 

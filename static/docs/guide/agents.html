@@ -348,28 +348,6 @@
 </table>
 <p>Tracks heartbeat timestamps from every registered actor. If an actor's last heartbeat is older than <code>heartbeat_timeout</code> seconds it publishes an alert to <code>agents/{monitor_id}/alert</code> and notifies MainActor directly. Does <em>not</em> auto-restart actors — restart policy belongs to the Supervisor. Infrastructure agents (<code>monitor</code>, <code>installer</code>, <code>main</code>, <code>home-assistant-agent</code>, <code>code-agent</code>, <code>anomaly-detector</code>) are excluded from user-facing notifications.</p>
 <hr />
-<h3 id="ioagent-core">IOAgent <code>[core]</code></h3>
-<p><strong>File:</strong> <code>wactorz/agents/io_agent.py</code></p>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>name</strong></td>
-<td><code>io-agent</code></td>
-</tr>
-<tr>
-<td><strong>subscribes</strong></td>
-<td><code>io/chat</code></td>
-</tr>
-</tbody>
-</table>
-<p>MQTT ↔ interface gateway. Bridges incoming messages from the web dashboard to MainActor and relays responses back. The CLI, Discord, WhatsApp, and Telegram interfaces bypass IOAgent and call <code>main_actor.process_user_input()</code> directly.</p>
-<hr />
 <h3 id="installeragent-core">InstallerAgent <code>[core]</code></h3>
 <p><strong>File:</strong> <code>wactorz/agents/installer_agent.py</code></p>
 <table>

@@ -25,10 +25,19 @@ from wactorz.web import api_actors, lifecycle, runtime, ws
 class _Recorder(Actor):
     """An actor that records lifecycle calls instead of performing them."""
 
-    def __init__(self, name: str = "worker", protected: bool = False) -> None:
+    def __init__(
+        self, name: str = "worker", protected: bool = False, refuses: bool = False
+    ) -> None:
         super().__init__(name=name)
         self.protected = protected
         self.calls: list[str] = []
+        self._refuses = refuses
+
+    async def apply_command(self, command: str) -> bool:
+        """Decline everything, for the tests about a command that does not take."""
+        if self._refuses:
+            return False
+        return await super().apply_command(command)
 
     async def start(self) -> None:
         self.calls.append("start")
@@ -74,6 +83,15 @@ class _Registry:
         if self._actor is not None and self._actor.name == name:
             return self._actor
         return None
+
+    def all_actors(self) -> list[Actor]:
+        """Every actor this registry holds.
+
+        Needed because a lifecycle command now broadcasts the snapshot it
+        produced, and building a snapshot walks the registry — the double has to
+        answer the same questions the real one does.
+        """
+        return [self._actor] if self._actor is not None else []
 
     async def unregister(self, actor_id: str) -> None:
         self.unregistered.append(actor_id)
@@ -300,6 +318,91 @@ class TestHTTPHandlers:
         assert response.status == 200
         assert _payload(response) == {"status": "starting"}
         assert actor.calls == ["start"]
+
+    async def test_stop_reaches_a_running_actor(self) -> None:
+        """The verb that was socket-only until now, on the same local path."""
+        actor = _Recorder()
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
+        runtime.mqtt_client_ref = None
+
+        response = await api_actors.stop_actor_handler(_request(actor.actor_id))  # pyright: ignore[reportArgumentType]
+
+        assert response.status == 200
+        assert _payload(response) == {"status": "stopping"}
+        assert actor.calls == ["stop"]
+
+    async def test_a_protected_actor_cannot_be_stopped(self) -> None:
+        """Stop is the command the guard exists for, so it gets its own refusal test."""
+        actor = _Recorder(protected=True)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
+
+        response = await api_actors.stop_actor_handler(_request(actor.actor_id))  # pyright: ignore[reportArgumentType]
+
+        assert response.status == 403
+        assert actor.calls == []
+
+    async def test_a_stop_is_reflected_in_the_state_the_api_reports(self) -> None:
+        """The half that was missing, and the reason the whole path is shared now.
+
+        State reaches this dict over MQTT, so with the broker down nothing else
+        was ever going to correct it: the command ran, the response said 200, and
+        `GET /actors` went on reporting the agent as running indefinitely.
+        """
+        actor = _Recorder()
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
+        runtime.mqtt_client_ref = None
+        runtime.state["agents"][actor.actor_id] = {"name": actor.name, "state": "running"}
+
+        response = await api_actors.stop_actor_handler(_request(actor.actor_id))  # pyright: ignore[reportArgumentType]
+
+        assert response.status == 200
+        assert runtime.state["agents"][actor.actor_id]["state"] == "stopped"
+
+    async def test_a_refused_command_is_not_reflected(self) -> None:
+        """Showing a state the actor never entered is worse than showing a stale one."""
+        actor = _Recorder(refuses=True)
+        runtime.registry = cast(ActorRegistry, _Registry(actor))
+        runtime.mqtt_client_ref = None
+        runtime.state["agents"][actor.actor_id] = {"name": actor.name, "state": "running"}
+
+        response = await api_actors.stop_actor_handler(_request(actor.actor_id))  # pyright: ignore[reportArgumentType]
+
+        assert response.status == 409
+        assert runtime.state["agents"][actor.actor_id]["state"] == "running"
+
+    async def test_a_remote_agent_is_commanded_over_the_broker(self) -> None:
+        """An agent on a node is absent from the local registry by design.
+
+        Before this it was indistinguishable from a typo and answered 404, while
+        the same command from the dashboard reached it perfectly well.
+        """
+        runtime.registry = cast(ActorRegistry, _Registry())
+        runtime.mqtt_client_ref = broker = _Broker()
+        runtime.state["agents"]["remote-1"] = {"name": "picam", "state": "running"}
+
+        response = await api_actors.stop_actor_handler(_request("picam"))  # pyright: ignore[reportArgumentType]
+
+        assert response.status == 200
+        assert [topic for topic, _ in broker.published] == ["agents/remote-1/commands"]
+        assert runtime.state["agents"]["remote-1"]["state"] == "stopped"
+
+    async def test_a_remote_agent_with_no_broker_reports_failure(self) -> None:
+        """Nowhere to send it, so the caller is told rather than reassured."""
+        runtime.registry = cast(ActorRegistry, _Registry())
+        runtime.mqtt_client_ref = None
+        runtime.state["agents"]["remote-1"] = {"name": "picam", "state": "running"}
+
+        response = await api_actors.stop_actor_handler(_request("picam"))  # pyright: ignore[reportArgumentType]
+
+        assert response.status == 503
+        assert runtime.state["agents"]["remote-1"]["state"] == "running"
+
+    async def test_stopping_an_unknown_actor_is_404(self) -> None:
+        runtime.registry = cast(ActorRegistry, _Registry())
+
+        response = await api_actors.stop_actor_handler(_request("nope"))  # pyright: ignore[reportArgumentType]
+
+        assert response.status == 404
 
     async def test_a_protected_actor_is_refused(self) -> None:
         actor = _Recorder(protected=True)

@@ -82,30 +82,78 @@ async def delete_actor_handler(request: web.Request) -> Response:
     return web.Response(status=200, text=f"stopping ({routed})")
 
 
-async def _lifecycle_handler(request: web.Request, command: str, status: str) -> Response:
-    """Run a lifecycle command on a local actor and report what happened.
+def _remote_entry(actor_id: str) -> tuple[str, dict] | tuple[None, None]:
+    """The MQTT-reported record for an agent that is not in the local registry.
 
-    The actor is driven in process. This used to publish to the broker so the
+    Agents living on a runner node never appear in the local registry — the read
+    path documents that as a contract — so a lifecycle command aimed at one has
+    to be recognised here or it looks exactly like a typo. Matched on id first
+    and then on name, because a caller may sensibly use either.
+
+    Returns the *id*, not whatever was asked for: a command to a remote agent is
+    published to a topic keyed by id, and a name would address nothing.
+    """
+    entry = runtime.state["agents"].get(actor_id)
+    if entry is not None:
+        return actor_id, entry
+    for known_id, known in runtime.state["agents"].items():
+        if known.get("name") == actor_id:
+            return known_id, known
+    return None, None
+
+
+async def _lifecycle_handler(request: web.Request, command: str, status: str) -> Response:
+    """Run a lifecycle command and report what happened.
+
+    Local actors are driven in process. This used to publish to the broker so the
     actor could receive its own command back over the network, which meant that
     with the broker down nothing happened at all while the response still said it
     had — the dashboard would show an agent running that the user had just paused.
+
+    Remote agents are reached the only way they can be, over the broker. They are
+    absent from the local registry by design, so without this an agent the
+    dashboard can stop was one this API answered 404 for.
+
+    `run_command` carries the part that was missing: the feed entry, the reported
+    state and the patch to open dashboards. Without it a command over REST
+    executed and then said nothing, and `GET /actors` reported the old state
+    until the next heartbeat — or forever, with the broker down.
     """
     actor_id = request.match_info["actor_id"]
     if runtime.registry is None:
         return web.json_response({"error": "registry not available"}, status=503)
+
     actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
-    if actor is None:
-        return web.json_response({"error": "actor not found"}, status=404)
-    if getattr(actor, "protected", False):
+    if actor is not None:
+        target, protected = actor.actor_id, bool(getattr(actor, "protected", False))
+    else:
+        target, entry = _remote_entry(actor_id)
+        if target is None or entry is None:
+            return web.json_response({"error": "actor not found"}, status=404)
+        protected = bool(entry.get("protected", False))
+
+    if protected:
         return web.json_response({"error": "actor is protected"}, status=403)
-    if not await actor.apply_command(command):
+
+    routed = await lifecycle.run_command(target, command, "rest-api")
+    if routed == "refused":
         return web.json_response({"error": f"{command} was refused"}, status=409)
+    if not routed:
+        # Reached only for a remote agent with no broker to reach it through.
+        # 503 rather than 200: the command went nowhere, and a caller that was
+        # told otherwise would have no way to find that out.
+        return web.json_response({"error": f"{command} could not be delivered"}, status=503)
     return web.json_response({"status": status})
 
 
 async def start_actor_handler(request: web.Request) -> Response:
     """Bring a stopped actor back up, under supervision again."""
     return await _lifecycle_handler(request, "start", "starting")
+
+
+async def stop_actor_handler(request: web.Request) -> Response:
+    """Stop a running actor."""
+    return await _lifecycle_handler(request, "stop", "stopping")
 
 
 async def pause_actor_handler(request: web.Request) -> Response:

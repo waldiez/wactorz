@@ -210,6 +210,10 @@ class RESTInterface:
             return await _lifecycle_endpoint(request, "start", "starting")
 
         async def stop_actor_endpoint(request: Request) -> Response:
+            """Stop, leaving the actor registered — it can be started again."""
+            return await _lifecycle_endpoint(request, "stop", "stopping")
+
+        async def delete_actor_endpoint(request: Request) -> Response:
             # apply_command("stop") releases from supervision but leaves the
             # actor registered; this endpoint has always removed it as well.
             response = await _lifecycle_endpoint(request, "stop", "stopping")
@@ -267,8 +271,9 @@ class RESTInterface:
         app.router.add_get("/actors", agents_endpoint)
         app.router.add_get("/actors/{actor_id}", actor_endpoint)
         app.router.add_post("/actors/{actor_id}/message", actor_message_endpoint)
-        app.router.add_delete("/actors/{actor_id}", stop_actor_endpoint)
+        app.router.add_delete("/actors/{actor_id}", delete_actor_endpoint)
         app.router.add_post("/actors/{actor_id}/start", start_actor_endpoint)
+        app.router.add_post("/actors/{actor_id}/stop", stop_actor_endpoint)
         app.router.add_post("/actors/{actor_id}/pause", pause_actor_endpoint)
         app.router.add_post("/actors/{actor_id}/resume", resume_actor_endpoint)
         app.router.add_get("/actors/{actor_id}/metrics", metrics_endpoint)

@@ -11,7 +11,7 @@ import logging
 import time
 
 from ..agents.lookup import find_main_actor
-from . import runtime
+from . import events, runtime
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,51 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
         logger.warning("[cmd] publish to %s failed: %s", agent_id[:8], exc)
         return ""
     return "broker"
+
+
+#: What the dashboard should show once a command has been accepted. `start` and
+#: `resume` both end up running, so they share the fallback.
+_REPORTED_STATE = {"stop": "stopped", "pause": "paused"}
+
+
+async def run_command(agent_id: str, command: str, sender: str) -> str:
+    """Run a lifecycle command *and* tell everyone watching. Returns the routing.
+
+    The bookkeeping around a command used to live only in the WebSocket handler,
+    so a command given over REST executed and then said nothing: no feed entry,
+    no patch to open dashboards, and — the one that bites — no update to the
+    state the API itself reports. With the broker up the agent republishes its
+    own status a second or two later and the gap closes by itself; with the
+    broker down nothing ever closes it, so `POST /actors/x/stop` answered 200
+    and `GET /actors` went on reporting that agent as running indefinitely.
+
+    Both callers go through here now, which is what makes REST and the dashboard
+    the same path rather than two that agree only while the broker is up.
+
+    Nothing is recorded when the command was not delivered or was refused:
+    reflecting a state the actor never entered is how a browser ends up showing
+    an agent as stopped that is still running, with nothing to correct it.
+    """
+    # Local import: `ws` imports this module, so importing it at module scope is
+    # a genuine circular import.
+    from .ws import broadcast
+
+    routed = await dispatch_command(agent_id, command, sender)
+    if not routed or routed == "refused":
+        return routed
+
+    events.add_log(
+        {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
+    )
+    # An absent entry is not an error: the command already succeeded, and the
+    # next heartbeat creates the entry. `.get` without a default on purpose —
+    # `.get(id, {})` would hand back a throwaway dict and the write below would
+    # silently do nothing.
+    entry = runtime.state["agents"].get(agent_id)
+    if entry is not None:
+        entry["state"] = _REPORTED_STATE.get(command, "running")
+    await broadcast({"type": "patch", "state": events.snapshot()})
+    return routed
 
 
 async def purge_agent_retained(agent_id: str) -> None:

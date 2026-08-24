@@ -402,24 +402,8 @@ async def handle_command(cmd: dict[str, Any]) -> None:
             )
             return
 
-        if not await lifecycle.dispatch_command(agent_id, command, "monitor-dashboard"):
-            # Reflecting the new state here regardless would leave the browser
-            # showing an agent as paused that is still running, with nothing to
-            # correct it until the next heartbeat.
-            return
-        events.add_log(
-            {"type": "command", "agent_id": agent_id, "command": command, "timestamp": time.time()}
-        )
-        # `.get(agent_id, {})` returned a *fresh* dict when the agent was
-        # absent, so the assignment mutated a throwaway and the write silently
-        # did nothing — a line that reads like a state update and is not one.
-        # An absent agent is not an error here: the command already succeeded,
-        # and the next heartbeat re-creates the entry.
-        entry = runtime.state["agents"].get(agent_id)
-        if entry is not None:
-            entry["state"] = (
-                "stopped" if command == "stop" else "paused" if command == "pause" else "running"
-            )  # start and resume both end up running
-        await broadcast({"type": "patch", "state": events.snapshot()})
+        # Dispatch, feed entry, reported state and the patch to every open
+        # dashboard all happen in `run_command`, which REST goes through too.
+        await lifecycle.run_command(agent_id, command, "monitor-dashboard")
     except Exception as exc:
         logger.error("[cmd] %s failed: %s", command, exc)

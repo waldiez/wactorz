@@ -22,8 +22,11 @@ Or via main (natural language):
 """
 
 import asyncio
+import importlib
+import importlib.metadata
 import logging
 import pathlib
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -40,6 +43,41 @@ BETA_WARNING = (
     "Experimental/Beta agent: behavior may change, fail, or be removed. "
     "Use it for trials, not unattended production workflows."
 )
+
+_IMPORT_NAME_MAP = {
+    "scikit-learn": "sklearn",
+    "stable-baselines3": "stable_baselines3",
+    "pillow": "PIL",
+    "pyyaml": "yaml",
+    "pymupdf": "fitz",
+    "beautifulsoup4": "bs4",
+    "python-dateutil": "dateutil",
+    "typing-extensions": "typing_extensions",
+    "opencv-python": "cv2",
+    "scikit-image": "skimage",
+    "webrtcvad-wheels": "webrtcvad",
+}
+
+
+def _dependency_is_satisfied(requirement: str) -> bool:
+    """Return whether a recipe dependency, including an exact pin, is installed."""
+    pip_name = re.split(r"[<>=!~;]", requirement, maxsplit=1)[0]
+    pip_name = pip_name.split("[", 1)[0].strip().lower()
+    import_name = _IMPORT_NAME_MAP.get(pip_name) or pip_name.replace("-", "_")
+    try:
+        importlib.import_module(import_name)
+    except ImportError:
+        return False
+
+    exact_version = re.search(r"(?<![<>=!~])==\s*([^,;\s]+)", requirement)
+    if exact_version is None:
+        return True
+    try:
+        installed_version = importlib.metadata.version(pip_name)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return installed_version == exact_version.group(1)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # RECIPE IMPORTS
@@ -789,29 +827,7 @@ class CatalogAgent(Actor):
                 # Fast-path: check which packages are already importable.
                 # Avoids a 120s installer wait when deps were installed in a
                 # previous session — same logic as main._spawn_dynamic_agent.
-                import importlib as _importlib
-
-                # Map pip package names to their actual import names where they differ.
-                _IMPORT_NAME_MAP = {
-                    "scikit-learn": "sklearn",
-                    "stable-baselines3": "stable_baselines3",
-                    "pillow": "PIL",
-                    "pyyaml": "yaml",
-                    "pymupdf": "fitz",
-                    "beautifulsoup4": "bs4",
-                    "python-dateutil": "dateutil",
-                    "typing-extensions": "typing_extensions",
-                    "opencv-python": "cv2",
-                    "scikit-image": "skimage",
-                }
-                needed = []
-                for pkg in install:
-                    pip_name = pkg.split("[")[0].lower()
-                    import_name = _IMPORT_NAME_MAP.get(pip_name) or pip_name.replace("-", "_")
-                    try:
-                        _importlib.import_module(import_name)
-                    except ImportError:
-                        needed.append(pkg)
+                needed = [pkg for pkg in install if not _dependency_is_satisfied(pkg)]
 
                 if needed:
                     installer = self._registry.find_by_name("installer") if self._registry else None

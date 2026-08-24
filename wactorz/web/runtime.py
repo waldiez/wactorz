@@ -33,7 +33,7 @@ MQTT_TOPICS = [
 IO_GATEWAY_ID = "io-gateway"
 
 # ── Injected handles ─────────────────────────────────────────────────────────
-# None  → legacy MQTT/IOAgent mode
+# None  → no registry wired; the dashboard renders MQTT-reported state only
 # <registry> → direct mode (Option B)
 registry: "ActorRegistry | None" = None
 

@@ -92,7 +92,7 @@ async def show_help(_ctx: CommandContext, _argument: str) -> str:
 async def show_nodes(ctx: CommandContext, _argument: str) -> str:
     """List local + remote nodes and their agents."""
     nodes = ctx.actor.list_nodes()
-    # Local row first — matches the format users got from io_agent
+    # Local row first, then remote — one format whatever the source
     local_agents = []
     if ctx.actor._registry:
         local_agents = sorted(a.name for a in ctx.actor._registry.all_actors())

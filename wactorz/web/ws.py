@@ -332,8 +332,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                     )
                                 except asyncio.CancelledError:
                                     # Stop button: finalize the partial stream so
-                                    # the UI re-enables, then post a confirmation
-                                    # matching the IOAgent's wording.
+                                    # the UI re-enables its composer, then say so.
+                                    # Without the stream-end the send control
+                                    # stays disabled with nothing to re-enable it.
                                     try:
                                         await ws_stream_end()
                                         await ws_reply("⏹ Stopped.")

@@ -63,7 +63,7 @@ class TestAssignmentPairs:
 
     def test_prefixed_env_name(self) -> None:
         """``MQTT_PASSWORD=`` has no word boundary before ``PASSWORD``."""
-        out = scrub("env: MQTT_PASSWORD=hunter2 INFLUX_TOKEN=abc123")
+        out = scrub("env: MQTT_PASSWORD=hunter2 API_TOKEN=abc123")
         assert "hunter2" not in out
         assert "abc123" not in out
 
@@ -137,7 +137,7 @@ class TestUrlUserinfo:
         assert "wactorz" in out, "the username is not the secret; keep it readable"
 
     def test_https_url(self) -> None:
-        assert "p4ss" not in scrub("POST https://admin:p4ss@influx.local/write")
+        assert "p4ss" not in scrub("POST https://admin:p4ss@broker.local/write")
 
     def test_url_without_credentials_untouched(self) -> None:
         url = "mqtt://broker.local:1883"

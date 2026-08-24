@@ -10,8 +10,8 @@ Both numbers now come from one value, so they cannot drift apart again.
 
 import inspect
 
-from wactorz.agents.mixins import planning
-from wactorz.agents.planner_agent import PlannerAgent
+from wactorz.agents.main import planning
+from wactorz.agents.planner.agent import PlannerAgent
 
 
 def test_the_wait_exceeds_the_planner_lifetime() -> None:

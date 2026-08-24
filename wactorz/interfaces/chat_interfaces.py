@@ -17,7 +17,7 @@ from .chat.telegram import TelegramInterface
 from .chat.whatsapp import WhatsAppInterface
 
 if TYPE_CHECKING:
-    from ..agents.main_actor import MainActor
+    from ..agents.main import MainActor
 
 logger = logging.getLogger(__name__)
 

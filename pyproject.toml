@@ -51,13 +51,6 @@ telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
-otel      = [
-    "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
-]
-influx    = [
-    "influxdb-client>=1.44.0",
-]
 tts       = [
     "edge-tts>=6.1.9",
 ]
@@ -106,8 +99,6 @@ all = [
     "wactorz[telegram]",
     "wactorz[whatsapp]",
     "wactorz[mcp]",
-    "wactorz[otel]",
-    "wactorz[influx]",
     "wactorz[tts]",
 ]
 
@@ -270,7 +261,8 @@ exclude_also = [
     "if __name__ == .__main__.:",
     "\\.\\.\\.",               # ellipsis / stub bodies
 ]
-# fail_under = 90
+# A ratchet: raise when coverage rises, never lower to pass a branch.
+fail_under = 62
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

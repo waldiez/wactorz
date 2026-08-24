@@ -8,9 +8,9 @@ from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissi
 
 ensure_importable("openai")
 
-from wactorz.agents.dynamic_agent import DynamicAgent
+from wactorz.agents.dynamic import DynamicAgent
 from wactorz.agents.llm_agent import OpenAIProvider
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
 from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
 
 
@@ -189,7 +189,7 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["interface_display_name"], "Reachy")
 
     async def test_interface_action_is_validated_and_removed_from_reply(self):
-        from wactorz.agents import main_actor as main_module
+        from wactorz.agents.main import actor as main_module
 
         actor = MainActor(llm_provider=None)
         token = main_module._INTERFACE_CONTEXT.set(
@@ -211,7 +211,7 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(actions, [{"cmd": "gesture", "name": "turn_around"}])
 
     async def test_interface_source_cannot_be_redelegated(self):
-        from wactorz.agents import main_actor as main_module
+        from wactorz.agents.main import actor as main_module
 
         actor = MainActor(llm_provider=None)
         actor._resolve_or_spawn = AsyncMock()

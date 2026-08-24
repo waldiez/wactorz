@@ -26,6 +26,9 @@ services:
   # ── MQTT broker ─────────────────────────────────────────────────────────────
   mosquitto:
     image: eclipse-mosquitto:2.0
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-mosquitto
     restart: unless-stopped
     hostname: mosquitto
@@ -142,33 +145,11 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── OpenTelemetry Collector ──────────────────────────────────────────────────
-  # docker compose --profile otel up -d
-  # Add to python profile:  --profile python --profile otel
-  # Receives OTLP HTTP on 4318; exposes /metrics on 8889 for Prometheus.
-  # Set OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4318 in .env to activate.
-  otelcol:
-    profiles: [otel]
-    image: otel/opentelemetry-collector-contrib:0.104.0
-    container_name: wactorz-otelcol
-    restart: unless-stopped
-    command: ["--config=/etc/otelcol/config.yaml"]
-    volumes:
-      - ./infra/otelcol/otel_config.yaml:/etc/otelcol/config.yaml:ro
-    ports:
-      - "${OTELCOL_OTLP_PORT:-4318}:4318"
-      - "${OTELCOL_METRICS_PORT:-8889}:8889"
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null", "http://localhost:13133/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
   prometheus:
     profiles: [python]
     image: prom/prometheus:v2.54.1
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-prometheus
     restart: unless-stopped
     entrypoint:
@@ -178,8 +159,10 @@ services:
       PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz-python}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
-      PROMETHEUS_MONITOR_OTELCOL: "${PROMETHEUS_MONITOR_OTELCOL:-0}"
       REST_EXTERNAL_PORT: "${REST_EXTERNAL_PORT:-8000}"
+      # The scrape authenticates when the app is keyed. Without it the
+      # wactorz-python target answers 401 and goes quietly down.
+      API_KEY: "${API_KEY:-}"
     # Loopback-bound: the Prometheus UI has no auth and exposes agent names and
     # spend. Scraping happens over the internal network, not this port.
     ports:
@@ -210,6 +193,9 @@ services:
   blackbox-exporter:
     profiles: [python]
     image: prom/blackbox-exporter:v0.25.0
+    cap_drop: [ALL]
+    read_only: true
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-blackbox
     restart: unless-stopped
     command:
@@ -218,39 +204,6 @@ services:
       - ./infra/prometheus/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     networks:
       - wactorz-net
-
-  # ── InfluxDB 2.x (optional — chat log + time-series) ────────────────────────
-  # docker compose --profile influx up -d              (standalone)
-  # docker compose --profile full --profile influx up -d  (with Python)
-  influxdb:
-    profiles: [influx]
-    image: influxdb:2.7
-    container_name: wactorz-influxdb
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${INFLUX_EXTERNAL_PORT:-8086}:8086"
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      # No fallback values: these seed a real admin account and API token, and a
-      # default would be a published credential. Left unset, InfluxDB's own setup
-      # refuses to initialise — set INFLUX_USERNAME / INFLUX_PASSWORD /
-      # INFLUX_TOKEN in .env before enabling this profile. (A `:?` guard here
-      # would break `docker compose up -d` for everyone, since compose
-      # interpolates every service regardless of the active profile.)
-      DOCKER_INFLUXDB_INIT_USERNAME: "${INFLUX_USERNAME:-}"
-      DOCKER_INFLUXDB_INIT_PASSWORD: "${INFLUX_PASSWORD:-}"
-      DOCKER_INFLUXDB_INIT_ORG: "${INFLUX_ORG:-wactorz}"
-      DOCKER_INFLUXDB_INIT_BUCKET: "${INFLUX_BUCKET:-wactorz}"
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-}"
-    volumes:
-      - influxdb-data:/var/lib/influxdb2
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # ── Home Assistant ───────────────────────────────────────────────────────────
   # docker compose --profile full up -d
@@ -285,5 +238,4 @@ networks:
 volumes:
   mosquitto-data:
   mosquitto-logs:
-  influxdb-data:
   prometheus-data:

@@ -19,10 +19,10 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.migration import Migration
-from wactorz.agents.nodes import NodeManager
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.nodes import NodeManager
 from wactorz.core.actor import ActorState
 
 
@@ -149,7 +149,7 @@ async def run_listener(
         main.state = ActorState.STOPPED
 
     broker = _Broker(messages, _stop)
-    monkeypatch.setattr("wactorz.agents.manifests.mqtt_client", broker)
+    monkeypatch.setattr("wactorz.agents.main.manifests.mqtt_client", broker)
     monkeypatch.setattr("wactorz.core.topic_bus.get_topic_bus", lambda: bus)
 
     await asyncio.wait_for(main._manifest_listener(), timeout=5)
@@ -294,7 +294,7 @@ class TestWhatIsSaidAboutIt:
     async def test_a_removal_is_announced(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level(logging.INFO, logger="wactorz.agents.manifests"):
+        with caplog.at_level(logging.INFO, logger="wactorz.agents.main.manifests"):
             await run_listener(monkeypatch, [message("weather"), tombstone("weather-id")])
 
         assert "removed 'weather'" in caplog.text
@@ -302,7 +302,7 @@ class TestWhatIsSaidAboutIt:
     async def test_a_tombstone_for_an_unknown_agent_announces_nothing(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level(logging.INFO, logger="wactorz.agents.manifests"):
+        with caplog.at_level(logging.INFO, logger="wactorz.agents.main.manifests"):
             await run_listener(monkeypatch, [message("weather"), tombstone("ghost-id")])
 
         assert "removed" not in caplog.text

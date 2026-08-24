@@ -176,13 +176,13 @@ Providers (all implement `complete(messages, system)` and `stream(messages, syst
 | `NIMProvider` | `nim` | `NIM_API_KEY` | `LLM_API_KEY` |
 | `GeminiProvider` | `gemini` | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `LLM_API_KEY` |
 
-### `wactorz.agents.main_actor.MainActor`
+### `wactorz.agents.main.MainActor`
 
 LLM orchestrator. Classifies every user message into `ACTUATE / HA / PIPELINE / OTHER`,
 routes to the appropriate agent, and streams replies. Manages the spawn registry
 (persisted to SQLite), pipeline rules, user facts, and conversation history.
 
-### `wactorz.agents.dynamic_agent.DynamicAgent`
+### `wactorz.agents.dynamic.DynamicAgent`
 
 Executes LLM-generated Python at runtime. Takes a `code` string defining
 `setup(agent)`, `process(agent)`, `handle_task(agent, payload)` and runs them in an
@@ -195,12 +195,7 @@ Tracks heartbeat timestamps for every registered actor. Publishes an alert and
 notifies main when an actor's last heartbeat is older than `heartbeat_timeout` (default
 60 s). Does **not** auto-restart actors — that is the Supervisor's job.
 
-### `wactorz.agents.io_agent.IOAgent`
-
-MQTT ↔ UI gateway. Bridges `io/chat` MQTT messages from the web dashboard to
-MainActor and relays responses back to the browser over WebSocket.
-
-### `wactorz.agents.planner_agent.PlannerAgent`
+### `wactorz.agents.planner.PlannerAgent`
 
 On-demand orchestrator. Spawned per `PIPELINE`-classified request. Discovers
 available agents and generates a multi-step plan via LLM. By default MainActor

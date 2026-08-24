@@ -18,10 +18,10 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.migration import Migration
-from wactorz.agents.nodes import NodeManager
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.nodes import NodeManager
 from wactorz.core.actor import ActorState
 
 
@@ -138,7 +138,7 @@ async def run_listener(
         main.state = ActorState.STOPPED
 
     broker = _Broker(messages, _stop)
-    monkeypatch.setattr("wactorz.agents.migration.mqtt_client", broker)
+    monkeypatch.setattr("wactorz.agents.main.migration.mqtt_client", broker)
 
     await asyncio.wait_for(main._state_return_listener(), timeout=5)
     return run
@@ -208,7 +208,7 @@ class TestTheToken:
     async def test_a_refusal_is_logged(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        with caplog.at_level(logging.WARNING, logger="wactorz.agents.migration"):
+        with caplog.at_level(logging.WARNING, logger="wactorz.agents.main.migration"):
             await run_listener(monkeypatch, [state_return(token="forged")], pending=waiting())
 
         assert "token" in caplog.text

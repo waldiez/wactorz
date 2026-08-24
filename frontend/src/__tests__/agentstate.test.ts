@@ -26,7 +26,7 @@ describe("canDirectMessage", () => {
         expect(canDirectMessage({ name: "catalog", protected: true })).toBe(true);
     });
     it("never allows the non-chat system agents", () => {
-        expect(canDirectMessage({ name: "io-agent" })).toBe(false);
+        expect(canDirectMessage({ name: "monitor-agent" })).toBe(false);
         expect(canDirectMessage({ name: "monitor-agent" })).toBe(false);
     });
     it("allows normal agents unless they are protected", () => {
@@ -40,7 +40,7 @@ describe("messageableNames", () => {
         expect(
             messageableNames([
                 { name: "main", protected: true }, // pinned → kept
-                { name: "io-agent" }, // system → dropped
+                { name: "monitor-agent" }, // system → dropped
                 { name: "worker" }, // normal → kept
                 { name: "locked", protected: true }, // protected → dropped
                 { name: "" }, // empty → dropped

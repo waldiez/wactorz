@@ -162,8 +162,7 @@
 <span class="err">│</span><span class="w">  </span><span class="nx">ActorRegistry</span><span class="w">  </span><span class="err">──</span><span class="w">  </span><span class="nx">name</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">actor</span><span class="w"> </span><span class="nx">lookup</span><span class="p">,</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">publisher</span><span class="w">                </span><span class="err">│</span>
 <span class="err">│</span><span class="w">                                                                        </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">MainActor</span><span class="w">                  </span><span class="nx">LLM</span><span class="w"> </span><span class="nx">orchestrator</span><span class="p">,</span><span class="w"> </span><span class="nx">intent</span><span class="w"> </span><span class="nx">routing</span><span class="p">,</span><span class="w"> </span><span class="nx">spawn</span><span class="w"> </span><span class="nx">reg</span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">MonitorAgent</span><span class="w">               </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w"> </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">IOAgent</span><span class="w">                    </span><span class="nx">MQTT</span><span class="err">↔</span><span class="nx">UI</span><span class="w"> </span><span class="nx">gateway</span><span class="p">,</span><span class="w"> </span><span class="nx">routes</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">main</span><span class="w">      </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">MonitorActor</span><span class="w">               </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w"> </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">CatalogAgent</span><span class="w">               </span><span class="nx">pre</span><span class="o">-</span><span class="nx">built</span><span class="w"> </span><span class="nx">recipe</span><span class="w"> </span><span class="kn">library</span><span class="p">,</span><span class="w"> </span><span class="nx">spawns</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">demand</span><span class="w"> </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">InstallerAgent</span><span class="w">             </span><span class="nx">pip</span><span class="w"> </span><span class="nx">installs</span><span class="w"> </span><span class="nx">deps</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nx">dynamic</span><span class="w"> </span><span class="nx">agents</span><span class="w">       </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">HomeAssistantAgent</span><span class="w">         </span><span class="nx">HA</span><span class="w"> </span><span class="nx">REST</span><span class="w"> </span><span class="nx">API</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">entities</span><span class="p">,</span><span class="w"> </span><span class="nx">services</span><span class="p">,</span><span class="w"> </span><span class="nx">automa</span><span class="err">…</span><span class="w">  </span><span class="err">│</span>
@@ -249,7 +248,7 @@
 <td>Streams HA state changes to MQTT so pipeline agents can react to device events in real time.</td>
 </tr>
 <tr>
-<td><strong>MonitorAgent</strong></td>
+<td><strong>MonitorActor</strong></td>
 <td>Tracks heartbeats from all actors. Alerts main when an agent is unresponsive for &gt;60 s.</td>
 </tr>
 <tr>
@@ -331,21 +330,15 @@
 </thead>
 <tbody>
 <tr>
-<td><code>io/chat</code></td>
-<td>IOAgent / UI</td>
-<td>main</td>
-<td><code>{from, content}</code></td>
-</tr>
-<tr>
 <td><code>agents/{id}/chat</code></td>
 <td>any actor</td>
-<td>UI / IOAgent</td>
+<td>UI</td>
 <td><code>{role, content, interface}</code></td>
 </tr>
 <tr>
 <td><code>agents/{id}/heartbeat</code></td>
 <td>every actor</td>
-<td>MonitorAgent</td>
+<td>MonitorActor</td>
 <td><code>{name, state, ts, ...}</code></td>
 </tr>
 <tr>
@@ -474,6 +467,26 @@ ignored. <code>AnthropicProvider</code> therefore leaves the parameter off for t
 dropped it, and learns the rest the first time one refuses — that request is retried without the
 parameter, and it is omitted for the remainder of the process. Those models are effectively pinned
 to their own default, so pinning a temperature no longer makes runs comparable against them.</p>
+<h3 id="the-fake-provider">The <code>fake</code> provider</h3>
+<p><code>LLM_PROVIDER=fake</code> selects a provider that answers from a script and never calls
+a model. It is a real provider reached through the same factory, so it streams,
+reports token counts and a (tiny, non-zero) cost, and is subject to the same
+spend cap — the system around it behaves exactly as it would against a paid
+model.</p>
+<p>It is <strong>not a small or offline model</strong>. It does not reason about anything: the
+intent classifier is told a fixed answer, fact extraction is told there is
+nothing to store, and everything else matches the request against a script.
+Useful for running the dashboard without an API key, for end-to-end runs that
+need the same answer twice, and for recording a walkthrough without paying per
+take. Useless for anything that depends on the reply being <em>right</em>.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">LLM_PROVIDER</span><span class="o">=</span>fake
+<span class="nv">LLM_FAKE_SCRIPT</span><span class="o">=</span><span class="s1">&#39;{&quot;weather&quot;: &quot;It is 22 degrees and clear.&quot;}&#39;</span><span class="w">   </span><span class="c1"># substring → reply</span>
+<span class="nv">LLM_FAKE_INTENT</span><span class="o">=</span>OTHER<span class="w">                                          </span><span class="c1"># ACTUATE | HA | PIPELINE | OTHER</span>
+</code></pre></div>
+
+<p>Both are optional; the defaults answer every request. Unmatched messages get a
+default reply that is deliberately obviously synthetic, so a recording made
+against it cannot be mistaken for a real session.</p>
 <h3 id="per-call-site-overrides">Per-call-site overrides</h3>
 <p><code>LLM_OVERRIDES</code> routes individual call sites to different providers/models, falling back to the global <code>LLM_PROVIDER</code> for any site not listed (<code>wactorz/llm_factory.py</code>):</p>
 <div class="highlight"><pre><span></span><code><span class="nv">LLM_OVERRIDES</span><span class="o">=</span><span class="s2">&quot;intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6&quot;</span>

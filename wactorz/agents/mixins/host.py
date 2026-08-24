@@ -58,21 +58,6 @@ class LLMHost(ActorHost, Protocol):
     def _persist_cost(self) -> None: ...
 
 
-class RoutingHost(LLMHost, Protocol):
-    """What `RoutingMixin` needs: the LLM surface plus in-flight task futures."""
-
-    _result_futures: dict[str, asyncio.Future]
-
-
-class MemoryHost(LLMHost, Protocol):
-    """What `MemoryMixin` needs — nothing beyond the LLM host.
-
-    Named anyway rather than reusing `LLMHost` directly: the mixin should say
-    what it depends on, and if that grows the change belongs here where it is
-    visible.
-    """
-
-
 class SpawnHost(ActorHost, Protocol):
     """What `SpawnMixin` needs: a provider to give the agents it creates, plus
     in-flight task futures.
@@ -83,33 +68,3 @@ class SpawnHost(ActorHost, Protocol):
 
     llm: LLMProvider | None
     _result_futures: dict[str, asyncio.Future]
-
-
-class PlanningHost(ActorHost, Protocol):
-    """What `PlanningMixin` needs — and it is the widest of the four.
-
-    Two things fall out of this list and neither is incidental:
-
-    - **`get_user_facts` comes from `MemoryMixin`**, not from any base. Planning
-      depends on a sibling mixin, so the two cannot be composed independently.
-      That coupling was real, undocumented, and only discoverable by running it.
-    - **The last four are `MainActor`'s own methods.** This mixin is not merely
-      "an LLMAgent host" as its docstring says; it requires `MainActor`
-      specifically, which is why it cannot be reused elsewhere as written.
-    """
-
-    llm: LLMProvider | None
-    _result_futures: dict[str, asyncio.Future]
-    _conversation_history: list[dict]
-
-    def get_user_facts(self) -> dict: ...
-
-    async def _mqtt_publish(
-        self, topic: str, payload: Any, retain: bool = False, qos: int = 0
-    ) -> None: ...
-
-    def _remove_from_spawn_registry(self, name: str) -> None: ...
-
-    async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None: ...
-
-    def _record_agent_deletion(self, name: str, reason: str = "user request") -> None: ...

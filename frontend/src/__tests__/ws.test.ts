@@ -124,14 +124,14 @@ describe("WSClient", () => {
             data: JSON.stringify({
                 type: "chat",
                 content: "Hello!",
-                from: "io-agent",
+                from: "picam",
                 timestamp: 1_700_000_000,
                 source: "voice",
             }),
         });
         expect(chatSpy).toHaveBeenCalledWith(
             "Hello!",
-            "io-agent",
+            "picam",
             1_700_000_000_000,
             "user",
             "voice",

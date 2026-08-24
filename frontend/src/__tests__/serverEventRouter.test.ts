@@ -101,8 +101,8 @@ describe("normaliseChat", () => {
     });
 
     it("defaults to field from agentName when from is absent", () => {
-        const msg = normaliseChat({ agentName: "io-agent", content: "hi" });
-        expect(msg.from).toBe("io-agent");
+        const msg = normaliseChat({ agentName: "picam", content: "hi" });
+        expect(msg.from).toBe("picam");
     });
 
     it("defaults to 'user' when to is absent", () => {

@@ -151,7 +151,7 @@
 <p>Core agents are started by the Supervisor on launch and managed with <code>ONE_FOR_ONE</code> restart policies. They are <strong>protected</strong> — they cannot be stopped or deleted from the dashboard.</p>
 <hr />
 <h3 id="mainactor-core-llm">MainActor <code>[core]</code> <code>[LLM]</code></h3>
-<p><strong>File:</strong> <code>wactorz/agents/main_actor.py</code></p>
+<p><strong>File:</strong> <code>wactorz/agents/main/actor.py</code> (the <code>wactorz/agents/main/</code> package)</p>
 <table>
 <thead>
 <tr>
@@ -235,7 +235,7 @@
 
 <hr />
 <h3 id="planneragent-core-llm">PlannerAgent <code>[core]</code> <code>[LLM]</code></h3>
-<p><strong>File:</strong> <code>wactorz/agents/planner_agent.py</code></p>
+<p><strong>File:</strong> <code>wactorz/agents/planner/</code> (<code>agent.py</code> plus its extracted concerns)</p>
 <table>
 <thead>
 <tr>
@@ -347,28 +347,6 @@
 </tbody>
 </table>
 <p>Tracks heartbeat timestamps from every registered actor. If an actor's last heartbeat is older than <code>heartbeat_timeout</code> seconds it publishes an alert to <code>agents/{monitor_id}/alert</code> and notifies MainActor directly. Does <em>not</em> auto-restart actors — restart policy belongs to the Supervisor. Infrastructure agents (<code>monitor</code>, <code>installer</code>, <code>main</code>, <code>home-assistant-agent</code>, <code>code-agent</code>, <code>anomaly-detector</code>) are excluded from user-facing notifications.</p>
-<hr />
-<h3 id="ioagent-core">IOAgent <code>[core]</code></h3>
-<p><strong>File:</strong> <code>wactorz/agents/io_agent.py</code></p>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>name</strong></td>
-<td><code>io-agent</code></td>
-</tr>
-<tr>
-<td><strong>subscribes</strong></td>
-<td><code>io/chat</code></td>
-</tr>
-</tbody>
-</table>
-<p>MQTT ↔ interface gateway. Bridges incoming messages from the web dashboard to MainActor and relays responses back. The CLI, Discord, WhatsApp, and Telegram interfaces bypass IOAgent and call <code>main_actor.process_user_input()</code> directly.</p>
 <hr />
 <h3 id="installeragent-core">InstallerAgent <code>[core]</code></h3>
 <p><strong>File:</strong> <code>wactorz/agents/installer_agent.py</code></p>
@@ -805,7 +783,7 @@
 
 <hr />
 <h2 id="dynamicagent">DynamicAgent</h2>
-<p><strong>File:</strong> <code>wactorz/agents/dynamic_agent.py</code></p>
+<p><strong>File:</strong> <code>wactorz/agents/dynamic/</code> (<code>agent.py</code> plus its extracted concerns)</p>
 <table>
 <thead>
 <tr>

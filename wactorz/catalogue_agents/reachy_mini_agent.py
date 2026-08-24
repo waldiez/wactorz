@@ -1447,7 +1447,7 @@ def _embodied_command_for_text(text):
 
 async def handle_task(agent, payload):
     # Direct send_to(reachy-mini, {...}) — same dispatch as MQTT.
-    # IOAgent wraps user text as: {"text": "...", "_task_id": ..., "reply_to": ...}
+    # A caller wraps user text as: {"text": "...", "_task_id": ..., "reply_to": ...}
     payload = payload or {}
     _tid = payload.get("_task_id") or payload.get("task")
 
@@ -1635,9 +1635,9 @@ async def handle_task(agent, payload):
                         bridged = await _bridge_to_main(agent, stripped, _tid)
                         if bridged is not None:
                             return bridged
-                        # Bridge unavailable — fall back to a clear hint. NOT the
-                        # raw input under 'text', or the io-agent's reply picker
-                        # (reply→result→text) echoes the user's own words back.
+                        # Bridge unavailable — fall back to a clear result. Do
+                        # not return the raw input under ``text``: a caller's
+                        # reply picker could otherwise echo the user's words.
                         return {"ok": False, "error": "could not parse instruction",
                                 "result": (f"I couldn't turn \"{stripped}\" into a robot action. "
                                            "Try something like \"wake\", \"say hello\", "

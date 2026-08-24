@@ -80,7 +80,7 @@ dev: ## Start the MQTT broker only (mosquitto on 1883)
 	$(COMPOSE_DEV) up
 
 dev-down: ## Stop the dev compose stack (all profiles)
-	$(COMPOSE_DEV) --profile app --profile influx --profile full down
+	$(COMPOSE_DEV) --profile app --profile full down
 
 dev-app: ## Run the backend + metrics in containers (compose 'app' profile, UI on :8888)
 	$(COMPOSE_DEV) --profile app up
@@ -141,7 +141,11 @@ lint-py: ## Lint Python — gated ruff (fails) + advisory docstrings/typing (rep
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
 	-$(PYTHON) -m ruff check wactorz --extend-select G,LOG,TRY,C90,PTH,S,T20,DTZ --statistics
 	@echo "── advisory (non-blocking): basedpyright (basic) ──"
-	@command -v basedpyright >/dev/null 2>&1 && basedpyright wactorz || echo "(basedpyright not installed — run 'make install-dev')"
+	@if command -v basedpyright >/dev/null 2>&1; then \
+		basedpyright wactorz || true; \
+	else \
+		echo "(basedpyright not installed — run 'make install-dev')"; \
+	fi
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 

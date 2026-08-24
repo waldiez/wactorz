@@ -159,7 +159,7 @@ def _is_installable_name(package: str) -> bool:
 
 
 # ── Sentinel: awaitable None ──────────────────────────────────────────────────
-# Mirror of dynamic_agent._AwaitableNone. Returned from sync methods like
+# Mirror of dynamic.api.AwaitableNone. Returned from sync methods like
 # subscribe() and declare_contract() so LLM-generated code that mistakenly
 # writes `await agent.subscribe(...)` doesn't blow up.
 
@@ -307,13 +307,13 @@ class _RemoteStreamWindow:
 
 
 # ── LLM namespace exposed as agent.llm ────────────────────────────────────────
-# Mirror of dynamic_agent._LLMInterface, but the actual LLM call happens on
+# Mirror of dynamic.api.LLMInterface, but the actual LLM call happens on
 # main via the existing main/llm_request bridge. This means:
 #   - The same agent code (`agent.llm.chat(...)` / `agent.llm.complete(...)`)
 #     works on both local and remote nodes — no migration breakage.
 #   - The API key stays on main; the edge device never needs it.
 #
-# Cost tracking caveat: locally the _LLMInterface increments the agent's
+# Cost tracking caveat: locally the LLMInterface increments the agent's
 # token / cost counters from the LLM response's usage dict. The LLM bridge
 # currently returns only {"text": ...} — usage is not propagated back, so
 # remote LLM cost is currently attributed to main, not to the agent that
@@ -322,7 +322,7 @@ class _RemoteStreamWindow:
 
 
 class _RemoteLLMInterface:
-    """Drop-in equivalent of _AgentAPI.llm on the remote side."""
+    """Drop-in equivalent of AgentAPI.llm on the remote side."""
 
     def __init__(self, api: _RemoteAgentAPI) -> None:
         self._api = api
@@ -341,7 +341,7 @@ class _RemoteLLMInterface:
         return await self._api.chat(messages, system=system, timeout=timeout)
 
     async def converse(self, user_message: str, system: str = "", timeout: float = 60.0) -> str:
-        """Stateful multi-turn chat — mirrors local _LLMInterface.converse().
+        """Stateful multi-turn chat — mirrors local LLMInterface.converse().
         Maintains history in agent.state['_chat_history'].
         """
         history = self._api.state.setdefault("_chat_history", [])
@@ -387,7 +387,7 @@ class _RemoteAgentAPI:
         # and tasks are reachable for shutdown.
         self._windows: dict[str, _RemoteStreamWindow] = {}
         # Shared mutable namespace exposed as agent.state to user code (mirrors
-        # DynamicAgent._AgentAPI.state). The remote runner historically pointed
+        # dynamic.api.AgentAPI.state). The remote runner historically pointed
         # this at the agent's _state dict via a @property — keep that working.
         # LLM namespace — exposed as agent.llm.chat / .complete / .converse so
         # the SAME agent code that uses agent.llm on a local DynamicAgent works
@@ -504,7 +504,7 @@ class _RemoteAgentAPI:
         subscribe() is NOT awaitable and does NOT return data.
         For a one-shot read use: data = await agent.mqtt_get(topic)
 
-        Mirrors DynamicAgent._AgentAPI.subscribe(). The remote node has no
+        Mirrors dynamic.api.AgentAPI.subscribe(). The remote node has no
         TopicBus, so the subscription is also recorded on the API so that the
         next _publish_manifest() includes it — main then registers it on the
         central TopicBus and the planner can wire it.
@@ -706,7 +706,7 @@ class _RemoteAgentAPI:
 
         Call from setup() to make this agent discoverable by the planner and
         other agents via topic-based auto-wiring. Same signature and aliases
-        as DynamicAgent._AgentAPI.declare_contract().
+        as dynamic.api.AgentAPI.declare_contract().
 
         On a remote node there's no local TopicBus, so the declared values are
         stored on the API and folded into the next _publish_manifest() — main
@@ -812,7 +812,7 @@ class _RemoteAgentAPI:
     @property
     def logger(self) -> Any:
         """Compatibility shim — allows agent.logger.info/warning/error in
-        generated code, mirroring DynamicAgent._AgentAPI.logger.
+        generated code, mirroring dynamic.api.AgentAPI.logger.
         """
         api = self
 

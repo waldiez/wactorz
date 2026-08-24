@@ -77,13 +77,7 @@ cat > /tmp/options.json <<'EOF'
   "telegram_bot_token": "",
   "telegram_allowed_user_ids": "",
   "telegram_allowed_user_id": 0,
-  "social_rate_limit_per_min": 12,
-  "otel_endpoint": "",
-  "otel_service_name": "wactorz",
-  "influx_url": "",
-  "influx_token": "",
-  "influx_org": "wactorz",
-  "influx_bucket": "wactorz"
+  "social_rate_limit_per_min": 12
 }
 EOF
 OPTIONS_PATH=/tmp/options.json bash ha-addon/run.sh

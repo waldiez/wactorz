@@ -301,9 +301,9 @@ describe("DashboardChat — target selection", () => {
     });
 
     it("does not switch to a non-messageable (system) agent", () => {
-        host = makeHost([agent("main"), agent("io-agent")]);
+        host = makeHost([agent("main"), agent("monitor-agent")]);
         const dc = mount(host);
-        host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-name="io-agent"]')?.click();
+        host.root.querySelector<HTMLElement>('.af-chat-agent-row[data-name="monitor-agent"]')?.click();
         expect(dc.chatTarget).toBe("main"); // unchanged
     });
 
@@ -317,14 +317,14 @@ describe("DashboardChat — target selection", () => {
     });
 
     it("populates the iobar select with messageable agents, main pinned first", () => {
-        host = makeHost([agent("zeta"), agent("main"), agent("io-agent")]);
+        host = makeHost([agent("zeta"), agent("main"), agent("monitor-agent")]);
         const dc = mount(host);
         const iobar = dc.buildIobar();
         const opts = [...iobar.querySelectorAll<HTMLOptionElement>("#af-target-select option")].map(
             o => o.value,
         );
         expect(opts[0]).toBe("main"); // PRIORITY pin
-        expect(opts).not.toContain("io-agent"); // system agent excluded
+        expect(opts).not.toContain("monitor-agent"); // system agent excluded
     });
 });
 

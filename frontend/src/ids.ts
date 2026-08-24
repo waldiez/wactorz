@@ -2,14 +2,8 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright 2025 - 2026 Waldiez & contributors
  */
-/**
- * Client-side id generation, backed by one HLC WID generator per session.
- *
- * WIDs are monotonic and collision-free; raw `Date.now()` collides for events in
- * the same millisecond, and two separate generators sharing a node id could also
- * collide — so all client ids come from this single generator.
- */
-import { HLCWidGen } from "@waldiez/wid";
+
+import { HLCWidGen } from "./vendor/hlcWid";
 
 const gen = new HLCWidGen({ node: "browser", W: 4 });
 

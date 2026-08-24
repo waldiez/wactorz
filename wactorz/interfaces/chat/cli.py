@@ -18,7 +18,7 @@ from ...config import (
 from ...core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
-    from ...agents.main_actor import MainActor
+    from ...agents.main import MainActor
 
 logger = logging.getLogger(__name__)
 

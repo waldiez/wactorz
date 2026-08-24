@@ -379,7 +379,7 @@ class SpawnMixin(_Host):
         """
         await self._apply_initial_state(name, config)
 
-        from ..dynamic_agent import DynamicAgent
+        from ..dynamic import DynamicAgent
 
         actor = await self.spawn(
             DynamicAgent,

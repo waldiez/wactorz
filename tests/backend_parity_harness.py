@@ -1,54 +1,16 @@
 import argparse
 import asyncio
-import importlib.util
 import json
 import pathlib
-import sys
 import tempfile
-import types
+import time
 from dataclasses import dataclass
-
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-FIXTURE_PATH = ROOT / "tests" / "parity_fixtures" / "backend_supervisor_parity.json"
-
-
-def _ensure_importable(name: str) -> None:
-    """Guarantee ``name`` can be imported by the hand-loaded core modules.
-
-    ``actor.py`` and ``registry.py`` import ``aiomqtt`` / ``psutil`` at load
-    time. Both are core dependencies so they are normally installed; only when
-    one is genuinely missing do we insert an empty placeholder so ``_load``
-    below can still exec the module. We never replace a real, importable module:
-    leaving a bare stub in ``sys.modules`` would shadow it for every other test
-    in this shared process.
-    """
-    if name in sys.modules:
-        return
-    try:
-        importlib.import_module(name)
-    except Exception:
-        sys.modules[name] = types.ModuleType(name)
-
-
-for _module in ("aiomqtt", "psutil"):
-    _ensure_importable(_module)
-
-
-def _load(name: str, path: pathlib.Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
-
-
-_load("wactorz.core.actor", ROOT / "wactorz" / "core" / "actor.py")
-_load("wactorz.core.registry", ROOT / "wactorz" / "core" / "registry.py")
 
 from wactorz.core.actor import Actor, ActorState, Message, SupervisorStrategy
 from wactorz.core.registry import ActorSystem, Supervisor
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+FIXTURE_PATH = ROOT / "tests" / "parity_fixtures" / "backend_supervisor_parity.json"
 
 
 @dataclass
@@ -102,51 +64,66 @@ def _make_system() -> ActorSystem:
 
 
 def _normalize_state(actor) -> str:
+    """The actor's state, or `missing` when it is not in the registry at all.
+
+    Reporting the absence rather than raising keeps a failure legible: the
+    comparison against the fixture then shows `missing` where `running` was
+    expected, instead of a KeyError several frames from the thing that is wrong.
+    """
+    if actor is None:
+        return "missing"
     value = actor.state.value
     return "running" if value == "running" else value.lower()
 
 
-async def _settled(
-    system, trackers: dict[str, ActorTracker], poll: float = 0.02, timeout: float = 10.0
+async def _wait_until_settled(
+    system: ActorSystem,
+    trackers: dict[str, "ActorTracker"],
+    *,
+    timeout: float = 10.0,
+    quiet: float = 0.15,
 ) -> None:
-    """Wait until the supervisor has finished restarting things, then return.
+    """Wait for the supervisor to finish reacting, rather than for a fixed delay.
 
-    This replaced a flat 0.35s sleep. Crash-and-restart is work, not a duration,
-    so a fixed wait encodes how fast the machine happened to be: run the suite
-    across every core (`make test` uses `-n auto`) and the wait that was ample
-    on an idle machine expires mid-restart, reporting a short start count as a
-    contract violation.
+    A restart is not instantaneous: the supervisor stops an actor, saves its
+    state and starts a replacement, and the save alone has been seen taking
+    longer on CI than any sleep worth writing. Reading the registry part-way
+    through finds an actor missing or stopped, which looks like a supervision
+    bug and is not one.
 
-    Settled means every actor is running again with its scripted crashes spent —
-    read from the harness's own inputs, never from the fixture's expected
-    numbers, which would leave the check marking its own work. That alone is not
-    enough under the group strategies: `one_for_all` and `rest_for_one` restart
-    siblings too, and between the crashed actor coming back and its siblings
-    going down the system briefly looks finished. So the state also has to hold
-    still across more than one supervisor sweep before it is believed.
+    Settled means **every supervised actor is registered and running**, and has
+    stayed that way briefly. The state check is what makes this reliable: while a
+    restart is in flight the actor is typically still registered but `stopped` or
+    `failed`, so presence alone — or a snapshot that merely stops changing —
+    reports a system caught mid-restart as a settled one.
 
-    The timeout is only a backstop against a supervisor that never settles, so
-    it is far longer than the work can need.
+    The quiet window is the secondary guard, for `one_for_all`, where every actor
+    is momentarily running again between the first restart and the rest.
+
+    Returns on timeout rather than raising, so a system that never settles is
+    reported by the fixture comparison, which can say which actor is wrong,
+    rather than by an exception here.
+
+    ⚠ Assumes every scenario ends with its actors running, which is what the
+    fixture describes today. A scenario whose expected end state is `failed` —
+    an actor that exhausts `max_restarts`, say — would sit here until the
+    timeout; give it its own predicate rather than widening this one, or the
+    wait starts asserting the thing the fixture is supposed to assert.
     """
-    quiet_polls = max(3, int(SUPERVISOR_POLL * 2 / poll))
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    last: tuple | None = None
-    stable = 0
-    while loop.time() < deadline:
-        await asyncio.sleep(poll)
-        states = {actor.name: _normalize_state(actor) for actor in system.registry.all_actors()}
-        snapshot = (
-            tuple(t.starts for t in trackers.values()),
-            tuple(sorted((r["name"], int(r["restarts_used"])) for r in system.supervisor.status())),
-        )
-        stable = stable + 1 if snapshot == last else 0
-        last = snapshot
-        done = all(t.crash_remaining == 0 for t in trackers.values()) and all(
-            states.get(name) == "running" for name in trackers
-        )
-        if done and stable >= quiet_polls:
+    expected = set(trackers)
+    deadline = time.monotonic() + timeout
+    previous: tuple | None = None
+    unchanged_since = time.monotonic()
+
+    while time.monotonic() < deadline:
+        actors = {actor.name: actor for actor in system.registry.all_actors()}
+        running = {name for name, actor in actors.items() if actor.state is ActorState.RUNNING}
+        snapshot = (tuple(sorted(running)), tuple(t.starts for t in trackers.values()))
+        if snapshot != previous:
+            previous, unchanged_since = snapshot, time.monotonic()
+        elif expected <= running and time.monotonic() - unchanged_since >= quiet:
             return
+        await asyncio.sleep(0.02)
 
 
 async def _run_scenario(scenario: dict) -> dict:
@@ -173,7 +150,7 @@ async def _run_scenario(scenario: dict) -> dict:
         )
 
     await system.supervisor.start()
-    await _settled(system, trackers)
+    await _wait_until_settled(system, trackers)
 
     status_rows = {row["name"]: row for row in system.supervisor.status()}
     registry_rows = {actor.name: actor for actor in system.registry.all_actors()}
@@ -184,7 +161,7 @@ async def _run_scenario(scenario: dict) -> dict:
             name: {
                 "starts": tracker.starts,
                 "restart_count": int(status_rows[name]["restarts_used"]),
-                "final_state": _normalize_state(registry_rows[name]),
+                "final_state": _normalize_state(registry_rows.get(name)),
             }
             for name, tracker in trackers.items()
         },

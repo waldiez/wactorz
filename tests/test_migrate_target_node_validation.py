@@ -11,10 +11,10 @@ the migration is refused and the agent stays where it is.
 import time
 from typing import Any
 
-from wactorz.agents.main_actor import MainActor
-from wactorz.agents.manifests import ManifestRegistry
-from wactorz.agents.migration import Migration
-from wactorz.agents.nodes import NodeManager
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.manifests import ManifestRegistry
+from wactorz.agents.main.migration import Migration
+from wactorz.agents.main.nodes import NodeManager
 
 
 def _bare_main(registry: dict, known_nodes: dict[str, Any]) -> MainActor:
@@ -48,7 +48,7 @@ def _bare_main(registry: dict, known_nodes: dict[str, Any]) -> MainActor:
 
 
 def _registry_with_agent_on(node: str) -> dict:
-    from wactorz.agents.helpers.main_actor_helpers import SPAWN_REGISTRY_KEY  # noqa: F401
+    from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY  # noqa: F401
 
     return {"temp-sensor": {"name": "temp-sensor", "node": node, "type": "dynamic", "code": "x"}}
 

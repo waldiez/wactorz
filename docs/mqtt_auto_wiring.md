@@ -520,11 +520,11 @@ User says: *"spawn an agent to log the mean of the last 5 temperature values"*
 | File | What It Does |
 | --- | --- |
 | `core/topic_bus.py` | `TopicContract`, `TopicRegistry`, `SharedStateHub`, `StreamWindow`, `TopicBus` |
-| `agents/dynamic_agent.py` | `_AgentAPI.publish()` — auto-registers contracts and captures schemas |
-| `agents/dynamic_agent.py` | `_AgentAPI.subscribe()` — auto-registers subscription in TopicBus |
-| `agents/dynamic_agent.py` | `_AgentAPI.declare_contract()` — explicit contract declaration with kwarg aliases |
-| `agents/planner_agent.py` | `_resolve_data_references()` — topic resolution from natural language |
-| `agents/planner_agent.py` | `_sample_live_topics()` — fallback MQTT sampling for schema capture |
-| `agents/planner_agent.py` | `_decompose_pipeline()` — injects schema context into LLM prompt |
-| `agents/planner_agent.py` | `_validate_pipeline_code()` — post-generation code validator |
-| `agents/main_actor.py` | `_manifest_listener()` — subscribes to `agents/+/manifest` for schema propagation |
+| `agents/dynamic/messaging.py` | `AgentAPI.publish()` — auto-registers contracts and captures schemas |
+| `agents/dynamic/streams.py` | `AgentAPI.subscribe()` — auto-registers subscription in TopicBus |
+| `agents/dynamic/streams.py` | `AgentAPI.declare_contract()` — explicit contract declaration with kwarg aliases |
+| `agents/planner/agent.py` | `_resolve_data_references()` — topic resolution from natural language |
+| `agents/planner/agent.py` | `_sample_live_topics()` — fallback MQTT sampling for schema capture |
+| `agents/planner/agent.py` | `_decompose_pipeline()` — injects schema context into LLM prompt |
+| `agents/planner/validation.py` | `validate_pipeline_code()` — post-generation code validator |
+| `agents/main/actor.py` | `_manifest_listener()` — subscribes to `agents/+/manifest` for schema propagation |

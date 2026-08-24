@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
-    from ...agents.main_actor import MainActor
+    from ...agents.main import MainActor
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class DiscordInterface:
 
         @client.event
         async def on_ready() -> None:
-            logger.info(f"[Discord] Logged in as {client.user}")
+            logger.info("[Discord] Logged in as %s", client.user)
 
         @client.event
         async def on_message(message: discord.Message) -> None:

@@ -621,35 +621,35 @@ Auto-wiring opportunities:
 <td><code>TopicContract</code>, <code>TopicRegistry</code>, <code>SharedStateHub</code>, <code>StreamWindow</code>, <code>TopicBus</code></td>
 </tr>
 <tr>
-<td><code>agents/dynamic_agent.py</code></td>
-<td><code>_AgentAPI.publish()</code> — auto-registers contracts and captures schemas</td>
+<td><code>agents/dynamic/messaging.py</code></td>
+<td><code>AgentAPI.publish()</code> — auto-registers contracts and captures schemas</td>
 </tr>
 <tr>
-<td><code>agents/dynamic_agent.py</code></td>
-<td><code>_AgentAPI.subscribe()</code> — auto-registers subscription in TopicBus</td>
+<td><code>agents/dynamic/streams.py</code></td>
+<td><code>AgentAPI.subscribe()</code> — auto-registers subscription in TopicBus</td>
 </tr>
 <tr>
-<td><code>agents/dynamic_agent.py</code></td>
-<td><code>_AgentAPI.declare_contract()</code> — explicit contract declaration with kwarg aliases</td>
+<td><code>agents/dynamic/streams.py</code></td>
+<td><code>AgentAPI.declare_contract()</code> — explicit contract declaration with kwarg aliases</td>
 </tr>
 <tr>
-<td><code>agents/planner_agent.py</code></td>
+<td><code>agents/planner/agent.py</code></td>
 <td><code>_resolve_data_references()</code> — topic resolution from natural language</td>
 </tr>
 <tr>
-<td><code>agents/planner_agent.py</code></td>
+<td><code>agents/planner/agent.py</code></td>
 <td><code>_sample_live_topics()</code> — fallback MQTT sampling for schema capture</td>
 </tr>
 <tr>
-<td><code>agents/planner_agent.py</code></td>
+<td><code>agents/planner/agent.py</code></td>
 <td><code>_decompose_pipeline()</code> — injects schema context into LLM prompt</td>
 </tr>
 <tr>
-<td><code>agents/planner_agent.py</code></td>
-<td><code>_validate_pipeline_code()</code> — post-generation code validator</td>
+<td><code>agents/planner/validation.py</code></td>
+<td><code>validate_pipeline_code()</code> — post-generation code validator</td>
 </tr>
 <tr>
-<td><code>agents/main_actor.py</code></td>
+<td><code>agents/main/actor.py</code></td>
 <td><code>_manifest_listener()</code> — subscribes to <code>agents/+/manifest</code> for schema propagation</td>
 </tr>
 </tbody>

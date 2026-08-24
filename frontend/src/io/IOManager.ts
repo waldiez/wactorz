@@ -8,8 +8,9 @@
  * `af-stream-end`) and the activity feed. The dashboard chat (DashboardChat)
  * renders from those events — IOManager owns no UI.
  *
- * Messages go to the IOAgent via the WebSocket (direct_ws mode). The `@agent-name`
- * prefix is preserved in the content so IOAgent can route it.
+ * Messages go to the server over the WebSocket, which routes them into the actor
+ * system directly. The `@agent-name` prefix is preserved in the content so the
+ * server can resolve the recipient from it.
  */
 
 import type { AgentInfo, ChatMessage } from "../types/agent";

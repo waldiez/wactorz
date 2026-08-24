@@ -166,7 +166,7 @@ describe("appendActionBtns", () => {
 
     it("non-messageable system agent → no buttons", () => {
         const c = document.createElement("div");
-        appendActionBtns(c, agent("io-agent"));
+        appendActionBtns(c, agent("monitor-agent"));
         expect(actions(c)).toEqual([]);
     });
 });
@@ -184,9 +184,9 @@ describe("buildWactorCard", () => {
     });
 
     it("gives a system agent no Chat button", () => {
-        // io-agent is plumbing, not a correspondent — offering Chat would send
+        // monitor-agent is plumbing, not a correspondent — offering Chat would send
         // messages nothing answers.
-        const card = buildWactorCard(agent("io-agent"), 0, cb());
+        const card = buildWactorCard(agent("monitor-agent"), 0, cb());
 
         expect(card.querySelector(".af-chat-btn")).toBeNull();
     });

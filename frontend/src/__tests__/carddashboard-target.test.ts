@@ -31,7 +31,7 @@ describe("CardDashboard chat-target selection", () => {
 
     it("falls back to 'main' when chatTarget default ('main') is absent", () => {
         cd.agents.set("1", agent("main", true)); // protected, but always messageable
-        cd.agents.set("2", agent("io-agent", true)); // system → not messageable
+        cd.agents.set("2", agent("monitor-agent", true)); // system → not messageable
         cd._chat.chatTarget = "main";
 
         const select = document.createElement("select");
@@ -40,7 +40,7 @@ describe("CardDashboard chat-target selection", () => {
         expect(select.value).toBe("main"); // never blank
         expect(cd._chat.chatTarget).toBe("main");
         // the system agent is not an option
-        expect([...select.options].map(o => o.value)).not.toContain("io-agent");
+        expect([...select.options].map(o => o.value)).not.toContain("monitor-agent");
     });
 
     it("falls back to the first messageable agent when no main exists", () => {

@@ -97,7 +97,7 @@ describe("buildFeedView", () => {
     });
 
     it("filters out system-agent rows", () => {
-        const wrap = view([item({ agentName: "io-agent" }), item({ agentName: "worker" })]);
+        const wrap = view([item({ agentName: "monitor-agent" }), item({ agentName: "worker" })]);
         expect(wrap.querySelectorAll(".af-feed-item").length).toBe(1);
     });
 

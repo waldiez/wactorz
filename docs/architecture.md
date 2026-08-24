@@ -22,7 +22,6 @@ The framework is built on three ideas: every agent is an independent **actor** w
 │                                                                        │
 │  MainActor                  LLM orchestrator, intent routing, spawn reg│
 │  MonitorActor               heartbeat watchdog, alerts main on failure │
-│  IOAgent                    MQTT↔UI gateway, routes chat to main       │
 │  CatalogAgent               pre-built recipe library, spawns on demand │
 │  InstallerAgent             pip installs deps for dynamic agents       │
 │  HomeAssistantAgent         HA REST API — entities, services, automa…  │
@@ -128,8 +127,7 @@ On first startup after upgrading from an older version, `migrate_from_pickle()` 
 
 | Topic pattern | Publisher | Subscriber | Payload |
 |---------------|-----------|------------|---------|
-| `io/chat` | IOAgent / UI | main | `{from, content}` |
-| `agents/{id}/chat` | any actor | UI / IOAgent | `{role, content, interface}` |
+| `agents/{id}/chat` | any actor | UI | `{role, content, interface}` |
 | `agents/{id}/heartbeat` | every actor | MonitorActor | `{name, state, ts, ...}` |
 | `agents/{id}/logs` | any actor | dashboard | `{type, message, ts}` |
 | `agents/{id}/manifest` | any actor | main | capabilities, input/output schema |

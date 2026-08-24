@@ -1359,7 +1359,6 @@ wactorz/
 │   ├── monitor_agent.py                       MonitorAgent — heartbeat, error registry, recovery
 │   ├── installer_agent.py                     InstallerAgent — pip install locally + SSH deploy to remote nodes
 │   ├── catalog_agent.py                       CatalogAgent — pre-built recipe library, spawns agents by name
-│   ├── io_agent.py                            IOAgent — MQTT↔UI gateway for browser chat
 │   ├── scheduled_agent.py                     ScheduledAgent — first-class time triggers (daily/weekly/cron/once)
 │   ├── one_off_actuator_agent.py              OneOffActuatorAgent — ephemeral one-shot HA actuator
 │   ├── home_assistant_agent.py                HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)

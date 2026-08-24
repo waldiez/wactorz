@@ -363,7 +363,6 @@ wactorz/                         ← repo root
 │   │   ├── home_assistant_map_agent.py
 │   │   ├── monitor_agent.py
 │   │   ├── installer_agent.py
-│   │   └── io_agent.py
 │   ├── catalogue_agents/        ← pre-built DynamicAgent recipes
 │   ├── interfaces/
 │   │   ├── chat_interfaces.py   ← CLI, REST, Discord, WhatsApp, Telegram

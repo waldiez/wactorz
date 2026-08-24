@@ -1,19 +1,16 @@
 /**
  * mock-agents.mjs
  *
- * Simulates a running Wactorz system by publishing MQTT messages that
- * the Babylon.js frontend subscribes to.  Run via compose.dev.yaml.
+ * Simulates a running Wactorz system by publishing the MQTT traffic the
+ * dashboard renders. Run via compose.dev.yaml.
  *
  * Topics published:
  *   agents/{id}/heartbeat   — periodic liveness ping per agent
  *   agents/{id}/status      — state changes
- *   agents/{id}/chat        — simulated LLM replies (+ replies to io/chat)
+ *   agents/{id}/chat        — simulated LLM replies
  *   agents/{id}/alert       — occasional warning/error
  *   agents/{id}/spawn       — new agent announcement
  *   system/health           — aggregate counts
- *
- * Topics subscribed:
- *   io/chat                 — user messages from the frontend IO bar
  */
 
 import mqtt from "mqtt";
@@ -77,7 +74,6 @@ client.on("connect", () => {
   }
 
   // Subscribe to user input so dev mode is interactive
-  client.subscribe("io/chat", { qos: 0 });
 
   startHeartbeats();
   startChat();
@@ -88,121 +84,6 @@ client.on("connect", () => {
 });
 
 client.on("error", (err) => console.error("[mock] MQTT error:", err.message));
-
-// ── Respond to user messages on io/chat ───────────────────────────────────────
-const MOCK_RESPONSES = [
-  "Got it — processing your request now.",
-  "Understood. Running analysis on that.",
-  "I'll coordinate with the other agents on this.",
-  "Interesting query. Let me check the available data.",
-  "That's within my capabilities. Executing now…",
-  "Classification in progress — confidence is high.",
-  "Fetching relevant context for your request.",
-  "Task queued. Expected completion: ~2 seconds.",
-  "Agent network is nominal. Request dispatched.",
-  "Acknowledged. Routing to the appropriate subsystem.",
-];
-
-// UDX knowledge-base replies for the mock
-const UDX_RESPONSES = [
-  "**UDX** here! Type `help` for a full command list, or try `docs architecture`, `explain mqtt`, `agents`, or `status`.",
-  "**Wactorz actors** communicate via MQTT topics only — no shared state, no locks. Try `explain actor-model` for details.",
-  "**Live agents** in this session: main-actor (orchestrator), monitor-agent (watchdog), io-agent (gateway), nautilus-agent (SSH/rsync), udx-agent (that's me!). Use `agents` for the full list.",
-  "**Deployment tip**: use `docker compose --profile python up -d` for the local stack, or the Home Assistant add-on for HAOS/Supervised installs. Use `docs deploy` for the full guide.",
-  "**NautilusAgent** bridges SSH/rsync — try `@nautilus-agent ping user@host`. Arguments are never shell-interpolated, so injection attacks are impossible.",
-  "**MQTT topic structure**: `agents/{id}/spawn|heartbeat|status|alert|chat` + `system/health` + `io/chat`. Use `docs mqtt` for the full reference.",
-  "**REST API** lives at `/api/`. Quick ref: `GET /api/actors`, `POST /api/actors/:id/pause`, `DELETE /api/actors/:id`. Use `docs api` for all endpoints.",
-];
-
-// Weather-agent mock replies
-const WEATHER_RESPONSES = [
-  "**Weather in London**\n\n🌡 **14°C / 57°F** (feels like 11°C)\n☁ Overcast\n💧 Humidity: 82%\n💨 Wind: 22 km/h SW\n👁 Visibility: 9 km\n☀ UV index: 1",
-  "**Weather in Tokyo**\n\n🌡 **21°C / 70°F** (feels like 20°C)\n🌤 Partly cloudy\n💧 Humidity: 65%\n💨 Wind: 14 km/h NE\n👁 Visibility: 16 km\n☀ UV index: 4",
-  "**Weather in New York**\n\n🌡 **8°C / 46°F** (feels like 5°C)\n🌧 Light rain\n💧 Humidity: 90%\n💨 Wind: 30 km/h NW\n👁 Visibility: 6 km\n☀ UV index: 0",
-  "🌦 Fetching weather… *(in real mode this calls wttr.in — no API key needed)*",
-];
-
-// News-agent mock replies
-const NEWS_RESPONSES = [
-  "**Hacker News — Top Stories** (top 5)\n\n1. **[Show HN: I built a multi-agent system in Rust](https://example.com)** — ⬆ 342 · [HN](https://news.ycombinator.com)\n2. **[The unreasonable effectiveness of LLMs as orchestrators](https://example.com)** — ⬆ 289 · [HN](https://news.ycombinator.com)\n3. **[Ask HN: How do you handle secret management in containers?](https://news.ycombinator.com)** — ⬆ 201 · [HN](https://news.ycombinator.com)\n4. **[Rust 2026 roadmap announced](https://example.com)** — ⬆ 178 · [HN](https://news.ycombinator.com)\n5. **[Babylon.js 8.0 released](https://example.com)** — ⬆ 154 · [HN](https://news.ycombinator.com)",
-  "**Hacker News — Newest Stories** (top 5)\n\n1. **[Actor model vs. CSP: a 2026 comparison](https://example.com)** — ⬆ 12\n2. **[MQTT vs WebSockets for real-time dashboards](https://example.com)** — ⬆ 8\n3. **[Building a zero-dependency Rust HTTP client](https://example.com)** — ⬆ 5\n4. **[Ask HN: Best free weather API?](https://news.ycombinator.com)** — ⬆ 3\n5. **[Show HN: Wactorz dashboard in Babylon.js](https://example.com)** — ⬆ 2",
-  "📰 Fetching top stories from Hacker News… *(in real mode this calls the HN Firebase API — no API key needed)*",
-];
-
-// WIZ coin-economy mock replies
-const WIZ_RESPONSES = [
-  "**WIZ — WaldiezCoin Economy** Ƿ\n\n```\nbalance              current coin balance\nhistory [n]          last n transactions (default 10)\nearn <n> <reason>    credit coins manually\ndebit <n> <reason>   debit coins manually\nhelp                 this message\n```",
-  "💰 **Balance**: Ƿ 1,250\n📈 Net today: **+Ƿ 142** (12 events)",
-  "📋 **Recent Transactions**\n\n  +10  spawn: data-fetcher\n  +2   heartbeat: main-actor\n  +5   system healthy\n  +2   heartbeat: io-agent\n  −3   stale alert: ml-classifier\n  +2   heartbeat: main-actor\n\n**Balance: Ƿ 1,254**",
-  "✅ Credited **Ƿ 50** → _manual bonus_\n**New balance: Ƿ 1,304**",
-  "📉 Debited **Ƿ 25** → _QA flag penalty_\n**New balance: Ƿ 1,279**",
-  "💡 **Economy Rules**\n\n  +10  agent spawned\n  +2   agent heartbeat\n  +5   all agents healthy\n  −5   QA content flag\n  −3   stale agent alert\n\nEarn coins by keeping your swarm healthy!",
-];
-
-// WIF finance-agent mock replies
-const WIF_RESPONSES = [
-  "**WIF — Finance Expert** 💹\n\n```\nadd <amount> [category] [note]       log an expense\nbudget <category> <amount>           set budget limit\nsummary [today|week|month|all]       spending report\nbalance                              budget vs actuals\ncalc compound <p> <rate%> <years>    compound interest\ncalc loan <p> <rate%> <years>        loan / mortgage\ncalc roi <initial> <final>            return on invest\ntips [saving|investing|debt|budget]  financial advice\nhelp                                 this message\n```",
-  "✅ Logged **$42.50** → `food` _lunch sushi_\n🟢 **food** budget: $127.50 / $300.00 (43%) — $172.50 left",
-  "**💰 Expense Summary — This Month**\n\n  █ **food**: $127.50\n  ▆ **transport**: $84.00\n  ▄ **entertainment**: $55.00 🟡 92% of $60\n  ▂ **misc**: $22.00\n\n**Total: $288.50** (14 transactions)",
-  "**📊 Budget Balance**\n\n🟢 **food**: [████████░░] $127.50 / $300.00 (43%) — $172.50 left\n🟢 **transport**: [██████░░░░] $84.00 / $140.00 (60%) — $56.00 left\n🔴 **entertainment**: [██████████] $55.00 / $60.00 (92%) — $5.00 left\n\n🟢 **TOTAL**: $266.50 / $500.00 (53%)",
-  "**📈 Compound Interest (monthly)**\n\nPrincipal : $10,000.00\nRate      : 7.00% p.a.\nTerm      : 20 years\n\n→ Future Value  : **$40,387.63**\n→ Interest Earned: **$30,387.63** (304% gain)",
-  "**🏠 Loan / Mortgage Calculator**\n\nPrincipal : $300,000.00\nRate      : 4.50% p.a.\nTerm      : 30 years\n\n→ Monthly Payment : **$1,520.06**\n→ Total Repaid    : **$547,220.13**\n→ Total Interest  : **$247,220.13**",
-  "**💡 Saving Tips**\n\n1. **50/30/20 rule** — 50% needs · 30% wants · 20% savings\n2. **Pay yourself first** — automate a transfer on payday\n3. **Emergency fund** — target 3–6 months of expenses\n4. **Cut subscriptions** — review monthly recurring charges\n5. **Track everything** — use `add <amount> <category>` to log expenses",
-  "📋 Budget set: **entertainment** → **$60.00**\n🟢 Currently at $0.00 (0%)",
-  "📰 _No expenses recorded yet. Try `add 25 food coffee` to get started._",
-  "📈 **Return on Investment**\n\nInitial : $5,000.00\nFinal   : $7,250.00\nGain    : $+2,250.00\n\n→ ROI: **+45.00%**",
-];
-
-// Nautilus-specific replies for the mock (sync/exec flavour)
-const NAUTILUS_RESPONSES = [
-  "✓ SSH connection to `remote-host` established.\n```\nLinux remote-host 6.1.0 #1 SMP x86_64 GNU/Linux\n```",
-  "rsync pull complete: `src/` → `./data/` (42 files, 1.3 MB transferred)",
-  "✓ `df -h` on `deploy-host`:\n```\nFilesystem  Size  Used Avail Use%\n/dev/sda1    50G   12G   36G  25%\n```",
-  "✗ SSH to `unreachable-host` timed out after 10s.",
-  "✓ rsync push `./dist/` → `web@cdn:/var/www/html/` — 18 files synced.",
-  "Remote command `systemctl status wactorz` returned exit 0.",
-  "Establishing encrypted tunnel… shell handshake complete.",
-  "✓ Key fingerprint accepted. Host added to known_hosts.",
-];
-
-client.on("message", (topic, raw) => {
-  if (topic !== "io/chat") return;
-  let msg;
-  try { msg = JSON.parse(raw.toString()); } catch { return; }
-
-  const text = (msg.content ?? "").trim();
-  if (!text) return;
-
-  // Parse @mention to choose responding agent; default to main-actor
-  let responder = agents.find((a) => a.name === "main-actor") ?? agents[0];
-  const mentionMatch = text.match(/^@([\w-]+)/);
-  if (mentionMatch) {
-    const named = agents.find((a) => a.name === mentionMatch[1]);
-    if (named) responder = named;
-  }
-
-  console.log(`[mock] io/chat → @${responder.name}: "${text.slice(0, 60)}"`);
-
-  // Simulate a short "thinking" delay (0.8–2.5 s)
-  const delay = 800 + Math.random() * 1700;
-  const pool =
-    responder.name === "nautilus-agent" ? NAUTILUS_RESPONSES :
-    responder.name === "udx-agent"      ? UDX_RESPONSES      :
-    responder.name === "weather-agent"  ? WEATHER_RESPONSES  :
-    responder.name === "news-agent"     ? NEWS_RESPONSES     :
-    responder.name === "wif-agent"      ? WIF_RESPONSES      :
-    responder.name === "wiz-agent"      ? WIZ_RESPONSES      :
-    MOCK_RESPONSES;
-  setTimeout(() => {
-    publish(`agents/${responder.id}/chat`, {
-      id:          nextWid(),
-      from:        responder.name,
-      to:          "user",
-      content:     pick(pool),
-      timestampMs: Date.now(),
-    });
-  }, delay);
-});
 
 function publish(topic, payload) {
   client.publish(topic, JSON.stringify(payload), { qos: 0, retain: false });

@@ -39,6 +39,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **One-off light commands now resolve common colour, brightness and follow-up requests
+  deterministically.** Singular requests choose one best-matching light instead of fanning out,
+  explicit plural requests still affect all matching lights, and malformed resolver output
+  produces a safe no-match response.
 - **Home Assistant automation requests now state explicitly when no automation was created.**
   Hardware recommendations remain available, but the response can no longer be mistaken for a
   successful write while automation creation is disabled.

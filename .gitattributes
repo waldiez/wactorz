@@ -1,6 +1,16 @@
 # .gitattributes
-* text=auto
-*.sh text eol=lf
+
+# LF everywhere, in the repository *and* in the working tree.
+#
+# `text=auto` on its own only normalises on the way in, so a Windows checkout
+# still gets CRLF working files. Two things then break on that machine and only
+# on that machine: prettier is configured `endOfLine: "lf"`, so `make lint`
+# reports every frontend file as unformatted; and vite copies templates through
+# byte for byte, so a local `make build-frontend` commits CRLF into static/app
+# and CI's "bundle matches the frontend source" check fails against its own LF
+# rebuild. Pinning eol here fixes both at the source. Binary files are still
+# detected by `text=auto` and left alone.
+* text=auto eol=lf
 
 # Generated docs bundled into the wheel — collapse in GitHub PR diffs
 static/docs/**        linguist-generated=true

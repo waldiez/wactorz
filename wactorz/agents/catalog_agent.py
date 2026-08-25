@@ -44,9 +44,6 @@ BETA_WARNING = (
     "Use it for trials, not unattended production workflows."
 )
 
-_REACHY_MINI_SDK_VERSION = "1.8.4"
-_REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
-
 _IMPORT_NAME_MAP = {
     "scikit-learn": "sklearn",
     "stable-baselines3": "stable_baselines3",
@@ -58,10 +55,6 @@ _IMPORT_NAME_MAP = {
     "typing-extensions": "typing_extensions",
     "opencv-python": "cv2",
     "scikit-image": "skimage",
-    # Ships the `webrtcvad` module under a different distribution name. Without
-    # this the check never finds it, so a fully installed robot was sent to the
-    # installer on every single spawn — the fast path exists to avoid exactly
-    # that wait.
     "webrtcvad-wheels": "webrtcvad",
 }
 

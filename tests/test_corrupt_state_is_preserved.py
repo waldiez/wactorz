@@ -95,7 +95,7 @@ class TestRemoteRunnerLoadState:
         # remote agent could lose its state with nothing recorded anywhere.
         agent = _RemoteAgent.__new__(_RemoteAgent)
         agent.name = "worker"
-        agent._state_path = str(tmp_path / "state.json")
+        agent._state_path = tmp_path / "state.json"
         agent._persistent_state = {}
         (tmp_path / "state.json").write_text("{not json", encoding="utf-8")
 
@@ -107,7 +107,7 @@ class TestRemoteRunnerLoadState:
     def test_a_readable_file_loads_and_is_left_alone(self, tmp_path: Path) -> None:
         agent = _RemoteAgent.__new__(_RemoteAgent)
         agent.name = "worker"
-        agent._state_path = str(tmp_path / "state.json")
+        agent._state_path = tmp_path / "state.json"
         agent._persistent_state = {}
         (tmp_path / "state.json").write_text(json.dumps({"a": 1}), encoding="utf-8")
 

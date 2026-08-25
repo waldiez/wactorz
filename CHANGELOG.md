@@ -23,25 +23,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
-- **Reachy warns about overheating and other motor faults, and can be asked how it is doing.**
-  The daemon reads the servos' hardware-error byte several times a second and decodes
-  overheating, overload, electrical-shock and input-voltage faults — then writes them only to
-  its own log, not into any status the SDK can read, which is why nothing in Wactorz had ever
-  seen them. It now follows the daemon's log stream, the same source the official control app
-  shows its overheating warning from, and raises each fault in chat with what to do about it.
-  A given fault on a given motor is repeated at most every five minutes, since the daemon
-  re-reads the motors continuously. The watch starts on connect and reconnects by itself,
-  because the stream ends whenever the daemon restarts — which is when a fault is most likely
-  next. `are you overheating` (also `health`, `how are you feeling`) reports the faults seen
-  this session and the IMU's temperature. **Only the wireless robot serves that log stream**,
-  so a Lite over USB is not watched and `health` says so rather than reporting a silence that
-  would read as "nothing wrong". **There is no battery level to report**: Pollen state that checking
-  the battery is impossible by design and that the only indication is the LED on the foot going
-  green to orange to red, so `health` says so outright rather than leaving an absent number to
-  look like a full charge. An `Input Voltage Error` from a motor is deliberately not warned
-  about either — Reachy Mini runs its servos above their protection threshold on purpose, so it
-  appears on healthy robots, and warning about it would train people to ignore the faults that
-  matter; it goes to the log instead.
+- **The optional packages the code already reaches for are now installable by name.** Three features degrade quietly when a package is absent: cron schedules refuse with a hint, query results come back as dicts instead of a DataFrame, and the camera shim returns nothing. All three were reachable only by installing the package yourself, and none of them was declared, so there was nothing to install *by name* — the cron error even told you to `pip install croniter`, a package this project never mentioned. There are now `wactorz[cron]`, `wactorz[data]` and `wactorz[vision]` extras for them. `cron` and `data` join `wactorz[all]`; `vision` stays out because OpenCV is large and the shim degrades cleanly without it, so `all` continues to mean "everything but the heavy stacks".
+
 - **Stopping an agent has a REST route, and every lifecycle command now says what it did.** `start`, `pause` and `resume` had routes; `stop` was reachable only over the dashboard's WebSocket, so anything scripted could start an agent and not stop it. `POST /actors/{id}/stop` fills that gap — it parks the agent and leaves it registered, which is what `DELETE /actors/{id}` has always done *and then removed*, so the two are now distinct rather than one verb wearing both names. **The bookkeeping that only the dashboard used to do is now shared by both paths**: a command records a feed entry, updates the state the API reports, and patches every open dashboard. Previously a command over REST executed and then said nothing, so `GET /actors` reported the old state until the agent's next heartbeat — and with the broker down, indefinitely: the response said the agent had stopped while every subsequent read said it was running. **Agents on a runner node can be commanded over REST too.** They are absent from the local registry by design, which made them indistinguishable from a typo, so a request the dashboard handled fine came back `404`; they are now reached over the broker as the dashboard reaches them, and a command that has no broker to travel through reports `503` rather than a hollow `200`.
 
 - **A dashboard whose session has ended says so, instead of quietly freezing.** Sessions do not last forever, and one can be ended from another browser. That used to leave the page on screen and polling into refusals: cards stopped changing, the feed stopped, and nothing explained why — a page that looks alive and is not. It now returns to the sign-in page, and brings you back where you were once you are in. There is a sign-out control in the header too, which appears only when there is a session to end: an install with no key never had one, and under Home Assistant ingress you were signed in by Home Assistant, so ending a session here would end nothing.
@@ -224,6 +207,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Catalogue dependency checks now respect exact version pins and distribution/import-name
+  differences.** A recipe no longer reuses an importable but incompatible pinned version, and
+  packages such as `webrtcvad-wheels` are recognised by the module they actually install.
+- **One-off light commands now resolve common colour, brightness and follow-up requests
+  deterministically.** Singular requests choose one best-matching light instead of fanning out,
+  explicit plural requests still affect all matching lights, and malformed resolver output
+  produces a safe no-match response.
+- **Home Assistant automation requests now state explicitly when no automation was created.**
+  Hardware recommendations remain available, but the response can no longer be mistaken for a
+  successful write while automation creation is disabled.
+
 - **Signing in survives a restart.** Sessions were held in memory, so every restart — an update, a crash, a `docker compose up -d` — signed every browser out and asked for the key again. They are now kept in the state directory and last the full thirty days, which is what the window always claimed. **A stolen file is not a way in**: what is stored cannot be turned back into a cookie, and it is written readable only by the account running Wactorz. **Changing `API_KEY` still ends every session**, with nothing extra to do — the stored sessions stop matching the moment the key does. Signing out, here or everywhere, still means it, and now stays meant after a restart. **Wiping agents does not sign you out**, and an install with no key writes no file at all, since there is nothing there to guard. If the file is ever unreadable, the worst that happens is you sign in again.
 - **The dashboard is sent only the broker messages it uses.** The server subscribes to whole topic subtrees because agents publish freely within them, and forwarded every message inside them to every open browser — so whatever any agent happened to publish crossed the wire, including topics nothing on the page reads. Only the topics the dashboard acts on are forwarded now. Nothing on screen changes, and this does not affect what the server itself takes in: an agent's metrics update the dashboard exactly as before. **If you have written a custom agent whose own topics you were reading from the browser**, they are no longer relayed.
 - **A web page on another site can no longer act on your Wactorz.** Every response carried `Access-Control-Allow-Origin: *` and every preflight was approved, so any page you visited while Wactorz was running could delete your agents, reset your system, or read your agent names, chat log and spend. Requests from another origin are now refused when they would change something, and responses to them are no longer readable by the calling page. The WebSocket is checked the same way — it is exempt from CORS entirely, so without this a page could still open it, watch the live feed and send commands. Requests carrying no `Origin` at all are unaffected, so `curl`, scripts and the Python client keep working. A dashboard hosted on another origin needs `WACTORZ_CORS_ORIGINS`.
@@ -231,98 +225,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- **Saying "stop conversation" now ends the conversation, as typing it always did.** The typed
-  commands and the spoken phrases were two separate lists that had drifted: chat understood
-  "stop conversation" and the voice session did not, so saying it was handled as an ordinary
-  question — Reachy answering "Goodbye!" out loud while the microphone stayed on and the session
-  ran. Only typing it stopped anything. The spoken phrases are now built from the typed ones, so
-  a wording that works in one cannot fail in the other, and `stop the conversation` and `end the
-  conversation` are understood aloud too.
+- **Scheduled agents on Windows no longer ignore the time zone they were given.** Windows ships no IANA time zone database, so `ZoneInfo("Europe/Athens")` found nothing there and resolution fell through its candidates to the machine's local time — quietly, because falling through is also what a genuine typo does. A schedule set for 08:00 in a named zone therefore fired at 08:00 local instead, and the only trace was a warning that read as if the zone name were wrong. The database now installs with the package on Windows, so a named zone resolves the way it already did on Linux and macOS. **If you run scheduled agents on Windows**, reinstall to pick it up and check any schedule whose zone differs from the machine's; nothing else changes, and no other platform is affected.
 
-- **A Reachy Mini installed exactly as instructed can now actually talk and listen.** The recipe
-  never listed `faster-whisper`, which is the default — and only local — speech recogniser behind
-  `ask_voice` and `conversation_start`, so on a fresh install every voice feature failed, and
-  nothing said why until the first attempt. It is now installed with the rest.
-
-- **Spawning Reachy Mini no longer waits on the dependency installer every time.** The check maps
-  a package name to the module it provides, and `webrtcvad-wheels` provides `webrtcvad` — with no
-  entry for it the check never found the package, so a host with everything already installed was
-  sent to the installer on every spawn, which is the wait the fast path exists to avoid. Verified
-  on a clean virtual environment built from the README: the recipe's dependencies now all resolve,
-  and the setup instructions name every package the recipe installs.
-
-- **Asking Reachy to stop talking politely now stops him, instead of getting an answer.** Stop and
-  silence requests were matched exactly, so "stop talking" was recognised and "Stop talking,
-  please!" was not — the polite version fell through and was handled as an ordinary question, so
-  he replied "Of course, I'll be quiet!" out loud, which is the thing being asked to stop, and
-  "Okay." to the next attempt. Padding words are now trimmed from the ends of a request before it
-  is matched, so "you can stop talking right now" and "Reachy, stop talking" are understood.
-  Only from the ends, and only padding: "stop the music" and "I couldn't stop talking about it"
-  stay ordinary requests, and "shut up" keeps its "up". "stop it" and "that's enough" were added
-  to the phrases that ask for quiet, and the polite forms of ending the session are understood
-  the same way.
-
-- **The pause between the sentences of one spoken reply is gone.** A reply is spoken sentence by
-  sentence so the first words reach the speaker quickly, but each sentence was synthesized only
-  once the previous one had finished playing — and every sentence is its own edge-tts request
-  over the network, with the loudness boost on top. That round trip landed in every gap, so
-  "Sure! I'm Reachy, your friendly robot companion. I love a good chat." arrived in pieces with
-  a wait between each. Each sentence is now synthesized while the previous one is still playing,
-  which removes the gap without giving up the quick start: only one runs ahead, so a reply cut
-  short has not paid for sentences nobody hears, and the unused one is discarded with its file.
-
-- **Reachy no longer pauses for seconds between every sentence.** Checking whether an
-  interruption was real costs a recogniser pass — around two seconds on the robot — and his own
-  voice trips the check on nearly every sentence, so with `barge_in` on that pause landed in
-  every gap and made him sound slow. The check now runs alongside the next sentence instead of
-  in front of it, and its answer is taken as soon as that sentence ends, so he still stops at
-  the next sentence boundary rather than at the end of the reply. Only one check runs at a
-  time: a second would queue another pass and overwrite the answer the first was about to give.
-
-- **A short spoken interruption is no longer discarded for being short.** Checking a suspected
-  interruption required more voice than the capture layer had needed to call it an utterance at
-  all — 0.35 s against 0.12 s — so "stop", about 0.2 s of speech and trimmed further by the echo
-  suppression that runs while the loudspeaker is playing, was thrown out before it was ever
-  transcribed. The two now agree: `barge_verify_min_speech_s` defaults to `barge_min_speech_s`.
-  The floor is only there to skip the recogniser on a click; whether a clip is a person or the
-  loudspeaker is decided by what it says, which is the only thing that can tell them apart.
-
-- **Telling Reachy to stop, out loud, while he is talking, now stops him.** The interruption was
-  recorded — 4.3 seconds of it — and then thrown away by the recogniser's own voice filter, which
-  runs before decoding and removed every frame of a clip captured over the loudspeaker. An empty
-  transcript read as "nobody interrupted", so he talked over the person asking him to stop. That
-  filter is now off for the check (`stt_vad_filter`), since the clip has already been gated by
-  Reachy's own VAD and a second pass had nothing to protect and everything to lose. The words
-  recovered there are carried into the turn instead of being transcribed again, which would have
-  re-run the same filter and lost them a second time.
-
-- **Reachy no longer interrupts himself.** With `barge_in` on, speech onset ended the reply
-  outright — and the microphone hears his own loudspeaker, so his voice ended it. A joke died
-  at "why don't eg-". Onset is now only a suspicion: the sentence in progress finishes, and
-  the recording is checked before it counts. It must carry enough voice to be a turn
-  (`barge_verify_min_speech_s`, 0.35 s), transcribe to something the recogniser stands behind,
-  and not repeat the words he was speaking — his own voice passes every acoustic test, so what
-  was said is the only thing that separates it from a person. Unconfirmed, he keeps talking; a
-  recogniser failure also leaves him talking, rather than becoming a way to silence him.
-  A real interruption now costs the rest of one sentence, which reads as letting him finish.
-
-- **Reachy's spoken answer and the one in chat are the same answer again.** Ask him to
-  actuate something and main replies with a machine acknowledgement — `Done: light.turn_on ->
-  light.tapo_l920.` Reachy already turned that into a sentence before speaking it, but chat
-  was handed the raw string, so you heard "Okay, the light is green" and read a service call.
-  Worse, the acknowledgement names no colour or brightness, so three differently worded
-  requests all read identically and there was no way to tell from chat what had been applied.
-  Chat now shows the sentence he spoke. Only for those acknowledgements: a long answer's
-  spoken form is truncated and ends "I've put the rest in Wactorz chat", which has to stay
-  true, so everything else is still displayed whole.
-
-- **Interruption can be asked for in words, and Reachy says whether it is on.** Talking over
-  him did nothing and nothing explained why: barge-in is opt-in — the microphone hears his own
-  speaker well enough that a cascaded pipeline cannot tell an echo from a real interruption —
-  and the only way to request it was hand-written JSON, which the plain `start conversation`
-  phrase had no way to carry. `start conversation with interruption` now sets it, and both
-  forms answer with the mode they started in, so a robot that will not be talked over no
-  longer reads as one that is ignoring you.
 - **A subscribe callback that cannot receive the message is now refused when the agent starts, not when the first message arrives.** `agent.subscribe(topic, callback)` checks that the callback can accept the payload, but the check raised its error inside a `try` that caught it again, so it never reached anyone: an agent written with `def on_message():` instead of `def on_message(payload):` started cleanly and then failed on every message, logging a callback error each time with nothing to say the shape was wrong. The mistake is now reported at `setup()` with the line to write instead. **If you have an agent that subscribes with a no-argument callback**, it will fail to start rather than run and drop every message — the fix is to give the callback its `payload` parameter.
 
 - **A dashboard whose connection dies is noticed instead of lingering.** The WebSocket was opened with no heartbeat, so a peer that went away without closing — a laptop suspended, a network dropped, a proxy that stopped forwarding — left a socket the server still believed was live, holding its share of resources and receiving broadcasts nobody would read. The server now pings an idle socket and closes it when the pings stop being answered.

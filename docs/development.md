@@ -26,12 +26,11 @@ cd wactorz
 pip install -e ".[all]"
 ```
 
-
 ---
 
 ## Optional dependencies
 
-The `[all]` extra installs everything except the ML stack (heavy torch dependency). Install individual extras as needed:
+The `[all]` extra installs everything except the heavier stacks, `ml` and `vision`. Install individual extras as needed:
 
 | Extra | Installs | Needed for |
 |---|---|---|
@@ -40,10 +39,14 @@ The `[all]` extra installs everything except the ML stack (heavy torch dependenc
 | `wactorz[google]` | `google-genai` | `--llm gemini` |
 | `wactorz[discord]` | `discord.py` | `--interface discord` |
 | `wactorz[whatsapp]` | `twilio` | `--interface whatsapp` |
+| `wactorz[telegram]` | `python-telegram-bot` | `--interface telegram` |
 | `wactorz[mcp]` | `mcp` | MCP-compatible clients |
 | `wactorz[tts]` | `edge-tts` | text-to-speech support |
+| `wactorz[cron]` | `croniter` | cron-expression schedules |
+| `wactorz[data]` | `pandas` | query results as a DataFrame |
+| `wactorz[vision]` | `opencv-python` | camera capture in generated code |
 | `wactorz[ml]` | `ultralytics`, `torch`, `numpy` | webcam detection pipelines |
-| `wactorz[all]` | all of the above except `ml` | recommended starting point |
+| `wactorz[all]` | all of the above except `ml` and `vision` | recommended starting point |
 
 > **Tip:** You only need to install the dep for the provider you actually use. If you plan to switch providers, install `wactorz[all]` once and set the active provider via `--llm` flag or `LLM_PROVIDER` in `.env`.
 

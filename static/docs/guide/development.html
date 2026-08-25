@@ -164,7 +164,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 
 <hr />
 <h2 id="optional-dependencies">Optional dependencies</h2>
-<p>The <code>[all]</code> extra installs everything except the ML stack (heavy torch dependency). Install individual extras as needed:</p>
+<p>The <code>[all]</code> extra installs everything except the heavier stacks, <code>ml</code> and <code>vision</code>. Install individual extras as needed:</p>
 <table>
 <thead>
 <tr>
@@ -200,6 +200,11 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <td><code>--interface whatsapp</code></td>
 </tr>
 <tr>
+<td><code>wactorz[telegram]</code></td>
+<td><code>python-telegram-bot</code></td>
+<td><code>--interface telegram</code></td>
+</tr>
+<tr>
 <td><code>wactorz[mcp]</code></td>
 <td><code>mcp</code></td>
 <td>MCP-compatible clients</td>
@@ -210,13 +215,28 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <td>text-to-speech support</td>
 </tr>
 <tr>
+<td><code>wactorz[cron]</code></td>
+<td><code>croniter</code></td>
+<td>cron-expression schedules</td>
+</tr>
+<tr>
+<td><code>wactorz[data]</code></td>
+<td><code>pandas</code></td>
+<td>query results as a DataFrame</td>
+</tr>
+<tr>
+<td><code>wactorz[vision]</code></td>
+<td><code>opencv-python</code></td>
+<td>camera capture in generated code</td>
+</tr>
+<tr>
 <td><code>wactorz[ml]</code></td>
 <td><code>ultralytics</code>, <code>torch</code>, <code>numpy</code></td>
 <td>webcam detection pipelines</td>
 </tr>
 <tr>
 <td><code>wactorz[all]</code></td>
-<td>all of the above except <code>ml</code></td>
+<td>all of the above except <code>ml</code> and <code>vision</code></td>
 <td>recommended starting point</td>
 </tr>
 </tbody>

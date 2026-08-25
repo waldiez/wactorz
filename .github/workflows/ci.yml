@@ -41,6 +41,35 @@ jobs:
       - name: Test
         run: python -m pytest tests -n auto
 
+  test-other-os:
+    # The package claims OS Independent, and carries code that only runs off
+    # Linux: the Windows event-loop policy and console encoding in
+    # `_bootstrap`, and the `signal.signal` fallback for shutdown signals.
+    # Neither is reachable on ubuntu, so without this they ship untested.
+    #
+    # One interpreter rather than the full matrix: what differs here is the
+    # platform, not the Python version, and the version matrix above already
+    # covers that on Linux.
+    name: Python 3.13 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Test
+        run: python -m pytest tests -n auto
+
   coverage-python:
     name: Python coverage
     runs-on: ubuntu-latest
@@ -74,7 +103,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        # vision as well: the type checker gates on this job, and the camera
+        # shim imports cv2, which it cannot resolve unless OpenCV is present.
+        # It stays out of [all] because it is large and the shim does without.
+        run: pip install -e ".[all,dev,vision]"
 
       - name: Lint
         run: make lint-py

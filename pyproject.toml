@@ -39,7 +39,8 @@ dependencies = [
     "prometheus-client>=0.24.0",
     "python-dotenv>=1.2.2",
     "websockets>=15.0",
-    "asyncssh>=2.14.0"
+    "asyncssh>=2.14.0",
+    "tzdata>=2026.3; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -54,6 +55,9 @@ mcp       = ["mcp>=1.0.0,<2"]
 tts       = [
     "edge-tts>=6.1.9",
 ]
+cron      = ["croniter>=2.0.0"]
+data      = ["pandas>=2.0.0"]
+vision    = ["opencv-python>=4.8.0"]
 docs      = [
     # Pinned exactly, not floored: both decide the bytes of the HTML committed
     # under static/docs, which CI checks against the sources. Pygments in
@@ -100,6 +104,8 @@ all = [
     "wactorz[whatsapp]",
     "wactorz[mcp]",
     "wactorz[tts]",
+    "wactorz[cron]",
+    "wactorz[data]",
 ]
 
 [project.scripts]
@@ -228,6 +234,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]       # re-exports: imported here to expose the package's public API
 "tests/*" = ["B", "E402", "D"] # tests do odd things; docstrings not required in test code
+# The runner carries its own `--test` reporter, whose output is the point of it.
+# It also runs agent code it is sent and installs what that code imports, so
+# `exec` and the pip subprocess are the feature rather than an oversight; how far
+# either should be trusted is a design question, not one a lint rule settles.
+"wactorz/remote_runner.py" = ["T201", "S102", "S603", "S606"]
 
 [tool.ruff.lint.pydocstyle]
 # options: google, numpy, pep257

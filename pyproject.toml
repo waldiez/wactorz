@@ -55,6 +55,9 @@ mcp       = ["mcp>=1.0.0,<2"]
 tts       = [
     "edge-tts>=6.1.9",
 ]
+cron      = ["croniter>=2.0.0"]
+data      = ["pandas>=2.0.0"]
+vision    = ["opencv-python>=4.8.0"]
 docs      = [
     # Pinned exactly, not floored: both decide the bytes of the HTML committed
     # under static/docs, which CI checks against the sources. Pygments in
@@ -97,6 +100,8 @@ all = [
     "wactorz[whatsapp]",
     "wactorz[mcp]",
     "wactorz[tts]",
+    "wactorz[cron]",
+    "wactorz[data]",
 ]
 
 [project.scripts]

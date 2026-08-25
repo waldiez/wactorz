@@ -225,7 +225,7 @@ def _next_fire_cron(now_local: datetime, expr: str) -> datetime:
     except ImportError as e:
         raise ValueError(
             "Cron schedules require the 'croniter' package. Install with "
-            "`pip install croniter`, OR use a structured schedule "
+            "`pip install 'wactorz[cron]'`, OR use a structured schedule "
             "({'type': 'daily', 'at': '17:00'}) instead — the structured "
             "form covers most cases and is preferred."
         ) from e

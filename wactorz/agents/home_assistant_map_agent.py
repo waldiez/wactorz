@@ -222,13 +222,38 @@ class HomeAssistantMapAgent(Actor):
             payload = await self._refresh_map_payload(event=None, include_states=False)
         else:
             payload = {
+                "result": (
+                    "I cannot answer questions. I keep a map of the Home Assistant "
+                    "entities and where they are, and I understand 'status', 'refresh' "
+                    "and 'refresh simple'."
+                ),
                 "error": "Unsupported command. Use 'status', 'refresh', or 'refresh simple'.",
                 "supported_commands": ["status", "refresh", "refresh simple"],
             }
             self.metrics.tasks_failed += 1
 
+        # See the state bridge for why `result` is added rather than assumed:
+        # a reply without a key the chat can read is shown as a Python repr.
+        if isinstance(payload, dict) and "result" not in payload:
+            payload["result"] = self._spoken_status(payload)
         if msg.sender_id:
             await self.send(msg.sender_id, MessageType.RESULT, payload)
+
+    def _spoken_status(self, status: dict[str, Any]) -> str:
+        """The map's state as a sentence, for a person who asked."""
+        if not status.get("configured"):
+            return (
+                "I keep a map of the Home Assistant entities and where they are, "
+                "but no instance is configured, so the map is empty."
+            )
+        seen = status.get("events_seen", 0)
+        problem = status.get("last_error")
+        trouble = f" The last thing to go wrong: {problem}." if problem else ""
+        return (
+            f"I keep a map of the Home Assistant entities and where they are, and "
+            f"publish it to {status.get('output_topic')}. The registry has changed "
+            f"{seen} time{'' if seen == 1 else 's'} since I started.{trouble}"
+        )
 
     def _extract_command(self, payload: Any) -> str:
         if isinstance(payload, dict):

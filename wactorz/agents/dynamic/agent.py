@@ -715,6 +715,10 @@ class DynamicAgent(Actor):
                         MessageType.RESULT,
                         _with_corr(
                             {
+                                "result": (
+                                    f"I gave up on that: it was still running after "
+                                    f"{self._HANDLE_TASK_TIMEOUT}s."
+                                ),
                                 "error": f"handle_task() timed out after {self._HANDLE_TASK_TIMEOUT}s",
                                 "error_phase": "handle_task",
                                 "agent": self.name,
@@ -731,6 +735,10 @@ class DynamicAgent(Actor):
                         MessageType.RESULT,
                         _with_corr(
                             {
+                                # `result` so this reaches a person as a sentence:
+                                # a reply carrying none of the keys the chat reads
+                                # is printed as a Python repr.
+                                "result": f"That went wrong while I was handling it: {e}",
                                 "error": str(e),
                                 "error_phase": "handle_task",
                                 "agent": self.name,
@@ -742,7 +750,16 @@ class DynamicAgent(Actor):
                 await self.send(
                     msg.sender_id,
                     MessageType.RESULT,
-                    _with_corr({"info": f"{self.name} has no handle_task defined"}),
+                    _with_corr(
+                        {
+                            "result": (
+                                f"I cannot answer questions: {self.name} was written "
+                                f"without a handle_task, so there is nothing here to "
+                                f"take a request."
+                            ),
+                            "info": f"{self.name} has no handle_task defined",
+                        }
+                    ),
                 )
         return None
 

@@ -334,6 +334,34 @@ def _install_reply_capture(target: Any) -> None:
     target._io_gateway_capture_installed = True
 
 
+#: Where a reply keeps its words, most likely first. `result` leads because that
+#: is the field the prompts tell a generated agent to fill -- "for agents that
+#: return plain text, use {"result": ...}" -- and what every other reader in the
+#: tree looks for before anything else.
+_REPLY_FIELDS = ("result", "reply", "text", "message", "content")
+
+
+def reply_text(payload: Any) -> str:
+    """The words in an agent's reply, whatever shape the agent chose.
+
+    One function for both ways a reply arrives, because they had drifted apart:
+    an in-process agent was read `reply` first and one answering from a node was
+    read `result` first. Nothing carried two of these fields, so nothing was
+    visibly wrong -- but the same agent moved onto a node would have started
+    rendering differently, with no way to see why.
+
+    A payload with none of them is returned as it is, which reaches a person as
+    a repr. That is deliberate: it is ugly enough to get reported, where a
+    prettier rendering would hide an agent that never learned to answer.
+    """
+    if isinstance(payload, dict):
+        for field in _REPLY_FIELDS:
+            value = payload.get(field)
+            if value:
+                return str(value)
+    return str(payload)
+
+
 def _takes_attachments(fn: Callable[..., Any]) -> bool:
     """Whether `fn` accepts an `attachments` argument.
 
@@ -448,14 +476,7 @@ async def route_chat(
                                 async for msg in client.messages:
                                     try:
                                         data = json.loads(msg.payload.decode())
-                                        text_out = (
-                                            data.get("result")
-                                            or data.get("reply")
-                                            or data.get("text")
-                                            or data.get("message")
-                                            or data.get("content")
-                                            or str(data)
-                                        )
+                                        text_out = reply_text(data)
                                     except Exception:
                                         text_out = msg.payload.decode()
                                     return str(text_out)
@@ -574,19 +595,13 @@ async def route_chat(
 
             payload = await asyncio.wait_for(reply_queue.get(), timeout=150.0)
 
-            if isinstance(payload, dict):
-                text_out = (
-                    payload.get("reply")
-                    or payload.get("message")
-                    or payload.get("text")
-                    or payload.get("content")
-                    or payload.get("result")
-                    or str(payload)
-                )
-                if "agents" in payload and isinstance(payload["agents"], list):
-                    text_out = format_catalog_agents_response(payload)
-            else:
-                text_out = str(payload)
+            text_out = reply_text(payload)
+            if (
+                isinstance(payload, dict)
+                and "agents" in payload
+                and isinstance(payload["agents"], list)
+            ):
+                text_out = format_catalog_agents_response(payload)
 
             await reply_fn(text_out)
 

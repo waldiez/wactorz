@@ -39,7 +39,8 @@ dependencies = [
     "prometheus-client>=0.24.0",
     "python-dotenv>=1.2.2",
     "websockets>=15.0",
-    "asyncssh>=2.14.0"
+    "asyncssh>=2.14.0",
+    "tzdata>=2026.3; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

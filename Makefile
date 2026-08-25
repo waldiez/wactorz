@@ -1,4 +1,4 @@
-.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt lint format clean \
+.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt fmt-py lint lint-py format clean \
         up down logs shell \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
@@ -158,13 +158,13 @@ down: ## Stop full stack
 logs: ## Follow full stack logs
 	$(COMPOSE) logs -f
 
-logs-%: ## Follow logs for a specific service, e.g. make logs-wactorz
+logs-%: ## Follow logs for a specific service, e.g. make logs-wactorz-python
 	$(COMPOSE) logs -f $*
 
 shell: ## Open a shell in the wactorz container
-	$(COMPOSE) exec wactorz sh
+	$(COMPOSE) exec wactorz-python sh
 
-shell-%: ## Open a shell in a running container, e.g. make shell-wactorz
+shell-%: ## Open a shell in a running container, e.g. make shell-wactorz-python
 	$(COMPOSE) exec $* sh
 
 # ── Misc ────────────────────────────────────────────────────────────────────
@@ -177,7 +177,7 @@ install: install-py install-frontend ## Install everything (Python + frontend)
 install-py: ## Install Python package in editable mode with all extras
 	$(PYTHON) -m pip install -e ".[all]"
 
-install-docs: ## Install docs dependencies (MkDocs Material + mkdocstrings + mike)
+install-docs: ## Install docs dependencies (markdown + pygments + pdoc)
 	$(PYTHON) -m pip install -e ".[docs]"
 
 install-dev: ## Install everything including dev/docs deps

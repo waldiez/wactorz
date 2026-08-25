@@ -315,7 +315,6 @@ See [MQTT Topics](mqtt_topics.md) for the full reference. Key topics:
 | `agents/{id}/spawned` | parent → all | `{child_id, child_name, timestamp}` when a parent spawns a child. |
 | `agents/{id}/manifest` | actor → all | Retained capability manifest. |
 | `agents/{id}/chat` | actor → UI | `{role, content, interface, ...}` |
-| `io/chat` | UI → IOAgent | `{from, content}` inbound chat from browser. |
 | `system/health` | monitor → all | Every 15 s. `{timestamp, total_actors, running, stopped, failed, degraded, actors: [...]}` |
 | `homeassistant/state_changes/#` | HA bridge → pipelines | HA state events. |
 | `nodes/{name}/spawn` | main → runner | Remote node agent spawn. |

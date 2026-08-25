@@ -52,7 +52,8 @@ def _parse_iso(value: str) -> datetime | None:
 
 
 def _format_when(start: dict, end: dict) -> str:
-    now_year = datetime.now().year
+    # The reader's year, so a date near the boundary is judged where they are.
+    now_year = datetime.now().astimezone().year
     if start.get("date") and not start.get("dateTime"):
         day = _parse_iso(start["date"])
         if not day:
@@ -73,7 +74,7 @@ def _format_when(start: dict, end: dict) -> str:
 def _format_events(items: list[dict]) -> str:
     if not items:
         return "No events found for that time range."
-    lines = []
+    lines: list[str] = []
     for event in items:
         summary = event.get("summary") or "(no title)"
         when = _format_when(event.get("start", {}), event.get("end", {}))

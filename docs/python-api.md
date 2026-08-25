@@ -195,11 +195,6 @@ Tracks heartbeat timestamps for every registered actor. Publishes an alert and
 notifies main when an actor's last heartbeat is older than `heartbeat_timeout` (default
 60 s). Does **not** auto-restart actors — that is the Supervisor's job.
 
-### `wactorz.agents.io_agent.IOAgent`
-
-MQTT ↔ UI gateway. Bridges `io/chat` MQTT messages from the web dashboard to
-MainActor and relays responses back to the browser over WebSocket.
-
 ### `wactorz.agents.planner.PlannerAgent`
 
 On-demand orchestrator. Spawned per `PIPELINE`-classified request. Discovers

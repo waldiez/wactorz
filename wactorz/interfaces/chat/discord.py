@@ -52,7 +52,7 @@ class DiscordInterface:
 
         @client.event
         async def on_ready() -> None:
-            logger.info(f"[Discord] Logged in as {client.user}")
+            logger.info("[Discord] Logged in as %s", client.user)
 
         @client.event
         async def on_message(message: discord.Message) -> None:

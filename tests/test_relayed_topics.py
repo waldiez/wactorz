@@ -51,7 +51,6 @@ IGNORED = [
     "system/anything-else",
     "nodes/pi-kitchen/desired_state",
     "main/llm_request",
-    "io/chat",
     "custom/detections/front-door",
     "agents/a1",
     "agents/a1/metrics/extra",

@@ -1,7 +1,12 @@
 """NIMProvider — NVIDIA NIM, OpenAI-shaped."""
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    # The shaping helpers are provider-agnostic and stay free of the SDK, so the
+    # SDK's own parameter types are attached here, at the one call that needs them.
+    from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolUnionParam
 
 from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..openai_shape import (
@@ -119,8 +124,8 @@ class NIMProvider(LLMProvider):
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
-                messages=full_messages,
-                tools=_openai_tools(tools),
+                messages=cast("list[ChatCompletionMessageParam]", full_messages),
+                tools=cast("list[ChatCompletionToolUnionParam]", _openai_tools(tools)),
                 tool_choice=kwargs.get("tool_choice", "auto"),
                 max_tokens=kwargs.get("max_tokens", 8192),
                 **_temp_params(kwargs),

@@ -608,7 +608,7 @@ async def _nl_to_commands(agent, text):
 
 async def handle_task(agent, payload):
     # Direct send_to(reachy-mini, {...}) — same dispatch as MQTT.
-    # IOAgent wraps user text as: {"text": "...", "_task_id": ..., "reply_to": ...}
+    # A caller wraps user text as: {"text": "...", "_task_id": ..., "reply_to": ...}
     payload = payload or {}
     _tid = payload.get("_task_id") or payload.get("task")
 
@@ -689,7 +689,7 @@ async def handle_task(agent, payload):
                     cmds = _repair_ha_commands(cmds, stripped)
                     if not cmds:
                         # Return a clear 'result' message — NOT the raw input under
-                        # 'text', or the io-agent's reply picker (reply→result→text)
+                        # 'text', or a caller's reply picker (reply→result→text)
                         # echoes the user's own words back at them.
                         return {"ok": False, "error": "could not parse instruction",
                                 "result": (f"I couldn't turn \"{stripped}\" into a robot action. "

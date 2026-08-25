@@ -163,7 +163,6 @@
 <span class="err">│</span><span class="w">                                                                        </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">MainActor</span><span class="w">                  </span><span class="nx">LLM</span><span class="w"> </span><span class="nx">orchestrator</span><span class="p">,</span><span class="w"> </span><span class="nx">intent</span><span class="w"> </span><span class="nx">routing</span><span class="p">,</span><span class="w"> </span><span class="nx">spawn</span><span class="w"> </span><span class="nx">reg</span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">MonitorActor</span><span class="w">               </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w"> </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">IOAgent</span><span class="w">                    </span><span class="nx">MQTT</span><span class="err">↔</span><span class="nx">UI</span><span class="w"> </span><span class="nx">gateway</span><span class="p">,</span><span class="w"> </span><span class="nx">routes</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">main</span><span class="w">       </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">CatalogAgent</span><span class="w">               </span><span class="nx">pre</span><span class="o">-</span><span class="nx">built</span><span class="w"> </span><span class="nx">recipe</span><span class="w"> </span><span class="kn">library</span><span class="p">,</span><span class="w"> </span><span class="nx">spawns</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">demand</span><span class="w"> </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">InstallerAgent</span><span class="w">             </span><span class="nx">pip</span><span class="w"> </span><span class="nx">installs</span><span class="w"> </span><span class="nx">deps</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nx">dynamic</span><span class="w"> </span><span class="nx">agents</span><span class="w">       </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">HomeAssistantAgent</span><span class="w">         </span><span class="nx">HA</span><span class="w"> </span><span class="nx">REST</span><span class="w"> </span><span class="nx">API</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">entities</span><span class="p">,</span><span class="w"> </span><span class="nx">services</span><span class="p">,</span><span class="w"> </span><span class="nx">automa</span><span class="err">…</span><span class="w">  </span><span class="err">│</span>
@@ -331,15 +330,9 @@
 </thead>
 <tbody>
 <tr>
-<td><code>io/chat</code></td>
-<td>IOAgent / UI</td>
-<td>main</td>
-<td><code>{from, content}</code></td>
-</tr>
-<tr>
 <td><code>agents/{id}/chat</code></td>
 <td>any actor</td>
-<td>UI / IOAgent</td>
+<td>UI</td>
 <td><code>{role, content, interface}</code></td>
 </tr>
 <tr>

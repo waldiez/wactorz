@@ -66,7 +66,7 @@ async def test_stop_cancels_inflight(patched: pytest.MonkeyPatch):
     assert payload["cancelled"] == 1
 
     # Cancelling the in-process task is the whole mechanism now: the standalone
-    # monitor that needed a broker round-trip to reach the IOAgent is gone.
+    # monitor that needed a broker round-trip to reach a separate agent is gone.
     assert mqtt.published == []
     assert payload["status"] == "stopped"
 

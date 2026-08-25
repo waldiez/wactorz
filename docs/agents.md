@@ -118,19 +118,6 @@ Tracks heartbeat timestamps from every registered actor. If an actor's last hear
 
 ---
 
-### IOAgent `[core]`
-
-**File:** `wactorz/agents/io_agent.py`
-
-| | |
-|---|---|
-| **name** | `io-agent` |
-| **subscribes** | `io/chat` |
-
-MQTT ↔ interface gateway. Bridges incoming messages from the web dashboard to MainActor and relays responses back. The CLI, Discord, WhatsApp, and Telegram interfaces bypass IOAgent and call `main_actor.process_user_input()` directly.
-
----
-
 ### InstallerAgent `[core]`
 
 **File:** `wactorz/agents/installer_agent.py`

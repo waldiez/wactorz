@@ -6,8 +6,10 @@ It connects to the shared MQTT broker, listens for spawn commands from main,
 and runs DynamicAgents locally. Those agents heartbeat back to the same broker
 so they appear in the central dashboard exactly like local agents.
 
-Usage on the remote machine:
-    pip install aiomqtt paho-mqtt psutil aiohttp --break-system-packages
+Usage on the remote machine (a virtualenv keeps agent dependencies off the
+host; without one the runner installs into the system interpreter and says so):
+    python3 -m venv ~/wactorz/venv && . ~/wactorz/venv/bin/activate
+    pip install aiomqtt paho-mqtt psutil aiohttp
     python3 remote_runner.py --broker 192.168.1.10 --name rpi-livingroom
 
 From the main Wactorz chat (automatic, once the node is a configured deploy
@@ -59,6 +61,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ctypes
 import importlib
 import inspect
 import json
@@ -72,7 +75,7 @@ import time
 import traceback
 import uuid
 from collections import deque
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -95,29 +98,251 @@ def _missing_deps() -> list[str]:
     return needed
 
 
+def _is_root() -> bool:
+    """Whether this process may write where the system package manager keeps its files.
+
+    Windows has no uid and the equivalent question is whether the token is
+    elevated, which shell32 answers. A failure to reach it is read as "not
+    privileged", so the install takes the contained path rather than assuming
+    it may write anywhere.
+    """
+    if os.name == "nt":
+        try:
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0  # pyright: ignore[reportAttributeAccessIssue]
+        except Exception:
+            return False
+    return os.getuid() == 0
+
+
+def _normalised_contract(
+    publishes: str | list[str] | None,
+    subscribes: str | list[str] | None,
+    produces_schema: dict[str, Any] | None,
+    consumes_schema: dict[str, Any] | None,
+    kwargs: dict[str, Any],
+) -> tuple[list[str], list[str], dict[str, Any], dict[str, Any]]:
+    """Resolve the aliases generated agent code reaches for, and normalise types.
+
+    Accepting them keeps a real contract from arriving empty because the author
+    guessed `schema` where the parameter is `produces_schema`. A lone topic is
+    widened to a list for the same reason: both spellings appear in practice.
+    """
+    if produces_schema is None:
+        produces_schema = (
+            kwargs.get("schema")
+            or kwargs.get("output_schema")
+            or kwargs.get("produce_schema")
+            or {}
+        )
+    if consumes_schema is None:
+        consumes_schema = kwargs.get("input_schema") or kwargs.get("consume_schema") or {}
+    if publishes is None:
+        publishes = kwargs.get("topics") or kwargs.get("publish")
+    if subscribes is None:
+        subscribes = kwargs.get("subscribe")
+    if isinstance(publishes, str):
+        publishes = [publishes]
+    if isinstance(subscribes, str):
+        subscribes = [subscribes]
+    return (
+        list(publishes or []),
+        list(subscribes or []),
+        produces_schema or {},
+        consumes_schema or {},
+    )
+
+
+def _validated_callback(
+    topic: str, callback: Callable[..., Awaitable[Any]] | None
+) -> Callable[..., Awaitable[Any]]:
+    """Return the callback, or refuse one that could not receive a payload.
+
+    Checked when the subscription is declared rather than when the first
+    message lands, so the author of a generated agent hears about it at
+    start-up. The signature check sits outside the try that tolerates an
+    un-inspectable callable: inside it, the very except meant to let such a
+    callable through swallowed this error instead, and the check never fired.
+    """
+    if callback is None or not callable(callback):
+        raise SubscribeCallbackError(topic, callback)
+    try:
+        sig = inspect.signature(callback)
+    except (TypeError, ValueError):
+        return callback  # not introspectable — let the runtime catch it
+    required = [p for p in sig.parameters.values() if p.default is inspect.Parameter.empty]
+    if not required:
+        raise SubscribeCallbackError(topic, callback)
+    return callback
+
+
+def _tolerant_invoker(
+    callback: Callable[..., Awaitable[Any]], agent_name: str
+) -> Callable[[Any], Awaitable[None]]:
+    """Wrap a callback so a generated `await None` is reported once, not raised.
+
+    The same protection DynamicAgent.subscribe() applies. Warned a single time
+    per subscription, because the mistake repeats on every message and the log
+    is the only place anyone would see it.
+    """
+    warned = False
+
+    async def _invoke(payload: Any) -> None:
+        nonlocal warned
+        try:
+            await callback(payload)
+        except TypeError as e:
+            if "NoneType" in str(e) and "await" in str(e):
+                if not warned:
+                    logger.warning(
+                        "[%s] subscribe callback has 'await None' error (suppressed): %s",
+                        agent_name,
+                        e,
+                    )
+                    warned = True
+            else:
+                raise
+
+    return _invoke
+
+
+async def _deliver_messages(
+    client: Any, topic: str, invoke: Callable[[Any], Awaitable[None]], agent_name: str
+) -> None:
+    """Hand each message on `client` to `invoke`, surviving one that raises."""
+    async for msg in client.messages:
+        try:
+            payload = json.loads(msg.payload.decode())
+        except Exception:
+            payload = {"raw": msg.payload.decode()}
+        try:
+            await invoke(payload)
+        except Exception:
+            logger.exception("[%s] subscribe callback error (topic=%s)", agent_name, topic)
+
+
+def _close_mqtt_client(client: Any, what: str) -> None:
+    """Stop and disconnect a paho client, whatever state it is in.
+
+    Called on paths that are discarding the client either way, so a failure to
+    close it changes nothing that follows and is recorded rather than raised.
+    """
+    try:
+        client.loop_stop()
+        client.disconnect()
+    except Exception:
+        logger.debug("[runner] %s did not close cleanly", what, exc_info=True)
+
+
+def _in_virtualenv() -> bool:
+    """Whether this interpreter is an environment of its own, not the system one.
+
+    `real_prefix` is what the legacy virtualenv package set; everything since
+    moves `prefix` away from `base_prefix`. Both are resolved before comparison,
+    because a symlinked environment otherwise looks unequal to itself.
+    """
+    if hasattr(sys, "real_prefix"):  # pragma: no cover - legacy virtualenv only
+        return True
+    base = getattr(sys, "base_prefix", sys.prefix)
+    return os.path.realpath(base) != os.path.realpath(sys.prefix)
+
+
+def _pip_install_command(packages: Sequence[str]) -> tuple[list[str], dict[str, str]]:
+    """A pip command for this node, and the environment it should run in.
+
+    Ordered by how little of the host it disturbs. Inside a virtualenv nothing
+    special is needed and nothing outside it is touched. Outside one, an
+    unprivileged install is directed at the user's own site-packages, which
+    leaves the distribution's tree alone; only root ends up writing where the
+    system package manager expects to be in charge.
+
+    A distribution may refuse either of those under PEP 668, and the override
+    goes through the environment rather than `--break-system-packages` because
+    no pip before 23.0.1 knows that argument — an edge node running an older one
+    would fail on the flag instead of installing. It is passed to the child
+    rather than set on this process, so two installs cannot race over it.
+    """
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+        "--no-input",
+    ]
+    env: dict[str, str] = {}
+    if not _in_virtualenv():
+        if not _is_root():
+            cmd.append("--user")
+        env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
+    cmd += [*packages, "-q"]
+    return cmd, env
+
+
+def _install_destination() -> str:
+    """Where an install would land, for a log line that says so."""
+    if _in_virtualenv():
+        return f"the virtualenv at {sys.prefix}"
+    if _is_root():
+        return f"the system interpreter at {sys.executable}"
+    return "this user's site-packages"
+
+
 async def _bootstrap_deps_async(ready: asyncio.Event) -> None:
     """Install missing deps in a thread pool, then signal the event."""
     needed = _missing_deps()
     if not needed:
         ready.set()
         return
-    print(f"[remote_runner] auto-installing {needed} via {sys.executable}...", flush=True)
+    logger.info("[runner] Auto-installing %s into %s.", needed, _install_destination())
+
+    cmd, extra_env = _pip_install_command(needed)
 
     def _pip() -> tuple[int, str]:
-        cmd = [sys.executable, "-m", "pip", "install", *needed, "-q"]
-        if sys.platform != "win32":
-            cmd.append("--break-system-packages")
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        env = {**os.environ, **extra_env} if extra_env else None
+        r = subprocess.run(cmd, capture_output=True, text=True, env=env)
         return r.returncode, r.stderr[:300]
 
     loop = asyncio.get_running_loop()
     rc, err = await loop.run_in_executor(None, _pip)
     if rc != 0:
-        print(f"[remote_runner] pip warning: {err}", flush=True)
+        logger.warning("[runner] pip reported: %s", err)
     else:
-        print("[remote_runner] deps installed.", flush=True)
+        logger.info("[runner] Dependencies installed.")
     importlib.invalidate_caches()
     ready.set()
+
+
+class SubscribeCallbackError(TypeError):
+    """A subscribe callback that cannot receive the payload it would be sent.
+
+    Raised where the subscription is declared rather than when a message
+    arrives, so the author of a generated agent hears about it at start-up
+    instead of through an opaque failure on the first publish.
+    """
+
+    def __init__(self, topic: str, callback: object) -> None:
+        if callback is None or not callable(callback):
+            super().__init__(
+                f"agent.subscribe('{topic}', callback) requires a callable callback. "
+                f"Got: {type(callback).__name__}. "
+                f"Define: async def on_msg(payload): ... then call "
+                f"agent.subscribe('{topic}', on_msg). "
+                f"For a one-shot read use: data = await agent.mqtt_get('{topic}')"
+            )
+        else:
+            name = getattr(callback, "__name__", "on_msg")
+            super().__init__(
+                "Subscribe callback must accept one argument (the payload dict). "
+                "Got a function with no required parameters. "
+                f"Fix: async def {name}(payload): ..."
+            )
+
+
+class ProcessEscalated(RuntimeError):
+    """process() failed often enough that a clean restart beats another attempt."""
+
+    def __init__(self, consecutive: int, last: BaseException) -> None:
+        super().__init__(f"process() failed {consecutive} times in a row, last error: {last}")
 
 
 logger = logging.getLogger("remote_runner")
@@ -216,7 +441,7 @@ class _RemoteStreamWindow:
         try:
             import aiomqtt
         except ImportError:
-            logger.error("[StreamWindow] aiomqtt not installed")
+            logger.warning("[StreamWindow] aiomqtt not installed")
             return
         while True:
             try:
@@ -509,106 +734,24 @@ class _RemoteAgentAPI:
         next _publish_manifest() includes it — main then registers it on the
         central TopicBus and the planner can wire it.
         """
-        if callback is None or not callable(callback):
-            raise TypeError(
-                f"agent.subscribe('{topic}', callback) requires a callable callback. "
-                f"Got: {type(callback).__name__}. "
-                f"Define: async def on_msg(payload): ... then call agent.subscribe('{topic}', on_msg). "
-                f"For a one-shot read use: data = await agent.mqtt_get('{topic}')"
-            )
-
-        # Validate callback accepts at least one argument (the payload)
-
-        try:
-            sig = inspect.signature(callback)
-        except (TypeError, ValueError):
-            sig = None  # Not introspectable — proceed and let runtime catch it
-        if sig is not None:
-            # Raised outside the try above: it used to sit inside it, where the
-            # very except meant to tolerate an un-inspectable callback swallowed
-            # this error instead — so the check never fired and the author of the
-            # generated agent got an opaque failure later rather than this.
-            params = [p for p in sig.parameters.values() if p.default is inspect.Parameter.empty]
-            if len(params) == 0:
-                raise TypeError(
-                    f"Subscribe callback must accept one argument (the payload dict). "
-                    f"Got a function with no required parameters. "
-                    f"Fix: async def {callback.__name__}(payload): ..."
-                )
+        checked = _validated_callback(topic, callback)
 
         # Dedup — same topic+callback pair only registers one listener.
         sub_key = (topic, id(callback))
         if sub_key in self._subscribed_topics:
-            logger.debug(f"[{self.name}] Already subscribed to {topic} — skipping duplicate")
+            logger.debug("[%s] Already subscribed to %s — skipping duplicate", self.name, topic)
             return _AWAITABLE_NONE
-        self._subscribed_topics[sub_key] = callback
+        self._subscribed_topics[sub_key] = checked
 
-        broker = self._agent._runner.broker
-        port = self._agent._runner.port
-        agent_name = self.name
-
-        # Tolerate LLM-generated `await None` errors inside callbacks — same
-        # protection DynamicAgent.subscribe() applies. Warn once per topic
-        # then suppress so we don't spam logs.
-        _await_warned = False
-
-        async def _safe_invoke(cb: Callable[..., Awaitable[None]], payload: Any) -> None:
-            nonlocal _await_warned
-            try:
-                await cb(payload)
-            except TypeError as e:
-                if "NoneType" in str(e) and "await" in str(e):
-                    if not _await_warned:
-                        logger.warning(
-                            f"[{agent_name}] subscribe callback has "
-                            f"'await None' error (suppressed): {e}"
-                        )
-                        _await_warned = True
-                else:
-                    raise
-
-        async def _listener() -> None:
-            try:
-                import aiomqtt
-            except ImportError:
-                logger.error(f"[{agent_name}] aiomqtt not installed")
-                return
-            while True:
-                try:
-                    async with aiomqtt.Client(
-                        broker,
-                        port,
-                        username=os.environ.get("MQTT_USERNAME") or None,
-                        password=os.environ.get("MQTT_PASSWORD") or None,
-                    ) as client:
-                        await client.subscribe(topic)
-                        logger.info(f"[{agent_name}] Subscribed to {topic}")
-                        async for msg in client.messages:
-                            try:
-                                payload = json.loads(msg.payload.decode())
-                            except Exception:
-                                payload = {"raw": msg.payload.decode()}
-                            try:
-                                await _safe_invoke(callback, payload)
-                            except Exception as e:
-                                logger.error(
-                                    f"[{agent_name}] subscribe callback error (topic={topic}): {e}"
-                                )
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    logger.warning(
-                        f"[{agent_name}] MQTT subscribe error on {topic}: {e} — retrying in 5s"
-                    )
-                    await asyncio.sleep(5)
-
-        task = asyncio.create_task(_listener())
+        task = asyncio.create_task(self._subscription_listener(topic, checked, self.name))
         self._subscriber_tasks.append(task)
         # Also let the agent's task list see it so stop() cancels cleanly.
         try:
             self._agent._tasks.append(task)
         except Exception:
-            pass
+            # Without this the task still runs; it just will not be cancelled by
+            # stop(), which is worth knowing about but not worth failing over.
+            logger.debug("[%s] Could not register listener task", self._agent.name, exc_info=True)
 
         # Record the subscription on the contract surface and re-publish the
         # manifest so main learns about it and updates the central TopicBus.
@@ -618,6 +761,36 @@ class _RemoteAgentAPI:
 
         # Return an awaitable no-op so `await agent.subscribe(...)` doesn't crash.
         return _AWAITABLE_NONE
+
+    async def _subscription_listener(
+        self, topic: str, callback: Callable[..., Awaitable[Any]], agent_name: str
+    ) -> None:
+        """Consume `topic` until cancelled, reconnecting when the broker drops."""
+        try:
+            import aiomqtt
+        except ImportError:
+            logger.warning("[%s] aiomqtt not installed", agent_name)
+            return
+
+        invoke = _tolerant_invoker(callback, agent_name)
+        while True:
+            try:
+                async with aiomqtt.Client(
+                    self._agent._runner.broker,
+                    self._agent._runner.port,
+                    username=os.environ.get("MQTT_USERNAME") or None,
+                    password=os.environ.get("MQTT_PASSWORD") or None,
+                ) as client:
+                    await client.subscribe(topic)
+                    logger.info("[%s] Subscribed to %s", agent_name, topic)
+                    await _deliver_messages(client, topic, invoke, agent_name)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(
+                    "[%s] MQTT subscribe error on %s: %s — retrying in 5s", agent_name, topic, e
+                )
+                await asyncio.sleep(5)
 
     # ── One-shot reads / time windows / world state ──────────────────────────
     async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any:
@@ -649,7 +822,7 @@ class _RemoteAgentAPI:
                             result.append(msg.payload.decode())
                         return
             except Exception:
-                pass
+                logger.debug("[mqtt_get] Read of %s failed", topic, exc_info=True)
 
         try:
             await asyncio.wait_for(_fetch(), timeout=timeout)
@@ -712,40 +885,22 @@ class _RemoteAgentAPI:
         stored on the API and folded into the next _publish_manifest() — main
         then registers a complete TopicContract on the central bus.
         """
-        # ── Accept common LLM kwarg aliases ───────────────────────────────────
-        if produces_schema is None:
-            produces_schema = (
-                kwargs.get("schema")
-                or kwargs.get("output_schema")
-                or kwargs.get("produce_schema")
-                or {}
-            )
-        if consumes_schema is None:
-            consumes_schema = kwargs.get("input_schema") or kwargs.get("consume_schema") or {}
-        if publishes is None:
-            publishes = kwargs.get("topics") or kwargs.get("publish")
-        if subscribes is None:
-            subscribes = kwargs.get("subscribe")
-
-        # ── Coerce single strings to lists ─────────────────────────────────────
-        if isinstance(publishes, str):
-            publishes = [publishes]
-        if isinstance(subscribes, str):
-            subscribes = [subscribes]
+        pubs, subs, produces, consumes = _normalised_contract(
+            publishes, subscribes, produces_schema, consumes_schema, kwargs
+        )
 
         # Fold declared values into our tracking — _publish_manifest() picks
         # them up next time it fires.
-        for t in publishes or []:
-            self._published_topics.add(t)
-        for t in subscribes or []:
+        self._published_topics.update(pubs)
+        for t in subs:
             if t not in self._declared_subscribes:
                 self._declared_subscribes.append(t)
         if triggers_when:
             self._declared_triggers_when.update(triggers_when)
-        if produces_schema:
-            self._declared_produces_schema.update(produces_schema)
-        if consumes_schema:
-            self._declared_consumes_schema.update(consumes_schema)
+        if produces:
+            self._declared_produces_schema.update(produces)
+        if consumes:
+            self._declared_consumes_schema.update(consumes)
 
         asyncio.create_task(self._publish_manifest())
         # Safe to await — return an awaitable sentinel because LLM code often
@@ -855,7 +1010,7 @@ class _RemoteAgentAPI:
         )
 
     async def alert(self, message: str, severity: str = "warning") -> None:
-        logger.warning(f"[{self.name}] ALERT({severity}): {message}")
+        logger.warning("[%s] ALERT(%s): %s", self.name, severity, message)
         await self._agent._publish(
             f"agents/{self.actor_id}/alert",
             {
@@ -903,7 +1058,7 @@ class _RemoteAgentAPI:
             result = await asyncio.wait_for(future, timeout=timeout)
             return result.get("text", "") if isinstance(result, dict) else str(result)
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] ask_llm timed out after {timeout}s")
+            logger.warning("[%s] ask_llm timed out after %ss", self.name, timeout)
             return ""
         finally:
             self._agent._pending_replies.pop(reply_topic, None)
@@ -931,7 +1086,7 @@ class _RemoteAgentAPI:
             result = await asyncio.wait_for(future, timeout=timeout)
             return result.get("text", "") if isinstance(result, dict) else str(result)
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] chat() timed out after {timeout}s")
+            logger.warning("[%s] chat() timed out after %ss", self.name, timeout)
             return ""
         finally:
             self._agent._pending_replies.pop(reply_topic, None)
@@ -954,7 +1109,7 @@ class _RemoteAgentAPI:
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] send_to '{agent_name}' timed out")
+            logger.warning("[%s] send_to '%s' timed out", self.name, agent_name)
             return None
         finally:
             self._agent._pending_replies.pop(reply_topic, None)
@@ -996,7 +1151,7 @@ class _RemoteAgent:
         if not state_dir:
             state_path = Path.home() / "wactorz" / "state"
             state_dir = str(state_path)
-        self._state_path = os.path.join(state_dir, f"{safe_name}_state.json")
+        self._state_path: Path = Path(state_dir) / f"{safe_name}_state.json"
         self._pending_replies: dict[str, asyncio.Future] = {}
         self._api = _RemoteAgentAPI(self)
         self._tasks: list[asyncio.Task] = []
@@ -1037,24 +1192,28 @@ class _RemoteAgent:
         initial = config.pop("_initial_state", None)
         if initial and isinstance(initial, dict):
             # Migration arrival path — initial state wins, period.
-            if os.path.exists(self._state_path):
+            if self._state_path.exists():
                 logger.info(
-                    f"[{self.name}] Migration: overwriting stale local state file "
-                    f"at {self._state_path} with {len(initial)} key(s) shipped from "
-                    f"the source node"
+                    "[%s] Migration: overwriting stale local state file at %s with %s key(s) shipped from the source node",
+                    self.name,
+                    self._state_path,
+                    len(initial),
                 )
                 try:
-                    os.unlink(self._state_path)
+                    self._state_path.unlink()
                 except Exception as e:
                     logger.warning(
-                        f"[{self.name}] Could not remove stale state file before "
-                        f"applying migration snapshot: {e}"
+                        "[%s] Could not remove stale state file before applying migration snapshot: %s",
+                        self.name,
+                        e,
                     )
             self._persistent_state = dict(initial)
             self._save_state()
             logger.info(
-                f"[{self.name}] Restored {len(initial)} state key(s) from migration: "
-                f"{list(initial.keys())}"
+                "[%s] Restored %s state key(s) from migration: %s",
+                self.name,
+                len(initial),
+                list(initial.keys()),
             )
         else:
             # Normal start/restart — pick up whatever is already on disk.
@@ -1064,10 +1223,10 @@ class _RemoteAgent:
 
     def _save_state(self) -> None:
         try:
-            with open(self._state_path, "w", encoding="utf-8") as f:
+            with self._state_path.open("w", encoding="utf-8") as f:
                 json.dump(self._persistent_state, f)
         except Exception as e:
-            logger.warning(f"[{self.name}] State save failed: {e}")
+            logger.warning("[%s] State save failed: %s", self.name, e)
 
     def _load_state(self) -> None:
         """Read the agent's state, or start empty if it cannot be read.
@@ -1080,22 +1239,20 @@ class _RemoteAgent:
         Deliberately not shared with wactorz.core.atomic_io — this module runs
         standalone on a remote node with nothing but the stdlib.
         """
-        if not os.path.exists(self._state_path):
+        if not self._state_path.exists():
             return
         try:
-            with open(self._state_path, encoding="utf-8") as f:
+            with self._state_path.open(encoding="utf-8") as f:
                 self._persistent_state = json.load(f)
-            logger.info(f"[{self.name}] Loaded persistent state.")
-        except Exception as e:
+            logger.info("[%s] Loaded persistent state.", self.name)
+        except Exception:
             kept = f"{self._state_path}.corrupt.{int(time.time())}"
             try:
-                os.replace(self._state_path, kept)
+                self._state_path.replace(kept)
             except Exception:
                 kept = ""
-            logger.error(
-                f"[{self.name}] State load failed: {e} — "
-                + (f"kept at {kept}" if kept else "the file could not be preserved")
-            )
+            preserved = f"kept at {kept}" if kept else "the file could not be preserved"
+            logger.exception("[%s] State load failed — %s", self.name, preserved)
 
     def _delete_state(self) -> bool:
         """Permanently remove the agent's on-disk JSON state file.
@@ -1113,12 +1270,14 @@ class _RemoteAgent:
         self._persistent_state = {}
         removed = False
         try:
-            if os.path.exists(self._state_path):
-                os.unlink(self._state_path)
+            if self._state_path.exists():
+                self._state_path.unlink()
                 removed = True
-                logger.info(f"[{self.name}] Deleted persistent state file: {self._state_path}")
+                logger.info("[%s] Deleted persistent state file: %s", self.name, self._state_path)
         except Exception as e:
-            logger.warning(f"[{self.name}] Failed to delete state file {self._state_path}: {e}")
+            logger.warning(
+                "[%s] Failed to delete state file %s: %s", self.name, self._state_path, e
+            )
         return removed
 
     # ── MQTT publish helper ───────────────────────────────────────────────────
@@ -1135,9 +1294,10 @@ class _RemoteAgent:
             self._fn_setup = self._ns.get("setup")
             self._fn_process = self._ns.get("process")
             self._fn_handle_task = self._ns.get("handle_task")
-            return None
         except Exception as e:
             return f"Compile error: {e}\n{traceback.format_exc()}"
+        else:
+            return None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -1166,9 +1326,11 @@ class _RemoteAgent:
                 self._restart_count += 1
                 if self._restart_count > self._max_restarts:
                     self._failed = True
-                    logger.error(
-                        f"[{self.name}] Crashed {self._restart_count} times — "
-                        f"giving up (max_restarts={self._max_restarts})."
+                    logger.exception(
+                        "[%s] Crashed %s times — giving up (max_restarts=%s).",
+                        self.name,
+                        self._restart_count,
+                        self._max_restarts,
                     )
                     await self._publish(
                         f"agents/{self.actor_id}/errors",
@@ -1188,8 +1350,11 @@ class _RemoteAgent:
 
                 delay = min(self._restart_delay * (2 ** (self._restart_count - 1)), 60.0)
                 logger.warning(
-                    f"[{self.name}] Crashed (attempt {self._restart_count}/{self._max_restarts}). "
-                    f"Restarting in {delay:.1f}s..."
+                    "[%s] Crashed (attempt %s/%s). Restarting in %.1fs...",
+                    self.name,
+                    self._restart_count,
+                    self._max_restarts,
+                    delay,
                 )
                 await self._publish(
                     f"agents/{self.actor_id}/errors",
@@ -1226,7 +1391,7 @@ class _RemoteAgent:
 
         err = self._compile()
         if err:
-            logger.error(f"[{self.name}] {err}")
+            logger.error("[%s] %s", self.name, err)
             await self._publish(
                 f"agents/{self.actor_id}/errors",
                 {
@@ -1245,10 +1410,10 @@ class _RemoteAgent:
         if self._fn_setup:
             try:
                 await self._fn_setup(self._api)  # pyright: ignore[reportGeneralTypeIssues]  # _compile() populates this
-                logger.info(f"[{self.name}] setup() completed.")
+                logger.info("[%s] setup() completed.", self.name)
             except Exception as e:
                 err_str = traceback.format_exc()
-                logger.error(f"[{self.name}] setup() failed: {e}")
+                logger.exception("[%s] setup() failed", self.name)
                 await self._publish(
                     f"agents/{self.actor_id}/errors",
                     {
@@ -1300,10 +1465,10 @@ class _RemoteAgent:
                 w.stop()
             self._api._windows.clear()
         except Exception:
-            pass
+            logger.debug("[%s] Stream windows did not close cleanly", self.name, exc_info=True)
         self._save_state()
         await self._publish_heartbeat("stopped")
-        logger.info(f"[{self.name}] Stopped.")
+        logger.info("[%s] Stopped.", self.name)
 
     # ── Loops ─────────────────────────────────────────────────────────────────
 
@@ -1337,7 +1502,7 @@ class _RemoteAgent:
                 successful_runs = 0
                 err_str = traceback.format_exc()
                 severity = "critical" if consecutive_errors >= 3 else "warning"
-                logger.error(f"[{self.name}] process() error #{consecutive_errors}: {e}")
+                logger.exception("[%s] process() error #%s", self.name, consecutive_errors)
                 await self._publish(
                     f"agents/{self.actor_id}/errors",
                     {
@@ -1352,9 +1517,7 @@ class _RemoteAgent:
                 )
                 if consecutive_errors >= self._PROCESS_ESCALATE_AFTER:
                     # Too many consecutive failures — let supervisor restart with clean namespace
-                    raise RuntimeError(
-                        f"process() failed {consecutive_errors} times in a row, last error: {e}"
-                    ) from e
+                    raise ProcessEscalated(consecutive_errors, e) from e
                 # Exponential backoff before next attempt
                 await asyncio.sleep(min(2**consecutive_errors, 30))
                 continue
@@ -1371,7 +1534,10 @@ class _RemoteAgent:
             except asyncio.CancelledError:
                 break
             except Exception:
-                pass
+                # The loop must outlive a failed publish, but a heartbeat that
+                # stops arriving with nothing said is what makes an agent look
+                # dead when it is not.
+                logger.debug("[%s] Heartbeat publish failed", self.name, exc_info=True)
 
     async def _publish_heartbeat(self, state: str) -> None:
         await self._publish(
@@ -1396,10 +1562,9 @@ class _RemoteAgent:
             return {"error": f"Agent '{self.name}' has no handle_task function."}
         try:
             result = await self._fn_handle_task(self._api, payload)
-            return result or {}
         except Exception as e:
             err_str = traceback.format_exc()
-            logger.error(f"[{self.name}] handle_task() error: {e}")
+            logger.exception("[%s] handle_task() error", self.name)
             await self._publish(
                 f"agents/{self.actor_id}/errors",
                 {
@@ -1412,6 +1577,8 @@ class _RemoteAgent:
                 },
             )
             return {"error": str(e), "error_phase": "handle_task", "agent": self.name}
+        else:
+            return result or {}
 
     def deliver_reply(self, reply_topic: str, data: Any) -> bool:
         """Called by runner when an inbound reply arrives for this agent.
@@ -1462,16 +1629,16 @@ class _RemoteRunner:
 
     async def spawn_agent(self, config: Any) -> None:
         if not isinstance(config, dict):
-            logger.warning(f"[runner] spawn_agent: invalid config type {type(config)}, ignoring.")
+            logger.warning("[runner] spawn_agent: invalid config type %s, ignoring.", type(config))
             return
         name = config.get("name", f"agent-{uuid.uuid4().hex[:6]}")
-        logger.info(f"[runner] Spawning agent '{name}'...")
+        logger.info("[runner] Spawning agent '%s'...", name)
         if name in self._agents:
             if config.get("replace", False):
-                logger.info(f"[runner] Replacing agent '{name}'")
+                logger.info("[runner] Replacing agent '%s'", name)
                 await self.stop_agent(name)
             else:
-                logger.info(f"[runner] Agent '{name}' already running (use replace=true)")
+                logger.info("[runner] Agent '%s' already running (use replace=true)", name)
                 return
 
         packages = config.get("install", [])
@@ -1484,7 +1651,7 @@ class _RemoteRunner:
                 # rejected it, so starting the agent only moves the failure to an
                 # import somewhere else — with the reason left in this node's log
                 # and nothing on the dashboard saying why.
-                logger.error(f"[runner] Not spawning '{name}' — install list refused.")
+                logger.error("[runner] Not spawning '%s' — install list refused.", name)
                 await self.publish(
                     f"agents/{self.node_name}/logs",
                     {
@@ -1502,9 +1669,9 @@ class _RemoteRunner:
             agent = _RemoteAgent(config, self, state_dir=self._state_dir)
             self._agents[name] = agent
             await agent.start()
-            logger.info(f"[runner] Agent '{name}' started.")
+            logger.info("[runner] Agent '%s' started.", name)
         except Exception as e:
-            logger.error(f"[runner] Failed to start agent '{name}': {e}")
+            logger.exception("[runner] Failed to start agent '%s'", name)
             self._agents.pop(name, None)
             await self.publish(
                 f"agents/{self.node_name}/logs",
@@ -1554,7 +1721,7 @@ class _RemoteRunner:
             # no later publish or supervisor restart can recreate it.
             agent._delete_state()
             await self._purge_agent_retained(actor_id)
-            logger.info(f"[runner] Agent '{name}' permanently deleted from this node.")
+            logger.info("[runner] Agent '%s' permanently deleted from this node.", name)
 
     async def _purge_agent_retained(self, actor_id: str) -> None:
         """Clear retained MQTT messages for an agent that has just been deleted.
@@ -1585,7 +1752,9 @@ class _RemoteRunner:
             try:
                 await self.publish(f"agents/{actor_id}/{metric}", b"", retain=True)
             except Exception as e:
-                logger.debug(f"[runner] Failed to clear retained agents/{actor_id}/{metric}: {e}")
+                logger.debug(
+                    "[runner] Failed to clear retained agents/%s/%s: %s", actor_id, metric, e
+                )
 
     async def stop_all(self) -> None:
         for name in list(self._agents):
@@ -1606,27 +1775,22 @@ class _RemoteRunner:
             # not carried out, and the agent would then fail on a missing import
             # somewhere far from here.
             logger.error(
-                f"[runner] Refusing install — not package names: {refused}. "
-                f"Names may contain letters, digits, '.', '-', '_', extras and "
-                f"version specifiers; anything else (options, URLs, paths) is rejected."
+                "[runner] Refusing install — not package names: %s. Names may contain letters, digits, '.', '-', '_', extras and version specifiers; anything else (options, URLs, paths) is rejected.",
+                refused,
             )
             return refused
 
-        logger.info(f"[runner] Installing: {' '.join(packages)}")
+        cmd, extra_env = _pip_install_command(packages)
+        logger.info("[runner] Installing %s into %s.", " ".join(packages), _install_destination())
         proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            *packages,
-            "--break-system-packages",
-            "-q",
+            *cmd,
+            env={**os.environ, **extra_env} if extra_env else None,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
-            logger.warning(f"[runner] pip install warning: {stderr.decode()[:200]}")
+            logger.warning("[runner] pip install warning: %s", stderr.decode()[:200])
         return []
 
     # ── Status heartbeat for the node itself ──────────────────────────────────
@@ -1670,6 +1834,38 @@ class _RemoteRunner:
 
     # ── MQTT publisher task (paho-mqtt direct — aiomqtt v2.x doesn't flush reliably) ──
 
+    def _connect_publisher(self) -> Any:
+        """Open a paho client for publishing, with credentials where configured.
+
+        The import is deferred rather than module-level: the runner installs its
+        own dependencies at start-up, so paho need not exist when this file is
+        first read.
+        """
+        import paho.mqtt.client as paho_mqtt
+
+        client = paho_mqtt.Client(client_id=f"runner-pub-{self.node_name}-{uuid.uuid4().hex[:6]}")
+        user = os.environ.get("MQTT_USERNAME") or None
+        if user:
+            client.username_pw_set(user, os.environ.get("MQTT_PASSWORD") or None)
+        client.connect(self.broker, self.port, keepalive=60)
+        client.loop_start()
+        return client
+
+    async def _publish_one_queued(self, client: Any) -> None:
+        """Hand the next queued message to the client, waiting for one to arrive.
+
+        The retain flag is optional in the queued tuple, because most callers
+        have no opinion about it and a two-item entry is the common case.
+        """
+        queue = self._pub_queue
+        if queue is None:
+            return
+        item = await queue.get()
+        topic, payload = item[0], item[1]
+        retain = item[2] if len(item) > 2 else False
+        client.publish(topic, payload, qos=1, retain=retain)
+        queue.task_done()
+
     async def _publisher_loop(self) -> None:
         """Uses paho-mqtt directly for reliable fire-and-forget publishing.
         aiomqtt v2.x wraps paho but its internal network loop doesn't get CPU
@@ -1679,55 +1875,218 @@ class _RemoteRunner:
         if self._deps_ready is None:
             return
         await self._deps_ready.wait()
-        import paho.mqtt.client as paho_mqtt
-
         loop = asyncio.get_event_loop()
-
-        def _connect() -> paho_mqtt.Client:
-            c = paho_mqtt.Client(client_id=f"runner-pub-{self.node_name}-{uuid.uuid4().hex[:6]}")
-            _user = os.environ.get("MQTT_USERNAME") or None
-            if _user:
-                c.username_pw_set(_user, os.environ.get("MQTT_PASSWORD") or None)
-            c.connect(self.broker, self.port, keepalive=60)
-            c.loop_start()
-            return c
-
         client = None
         while self._running:
             if self._pub_queue is None:
                 return
             try:
                 if client is None:
-                    client = await loop.run_in_executor(None, _connect)
-                    logger.info(f"[runner] Publisher connected to {self.broker}:{self.port}")
+                    client = await loop.run_in_executor(None, self._connect_publisher)
+                    logger.info("[runner] Publisher connected to %s:%s", self.broker, self.port)
 
-                item = await self._pub_queue.get()
-                topic, payload = item[0], item[1]
-                retain = item[2] if len(item) > 2 else False
-                client.publish(topic, payload, qos=1, retain=retain)
-                self._pub_queue.task_done()
+                await self._publish_one_queued(client)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning(f"[runner] Publisher error: {e}. Reconnecting in 3s...")
+                logger.warning("[runner] Publisher error: %s. Reconnecting in 3s...", e)
                 if client:
-                    try:
-                        client.loop_stop()
-                        client.disconnect()
-                    except Exception:
-                        pass
+                    _close_mqtt_client(client, "Discarded publisher")
                     client = None
                 await asyncio.sleep(3)
 
         if client:
-            try:
-                client.loop_stop()
-                client.disconnect()
-            except Exception:
-                pass
+            _close_mqtt_client(client, "Publisher")
 
     # ── MQTT subscriber task ──────────────────────────────────────────────────
+
+    # ── Control-plane commands ────────────────────────────────────────────────
+
+    async def _dispatch_control(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Route one control message to the command it names.
+
+        Exact topics are looked up; the two families that carry a variable
+        segment — a reply's correlation key and an agent's name — are matched
+        after, because a table cannot express them.
+        """
+        exact = {
+            f"nodes/{self.node_name}/desired_state": self._on_desired_state,
+            f"nodes/{self.node_name}/spawn": self._on_spawn,
+            f"nodes/{self.node_name}/stop": self._on_stop,
+            f"nodes/{self.node_name}/migrate": self._on_migrate,
+            f"nodes/{self.node_name}/stop_all": self._on_stop_all,
+            f"nodes/{self.node_name}/restart": self._on_restart,
+            f"nodes/{self.node_name}/restart_agent": self._on_restart_agent,
+            f"nodes/{self.node_name}/list": self._on_list,
+        }
+        handler = exact.get(topic_str)
+        if handler is not None:
+            await handler(topic_str, data, msg)
+        elif topic_str.startswith(f"nodes/{self.node_name}/reply/"):
+            await self._on_reply(topic_str, data, msg)
+        elif "/task" in topic_str:
+            await self._on_task(topic_str, data, msg)
+
+    async def _on_desired_state(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Start any agent named in the desired state that is not running."""
+        if not msg.payload or not isinstance(data, dict):
+            return
+        desired = data.get("agents", [])
+        if not desired:
+            return
+        logger.info(
+            "[runner] Reconciling desired state: %s",
+            [a.get("name") for a in desired],
+        )
+
+        def _log_exc(t: asyncio.Task) -> None:
+            if not t.cancelled() and t.exception():
+                logger.error("[runner] reconcile task failed: %s", t.exception())
+
+        for agent_config in desired:
+            aname = agent_config.get("name")
+            if not aname:
+                continue
+            if aname in self._agents:
+                logger.info("[runner] '%s' already running, skipping.", aname)
+            else:
+                logger.info("[runner] Reconcile: starting missing agent '%s'", aname)
+                task = asyncio.create_task(self.spawn_agent(agent_config))
+                task.add_done_callback(_log_exc)
+
+    async def _on_spawn(self, topic_str: str, data: Any, msg: Any) -> None:
+        if not msg.payload:  # empty = retain-clear message, ignore
+            return
+
+        def _log_task_exc(t: asyncio.Task) -> None:
+            if not t.cancelled() and t.exception():
+                logger.error("[runner] spawn_agent task failed: %s", t.exception())
+
+        task = asyncio.create_task(self.spawn_agent(data))
+        task.add_done_callback(_log_task_exc)
+        # Clear the retained message so this spawn doesn't re-fire every time
+        # the subscriber reconnects or restarts.
+        asyncio.create_task(self.publish(topic_str, b"", retain=True))
+
+    async def _on_stop(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Stop a named agent.
+
+        Payload formats accepted:
+          {"name": "foo"}                 plain stop, state preserved
+          {"name": "foo", "delete": true} permanent delete: wipes the state file
+                                          and the retained MQTT topics
+          "foo"                           legacy bare name, plain stop
+        """
+        if isinstance(data, dict):
+            name = data.get("name")
+            do_delete = bool(data.get("delete", False))
+        else:
+            name = str(data)
+            do_delete = False
+        if name:
+            asyncio.create_task(self.stop_agent(name, delete=do_delete))
+
+    async def _on_migrate(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Move a running agent to another node.
+
+        Payload: {"name": "agent-name", "target_node": "rpi-bedroom"}
+        """
+        if isinstance(data, dict):
+            asyncio.create_task(self._migrate_agent(data))
+
+    async def _on_stop_all(self, topic_str: str, data: Any, msg: Any) -> None:
+        logger.info("[runner] stop_all received — shutting down.")
+        asyncio.create_task(self._shutdown())
+
+    async def _on_restart(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Restart the runner in place: stop the agents, re-exec, same PID."""
+        logger.info("[runner] Restart command received.")
+        asyncio.create_task(self._restart())
+
+    async def _on_restart_agent(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Restart one agent without losing its config — stop plus spawn."""
+        name = data.get("name") if isinstance(data, dict) else str(data)
+        if not isinstance(name, str):
+            name = str(name)
+        asyncio.create_task(self._restart_agent(name))
+
+    async def _on_list(self, topic_str: str, data: Any, msg: Any) -> None:
+        await self.publish(
+            f"nodes/{self.node_name}/agents",
+            {
+                "node": self.node_name,
+                "agents": [{"name": a.name, "actor_id": a.actor_id} for a in self._agents.values()],
+                "timestamp": time.time(),
+            },
+        )
+
+    async def _on_reply(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Hand a reply to whichever agent is waiting on its topic."""
+        for agent in self._agents.values():
+            if agent.deliver_reply(topic_str, data):
+                return
+        # Every key actually waiting, so the mismatch is visible now rather
+        # than as a timeout a minute later.
+        waiting: list[str] = []
+        for agent in self._agents.values():
+            waiting.extend(list(agent._pending_replies.keys()))
+        logger.warning(
+            "[runner] Reply arrived on %s but no agent had a matching pending future. "
+            "Waiting keys: %r",
+            topic_str,
+            waiting,
+        )
+
+    async def _on_task(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Run a task addressed to a named agent, off the consuming loop.
+
+        The subscriber is a sequential consumer, so awaiting handle_task here
+        would stop every other message being dispatched. An agent whose task
+        makes a round trip — publishing to main and awaiting the reply on this
+        same client — could then never receive it: the loop holding the only
+        consumer is the loop waiting for the call to finish. It deadlocks and
+        times out a minute later although main answered in milliseconds.
+        """
+        parts = topic_str.split("/")  # agents/by-name/{agent_name}/task
+        if len(parts) < 4:
+            return
+        agent_name = parts[2]
+        agent = self._agents.get(agent_name)
+        if not agent or not isinstance(data, dict):
+            return
+
+        # handle_task receives the full envelope, as the local DynamicAgent
+        # does. Unwrapping data['payload'] here instead would hand agent code a
+        # bare string where it expects a dict, so the same agent would work
+        # locally and break remotely. Transport metadata is stripped so it does
+        # not leak into what the agent sees.
+        reply_topic = data.get("_reply_topic")
+        payload: Any = {k: v for k, v in data.items() if k not in ("_reply_topic", "_remote_task")}
+        # A scalar wrapped in 'payload' and nothing else passes through as the
+        # scalar, which is what callers sending {'payload': 42} expect.
+        if set(payload.keys()) == {"payload"} and not isinstance(payload["payload"], dict):
+            payload = payload["payload"]
+
+        async def _run_task(a: _RemoteAgent, p: Any, rt: str | None, an: str) -> None:
+            try:
+                result = await a.handle_task(p)
+            except Exception as e:
+                logger.exception("[runner] handle_task error for '%s'", an)
+                result = {"error": str(e), "agent": an}
+            if rt:
+                if not isinstance(result, dict):
+                    result = {"result": str(result) if result is not None else ""}
+                try:
+                    await self.publish(rt, result)
+                except Exception as e:
+                    logger.warning("[runner] Reply publish failed for '%s' → %s: %s", an, rt, e)
+
+        task = asyncio.create_task(_run_task(agent, payload, reply_topic, agent_name))
+        # Hold a reference so the task is not collected mid-flight, and so a
+        # shutdown can cancel it.
+        agent._tasks.append(task)
+        task.add_done_callback(lambda t, _ts=agent._tasks: _ts.remove(t) if t in _ts else None)
 
     async def _subscriber_loop(self) -> None:
         """Subscribes to:
@@ -1765,7 +2124,9 @@ class _RemoteRunner:
                 ) as client:
                     for topic in topics:
                         await client.subscribe(topic)
-                    logger.info(f"[runner] Subscribed to control topics on node '{self.node_name}'")
+                    logger.info(
+                        "[runner] Subscribed to control topics on node '%s'", self.node_name
+                    )
 
                     async for msg in client.messages:
                         topic_str = str(msg.topic)
@@ -1773,220 +2134,13 @@ class _RemoteRunner:
                             data = json.loads(msg.payload.decode())
                         except Exception:
                             data = msg.payload.decode()
-
-                        if topic_str == f"nodes/{self.node_name}/desired_state":
-                            # Reconcile: start any agents in desired state not already running
-                            if not msg.payload or not isinstance(data, dict):
-                                continue
-                            desired = data.get("agents", [])
-                            if not desired:
-                                continue
-                            logger.info(
-                                f"[runner] Reconciling desired state: {[a.get('name') for a in desired]}"
-                            )
-                            for agent_config in desired:
-                                aname = agent_config.get("name")
-                                if not aname:
-                                    continue
-                                if aname in self._agents:
-                                    logger.info(f"[runner] '{aname}' already running, skipping.")
-                                else:
-                                    logger.info(
-                                        f"[runner] Reconcile: starting missing agent '{aname}'"
-                                    )
-
-                                    def _log_exc(t: asyncio.Task) -> None:
-                                        if not t.cancelled() and t.exception():
-                                            logger.error(
-                                                f"[runner] reconcile task failed: {t.exception()}"
-                                            )
-
-                                    task = asyncio.create_task(self.spawn_agent(agent_config))
-                                    task.add_done_callback(_log_exc)
-
-                        elif topic_str == f"nodes/{self.node_name}/spawn":
-                            if not msg.payload:  # empty = retain-clear message, ignore
-                                continue
-
-                            def _log_task_exc(t: asyncio.Task) -> None:
-                                if not t.cancelled() and t.exception():
-                                    logger.error(
-                                        f"[runner] spawn_agent task failed: {t.exception()}"
-                                    )
-
-                            task = asyncio.create_task(self.spawn_agent(data))
-                            task.add_done_callback(_log_task_exc)
-                            # Clear the retained message so this spawn doesn't
-                            # re-fire every time the subscriber reconnects/restarts
-                            asyncio.create_task(self.publish(topic_str, b"", retain=True))
-
-                        elif topic_str == f"nodes/{self.node_name}/stop":
-                            # Payload formats accepted:
-                            #   {"name": "foo"}                → plain stop, state preserved
-                            #   {"name": "foo", "delete": true} → permanent delete:
-                            #     wipes state file + retained MQTT topics
-                            #   "foo"                          → legacy bare-name plain stop
-                            if isinstance(data, dict):
-                                name = data.get("name")
-                                do_delete = bool(data.get("delete", False))
-                            else:
-                                name = str(data)
-                                do_delete = False
-                            if name:
-                                asyncio.create_task(self.stop_agent(name, delete=do_delete))
-
-                        elif topic_str == f"nodes/{self.node_name}/migrate":
-                            # Migrate a running agent to another node
-                            # payload: {"name": "agent-name", "target_node": "rpi-bedroom"}
-                            if isinstance(data, dict):
-                                asyncio.create_task(self._migrate_agent(data))
-
-                        elif topic_str == f"nodes/{self.node_name}/stop_all":
-                            logger.info("[runner] stop_all received — shutting down.")
-                            asyncio.create_task(self._shutdown())
-
-                        elif topic_str == f"nodes/{self.node_name}/restart":
-                            # Gracefully restart the runner process in-place using os.execv.
-                            # Stops all agents cleanly, publishes a "restarting" heartbeat,
-                            # then re-execs itself — same PID, same venv, clean state.
-                            logger.info("[runner] Restart command received.")
-                            asyncio.create_task(self._restart())
-
-                        elif topic_str == f"nodes/{self.node_name}/restart_agent":
-                            # Restart a single named agent without losing its config.
-                            # Equivalent to stop + spawn with replace=true.
-                            name = data.get("name") if isinstance(data, dict) else str(data)
-                            if not isinstance(name, str):
-                                name = str(name)
-                            asyncio.create_task(self._restart_agent(name))
-
-                        elif topic_str == f"nodes/{self.node_name}/list":
-                            await self.publish(
-                                f"nodes/{self.node_name}/agents",
-                                {
-                                    "node": self.node_name,
-                                    "agents": [
-                                        {"name": a.name, "actor_id": a.actor_id}
-                                        for a in self._agents.values()
-                                    ],
-                                    "timestamp": time.time(),
-                                },
-                            )
-
-                        elif topic_str.startswith(f"nodes/{self.node_name}/reply/"):
-                            # Route reply back to the waiting agent
-                            delivered = False
-                            for agent in self._agents.values():
-                                if agent.deliver_reply(topic_str, data):
-                                    delivered = True
-                                    break
-                            if not delivered:
-                                # Log every key actually waiting so we can see
-                                # the mismatch in one shot rather than 60s later.
-                                waiting = []
-                                for agent in self._agents.values():
-                                    waiting.extend(list(agent._pending_replies.keys()))
-                                logger.warning(
-                                    f"[runner] Reply arrived on {topic_str} but "
-                                    f"no agent had a matching pending future. "
-                                    f"Waiting keys: {waiting!r}"
-                                )
-
-                        elif "/task" in topic_str:
-                            # agents/by-name/{agent_name}/task
-                            parts = topic_str.split("/")
-                            if len(parts) >= 4:
-                                agent_name = parts[2]
-                                agent = self._agents.get(agent_name)
-                                if agent and isinstance(data, dict):
-                                    # Match local-actor semantics: handle_task
-                                    # receives the FULL task envelope (text,
-                                    # payload, etc.). Previously we unwrapped
-                                    # data['payload'], which could be a bare
-                                    # string and crashed agent code that calls
-                                    # payload.get('text'). The local
-                                    # DynamicAgent does NOT unwrap — it passes
-                                    # msg.payload (the full dict) straight to
-                                    # _fn_handle_task. Remote must agree, or
-                                    # the same agent works locally and breaks
-                                    # remotely (and vice versa).
-                                    # We strip transport-level metadata so the
-                                    # agent doesn't see _reply_topic / _remote_task
-                                    # leaking into its payload.
-                                    reply_topic = data.get("_reply_topic")
-                                    payload = {
-                                        k: v
-                                        for k, v in data.items()
-                                        if k not in ("_reply_topic", "_remote_task")
-                                    }
-                                    # If the sender wrapped a scalar in a
-                                    # 'payload' field and that's literally all
-                                    # there is, pass the scalar through —
-                                    # preserves the older convention for
-                                    # callers that send {'payload': 42} and
-                                    # expect 42 in handle_task.
-                                    if set(payload.keys()) == {"payload"} and not isinstance(
-                                        payload["payload"], dict
-                                    ):
-                                        payload = payload["payload"]
-
-                                    # CRITICAL: run handle_task in a background
-                                    # task. The subscriber loop is a SEQUENTIAL
-                                    # consumer (`async for msg in client.messages`)
-                                    # — while we await handle_task here, no other
-                                    # MQTT message gets dispatched. If the agent's
-                                    # handle_task makes a round-trip RPC such as
-                                    # agent.llm.chat() (publishes to main, awaits
-                                    # the reply on this same MQTT client), the
-                                    # reply CANNOT be delivered because we hold
-                                    # the only consumer — so the call deadlocks
-                                    # and times out 60s later, even though main
-                                    # responded in ms. By offloading to a task,
-                                    # the subscriber returns to the loop and is
-                                    # free to deliver subsequent replies.
-                                    async def _run_task(
-                                        a: _RemoteAgent, p: Any, rt: str | None, an: str
-                                    ) -> None:
-                                        try:
-                                            result = await a.handle_task(p)
-                                        except Exception as e:
-                                            logger.error(
-                                                f"[runner] handle_task error for '{an}': {e}"
-                                            )
-                                            result = {"error": str(e), "agent": an}
-                                        if rt:
-                                            if not isinstance(result, dict):
-                                                result = {
-                                                    "result": str(result)
-                                                    if result is not None
-                                                    else ""
-                                                }
-                                            try:
-                                                await self.publish(rt, result)
-                                            except Exception as e:
-                                                logger.warning(
-                                                    f"[runner] Reply publish failed "
-                                                    f"for '{an}' → {rt}: {e}"
-                                                )
-
-                                    task = asyncio.create_task(
-                                        _run_task(agent, payload, reply_topic, agent_name)
-                                    )
-                                    # Keep a reference so the task doesn't get
-                                    # garbage-collected mid-flight, and so a
-                                    # shutdown can cancel it cleanly.
-                                    agent._tasks.append(task)
-                                    task.add_done_callback(
-                                        lambda t, _ts=agent._tasks: (
-                                            _ts.remove(t) if t in _ts else None
-                                        )
-                                    )
+                        await self._dispatch_control(topic_str, data, msg)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 if self._running:
-                    logger.warning(f"[runner] Subscriber disconnected: {e}. Reconnecting in 3s...")
+                    logger.warning("[runner] Subscriber disconnected: %s. Reconnecting in 3s...", e)
                     await asyncio.sleep(3)
 
     # ── Main run loop ─────────────────────────────────────────────────────────
@@ -1995,7 +2149,9 @@ class _RemoteRunner:
         self._running = True
         self._pub_queue = asyncio.Queue()  # must be created inside the running event loop
         self._deps_ready = asyncio.Event()
-        logger.info(f"[runner] Starting node '{self.node_name}' → broker {self.broker}:{self.port}")
+        logger.info(
+            "[runner] Starting node '%s' → broker %s:%s", self.node_name, self.broker, self.port
+        )
 
         # Bootstrap missing deps in thread pool; publisher/subscriber wait on this event.
         asyncio.create_task(_bootstrap_deps_async(self._deps_ready))
@@ -2007,7 +2163,7 @@ class _RemoteRunner:
         ]
 
         await asyncio.sleep(1)  # let publisher connect before anything else fires
-        logger.info(f"[runner] Node '{self.node_name}' online.")
+        logger.info("[runner] Node '%s' online.", self.node_name)
 
         try:
             await asyncio.gather(*tasks)
@@ -2031,7 +2187,7 @@ class _RemoteRunner:
         """
         agent = self._agents.get(name)
         if not agent:
-            logger.warning(f"[runner] restart_agent: '{name}' not running here")
+            logger.warning("[runner] restart_agent: '%s' not running here", name)
             await self.publish(
                 f"nodes/{self.node_name}/logs",
                 {
@@ -2044,7 +2200,7 @@ class _RemoteRunner:
             return
         config = dict(agent._config)
         config["replace"] = True
-        logger.info(f"[runner] Restarting agent '{name}'")
+        logger.info("[runner] Restarting agent '%s'", name)
         await self.spawn_agent(config)
 
     async def _restart(self) -> None:
@@ -2098,7 +2254,7 @@ class _RemoteRunner:
 
         agent = self._agents.get(name)
         if not agent:
-            logger.warning(f"[runner] migrate: agent '{name}' not running here")
+            logger.warning("[runner] migrate: agent '%s' not running here", name)
             await self.publish(
                 f"nodes/{self.node_name}/migrate_result",
                 {
@@ -2127,8 +2283,9 @@ class _RemoteRunner:
                 dropped.append(k)
         if dropped:
             logger.warning(
-                f"[runner] migrate '{name}': dropping non-JSON state keys "
-                f"{dropped} — they cannot travel over MQTT"
+                "[runner] migrate '%s': dropping non-JSON state keys %s — they cannot travel over MQTT",
+                name,
+                dropped,
             )
 
         # ── Remote → Local migration ──────────────────────────────────────────
@@ -2138,8 +2295,10 @@ class _RemoteRunner:
         if target_node == "@main":
             return_token = payload.get("return_token", "")
             logger.info(
-                f"[runner] Migrating '{name}' from {self.node_name} → local (main); "
-                f"returning {len(safe_state)} state key(s)"
+                "[runner] Migrating '%s' from %s → local (main); returning %s state key(s)",
+                name,
+                self.node_name,
+                len(safe_state),
             )
             # Snapshot the full config BEFORE we stop the agent (some
             # implementations clear _config on stop). 'config' here already
@@ -2179,17 +2338,20 @@ class _RemoteRunner:
                     "timestamp": time.time(),
                 },
             )
-            logger.info(f"[runner] Migration of '{name}' to local (main) dispatched.")
+            logger.info("[runner] Migration of '%s' to local (main) dispatched.", name)
             return
 
         if safe_state:
             config["_initial_state"] = safe_state
             logger.info(
-                f"[runner] migrate '{name}': carrying {len(safe_state)} state key(s) "
-                f"to '{target_node}': {list(safe_state.keys())}"
+                "[runner] migrate '%s': carrying %s state key(s) to '%s': %s",
+                name,
+                len(safe_state),
+                target_node,
+                list(safe_state.keys()),
             )
 
-        logger.info(f"[runner] Migrating '{name}' from {self.node_name} → {target_node}")
+        logger.info("[runner] Migrating '%s' from %s → %s", name, self.node_name, target_node)
 
         # Stop locally AND delete the state file. The agent's state is now in
         # `config["_initial_state"]` and about to be published to the target
@@ -2213,7 +2375,7 @@ class _RemoteRunner:
                 "timestamp": time.time(),
             },
         )
-        logger.info(f"[runner] Migration of '{name}' to '{target_node}' dispatched.")
+        logger.info("[runner] Migration of '%s' to '%s' dispatched.", name, target_node)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -2257,8 +2419,9 @@ def main() -> None:
     if bad or not node_name.strip():
         problem = f"contains {' and '.join(repr(c) for c in bad)}" if bad else "is empty"
         logger.error(
-            f"[runner] Refusing to start: node name {node_name!r} {problem}, which "
-            f"cannot appear in an MQTT topic. Rename the node and redeploy."
+            "[runner] Refusing to start: node name %r %s, which cannot appear in an MQTT topic. Rename the node and redeploy.",
+            node_name,
+            problem,
         )
         raise SystemExit(2)
 
@@ -2285,6 +2448,12 @@ def main() -> None:
 
 
 # ── Self-test (python3 remote_runner.py --test) ───────────────────────────────
+
+
+async def _settle(task: asyncio.Task) -> None:
+    """Cancel a task and wait for it to unwind, whatever it raises on the way."""
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 async def _run_supervisor_tests() -> bool:
@@ -2343,11 +2512,7 @@ async def _run_supervisor_tests() -> bool:
     await asyncio.sleep(0.15)
     agent._running = False
     await asyncio.sleep(0.05)
-    task.cancel()
-    try:
-        await task
-    except Exception:
-        pass
+    await _settle(task)
     check("stable: restart_count=0", agent._restart_count == 0, f"got {agent._restart_count}")
     check("stable: not failed", not agent._failed)
 
@@ -2398,11 +2563,7 @@ async def _run_supervisor_tests() -> bool:
     task = asyncio.create_task(agent._supervisor_loop())
     await asyncio.sleep(0.05)
     await agent.stop()
-    task.cancel()
-    try:
-        await task
-    except Exception:
-        pass
+    await _settle(task)
     check("stop(): restart_count=0", agent._restart_count == 0)
     check("stop(): not failed", not agent._failed)
 
@@ -2413,11 +2574,7 @@ async def _run_supervisor_tests() -> bool:
     await asyncio.sleep(0.3)
     agent._running = False
     await asyncio.sleep(0.05)
-    task.cancel()
-    try:
-        await task
-    except Exception:
-        pass
+    await _settle(task)
     check(
         "health credit: restart_count < 2", agent._restart_count < 2, f"got {agent._restart_count}"
     )
@@ -2426,11 +2583,7 @@ async def _run_supervisor_tests() -> bool:
     agent, runner = make_agent("this is not valid python !!!")
     task = asyncio.create_task(agent._supervisor_loop())
     await asyncio.sleep(0.15)
-    task.cancel()
-    try:
-        await task
-    except Exception:
-        pass
+    await _settle(task)
     check("compile: _running=False", not agent._running)
     check("compile: restart_count=0", agent._restart_count == 0)
     check(
@@ -2444,11 +2597,7 @@ async def _run_supervisor_tests() -> bool:
     agent, runner = make_agent(setup_fail)
     task = asyncio.create_task(agent._supervisor_loop())
     await asyncio.sleep(0.15)
-    task.cancel()
-    try:
-        await task
-    except Exception:
-        pass
+    await _settle(task)
     check("setup: _running=False", not agent._running)
     check("setup: restart_count=0", agent._restart_count == 0)
 

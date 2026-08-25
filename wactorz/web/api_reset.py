@@ -66,7 +66,7 @@ def forget_legacy_state(actor: Any, keys: tuple[str, ...] | None = None) -> None
 def survives_factory_reset(name: str, protected: bool) -> bool:
     """Whether an agent is kept by ``reset all`` (factory reset).
 
-    Kept if it is a system-protected actor (main / monitor / io-agent / installer
+    Kept if it is a system-protected actor (main / monitor / installer
     / catalog) OR one of the HA system agents — i.e. exactly the set a fresh,
     empty boot brings up. Everything else (user- and catalog-spawned agents) is
     wiped. Note this is independent of manual delete, which keys off ``protected``

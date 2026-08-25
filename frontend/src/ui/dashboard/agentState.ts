@@ -14,7 +14,6 @@ export const STALE_MS = 180_000;
 
 /** System agents that exist but cannot be chatted with directly. */
 export const SYSTEM_AGENT_NAMES: Set<string> = new Set([
-    "io-agent",
     "monitor-agent",
     "home-assistant-state-bridge",
     "home-assistant-map-agent",

@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import ast
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -123,7 +122,6 @@ def check(program: Program, *, fix: bool, fmt: bool) -> tuple[int, str]:
             check=False,
         )
         edited = scratch.read_text(encoding="utf-8")
-        shutil.copyfile(scratch, f".local/{program.name}")
 
     count = 0
     for line in result.stdout.splitlines():

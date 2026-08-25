@@ -3321,8 +3321,12 @@ async def _prepare_speech(agent, text, payload):
     # Auto-detect matters because an English voice fed literal Greek text spells out
     # the Unicode letter names ("kappa alpha lambda...") instead of pronouncing the
     # word. Picking a voice that matches the text's script fixes that.
+    # Every term joined with `or` so an empty one falls through. A default
+    # argument would not: it applies only when the name is absent, and this one
+    # is documented as "leave empty for the default".
     default_voice = (agent.state.get("tts_voice")
-                     or os.environ.get("TTS_VOICE", "en-US-JennyNeural"))
+                     or os.environ.get("TTS_VOICE", "").strip()
+                     or "en-US-JennyNeural")
     voice = payload.get("voice") or _voice_for_text(text, default_voice)
 
     # -- Synthesize to a temp MP3 file (path-based, GStreamer playbin decodes it) --

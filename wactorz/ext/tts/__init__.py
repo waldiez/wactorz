@@ -60,7 +60,13 @@ def public_config(_app: web.Application) -> dict[str, Any]:
     """Non-secret TTS config for the browser."""
     return {
         "available": _tts_state.available,
-        "voice": os.getenv("TTS_VOICE", _tts_state.default_voice),
+        # Stripped and `or`-ed rather than given as a default argument: a
+        # default applies only when the name is absent, and `.env.template`
+        # tells you to leave this one empty for it. `load_dotenv` then supplies
+        # "", which reached the synthesiser and was refused, so the documented
+        # setup produced no speech at all. Whitespace goes the same way, because
+        # a `.env` line keeps trailing spaces more often than anyone means it to.
+        "voice": os.getenv("TTS_VOICE", "").strip() or _tts_state.default_voice,
     }
 
 
@@ -125,7 +131,7 @@ async def tts_handler(request: web.Request) -> web.Response:
     # Mirror TTSManager.ts: strip code blocks, cap at 300 chars.
     text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
 
-    default_voice = os.environ.get("TTS_VOICE", _tts_state.default_voice)
+    default_voice = os.environ.get("TTS_VOICE", "").strip() or _tts_state.default_voice
     voice = str(body.get("voice") or "") or default_voice
 
     try:

@@ -48,8 +48,8 @@ def main() -> None:
     )
 
     # ── Validate packages ─────────────────────────────────────────────────────
-    run([sys.executable, "-m", "twine", "check", "dist/*"], cwd=ROOT, shell=False)
-    # twine check doesn't support globs on Windows; pass files explicitly
+    # Files listed explicitly rather than as a glob, which twine does not
+    # expand on every platform.
     dist_files = list((ROOT / "dist").iterdir())
     run([sys.executable, "-m", "twine", "check"] + [str(f) for f in dist_files])
 

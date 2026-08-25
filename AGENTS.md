@@ -67,10 +67,40 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
   standard library, and never for a required dependency such as `aiohttp` or `aiomqtt` — those
   cost nothing at module scope, and hiding them there conceals what a module actually depends on
   and complicates patching in tests. When one is load-bearing, say which of the two reasons
-  applies on the line itself.
+  applies on the line itself. This holds inside `AGENT_CODE` too — a catalogue
+  agent's program is a file that happens to be quoted.
+- **Paths are `pathlib.Path` inside a module**; accept `str | os.PathLike[str]` at a public
+  edge and convert once, on the way in.
+- **Define helpers at module level, not inside the function that calls them.** A function
+  redefined on every call is rebuilt on every call, cannot be tested on its own, and hides how
+  much a loop body is really doing. Decorator wrappers built once at import time are the
+  exception.
+- **Keep side effects out of `__init__`.** Creating directories, opening files and connecting
+  belong in a start method, so an object can be constructed in a test without touching anything.
+- **Comments and docstrings are written for a stranger reading the file a year from now.** They
+  explain what the code is for and why it is shaped that way. Three things do not belong in
+  them:
+  - **Counts and measurements.** They are true on the day they are written and misleading
+    afterwards. Say "most", or say nothing.
+  - **What happened.** No "used to", no "previously", no reference to the bug that prompted the
+    change. The reader was not there and cannot check.
+  - **Superlatives.** "the largest", "the only", "the last remaining" — all of them decay
+    silently.
 - Ruff is the gated linter and formatter (`pyproject.toml` `[tool.ruff]`). `make lint-py` runs it,
   plus an advisory pass that reports but never blocks. Pre-commit and CI both enforce the gated
   rules, so a push that skips them fails rather than merging.
+
+## Catalogue agents
+
+`wactorz/catalogue_agents/*.py` hold a runnable agent program as a string in `AGENT_CODE`,
+exec'd when the agent is spawned. Two consequences:
+
+- **Ruff and the type checker see a string literal**, so none of the gated rules reach that code.
+  A near-zero finding count for these files means nothing was read, not that nothing is wrong.
+  `tests/test_catalogue_agent_code.py` parses each program so a syntax error fails a test rather
+  than an agent that will not start.
+- **The program cannot import `wactorz`** when it runs on a node. What it needs is either stdlib
+  or injected into the exec namespace by the host.
 
 ## Safety
 

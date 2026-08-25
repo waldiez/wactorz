@@ -17,30 +17,45 @@ import pytest
 
 AGENTS = pathlib.Path(__file__).resolve().parent.parent / "wactorz" / "catalogue_agents"
 
-#: A string this size assigned to a module-level name is agent source, not prose.
-MIN_LINES = 20
-
-#: A ceiling, not a target. Existing ones are left to a change of their own.
-#: Lower it as they go; raising it means an import that belongs at the top.
-FUNCTION_LOCAL_STDLIB_CEILING = 62
+#: The name the loader asks for: `getattr(mod, "AGENT_CODE", None)`. Matching on
+#: it rather than on "a long string" keeps prompts out, and keeps this in step
+#: with what actually gets run.
+NAME = "AGENT_CODE"
 
 
 def agent_sources() -> list[tuple[str, str, str]]:
     """(module, name, source) for every embedded agent program."""
     found = []
     for path in sorted(AGENTS.glob("*.py")):
-        for node in ast.parse(path.read_text()).body:
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
             if not isinstance(node, ast.Assign):
                 continue
             value = node.value
             if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
                 continue
-            if len(value.value.splitlines()) < MIN_LINES:
+            if not any(isinstance(t, ast.Name) and t.id == NAME for t in node.targets):
                 continue
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    found.append((path.name, target.id, value.value))
+            found.append((path.name, NAME, value.value))
     return found
+
+
+def commented_out() -> list[str]:
+    """Modules whose program has been commented out and not put back.
+
+    An easy thing to leave behind after reading the code with the linter, and
+    the recipe is dead until it goes back: the loader finds no attribute.
+    """
+    out = []
+    for path in sorted(AGENTS.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        live = any(line.startswith(f"{NAME} = ") for line in text.splitlines())
+        commented = any(
+            line.lstrip("# ").startswith(f"{NAME} = ") and line.lstrip().startswith("#")
+            for line in text.splitlines()
+        )
+        if commented and not live:
+            out.append(path.name)
+    return out
 
 
 SOURCES = agent_sources()
@@ -88,7 +103,12 @@ def function_local_stdlib_imports(source: str) -> list[tuple[str, int]]:
 
 def test_there_is_agent_source_to_check() -> None:
     """Without this, renaming the convention would make every check below vacuous."""
-    assert SOURCES, f"no embedded agent source found under {AGENTS}"
+    assert SOURCES, f"no {NAME} found under {AGENTS}"
+
+
+def test_no_program_is_left_commented_out() -> None:
+    """A commented-out program is a recipe the loader cannot find."""
+    assert not commented_out(), f"{NAME} is commented out in: {', '.join(commented_out())}"
 
 
 @pytest.mark.parametrize(
@@ -104,19 +124,21 @@ def test_every_agent_program_parses(module: str, name: str, source: str) -> None
         )
 
 
-def test_stdlib_imports_do_not_drift_further_into_functions() -> None:
-    """Hold the line on imports that belong at the top of their agent."""
+#: How many of these the programs still carry. A ceiling, not a target: it fails
+#: on growth, never on progress, so it can be lowered whenever a program is
+#: cleaned up rather than having to move in the same commit.
+FUNCTION_LOCAL_STDLIB_CEILING = 62
+
+
+def test_stdlib_imports_do_not_spread() -> None:
+    """A stdlib import cannot fail, so a function is never the place for it."""
     offenders = [
-        (module, name, module_name, lineno)
-        for module, name, source in SOURCES
-        for module_name, lineno in function_local_stdlib_imports(source)
+        f"{module}:{imported}@{lineno}"
+        for module, _name, source in SOURCES
+        for imported, lineno in function_local_stdlib_imports(source)
     ]
 
-    if len(offenders) > FUNCTION_LOCAL_STDLIB_CEILING:
-        added = len(offenders) - FUNCTION_LOCAL_STDLIB_CEILING
-        sample = ", ".join(f"{m}:{mod}@{ln}" for m, _n, mod, ln in offenders[-added:])
-        pytest.fail(f"{added} new stdlib import(s) inside a function: {sample}")
-
-    assert len(offenders) == FUNCTION_LOCAL_STDLIB_CEILING, (
-        f"lower FUNCTION_LOCAL_STDLIB_CEILING to {len(offenders)}"
+    assert len(offenders) <= FUNCTION_LOCAL_STDLIB_CEILING, (
+        f"{len(offenders) - FUNCTION_LOCAL_STDLIB_CEILING} new stdlib import(s) inside "
+        f"a function: {', '.join(offenders[FUNCTION_LOCAL_STDLIB_CEILING:])}"
     )

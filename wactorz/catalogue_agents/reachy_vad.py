@@ -98,7 +98,7 @@ def capture_utterance(
     WebRTC frames are discarded for ``flush_s``.
     """
     try:
-        import webrtcvad
+        import webrtcvad  # pyright: ignore[reportMissingImports]  # optional dependency
     except ImportError as exc:
         raise RuntimeError("webrtcvad is not installed; run: pip install webrtcvad-wheels") from exc
 

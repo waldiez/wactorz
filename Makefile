@@ -135,14 +135,14 @@ fmt-py: ## Format Python (ruff format + safe autofixes) — run this to pass the
 lint: ## Full frontend lint (typecheck + prettier + eslint)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint
 
-lint-py: ## Lint Python — gated ruff (fails) + advisory docstrings/typing (reports only)
+lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff families (report only)
 	$(PYTHON) -m ruff check wactorz tests scripts
 	$(PYTHON) -m ruff format --check wactorz tests scripts
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
 	-$(PYTHON) -m ruff check wactorz --extend-select G,LOG,TRY,C90,PTH,S,T20,DTZ --statistics
-	@echo "── advisory (non-blocking): basedpyright (basic) ──"
+	@echo "── gated: basedpyright (basic) ──"
 	@if command -v basedpyright >/dev/null 2>&1; then \
-		basedpyright wactorz || true; \
+		basedpyright wactorz; \
 	else \
 		echo "(basedpyright not installed — run 'make install-dev')"; \
 	fi

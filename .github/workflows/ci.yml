@@ -103,7 +103,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        # vision as well: the type checker gates on this job, and the camera
+        # shim imports cv2, which it cannot resolve unless OpenCV is present.
+        # It stays out of [all] because it is large and the shim does without.
+        run: pip install -e ".[all,dev,vision]"
 
       - name: Lint
         run: make lint-py

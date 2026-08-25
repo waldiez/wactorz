@@ -39,6 +39,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Catalogue dependency checks now respect exact version pins and distribution/import-name
+  differences.** A recipe no longer reuses an importable but incompatible pinned version, and
+  packages such as `webrtcvad-wheels` are recognised by the module they actually install.
 - **One-off light commands now resolve common colour, brightness and follow-up requests
   deterministically.** Singular requests choose one best-matching light instead of fanning out,
   explicit plural requests still affect all matching lights, and malformed resolver output

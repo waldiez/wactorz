@@ -23,6 +23,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy Mini v2 expands the opt-in experimental catalogue agent into an embodied voice
+  interface.** It adds bounded camera and microphone capture, local or explicitly hosted STT,
+  multi-turn VAD conversation, speech and interruption controls, sound localisation, health and
+  reconnect diagnostics, and safer expressive motion. Reachy remains hidden from the normal
+  catalogue list, installs its robot/media dependencies only when explicitly spawned, and keeps
+  always-on listening, barge-in, and background motion disabled by default. Voice turns can route
+  through Main using a gated interface envelope while staying in Reachy's dashboard thread.
+
 - **The optional packages the code already reaches for are now installable by name.** Three features degrade quietly when a package is absent: cron schedules refuse with a hint, query results come back as dicts instead of a DataFrame, and the camera shim returns nothing. All three were reachable only by installing the package yourself, and none of them was declared, so there was nothing to install *by name* — the cron error even told you to `pip install croniter`, a package this project never mentioned. There are now `wactorz[cron]`, `wactorz[data]` and `wactorz[vision]` extras for them. `cron` and `data` join `wactorz[all]`; `vision` stays out because OpenCV is large and the shim degrades cleanly without it, so `all` continues to mean "everything but the heavy stacks".
 
 - **Stopping an agent has a REST route, and every lifecycle command now says what it did.** `start`, `pause` and `resume` had routes; `stop` was reachable only over the dashboard's WebSocket, so anything scripted could start an agent and not stop it. `POST /actors/{id}/stop` fills that gap — it parks the agent and leaves it registered, which is what `DELETE /actors/{id}` has always done *and then removed*, so the two are now distinct rather than one verb wearing both names. **The bookkeeping that only the dashboard used to do is now shared by both paths**: a command records a feed entry, updates the state the API reports, and patches every open dashboard. Previously a command over REST executed and then said nothing, so `GET /actors` reported the old state until the agent's next heartbeat — and with the broker down, indefinitely: the response said the agent had stopped while every subsequent read said it was running. **Agents on a runner node can be commanded over REST too.** They are absent from the local registry by design, which made them indistinguishable from a typo, so a request the dashboard handled fine came back `404`; they are now reached over the broker as the dashboard reaches them, and a command that has no broker to travel through reports `503` rather than a hollow `200`.

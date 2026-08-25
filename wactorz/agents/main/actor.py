@@ -3,6 +3,8 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
+import contextvars
+import json
 import logging
 import re
 import socket
@@ -37,6 +39,24 @@ from .spawns import SpawnService
 from .turn_actions import TurnActions
 
 logger = logging.getLogger(__name__)
+
+
+_INTERFACE_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "wactorz_interface_source", default=""
+)
+_INTERFACE_HISTORY: contextvars.ContextVar[tuple[dict[str, Any], ...]] = contextvars.ContextVar(
+    "wactorz_interface_history", default=()
+)
+_INTERFACE_VOICE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "wactorz_interface_voice", default=False
+)
+_INTERFACE_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "wactorz_interface_context", default=None
+)
+_INTERFACE_ACTION_RE = re.compile(
+    r"<interface_action>\s*(\{.*?\})\s*</interface_action>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _normalize_agent_name(name: str) -> str:
@@ -126,6 +146,90 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.delegation = DelegationManager(self)
         self.lifecycle = LifecycleService(self)
 
+    def _current_interface_source(self) -> str:
+        """Return the task-local interface excluded from delegation this turn."""
+        return _INTERFACE_SOURCE.get()
+
+    def _current_interface_history(self) -> tuple[dict, ...]:
+        """Return recent structured turns supplied by the active interface."""
+        return _INTERFACE_HISTORY.get()
+
+    def _current_interface_is_voice(self) -> bool:
+        """Return whether the active interface used speech recognition."""
+        return bool(_INTERFACE_VOICE.get())
+
+    def _current_interface_context(self) -> dict:
+        """Return the sanitized capabilities of the active interface."""
+        return dict(_INTERFACE_CONTEXT.get() or {})
+
+    def _is_interface_source(self, agent_name: str) -> bool:
+        """Return whether an agent name resolves to the active interface."""
+        source = self._current_interface_source()
+        return bool(source) and _normalize_agent_name(agent_name) == _normalize_agent_name(source)
+
+    @staticmethod
+    def _sanitize_interface_context(raw_context: Any, source: str) -> dict[str, Any]:
+        """Keep bounded display metadata and explicit action allow-lists."""
+        if not isinstance(raw_context, dict):
+            return {}
+        display_name = str(raw_context.get("display_name") or source or "interface")[:80]
+        kind = str(raw_context.get("kind") or "interface")[:80]
+        capabilities: dict[str, tuple[str, ...]] = {}
+        raw_capabilities = raw_context.get("capabilities")
+        if isinstance(raw_capabilities, dict):
+            for raw_command, raw_options in list(raw_capabilities.items())[:12]:
+                command = str(raw_command).strip().lower()
+                if not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", command):
+                    continue
+                if not isinstance(raw_options, (list, tuple)):
+                    continue
+                options = []
+                for raw_option in list(raw_options)[:20]:
+                    option = str(raw_option).strip().lower()
+                    if re.fullmatch(r"[a-z][a-z0-9_]{0,39}", option):
+                        options.append(option)
+                if options:
+                    capabilities[command] = tuple(dict.fromkeys(options))
+        prompt_note = " ".join(str(raw_context.get("prompt_note") or "").split())[:400]
+        if prompt_note and not prompt_note.endswith(" "):
+            prompt_note += " "
+        return {
+            "display_name": display_name,
+            "kind": kind,
+            "capabilities": capabilities,
+            "prompt_note": prompt_note,
+        }
+
+    def _extract_interface_actions(self, response: str) -> tuple[str, list[dict[str, str]]]:
+        """Remove action blocks and validate them against the interface allow-list."""
+        capabilities = self._current_interface_context().get("capabilities") or {}
+        actions: list[dict[str, str]] = []
+        for match in _INTERFACE_ACTION_RE.finditer(str(response or "")):
+            if len(actions) >= 3:
+                break
+            try:
+                candidate = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(candidate, dict):
+                continue
+            command = str(candidate.get("cmd") or candidate.get("action") or "").lower()
+            name = str(candidate.get("name") or "").lower()
+            if command and name and name in capabilities.get(command, ()):
+                actions.append({"cmd": command, "name": name})
+        clean = _INTERFACE_ACTION_RE.sub("", str(response or ""))
+        return re.sub(r"\n{3,}", "\n\n", clean).strip(), actions
+
+    def _replace_latest_interface_reply(self, raw_reply: str, clean_reply: str) -> None:
+        """Keep interface protocol blocks out of durable conversation history."""
+        if raw_reply == clean_reply:
+            return
+        for item in reversed(self._conversation_history):
+            if item.get("role") == "assistant" and item.get("content") == raw_reply:
+                item["content"] = clean_reply
+                self.persist("conversation_history", self._conversation_history)
+                return
+
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     async def on_start(self) -> None:
@@ -206,6 +310,79 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 )
                 return
             await self._handle_task(msg)
+
+    async def _handle_task(self, msg: Message) -> None:
+        """Route interface tasks through the full orchestrator without blocking replies."""
+        payload = msg.payload if isinstance(msg.payload, dict) else {}
+        if payload.get("_via_interface"):
+            task = asyncio.create_task(self._handle_interface_request(payload, msg))
+            self._tasks.append(task)
+            task.add_done_callback(
+                lambda done: self._tasks.remove(done) if done in self._tasks else None
+            )
+            return
+        await super()._handle_task(msg)
+
+    async def _handle_interface_request(self, payload: dict[str, Any], msg: Message) -> None:
+        """Process one interface turn and reply on its correlation address."""
+        text = str(
+            payload.get("text")
+            or payload.get("message")
+            or payload.get("query")
+            or payload.get("task")
+            or ""
+        ).strip()
+        task_id = payload.get("_task_id")
+        reply_to = payload.get("_reply_to") or msg.reply_to or msg.sender_id
+        history = []
+        raw_history = payload.get("_interface_history")
+        if isinstance(raw_history, list):
+            for item in raw_history[-4:]:
+                if not isinstance(item, dict):
+                    continue
+                transcript = str(item.get("transcript") or "").strip()
+                response = str(item.get("response") or "").strip()
+                if transcript or response:
+                    history.append({"transcript": transcript[:1000], "response": response[:2000]})
+        source_value = str(payload.get("_interface_source") or "")
+        interface_context = self._sanitize_interface_context(
+            payload.get("_interface_context"), source_value
+        )
+        source_token = _INTERFACE_SOURCE.set(source_value)
+        history_token = _INTERFACE_HISTORY.set(tuple(history))
+        voice_token = _INTERFACE_VOICE.set(bool(payload.get("_interface_voice")))
+        context_token = _INTERFACE_CONTEXT.set(interface_context)
+        source = self._current_interface_source()
+        logger.info("[%s] interface request from %s: %r", self.name, source or "unknown", text[:80])
+        try:
+            try:
+                reply = await self.process_user_input(text) if text else ""
+                clean_reply, interface_actions = self._extract_interface_actions(reply)
+                if interface_actions and not clean_reply:
+                    clean_reply = "Okay."
+                self._replace_latest_interface_reply(reply, clean_reply)
+                reply = clean_reply
+            except Exception as exc:
+                logger.warning("[%s] interface request failed: %s", self.name, exc)
+                reply = f"[error] {exc}"
+                interface_actions = []
+        finally:
+            _INTERFACE_CONTEXT.reset(context_token)
+            _INTERFACE_VOICE.reset(voice_token)
+            _INTERFACE_HISTORY.reset(history_token)
+            _INTERFACE_SOURCE.reset(source_token)
+        if reply_to:
+            result: dict[str, Any] = {
+                "text": reply,
+                "result": reply,
+                "task": text,
+                "agent": "main",
+                "interface_actions": interface_actions,
+                "interface_display_name": interface_context.get("display_name", source),
+            }
+            if task_id:
+                result["_task_id"] = task_id
+            await self.send(reply_to, MessageType.RESULT, result)
 
     # ── User input ─────────────────────────────────────────────────────────
 

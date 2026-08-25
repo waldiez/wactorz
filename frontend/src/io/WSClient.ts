@@ -16,7 +16,16 @@ import { emit } from "../events";
 import { MAIN_AGENT } from "../agents/naming";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
-export type ChatHandler = (content: string, from: string, timestampMs: number) => void;
+export type ChatHandler = (
+    content: string,
+    from: string,
+    timestampMs: number,
+    to: string,
+    source: string,
+    surface: string,
+    surfaceLabel: string,
+    brain: string,
+) => void;
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
 export type StreamEndHandler = (from: string) => void;
 /** A live `server_event` frame carrying a topic-addressed payload. */
@@ -325,7 +334,16 @@ export class WSClient {
         const ts = toMs(data["timestamp"]);
 
         if (data["type"] === "chat") {
-            this._onChat?.(asStr(data["content"]), from, ts);
+            this._onChat?.(
+                asStr(data["content"]),
+                from,
+                ts,
+                asStr(data["to"], "user"),
+                asStr(data["source"]),
+                asStr(data["surface"]),
+                asStr(data["surface_label"]),
+                asStr(data["brain"]),
+            );
         } else if (data["type"] === "stream_chunk") {
             this._onStreamChunk?.(asStr(data["content"]), from, ts);
         } else if (data["type"] === "stream_end") {

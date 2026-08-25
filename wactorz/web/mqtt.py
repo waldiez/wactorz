@@ -78,10 +78,18 @@ async def handle_message(topic: str, payload: str) -> None:
     if push:
         try:
             if runtime.db is not None and push.get("content"):
+                # A voice turn arrives as the user's own words (from="user"), so
+                # the role and the agent it belongs to come from opposite ends of
+                # the envelope; persisting it as "assistant" would replay the
+                # user's speech back as the agent's reply on reload.
+                role = "user" if push.get("from") == "user" else "assistant"
+                agent_name = (
+                    push.get("to", "agent") if role == "user" else push.get("from", "agent")
+                )
                 runtime.db.write_chat_log(
                     ts=push.get("timestamp", time.time()),
-                    agent_name=push.get("from", "agent"),
-                    role="assistant",
+                    agent_name=agent_name,
+                    role=role,
                     # Same treatment as the WS path: an agent can quote back
                     # something a user typed, and this row outlives the turn.
                     content=redact(push["content"]),

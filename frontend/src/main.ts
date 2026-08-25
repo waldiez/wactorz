@@ -188,14 +188,20 @@ function refreshLiveActors(): void {
 // ═══ 4 · Wiring — WebSocket transport (chat replies · state patches · log feed)
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
-ws.onChat((content, from, timestampMs) => {
-    toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
+ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain) => {
+    if (from !== "user") {
+        toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
+    }
     const msg = {
         id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
-        to: "user",
+        to,
         content,
         timestampMs,
+        ...(source ? { source } : {}),
+        ...(surface ? { surface } : {}),
+        ...(surfaceLabel ? { surfaceLabel } : {}),
+        ...(brain ? { brain } : {}),
     };
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(from, "user");

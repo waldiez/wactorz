@@ -442,7 +442,9 @@ class Supervisor:
         # The watch loop skips retired specs, so this also stops the same
         # critical message repeating on every poll.
         spec.retired = True
-        spec.actor = None
+        # _stop_actor clears spec.actor; dropping the reference without stopping
+        # the actor first leaves its tasks running with nothing left to stop them.
+        await self._stop_actor(name, spec)
         logger.critical("[Supervisor] Retiring '%s': %s. Manual intervention required.", name, why)
         await self._notify_main(
             f"🚨 **{name}** has crashed {spec.max_restarts} times and the Supervisor has given up. "

@@ -216,6 +216,7 @@ describe("main.ts bootstrap", () => {
     it("drives the WebSocket handlers", () => {
         wsHandler("serverEvent")("agents/a/heartbeat", { cpu: 1 }); // forwarded to router.route
         wsHandler("chat")("hi", "A", 1);
+        wsHandler("chat")("heard speech", "user", 2, "reachy-mini");
         wsHandler("statePatch")(
             [{ agent_id: "a", name: "A", state: "running" }, { agent_id: "" }, { agent_id: "del" }],
             "delX",

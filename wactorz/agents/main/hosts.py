@@ -132,6 +132,10 @@ class DelegationHost(Protocol):
 
     async def _resolve_or_spawn(self, agent_name: str) -> tuple[Any, bool]: ...
 
+    def _current_interface_source(self) -> str: ...
+
+    def _is_interface_source(self, agent_name: str) -> bool: ...
+
 
 class NodeHost(ListenerHost, Protocol):
     """What the node collaborator needs beyond a connection.

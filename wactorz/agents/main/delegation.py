@@ -326,6 +326,16 @@ class DelegationManager:
             if agent_name == self.host.name:
                 response = response.replace(m.group(0), "")
                 continue
+            if self.host._is_interface_source(agent_name):
+                marker = f"[interface loop prevented: {self.host._current_interface_source()}]"
+                logger.warning(
+                    "[%s] Refusing to delegate an interface request back to %s",
+                    self.host.name,
+                    self.host._current_interface_source(),
+                )
+                results.append(marker)
+                response = response.replace(m.group(0), marker)
+                continue
 
             if isinstance(cfg.get("payload"), dict):
                 payload = cfg["payload"]
@@ -428,6 +438,15 @@ class DelegationManager:
 
         replacements: list[tuple[str, str]] = []
         for full_match, agent_name, payload, is_bare in delegations:
+            if self.host._is_interface_source(agent_name):
+                source = self.host._current_interface_source()
+                logger.warning(
+                    "[%s] Refusing to delegate an interface request back to %s",
+                    self.host.name,
+                    source,
+                )
+                replacements.append((full_match, f"[interface loop prevented: {source}]"))
+                continue
             target, spawnable = await self.host._resolve_or_spawn(agent_name)
             if target:
                 replacements.append((full_match, await self._run_delegation(target.name, payload)))

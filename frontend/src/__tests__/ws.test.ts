@@ -126,9 +126,19 @@ describe("WSClient", () => {
                 content: "Hello!",
                 from: "picam",
                 timestamp: 1_700_000_000,
+                source: "voice",
             }),
         });
-        expect(chatSpy).toHaveBeenCalledWith("Hello!", "picam", 1_700_000_000_000);
+        expect(chatSpy).toHaveBeenCalledWith(
+            "Hello!",
+            "picam",
+            1_700_000_000_000,
+            "user",
+            "voice",
+            "",
+            "",
+            "",
+        );
     });
 
     it("converts ms timestamp correctly in chat", () => {
@@ -589,6 +599,22 @@ describe("WSClient", () => {
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "chat", from: "agent" }) });
         expect(spy.mock.calls[0]![0]).toBe("");
+    });
+
+    it("forwards a voice user's chat target", () => {
+        const c = new WSClient();
+        const spy = vi.fn();
+        c.onChat(spy);
+        c.connect("ws://localhost/ws");
+        ws().emit("message", {
+            data: JSON.stringify({
+                type: "chat",
+                from: "user",
+                to: "reachy-mini",
+                content: "turn on the light",
+            }),
+        });
+        expect(spy.mock.calls[0]![3]).toBe("reachy-mini");
     });
 
     it("stream_chunk with no content uses empty string", () => {

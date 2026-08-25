@@ -145,13 +145,19 @@ function buildMsgBubble(msg: ChatMessage, isUser: boolean): HTMLElement {
 /** Build a detached chat message row (user vs agent styling, optional time). */
 export function buildChatMessageEl(msg: ChatMessage): HTMLElement {
     const isUser = msg.from === "user";
+    const surfaceLabel = msg.source === "voice" ? msg.surfaceLabel?.trim() || msg.surface?.trim() || "" : "";
 
     const row = document.createElement("div");
     row.className = `af-chat-msg af-chat-msg-${isUser ? "user" : "agent"}`;
 
     const from = document.createElement("div");
     from.className = "af-chat-msg-from";
-    from.textContent = isUser ? `you · ${timeLabel(msg.timestampMs)}` : msg.from;
+    if (isUser) {
+        const via = surfaceLabel ? ` · via ${surfaceLabel}` : "";
+        from.textContent = `you${via} · ${timeLabel(msg.timestampMs)}`;
+    } else {
+        from.textContent = surfaceLabel && msg.from === msg.surface ? surfaceLabel : msg.from;
+    }
 
     row.append(from, buildMsgBubble(msg, isUser));
     if (!isUser) {

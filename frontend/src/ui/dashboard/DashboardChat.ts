@@ -24,6 +24,7 @@ import {
     resolveSendTarget,
     sendBlockedReason,
     stripLeadingMention,
+    voiceThreadTarget,
 } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
 import { safeStorage } from "../../safeStorage";
@@ -608,13 +609,12 @@ export class DashboardChat {
                 msg.from === "io-gateway" || msg.from === "system"
                     ? { ...msg, to: this._lastSentTarget }
                     : msg;
-            this.chatMessages.push(stored);
-            if (this.chatMessages.length > 500) {
-                this.chatMessages.shift();
-            }
+            this.chatMessages = [...this.chatMessages, stored].slice(-500);
+            const voiceTarget = voiceThreadTarget(stored, this.chatTarget, [...this.host.agents.values()]);
+            this.chatTarget = voiceTarget ?? this.chatTarget;
+            this._lastSentTarget = voiceTarget ?? this._lastSentTarget;
             if (this.host.getView() === "chat" && this._msgBelongsHere(stored)) {
-                this._appendChatMsgEl(stored);
-                this._scrollThread();
+                this._showSentMessage(stored, Boolean(voiceTarget));
             }
         });
 

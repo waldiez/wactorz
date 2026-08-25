@@ -133,6 +133,14 @@ export interface ChatMessage {
     to: string; // agent name or "user"
     content: string;
     timestampMs: number;
+    /** Origin channel for special routing, such as an embodied voice turn. */
+    source?: string;
+    /** Agent surface carrying the turn while another agent may own reasoning. */
+    surface?: string;
+    /** Human-friendly name for the active interface surface. */
+    surfaceLabel?: string;
+    /** Internal reasoning agent, retained only as diagnostic metadata. */
+    brain?: string;
     /** Files attached to this turn, if any. */
     attachments?: Attachment[];
 }

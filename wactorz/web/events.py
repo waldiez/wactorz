@@ -272,15 +272,30 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                 }
             )
         elif metric == "chat":
-            # User-facing message pushed by an agent via Actor.notify_user().
-            # Forward it to the chat panel as a live chat frame (in addition to
-            # the dashboard feed). The frame is carried under "_push_chat";
-            # mqtt_listener does the broadcast since parse_topic is synchronous.
+            # Usually an agent notification; voice agents may also publish the
+            # recognized user turn so it appears in the same dashboard thread.
             sender = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            recipient = "user"
             content = ""
+            timestamp = time.time()
+            source = ""
+            surface = ""
+            surface_label = ""
+            brain = ""
             if isinstance(data, dict):
                 content = (data.get("content") or data.get("text") or "").strip()
                 sender = data.get("from") or sender
+                recipient = data.get("to") or recipient
+                source = data.get("source") if isinstance(data.get("source"), str) else ""
+                surface = data.get("surface") if isinstance(data.get("surface"), str) else ""
+                surface_label = (
+                    data.get("surface_label") if isinstance(data.get("surface_label"), str) else ""
+                )
+                brain = data.get("brain") if isinstance(data.get("brain"), str) else ""
+                try:
+                    timestamp = float(data.get("timestamp") or timestamp)
+                except (TypeError, ValueError):
+                    timestamp = time.time()
             elif isinstance(data, str):
                 content = data.strip()
             if content:
@@ -289,8 +304,13 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                         "type": "chat",
                         "agent_id": agent_id,
                         "from": sender,
+                        "to": recipient,
                         "content": content,
-                        "timestamp": time.time(),
+                        "timestamp": timestamp,
+                        "source": source,
+                        "surface": surface,
+                        "surface_label": surface_label,
+                        "brain": brain,
                     }
                 )
                 return {
@@ -301,8 +321,13 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                     "_push_chat": {
                         "type": "chat",
                         "from": sender,
+                        "to": recipient,
                         "content": content,
-                        "timestamp": time.time(),
+                        "timestamp": timestamp,
+                        "source": source,
+                        "surface": surface,
+                        "surface_label": surface_label,
+                        "brain": brain,
                     },
                 }
             return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}

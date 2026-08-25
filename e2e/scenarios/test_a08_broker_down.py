@@ -77,6 +77,18 @@ def test_the_dashboard_path_lands_with_the_broker_stopped_too(
         interval=0.25,
     )
 
+    # Stopped here rather than at the top: the previous scenario's broker is
+    # restarted by the autouse fixture before this one begins, so without this
+    # the socket command below travelled with the broker up and the assertion
+    # held for a system that had never been tested. Resuming first with the
+    # broker up is deliberate - it leaves the socket pause as the only thing
+    # that happens while the broker is refusing connections.
+    broker.stop()
+    assert not broker.reachable(), (
+        "the broker is still reachable, so pausing over the socket proves nothing "
+        "about the path this scenario exists to check"
+    )
+
     app.rest.socket_command(spare_agent, "pause")
 
     waiting.until(

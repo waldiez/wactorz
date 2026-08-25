@@ -236,9 +236,17 @@ e2e-release: ## Run everything before a tag: core + release/ + demo/
 	$(E2E)
 
 e2e-rehearse: ## Headed, paced, fake model — for iterating on demo pacing
-	$(E2E) --profile rehearse
+	@# Narrowed like e2e-demo below, and for the pacing half of the same reason.
+	$(E2E)/scenarios/demo --profile rehearse
 
 e2e-demo: ## Headed, paced, real model — for the take you keep
+	@# The demo stories only. A profile says how to run, not what: left wide this
+	@# spent a real completion on all fifty scenarios and opened a browser per
+	@# scenario that takes one, so "the take you keep" was fourteen recordings
+	@# with windows appearing and closing between them. One story is one take.
+	$(E2E)/scenarios/demo --profile demo
+
+e2e-demo-all: ## Every scenario against a real model — deliberate, and it costs
 	$(E2E) --profile demo
 
 e2e-clean: ## Delete every e2e artefact (state, logs, videos, traces)

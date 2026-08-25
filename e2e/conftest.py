@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import profiles
 import pytest
-from harness import backend, broker, browser, node, probe
+from harness import backend, broker, browser, homeassistant, node, probe
 
 if TYPE_CHECKING:
     # Deferred at runtime for the same reason `harness.browser` defers it: this
@@ -160,9 +160,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                         )
                     )
                 )
-        if list(item.iter_markers(name="requires_ha")) and not (
-            os.getenv("HA_URL") and os.getenv("HA_TOKEN")
-        ):
+        if list(item.iter_markers(name="requires_ha")) and not homeassistant.configured():
             item.add_marker(
                 pytest.mark.skip(reason="needs a live Home Assistant: set HA_URL and HA_TOKEN")
             )

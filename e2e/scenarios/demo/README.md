@@ -17,6 +17,35 @@ better starting from nothing anyway.
 
 Recordings land in `e2e/out/videos/`. Share the file, not the directory.
 
+`make e2e-demo` runs this directory and nothing else. A profile says *how* to
+run, not what, so left wide it spent a real completion on every scenario in the
+suite and opened a browser for each one that takes a page — which made "the take
+you keep" fourteen clips with windows appearing between them. Each story holds
+one page across its own steps, so one story is one take, and two stories are two
+files rather than one with a seam in it. `make e2e-demo-all` is still there for
+running everything against a real model, which is a thing to decide rather than
+a default.
+
+## Two stories, and they want different instances
+
+`test_nursery_fan.py` names no entity and asks for an automation in the words a
+person would use. That is what makes it the story worth recording, and it is why
+it only works on a house that already has what it asks for: on an instance with
+no nursery and no fan, the model looks, finds neither, and says so — correct
+behaviour that reads as a broken demo.
+
+`test_invented_sensor.py` brings its own sensor. Home Assistant will hold a
+state for an entity nothing owns, so the scenario creates one, drives it, and
+deletes it again. It needs no device and no helper set up in advance, it touches
+nothing of yours, and it asserts on values odd enough that a model repeating one
+has read the instance rather than guessed. Run this one anywhere; run the other
+one where you meant to.
+
+**It never invents a switch, and that is deliberate.** An invented switch accepts
+`switch.turn_on` with a `200` and does not move, because nothing is behind it to
+do the moving — so a story asserting on one would pass while nothing happened.
+Readings in, and the reaction observed through the product.
+
 ## A demo against a live Home Assistant switches real things on
 
 The stories here are automations, and an automation that works is one that acts.

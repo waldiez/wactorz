@@ -73,9 +73,9 @@ TASK EXAMPLES (natural language also works via @mention)
 AGENT_CODE = r'''
 import asyncio
 import json
+import os
 import re
 import time
-
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 
@@ -267,7 +267,6 @@ async def _mqtt_subscriber(agent):
     except ImportError:
         await agent.log("aiomqtt not available — collector disabled")
         return
-    import os
 
     topics = agent.state["topics"]
     _last_exc = None
@@ -392,16 +391,25 @@ async def _prune_loop(agent):
 # STORAGE REPORT — published hourly on agents/{id}/storage, and on demand
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _human_bytes(n):
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024 or unit == "TB":
-            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
-        n /= 1024
+def _human_bytes(n: float) -> str:
+    """A byte count in the largest unit that keeps it under 1024.
+
+    `size` rather than reusing `n`, so the argument still means the argument
+    further down. The last unit is returned after the loop instead of being
+    special-cased inside it, which leaves every exit visible.
+    """
+    if n < 1024:
+        return f"{int(n)} B"
+    size = n / 1024
+    for unit in ("KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
 
 
 def _storage_report(agent):
     """Size of the SQLite database on disk (incl. WAL/SHM) + row counts."""
-    import os
     from wactorz.core.persistence import get_db
     db = get_db()
     if not db:

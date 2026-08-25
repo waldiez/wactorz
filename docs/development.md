@@ -26,7 +26,6 @@ cd wactorz
 pip install -e ".[all]"
 ```
 
-
 ---
 
 ## Optional dependencies
@@ -40,6 +39,7 @@ The `[all]` extra installs everything except the heavier stacks, `ml` and `visio
 | `wactorz[google]` | `google-genai` | `--llm gemini` |
 | `wactorz[discord]` | `discord.py` | `--interface discord` |
 | `wactorz[whatsapp]` | `twilio` | `--interface whatsapp` |
+| `wactorz[telegram]` | `python-telegram-bot` | `--interface telegram` |
 | `wactorz[mcp]` | `mcp` | MCP-compatible clients |
 | `wactorz[tts]` | `edge-tts` | text-to-speech support |
 | `wactorz[cron]` | `croniter` | cron-expression schedules |

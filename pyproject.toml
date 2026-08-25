@@ -230,6 +230,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]       # re-exports: imported here to expose the package's public API
 "tests/*" = ["B", "E402", "D"] # tests do odd things; docstrings not required in test code
+# The runner carries its own `--test` reporter, whose output is the point of it.
+# It also runs agent code it is sent and installs what that code imports, so
+# `exec` and the pip subprocess are the feature rather than an oversight; how far
+# either should be trusted is a design question, not one a lint rule settles.
+"wactorz/remote_runner.py" = ["T201", "S102", "S603", "S606"]
 
 [tool.ruff.lint.pydocstyle]
 # options: google, numpy, pep257

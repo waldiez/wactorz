@@ -44,6 +44,9 @@ BETA_WARNING = (
     "Use it for trials, not unattended production workflows."
 )
 
+_REACHY_MINI_SDK_VERSION = "1.8.4"
+_REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
+
 _IMPORT_NAME_MAP = {
     "scikit-learn": "sklearn",
     "stable-baselines3": "stable_baselines3",
@@ -693,16 +696,6 @@ class CatalogAgent(Actor):
             text = ""
 
         if text:
-            # Main and embodied interfaces send natural language here, not only
-            # the CLI-shaped ``spawn <name>`` form. Resolve the recipe from the
-            # whole sentence so "tell catalog to spawn the weather agent" does
-            # the requested work instead of silently degrading to ``list``.
-            if re.search(r"\b(?:spawn|start|launch|run)\b", text, re.IGNORECASE):
-                resolved = self._resolve_name(text)
-                if resolved:
-                    return await self._action_spawn(resolved, {})
-                return await self._action_spawn(text, {})
-
             parts = text.split(None, 1)
             cmd = parts[0].lower()
             arg = parts[1].strip() if len(parts) > 1 else ""

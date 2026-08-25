@@ -273,7 +273,7 @@ exclude_also = [
     "\\.\\.\\.",               # ellipsis / stub bodies
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 62
+fail_under = 64
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

@@ -6,8 +6,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Force the gated features ON for this file so the mic + paste paths (dead until
 // the server names a branch and says it takes uploads) are exercised. The gates
-// themselves are covered in feature-flags.test.ts and uploads-gate.test.ts.
-vi.mock("../io/SpeechToText", () => {
+// themselves are covered in ext/stt/mode.test.ts and uploads-gate.test.ts.
+vi.mock("../ext/stt", () => {
     class SpeechToText {
         static isSupported() {
             return true;
@@ -23,7 +23,7 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 
 import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
-import type { SpeechToText } from "../io/SpeechToText";
+import type { SpeechToText } from "../ext/stt";
 import { uploadFile } from "../ui/dashboard/uploads";
 import { toast } from "../ui/ToastManager";
 

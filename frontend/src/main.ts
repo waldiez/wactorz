@@ -32,6 +32,10 @@ import { createOutageTracker } from "./io/outage";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
+// Imported for its side effect: the extension registers its /api/config
+// entries at module load, and seedServerConfig() seeds only what is
+// registered by then. It has nothing to bootstrap, so there is no register().
+import "./ext/stt";
 import { seedServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";

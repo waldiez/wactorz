@@ -8,8 +8,8 @@
  * DOM construction — all behaviour is routed back through the `IobarDeps`.
  */
 import type { ChatInput } from "./chatInput";
-import type { SpeechToText } from "../../io/SpeechToText";
-import { micOffered } from "../../io/SpeechToText";
+import type { SpeechToText } from "../../ext/stt";
+import { micOffered } from "../../ext/stt";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile } from "./uploads";

@@ -3,7 +3,7 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { SpeechToText, sttMode } from "../io/SpeechToText";
+import { SpeechToText, sttMode } from "../../../ext/stt";
 
 describe("SpeechToText (branch & happy-dom defaults)", () => {
     it("reports a branch even with no server config seeded", () => {

@@ -3,50 +3,14 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Backend-backed speech-to-text.
+ * Microphone capture for the branches that record in the browser.
  *
- * Records microphone audio with MediaRecorder + getUserMedia (supported
- * wherever audio capture is allowed) and POSTs it to the server's STT endpoint,
- * so the actual recognition happens server-side.
+ * Recording is MediaRecorder + getUserMedia, which is available wherever audio
+ * capture is allowed at all. What it produces is converted to WAV before it is
+ * sent, because the recogniser reads PCM and the server carries no codec.
  */
 
-import { safeStorage } from "../safeStorage";
-
-/** Which speech-to-text branch the deployment offers. Mirrors `STT_MODES`. */
-export type SttMode = "off" | "browser" | "server" | "host";
-
-/** Where the seeded server capability is kept. See `config/serverConfig.ts`. */
-export const STT_KEY = "wactorz-stt-mode";
-
-/**
- * The branch this deployment offers.
- *
- * Answered by the server rather than by how the bundle was built: which
- * branches can work depends on the deployment, and one committed bundle is
- * served by all of them. An unrecognised value is treated as `off`, so a
- * browser that has not been taught a newer branch offers nothing rather than
- * offering something it cannot drive.
- *
- * Read through a function rather than exported as a const because the value
- * arrives with `/api/config`, after the modules that ask have loaded.
- */
-export function sttMode(): SttMode {
-    const stored = safeStorage.get(STT_KEY);
-    return stored === "browser" || stored === "server" || stored === "host" ? stored : "off";
-}
-
-/**
- * Whether the microphone button in the composer can be offered.
- *
- * Both branches this covers capture in the browser, so they need a browser that
- * can record. `host` is excluded rather than forgotten: the server owns the
- * microphone there, so it is driven by a control message rather than by this
- * button, and it is offered by the branch that implements it.
- */
-export function micOffered(): boolean {
-    const mode = sttMode();
-    return (mode === "browser" || mode === "server") && SpeechToText.isSupported();
-}
+import { toWav } from "./wav";
 
 export class SpeechToText {
     private recorder: MediaRecorder | null = null;
@@ -107,10 +71,14 @@ export class SpeechToText {
         return blob ? this.transcribe(blob) : "";
     }
 
-    /** POST recorded audio to the backend STT endpoint for transcription. */
+    /** POST recorded audio to the recognition endpoint and return the transcript. */
     async transcribe(blob: Blob): Promise<string> {
+        // Converted here rather than sent as recorded: the endpoint reads PCM,
+        // and decoding WebM server-side would put a codec between the feature
+        // and working at all.
+        const wav = await toWav(blob);
         const body = new FormData();
-        body.append("audio", blob, "speech.webm");
+        body.append("audio", wav, "speech.wav");
         const res = await fetch(`${this.apiBase}/api/stt`, { method: "POST", body });
         if (!res.ok) {
             throw new Error(`STT failed (${res.status})`);

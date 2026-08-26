@@ -4,16 +4,18 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { STT_KEY, sttMode, micOffered, SpeechToText } from "../io/SpeechToText";
-import { safeStorage } from "../safeStorage";
+import { STT_KEY, STT_AVAILABLE_KEY, sttMode, micOffered, SpeechToText } from "../../../ext/stt";
+import { safeStorage } from "../../../safeStorage";
 
 describe("the speech-to-text branch", () => {
     beforeEach(() => {
         safeStorage.remove(STT_KEY);
+        safeStorage.remove(STT_AVAILABLE_KEY);
     });
 
     afterEach(() => {
         safeStorage.remove(STT_KEY);
+        safeStorage.remove(STT_AVAILABLE_KEY);
         vi.restoreAllMocks();
     });
 
@@ -39,10 +41,12 @@ describe("the speech-to-text branch", () => {
 describe("whether the composer offers a microphone", () => {
     beforeEach(() => {
         safeStorage.remove(STT_KEY);
+        safeStorage.remove(STT_AVAILABLE_KEY);
     });
 
     afterEach(() => {
         safeStorage.remove(STT_KEY);
+        safeStorage.remove(STT_AVAILABLE_KEY);
         vi.restoreAllMocks();
     });
 
@@ -52,16 +56,37 @@ describe("whether the composer offers a microphone", () => {
         expect(micOffered()).toBe(false);
     });
 
-    it.each(["browser", "server"] as const)("does in %s when the browser can record", mode => {
+    it("does in browser, which needs no recogniser here", () => {
         vi.spyOn(SpeechToText, "isSupported").mockReturnValue(true);
-        safeStorage.set(STT_KEY, mode);
+        safeStorage.set(STT_KEY, "browser");
+
+        // The client transcribes for itself, so whether the server can reach a
+        // recogniser says nothing about whether this can work.
+        expect(micOffered()).toBe(true);
+    });
+
+    it("does in server when a recogniser is reachable", () => {
+        vi.spyOn(SpeechToText, "isSupported").mockReturnValue(true);
+        safeStorage.set(STT_KEY, "server");
+        safeStorage.set(STT_AVAILABLE_KEY, "1");
 
         expect(micOffered()).toBe(true);
     });
 
-    it.each(["browser", "server"] as const)("does not in %s when it cannot", mode => {
+    it("does not in server when the server has no recogniser", () => {
+        vi.spyOn(SpeechToText, "isSupported").mockReturnValue(true);
+        safeStorage.set(STT_KEY, "server");
+        safeStorage.set(STT_AVAILABLE_KEY, "0");
+
+        // Configured for recognition without the dependency installed: offering
+        // a button that answers 503 every time is worse than offering none.
+        expect(micOffered()).toBe(false);
+    });
+
+    it.each(["browser", "server"] as const)("does not in %s when it cannot record", mode => {
         vi.spyOn(SpeechToText, "isSupported").mockReturnValue(false);
         safeStorage.set(STT_KEY, mode);
+        safeStorage.set(STT_AVAILABLE_KEY, "1");
 
         expect(micOffered()).toBe(false);
     });

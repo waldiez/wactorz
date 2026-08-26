@@ -131,6 +131,10 @@ async def config_handler(request: web.Request) -> Response:
         # otherwise a deployment with uploads off still offers a drop zone that
         # can only fail, and one with uploads on hides a feature it has.
         "uploads": {"enabled": config.UPLOADS_ENABLED},
+        # Which speech-to-text branch is offered, for the same reason as uploads:
+        # a bundle cannot know, and the microphone must appear only where it can
+        # actually work. "off" means the browser shows no microphone at all.
+        "stt": {"mode": config.STT_MODE},
         # Whether this browser holds a session it could end, which is not the
         # same question as "is a key configured". Under Home Assistant ingress
         # the user was authenticated by HA and carries no session here, so a

@@ -152,6 +152,42 @@ UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", 
 #: so a file the UI accepts is not refused by the server.
 UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
 
+#: The speech-to-text branches, in the order they concede privacy.
+#:
+#: ``off``      no transcription; the browser hides the microphone.
+#: ``browser``  the client transcribes locally and sends only text.
+#: ``server``   the browser captures, the host transcribes.
+#: ``host``     the host captures from its own microphone and transcribes.
+#:
+#: ``server`` and ``host`` differ in who owns the microphone, which is what
+#: decides whether a secure context is needed: only browser capture calls
+#: ``getUserMedia``, so ``host`` is the branch that works over plain HTTP -- and
+#: the only one where the server hears the room.
+STT_MODES = ("off", "browser", "server", "host")
+
+
+def _stt_mode() -> str:
+    """The configured branch, or ``off`` when unset or unrecognised."""
+    value = _unquote(os.getenv("WACTORZ_STT", "") or "").lower()
+    if not value:
+        return "off"
+    if value not in STT_MODES:
+        # Named rather than ignored: a typo here shows up as a microphone that
+        # never appears, which looks like a broken feature rather than a setting.
+        warnings.warn(
+            f"WACTORZ_STT={value!r} is not one of {', '.join(STT_MODES)} — using 'off'",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return "off"
+    return value
+
+
+#: Which branch this deployment offers. The browser learns it from here rather
+#: than from how the bundle was built, so one wheel serves every deployment and
+#: the microphone is offered exactly where it can work.
+STT_MODE = _stt_mode()
+
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
 #: deployment with no Supervisor must never offer it. Inferring it from the peer's

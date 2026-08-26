@@ -1,3 +1,17 @@
+"""Runtime settings, read from the environment once at import.
+
+Two shapes, for one reason: an ``AppConfig`` instance carries the settings a
+caller wants as a group, and bare module constants carry the ones the web layer
+and extensions reach for individually. Both are values rather than lookups, so a
+setting takes effect when the process starts and not before.
+
+The ``.env`` file is loaded above all of them, and that position is load-bearing.
+Anything read further up the module sees only real environment variables, which
+leaves a file that is plainly obeyed elsewhere doing nothing for that one
+setting -- indistinguishable, from the outside, from a misspelled name. New
+settings go below the load. Real environment variables win over the file.
+"""
+
 import os
 import re
 import warnings
@@ -5,6 +19,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
+
+# Loaded before anything below reads the environment. Settings further down are
+# read at import, so a file loaded after them would reach only the ones built
+# later -- the dataclass would see it and the bare constants would not, which is
+# the sort of split nobody can guess at from a .env that looks obeyed.
+# Real environment variables still win: load_dotenv does not override them.
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file)
+else:
+    load_dotenv(find_dotenv())
 
 
 def _env_truthy(name: str) -> bool:
@@ -278,15 +303,20 @@ def _deploy_targets() -> tuple[DeployTarget, ...]:
     return tuple(targets)
 
 
-_env_file = Path(__file__).parent / ".env"
-if _env_file.exists():
-    load_dotenv(_env_file)
-else:
-    load_dotenv(find_dotenv())
-
-
 @dataclass(frozen=True)
 class AppConfig:
+    """The settings a caller wants as a group, resolved once into `CONFIG`.
+
+    Frozen because these describe the process rather than the moment: a caller
+    that reads `CONFIG.port` halfway through a run gets what the process started
+    with, and nothing can hand it something else. Anything that genuinely varies
+    at runtime belongs in state, not here.
+
+    Fields carry secrets -- API keys, broker and Home Assistant credentials -- so
+    an instance is never serialised whole to a caller. `/api/config` names the
+    handful of fields the browser needs and sends only those.
+    """
+
     interface: str
     port: int
     llm_provider: str

@@ -13,9 +13,11 @@ environment when called, so nothing has to be re-imported to vary it.
 """
 
 import warnings
+from pathlib import Path
 
 import pytest
 
+from wactorz import config
 from wactorz.config import _env_int, _env_truthy
 
 
@@ -91,3 +93,23 @@ def test_the_state_bridge_flag_is_wired_to_the_shared_parser() -> None:
     source = Path("wactorz/config.py").read_text(encoding="utf-8")
 
     assert 'ha_state_bridge_per_entity=_env_truthy("HA_STATE_BRIDGE_PER_ENTITY")' in source
+
+
+class TestTheFileIsLoadedFirst:
+    """Settings read above the `.env` load see only real environment variables.
+
+    The dataclass is built near the end of the module and the bare constants far
+    above it, so the load sits between them unless something keeps it first: a
+    file obeyed for one and ignored for the other, with nothing on the outside to
+    tell that apart from a misspelled name.
+    """
+
+    def test_no_setting_is_read_before_the_file_is_loaded(self) -> None:
+        source = Path(config.__file__).read_text(encoding="utf-8")
+        loaded_at = source.index("load_dotenv(")
+        read_at = min(
+            source.index(f"\n{name} = ")
+            for name in ("DEV_MODE", "UPLOADS_ENABLED", "UPLOAD_MAX_BYTES", "INGRESS_ENABLED")
+        )
+
+        assert loaded_at < read_at

@@ -8,13 +8,14 @@ merely because an API key happens to exist in the environment.
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import os
 import tempfile
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Protocol
 
 _DEFAULT_MODELS = {
@@ -31,6 +32,175 @@ _BACKEND_ALIASES = {
 }
 _LOCAL_MODELS: dict[tuple[str, str, str, str], Any] = {}
 _MODEL_LOCK = threading.Lock()
+_LOGGER = logging.getLogger(__name__)
+
+#: Compute types no CPU implements. A configuration written for a GPU box has
+#: to keep working on a laptop or a Raspberry Pi, so these are exchanged for an
+#: equivalent the CPU can run rather than raising.
+_GPU_ONLY_COMPUTE_TYPES = frozenset({"float16", "int8_float16", "bfloat16", "int8_bfloat16"})
+_CPU_COMPUTE_TYPE = "int8"
+#: Directory prefix Hugging Face gives a cached repository: ``models--<org>--<name>``.
+_HF_CACHE_MARKER = "models--"
+#: Substrings that mark a failure as "this machine cannot run CUDA" rather than
+#: a problem with the audio or the model. A machine can report a CUDA device and
+#: still lack the runtime libraries the device needs, and that gap only shows up
+#: once work is submitted, so the message is what identifies it.
+_CUDA_FAILURE_MARKERS = (
+    "cublas",
+    "cudnn",
+    "cuda",
+    "libcu",
+    "no gpu",
+    "gpu is not supported",
+)
+#: Set once CUDA has proven unusable here, so later turns go straight to the CPU
+#: instead of paying for the same failure on every utterance.
+_CUDA_DISABLED = False
+
+
+def _looks_like_path(value: str) -> bool:
+    """Say whether a model identifier names a location rather than a model.
+
+    A Hugging Face repository id is a bare name or one ``namespace/name`` pair.
+    Anything rooted, drive-qualified, home-relative, backslash-separated, or
+    deeper than one slash is a filesystem path someone typed.
+    """
+    candidate = PurePath(value)
+    return bool(
+        candidate.drive
+        or candidate.is_absolute()
+        or value.startswith((".", "~"))
+        or "\\" in value
+        or value.count("/") > 1
+    )
+
+
+def _repo_id_from_cache_path(path: Path) -> str | None:
+    """Recover the repository a Hugging Face cache directory was filled from."""
+    for part in path.parts:
+        if part.startswith(_HF_CACHE_MARKER):
+            segments = [segment for segment in part.split("--")[1:] if segment]
+            if segments:
+                return "/".join(segments)
+    return None
+
+
+def _resolve_model_source(model: str) -> str:
+    """Return a model identifier that can be loaded on *this* machine.
+
+    A configured path is used as it stands when it exists. When it does not —
+    a settings file carried over from another machine, another user account or
+    another operating system — a Hugging Face cache path still names the
+    repository it was filled from, so that name is used instead and the model is
+    found in this machine's own cache or downloaded. A path that names nothing
+    recoverable is reported with what to set instead, because guessing a
+    different model would transcribe at a quality nobody asked for.
+    """
+    candidate = model.strip()
+    if not candidate:
+        raise ValueError("STT model is empty; set REACHY_STT_MODEL to a model name or path")
+    if Path(candidate).expanduser().exists():
+        return str(Path(candidate).expanduser())
+    if not _looks_like_path(candidate):
+        return candidate
+    repo_id = _repo_id_from_cache_path(Path(candidate).expanduser())
+    if repo_id is None:
+        raise RuntimeError(
+            f"STT model path does not exist on this machine: {candidate!r}. "
+            "Set REACHY_STT_MODEL to a model name (base, small, large-v3-turbo), "
+            "a Hugging Face repository id, or a path that exists here."
+        )
+    _LOGGER.warning("STT model path %r does not exist here; loading %r instead", candidate, repo_id)
+    return repo_id
+
+
+def _cuda_is_usable() -> bool:
+    """Report whether CUDA is worth attempting for a local model."""
+    if _CUDA_DISABLED:
+        return False
+    try:
+        # Optional dependency: installed with faster-whisper, absent on a
+        # hosted-backend deployment that never loads a local model.
+        import ctranslate2  # pyright: ignore[reportMissingImports]
+
+        return int(ctranslate2.get_cuda_device_count()) > 0
+    except Exception:
+        # Any failure to ask the question at all — the runtime missing, the
+        # driver refusing — answers it: there is no CUDA to use here.
+        return False
+
+
+def _resolve_placement(device: str, compute_type: str) -> tuple[str, str]:
+    """Choose the device and compute type this machine can actually run.
+
+    ``auto`` follows the hardware. An explicit ``cuda`` is honoured when a CUDA
+    device is present and demoted with a warning when it is not, because a robot
+    that hears you on the CPU is better than one that cannot hear you at all.
+    """
+    resolved_device = (device or "auto").strip().lower() or "auto"
+    if resolved_device in ("gpu", "nvidia"):
+        resolved_device = "cuda"
+    if resolved_device != "cpu":
+        if _cuda_is_usable():
+            resolved_device = "cuda"
+        else:
+            if resolved_device == "cuda":
+                _LOGGER.warning("STT device 'cuda' is unavailable here; transcribing on the CPU")
+            resolved_device = "cpu"
+    resolved_compute = (compute_type or "default").strip() or "default"
+    if resolved_device == "cpu" and resolved_compute.lower() in _GPU_ONLY_COMPUTE_TYPES:
+        _LOGGER.info(
+            "STT compute type %r needs a GPU; using %r on the CPU",
+            resolved_compute,
+            _CPU_COMPUTE_TYPE,
+        )
+        resolved_compute = _CPU_COMPUTE_TYPE
+    return resolved_device, resolved_compute
+
+
+def _looks_like_cuda_failure(exc: BaseException) -> bool:
+    """Say whether a failure is CUDA being unusable rather than a bad request."""
+    message = f"{exc}".casefold()
+    return any(marker in message for marker in _CUDA_FAILURE_MARKERS)
+
+
+def _disable_cuda(exc: BaseException) -> None:
+    """Route every later local transcription to the CPU."""
+    global _CUDA_DISABLED
+    _CUDA_DISABLED = True
+    _LOGGER.warning("CUDA transcription failed (%s); falling back to the CPU", exc)
+
+
+def _decode(
+    whisper_model_cls: Any,
+    source: str,
+    device: str,
+    compute_type: str,
+    path: Path,
+    transcribe_kwargs: dict[str, Any],
+) -> tuple[list[Any], Any]:
+    """Load the model where it was placed and decode one clip there.
+
+    Segments are materialised here: ``transcribe`` returns a generator, so a
+    device that cannot do the work reports it while the list is being built, not
+    when the call returns.
+    """
+    model = _load_faster_whisper_model(whisper_model_cls, source, device, compute_type)
+    segments, info = model.transcribe(str(path), **transcribe_kwargs)
+    return list(segments), info
+
+
+def _load_faster_whisper_model(
+    whisper_model_cls: Any, source: str, device: str, compute_type: str
+) -> Any:
+    """Return a cached ``WhisperModel``, building it on first use."""
+    key = ("faster-whisper", source, device, compute_type)
+    with _MODEL_LOCK:
+        model = _LOCAL_MODELS.get(key)
+        if model is None:
+            model = whisper_model_cls(source, device=device, compute_type=compute_type)
+            _LOCAL_MODELS[key] = model
+        return model
 
 
 @dataclass(frozen=True)
@@ -138,16 +308,7 @@ class FasterWhisperBackend:
                 raise RuntimeError(
                     "faster-whisper is not installed; run: pip install faster-whisper"
                 ) from exc
-            key = ("faster-whisper", config.model, config.device, config.compute_type)
-            with _MODEL_LOCK:
-                model = _LOCAL_MODELS.get(key)
-                if model is None:
-                    model = WhisperModel(
-                        config.model,
-                        device=config.device,
-                        compute_type=config.compute_type,
-                    )
-                    _LOCAL_MODELS[key] = model
+            source = _resolve_model_source(config.model)
             path = _temporary_wav(wav_bytes)
             try:
                 transcribe_kwargs: dict[str, Any] = (
@@ -158,8 +319,23 @@ class FasterWhisperBackend:
                 )
                 if config.hotwords:
                     transcribe_kwargs["hotwords"] = config.hotwords
-                segments, info = model.transcribe(str(path), **transcribe_kwargs)
-                segment_list = list(segments)
+                device, compute_type = _resolve_placement(config.device, config.compute_type)
+                try:
+                    segment_list, info = _decode(
+                        WhisperModel, source, device, compute_type, path, transcribe_kwargs
+                    )
+                except Exception as exc:
+                    # A machine can advertise a CUDA device and still be missing
+                    # the libraries it needs, which only surfaces once decoding
+                    # starts. One retry on the CPU turns that into a slower
+                    # answer instead of a voice interface that never replies.
+                    if device == "cpu" or not _looks_like_cuda_failure(exc):
+                        raise
+                    _disable_cuda(exc)
+                    device, compute_type = _resolve_placement(config.device, config.compute_type)
+                    segment_list, info = _decode(
+                        WhisperModel, source, device, compute_type, path, transcribe_kwargs
+                    )
                 text = " ".join(str(segment.text).strip() for segment in segment_list).strip()
                 log_probs = [
                     float(segment.avg_logprob)

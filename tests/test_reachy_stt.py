@@ -4,6 +4,7 @@ import asyncio
 import os
 import types
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from wactorz.catalogue_agents import reachy_stt
@@ -133,6 +134,150 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertEqual(kwargs["file"], ("reachy.wav", b"RIFFmock", "audio/wav"))
         self.assertEqual(kwargs["model"], "whisper-1")
         self.assertEqual(kwargs["language"], "en")
+
+
+class ModelSourceTest(unittest.TestCase):
+    """A settings file has to survive being carried to another machine."""
+
+    def test_model_name_is_left_alone(self):
+        self.assertEqual(reachy_stt._resolve_model_source("large-v3-turbo"), "large-v3-turbo")
+
+    def test_repository_id_is_left_alone(self):
+        self.assertEqual(
+            reachy_stt._resolve_model_source("Systran/faster-whisper-base"),
+            "Systran/faster-whisper-base",
+        )
+
+    def test_existing_path_is_used_as_given(
+        self,
+    ):
+        with mock.patch.object(Path, "exists", return_value=True):
+            resolved = reachy_stt._resolve_model_source("/models/faster-whisper-base")
+        self.assertEqual(Path(resolved), Path("/models/faster-whisper-base"))
+
+    def test_missing_cache_path_falls_back_to_its_repository(self):
+        stale = (
+            "C:/Users/someone-else/.cache/huggingface/hub/"
+            "models--Infomaniak-AI--faster-whisper-large-v3-turbo/snapshots/d94d07e"
+        )
+        self.assertEqual(
+            reachy_stt._resolve_model_source(stale),
+            "Infomaniak-AI/faster-whisper-large-v3-turbo",
+        )
+
+    def test_missing_unrecoverable_path_names_what_to_set(self):
+        with self.assertRaisesRegex(RuntimeError, "REACHY_STT_MODEL"):
+            reachy_stt._resolve_model_source("/opt/models/my-own-whisper")
+
+    def test_empty_model_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "empty"):
+            reachy_stt._resolve_model_source("   ")
+
+
+class PlacementTest(unittest.TestCase):
+    """The same configuration has to run on a GPU box, a laptop and a Pi."""
+
+    def setUp(self):
+        self._restore = reachy_stt._CUDA_DISABLED
+        reachy_stt._CUDA_DISABLED = False
+
+    def tearDown(self):
+        reachy_stt._CUDA_DISABLED = self._restore
+
+    def test_auto_uses_cuda_when_it_is_usable(self):
+        with mock.patch.object(reachy_stt, "_cuda_is_usable", return_value=True):
+            self.assertEqual(reachy_stt._resolve_placement("auto", "float16"), ("cuda", "float16"))
+
+    def test_auto_falls_back_to_cpu_without_cuda(self):
+        with mock.patch.object(reachy_stt, "_cuda_is_usable", return_value=False):
+            self.assertEqual(reachy_stt._resolve_placement("auto", "default"), ("cpu", "default"))
+
+    def test_explicit_cuda_is_demoted_rather_than_raising(self):
+        with mock.patch.object(reachy_stt, "_cuda_is_usable", return_value=False):
+            device, compute_type = reachy_stt._resolve_placement("cuda", "float16")
+        self.assertEqual((device, compute_type), ("cpu", "int8"))
+
+    def test_cpu_is_never_promoted(self):
+        with mock.patch.object(reachy_stt, "_cuda_is_usable", return_value=True):
+            self.assertEqual(reachy_stt._resolve_placement("cpu", "int8"), ("cpu", "int8"))
+
+    def test_cuda_is_not_retried_once_it_has_failed(self):
+        reachy_stt._disable_cuda(RuntimeError("Library cublas64_12.dll is not found"))
+        self.assertFalse(reachy_stt._cuda_is_usable())
+
+    def test_missing_cuda_libraries_are_recognised(self):
+        self.assertTrue(
+            reachy_stt._looks_like_cuda_failure(
+                RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+            )
+        )
+        self.assertFalse(reachy_stt._looks_like_cuda_failure(RuntimeError("WAV payload is empty")))
+
+
+class CudaFallbackTest(unittest.TestCase):
+    """A GPU that reports itself but cannot decode must not silence the robot."""
+
+    def setUp(self):
+        self._restore = reachy_stt._CUDA_DISABLED
+        reachy_stt._CUDA_DISABLED = False
+
+    def tearDown(self):
+        reachy_stt._CUDA_DISABLED = self._restore
+        reachy_stt._LOCAL_MODELS.clear()
+
+    def test_transcription_retries_on_cpu_when_cuda_cannot_decode(self):
+        built = []
+
+        class Model:
+            def __init__(self, name, **kwargs):
+                self.device = kwargs["device"]
+                built.append((name, kwargs))
+
+            def transcribe(self, path, **kwargs):
+                if self.device == "cuda":
+
+                    def fail():
+                        raise RuntimeError("Library cublas64_12.dll is not found")
+                        yield  # pragma: no cover - generator marker
+
+                    return fail(), types.SimpleNamespace(language="en", language_probability=0.9)
+                return [
+                    types.SimpleNamespace(text=" cpu words ", avg_logprob=-0.1, no_speech_prob=0.05)
+                ], types.SimpleNamespace(language="en", language_probability=0.9)
+
+        module = types.SimpleNamespace(WhisperModel=Model)
+        config = reachy_stt.STTConfig("faster-whisper", "base", None, "cuda", "float16")
+        with (
+            mock.patch.dict("sys.modules", {"faster_whisper": module}),
+            mock.patch.object(reachy_stt, "_cuda_is_usable", side_effect=[True, False]),
+        ):
+            result = asyncio.run(reachy_stt.FasterWhisperBackend().transcribe(b"RIFFmock", config))
+
+        self.assertEqual(result.text, "cpu words")
+        self.assertEqual(
+            [kwargs["device"] for _name, kwargs in built],
+            ["cuda", "cpu"],
+        )
+        self.assertEqual(built[1][1]["compute_type"], "int8")
+        self.assertTrue(reachy_stt._CUDA_DISABLED)
+
+    def test_unrelated_failures_are_not_retried(self):
+        attempts = []
+
+        class Model:
+            def __init__(self, name, **kwargs):
+                attempts.append(kwargs["device"])
+
+            def transcribe(self, path, **kwargs):
+                raise ValueError("audio file is not a WAV")
+
+        module = types.SimpleNamespace(WhisperModel=Model)
+        config = reachy_stt.STTConfig("faster-whisper", "base", None, "cpu", "int8")
+        with mock.patch.dict("sys.modules", {"faster_whisper": module}):
+            with self.assertRaisesRegex(ValueError, "not a WAV"):
+                asyncio.run(reachy_stt.FasterWhisperBackend().transcribe(b"RIFFmock", config))
+
+        self.assertEqual(attempts, ["cpu"])
 
 
 if __name__ == "__main__":

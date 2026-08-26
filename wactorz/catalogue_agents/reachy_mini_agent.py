@@ -5769,9 +5769,23 @@ async def _conversation_stop(agent, payload=None):
 
 
 async def _conversation_turn_error(agent, session, turn, error, max_errors):
+    """Record one failed turn and say whether the session may continue.
+
+    Turn events reach the dashboard over MQTT, which a session that ends early
+    is not around to be read from. The log is what is left to explain why a
+    robot that was asked to listen stopped answering, so the reason goes there
+    too.
+    """
     session["consecutive_errors"] = int(session.get("consecutive_errors") or 0) + 1
+    keep_going = session["consecutive_errors"] < max_errors
+    await agent.log(
+        f"voice turn {int(session.get('turn_index') or 0)} failed "
+        f"({session['consecutive_errors']}/{max_errors}): {error}"
+        + ("" if keep_going else " — ending the conversation session"),
+        level="warning",
+    )
     await _conversation_publish(agent, session, "error", turn, ok=False, error=error)
-    return session["consecutive_errors"] < max_errors
+    return keep_going
 
 
 async def _conversation_loop(agent, session):
@@ -5811,6 +5825,10 @@ async def _conversation_loop(agent, session):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
+                await agent.log(
+                    f"voice capture failed; ending the conversation session: {exc}",
+                    level="warning",
+                )
                 await _conversation_publish(
                     agent, session, "error", turn, ok=False, error=exc, stop_reason="capture_failed"
                 )

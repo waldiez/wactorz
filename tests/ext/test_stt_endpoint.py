@@ -13,7 +13,7 @@ import wave
 from typing import Any
 
 import pytest
-from aiohttp import FormData
+from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 
 # Skipped rather than stubbed with a placeholder module: the cases below import
@@ -289,3 +289,32 @@ class TestWhatTheBrowserIsTold:
         # the second is installed.
         assert payload["stt"]["mode"] == "server"
         assert payload["stt"]["available"] is True
+
+
+class TestABranchNothingServes:
+    """A valid setting that offers nothing must say so rather than go quiet."""
+
+    @pytest.mark.parametrize("mode", ["browser", "host"])
+    def test_a_configured_branch_with_no_client_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, mode: str
+    ) -> None:
+        monkeypatch.setattr(config, "STT_MODE", mode)
+
+        with caplog.at_level("WARNING"):
+            stt.setup(web.Application())
+
+        # Silence here is indistinguishable from a broken install: no microphone
+        # appears, and nothing anywhere accounts for it.
+        assert mode in caplog.text
+        assert "server" in caplog.text
+
+    @pytest.mark.parametrize("mode", ["server", "off"])
+    def test_nothing_is_said_about_a_branch_that_behaves(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, mode: str
+    ) -> None:
+        monkeypatch.setattr(config, "STT_MODE", mode)
+
+        with caplog.at_level("WARNING"):
+            stt.setup(web.Application())
+
+        assert not caplog.text

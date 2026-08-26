@@ -57,15 +57,14 @@ export function sttAvailable(): boolean {
 /**
  * Whether the composer's microphone button can be offered.
  *
- * `browser` transcribes on the client and needs no recogniser here; `server`
- * sends the clip on and does. `host` is excluded rather than forgotten: the
- * server owns the microphone there, so it is driven by a control message rather
- * than by this button, and the branch that implements it supplies its own.
+ * `server` is the one branch this button drives: the recorder captures here and
+ * sends the clip to the recogniser, so it needs a browser that can record and a
+ * recogniser the server can reach. The other branches are named by config and
+ * supplied by whatever implements them -- `browser` transcribes on the client
+ * and has no transcriber yet, and `host` records server-side and is driven by a
+ * control message rather than by this button. Offering it for either would send
+ * audio somewhere the chosen branch says it should not go.
  */
 export function micOffered(): boolean {
-    const mode = sttMode();
-    if (mode === "server") {
-        return sttAvailable() && SpeechToText.isSupported();
-    }
-    return mode === "browser" && SpeechToText.isSupported();
+    return sttMode() === "server" && sttAvailable() && SpeechToText.isSupported();
 }

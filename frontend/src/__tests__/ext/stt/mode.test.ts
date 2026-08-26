@@ -56,13 +56,14 @@ describe("whether the composer offers a microphone", () => {
         expect(micOffered()).toBe(false);
     });
 
-    it("does in browser, which needs no recogniser here", () => {
+    it("does not in browser, which has no transcriber on the client", () => {
         vi.spyOn(SpeechToText, "isSupported").mockReturnValue(true);
         safeStorage.set(STT_KEY, "browser");
+        safeStorage.set(STT_AVAILABLE_KEY, "1");
 
-        // The client transcribes for itself, so whether the server can reach a
-        // recogniser says nothing about whether this can work.
-        expect(micOffered()).toBe(true);
+        // The button's only path sends the clip to the server, which is the one
+        // place this branch says the audio must not go.
+        expect(micOffered()).toBe(false);
     });
 
     it("does in server when a recogniser is reachable", () => {
@@ -83,9 +84,9 @@ describe("whether the composer offers a microphone", () => {
         expect(micOffered()).toBe(false);
     });
 
-    it.each(["browser", "server"] as const)("does not in %s when it cannot record", mode => {
+    it("does not in server when the browser cannot record", () => {
         vi.spyOn(SpeechToText, "isSupported").mockReturnValue(false);
-        safeStorage.set(STT_KEY, mode);
+        safeStorage.set(STT_KEY, "server");
         safeStorage.set(STT_AVAILABLE_KEY, "1");
 
         expect(micOffered()).toBe(false);

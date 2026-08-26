@@ -23,6 +23,8 @@ from typing import Any
 
 from aiohttp import BodyPartReader, web
 
+from ... import config
+
 logger = logging.getLogger(__name__)
 
 #: Samples per Wyoming audio message. Small enough that a long clip does not
@@ -83,9 +85,27 @@ def service_uri() -> str:
     return os.getenv("WACTORZ_STT_URI", "").strip() or DEFAULT_URI
 
 
+#: Branches a client can act on. The rest are accepted by configuration so a
+#: deployment can be set up ahead of them, and say so rather than going quiet.
+SERVED_MODES = ("server",)
+
+
 def setup(app: web.Application) -> None:
-    """Register the recognition route."""
+    """Register the recognition route, and account for a branch nothing serves."""
     app.router.add_post("/api/stt", stt_handler)
+
+    # Read through the module rather than bound at import, so the value is the
+    # one in force when the app is built.
+    mode = config.STT_MODE
+    if mode not in SERVED_MODES and mode != "off":
+        # Otherwise a valid setting produces an interface with no microphone and
+        # nothing anywhere saying why, which reads as a broken install.
+        logger.warning(
+            "[stt] WACTORZ_STT=%s is configured, but no microphone is offered for it yet. "
+            "Set WACTORZ_STT=%s for speech recognition.",
+            mode,
+            SERVED_MODES[0],
+        )
 
 
 def public_config(_app: web.Application) -> dict[str, Any]:

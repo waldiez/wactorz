@@ -153,6 +153,18 @@ class TestTalkingToTheService:
 
 
 class TestTheEndpoint:
+    async def test_the_transcript_is_trimmed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        padded = FakeClient(text=" Hello there, can you hear me? ")
+        monkeypatch.setattr(
+            stt, "AsyncClient", type("C", (), {"from_uri": staticmethod(lambda _u: padded)})
+        )
+
+        _, body = await post_audio()
+
+        # Recognisers conventionally lead with a space, and this is appended to
+        # whatever the composer already holds.
+        assert body["text"] == "Hello there, can you hear me?"
+
     async def test_a_clip_comes_back_as_text(self, service: FakeClient) -> None:
         status, body = await post_audio()
 

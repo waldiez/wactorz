@@ -159,7 +159,9 @@ async def _exchange(
         if event is None:
             raise RuntimeError("the recogniser closed the connection without transcribing")
         if Transcript.is_type(event.type):
-            return Transcript.from_event(event).text
+            # Stripped: recognisers conventionally lead with a space, and the
+            # caller appends this to whatever the composer already holds.
+            return Transcript.from_event(event).text.strip()
 
 
 async def transcribe(raw: bytes, uri: str | None = None) -> str:

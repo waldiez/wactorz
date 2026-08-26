@@ -9,7 +9,7 @@
  */
 import type { ChatInput } from "./chatInput";
 import type { SpeechToText } from "../../io/SpeechToText";
-import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
+import { WebSpeech } from "../../io/WebSpeech";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile } from "./uploads";
@@ -185,63 +185,65 @@ function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButton
     });
 }
 
-async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void> {
-    try {
-        await stt.start();
-        btn.classList.add("recording");
-        btn.title = "Stop & transcribe";
-        btn.setAttribute("aria-label", "Stop & transcribe");
-    } catch {
-        toast.show({ type: "alert-error", title: "Mic blocked", message: "Microphone permission denied." });
-    }
-}
+/** One recogniser for the bar, so a second click stops the first session. */
+const speech = new WebSpeech();
 
-async function finishMic(
-    stt: SpeechToText,
-    input: HTMLTextAreaElement,
-    btn: HTMLButtonElement,
-): Promise<void> {
+function idle(btn: HTMLButtonElement): void {
     btn.classList.remove("recording");
     btn.title = "Voice input";
     btn.setAttribute("aria-label", "Voice input");
-    try {
-        const text = await stt.stopAndTranscribe();
-        if (text) {
-            input.value = input.value ? `${input.value} ${text}` : text;
+}
+
+function beginListening(input: HTMLTextAreaElement, btn: HTMLButtonElement): void {
+    // What the composer held before speaking, so a revised hypothesis replaces
+    // the previous one instead of appending to it.
+    const base = input.value ? `${input.value} ` : "";
+    let committed = "";
+
+    speech.start(
+        (text, isFinal) => {
+            if (isFinal) {
+                committed += text;
+            }
+            input.value = base + committed + (isFinal ? "" : text);
             input.dispatchEvent(new Event("input"));
+        },
+        () => {
+            idle(btn);
             input.focus();
-        }
-    } catch (err) {
-        toast.show({ type: "alert-error", title: "Transcription failed", message: String(err) });
-    }
+        },
+        why => {
+            idle(btn);
+            if (why !== "aborted" && why !== "no-speech") {
+                toast.show({ type: "alert-error", title: "Voice input failed", message: why });
+            }
+        },
+    );
+
+    btn.classList.add("recording");
+    btn.title = "Stop listening";
+    btn.setAttribute("aria-label", "Stop listening");
 }
 
-async function toggleMic(
-    stt: SpeechToText,
-    input: HTMLTextAreaElement,
-    btn: HTMLButtonElement,
-): Promise<void> {
-    if (stt.recording) {
-        await finishMic(stt, input, btn);
-    } else {
-        await startMic(stt, btn);
-    }
-}
-
-/** Whether the voice mic button should be shown: backend enabled and the
- *  browser can actually capture audio. Otherwise it's simply not rendered. */
+/** Whether the mic button is shown: only that this browser has the API. */
 function micAvailable(): boolean {
-    return STT_ENABLED && Stt.isSupported();
+    return WebSpeech.isSupported();
 }
 
-/** Mic button: click to record, click again to transcribe into the input. */
-function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonElement {
+/** Mic button: click to listen, click again to stop. Text appears as spoken. */
+function buildMicBtn(_stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "af-mic-btn";
     btn.title = "Voice input";
     btn.setAttribute("aria-label", "Voice input");
     btn.innerHTML = iconMarkup("mic", 16);
-    btn.addEventListener("click", () => void toggleMic(stt, input, btn));
+    btn.addEventListener("click", () => {
+        if (speech.listening) {
+            speech.stop();
+        } else {
+            beginListening(input, btn);
+        }
+    });
     return btn;
 }
 

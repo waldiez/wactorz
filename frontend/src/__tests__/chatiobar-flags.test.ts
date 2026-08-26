@@ -7,14 +7,31 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Force the gated features ON for this file so the mic + paste paths (dead while
 // STT is off and the server has not said it takes uploads) are exercised. The
 // gates themselves are covered in feature-flags.test.ts and uploads-gate.test.ts.
-vi.mock("../io/SpeechToText", () => {
-    class SpeechToText {
+vi.mock("../io/WebSpeech", () => {
+    class WebSpeech {
         static isSupported() {
             return true;
         }
+        listening = false;
+        start(onText: (t: string, f: boolean) => void, onEnd: () => void) {
+            this.listening = true;
+            session = {
+                say: (text: string, isFinal: boolean) => onText(text, isFinal),
+                finish: () => {
+                    this.listening = false;
+                    onEnd();
+                },
+            };
+        }
+        stop() {
+            session?.finish();
+        }
     }
-    return { STT_ENABLED: true, SpeechToText };
+    return { WebSpeech };
 });
+
+/** Handle on the recogniser the bar built, so a test can speak through it. */
+let session: { say: (t: string, f: boolean) => void; finish: () => void } | null = null;
 vi.mock("../ui/dashboard/uploads", () => ({
     uploadsEnabled: () => true,
     uploadFile: vi.fn(async () => ({ id: "att-1" })),
@@ -25,7 +42,6 @@ import { buildIobar, type IobarDeps } from "../ui/dashboard/chatIobar";
 import type { ChatInput } from "../ui/dashboard/chatInput";
 import type { SpeechToText } from "../io/SpeechToText";
 import { uploadFile } from "../ui/dashboard/uploads";
-import { toast } from "../ui/ToastManager";
 
 interface FakeStt {
     recording: boolean;
@@ -61,44 +77,63 @@ function mount(stt: FakeStt): HTMLElement {
     return bar;
 }
 
-describe("chatIobar with STT enabled — mic button", () => {
+describe("chatIobar — the microphone", () => {
     beforeEach(() => {
+        document.body.innerHTML = "";
+        // The bar keeps one recogniser for the module, so a case that leaves it
+        // listening would make the next case's click stop rather than start.
+        session?.finish();
+        session = null;
         document.body.innerHTML = "";
         vi.clearAllMocks();
     });
 
-    it("renders the mic button when STT is enabled and supported", () => {
+    it("renders the button where the browser has the API", () => {
         expect(mount(makeStt()).querySelector(".af-mic-btn")).not.toBeNull();
     });
 
-    it("starts recording on first click", async () => {
-        const stt = makeStt();
-        const btn = mount(stt).querySelector<HTMLButtonElement>(".af-mic-btn")!;
-        btn.click();
-        await vi.waitFor(() => expect(stt.start).toHaveBeenCalled());
-        expect(btn.classList.contains("recording")).toBe(true);
+    it("shows a hypothesis while it is still being spoken", () => {
+        const bar = mount(makeStt());
+        const input = bar.querySelector("textarea") as HTMLTextAreaElement;
+        (bar.querySelector(".af-mic-btn") as HTMLButtonElement).click();
+
+        session?.say("hello th", false);
+
+        // The point of this path: text appears without waiting for the end.
+        expect(input.value).toBe("hello th");
     });
 
-    it("transcribes into the input on the second click", async () => {
-        const stt = makeStt();
-        const bar = mount(stt);
-        const btn = bar.querySelector<HTMLButtonElement>(".af-mic-btn")!;
-        const input = bar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
-        stt.recording = true; // pretend we're mid-recording
-        btn.click();
-        await vi.waitFor(() => expect(stt.stopAndTranscribe).toHaveBeenCalled());
+    it("replaces a hypothesis rather than appending to it", () => {
+        const bar = mount(makeStt());
+        const input = bar.querySelector("textarea") as HTMLTextAreaElement;
+        (bar.querySelector(".af-mic-btn") as HTMLButtonElement).click();
+
+        session?.say("hello th", false);
+        session?.say("hello there", false);
+
         expect(input.value).toBe("hello there");
-        expect(btn.classList.contains("recording")).toBe(false);
     });
 
-    it("toasts when mic permission is denied", async () => {
-        const stt = makeStt();
-        stt.start.mockRejectedValueOnce(new Error("denied"));
-        const btn = mount(stt).querySelector<HTMLButtonElement>(".af-mic-btn")!;
+    it("keeps what was already typed", () => {
+        const bar = mount(makeStt());
+        const input = bar.querySelector("textarea") as HTMLTextAreaElement;
+        input.value = "note:";
+        (bar.querySelector(".af-mic-btn") as HTMLButtonElement).click();
+
+        session?.say("hello", true);
+
+        expect(input.value).toBe("note: hello");
+    });
+
+    it("stops listening on a second click", () => {
+        const bar = mount(makeStt());
+        const btn = bar.querySelector(".af-mic-btn") as HTMLButtonElement;
         btn.click();
-        await vi.waitFor(() =>
-            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
-        );
+        expect(btn.classList.contains("recording")).toBe(true);
+
+        btn.click();
+
+        expect(btn.classList.contains("recording")).toBe(false);
     });
 });
 

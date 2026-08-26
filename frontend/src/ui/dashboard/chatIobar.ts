@@ -9,7 +9,7 @@
  */
 import type { ChatInput } from "./chatInput";
 import type { SpeechToText } from "../../io/SpeechToText";
-import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
+import { micOffered } from "../../io/SpeechToText";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile } from "./uploads";
@@ -228,12 +228,6 @@ async function toggleMic(
     }
 }
 
-/** Whether the voice mic button should be shown: backend enabled and the
- *  browser can actually capture audio. Otherwise it's simply not rendered. */
-function micAvailable(): boolean {
-    return STT_ENABLED && Stt.isSupported();
-}
-
 /** Mic button: click to record, click again to transcribe into the input. */
 function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonElement {
     const btn = document.createElement("button");
@@ -310,7 +304,7 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
 
     const { inputWrap, input, mentionPanel } = buildInputArea(deps, select);
     bar.append(select, inputWrap);
-    if (micAvailable()) {
+    if (micOffered()) {
         bar.appendChild(buildMicBtn(deps.stt, input));
     }
     const sendBtn = buildSendBtn(deps, input, mentionPanel);

@@ -3,11 +3,11 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { SpeechToText, STT_ENABLED } from "../io/SpeechToText";
+import { SpeechToText, sttMode } from "../io/SpeechToText";
 
-describe("SpeechToText (feature flags & happy-dom defaults)", () => {
-    it("exposes the STT_ENABLED feature constant as a boolean", () => {
-        expect(typeof STT_ENABLED).toBe("boolean");
+describe("SpeechToText (branch & happy-dom defaults)", () => {
+    it("reports a branch even with no server config seeded", () => {
+        expect(sttMode()).toBe("off");
     });
 
     it("reports unsupported when MediaRecorder/getUserMedia are absent (happy-dom)", () => {

@@ -22,6 +22,7 @@
 import { safeStorage } from "../safeStorage";
 import { SIGN_OUT_KEY } from "../ui/dashboard/signOut";
 import { UPLOADS_KEY } from "../ui/dashboard/uploads";
+import { STT_KEY } from "../io/SpeechToText";
 
 /** Seed a single key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {
@@ -67,6 +68,11 @@ registerConfigEntry(SIGN_OUT_KEY, c =>
 registerConfigEntry(UPLOADS_KEY, c =>
     (c.uploads as Record<string, unknown> | undefined)?.enabled ? "1" : "0",
 );
+// Core entry — which speech-to-text branch the deployment offers. A mode string
+// rather than a flag: the branches differ in who owns the microphone, and the
+// browser needs to know which, not merely whether. Always non-empty, so it does
+// not need the "1"/"0" treatment the flags above use to avoid a stale value.
+registerConfigEntry(STT_KEY, c => (c.stt as Record<string, unknown> | undefined)?.mode as string | undefined);
 
 /** Fetch `/api/config` and seed every registered client-side key from it.
  *  Returns whether the HA URL changed (the caller uses this to refresh the

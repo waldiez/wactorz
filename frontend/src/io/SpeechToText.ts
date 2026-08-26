@@ -10,16 +10,43 @@
  * so the actual recognition happens server-side.
  */
 
+import { safeStorage } from "../safeStorage";
+
+/** Which speech-to-text branch the deployment offers. Mirrors `STT_MODES`. */
+export type SttMode = "off" | "browser" | "server" | "host";
+
+/** Where the seeded server capability is kept. See `config/serverConfig.ts`. */
+export const STT_KEY = "wactorz-stt-mode";
+
 /**
- * Whether the mic button is shown. Off by default, and `/api/stt` does not
- * exist yet — this is a switch for developing the feature, not a per-deploy
- * option. While off, the mic button is not rendered at all.
+ * The branch this deployment offers.
  *
- * Build-time for that reason alone. Once the endpoint lands this becomes a
- * question only the server can answer, and it should move to `/api/config`
- * beside `uploads.enabled` rather than stay in the bundle.
+ * Answered by the server rather than by how the bundle was built: which
+ * branches can work depends on the deployment, and one committed bundle is
+ * served by all of them. An unrecognised value is treated as `off`, so a
+ * browser that has not been taught a newer branch offers nothing rather than
+ * offering something it cannot drive.
+ *
+ * Read through a function rather than exported as a const because the value
+ * arrives with `/api/config`, after the modules that ask have loaded.
  */
-export const STT_ENABLED = import.meta.env["VITE_STT_ENABLED"] === "true";
+export function sttMode(): SttMode {
+    const stored = safeStorage.get(STT_KEY);
+    return stored === "browser" || stored === "server" || stored === "host" ? stored : "off";
+}
+
+/**
+ * Whether the microphone button in the composer can be offered.
+ *
+ * Both branches this covers capture in the browser, so they need a browser that
+ * can record. `host` is excluded rather than forgotten: the server owns the
+ * microphone there, so it is driven by a control message rather than by this
+ * button, and it is offered by the branch that implements it.
+ */
+export function micOffered(): boolean {
+    const mode = sttMode();
+    return (mode === "browser" || mode === "server") && SpeechToText.isSupported();
+}
 
 export class SpeechToText {
     private recorder: MediaRecorder | null = null;

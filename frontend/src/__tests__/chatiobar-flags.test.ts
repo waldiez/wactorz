@@ -4,16 +4,16 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Force the gated features ON for this file so the mic + paste paths (dead while
-// STT is off and the server has not said it takes uploads) are exercised. The
-// gates themselves are covered in feature-flags.test.ts and uploads-gate.test.ts.
+// Force the gated features ON for this file so the mic + paste paths (dead until
+// the server names a branch and says it takes uploads) are exercised. The gates
+// themselves are covered in feature-flags.test.ts and uploads-gate.test.ts.
 vi.mock("../io/SpeechToText", () => {
     class SpeechToText {
         static isSupported() {
             return true;
         }
     }
-    return { STT_ENABLED: true, SpeechToText };
+    return { micOffered: () => true, SpeechToText };
 });
 vi.mock("../ui/dashboard/uploads", () => ({
     uploadsEnabled: () => true,

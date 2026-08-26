@@ -49,9 +49,13 @@ def setUpModule():
     global _FAKE_REACHY_SDK
     try:
         __import__("reachy_mini")
-    except ModuleNotFoundError:
+    except ImportError:
+        # ImportError rather than ModuleNotFoundError: the SDK can be installed
+        # and still fail to import, because it pulls in bindings of its own that
+        # need not work on this interpreter. Only its metadata is used here, so
+        # an SDK that will not load is the same situation as an absent one.
         sdk = types.ModuleType("reachy_mini")
-        sdk.__version__ = "1.8.4"
+        sdk.__version__ = "1.8.4"  # pyright: ignore[reportAttributeAccessIssue]
         _FAKE_REACHY_SDK = sdk
         sys.modules["reachy_mini"] = sdk
 

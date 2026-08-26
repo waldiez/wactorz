@@ -150,12 +150,15 @@ async def transcribe(raw: bytes, uri: str | None = None) -> str:
     # Bounded separately: refusing to connect and answering slowly are different
     # failures, and a service loading a model deserves far longer than one that
     # is not listening at all.
-    await asyncio.wait_for(client.connect(), CONNECT_TIMEOUT)
     try:
+        await asyncio.wait_for(client.connect(), CONNECT_TIMEOUT)
         return await asyncio.wait_for(
             _exchange(client, frames, rate, width, channels), TRANSCRIBE_TIMEOUT
         )
     finally:
+        # Safe on every path, including one where the connection never opened:
+        # with no writer to close this does nothing, rather than raising over
+        # the error that brought us here.
         await client.disconnect()
 
 

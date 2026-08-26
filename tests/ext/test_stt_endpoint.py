@@ -245,6 +245,24 @@ class TestTheEndpoint:
         assert status == 502
         assert hanging.disconnected is True
 
+    async def test_a_connection_that_never_opens_is_still_cleaned_up(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class Stalling(FakeClient):
+            async def connect(self) -> None:
+                await asyncio.sleep(60)
+
+        monkeypatch.setattr(stt, "CONNECT_TIMEOUT", 0.05)
+        stalling = Stalling()
+        monkeypatch.setattr(
+            stt, "AsyncClient", type("C", (), {"from_uri": staticmethod(lambda _u: stalling)})
+        )
+
+        status, _ = await post_audio()
+
+        assert status == 502
+        assert stalling.disconnected is True
+
     async def test_without_the_dependency_it_says_so_rather_than_failing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

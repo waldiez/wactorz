@@ -55,6 +55,11 @@ mcp       = ["mcp>=1.0.0,<2"]
 tts       = [
     "edge-tts>=6.1.9",
 ]
+# Wyoming is the protocol for both ends of the voice loop -- Whisper for
+# recognition, Piper for synthesis -- so it belongs to neither alone.
+voice     = [
+    "wyoming>=1.10.0",
+]
 cron      = ["croniter>=2.0.0"]
 data      = ["pandas>=2.0.0"]
 vision    = ["opencv-python>=4.8.0"]
@@ -104,6 +109,7 @@ all = [
     "wactorz[whatsapp]",
     "wactorz[mcp]",
     "wactorz[tts]",
+    "wactorz[voice]",
     "wactorz[cron]",
     "wactorz[data]",
 ]

@@ -1,0 +1,227 @@
+"""STT extension — server-side speech-to-text via a Wyoming ASR service.
+
+Optional dependency: ``pip install wactorz[voice]`` (installs wyoming). If it is
+not installed the extension still loads -- the route answers 503 and
+``public_config()`` reports ``available: false``, so a deployment configured for
+a branch it cannot serve offers no microphone rather than one whose every
+recording fails.
+
+Wyoming is a network protocol, which is what makes the recogniser's location a
+setting rather than a deployment: the service named by ``WACTORZ_STT_URI`` may
+run beside this process, on the Home Assistant host, or on a machine bought for
+the purpose, and nothing here changes between those.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import logging
+import os
+import wave
+from typing import Any
+
+from aiohttp import BodyPartReader, web
+
+logger = logging.getLogger(__name__)
+
+#: Samples per Wyoming audio message. Small enough that a long clip does not
+#: arrive as one oversized frame, large enough not to spend the transfer on
+#: per-message overhead.
+CHUNK_BYTES = 4096
+
+
+class TooLarge(Exception):
+    """The clip outgrew the limit while being read."""
+
+
+#: Largest clip accepted, counted while reading rather than trusting a header.
+#: A minute of 16-bit 16 kHz mono is about 2 MB, so this bounds an utterance
+#: generously while still refusing a stream that never ends.
+MAX_AUDIO_BYTES = 10 * 1024 * 1024
+
+#: How long to wait for the recogniser to accept a connection. A service that
+#: is not there fails at once; this bounds one that accepts slowly.
+CONNECT_TIMEOUT = 10.0
+
+#: How long one clip may take end to end. Deliberately generous: Whisper on a CPU
+#: loads its model on first use and can take most of a minute to answer, and a
+#: limit that cuts off slow-but-healthy work only trades one failure for another.
+TRANSCRIBE_TIMEOUT = 120.0
+
+#: Where the recogniser listens. The default is the port Wyoming Whisper uses,
+#: on this host, which is what a Home Assistant add-on install already provides.
+DEFAULT_URI = "tcp://localhost:10300"
+
+
+class STTState:  # pylint: disable=too-few-public-methods
+    """Recognition capability, decided once at import and read-only after."""
+
+    def __init__(self) -> None:
+        self.available: bool = False
+
+
+_stt_state = STTState()
+
+try:  # optional dependency — the module must import without a recogniser installed
+    from wyoming.asr import Transcribe, Transcript
+    from wyoming.audio import AudioChunk, AudioStart, AudioStop
+    from wyoming.client import AsyncClient
+
+    _stt_state.available = True
+except ImportError:
+    pass
+
+
+def service_uri() -> str:
+    """The configured recogniser, or the local default.
+
+    Stripped and ``or``-ed rather than passed as a default: a default applies
+    only when the name is absent, and an empty value in a ``.env`` is a name
+    that is present.
+    """
+    return os.getenv("WACTORZ_STT_URI", "").strip() or DEFAULT_URI
+
+
+def setup(app: web.Application) -> None:
+    """Register the recognition route."""
+    app.router.add_post("/api/stt", stt_handler)
+
+
+def public_config(_app: web.Application) -> dict[str, Any]:
+    """Non-secret recognition config for the browser."""
+    # The URI is deliberately absent: the browser never speaks to the recogniser,
+    # and an address is a fact about the network this deployment sits on.
+    return {"available": _stt_state.available}
+
+
+def _pcm_from_wav(raw: bytes) -> tuple[bytes, int, int, int]:
+    """Frames, rate, sample width and channel count from a WAV clip.
+
+    WAV rather than what a browser records by default: decoding WebM or Ogg
+    needs a codec this process does not have, and requiring one would make a
+    system package the difference between the feature working and not. A caller
+    that has audio in another container converts before sending.
+    """
+    with wave.open(io.BytesIO(raw), "rb") as handle:
+        return (
+            handle.readframes(handle.getnframes()),
+            handle.getframerate(),
+            handle.getsampwidth(),
+            handle.getnchannels(),
+        )
+
+
+async def _exchange(
+    client: AsyncClient, frames: bytes, rate: int, width: int, channels: int
+) -> str:
+    """Drive one recognition exchange on a connected client.
+
+    Separate from `transcribe` so it can be handed to `wait_for` as a whole:
+    `asyncio.timeout` would read better but arrived in 3.11, and this package
+    still supports 3.10.
+    """
+    await client.write_event(Transcribe().event())
+    await client.write_event(AudioStart(rate=rate, width=width, channels=channels).event())
+    for begin in range(0, len(frames), CHUNK_BYTES):
+        await client.write_event(
+            AudioChunk(
+                rate=rate,
+                width=width,
+                channels=channels,
+                audio=frames[begin : begin + CHUNK_BYTES],
+            ).event()
+        )
+    await client.write_event(AudioStop().event())
+
+    while True:
+        event = await client.read_event()
+        if event is None:
+            raise RuntimeError("the recogniser closed the connection without transcribing")
+        if Transcript.is_type(event.type):
+            return Transcript.from_event(event).text
+
+
+async def transcribe(raw: bytes, uri: str | None = None) -> str:
+    """Send one clip to the recogniser and return what it heard."""
+    frames, rate, width, channels = _pcm_from_wav(raw)
+    client = AsyncClient.from_uri(uri or service_uri())
+
+    # Bounded separately: refusing to connect and answering slowly are different
+    # failures, and a service loading a model deserves far longer than one that
+    # is not listening at all.
+    await asyncio.wait_for(client.connect(), CONNECT_TIMEOUT)
+    try:
+        return await asyncio.wait_for(
+            _exchange(client, frames, rate, width, channels), TRANSCRIBE_TIMEOUT
+        )
+    finally:
+        await client.disconnect()
+
+
+async def _read_audio(request: web.Request) -> bytes:
+    """Read the uploaded clip, refusing one that outgrows the limit.
+
+    Read in chunks against a running total rather than in one call: the size a
+    request declares is not the size it sends, and the point of a limit is to
+    stop reading rather than to describe what was already read.
+    """
+    reader = await request.multipart()
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+        # A nested multipart reads back as a reader rather than a part, and it
+        # carries no bytes of its own to collect.
+        if not isinstance(part, BodyPartReader) or part.name != "audio":
+            continue
+        collected = bytearray()
+        while True:
+            chunk = await part.read_chunk()
+            if not chunk:
+                break
+            collected += chunk
+            if len(collected) > MAX_AUDIO_BYTES:
+                raise TooLarge
+        return bytes(collected)
+    raise LookupError("no audio part")
+
+
+async def stt_handler(request: web.Request) -> web.Response:
+    """POST /api/stt with an ``audio`` part — transcribe it.
+
+    Returns ``{"text": ...}``. 503 when wyoming is not installed, so a browser
+    can tell "this deployment does not recognise speech" from "it tried and
+    failed".
+    """
+    if not _stt_state.available:
+        return web.json_response(
+            {"error": "wyoming not installed — pip install 'wactorz[voice]'"}, status=503
+        )
+
+    # request.multipart() asserts rather than raising for a body that is not
+    # multipart at all, which would surface as a 500 for a caller error.
+    if not (request.content_type or "").startswith("multipart/"):
+        return web.json_response({"error": "expected a multipart body"}, status=415)
+
+    try:
+        raw = await _read_audio(request)
+    except TooLarge:
+        return web.json_response({"error": f"larger than {MAX_AUDIO_BYTES} bytes"}, status=413)
+    except LookupError:
+        return web.json_response({"error": "expected an audio part"}, status=400)
+
+    if not raw:
+        return web.json_response({"error": "the audio part was empty"}, status=400)
+
+    try:
+        text = await transcribe(raw)
+    except wave.Error:
+        return web.json_response({"error": "expected a WAV clip"}, status=415)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # The recogniser is a separate service that can be absent, starting, or
+        # broken, and none of those are this request's fault.
+        logger.warning("[stt] %s did not transcribe: %s", service_uri(), exc)
+        return web.json_response({"error": "the recogniser did not answer"}, status=502)
+
+    return web.json_response({"text": text})

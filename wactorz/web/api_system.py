@@ -144,8 +144,18 @@ async def config_handler(request: web.Request) -> Response:
         "ws_url": ws_url,
     }
     # Merge each extension's non-secret browser config (e.g. tts availability),
-    # namespaced by extension name.
-    payload.update(collect_public_config(request.app))
+    # namespaced by extension name. Merged into an existing key rather than
+    # replacing it: an extension named after something core already reports would
+    # otherwise delete core's fields on its way in, silently and only in the
+    # deployments that have it installed. Speech-to-text is exactly that case --
+    # which branch is offered is core's to answer, whether a recogniser is
+    # reachable is the extension's, and they are two halves of one question.
+    for key, value in collect_public_config(request.app).items():
+        existing = payload.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            existing.update(value)
+        else:
+            payload[key] = value
     return web.json_response(payload)
 
 

@@ -23,6 +23,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The dashboard can be told which kind of speech-to-text a deployment offers, and one of them
+  now works.** `WACTORZ_STT` names a branch -- `off`, `browser`, `server` or `host` -- and the
+  browser reads it from `/api/config` rather than from how the bundle was built, so one wheel
+  serves deployments that differ and the microphone appears only where it can work. The `server`
+  branch ships: `POST /api/stt` takes a clip and answers with what was heard, by way of the
+  Wyoming recogniser named by `WACTORZ_STT_URI` (`pip install 'wactorz[voice]'`, defaulting to a
+  Whisper service on this host). Because Wyoming is a network protocol, that recogniser may sit on
+  another machine entirely and nothing else changes. Clips are sent as WAV: decoding what a browser
+  records by default needs a codec this process does not carry, and requiring one would make a
+  system package the difference between the feature working and not. **If you were using
+  `VITE_STT_ENABLED`**, it is gone -- set `WACTORZ_STT` on the backend instead, and the interface
+  follows it.
+
 - **Reachy Mini v2 expands the opt-in experimental catalogue agent into an embodied voice
   interface.** It adds bounded camera and microphone capture, local or explicitly hosted STT,
   multi-turn VAD conversation, speech and interruption controls, sound localisation, health and

@@ -2049,7 +2049,10 @@ def _pending_look_closer(agent) -> bool:
 
 
 _REACHY_NAME_VARIANTS = (
-    r"(?:reachy|richie|ritchie|richy|reachie|rechi|"
+    # "ricci" and "richi" are what the large-v3-turbo model actually returns for
+    # "Reachy" on this setup - confirmed by round-tripping edge-tts speech back
+    # through the recogniser, not guessed from the shape of the other variants.
+    r"(?:reachy|richie|ritchie|richy|reachie|rechi|ricci|richi|"
     r"riti|rity|ritty|ritsi|ritsie|ritsy|ritzi|ritzie|ritzy|rizzi|rizzy|lizzy|lizzie|lizi|lissy)"
 )
 

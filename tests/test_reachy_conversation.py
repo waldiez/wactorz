@@ -715,7 +715,9 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("creation is disabled", result["result"])
 
     def test_reachy_name_is_repaired_without_naming_the_user(self):
-        for alias in ("Richie", "Riti", "Ritsy", "Ritzy", "Rizzi", "Lizzy"):
+        # Ricci is not a guess: it is what faster-whisper large-v3-turbo returns
+        # for spoken "Reachy" on the machine that drives the robot.
+        for alias in ("Richie", "Riti", "Ritsy", "Ritzy", "Rizzi", "Lizzy", "Ricci", "Richi"):
             with self.subTest(alias=alias):
                 self.assertEqual(
                     NS["_normalize_reachy_transcript"](f"Hey {alias}"),

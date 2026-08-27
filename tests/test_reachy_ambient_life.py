@@ -608,6 +608,27 @@ class TestThePresetsAreOrderedAndComplete:
     def test_alive_is_the_default(self) -> None:
         assert NS["_LIFE_DEFAULT_PRESET"] == "alive"
 
+    def test_an_unconfigured_deployment_gets_no_motion(self) -> None:
+        """The layer moves the robot without being asked, so it is opt-in.
+
+        `alive` is the default *mood*, which is not the same as being on: a
+        deployment that never chose this should not have to discover it and turn
+        it off, and the template and the catalogue page both say so.
+        """
+        source = recipe_source()
+        block = source[source.index('chosen = agent.recall("idle_preset")') :][:200]
+
+        assert 'if chosen else "off"' in block, (
+            "an unconfigured deployment now starts moving on its own after an upgrade"
+        )
+
+    def test_a_misspelt_preset_still_gets_motion(self) -> None:
+        """A typo in a preset name is a request for motion either way."""
+        agent = FakeAgent()
+
+        assert NS["_apply_life_preset"](agent, "livley") == "alive"
+        assert agent.state["life_enabled"] is True
+
     def test_alive_is_the_reference_tuning(self) -> None:
         """Every other preset is defined around it, so it must not drift."""
         alive = NS["_LIFE_PRESETS"]["alive"]
@@ -846,8 +867,6 @@ class TestThePhrasingsPeopleActuallyUse:
 
 def recipe_source() -> str:
     """The recipe text itself, for the few invariants that live in ordering."""
-    from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
-
     return AGENT_CODE
 
 

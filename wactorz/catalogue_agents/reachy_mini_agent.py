@@ -860,10 +860,13 @@ async def setup(agent):
     #   {"cmd": "life", "enabled": false}              (this run only)
     # A preset sets every dial; the individual settings below then override it,
     # so an existing .env that only names an amplitude keeps working unchanged.
-    _apply_life_preset(
-        agent,
-        _life_preset_name(agent.recall("idle_preset"), os.environ.get("REACHY_IDLE_PRESET")),
-    )
+    # Unconfigured means off. This layer streams targets continuously and moves
+    # the robot without being asked, so a deployment that never chose it should
+    # not have to discover it and turn it off. A configured name that is not
+    # recognised still gets the default mood rather than silence, because a typo
+    # in a preset name is a request for motion either way.
+    chosen = agent.recall("idle_preset") or os.environ.get("REACHY_IDLE_PRESET")
+    _apply_life_preset(agent, _life_preset_name(chosen) if chosen else "off")
     if agent.recall("idle_life") is not None or os.environ.get("REACHY_IDLE_LIFE") is not None:
         agent.state["life_enabled"] = _truthy(
             agent.recall("idle_life"), os.environ.get("REACHY_IDLE_LIFE")

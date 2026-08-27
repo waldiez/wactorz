@@ -343,7 +343,7 @@ independent settings, and nobody wants to reason about five settings with an
 audience already in front of the robot. A preset sets all of them at once:
 
 | Preset | What it looks like |
-|---|---|
+| --- | --- |
 | `off` | Completely still. Motors stay live and every command still works — this is stillness, not sleep. |
 | `calm` | Barely moving, and *slower* as well as smaller. Breathing that is only shallower reads as a robot turned down; breathing that is also slower reads as something at rest. |
 | `antennas` | Antennas alive, head and body held absolutely still. For a plinth where a sweeping head is a hazard, or when he should look like he is listening rather than performing. |
@@ -356,7 +356,7 @@ Set it whichever way is nearest to hand:
 {"cmd": "life", "preset": "showtime"}
 ```
 
-```
+```text
 REACHY_IDLE_PRESET=alive                        # .env, at boot
 custom/reachy/config {"idle_preset": "calm"}    # persists
 ```

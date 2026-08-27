@@ -567,9 +567,6 @@ class DynamicAgent(Actor):
         """Call process() on each tick until the agent stops or fails."""
         _llm_fix_attempted = False
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
-            if self.state == ActorState.PAUSED:
-                await asyncio.sleep(self.poll_interval)
-                continue
             try:
                 await asyncio.wait_for(
                     process(self._api),

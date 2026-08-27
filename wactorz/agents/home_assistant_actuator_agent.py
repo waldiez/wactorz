@@ -252,8 +252,6 @@ class HomeAssistantActuatorAgent(Actor):
                     async for message in client.messages:
                         if self.state in (ActorState.STOPPED, ActorState.FAILED):
                             break
-                        if self.state == ActorState.PAUSED:
-                            continue
                         try:
                             import json
 

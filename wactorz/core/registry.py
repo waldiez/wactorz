@@ -339,9 +339,8 @@ class Supervisor:
             # Should be running and is not: a respawn failed, or never ran.
             return "no running actor"
 
-        # STOPPED means a deliberate stop or delete; PAUSED means the user
-        # paused it. Neither is a crash.
-        if actor.state in (ActorState.STOPPED, ActorState.PAUSED):
+        # A deliberate stop or delete, which is not a crash.
+        if actor.state == ActorState.STOPPED:
             return None
 
         if actor.state == ActorState.FAILED:

@@ -50,6 +50,28 @@
   color: rgba(255, 255, 255, 0.6);
 }
 
+/* ── Attach button ────────────────────────────────────────────────────────── */
+.af-attach-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.af-attach-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
 /* ── Voice (STT) mic button ───────────────────────────────────────────────── */
 .af-mic-btn {
   flex-shrink: 0;

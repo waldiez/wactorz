@@ -17,6 +17,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from ...config import CONFIG
 from ...core.actor import MessageType
 from ..lookup import find_main_actor
 from ..prompts.planner_prompts import (
@@ -392,7 +393,12 @@ class PipelineMixin(_Host):
         return []
 
     async def _gather_notification_urls(self, task: str) -> str:
-        """Notification webhook URLs main has stored, plus any named in the task."""
+        """Where a notification may be sent, from the three places one can come from.
+
+        An address main has stored, one named in the task itself, and one set in
+        the environment. The first two are given to the model as they are; the
+        third is given by variable name only, so its value stays out of the prompt.
+        """
         # ── Fetch stored notification URLs from main ──────────────────────
         notification_urls: dict[str, Any] = {}
         if self._registry:
@@ -414,9 +420,24 @@ class PipelineMixin(_Host):
             elif "telegram" in url:
                 notification_urls["telegram"] = url
 
+        # Configured in the environment rather than told to an agent. The name is
+        # given to the model and the value is not: generated code reads it at run
+        # time, so the secret stays out of the prompt, out of the code that is
+        # written, and out of anything that persists either.
+        # A fallback, not an override: a URL stored deliberately or named in the
+        # task is the one that turn means, and a deployment-wide default that
+        # quietly replaced it would send the message somewhere else.
+        by_environment: dict[str, str] = {}
+        if CONFIG.discord_webhook_url and "discord" not in notification_urls:
+            by_environment["discord"] = "DISCORD_WEBHOOK_URL"
+
         notif_section = ""
-        if notification_urls:
+        if notification_urls or by_environment:
             lines = ["NOTIFICATION URLS (use these directly in code — do not use placeholders):"]
+            for svc, name in by_environment.items():
+                lines.append(
+                    f'  {svc}: read it with os.environ["{name}"] — the value is not shown here'
+                )
             for svc, url in notification_urls.items():
                 lines.append(f"  {svc}: {url}")
             notif_section = "\n".join(lines)

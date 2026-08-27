@@ -334,7 +334,7 @@ class TestRewriteAndFallThrough:
 class TestSubVerbFamilies:
     """`<command> <verb> <argument>` — the verb chooses the behaviour."""
 
-    @pytest.mark.parametrize("verb", ["stop", "delete", "pause", "remove"])
+    @pytest.mark.parametrize("verb", ["stop", "delete", "remove"])
     def test_the_agents_verbs_are_handled_without_the_model(self, verb: str) -> None:
         assert not went_to_the_model(f"/agents {verb} ghost")
 
@@ -389,7 +389,7 @@ class TestOrderIsSemantic:
     earlier one has to win.
     """
 
-    @pytest.mark.parametrize("verb", ["stop", "delete", "pause", "remove", "restart"])
+    @pytest.mark.parametrize("verb", ["stop", "delete", "remove", "restart"])
     def test_a_verb_is_never_read_as_a_search_term(self, verb: str) -> None:
         # The general listing matches any `/agents …`, so ahead of the verbs it
         # would report that no agent matches "stop" — having stopped nothing,
@@ -400,7 +400,7 @@ class TestOrderIsSemantic:
 
         assert not main.calls["capabilities"]
 
-    @pytest.mark.parametrize("verb", ["stop", "delete", "pause", "remove"])
+    @pytest.mark.parametrize("verb", ["stop", "delete", "remove"])
     def test_a_verb_with_no_agent_named_deletes_nothing(self, verb: str) -> None:
         # An unfinished sentence, not a request to act on an agent called "".
         # A command that accepts it answers that it deleted something.
@@ -411,7 +411,7 @@ class TestOrderIsSemantic:
         assert not main.calls["deleted"]
         assert "permanently deleted" not in answer
 
-    @pytest.mark.parametrize("command", ["/start", "/pause", "/resume"])
+    @pytest.mark.parametrize("command", ["/start"])
     def test_a_bare_lifecycle_verb_asks_for_an_agent(self, command: str) -> None:
         assert main_reply(command) == f"Usage: {command} <agent-name>"
 
@@ -432,22 +432,22 @@ class TestOrderIsSemantic:
 
 class TestABarePrefixReachesItsUsageHint:
     """A branch's own comment records this: the text is already stripped, so a
-    bare `/pause` never matched the prefix form and fell through to the model,
+    bare verb never matches the prefix form and would fall through to the model,
     leaving the usage hint unreachable. Both spellings are matched now.
     """
 
-    @pytest.mark.parametrize("command", ["/start", "/pause", "/resume"])
+    @pytest.mark.parametrize("command", ["/start"])
     def test_it_answers_with_usage_rather_than_asking_the_model(self, command: str) -> None:
         answer = reply(command)
 
         assert answer == f"Usage: {command} <agent-name>"
 
-    @pytest.mark.parametrize("command", ["/start", "/pause", "/resume"])
+    @pytest.mark.parametrize("command", ["/start"])
     def test_the_bare_form_does_not_reach_the_model(self, command: str) -> None:
         assert not went_to_the_model(command)
 
     def test_the_prefix_form_still_takes_its_argument(self) -> None:
-        assert "ghost" in reply("/pause ghost")
+        assert "ghost" in reply("/start ghost")
 
 
 class TestHowTheTextIsNormalised:
@@ -518,6 +518,6 @@ class TestNotificationsRideAlong:
         assert reply("/help", notification="[alert] disk full\n").startswith("[alert] disk full\n")
 
     def test_a_usage_hint_carries_the_prefix(self) -> None:
-        assert reply("/pause", notification="[alert] disk full\n") == (
-            "[alert] disk full\nUsage: /pause <agent-name>"
+        assert reply("/start", notification="[alert] disk full\n") == (
+            "[alert] disk full\nUsage: /start <agent-name>"
         )

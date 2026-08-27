@@ -5,7 +5,7 @@
 /** All shared type definitions for agents, messages, and MQTT events. */
 
 /** Lifecycle state of an agent. */
-export type AgentState = "initializing" | "running" | "paused" | "stopped" | { failed: string };
+export type AgentState = "initializing" | "running" | "stopped" | { failed: string };
 
 /** Static info about a registered agent. */
 export interface AgentInfo {
@@ -13,6 +13,7 @@ export interface AgentInfo {
     name: string;
     state: AgentState;
     protected: boolean;
+    essential?: boolean;
     /** Agent role / type hint (e.g. "main", "dynamic", "monitor", "ml"). */
     agentType?: string;
     /** ISO timestamp of last heartbeat. */
@@ -78,6 +79,7 @@ export interface StatusPayload {
     agentName: string;
     state: AgentState;
     protected?: boolean;
+    essential?: boolean;
     messagesReceived: number;
     messagesProcessed: number;
     messagesFailed: number;

@@ -25,8 +25,6 @@ HELP_LINES: tuple[str, ...] = (
     "  /delete <agent>         — stop an agent and remove it from the spawn registry",
     "  /stop <agent>           — stop an agent, keeping its state (reversible)",
     "  /start <agent>          — start a stopped agent back up",
-    "  /pause <agent>          — pause a local agent (remote not supported)",
-    "  /resume <agent>         — resume a paused local agent",
     "  @agent-name <msg>       — send a message directly to a named agent",
     "  @catalog list           — list available catalog recipes",
     "  @catalog spawn <n>      — spawn a catalog agent",

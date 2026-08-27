@@ -47,8 +47,8 @@ export function canDirectMessage(agent: { name: string; protected?: boolean }): 
  * choice; it simply cannot answer until it is running again, so the send says so
  * instead of quietly going somewhere else.
  *
- * `paused` and `initializing` pass: both are transient, and a false block during
- * normal startup would be worse than the problem this solves.
+ * `initializing` passes: it is transient, and a false block during normal
+ * startup would be worse than the problem this solves.
  */
 export function isReachable(agent: { state: AgentState }): boolean {
     return !(typeof agent.state === "object" || agent.state === "stopped");
@@ -74,8 +74,6 @@ export function stateColor(state: AgentState): string {
     switch (state as string) {
         case "running":
             return "#34d399";
-        case "paused":
-            return "#fbbf24";
         case "initializing":
             return "#60a5fa";
         case "stopped":

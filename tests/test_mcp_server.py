@@ -30,8 +30,6 @@ EXPECTED_TOOLS = {
     "list_agents",
     "list_capabilities",
     "stop_agent",
-    "pause_agent",
-    "resume_agent",
     "ha_list_entities",
     "ha_get_state",
     "ha_call_service",
@@ -95,7 +93,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             {
                 "id": "actor-456",
                 "name": "worker",
-                "state": "paused",
+                "state": "stopped",
                 "protected": False,
             },
         ]
@@ -103,7 +101,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             result = await mcp_server.list_agents()
 
         self.assertIn("[running   ] @main [protected]  (id: actor-123)", result)
-        self.assertIn("[paused    ] @worker  (id: actor-456)", result)
+        self.assertIn("[stopped   ] @worker  (id: actor-456)", result)
 
     async def test_list_agents_surfaces_backend_error(self):
         error = {"error": "Cannot connect to wactorz at http://localhost:8000. Is it running?"}

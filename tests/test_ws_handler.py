@@ -263,7 +263,7 @@ class TestHandleCommand:
 
     @pytest.mark.parametrize(
         ("command", "expected"),
-        [("stop", "stopped"), ("pause", "paused"), ("start", "running"), ("resume", "running")],
+        [("stop", "stopped"), ("start", "running")],
     )
     async def test_the_dashboard_is_told_the_new_state(
         self, commands: list[dict[str, Any]], command: str, expected: str
@@ -276,12 +276,13 @@ class TestHandleCommand:
     async def test_a_refused_command_leaves_the_view_alone(
         self, commands: list[dict[str, Any]]
     ) -> None:
-        # Reflecting a state the agent never entered would show it as paused
+        # Reflecting a state the agent never entered would show it as stopped
         # while it is still running, with nothing to correct that until the next
-        # heartbeat.
+        # heartbeat. The verb has to be one the allow-list accepts, or the refusal
+        # under test is never reached.
         ws.lifecycle.dispatch_command.return_value = False
 
-        await ws.handle_command({"command": "pause", "agent_id": "a1"})
+        await ws.handle_command({"command": "stop", "agent_id": "a1"})
 
         assert runtime.state["agents"]["a1"]["state"] == "running"
         assert not commands

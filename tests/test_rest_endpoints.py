@@ -149,7 +149,7 @@ class TestCommands:
         self, main_and_client: tuple[_Main, TestClient]
     ) -> None:
         main, client = main_and_client
-        resp = await client.post("/agents/command", json={"target": "a1", "command": "pause"})
+        resp = await client.post("/agents/command", json={"target": "a1", "command": "stop"})
         assert resp.status == 200
         assert main.commands[0][0] == "a1"
 
@@ -158,7 +158,7 @@ class TestCommands:
         assert resp.status == 400
 
     async def test_a_command_with_no_target_is_refused(self, client: TestClient) -> None:
-        assert (await client.post("/agents/command", json={"command": "pause"})).status == 400
+        assert (await client.post("/agents/command", json={"command": "stop"})).status == 400
 
 
 class TestActorRoutes:
@@ -191,13 +191,13 @@ class TestActorRoutes:
 class TestLifecycle:
     @pytest.mark.parametrize(
         ("verb", "command"),
-        [("start", "start"), ("stop", "stop"), ("pause", "pause"), ("resume", "resume")],
+        [("start", "start"), ("stop", "stop")],
     )
     async def test_a_verb_runs_the_actors_own_command(
         self, actor: _Actor, client: TestClient, verb: str, command: str
     ) -> None:
         # Routed through apply_command so supervision is released properly,
-        # rather than calling stop()/pause() behind the supervisor's back.
+        # rather than calling stop() behind the supervisor's back.
         resp = await client.post(f"/actors/a1/{verb}")
         assert resp.status == 200
         assert actor.commands == [command]
@@ -212,14 +212,21 @@ class TestLifecycle:
         assert actor.commands == ["stop"]
         assert main._registry.unregistered == []
 
-    async def test_a_protected_actor_is_refused(self, client: TestClient, actor: _Actor) -> None:
-        actor.protected = True
-        assert (await client.post("/actors/a1/pause")).status == 403
-
-    async def test_a_protected_actor_cannot_be_stopped(
+    async def test_a_protected_actor_can_still_be_stopped(
         self, client: TestClient, actor: _Actor
     ) -> None:
         actor.protected = True
+
+        # Protection is about not losing an agent that cannot be recreated, and
+        # stopping loses nothing: the card offers Start straight afterwards.
+        assert (await client.post("/actors/a1/stop")).status == 200
+        assert actor.commands == ["stop"]
+
+    async def test_an_essential_actor_cannot_be_stopped(
+        self, client: TestClient, actor: _Actor
+    ) -> None:
+        actor.essential = True
+
         assert (await client.post("/actors/a1/stop")).status == 403
         assert actor.commands == []
 
@@ -227,7 +234,7 @@ class TestLifecycle:
         self, client: TestClient, actor: _Actor
     ) -> None:
         actor.refuse = True
-        assert (await client.post("/actors/a1/pause")).status == 409
+        assert (await client.post("/actors/a1/stop")).status == 409
 
     async def test_delete_also_unregisters(
         self, main_and_client: tuple[_Main, TestClient], actor: _Actor
@@ -235,8 +242,24 @@ class TestLifecycle:
         main, client = main_and_client
         resp = await client.delete("/actors/a1")
         assert resp.status == 200
-        assert actor.commands == ["stop"]
+        # The delete verb, not stop: they are refused under different rules, and
+        # delete also clears the spawn-registry entry that a start would restore.
+        assert actor.commands == ["delete"]
         assert main._registry.unregistered == ["a1"]
+
+    async def test_a_protected_actor_cannot_be_deleted(
+        self, main_and_client: tuple[_Main, TestClient], actor: _Actor
+    ) -> None:
+        main, client = main_and_client
+        actor.protected = True
+
+        resp = await client.delete("/actors/a1")
+
+        # Asking the policy about a stop here would let a protected actor be
+        # deleted, since protection does not refuse a stop.
+        assert resp.status == 403
+        assert actor.commands == []
+        assert main._registry.unregistered == []
 
     async def test_deleting_an_unknown_actor_does_not_unregister(
         self, main_and_client: tuple[_Main, TestClient]
@@ -286,10 +309,10 @@ class TestMonitorStopRoute:
         assert (await resp.json()) == {"status": "stopping"}
         assert actor.commands == ["stop"]
 
-    async def test_a_protected_actor_is_refused_and_not_stopped(
+    async def test_an_essential_actor_is_refused_and_not_stopped(
         self, monitor_client: TestClient, actor: _Actor
     ) -> None:
-        actor.protected = True
+        actor.essential = True
         resp = await monitor_client.post("/api/actors/a1/stop")
         assert resp.status == 403
         assert actor.commands == []

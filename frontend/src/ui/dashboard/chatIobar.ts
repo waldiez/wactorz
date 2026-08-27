@@ -12,7 +12,7 @@ import type { SpeechToText } from "../../ext/stt";
 import { micOffered } from "../../ext/stt";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
-import { uploadsEnabled, uploadFile } from "./uploads";
+import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, listen } from "../../events";
 
 /** The composer's prompt: it names the recipient, or invites picking one. */
@@ -279,6 +279,11 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
         return;
     }
     e.preventDefault();
+    await attachFiles(files);
+}
+
+/** Upload files and offer each as a pending attachment, however it was chosen. */
+async function attachFiles(files: File[]): Promise<void> {
     const apiBase: string = window.__WACTORZ_INGRESS_PATH ?? "";
     for (const file of files) {
         try {
@@ -288,6 +293,38 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
             toast.show({ type: "alert-error", title: "Upload failed", message: String(err) });
         }
     }
+}
+
+/** Attach button: the same thing dropping a file does, for choosing one instead.
+ *  Dropping needs a window to drop onto and the file already in view, neither of
+ *  which holds on a phone or when it sits several folders deep. */
+function buildAttachBtn(): { button: HTMLButtonElement; picker: HTMLInputElement } {
+    const btn = document.createElement("button");
+    btn.className = "af-attach-btn";
+    btn.title = "Attach files";
+    btn.setAttribute("aria-label", "Attach files");
+    btn.innerHTML = iconMarkup("paperclip", 16);
+
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.multiple = true;
+    // ACCEPTED_MIME holds both prefixes ("image/") and exact types
+    // ("application/pdf"); only the former take a wildcard, and "application/pdf*"
+    // is not a token any browser accepts.
+    picker.accept = [
+        ...ACCEPTED_MIME.map(type => (type.endsWith("/") ? `${type}*` : type)),
+        ...ACCEPTED_EXT,
+    ].join(",");
+    picker.hidden = true;
+    picker.addEventListener("change", () => {
+        void attachFiles(Array.from(picker.files ?? []));
+        // Cleared so choosing the same file twice in a row still counts as a
+        // change; otherwise the second attempt looks like nothing happened.
+        picker.value = "";
+    });
+
+    btn.addEventListener("click", () => picker.click());
+    return { button: btn, picker };
 }
 
 /** Build the full chat input bar. */
@@ -306,6 +343,12 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     bar.append(select, inputWrap);
     if (micOffered()) {
         bar.appendChild(buildMicBtn(deps.stt, input));
+    }
+    if (uploadsEnabled()) {
+        const { button, picker } = buildAttachBtn();
+        // The picker is a sibling rather than a child: interactive content
+        // nested inside a button is invalid, hidden or not.
+        bar.append(button, picker);
     }
     const sendBtn = buildSendBtn(deps, input, mentionPanel);
     const stopBtn = buildStopBtn(deps);

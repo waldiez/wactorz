@@ -260,12 +260,10 @@ describe("sending to an agent that cannot answer", () => {
         expect(sent).not.toHaveBeenCalled();
     });
 
-    it("lets a paused or initializing agent through", () => {
-        // Both are transient. A false block here would be worse than the bug.
+    it("lets an initializing agent through", () => {
+        // Transient. A false block during normal startup would be worse than
+        // the problem the check solves.
         workerBecomes("initializing");
-        expect(send("hello").sent).toHaveBeenCalledTimes(1);
-
-        workerBecomes("paused");
         expect(send("hello").sent).toHaveBeenCalledTimes(1);
     });
 });

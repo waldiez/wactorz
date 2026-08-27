@@ -137,6 +137,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # chats, so on an idle system with a failing agent nothing empties them.
         self._pending_notifications: list[dict] = []
         self.protected = True
+        # Stopping main leaves chat unanswered, which is the surface a user
+        # would reach for to start it again.
+        self.essential = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
         self.manifests = ManifestRegistry(self)
         self.nodes = NodeManager(self, self.manifests)

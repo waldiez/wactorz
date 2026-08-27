@@ -190,9 +190,6 @@ input[type="color"]::-webkit-color-swatch {
 .af-dot-running {
   background: #34d399;
 }
-.af-dot-paused {
-  background: #fbbf24;
-}
 .af-dot-initializing {
   background: #60a5fa;
 }
@@ -206,9 +203,6 @@ input[type="color"]::-webkit-color-swatch {
 /* State label colours */
 .af-state-running {
   color: #34d399;
-}
-.af-state-paused {
-  color: #fbbf24;
 }
 .af-state-initializing {
   color: #60a5fa;
@@ -367,11 +361,6 @@ input[type="color"]::-webkit-color-swatch {
   color: #3dd68c;
   border: 1px solid #3dd68c44;
 }
-.cd-badge-paused {
-  background: #fb923c22;
-  color: #fb923c;
-  border: 1px solid #fb923c44;
-}
 .cd-badge-initializing {
   background: #60a5fa22;
   color: #60a5fa;
@@ -429,9 +418,6 @@ input[type="color"]::-webkit-color-swatch {
   background: #3dd68c;
   box-shadow: 0 0 6px #3dd68c88;
   animation: cd-dot-pulse 2.5s ease-in-out infinite;
-}
-.cd-dot-paused {
-  background: #fb923c;
 }
 .cd-dot-initializing {
   background: #60a5fa;

@@ -148,7 +148,7 @@
 <p>All agents are Python classes that extend <code>Actor</code>. They communicate exclusively via MQTT — no direct calls between agents at runtime.</p>
 <hr />
 <h2 id="core-agents">Core agents</h2>
-<p>Core agents are started by the Supervisor on launch and managed with <code>ONE_FOR_ONE</code> restart policies. They are <strong>protected</strong> — they cannot be stopped or deleted from the dashboard.</p>
+<p>Core agents are started by the Supervisor on launch and managed with <code>ONE_FOR_ONE</code> restart policies. They are <strong>protected</strong> — they cannot be deleted, since nothing could recreate them. They can be stopped and started again, except for <code>main</code>, which is also <strong>essential</strong>: stopping it would leave chat unanswered, which is where a user would go to start it again.</p>
 <hr />
 <h3 id="mainactor-core-llm">MainActor <code>[core]</code> <code>[LLM]</code></h3>
 <p><strong>File:</strong> <code>wactorz/agents/main/actor.py</code> (the <code>wactorz/agents/main/</code> package)</p>

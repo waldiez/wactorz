@@ -178,6 +178,7 @@ import io
 import json
 import math
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -713,6 +714,25 @@ async def setup(agent):
             agent.persist("connection_mode", c)
             agent.state["connection_mode"] = _normalize_connection_mode(c) or "auto"
             await agent.log(f'connection_mode updated to {c} — say "reconnect" to apply')
+        # Ambient life applies live; there is nothing to reconnect for.
+        if "idle_preset" in payload:
+            applied = _apply_life_preset(agent, payload["idle_preset"])
+            agent.persist("idle_preset", applied)
+            if agent.state.get("life_enabled"):
+                _start_life_loop(agent)
+            await agent.log(f"idle preset {applied}")
+        if "idle_life" in payload:
+            enabled = bool(payload["idle_life"])
+            agent.persist("idle_life", enabled)
+            agent.state["life_enabled"] = enabled
+            if enabled:
+                _start_life_loop(agent)
+            await agent.log(f"ambient life {'on' if enabled else 'off'}")
+        if "life_amplitude" in payload:
+            amplitude = _life_amplitude_setting(payload["life_amplitude"], None)
+            agent.persist("life_amplitude", amplitude)
+            agent.state["life_amplitude"] = amplitude
+            await agent.log(f"ambient life amplitude {amplitude}")
 
     agent.subscribe("custom/reachy/config", on_config)
 
@@ -831,6 +851,48 @@ async def setup(agent):
     # with "enable debug"; restarts always return to the quiet UX.
     agent.state["debug"] = False
     agent.state["_facing_body_yaw_deg"] = 0.0
+    # ---- Ambient life ----
+    # Off unless asked for. It streams targets continuously, so a deployment
+    # that never wanted it should not have to discover it and turn it off.
+    #   REACHY_IDLE_LIFE=1                  on at boot
+    #   REACHY_IDLE_LIFE_AMPLITUDE=0.6      scale everything down
+    #   custom/reachy/config {"idle_life": true}       (persists)
+    #   {"cmd": "life", "enabled": false}              (this run only)
+    # A preset sets every dial; the individual settings below then override it,
+    # so an existing .env that only names an amplitude keeps working unchanged.
+    _apply_life_preset(
+        agent,
+        _life_preset_name(agent.recall("idle_preset"), os.environ.get("REACHY_IDLE_PRESET")),
+    )
+    if agent.recall("idle_life") is not None or os.environ.get("REACHY_IDLE_LIFE") is not None:
+        agent.state["life_enabled"] = _truthy(
+            agent.recall("idle_life"), os.environ.get("REACHY_IDLE_LIFE")
+        )
+    explicit_amplitude = agent.recall("life_amplitude") or os.environ.get(
+        "REACHY_IDLE_LIFE_AMPLITUDE"
+    )
+    if explicit_amplitude:
+        agent.state["life_amplitude"] = _life_amplitude_setting(explicit_amplitude)
+    # Attract beats: the larger occasional moves. On with ambient life unless
+    # turned off, because "alive" without them is only "not switched off".
+    if agent.recall("attract") is not None or os.environ.get("REACHY_ATTRACT") is not None:
+        agent.state["attract_enabled"] = _truthy(
+            agent.recall("attract"), os.environ.get("REACHY_ATTRACT")
+        )
+    if os.environ.get("REACHY_ATTRACT_MIN_GAP"):
+        agent.state["attract_min_gap"] = float(os.environ["REACHY_ATTRACT_MIN_GAP"])
+    if os.environ.get("REACHY_ATTRACT_MAX_GAP"):
+        agent.state["attract_max_gap"] = float(os.environ["REACHY_ATTRACT_MAX_GAP"])
+    # A commanded pose eases back to neutral once it has been held. Turn this
+    # off if you want a pose you send to be where he stays.
+    agent.state["life_relax"] = _truthy(agent.recall("life_relax"), os.environ.get("REACHY_IDLE_RELAX"), True)
+    agent.state["_life_base"] = _life_neutral_base()
+    agent.state["_life_base_known"] = True
+    agent.state["_life_base_at"] = time.monotonic()
+    agent.state["_life_antenna_base"] = (0.0, 0.0)
+    agent.state["_life_task"] = None
+    agent.state["_attract_task"] = None
+    agent.state["_speech_motion"] = False
     # Speech interrupt state — a 'shutup'/'stop' sets stop_speaking to cut a say.
     agent.state["stop_speaking"] = False
     agent.state["_speaking"] = False
@@ -905,6 +967,7 @@ async def setup(agent):
         "debug",
         "face_forward",
         "health",
+        "life",
     ):
 
         def _make_cb(v):
@@ -939,9 +1002,26 @@ async def setup(agent):
             "motors_enabled": bool(agent.state.get("motors_enabled")),
             "conversation_echo_control": bool(agent.state.get("conversation_echo_control")),
             "conversation_state": agent.state.get("conversation_state", "idle"),
+            "life": bool(agent.state.get("life_enabled")),
+            "life_preset": agent.state.get("life_preset", _LIFE_DEFAULT_PRESET),
             "ts": time.time(),
         },
     )
+
+    if agent.state.get("life_enabled"):
+        _start_life_loop(agent)
+        preset = agent.state.get("life_preset", _LIFE_DEFAULT_PRESET)
+        await agent.log(f"ambient life on (preset: {preset})")
+        # `awake` gates every frame and is only set when wake_up succeeds
+        # during bring-up. Without this line a failed wake leaves a robot that
+        # reports itself ready, accepts every command, and never moves, with
+        # nothing in the log connecting the two.
+        if not agent.state.get("awake"):
+            await agent.log(
+                "ambient life is on but Reachy is not awake, so nothing will "
+                'move. Say "wake" (or publish {"cmd":"wake"}) to start it.',
+                level="warning",
+            )
 
     await agent.log("reachy-mini ready")
 
@@ -968,6 +1048,8 @@ async def process(agent):
             "motors_enabled": bool(agent.state.get("motors_enabled")),
             "conversation_echo_control": bool(agent.state.get("conversation_echo_control")),
             "conversation_state": agent.state.get("conversation_state", "idle"),
+            "life": bool(agent.state.get("life_enabled")),
+            "life_preset": agent.state.get("life_preset", _LIFE_DEFAULT_PRESET),
             "ts": time.time(),
         },
     )
@@ -1407,10 +1489,142 @@ async def _nl_to_commands(agent, text: str):
     return None
 
 
+def _spoken_life_preset(low, normalized):
+    """Map a spoken request onto an idle preset, in English or Greek.
+
+    Matched before the volume rules, because "calm down" is about how he moves
+    and "quieter" is about how he sounds, and the two vocabularies overlap
+    enough that order decides which wins.
+    """
+    if normalized in ("stop moving", "hold still", "stand still", "freeze", "stop fidgeting"):
+        return "off"
+    if any(stem in low for stem in ("μη κουνιέσαι", "μείνε ακίνητ", "σταμάτα να κουνιέσαι")):
+        return "off"
+
+    if re.search(
+        r"\b(calm down|settle down|calm mode|quiet mode|be calm|be still|"
+        r"stop fidgeting|relax a bit)\b",
+        low,
+    ):
+        return "calm"
+    if any(stem in low for stem in ("ηρέμησ", "ηρεμ", "χαλάρωσ")):
+        return "calm"
+
+    if re.search(r"\b(antennas? only|just (?:your )?antennas?|only (?:your )?antennas?)\b", low):
+        return "antennas"
+    if "μόνο" in low and "κερα" in low:
+        return "antennas"
+
+    if re.search(
+        r"\b(show ?time|show off|full energy|go big|be lively|put on a show)\b", low
+    ):
+        return "showtime"
+    # Greek deliberately narrow: "δείξε" is just "show me", and "ενέργεια"
+    # belongs to the smart-energy agent.
+    if any(stem in low for stem in ("ζωηρ", "πιο ζωντανά")):
+        return "showtime"
+
+    # Naming a preset alongside any word that means "how you move", so the
+    # phrasings nobody thinks to list still land: "set preset animation alive",
+    # "idle showtime", "motion calm", "change the animation to alive".
+    if re.search(r"\b(preset|idle|animation|animations|motion|mood|movement)\b", low):
+        for name in _LIFE_PRESETS:
+            if re.search(rf"\b{name}\b", low):
+                return name
+
+    # Bare words, matched only as the whole utterance. "alive" on its own is a
+    # preset name, but "are you alive?" is a question, and matching the word
+    # loosely would answer the question by changing the subject.
+    if normalized in (
+        "alive",
+        "be alive",
+        "normal",
+        "be normal",
+        "back to normal",
+        "as usual",
+        "default",
+        "wake up a bit",
+    ):
+        return "alive"
+    if normalized in ("κανονικά", "ζωντάνεψε", "όπως πριν"):
+        return "alive"
+    return None
+
+
+#: Words that join two requests into one sentence, in both languages Reachy is
+#: spoken to in.
+_CLAUSE_JOINERS = (" and ", " then ", " also ", " plus ", "; ", " και ", " μετά ")
+
+#: Things that are not Reachy. A request naming one of these is a smart-home
+#: request, and the local shortcuts here cannot carry it - only the planner can
+#: emit a robot command and a Home Assistant command from one sentence.
+_OTHER_DOMAIN_WORDS = (
+    "light",
+    "lamp",
+    "switch",
+    "plug",
+    "socket",
+    "scene",
+    "thermostat",
+    "climate",
+    "heater",
+    "radiator",
+    "fan",
+    "cover",
+    "blind",
+    "curtain",
+    "tv",
+    "home assistant",
+    "φως",
+    "φώτα",
+    "λάμπα",
+    "πρίζα",
+    "θερμοστάτη",
+)
+
+#: Single-intent phrases that happen to contain a joiner. These are matched as
+#: whole utterances (today in handle_task, not here), so they can never swallow a
+#: second request the way a substring match can. Listed so that moving one into
+#: this function later does not silently send it to the planner.
+_JOINED_SINGLE_INTENTS = frozenset(
+    {
+        "listen and ask wactorz",
+        "listen then ask wactorz",
+    }
+)
+
+
+def _asks_for_more_than_one_thing(low, normalized):
+    """Does this sentence ask for something Reachy cannot do by himself?
+
+    The local shortcuts match a verb *anywhere* in the text and return exactly
+    one command, and the caller then replaces the whole request with it. That is
+    right for "do a dance" and silently wrong for "turn on the light and do a
+    dance", where the smart-home half is discarded with no error and no mention.
+
+    The test is a joiner *plus* something that is not Reachy, rather than a
+    joiner alone, because plenty of single commands are phrased with one: "turn
+    around and tell me what you see" is one `look_behind`, not two requests.
+    Deferring those to the planner would cost an LLM call and change nothing.
+
+    Known gap: two robot verbs in one sentence ("nod and dance") still take the
+    shortcut and only the first is honoured. Something asked for does happen,
+    which makes it a smaller failure than losing a whole clause.
+    """
+    if normalized in _JOINED_SINGLE_INTENTS:
+        return False
+    if not any(joiner in low for joiner in _CLAUSE_JOINERS):
+        return False
+    return any(word in low for word in _OTHER_DOMAIN_WORDS)
+
+
 def _embodied_command_for_text(text: str):
     """Return a deterministic local command for obvious embodiment requests."""
     low = str(text or "").lower()
     normalized = low.strip().rstrip("!.?")
+    # One command cannot answer two requests, and this function returns one.
+    if _asks_for_more_than_one_thing(low, normalized):
+        return None
     if normalized in ("enable debug", "debug on", "show debug", "show action sequences"):
         return {"cmd": "debug", "enabled": True}
     if normalized in ("disable debug", "debug off", "hide debug", "hide action sequences"):
@@ -1455,6 +1669,13 @@ def _embodied_command_for_text(text: str):
         "look at this",
     ):
         return {"cmd": "describe"}
+
+    # Idle mood, said out loud. This is the control that gets used with an
+    # audience already watching, so it has to work from across the room and in
+    # either language - reaching for a laptop to change a preset defeats it.
+    preset_spoken = _spoken_life_preset(low, normalized)
+    if preset_spoken:
+        return {"cmd": "life", "preset": preset_spoken}
 
     greek_voice = any(stem in low for stem in ("φων", "έντασ", "τόνο"))
     greek_softer = any(stem in low for stem in ("χαμήλω", "χαμηλώ", "πιο σιγά", "σιγανά"))
@@ -2207,16 +2428,8 @@ def _voice_friendly_reply(text, limit=None, user_text=""):
     value = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", value)
     # Italic role-play directions and emoji are visual flourishes, not speech.
     value = re.sub(r"(?<!\*)\*[^*\n]+\*(?!\*)", " ", value)
-    value = "".join(
-        " "
-        if (
-            0x1F1E6 <= ord(ch) <= 0x1FAFF
-            or 0x2600 <= ord(ch) <= 0x27BF
-            or ord(ch) in (0x200D, 0xFE0F)
-        )
-        else ch
-        for ch in value
-    )
+    # One filter, so a gap closed in either place is closed in both.
+    value = _strip_emoji(value)
     had_url = bool(re.search(r"https?://\S+", value))
     value = re.sub(r"https?://\S+", "", value)
     value = re.sub(r"(?m)^\s{0,3}(?:#{1,6}\s*|[-*+]\s+|\d+[.)]\s+)", "", value)
@@ -2501,6 +2714,14 @@ async def _bridge_to_main(
 
 
 async def cleanup(agent):
+    # Stop ambient motion first: it streams targets continuously, and a frame
+    # that lands after the SDK object is released raises against a dead
+    # connection, once per frame.
+    for key in ("_life_task", "_attract_task"):
+        task = agent.state.get(key)
+        if task is not None and not task.done():
+            task.cancel()
+        agent.state[key] = None
     # Stop a voice session before releasing the SDK/media objects it may use.
     try:
         await _conversation_stop(agent, {"reason": "cleanup"})
@@ -2687,6 +2908,8 @@ async def _dispatch(agent, cmd, payload, return_result=False):
             result = await _antennas(agent, payload)
         elif cmd == "gesture":
             result = await _gesture(agent, payload)
+        elif cmd == "life":
+            result = await _life(agent, payload)
         elif cmd == "look_at":
             result = await _look_at(agent, payload)
         elif cmd == "look_pixel":
@@ -2796,6 +3019,8 @@ async def _wake(agent):
             agent.state["awake"] = True
         finally:
             agent.state["busy"] = False
+    # wake_up ends at the neutral pose, which is a base ambient life can name.
+    _note_base_pose(agent, **_life_neutral_base(), antennas=(0.0, 0.0))
     return {}
 
 
@@ -2993,6 +3218,23 @@ async def _pose(agent, payload):
                 agent.state["_facing_body_yaw_deg"] = by_degrees
         finally:
             agent.state["busy"] = False
+    # Ambient life breathes around whatever the last deliberate command set, so
+    # it has to be told what that was. Recorded after the move, not before, so a
+    # goto that raised does not leave life orbiting a pose Reachy never reached.
+    _note_base_pose(
+        agent,
+        x=float(payload.get("x", 0)),
+        y=float(payload.get("y", 0)),
+        z=float(payload.get("z", 0)),
+        roll=float(payload.get("roll", 0)),
+        pitch=float(payload.get("pitch", 0)),
+        yaw=float(payload.get("yaw", 0)),
+        antennas=(
+            (float(payload["antennas"][1]), float(payload["antennas"][0]))
+            if "antennas" in payload and len(payload["antennas"]) == 2
+            else None
+        ),
+    )
     return {}
 
 
@@ -3021,6 +3263,10 @@ async def _antennas(agent, payload):
             await _do(mini.goto_target, **kw)
         finally:
             agent.state["busy"] = False
+    # angles is [right, left] by this point, in whatever unit the payload used.
+    # Recorded so ambient life flicks around the commanded rest position.
+    degrees = angles if payload.get("degrees", True) else [float(np.rad2deg(a)) for a in angles]
+    _note_base_pose(agent, antennas=(float(degrees[1]), float(degrees[0])))
     return {}
 
 
@@ -3040,6 +3286,10 @@ async def _look_at(agent, payload):
             await _do(fn, x, y, z, duration=duration)
         finally:
             agent.state["busy"] = False
+    # An IK aim leaves the head somewhere with no pose-space name, so life stops
+    # touching it and keeps only the antennas going. Holding a gaze that was
+    # deliberately aimed is the right thing to do anyway.
+    _forget_base_pose(agent)
     return {"target": {"x": x, "y": y, "z": z}}
 
 
@@ -3247,6 +3497,17 @@ async def _gesture(agent, payload: dict[str, Any]) -> dict[str, Any]:
                 agent.state["_facing_body_yaw_deg"] = float(body_yaw)
         finally:
             agent.state["busy"] = False
+    last_yaw, last_pitch, last_roll, last_left, last_right, _body = steps[-1]
+    _note_base_pose(
+        agent,
+        yaw=last_yaw,
+        pitch=last_pitch,
+        roll=last_roll,
+        x=0.0,
+        y=0.0,
+        z=0.0,
+        antennas=(float(last_left), float(last_right)),
+    )
     labels = {
         "dance": "Ta-da! I did a little dance.",
         "nod": "I nodded.",
@@ -3274,6 +3535,9 @@ async def _emotion(agent, payload):
             await _do(mini.play_move, clip, initial_goto_duration=initial_goto)
         finally:
             agent.state["busy"] = False
+    # A recorded clip ends wherever its last frame put him; nothing here can say
+    # where that is in pose space.
+    _forget_base_pose(agent)
     return {"played": name}
 
 
@@ -3303,6 +3567,16 @@ async def _set_pose(agent, payload):
         by = float(payload["body_yaw"])
         kw["body_yaw"] = float(np.deg2rad(by)) if payload.get("body_yaw_degrees", True) else by
     await _do(mini.set_target, **kw)
+    if any(k in payload for k in ("x", "y", "z", "roll", "pitch", "yaw")):
+        _note_base_pose(
+            agent,
+            x=float(payload.get("x", 0)),
+            y=float(payload.get("y", 0)),
+            z=float(payload.get("z", 0)),
+            roll=float(payload.get("roll", 0)),
+            pitch=float(payload.get("pitch", 0)),
+            yaw=float(payload.get("yaw", 0)),
+        )
     return {}
 
 
@@ -3395,15 +3669,959 @@ async def _stop(agent):
     return {"stopped": True, "fallback": True}
 
 
+# ---------------------------------------------------------------------------
+# Ambient life - the layer that stops Reachy reading as switched off
+# ---------------------------------------------------------------------------
+# A robot holding one pose perfectly still is indistinguishable from a prop,
+# which is the whole problem in a room full of people walking past. This layer
+# keeps a little motion going at all times: breathing, a slow weight shift,
+# gaze drifting the way an idle person's does, the occasional antenna flick.
+#
+# The rule that makes it safe to leave running unattended: it is ADDITIVE,
+# never absolute. It does not decide where Reachy is looking - it perturbs
+# whatever the last deliberate command established. A pose from Wactorz moves
+# the base, this layer breathes around the new base, and the next pose moves it
+# again. Nothing here can fight a command, because nothing here ever names an
+# absolute target of its own.
+#
+# Three periods, deliberately incommensurate. Equal or harmonic periods make
+# the sum visibly repeat, and a visible repeat reads as a machine cycling
+# rather than a creature idling.
+_LIFE_BREATH_PERIOD = 4.3
+_LIFE_BOB_PERIOD = 6.7
+_LIFE_SWAY_PERIOD = 11.3
+_LIFE_FRAME_HZ = 20.0
+#: Seconds to fade back in after yielding, so resuming never snaps.
+_LIFE_RAMP_SECONDS = 0.8
+#: How long a deliberate pose is held before it eases back toward neutral, and
+#: how long that easing takes.
+#
+# A pose is transient intent, not a new resting posture. Held permanently, an
+# aim taken for one command - a `describe` pointing the head down, say --
+# becomes the base every later frame breathes around, and nothing short of
+# another explicit command brings him up. Creatures return to rest; so does he.
+_LIFE_HOLD_SECONDS = 3.5
+_LIFE_RELAX_SECONDS = 2.5
+#: Hard ceilings, applied after the configured amplitude. This runs unattended
+#: for hours next to the public, so the limit lives in the code and not only in
+#: the config that reaches it.
+#
+# Sized for a room rather than a desk: an offset that reads as clear motion from
+# a metre away reads as stillness from across a hall, past a crowd.
+_LIFE_MAX = {
+    "z": 9.0,  # mm
+    "pitch": 8.0,  # deg
+    "yaw": 16.0,  # deg
+    "roll": 5.0,  # deg
+    "body_yaw": 14.0,  # deg
+    "antenna": 34.0,  # deg
+}
+
+
+# ---------------------------------------------------------------------------
+# Idle presets - one word instead of five dials
+# ---------------------------------------------------------------------------
+# Amplitude, tempo, which joints move, whether attract beats play and how often
+# are five independent settings, and nobody wants to reason about five settings
+# with an audience already standing in front of the robot. Each preset sets all
+# of them, so switching is complete rather than leaving half the previous mood
+# behind.
+#
+# `alive` is the default and is deliberately the tuning that was signed off on
+# the robot - the others are defined around it rather than it being one point
+# among five. Naming is plain on purpose: these get said out loud, sometimes
+# across a room, sometimes in a second language.
+#
+#   amplitude  gain on every offset; the hard ceilings still apply on top
+#   tempo      scales the clock, so calm breathes slower rather than smaller
+#   channels   which joints this preset is allowed to touch at all
+#   attract    the larger occasional moves, and the gap range between them
+_LIFE_PRESETS = {
+    # Everything off. Motors stay live and every command still works - this is
+    # stillness, not sleep.
+    "off": {
+        "amplitude": 0.0,
+        "tempo": 1.0,
+        "channels": (),
+        "attract": False,
+        "gaps": (18.0, 45.0),
+        "blurb": "Completely still.",
+    },
+    # Present but restful. Slower as well as smaller: breathing that is merely
+    # shallower reads as a robot turned down, breathing that is also slower
+    # reads as something at rest.
+    "calm": {
+        "amplitude": 0.35,
+        "tempo": 0.7,
+        "channels": ("head", "body", "antennas"),
+        "attract": False,
+        "gaps": (30.0, 70.0),
+        "blurb": "Barely moving, but not dead.",
+    },
+    # Head and body completely still, antennas alive. For a plinth where the
+    # head sweeping would be a hazard or a distraction, and for the moment when
+    # he is meant to be listening rather than performing.
+    "antennas": {
+        "amplitude": 0.85,
+        "tempo": 1.0,
+        "channels": ("antennas",),
+        "attract": False,
+        "gaps": (18.0, 45.0),
+        "blurb": "Antennas only; head and body still.",
+    },
+    # The reference tuning; every other preset is defined around it.
+    "alive": {
+        "amplitude": 1.0,
+        "tempo": 1.0,
+        "channels": ("head", "body", "antennas"),
+        "attract": True,
+        "gaps": (18.0, 45.0),
+        "blurb": "Breathing, gaze drift, and an attract beat every half minute or so.",
+    },
+    # For a busy room, where he is competing with a crowd for attention. Larger
+    # and quicker, with attract beats two to three times as often. Too much for
+    # a quiet room, and meant to be.
+    "showtime": {
+        "amplitude": 1.4,
+        "tempo": 1.15,
+        "channels": ("head", "body", "antennas"),
+        "attract": True,
+        "gaps": (9.0, 22.0),
+        "blurb": "Big and frequent; for a crowded room.",
+    },
+}
+#: Presets may push past an amplitude of 1, because the hard ceilings in
+#: `_LIFE_MAX` are the real safety limit and the tuned motion sits below them.
+#: Anything above this is a typo rather than an intention.
+_LIFE_MAX_AMPLITUDE = 1.5
+_LIFE_DEFAULT_PRESET = "alive"
+
+
+def _life_preset_name(*candidates):
+    """First candidate naming a preset, else the default.
+
+    An unknown name falls back rather than raising, because this is read from
+    the environment at boot: a typo should leave a working robot with the
+    default mood, not one that failed to start.
+    """
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        text = str(candidate).strip().lower()
+        if text in _LIFE_PRESETS:
+            return text
+    return _LIFE_DEFAULT_PRESET
+
+
+def _apply_life_preset(agent, name):
+    """Set every idle dial from one preset name. Returns the name applied."""
+    resolved = _life_preset_name(name)
+    preset = _LIFE_PRESETS[resolved]
+    agent.state["life_preset"] = resolved
+    agent.state["life_enabled"] = resolved != "off"
+    agent.state["life_amplitude"] = float(preset["amplitude"])
+    agent.state["life_tempo"] = float(preset["tempo"])
+    agent.state["life_channels"] = tuple(preset["channels"])
+    agent.state["attract_enabled"] = bool(preset["attract"])
+    agent.state["attract_min_gap"], agent.state["attract_max_gap"] = preset["gaps"]
+    return resolved
+
+
+def _life_moves(agent, channel):
+    """Is this preset allowed to touch this channel at all?
+
+    Separate from amplitude because "antennas only" is a different statement
+    from "very small": one keeps the head absolutely still, the other still
+    drifts it, just less.
+    """
+    channels = agent.state.get("life_channels")
+    if channels is None:
+        return True
+    return channel in channels
+
+
+def _truthy(*candidates):
+    """First candidate that says anything, read as a flag.
+
+    A persisted value arrives as a real bool; an environment variable arrives as
+    a string, where "0" and "false" are the answers people actually write and
+    both are truthy to bool().
+    """
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        if isinstance(candidate, bool):
+            return candidate
+        text = str(candidate).strip().lower()
+        if not text:
+            continue
+        return text not in ("0", "false", "no", "off")
+    return False
+
+
+def _life_amplitude_setting(*candidates):
+    """First usable amplitude, clamped to 0..1. Defaults to full."""
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        text = str(candidate).strip()
+        if not text:
+            continue
+        try:
+            return max(0.0, min(_LIFE_MAX_AMPLITUDE, float(text)))
+        except (TypeError, ValueError):
+            continue
+    return 1.0
+
+
+def _life_clamp(field, value):
+    """Clamp one offset to its ceiling. Anything not a finite number becomes 0."""
+    limit = _LIFE_MAX[field]
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(value):
+        return 0.0
+    return max(-limit, min(limit, value))
+
+
+def _life_neutral_base():
+    return {"x": 0.0, "y": 0.0, "z": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+
+
+def _note_base_pose(agent, antennas=None, **fields):
+    """Record where a deliberate command left Reachy, so life breathes around it.
+
+    Called by the commands that move Reachy somewhere they can name. Head fields
+    are absolute, in the units pose takes (mm and degrees).
+    """
+    base = dict(agent.state.get("_life_base") or _life_neutral_base())
+    for key, value in fields.items():
+        if key in base and value is not None:
+            try:
+                base[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+    agent.state["_life_base"] = base
+    agent.state["_life_base_known"] = True
+    agent.state["_life_base_at"] = time.monotonic()
+    if antennas is not None:
+        try:
+            left, right = antennas
+            agent.state["_life_antenna_base"] = (float(left), float(right))
+        except (TypeError, ValueError):
+            pass
+
+
+def _forget_base_pose(agent):
+    """Mark the head pose unknowable, so life stops touching the head.
+
+    A recorded emotion clip or an IK look_at leaves Reachy somewhere this layer
+    cannot express in pose space, and breathing around a base that is no longer
+    true would drag him off the target the command aimed at. Antennas stay
+    alive, because nothing else is holding them - so he keeps a pulse while
+    holding the gaze he was told to hold, which is what someone looking at
+    something actually does.
+    """
+    agent.state["_life_base_known"] = False
+    agent.state["_life_base_at"] = time.monotonic()
+
+
+def _life_relaxed_base(agent, now):
+    """The commanded base, easing back toward neutral once the hold expires.
+
+    Applied per frame, so the return is a smooth drift rather than a move --
+    he holds what he was told to hold, then relaxes out of it the way someone
+    stops craning their neck. Body yaw is deliberately NOT relaxed: if
+    you turned him to face the room, facing the room is where he stays.
+    """
+    base = dict(agent.state.get("_life_base") or _life_neutral_base())
+    antenna = tuple(agent.state.get("_life_antenna_base") or (0.0, 0.0))
+    if not agent.state.get("life_relax", True):
+        return base, antenna
+    set_at = agent.state.get("_life_base_at")
+    if not set_at:
+        return base, antenna
+    held_for = now - float(set_at)
+    if held_for <= _LIFE_HOLD_SECONDS:
+        return base, antenna
+    progress = min(1.0, (held_for - _LIFE_HOLD_SECONDS) / max(0.001, _LIFE_RELAX_SECONDS))
+    eased = progress * progress * (3.0 - 2.0 * progress)
+    neutral = _life_neutral_base()
+    relaxed = {key: value + (neutral[key] - value) * eased for key, value in base.items()}
+    return relaxed, (antenna[0] * (1.0 - eased), antenna[1] * (1.0 - eased))
+
+
+async def _life_recover_base(agent):
+    """Come back to neutral after a pose that had no name in pose space.
+
+    `look_at` and recorded clips leave the head somewhere this layer cannot
+    describe, so it stops touching the head. That is right while he is meant to
+    hold that gaze and wrong once the hold has passed, so he then makes one real
+    interpolated move home and full ambient motion resumes from there.
+
+    An interpolated `goto_target` rather than the raw stream, because the stream
+    would jump: the distance from an unknown pose to neutral can be the whole
+    range, and only a trajectory crosses that smoothly.
+    """
+    mini = agent.state.get("mini")
+    create_head_pose = agent.state.get("create_head_pose")
+    np = agent.state.get("np")
+    lock = agent.state.get("motion_lock")
+    if mini is None or create_head_pose is None or np is None or lock is None:
+        return
+    if lock.locked():
+        return  # something deliberate is running; it will set the base itself
+    async with lock:
+        agent.state["busy"] = True
+        try:
+            await _do(
+                mini.goto_target,
+                head=create_head_pose(degrees=True),
+                antennas=np.deg2rad([0.0, 0.0]),
+                body_yaw=None,
+                duration=1.2,
+            )
+        finally:
+            agent.state["busy"] = False
+    _note_base_pose(agent, **_life_neutral_base(), antennas=(0.0, 0.0))
+
+
+#: How long ambient motion may be suppressed before the hold is treated as
+#: debris. Longer than any real utterance or trajectory, short enough that a
+#: visitor does not watch a dead robot for a whole visit.
+_LIFE_STUCK_SECONDS = 25.0
+
+
+def _life_clear_stale_holds(agent):
+    """Release a suppression flag that outlived whatever set it.
+
+    Ambient motion stands down for `busy` and for speech, and both are set by
+    code that clears them in a `finally`. A cancellation at the wrong moment can
+    still leave one set with nothing left to clear it, and the symptom is silent:
+    Reachy stops moving while every command still reports success.
+
+    Both checks are corroborated against something that cannot be faked - the
+    motion lock for `busy`, the speaking flag for speech - so this discards
+    debris and never interrupts a command that is still running.
+
+    Returns the names cleared, for the log.
+    """
+    cleared = []
+    if agent.state.get("_speech_motion") and not agent.state.get("_speaking"):
+        agent.state["_speech_motion"] = False
+        cleared.append("speech-motion")
+    lock = agent.state.get("motion_lock")
+    if agent.state.get("busy") and (lock is None or not lock.locked()):
+        agent.state["busy"] = False
+        cleared.append("busy")
+    return cleared
+
+
+def _life_should_run(agent):
+    """Every reason to stay still, in one place.
+
+    Deliberate motion wins outright. busy is set for the whole of an
+    interpolated goto_target, and streaming raw targets into a trajectory that
+    is still running is exactly what would make the two fight.
+    """
+    if not agent.state.get("life_enabled"):
+        return False
+    if not agent.state.get("awake"):
+        return False
+    if agent.state.get("busy"):
+        return False
+    if agent.state.get("_speech_motion"):
+        return False  # the speech layer owns the head while he is talking
+    return agent.state.get("mini") is not None
+
+
+def _life_gaze_step(gaze, now, rng):
+    """Idle gaze: hold a spot for a few seconds, then ease to another.
+
+    Continuous drift reads as scanning, and scanning reads as searching for
+    something - a task, not an idle. Eyes with nothing to do settle, sit, then
+    move somewhere else, so that is what this does.
+    """
+    if now >= gaze["until"]:
+        gaze["from"] = gaze["to"]
+        gaze["to"] = (
+            _life_clamp("yaw", rng.uniform(-13.0, 13.0)),
+            _life_clamp("pitch", rng.uniform(-5.0, 4.0)),
+        )
+        gaze["started"] = now
+        gaze["travel"] = rng.uniform(0.45, 1.0)
+        gaze["until"] = now + gaze["travel"] + rng.uniform(1.6, 4.5)
+    span = max(1e-6, gaze["travel"])
+    progress = max(0.0, min(1.0, (now - gaze["started"]) / span))
+    eased = progress * progress * (3.0 - 2.0 * progress)
+    return (
+        gaze["from"][0] + (gaze["to"][0] - gaze["from"][0]) * eased,
+        gaze["from"][1] + (gaze["to"][1] - gaze["from"][1]) * eased,
+    )
+
+
+def _life_antenna_step(ant, now, rng):
+    """Antennas: mostly at rest, with an occasional asymmetric flick.
+
+    Asymmetric on purpose. Two antennas doing the same thing at the same moment
+    is twinning, and twinning is the fastest way to make something look
+    mechanical. One leading the other by a fraction of a beat is most of what
+    sells this as a creature.
+    """
+    if now >= ant["until"]:
+        ant["from"] = ant["to"]
+        if ant["resting"]:
+            lead = rng.uniform(14.0, 30.0) * rng.choice((-1.0, 1.0))
+            ant["to"] = (
+                _life_clamp("antenna", lead),
+                _life_clamp("antenna", lead * rng.uniform(-0.7, 0.4)),
+            )
+            ant["travel"] = rng.uniform(0.12, 0.28)
+            hold = rng.uniform(0.2, 0.7)
+        else:
+            ant["to"] = (0.0, 0.0)
+            ant["travel"] = rng.uniform(0.25, 0.5)
+            hold = rng.uniform(1.0, 3.5)
+        ant["resting"] = not ant["resting"]
+        ant["started"] = now
+        ant["until"] = now + ant["travel"] + hold
+    span = max(1e-6, ant["travel"])
+    progress = max(0.0, min(1.0, (now - ant["started"]) / span))
+    eased = progress * progress * (3.0 - 2.0 * progress)
+    return (
+        ant["from"][0] + (ant["to"][0] - ant["from"][0]) * eased,
+        ant["from"][1] + (ant["to"][1] - ant["from"][1]) * eased,
+    )
+
+
+def _life_offsets(elapsed, gaze, amplitude=1.0):
+    """The additive head offset at `elapsed` seconds. Pure; the tests drive it.
+
+    Breath drives z and a little pitch together, because a chest rising also
+    tips the head fractionally. Moving one without the other is the part that
+    looks wrong without being obviously wrong.
+    """
+    breath = math.sin(2.0 * math.pi * elapsed / _LIFE_BREATH_PERIOD)
+    bob = math.sin(2.0 * math.pi * elapsed / _LIFE_BOB_PERIOD)
+    sway = math.sin(2.0 * math.pi * elapsed / _LIFE_SWAY_PERIOD)
+    gaze_yaw, gaze_pitch = gaze
+    raw = {
+        "z": 5.5 * breath,
+        "pitch": 2.6 * bob + 1.2 * breath + gaze_pitch,
+        "yaw": gaze_yaw + 2.2 * sway,
+        "roll": 2.4 * sway,
+        "body_yaw": 8.0 * sway,
+    }
+    return {key: _life_clamp(key, value * amplitude) for key, value in raw.items()}
+
+
+async def _life_apply(agent, offsets, antenna_offsets):
+    """Send one frame as a raw target added to the current base."""
+    mini = agent.state.get("mini")
+    np = agent.state.get("np")
+    create_head_pose = agent.state.get("create_head_pose")
+    if mini is None or np is None or create_head_pose is None:
+        return
+    setter = getattr(mini, "set_target", None)
+    if not callable(setter):
+        return
+    kw = {}
+    antenna_base = tuple(agent.state.get("_life_antenna_base") or (0.0, 0.0))
+    if agent.state.get("_life_base_known") and _life_moves(agent, "head"):
+        base, antenna_base = _life_relaxed_base(agent, time.monotonic())
+        kw["head"] = create_head_pose(
+            x=base["x"],
+            y=base["y"],
+            z=base["z"] + offsets["z"],
+            roll=base["roll"] + offsets["roll"],
+            pitch=base["pitch"] + offsets["pitch"],
+            yaw=base["yaw"] + offsets["yaw"],
+            mm=True,
+            degrees=True,
+        )
+        if _life_moves(agent, "body"):
+            body_base = float(agent.state.get("_facing_body_yaw_deg", 0.0))
+            kw["body_yaw"] = float(np.deg2rad(body_base + offsets["body_yaw"]))
+    if _life_moves(agent, "antennas"):
+        left_base, right_base = antenna_base
+        left = left_base + antenna_offsets[0]
+        right = right_base + antenna_offsets[1]
+        # The SDK takes [right, left]; _antennas documents the same order.
+        kw["antennas"] = np.deg2rad([right, left])
+    if not kw:
+        return  # this preset moves nothing; sending an empty target is a no-op
+    await _do(setter, **kw)
+
+
+async def _life_loop(agent):
+    """Stream ambient motion, yielding to anything deliberate.
+
+    Errors are swallowed per frame rather than ending the loop. A dropped frame
+    is invisible; a raised exception would end the loop and leave Reachy dead
+    still for the rest of the day, which is the failure this whole layer exists
+    to prevent. The log is throttled, because a persistent fault at 20 Hz would
+    otherwise be a thousand identical lines a minute.
+    """
+    rng = random.Random()
+    now = time.monotonic()
+    started = now
+    gaze = {"from": (0.0, 0.0), "to": (0.0, 0.0), "started": now, "travel": 1.0, "until": now}
+    ant = {
+        "from": (0.0, 0.0),
+        "to": (0.0, 0.0),
+        "started": now,
+        "travel": 1.0,
+        "until": now,
+        "resting": True,
+    }
+    period = 1.0 / _LIFE_FRAME_HZ
+    amplitude = 0.0
+    last_complaint = 0.0
+    held_since = None
+    while True:
+        await asyncio.sleep(period)
+        try:
+            if not _life_should_run(agent):
+                # Fade in from zero on the way back, so the first frame after a
+                # command never jumps by the full offset.
+                amplitude = 0.0
+                # Standing down is normal and constant; standing down for a
+                # long stretch while switched on is not.
+                if agent.state.get("life_enabled") and agent.state.get("awake"):
+                    now = time.monotonic()
+                    if held_since is None:
+                        held_since = now
+                    elif now - held_since > _LIFE_STUCK_SECONDS:
+                        held_since = None
+                        cleared = _life_clear_stale_holds(agent)
+                        if cleared:
+                            await agent.log(
+                                "ambient life was held by a stale "
+                                f"{' and '.join(cleared)} flag; released it",
+                                level="warning",
+                            )
+                else:
+                    held_since = None
+                continue
+            held_since = None
+            now = time.monotonic()
+            if not agent.state.get("_life_base_known"):
+                # Frozen head, antennas still going. Give the aimed gaze its
+                # hold, then come home rather than staying there for the day.
+                since = now - float(agent.state.get("_life_base_at") or now)
+                if since > _LIFE_HOLD_SECONDS and agent.state.get("life_relax", True):
+                    await _life_recover_base(agent)
+                    continue
+            configured = max(
+                0.0, min(_LIFE_MAX_AMPLITUDE, float(agent.state.get("life_amplitude", 1.0) or 0.0))
+            )
+            amplitude = min(1.0, amplitude + period / _LIFE_RAMP_SECONDS)
+            level = amplitude * configured
+            tempo = max(0.1, float(agent.state.get("life_tempo", 1.0) or 1.0))
+            offsets = _life_offsets(
+                (now - started) * tempo, _life_gaze_step(gaze, now, rng), level
+            )
+            raw_antenna = _life_antenna_step(ant, now, rng)
+            antenna = (
+                _life_clamp("antenna", raw_antenna[0] * level),
+                _life_clamp("antenna", raw_antenna[1] * level),
+            )
+            await _life_apply(agent, offsets, antenna)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            amplitude = 0.0
+            if time.monotonic() - last_complaint > 30.0:
+                last_complaint = time.monotonic()
+                await agent.log(f"ambient life frame skipped: {exc}", level="warning")
+
+
+# ---------------------------------------------------------------------------
+# Attract beats - the moves that make someone stop walking
+# ---------------------------------------------------------------------------
+# Breathing keeps him from reading as switched off. It does not make anyone
+# cross a room. These are the larger, occasional moves that do: big enough to
+# catch the eye at the edge of vision, rare enough that they never look like a
+# machine on a cycle.
+#
+# Each runs as a real interpolated trajectory under the motion lock, with
+# `busy` set, so the ambient layer stands down for the duration exactly as it
+# does for a command you send - and then the base relaxes home on its own.
+#
+# Steps are (yaw, pitch, roll, left antenna, right antenna, seconds).
+_ATTRACT_BEATS = {
+    # A slow scan of the room, ending back at the middle. Reads as looking for
+    # someone, which is the thing that makes people check whether he means them.
+    "scan": [
+        (-28, -4, -6, 30, 10, 1.1),
+        (-28, -4, -6, 10, 30, 0.5),
+        (26, -4, 6, 10, 30, 1.4),
+        (26, -4, 6, 30, 10, 0.5),
+        (0, 0, 0, 0, 0, 0.9),
+    ],
+    # Head cocks, antennas go up: the shape of "oh?". The tilt breaks the
+    # vertical, which is what carries at distance.
+    "perk": [
+        (10, -12, 18, 45, 20, 0.45),
+        (10, -12, 18, 45, 20, 1.2),
+        (0, 0, 0, 0, 0, 0.7),
+    ],
+    # Glance away, snap back. The snap is the point: fast motion after slow is
+    # what the eye catches, and it reads as reacting rather than performing.
+    "double_take": [
+        (34, 2, 8, 5, 5, 0.7),
+        (34, 2, 8, 5, 5, 0.35),
+        (-6, -10, -10, 40, 40, 0.22),
+        (0, 0, 0, 0, 0, 0.8),
+    ],
+    # A long stretch and settle, the way something that has been sitting still
+    # shifts its weight. Slow throughout; this one is for the corner of the eye.
+    "stretch": [
+        (0, -16, 0, 40, 40, 1.5),
+        (14, -10, 12, 20, 40, 1.1),
+        (-14, -10, -12, 40, 20, 1.3),
+        (0, 0, 0, 0, 0, 1.2),
+    ],
+    # Two slow nods to nobody in particular. Reads as agreeing with a thought,
+    # which is a strong "someone is home" cue for how little it moves.
+    "muse": [
+        (-8, 8, -4, 12, 18, 0.8),
+        (-8, -6, -4, 18, 12, 0.6),
+        (-8, 6, -4, 12, 18, 0.7),
+        (0, 0, 0, 0, 0, 0.8),
+    ],
+}
+
+
+def _attract_is_welcome(agent):
+    """Only when nobody is mid-conversation with him.
+
+    A big move while someone is being listened to reads as not paying
+    attention, which is worse than standing still. Ambient breathing continues
+    throughout either way.
+    """
+    if not _life_should_run(agent):
+        return False
+    if not agent.state.get("attract_enabled"):
+        return False
+    if not agent.state.get("_life_base_known"):
+        return False
+    if not _life_moves(agent, "head"):
+        return False  # every beat is a head move; "antennas only" means it
+    session = agent.state.get("conversation_session")
+    live = bool(session and session.get("task") and not session["task"].done())
+    # A session merely open is fine - waiting to be spoken to is exactly when a
+    # beat is worth playing. One mid-turn is not: a big move while someone is
+    # being listened to reads as not paying attention, which is worse than
+    # standing still.
+    if live and agent.state.get("conversation_state") not in ("idle", "listening"):
+        return False
+    return not agent.state.get("_speaking")
+
+
+async def _play_attract_beat(agent, name):
+    """Run one attract beat as a real trajectory, then let the base relax home."""
+    steps = _ATTRACT_BEATS.get(name)
+    mini = agent.state.get("mini")
+    np = agent.state.get("np")
+    create_head_pose = agent.state.get("create_head_pose")
+    lock = agent.state.get("motion_lock")
+    if not steps or mini is None or np is None or create_head_pose is None or lock is None:
+        return False
+    scale = max(0.0, min(1.0, float(agent.state.get("life_amplitude", 1.0) or 0.0)))
+    async with lock:
+        agent.state["busy"] = True
+        try:
+            for yaw, pitch, roll, left, right, seconds in steps:
+                if not agent.state.get("life_enabled"):
+                    break
+                await _do(
+                    mini.goto_target,
+                    head=create_head_pose(
+                        yaw=yaw * scale, pitch=pitch * scale, roll=roll * scale, degrees=True
+                    ),
+                    antennas=np.deg2rad([right * scale, left * scale]),
+                    body_yaw=None,
+                    duration=float(seconds),
+                )
+                await asyncio.sleep(float(seconds) + 0.03)
+        finally:
+            agent.state["busy"] = False
+    # Ends at neutral, which is a base ambient motion can breathe around, and
+    # which relaxation will hold rather than drift away from.
+    _note_base_pose(agent, **_life_neutral_base(), antennas=(0.0, 0.0))
+    return True
+
+
+async def _attract_loop(agent):
+    """Play one attract beat every so often, when he is otherwise unoccupied.
+
+    The interval is randomised and the beat is drawn without immediate repeats:
+    a fixed interval, or the same move twice running, is what turns a character
+    back into a display piece.
+    """
+    rng = random.Random()
+    last = None
+    # The first beat lands within a few seconds of spawn rather than a full
+    # gap later: nothing tells you the animation layer is alive until something
+    # moves, and a fresh spawn is exactly when that needs confirming. After it,
+    # the normal randomised cadence takes over.
+    first = True
+    while True:
+        if first:
+            first = False
+            await asyncio.sleep(rng.uniform(2.5, 5.0))
+        else:
+            low = float(agent.state.get("attract_min_gap", 18.0))
+            high = float(agent.state.get("attract_max_gap", 45.0))
+            await asyncio.sleep(rng.uniform(min(low, high), max(low, high)))
+        try:
+            if not _attract_is_welcome(agent):
+                continue
+            choices = [name for name in _ATTRACT_BEATS if name != last] or list(_ATTRACT_BEATS)
+            name = rng.choice(choices)
+            if await _play_attract_beat(agent, name):
+                last = name
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await agent.log(f"attract beat skipped: {exc}", level="warning")
+
+
+def _start_life_loop(agent):
+    """Run one ambient loop for the life of the agent."""
+    task = agent.state.get("_life_task")
+    if task is not None and not task.done():
+        return
+    agent.state["_life_task"] = agent.run_in_background(_life_loop(agent))
+    attract = agent.state.get("_attract_task")
+    if attract is None or attract.done():
+        agent.state["_attract_task"] = agent.run_in_background(_attract_loop(agent))
+
+
+async def _life(agent, payload=None):
+    """cmd=life - turn ambient motion on or off, or set its amplitude.
+
+    {"cmd": "life", "enabled": true}                    full amplitude
+    {"cmd": "life", "enabled": true, "amplitude": 0.5}  half
+    {"cmd": "life", "enabled": false}                   hold still
+    """
+    payload = payload or {}
+    # Preset first, individual dials after, so {"preset": "calm", "attract": true}
+    # reads the way it looks: the mood, then one deliberate exception to it.
+    if payload.get("preset"):
+        requested = str(payload["preset"]).strip().lower()
+        if requested not in _LIFE_PRESETS:
+            raise ValueError(f"preset must be one of: {', '.join(_LIFE_PRESETS)}")
+        _apply_life_preset(agent, requested)
+    if "enabled" in payload or "on" in payload:
+        agent.state["life_enabled"] = bool(payload.get("enabled", payload.get("on")))
+    if "amplitude" in payload:
+        agent.state["life_amplitude"] = max(0.0, min(1.0, float(payload["amplitude"])))
+    if "attract" in payload:
+        agent.state["attract_enabled"] = bool(payload["attract"])
+    if "relax" in payload:
+        agent.state["life_relax"] = bool(payload["relax"])
+    if "beat" in payload:
+        # Play one on demand - for aiming a camera at him, or for checking a
+        # beat reads from where the audience will actually be standing.
+        played = await _play_attract_beat(agent, str(payload["beat"]))
+        if not played:
+            raise ValueError(f"beat must be one of: {', '.join(sorted(_ATTRACT_BEATS))}")
+        return {"beat": payload["beat"], "result": f"Played {payload['beat']}."}
+    if agent.state.get("life_enabled"):
+        _start_life_loop(agent)
+    preset = agent.state.get("life_preset", _LIFE_DEFAULT_PRESET)
+    return {
+        "life": bool(agent.state.get("life_enabled")),
+        "preset": preset,
+        "amplitude": round(float(agent.state.get("life_amplitude", 1.0)), 2),
+        "attract": bool(agent.state.get("attract_enabled")),
+        "relax": bool(agent.state.get("life_relax", True)),
+        "presets": {name: spec["blurb"] for name, spec in _LIFE_PRESETS.items()},
+        "beats": sorted(_ATTRACT_BEATS),
+        "result": f"Idle preset: {preset}. {_LIFE_PRESETS[preset]['blurb']}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Speech motion - moving on the words rather than on a timer
+# ---------------------------------------------------------------------------
+#: How long one word's accent takes to decay. Shorter than the gap between
+#: words, so accents read as separate beats rather than one continuous wobble.
+_SPEECH_ACCENT_DECAY = 0.17
+
+
+def _speech_accent(beats, elapsed):
+    """Accent envelope at `elapsed` seconds into an utterance.
+
+    edge-tts reports the offset and duration of every word it synthesised, so
+    accents can land where the stress actually falls. A gesture loop on a fixed
+    interval drifts against the sentence within a couple of seconds and then
+    reads as a robot moving while a recording plays - which is what it would
+    be. The word timings are what make it read as Reachy talking.
+
+    Returns (envelope 0..1, word index). The index alternates the direction of
+    the accent, so consecutive words do not all push the same way.
+    """
+    if not beats:
+        return 0.0, 0
+    index = -1
+    for position, (onset, _duration) in enumerate(beats):
+        if onset > elapsed:
+            break
+        index = position
+    if index < 0:
+        return 0.0, 0
+    onset, duration = beats[index]
+    since = elapsed - onset
+    if since < 0:
+        return 0.0, index
+    envelope = math.exp(-since / _SPEECH_ACCENT_DECAY)
+    # A longer word carries more weight, up to a point.
+    weight = max(0.45, min(1.0, float(duration) / 0.32))
+    return envelope * weight, index
+
+
+def _speech_offsets(beats, elapsed, total_seconds, amplitude=1.0):
+    """Head and antenna offsets for one frame of speech. Pure; tests drive it.
+
+    Two layers: a per-word accent, and a slow arc across the whole utterance --
+    a small lift as he starts, a settle as he finishes. The arc is what stops a
+    long sentence looking like one nod repeated; anticipation at the start and a
+    settle at the end are what give it a beginning and an end.
+    """
+    envelope, index = _speech_accent(beats, elapsed)
+    direction = 1.0 if index % 2 == 0 else -1.0
+    span = max(0.001, float(total_seconds or 0.0))
+    progress = max(0.0, min(1.0, elapsed / span))
+    arc = math.sin(math.pi * progress)  # 0 at both ends, 1 in the middle
+    raw = {
+        "z": 1.4 * arc,
+        "pitch": -1.6 * envelope + 0.8 * arc,
+        "yaw": 1.9 * envelope * direction,
+        "roll": 0.9 * envelope * direction,
+        "body_yaw": 1.2 * arc * direction,
+    }
+    offsets = {key: _life_clamp(key, value * amplitude) for key, value in raw.items()}
+    flick = 9.0 * envelope * amplitude
+    antenna = (
+        _life_clamp("antenna", flick * direction),
+        _life_clamp("antenna", -flick * direction * 0.6),
+    )
+    return offsets, antenna
+
+
+async def _speech_motion(agent, beats, total_seconds):
+    """Animate one utterance against its own word timings.
+
+    Started right after play_sound and cancelled when the wait ends, so it
+    tracks the audio rather than a prediction of it. The _speech_motion flag is
+    what tells the ambient layer to stand down for the duration: both layers
+    write the same joints, so exactly one of them owns the head at a time.
+    """
+    agent.state["_speech_motion"] = True
+    started = time.monotonic()
+    period = 1.0 / _LIFE_FRAME_HZ
+    amplitude = max(0.0, min(1.0, float(agent.state.get("life_amplitude", 1.0) or 0.0)))
+    try:
+        while True:
+            elapsed = time.monotonic() - started
+            if total_seconds and elapsed > float(total_seconds) + 0.4:
+                return
+            if agent.state.get("busy"):
+                # A deliberate motion started mid-sentence. It wins - this is
+                # decoration on top of speech, not a claim on the robot.
+                await asyncio.sleep(period)
+                continue
+            offsets, antenna = _speech_offsets(beats, elapsed, total_seconds, amplitude)
+            try:
+                await _life_apply(agent, offsets, antenna)
+            except Exception:
+                pass  # one dropped frame; the audio is what matters here
+            await asyncio.sleep(period)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        agent.state["_speech_motion"] = False
+
+
+#: Codepoint ranges that are pictures rather than words. edge-tts does not skip
+#: these - it reads their Unicode names aloud, so a cheerful reply ends with
+#: Reachy solemnly announcing "smiling face with smiling eyes".
+_EMOJI_RANGES = (
+    (0x1F000, 0x1FAFF),  # the emoji planes: pictographs, emoticons, transport
+    (0x2190, 0x21FF),  # arrows
+    (0x2300, 0x23FF),  # misc technical: watches, hourglasses, media symbols
+    (0x2460, 0x24FF),  # enclosed alphanumerics
+    (0x25A0, 0x25FF),  # geometric shapes
+    (0x2600, 0x27BF),  # misc symbols and dingbats
+    (0x2900, 0x297F),  # supplemental arrows
+    (0x2B00, 0x2BFF),  # stars and further arrows
+    (0xFE00, 0xFE0F),  # variation selectors
+)
+#: Zero-width joiner, plus the enclosing marks that build flags and keycaps.
+_EMOJI_SINGLES = frozenset({0x200D, 0x20E3, 0x3030, 0x303D, 0x3297, 0x3299})
+
+
+def _strip_emoji(text):
+    """Remove pictographs from anything about to be spoken.
+
+    Applied at synthesis rather than only where replies are composed, because
+    every other path - a direct `say`, a spoken vision description, a plan the
+    planner wrote - reaches the synthesiser too. General punctuation (dashes,
+    curly quotes, ellipsis) is deliberately outside every range here: it belongs
+    in speech.
+    """
+    if not text:
+        return ""
+    out = []
+    for char in str(text):
+        point = ord(char)
+        if point in _EMOJI_SINGLES or any(low <= point <= high for low, high in _EMOJI_RANGES):
+            out.append(" ")
+        else:
+            out.append(char)
+    return " ".join("".join(out).split())
+
+
+def _speaks_every_script(voice):
+    """Is this a voice that keeps one identity across languages?
+
+    Microsoft's "Multilingual" neural voices pronounce other scripts themselves,
+    at the pace a native voice does. A single-language voice handed one instead
+    reads the Unicode letter names aloud, which is what the script swap exists
+    to prevent - so for a multilingual voice the swap buys nothing and costs
+    Reachy a consistent voice across languages.
+    """
+    return "multilingual" in voice.lower()
+
+
+def _greek_voice():
+    """The voice for Greek text, overridable per deployment.
+
+    `or`-ed rather than passed as a default argument for the reason TTS_VOICE
+    documents: `load_dotenv` supplies "" for an empty `.env` line, and a default
+    argument applies only when the name is absent.
+
+    edge-tts ships exactly two Greek voices - AthinaNeural (female) and
+    NestorasNeural (male) - so this is a choice between two, not a free field.
+    """
+    return os.environ.get("TTS_VOICE_EL", "").strip() or "el-GR-AthinaNeural"
+
+
 def _voice_for_text(text, default_voice):
     """Pick a TTS voice whose language matches the script of `text`.
 
-    An English neural voice given text in a non-Latin script (e.g. Greek)
+    A monolingual English voice given text in a non-Latin script (e.g. Greek)
     reads out the Unicode letter NAMES instead of pronouncing the word. We
     only auto-switch for scripts with an unambiguous language mapping, and we
-    never override a default that's already in the target language.
+    never override a default that can already speak the target language --
+    whether because it is already in it, or because it is multilingual.
 
-    Returns default_voice when the script is Latin/ambiguous or already matches.
+    Returns default_voice when the script is Latin/ambiguous or already covered.
     """
     # Count alphabetic chars per detectable script.
     el = latin = 0
@@ -3415,10 +4633,12 @@ def _voice_for_text(text, default_voice):
             el += 1
         elif 0x0041 <= cp <= 0x024F:  # Latin + Latin Extended-A/B
             latin += 1
-    # Greek dominates and the default isn't already a Greek voice -> use one.
-    if el > 0 and el >= latin and not default_voice.lower().startswith("el-"):
-        return "el-GR-AthinaNeural"
-    return default_voice
+    if not (el > 0 and el >= latin):
+        return default_voice
+    # Greek dominates. Leave the default alone if it can already say it.
+    if default_voice.lower().startswith("el-") or _speaks_every_script(default_voice):
+        return default_voice
+    return _greek_voice()
 
 
 def _say_playback_pad(speech_seconds, payload):
@@ -3693,15 +4913,18 @@ async def _prepare_speech(agent, text: str, payload: dict[str, Any]) -> dict[str
     # duration from the WordBoundary offsets for free — used to wait out
     # playback so sequential says don't cut each other off.
     speech_ticks = 0
+    # Every word's (start, length) in seconds. The maximum waits out playback;
+    # the individual timings drive speech-matched motion (`_speech_offsets`).
+    beats = []
     with open(raw_path, "wb") as _f:
         async for chunk in communicate.stream():
             if chunk.get("type") == "audio":
                 _f.write(chunk["data"])  # pyright: ignore[reportTypedDictNotRequiredAccess]
             elif chunk.get("type") in ("WordBoundary", "SentenceBoundary"):
-                speech_ticks = max(
-                    speech_ticks,
-                    int(chunk.get("offset", 0)) + int(chunk.get("duration", 0)),
-                )
+                offset = int(chunk.get("offset", 0))
+                length = int(chunk.get("duration", 0))
+                speech_ticks = max(speech_ticks, offset + length)
+                beats.append((offset / 1e7, length / 1e7))
     # edge-tts uses 100-ns ticks. Some versions default to SentenceBoundary
     # metadata while older versions may emit no timing metadata at all. Never
     # let an unknown duration become a zero wait: the next play_sound call would
@@ -3729,6 +4952,7 @@ async def _prepare_speech(agent, text: str, payload: dict[str, Any]) -> dict[str
         "voice": voice,
         "speech_seconds": speech_seconds,
         "trim_db": trim_db,
+        "beats": beats,
     }
 
 
@@ -3776,6 +5000,12 @@ async def _say(agent, payload):
     text = (payload.get("text") or payload.get("message") or payload.get("say") or "").strip()
     if not text:
         raise ValueError("say requires {'text': '...'}")
+    # Applied here because every spoken word crosses this point, whatever
+    # produced it. `_voice_friendly_reply` strips these for conversation replies,
+    # but a direct `say` does not go through it.
+    text = _strip_emoji(text)
+    if not text:
+        raise ValueError("say requires text with something speakable in it")
     text = text[:500]
 
     mini = agent.state.get("mini")
@@ -3828,6 +5058,15 @@ async def _say(agent, payload):
     await _do(media.play_sound, play_path)
     agent.state["_speaking"] = True
 
+    # Speech-matched motion starts with the audio and is cancelled with it, so
+    # it tracks playback rather than a prediction of it. Opt out per utterance
+    # with {"speech_motion": false}; it is off entirely unless ambient life is.
+    speech_task = None
+    if agent.state.get("life_enabled") and payload.get("speech_motion", True):
+        speech_task = agent.run_in_background(
+            _speech_motion(agent, prepared.get("beats") or [], speech_seconds)
+        )
+
     # play_sound returns immediately; block for the utterance's length so a
     # following say (or volume change) in the same plan doesn't stomp this one
     # mid-word. Opt out with {"await_playback": false} for a single fire-and-
@@ -3868,6 +5107,18 @@ async def _say(agent, payload):
         # Cancellation (conversation_stop) must never leave the microphone
         # gate believing Reachy is still speaking.
         agent.state["_speaking"] = False
+        if speech_task is not None and not speech_task.done():
+            # Cancelled rather than awaited: a 'shutup' cuts the audio
+            # mid-word, and motion that ran on to its scheduled end would be
+            # Reachy gesturing at silence. The ambient layer takes the head back
+            # on its next frame, ramping from zero, so the hand-back is a step of
+            # at most the accent amplitude.
+            speech_task.cancel()
+        # The task clears this in its own `finally`, which runs when the event
+        # loop next reaches it. Clearing here too costs nothing and removes the
+        # window in which a shutdown, or a cancellation the loop never gets to
+        # process, leaves ambient motion suppressed for good.
+        agent.state["_speech_motion"] = False
         pending_check = session.get("barge_check") if session else None
         if pending_check is not None and pending_check.done():
             pending_check = None

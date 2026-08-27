@@ -45,6 +45,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy keeps moving when nothing is happening.** A robot holding one pose perfectly still is
+  hard to tell from a prop, which matters most in a room people are walking through. An opt-in
+  layer keeps breathing, a slow weight shift, gaze that settles and then moves, and the occasional
+  asymmetric antenna flick going at all times, and every so often plays one larger beat: a slow
+  scan of the room, a head cock, a glance away and back, a stretch. It is additive and never names
+  an absolute target of its own, so it perturbs whatever pose the last command established and
+  cannot pull Reachy off one; it stands down entirely while a command is in flight, while he is
+  speaking, and while he is asleep. A commanded pose is held and then eased back toward neutral,
+  because an aim taken for one command is intent rather than a new resting posture, though the
+  direction he faces is never relaxed away. Spoken replies are animated against the word timings
+  edge-tts already reports, so accents land on the words instead of drifting against the sentence.
+  Five presets set every dial at once: `off`, `calm`, `antennas` (head and body still), `alive`
+  (the default) and `showtime`. Choose one with `REACHY_IDLE_PRESET`, `{"cmd": "life", "preset":
+  "calm"}`, `custom/reachy/config {"idle_preset": "calm"}`, or by saying "calm down", "showtime",
+  "antennas only" or "μόνο τις κεραίες" to him. `REACHY_IDLE_LIFE_AMPLITUDE`, `REACHY_ATTRACT` and
+  `REACHY_IDLE_RELAX` override individual parts of a preset; offsets are clamped in the code as
+  well, so a configuration mistake cannot produce a large movement.
+
+- **The voice for Greek can be chosen without editing the source.** `TTS_VOICE_EL` selects between
+  the two Greek voices edge-tts offers, and applies only when `TTS_VOICE` cannot speak Greek
+  itself.
+
 - **The chat shows that an agent is working.** Nothing appeared between sending a message and the
   first word of the reply, so a slow answer was indistinguishable from one that had gone nowhere. A
   row now stands in the agent's place until it replies, in that agent's own conversation only. It
@@ -95,6 +117,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **A host name nobody configured is refused, closing DNS rebinding.** Checking the origin alone cannot see that attack: the attacker's page and the address it resolves to share a name, so they agree while the request reaches a server on your own machine. Loopback names and IP addresses are always accepted, so `localhost` and `192.168.1.5` are unaffected. **If you reach the dashboard by an mDNS or LAN name** such as `wactorz.local`, add it to `WACTORZ_ALLOWED_HOSTS`; the refusal is logged with the name to add. The Home Assistant add-on is unaffected — requests arriving through its panel are recognised as such.
 
 ### Fixed
+
+- **Reachy keeps one voice across languages instead of becoming a different person in Greek.** A
+  voice that speaks a single language does not fail when it is handed another script, it reads the
+  Unicode letter names aloud, so Greek text was redirected to a Greek voice. That redirect was
+  applied to every voice, including the multilingual ones that pronounce Greek themselves, which
+  meant choosing a multilingual voice bought nothing: Reachy still changed voice mid-conversation
+  whenever the language changed. **A voice that can already speak the language is now left alone**,
+  and the redirect target is configurable through `TTS_VOICE_EL` rather than fixed in the source.
+
+- **Emoji are no longer read out loud.** edge-tts does not skip them, it pronounces their Unicode
+  names, so a cheerful reply ended with Reachy announcing "smiling face with smiling eyes". They
+  were stripped where conversation replies are composed, which left every other route to the
+  speaker uncovered: a direct `say`, a spoken vision description, a line the planner wrote.
+  **Stripping now happens at synthesis**, the one point every spoken word crosses, and covers the
+  blocks holding stars, arrows and keycaps as well. Dashes, curly quotes and ellipsis are kept,
+  because they belong in speech.
+
+- **Reachy offers the emotion clips he actually has.** The recorded-emotion library was probed
+  through accessor names the current SDK does not use, and the failure was silent: the library
+  loaded without error and reported no clips, so `list_emotions` returned an empty list and the
+  planner concluded Reachy had no emotions to play. **The probe now tries the current accessor
+  first**, keeps the older names for older SDKs, and falls back to the mapping the library exposes.
+
+- **A request that names a light and a movement no longer loses the light.** Local shortcuts match
+  a verb anywhere in a sentence and return exactly one command, which the request was then replaced
+  with, so "turn on the light and do a dance" did the dance and discarded the rest without an error
+  or a mention. **A sentence that joins clauses and names something that is not Reachy now goes to
+  the planner**, which can emit a robot command and a Home Assistant command together. A
+  conjunction alone is not enough to defer, because "turn around and tell me what you see" is a
+  single command that already does both halves.
+
+- **More mishearings of Reachy's name are repaired.** Local speech recognition returns "Ricci" for
+  "Reachy" often enough to matter, and that spelling was not among the variants corrected when the
+  name is used to address him.
 
 - **Reachy's speech recognition now runs on whatever machine it finds itself on, instead of going silent on the ones without a GPU.** A configuration written on a workstation stopped working the moment it was copied to a laptop or a Raspberry Pi, in two ways that both looked like a robot ignoring you. `REACHY_STT_DEVICE=cuda` (and `auto`, which resolved to the same thing) was taken at its word: a machine can report a CUDA device and still be missing the runtime libraries that device needs, and that gap surfaces only once decoding starts, so the model loaded happily and then failed on every utterance with `Library cublas64_12.dll is not found`. **A CUDA failure now demotes transcription to the CPU for the rest of the process**, with a GPU-only compute type such as `float16` exchanged for one a CPU implements, so the answer arrives more slowly rather than not at all. `REACHY_STT_MODEL` was the second way: a local path names a location on one machine and nothing at all on the next, and a path that resolves to nothing was passed to the loader as though it were a model name, which reported an unrelated complaint about repository ids. **A Hugging Face cache path that does not exist here is now read for the repository it was filled from**, and that model is loaded from this machine's own cache or fetched, while a path that names nothing recoverable says so and names the setting to change. Model names and repository ids, which travel between machines, are unaffected.
 

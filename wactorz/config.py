@@ -335,6 +335,7 @@ class AppConfig:
     ha_state_bridge_domains: str
     ha_state_bridge_per_entity: bool
     discord_token: str
+    discord_webhook_url: str
     telegram_token: str
     telegram_allowed_user_id: int
     ws_port: int
@@ -392,6 +393,7 @@ CONFIG = AppConfig(
     ha_state_bridge_per_entity=_env_truthy("HA_STATE_BRIDGE_PER_ENTITY"),
     # Also accept the shorter DISCORD_TOKEN / TELEGRAM_TOKEN names.
     discord_token=os.getenv("DISCORD_BOT_TOKEN", "") or os.getenv("DISCORD_TOKEN", ""),
+    discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
     ws_port=_env_int("WS_PORT", 8888),

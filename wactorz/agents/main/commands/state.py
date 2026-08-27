@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from ....config import CONFIG
 from ..planning import PENDING_PLANS_KEY
 from .dispatch import CommandContext, command
 
@@ -272,9 +273,18 @@ async def manage_webhooks(ctx: CommandContext, argument: str) -> str:
     if not parts:
         # /webhook — show stored URLs
         urls = ctx.actor.recall("_notification_urls") or {}
-        if not urls:
+        # Named, never printed: an address set in the environment is kept out of
+        # the conversation deliberately, and echoing it here would put it back.
+        from_environment = ["discord"] if CONFIG.discord_webhook_url else []
+        if not urls and not from_environment:
             return "No notification URLs stored.\nUse: /webhook discord <url>  or  /webhook telegram <url>"
         lines = ["Stored notification URLs:"]
+        for svc in from_environment:
+            # Both are reported when both exist, and which one wins is said
+            # plainly. Showing only one would describe a state that is not the
+            # one in effect.
+            shadowed = " (not in use — the stored URL below wins)" if svc in urls else ""
+            lines.append(f"  {svc}: set in the environment{shadowed}")
         for svc, url in urls.items():
             lines.append(f"  {svc}: {url}")
         return "\n".join(lines)

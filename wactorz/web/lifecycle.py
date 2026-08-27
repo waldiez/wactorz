@@ -33,7 +33,7 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
         actor = runtime.registry.get(agent_id) or runtime.registry.find_by_name(agent_id)
 
     if actor is not None:
-        # apply_command, not stop()/pause() directly: it releases the actor from
+        # apply_command, not stop() directly: it releases the actor from
         # supervision first, without which the watchdog restarts it ~35s later.
         return "local" if await actor.apply_command(command) else "refused"
 
@@ -51,9 +51,9 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
     return "broker"
 
 
-#: What the dashboard should show once a command has been accepted. `start` and
-#: `resume` both end up running, so they share the fallback.
-_REPORTED_STATE = {"stop": "stopped", "pause": "paused"}
+#: What the dashboard should show once a command has been accepted. `start`
+#: ends up running, which is the fallback.
+_REPORTED_STATE = {"stop": "stopped"}
 
 
 async def run_command(agent_id: str, command: str, sender: str) -> str:

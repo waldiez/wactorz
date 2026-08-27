@@ -1,7 +1,7 @@
 """REST endpoints for actors: listing, inspection, and control.
 
 Read paths render the live registry (plus MQTT-reported state) into the
-dashboard's card payloads; write paths pause/resume/delete an actor or hand a
+dashboard's card payloads; write paths start/stop/delete an actor or hand a
 message to it.
 """
 
@@ -12,6 +12,7 @@ import logging
 from aiohttp import web
 from aiohttp.web import Response
 
+from ..core.actor import forbidden
 from . import chat, cost, events, lifecycle, runtime, ws
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ def _actor_payload(ag: dict) -> dict:
         "name": ag.get("name", ""),
         "state": ag.get("state", "unknown"),
         "protected": ag.get("protected", False),
+        "essential": ag.get("essential", False),
         "cpu": ag.get("cpu"),
         "mem": ag.get("mem"),
         "task": ag.get("task"),
@@ -108,7 +110,7 @@ async def _lifecycle_handler(request: web.Request, command: str, status: str) ->
     Local actors are driven in process. This used to publish to the broker so the
     actor could receive its own command back over the network, which meant that
     with the broker down nothing happened at all while the response still said it
-    had — the dashboard would show an agent running that the user had just paused.
+    had — the dashboard would show an agent running that the user had just stopped.
 
     Remote agents are reached the only way they can be, over the broker. They are
     absent from the local registry by design, so without this an agent the
@@ -125,15 +127,21 @@ async def _lifecycle_handler(request: web.Request, command: str, status: str) ->
 
     actor = runtime.registry.get(actor_id) or runtime.registry.find_by_name(actor_id)
     if actor is not None:
-        target, protected = actor.actor_id, bool(getattr(actor, "protected", False))
+        target = actor.actor_id
+        protected = bool(getattr(actor, "protected", False))
+        essential = bool(getattr(actor, "essential", False))
     else:
         target, entry = _remote_entry(actor_id)
         if target is None or entry is None:
             return web.json_response({"error": "actor not found"}, status=404)
         protected = bool(entry.get("protected", False))
+        essential = bool(entry.get("essential", False))
 
-    if protected:
-        return web.json_response({"error": "actor is protected"}, status=403)
+    # 403 is for a rule about the agent; a command declined because the state is
+    # wrong answers 409 below. Asked of the same predicate the actor uses, so a
+    # caller cannot be refused here for something the actor would have allowed.
+    if forbidden(command, protected=protected, essential=essential):
+        return web.json_response({"error": f"{command} is not allowed for this actor"}, status=403)
 
     routed = await lifecycle.run_command(target, command, "rest-api")
     if routed == "refused":
@@ -154,16 +162,6 @@ async def start_actor_handler(request: web.Request) -> Response:
 async def stop_actor_handler(request: web.Request) -> Response:
     """Stop a running actor."""
     return await _lifecycle_handler(request, "stop", "stopping")
-
-
-async def pause_actor_handler(request: web.Request) -> Response:
-    """Suspend an actor's message processing, leaving it in the registry."""
-    return await _lifecycle_handler(request, "pause", "pausing")
-
-
-async def resume_actor_handler(request: web.Request) -> Response:
-    """Resume a paused actor."""
-    return await _lifecycle_handler(request, "resume", "resuming")
 
 
 async def actor_metrics_handler(request: web.Request) -> Response:

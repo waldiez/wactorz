@@ -66,7 +66,7 @@ Every agent publishes to its own namespace: `agents/{actor_id}/...`
 
 ### `agents/{id}/status`
 **Published by:** Every agent
-**Trigger:** On state change (start, stop, pause, resume)
+**Trigger:** On state change (start, stop)
 **Purpose:** State transition events.
 
 ```json
@@ -117,17 +117,16 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 
 ### `agents/{id}/commands`
 **Published by:** Dashboard (via `wactorz/web/`) or any external client
-**Trigger:** User clicks Pause / Resume / Stop / Delete in dashboard
+**Trigger:** User clicks Start / Stop / Delete in dashboard
 **Purpose:** Remote control of agents.
 
 ```json
-{ "command": "pause"  }
-{ "command": "resume" }
+{ "command": "start"  }
 { "command": "stop"   }
 { "command": "delete" }
 ```
 
-> Protected agents (`main`, `monitor`) ignore `pause`, `stop`, and `delete` commands.
+> Protected agents (`main`, `monitor`, `catalog`, `installer`) ignore `delete`. `main` is also essential and ignores `stop`.
 
 ---
 
@@ -567,7 +566,7 @@ mosquitto_sub -h localhost -p 1883 -t "system/#"
 mosquitto_sub -h localhost -p 1883 -t "home/#"
 
 # Send a command to an agent (replace {actor_id} with actual UUID)
-mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command":"pause"}'
+mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command":"stop"}'
 ```
 
 ---

@@ -78,10 +78,8 @@ wactorz --interface rest --port 8000
 | `GET` | `/actors/{actor_id}` | Get one actor's status payload. |
 | `POST` | `/actors/{actor_id}/message` | Send a task payload to an actor. Body: `{"content": "..."}`. |
 | `DELETE` | `/actors/{actor_id}` | Stop and unregister a non-protected actor. |
-| `POST` | `/actors/{actor_id}/pause` | Pause a non-protected actor. |
-| `POST` | `/actors/{actor_id}/resume` | Resume a paused non-protected actor. |
 | `GET` | `/actors/{actor_id}/metrics` | Get one actor's metrics payload. |
-| `POST` | `/agents/command` | Send `stop`, `pause`, or `resume` to a target actor. |
+| `POST` | `/agents/command` | Send `start`, `stop` or `delete` to a target actor. |
 
 #### Authentication
 
@@ -144,9 +142,7 @@ HA_TOKEN=                     # optional; enables direct HA tools
 | `ask_agent(agent_name, message)` | Send a message through `/chat` with `agent_name` included in the payload. |
 | `list_agents()` | List currently registered agents from `/agents`. |
 | `list_capabilities(keyword)` | Ask main for the running and spawnable capability catalog. |
-| `stop_agent(agent_id)` | Stop and unregister a non-protected actor via REST. |
-| `pause_agent(agent_id)` | Pause a non-protected actor. |
-| `resume_agent(agent_id)` | Resume a paused actor. |
+| `stop_agent(agent_id)` | Stop an actor via REST, leaving it registered so it can be started again. Refused for an essential actor. |
 | `ha_list_entities(domain)` | List Home Assistant entities directly from HA REST. |
 | `ha_get_state(entity_id)` | Read one Home Assistant entity state. |
 | `ha_call_service(domain, service, entity_id, data_json)` | Call a Home Assistant service directly. |

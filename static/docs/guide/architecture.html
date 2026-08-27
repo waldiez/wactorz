@@ -273,7 +273,7 @@
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">Message</span><span class="p">):</span>
         <span class="c1"># Called for every message in the inbox.</span>
-        <span class="c1"># msg.type is one of: START, STOP, PAUSE, RESUME, DELETE,</span>
+        <span class="c1"># msg.type is one of: START, STOP, DELETE,</span>
         <span class="c1"># TASK, RESULT, HEARTBEAT, SPAWN, TICK, STATUS_REQUEST, STATUS_RESPONSE.</span>
         <span class="k">if</span> <span class="n">msg</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="n">MessageType</span><span class="o">.</span><span class="n">TASK</span><span class="p">:</span>
             <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_do_work</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="p">)</span>

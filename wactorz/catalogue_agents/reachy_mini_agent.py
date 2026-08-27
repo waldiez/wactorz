@@ -797,9 +797,12 @@ async def setup(agent):
 
         moves = RecordedMoves("pollen-robotics/reachy-mini-emotions-library")
         agent.state["moves"] = moves
-        # Best-effort list — the lib usually exposes .available()/.list()/dict-like access
+        # Best-effort list, because the accessor is named differently across
+        # SDK versions; the `moves` mapping is the fallback when none answer. An
+        # empty list is not cosmetic - `list_emotions` returns it and the
+        # planner concludes Reachy has no emotions to play.
         names = []
-        for attr in ("available", "list", "keys"):
+        for attr in ("list_moves", "available", "list", "keys"):
             f = getattr(moves, attr, None)
             if callable(f):
                 try:
@@ -807,6 +810,11 @@ async def setup(agent):
                     break
                 except Exception:
                     continue
+        if not names:
+            try:
+                names = list(getattr(moves, "moves", {}) or {})
+            except Exception:
+                names = []
         agent.state["emotion_names"] = names
         await agent.log(f"Emotion library loaded ({len(names)} clips)")
     except Exception as e:

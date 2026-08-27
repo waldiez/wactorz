@@ -110,8 +110,8 @@ describe("CardDashboard render", () => {
         cd.show([agent("main")]);
         cd.addAgent(agent("beta"));
         expect(cd.agents.has("beta")).toBe(true);
-        cd.updateAgent(agent("beta", { state: "paused" }));
-        expect(cd.agents.get("beta").state).toBe("paused");
+        cd.updateAgent(agent("beta", { state: "stopped" }));
+        expect(cd.agents.get("beta").state).toBe("stopped");
         cd.removeAgent("beta");
         expect(cd.agents.has("beta")).toBe(false);
     });

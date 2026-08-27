@@ -338,8 +338,8 @@ async def test5b_release_alone_unlinks() -> None:
     """A released spec is not restarted even when its actor looks crashed.
 
     Tests 4 and 5 stop the actor as well, so the watch loop's separate
-    STOPPED/PAUSED skip covers for `release()` — they still pass with the
-    retired flag disabled entirely. This one leaves the actor FAILED, which the
+    STOPPED skip covers for `release()` — they still pass with the retired flag
+    disabled entirely. This one leaves the actor FAILED, which the
     state guard does *not* skip, so only the retired flag can prevent a restart.
     """
     print("\nTest 5b — release() unlinks even a FAILED actor")

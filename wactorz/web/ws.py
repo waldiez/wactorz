@@ -373,7 +373,7 @@ async def handle_command(cmd: dict[str, Any]) -> None:
     agent_id = cmd.get("agent_id")
     if not command or not agent_id:
         return
-    if command not in {"start", "pause", "stop", "resume", "delete"}:
+    if command not in {"start", "stop", "delete"}:
         return
 
     logger.info("[cmd] %s -> %s", command.upper(), agent_id[:8])

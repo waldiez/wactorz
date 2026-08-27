@@ -54,12 +54,28 @@ logger = logging.getLogger(__name__)
 SIZE_WALK_BUDGET = 2000
 
 
+def forbidden(command: str, *, protected: bool, essential: bool) -> bool:
+    """Whether policy refuses this command, regardless of the actor's state.
+
+    Two different questions. ``protected`` marks an agent defined in code rather
+    than spawned, so a delete drops a registry entry nothing can recreate.
+    ``essential`` marks one whose stop would take away the means of undoing it.
+    A refusal for either reason is a rule about the agent, not about the moment,
+    which is what separates it from a command declined because the state is
+    wrong.
+
+    Shared rather than reimplemented per entry point: the transports each had
+    their own copy, and a copy is only ever as current as the last person to
+    remember it.
+    """
+    return (protected and command == "delete") or (essential and command == "stop")
+
+
 class ActorState(str, Enum):
     """Where an actor is in its lifecycle."""
 
     IDLE = "idle"
     RUNNING = "running"
-    PAUSED = "paused"
     STOPPED = "stopped"
     FAILED = "failed"
 
@@ -70,8 +86,6 @@ class MessageType(str, Enum):
     # Lifecycle
     START = "start"
     STOP = "stop"
-    PAUSE = "pause"
-    RESUME = "resume"
     DELETE = "delete"
     # Communication
     TASK = "task"
@@ -183,8 +197,15 @@ class Actor(ABC):
         # otherwise falls back to legacy pickle behavior
         self._persistence_api: PersistenceAPI | None = None
 
-        # Protection — if True, stop/delete/pause commands are ignored
+        # Protection — if True, delete is refused. These are agents defined in
+        # code rather than spawned, so deleting one drops a spawn-registry entry
+        # that nothing can recreate from the interface.
         self.protected: bool = False
+
+        # Essential — if True, stop is refused as well. Reserved for an agent the
+        # user would be stopping their own way of undoing it: everything else can
+        # be stopped and started again from its card.
+        self.essential: bool = False
 
         # Supervisor reference — set by Supervisor when this actor is registered under it
         self.supervisor_id: str | None = None
@@ -357,26 +378,12 @@ class Actor(ABC):
         finally:
             self._tasks.clear()
 
-    async def pause(self):
-        """Stop processing messages, keeping the mailbox and registration."""
-        self.state = ActorState.PAUSED
-        await self._publish_status()
-
-    async def resume(self):
-        """Start processing messages again after a pause."""
-        self.state = ActorState.RUNNING
-        await self._publish_status()
-
     # ─── Message Loop ─────────────────────────────────────────────────────────
 
     async def _message_loop(self):
         """Main message processing loop."""
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                if self.state == ActorState.PAUSED:
-                    await asyncio.sleep(0.1)
-                    continue
-
                 msg = await asyncio.wait_for(self._mailbox.get(), timeout=1.0)
                 self.metrics.messages_received += 1
                 # Only count meaningful messages — not heartbeats, status pings, lifecycle
@@ -385,8 +392,6 @@ class Actor(ABC):
                     MessageType.STATUS_REQUEST,
                     MessageType.STATUS_RESPONSE,
                     MessageType.STOP,
-                    MessageType.PAUSE,
-                    MessageType.RESUME,
                 }
                 if msg.type not in _noise:
                     self.metrics.messages_processed += 1
@@ -439,8 +444,6 @@ class Actor(ABC):
         self._handlers = {
             MessageType.START: self._handle_lifecycle,
             MessageType.STOP: self._handle_lifecycle,
-            MessageType.PAUSE: self._handle_lifecycle,
-            MessageType.RESUME: self._handle_lifecycle,
             MessageType.STATUS_REQUEST: self._handle_status_request,
             MessageType.HEARTBEAT: self._handle_heartbeat_msg,
         }
@@ -449,8 +452,8 @@ class Actor(ABC):
         """Apply a lifecycle message through the one implementation of it.
 
         Message-passing is another way to ask for the same thing, not another
-        set of rules: START/STOP/PAUSE/RESUME all route through `apply_command`,
-        so a protected actor refuses a STOP message exactly as it refuses the
+        set of rules: START/STOP all route through `apply_command`,
+        so an essential actor refuses a STOP message exactly as it refuses the
         REST and dashboard routes, and the supervision release happens once
         rather than per entry point.
         """
@@ -538,6 +541,7 @@ class Actor(ABC):
             "memory_mb": self._estimate_memory_mb(),
             "task": self._current_task_description(),
             "protected": self.protected,
+            "essential": self.essential,
         }
 
     def _build_metrics(self) -> dict:
@@ -551,7 +555,7 @@ class Actor(ABC):
             "restart_count": self.metrics.restart_count,
         }
 
-    LIFECYCLE_COMMANDS = ("start", "pause", "resume", "stop", "delete")
+    LIFECYCLE_COMMANDS = ("start", "stop", "delete")
 
     def _release_from_supervision(self) -> None:
         """Tell the supervisor this actor is leaving deliberately.
@@ -589,11 +593,12 @@ class Actor(ABC):
         Every entry point routes through this — the broker listener, and the web
         layer when the actor is local — so the two cannot drift apart.
 
-        Returns ``False`` when the command was refused (protected actor) or
-        unknown, so a caller can report that rather than claim success.
+        Returns ``False`` when the command was refused -- ``delete`` on a
+        protected actor, ``stop`` on an essential one -- or unknown, so a caller
+        can report that rather than claim success.
         """
-        if self.protected and command in ("stop", "pause", "delete"):
-            logger.warning("[%s] Ignoring %r — actor is protected.", self.name, command)
+        if forbidden(command, protected=self.protected, essential=self.essential):
+            logger.warning("[%s] Ignoring %r — refused by policy.", self.name, command)
             return False
 
         if command == "start":
@@ -602,10 +607,6 @@ class Actor(ABC):
                 return False
             await self.start()
             self._resume_supervision()
-        elif command == "pause":
-            await self.pause()
-        elif command == "resume":
-            await self.resume()
         elif command == "stop":
             self._release_from_supervision()
             await self.stop()
@@ -647,7 +648,7 @@ class Actor(ABC):
                             logger.info("[%s] Received command: %s", self.name, command)
                             applied = await self.apply_command(command)
                             # Only stop listening if it actually took effect: a
-                            # protected actor refuses stop/delete and must keep
+                            # an actor that refuses a command by policy must keep
                             # receiving commands afterwards.
                             if applied and command in ("stop", "delete"):
                                 return

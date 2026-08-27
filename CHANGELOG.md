@@ -7,12 +7,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed — breaking
 
+- **Pausing and resuming an agent are gone; an agent is either running or stopped.** Two ways to
+  make an agent quiet is one more than the interface can explain, and the pair carried its own
+  failure: a paused agent stayed registered and supervised, so it looked available to everything
+  except the message loop. Stopping already does what pausing was reached for, and starting brings
+  it back. **If you call `POST /api/actors/{id}/pause` or `/resume`** (or the un-prefixed
+  `/actors/{id}/pause`), use `/stop` and `/start` instead — the four routes are removed. The
+  `pause_agent` and `resume_agent` MCP tools, the `/pause`, `/resume` and `/agents pause` chat
+  commands, and the `pause`/`resume` WebSocket commands go with them. `ActorState.PAUSED`,
+  `MessageType.PAUSE`, `MessageType.RESUME`, `Actor.pause()` and `Actor.resume()` are removed from
+  the public API, and `paused` is no longer a state the dashboard can report. Nothing persisted a
+  paused agent, so no stored state needs migrating.
+
 - **The `io-agent` and its `io/chat` MQTT topics are gone.** It was supervised in every deployment and subscribed to `io/chat` and `io/chat/control`, but nothing had published to them for some time: chat moved to the WebSocket, and the browser stopped speaking MQTT entirely. It was also the one inbound path that reached the *unrestricted* orchestrator, where Discord, Telegram and WhatsApp all go through the restricted surface — so it was a side door as well as a dead one. **If you publish to `io/chat` from an automation or a script**, that path is closed: send chat over `POST /api/chat` instead, or have an agent subscribe to a topic of its own, which is how the shipped integrations already work (`custom/reachy/*` is the worked example). Outbound telemetry is unaffected — every topic the system *publishes* is unchanged, which is the part the README's MQTT claim is about. `wactorz.IOAgent` and `wactorz.agents.IOAgent` are removed from the public API.
 
 - **The OpenTelemetry integration is gone**, along with the `wactorz[otel]` extra, its two `opentelemetry-*` dependencies, the `otel` Compose profile and collector service, `infra/otelcol/`, the `OTEL_*` variables, the optional `otelcol` Prometheus scrape target, and the add-on's `otel_endpoint` / `otel_service_name` options. It exported metrics only — the same per-actor values `/metrics` already serves — so it duplicated a surface that is more portable without it. **If you were exporting to an OTLP collector**, run that collector with a `prometheus` receiver pointed at `/metrics` instead; it does the same translation with nothing to maintain here.
 - **The InfluxDB integration is gone**, along with the `wactorz[influx]` extra, the `influx` Compose profile and service, the `INFLUX_*` environment variables, and the add-on's four `influx_*` options. It wrote one measurement — a point per chat turn — and nothing in the project ever read it back: there was no query path, no dashboard and no Grafana. What it did do was send message bodies to a store that is routinely another machine, which was the only path that took conversation text off the host. **If you were using it**, the chat log in SQLite holds the same turns and is unaffected; point your own collector at that instead. Nothing else changes — Prometheus and the chat log are untouched.
 
 ### Changed — breaking
+
+- **A protected agent can now be stopped; it still cannot be deleted.** Protection covered both,
+  which left the system agents with no controls at all once pausing went away. The two are
+  different questions: these agents are defined in code rather than spawned, so deleting one drops
+  a registry entry nothing can recreate, while stopping one is reversible and the card offers Start
+  immediately. `main` is the exception and refuses stop as well, because stopping it leaves chat
+  unanswered — the surface a user would reach for to start it again. Actors carry a new `essential`
+  flag for that, reported alongside `protected` in agent payloads. **If you relied on
+  `POST /api/actors/{id}/stop` returning 403 for `monitor`, `catalog` or `installer`**, it now
+  stops them.
 
 - **The bundled MQTT broker no longer accepts anonymous connections, and `docker compose` will not start without `MQTT_PASSWORD`.** The broker is the control plane — agent commands, chat, and the code spawned agents run all cross it — and its port is published to the host, so anonymous access was publish access to all of it from anywhere that could reach the port. **Set `MQTT_PASSWORD` in `.env`** (`MQTT_USERNAME` defaults to `wactorz`); compose stops with a message naming the variable rather than coming up open. There is no `mosquitto_passwd` step: the broker's password file is written at container start from those variables, so an existing deployment needs only the `.env` line, and changing the credential later is an edit and a restart. The development stack (`compose.dev.yaml`) needs no setup — it defaults to `wactorz` / `wactorz-dev` and now binds its broker to loopback, because a known password on a network-reachable broker is barely better than the anonymous one it replaces. **If you run your own broker**, nothing here applies; these are the settings the bundled one is configured from.
 - **Edge nodes are given broker credentials by `/deploy`, and need redeploying.** The runner reads `MQTT_USERNAME` / `MQTT_PASSWORD` from its environment and nothing ever delivered them, so every deployed node connected anonymously — meaning the change above would have orphaned all of them, retrying forever with nothing useful in the log. A deploy now writes them to `~/wactorz/.env` on the node (mode `0600`) and the runner sources them at start, so they appear in no command line. A node uses `DEPLOY_<NODE>_BROKER_USER` / `_BROKER_PASSWORD` when set and this server's credentials otherwise; sharing the server's account is the workable default, at the cost that a stolen node holds full broker access. **Redeploy each node** — this and the package-name fix below both ship in the runner, which is a file copied to each machine.
@@ -22,6 +44,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **`API_KEY`, once set, is required on every monitor route except `/health`.** It was read by nothing there before. `X-API-Key` or `Authorization: Bearer` both work; `/health` stays open so container and uptime probes keep working. A browser cannot attach a header to its own navigation, so **setting a key means signing in** — see the sign-in entry below. Scripts, probes and integrations keep using the key directly and are unaffected by anyone signing out.
 
 ### Added
+
+- **The chat shows that an agent is working.** Nothing appeared between sending a message and the
+  first word of the reply, so a slow answer was indistinguishable from one that had gone nowhere. A
+  row now stands in the agent's place until it replies, in that agent's own conversation only. It
+  clears on the first word, on any ending -- including one that produces no text, such as a stop or
+  an error -- and on a send that never left or a connection that dropped. Commands do not raise it,
+  since they are answered before any agent sees them.
 
 - **Reachy Mini v2 expands the opt-in experimental catalogue agent into an embodied voice
   interface.** It adds bounded camera and microphone capture, local or explicitly hosted STT,

@@ -1,10 +1,10 @@
-"""A paused agent must not answer chat.
+"""An agent that is not running must not answer chat.
 
-Pausing stops the message loop from draining the mailbox, but chat never uses
-the mailbox — it calls ``process_user_input``, ``chat`` or ``handle_message`` on
-the agent directly. So the one way a user actually talks to an agent went
-straight past the pause, and a paused agent replied as though nothing had
-happened.
+Stopping cancels the message loop that drains the mailbox, but chat never uses
+the mailbox -- it calls ``process_user_input``, ``chat`` or ``handle_message``
+on the agent directly. The object is still there and its methods still work, so
+the state has to be checked here or the one way a user actually talks to an
+agent goes straight past it.
 """
 
 from collections.abc import Iterator
@@ -69,26 +69,6 @@ async def _say(text: str) -> tuple[list[str], int]:
     return replies, ends["n"]
 
 
-class TestAPausedAgent:
-    async def test_it_does_not_answer(self, agent: _Talker) -> None:
-        runtime.registry = _Registry(agent)
-        agent.state = ActorState.PAUSED
-
-        replies, _ends = await _say("@weather-agent what is the weather")
-
-        assert agent.asked == []
-        assert "paused" in replies[0].lower()
-
-    async def test_the_turn_is_ended_so_the_input_re_enables(self, agent: _Talker) -> None:
-        runtime.registry = _Registry(agent)
-        agent.state = ActorState.PAUSED
-
-        _replies, ends = await _say("@weather-agent hello")
-
-        # Without this the browser waits for a stream that never ends.
-        assert ends == 1
-
-
 class TestAStoppedAgent:
     async def test_it_does_not_answer(self, agent: _Talker) -> None:
         runtime.registry = _Registry(agent)
@@ -100,6 +80,15 @@ class TestAStoppedAgent:
         # object is still there and its methods still work.
         assert agent.asked == []
         assert "stopped" in replies[0].lower()
+
+    async def test_the_turn_is_ended_so_the_input_re_enables(self, agent: _Talker) -> None:
+        runtime.registry = _Registry(agent)
+        agent.state = ActorState.STOPPED
+
+        _replies, ends = await _say("@weather-agent hello")
+
+        # Without this the browser waits for a stream that never ends.
+        assert ends == 1
 
     async def test_it_answers_again_once_started(self, agent: _Talker) -> None:
         runtime.registry = _Registry(agent)
@@ -134,15 +123,4 @@ class TestARunningAgent:
         replies, _ends = await _say("@weather-agent what is the weather")
 
         assert agent.asked == ["what is the weather"]
-        assert replies == ["sunny"]
-
-    async def test_a_resumed_agent_answers_again(self, agent: _Talker) -> None:
-        runtime.registry = _Registry(agent)
-        agent.state = ActorState.PAUSED
-        await _say("@weather-agent first")
-
-        await agent.resume()
-        replies, _ends = await _say("@weather-agent second")
-
-        assert agent.asked == ["second"]
         assert replies == ["sunny"]

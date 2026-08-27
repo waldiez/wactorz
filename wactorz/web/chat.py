@@ -504,16 +504,15 @@ async def route_chat(
         return
 
     # Every path below reaches into the agent directly rather than through its
-    # mailbox, so none of the states that suspend the mailbox stop it answering
-    # on their own: a paused agent replied as though nothing had happened, and a
-    # stopped one kept answering after its message loop had been cancelled.
+    # mailbox, so a state that ends the mailbox does not stop it answering on its
+    # own: a stopped agent keeps replying after its message loop is cancelled
+    # unless the state is checked here.
     #
     # ``==`` not ``is``: ActorState is a str-enum compared by value everywhere
     # else in the codebase, and identity is not safe here — the test suite has
     # wactorz.core.actor loaded under two module identities, so the enum members
     # are distinct objects with equal values.
     _unavailable = {
-        ActorState.PAUSED.value: "is paused. Resume it to send messages.",
         ActorState.STOPPED.value: "is stopped. Start it to send messages.",
         ActorState.FAILED.value: "has failed. It should restart shortly.",
     }

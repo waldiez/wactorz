@@ -329,16 +329,6 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 <td>Stop and unregister a non-protected actor.</td>
 </tr>
 <tr>
-<td><code>POST</code></td>
-<td><code>/actors/{actor_id}/pause</code></td>
-<td>Pause a non-protected actor.</td>
-</tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/actors/{actor_id}/resume</code></td>
-<td>Resume a paused non-protected actor.</td>
-</tr>
-<tr>
 <td><code>GET</code></td>
 <td><code>/actors/{actor_id}/metrics</code></td>
 <td>Get one actor's metrics payload.</td>
@@ -346,7 +336,7 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 <tr>
 <td><code>POST</code></td>
 <td><code>/agents/command</code></td>
-<td>Send <code>stop</code>, <code>pause</code>, or <code>resume</code> to a target actor.</td>
+<td>Send <code>start</code>, <code>stop</code> or <code>delete</code> to a target actor.</td>
 </tr>
 </tbody>
 </table>
@@ -436,15 +426,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </tr>
 <tr>
 <td><code>stop_agent(agent_id)</code></td>
-<td>Stop and unregister a non-protected actor via REST.</td>
-</tr>
-<tr>
-<td><code>pause_agent(agent_id)</code></td>
-<td>Pause a non-protected actor.</td>
-</tr>
-<tr>
-<td><code>resume_agent(agent_id)</code></td>
-<td>Resume a paused actor.</td>
+<td>Stop an actor via REST, leaving it registered so it can be started again. Refused for an essential actor.</td>
 </tr>
 <tr>
 <td><code>ha_list_entities(domain)</code></td>

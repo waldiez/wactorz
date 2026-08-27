@@ -69,6 +69,7 @@ export class DashboardChat {
         isChatView: () => this.host.getView() === "chat",
         lastSentTarget: () => this._lastSentTarget,
         belongsHere: (from, to) => this._msgBelongsHere({ id: "", from, to, content: "", timestampMs: 0 }),
+        isOpenThread: name => name === this.chatTarget,
         thread: () => this.root.querySelector<HTMLElement>(".af-chat-thread"),
         scrollThread: () => this._scrollThread(),
         commit: msg => {
@@ -102,6 +103,7 @@ export class DashboardChat {
     private _evSendMessage: EventListener | null = null;
     private _evSendFailed: EventListener | null = null;
     private _evAttach: EventListener | null = null;
+    private _evConnection: EventListener | null = null;
 
     /** Files attached but not yet sent (rendered as chips in the iobar tray). */
     private _pendingAttachments: Attachment[] = [];
@@ -308,7 +310,7 @@ export class DashboardChat {
 
         const streamText = this._streamUI.streamHereText();
         const msgs = this.chatMessages.filter(m => this._msgBelongsHere(m));
-        if (msgs.length === 0 && !streamText) {
+        if (msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
             thread.appendChild(buildChatEmptyState(this.chatTarget));
         } else {
             msgs.forEach(m => this._appendChatMsgEl(m, thread));
@@ -316,6 +318,7 @@ export class DashboardChat {
         if (streamText) {
             this._streamUI.reattachRow(thread);
         }
+        this._streamUI.reattachWaiting();
         this._scrollThread();
     }
 
@@ -527,6 +530,12 @@ export class DashboardChat {
         this._showSentMessage(msg, prevTarget !== target);
         input.value = "";
         input.style.height = "auto";
+        // Not for a command: it is handled before any agent sees it and answered
+        // by main, so claiming the target is working would name the wrong agent
+        // and wait for a reply that is never attributed to it.
+        if (!body.startsWith("/")) {
+            this._streamUI.awaiting(target);
+        }
         this._emitSend(body, target, msg.attachments?.map(a => a.id) ?? []);
     }
 
@@ -591,6 +600,7 @@ export class DashboardChat {
             ["af-reset-chat", this._evResetChat],
             ["af-send-message", this._evSendMessage],
             ["af-send-failed", this._evSendFailed],
+            ["af-connection-status", this._evConnection],
             ["af-attachment-added", this._evAttach],
         ];
         pairs.forEach(([name, fn]) => {
@@ -599,7 +609,7 @@ export class DashboardChat {
             }
         });
         this._evChat = this._evChunk = this._evEnd = this._evResetChat = this._evSendMessage = null;
-        this._evSendFailed = this._evAttach = null;
+        this._evSendFailed = this._evAttach = this._evConnection = null;
     }
 
     private _wireChatEvents(): void {
@@ -610,6 +620,11 @@ export class DashboardChat {
                     ? { ...msg, to: this._lastSentTarget }
                     : msg;
             this.chatMessages = [...this.chatMessages, stored].slice(-500);
+            // Some agents answer with a single chat frame and no stream at all,
+            // so for those turns this is the only ending there is. Attributed
+            // like any other, so a bystander's message does not end a turn it has
+            // nothing to do with.
+            this._streamUI.endWait(stored.from);
             const voiceTarget = voiceThreadTarget(stored, this.chatTarget, [...this.host.agents.values()]);
             this.chatTarget = voiceTarget ?? this.chatTarget;
             this._lastSentTarget = voiceTarget ?? this._lastSentTarget;
@@ -632,6 +647,8 @@ export class DashboardChat {
         });
 
         this._evSendFailed = listen("af-send-failed", detail => {
+            // Nothing went on the wire, so no reply is coming for anyone.
+            this._streamUI.endWait();
             // The optimistic bubble was rendered before the transport attempt;
             // a failed send must not stay on screen looking delivered.
             let idx = -1;
@@ -668,10 +685,20 @@ export class DashboardChat {
             };
             this.chatMessages.push(msg);
             this._showSentMessage(msg, switched);
+            if (!content.startsWith("/")) {
+                this._streamUI.awaiting(target);
+            }
         });
     }
 
     private _wireStreamEvents(): void {
+        // The transport dropping out of `live` means no reply is arriving for
+        // anything outstanding, whichever agent it was sent to.
+        this._evConnection = listen("af-connection-status", detail => {
+            if (detail?.status !== "live") {
+                this._streamUI.endWait();
+            }
+        });
         this._evChunk = listen("af-stream-chunk", detail => this._streamUI.onChunk(detail));
         this._evEnd = listen("af-stream-end", detail => this._streamUI.onEnd(detail));
     }

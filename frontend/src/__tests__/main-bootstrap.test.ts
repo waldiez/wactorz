@@ -234,7 +234,7 @@ describe("main.ts bootstrap", () => {
     it("handles the app-event listeners", () => {
         emit("af-stream-end", { text: "done", from: "A" });
         emit("af-stream-end", { text: "", from: "A" }); // !text → return
-        emit("af-agent-command", { command: "pause", agentId: "a" }); // non-delete
+        emit("af-agent-command", { command: "stop", agentId: "a" }); // non-delete
         emit("af-send-message", { content: "hi", target: "A", attachments: [] }); // agent found
         emit("af-send-message", { content: "hi", target: "nope", attachments: [] }); // null
         emit("af-wipe-all");

@@ -179,14 +179,14 @@ export function buildStatCards(container: HTMLElement, data: StatCardData): void
     });
 }
 
-export type AgentAction = "start" | "pause" | "resume" | "stop" | "delete";
+export type AgentAction = "start" | "stop" | "delete";
 
 export interface WactorCardCallbacks {
     onChat: (agent: AgentInfo) => void;
     onCommand: (agentId: string, action: AgentAction, btn: HTMLButtonElement) => void;
 }
 
-/** Append the start/pause/resume/stop/delete action buttons appropriate to the state. */
+/** Append the start/stop/delete action buttons appropriate to the state. */
 export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void {
     if (!canDirectMessage(agent)) {
         return;
@@ -207,13 +207,10 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
         // agent — stopping one was effectively irreversible.
         add("Start", "start");
     }
-    if (status === "running") {
-        add("Pause", "pause");
-    }
-    if (status === "paused") {
-        add("Resume", "resume");
-    }
-    if (!agent.protected && status !== "stopped") {
+    // Two different questions: a protected agent is defined in code and cannot be
+    // recreated once deleted, while an essential one cannot be stopped because
+    // stopping it removes the way back.
+    if (!agent.essential && status !== "stopped") {
         add("Stop", "stop", "caution");
     }
     if (!agent.protected) {

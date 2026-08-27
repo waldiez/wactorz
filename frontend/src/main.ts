@@ -219,7 +219,7 @@ ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain)
 ioManager.setWSClient(ws);
 
 // State patches broadcast by the server over the same /ws connection.
-// This is how pause/stop/resume state changes reach the UI without polling.
+// This is how start/stop state changes reach the UI without polling.
 ws.onStatePatch((agents, deletedId, stats) => {
     if (deletedId) {
         markDeleted(deletedId);

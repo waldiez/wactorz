@@ -115,9 +115,6 @@
 .af-chat-pane-state.running {
   color: #34d399;
 }
-.af-chat-pane-state.paused {
-  color: #fbbf24;
-}
 .af-chat-pane-state.failed {
   color: #f87171;
 }

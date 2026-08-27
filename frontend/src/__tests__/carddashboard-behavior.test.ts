@@ -151,9 +151,9 @@ describe("CardDashboard behaviour", () => {
             const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
             document.addEventListener("af-agent-command", onCmd);
             const btn = document.createElement("button");
-            cd._sendCommand("main", "pause", btn);
+            cd._sendCommand("main", "stop", btn);
             document.removeEventListener("af-agent-command", onCmd);
-            expect(seen).toEqual([{ command: "pause", agentId: "main" }]);
+            expect(seen).toEqual([{ command: "stop", agentId: "main" }]);
             expect(btn.disabled).toBe(true);
             expect(btn.classList.contains("sending")).toBe(true);
         });
@@ -224,9 +224,9 @@ describe("CardDashboard behaviour", () => {
             const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
             document.addEventListener("af-agent-command", onCmd);
             cd.show([agent("main")]);
-            (cd.root.querySelector('[data-action="pause"]') as HTMLButtonElement).click();
+            (cd.root.querySelector('[data-action="stop"]') as HTMLButtonElement).click();
             document.removeEventListener("af-agent-command", onCmd);
-            expect(seen).toEqual([{ command: "pause", agentId: "main" }]);
+            expect(seen).toEqual([{ command: "stop", agentId: "main" }]);
         });
 
         it("a header view button switches the active view", () => {
@@ -261,7 +261,7 @@ describe("CardDashboard behaviour", () => {
         it("_sendCommand re-enables its button after the timeout", () => {
             vi.useFakeTimers();
             const btn = document.createElement("button");
-            cd._sendCommand("main", "pause", btn);
+            cd._sendCommand("main", "stop", btn);
             expect(btn.disabled).toBe(true);
             vi.advanceTimersByTime(600);
             expect(btn.disabled).toBe(false);
@@ -297,7 +297,7 @@ describe("CardDashboard behaviour", () => {
             cd._setView("chat");
             expect(() => {
                 cd.addAgent(agent("catalog"));
-                cd.updateAgent(agent("catalog", { state: "paused" }));
+                cd.updateAgent(agent("catalog", { state: "stopped" }));
                 cd.removeAgent("catalog");
             }).not.toThrow();
         });
@@ -306,7 +306,7 @@ describe("CardDashboard behaviour", () => {
             cd.show([agent("main")]);
             cd.hide();
             expect(() => {
-                cd.updateAgent(agent("main", { state: "paused" }));
+                cd.updateAgent(agent("main", { state: "stopped" }));
                 cd.removeAgent("main");
             }).not.toThrow();
         });

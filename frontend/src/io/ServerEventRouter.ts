@@ -254,7 +254,7 @@ function bool(v: unknown): boolean | undefined {
 
 /** Validate an untrusted value into an {@link AgentState}, defaulting to "running". */
 function coerceState(v: unknown): AgentState {
-    if (v === "initializing" || v === "running" || v === "paused" || v === "stopped") {
+    if (v === "initializing" || v === "running" || v === "stopped") {
         return v;
     }
     if (v !== null && typeof v === "object" && typeof (v as { failed?: unknown }).failed === "string") {

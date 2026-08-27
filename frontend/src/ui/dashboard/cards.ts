@@ -192,9 +192,12 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
         return;
     }
     const status = stateLabel(agent.state);
-    const add = (label: string, action: AgentAction, danger = false) => {
+    // "caution" and "danger" read differently on purpose: stopping an agent is
+    // undone by starting it again, and deleting one is not. They sit next to each
+    // other, so sharing a colour invited the second when the first was meant.
+    const add = (label: string, action: AgentAction, tone: "" | "caution" | "danger" = "") => {
         const b = document.createElement("button");
-        b.className = `af-mini-btn${danger ? " danger" : ""}`;
+        b.className = `af-mini-btn${tone ? ` ${tone}` : ""}`;
         b.textContent = label;
         b.dataset["action"] = action;
         controls.appendChild(b);
@@ -211,10 +214,10 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
         add("Resume", "resume");
     }
     if (!agent.protected && status !== "stopped") {
-        add("Stop", "stop", true);
+        add("Stop", "stop", "caution");
     }
     if (!agent.protected) {
-        add("Delete", "delete", true);
+        add("Delete", "delete", "danger");
     }
 }
 

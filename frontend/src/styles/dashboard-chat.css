@@ -220,7 +220,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #dc2626;
+  /* Amber, not red: stopping a reply is interrupting something in progress and
+     is undone by asking again, while every red control in the interface removes
+     something that does not come back. */
+  background: #d97706;
   border: none;
   color: white;
   cursor: pointer;
@@ -229,7 +232,7 @@
     transform 0.1s;
 }
 .af-stop-btn:hover {
-  background: #ef4444;
+  background: #f59e0b;
   transform: scale(1.05);
 }
 .af-voice-btn {

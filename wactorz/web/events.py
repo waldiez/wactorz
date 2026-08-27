@@ -93,6 +93,11 @@ def record_heartbeat(agent_id: str, data: Any) -> None:
     # api_reset's own comment warns about when it distrusts this field.
     if "protected" in data:
         ag["protected"] = bool(data["protected"])
+    # Carried the same way and for the same reason: the dashboard decides from
+    # this whether to offer Stop, and an absent flag offers it for an agent that
+    # refuses it.
+    if "essential" in data:
+        ag["essential"] = bool(data["essential"])
     # Remote agents' heartbeats include "node" — capture it so the dashboard
     # delete path can route the stop to the right runner. Local agents don't set
     # this field; absence means "local".
@@ -211,6 +216,8 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                     runtime.state["agents"][agent_id]["state"] = data["state"]
                 if "protected" in data:
                     runtime.state["agents"][agent_id]["protected"] = data["protected"]
+                if "essential" in data:
+                    runtime.state["agents"][agent_id]["essential"] = data["essential"]
             name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             add_log(
                 {

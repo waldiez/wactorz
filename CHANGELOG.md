@@ -45,6 +45,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The chat shows that an agent is working.** Nothing appeared between sending a message and the
+  first word of the reply, so a slow answer was indistinguishable from one that had gone nowhere. A
+  row now stands in the agent's place until it replies, in that agent's own conversation only. It
+  clears on the first word, on any ending -- including one that produces no text, such as a stop or
+  an error -- and on a send that never left or a connection that dropped. Commands do not raise it,
+  since they are answered before any agent sees them.
+
 - **Reachy Mini v2 expands the opt-in experimental catalogue agent into an embodied voice
   interface.** It adds bounded camera and microphone capture, local or explicitly hosted STT,
   multi-turn VAD conversation, speech and interruption controls, sound localisation, health and

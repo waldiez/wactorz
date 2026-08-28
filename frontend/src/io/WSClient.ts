@@ -28,6 +28,9 @@ export type ChatHandler = (
 ) => void;
 export type StreamChunkHandler = (chunk: string, from: string, timestampMs: number) => void;
 export type StreamEndHandler = (from: string) => void;
+/** A reading from the recogniser. `text` replaces that segment, never adds to it. */
+export type TranscriptHandler = (text: string, segment: number, final: boolean) => void;
+export type TranscriptErrorHandler = (message: string) => void;
 /** A live `server_event` frame carrying a topic-addressed payload. */
 export type ServerEventHandler = (topic: string, payload: unknown) => void;
 /** The /ws connection opened or dropped. */
@@ -69,6 +72,8 @@ export class WSClient {
     private _onChat: ChatHandler | null = null;
     private _onStreamChunk: StreamChunkHandler | null = null;
     private _onStreamEnd: StreamEndHandler | null = null;
+    private _onTranscript: TranscriptHandler | null = null;
+    private _onTranscriptError: TranscriptErrorHandler | null = null;
     private _onStatePatch: StatePatchHandler | null = null;
     private _onLogFeed: LogFeedHandler | null = null;
     private _onServerEvent: ServerEventHandler | null = null;
@@ -103,6 +108,36 @@ export class WSClient {
     /** Stream finished — render the final markdown for the accumulated reply. */
     onStreamEnd(fn: StreamEndHandler): void {
         this._onStreamEnd = fn;
+    }
+
+    /** What the recogniser has heard so far, or settled on. */
+    onTranscript(fn: TranscriptHandler): void {
+        this._onTranscript = fn;
+    }
+
+    /** Recognition could not start, or stopped. A later `startListening` may retry. */
+    onTranscriptError(fn: TranscriptErrorHandler): void {
+        this._onTranscriptError = fn;
+    }
+
+    /** Ask the server to open a recognition session. */
+    startListening(): boolean {
+        return this.sendRaw({ type: "stt_start" });
+    }
+
+    /** Say the audio has ended; the last readings still follow. */
+    stopListening(): boolean {
+        return this.sendRaw({ type: "stt_stop" });
+    }
+
+    /** Send one frame of 32-bit float PCM. Dropped when the socket is not open,
+     *  because a frame of live audio is worth nothing by the time it reopens. */
+    sendAudio(frame: ArrayBuffer): boolean {
+        if (!this.connected) {
+            return false;
+        }
+        this.ws!.send(frame);
+        return true;
     }
 
     /** Server broadcast a state patch (agent list updated, or agent deleted). */
@@ -348,6 +383,14 @@ export class WSClient {
             this._onStreamChunk?.(asStr(data["content"]), from, ts);
         } else if (data["type"] === "stream_end") {
             this._onStreamEnd?.(from);
+        } else if (data["type"] === "stt_partial" || data["type"] === "stt_final") {
+            this._onTranscript?.(
+                asStr(data["text"]),
+                Number(data["segment"] ?? 0),
+                data["type"] === "stt_final",
+            );
+        } else if (data["type"] === "stt_error") {
+            this._onTranscriptError?.(asStr(data["message"], "recognition stopped"));
         }
     }
 

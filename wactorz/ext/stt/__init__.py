@@ -24,6 +24,7 @@ from typing import Any
 from aiohttp import BodyPartReader, web
 
 from ... import config
+from . import streaming
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +109,25 @@ def setup(app: web.Application) -> None:
         )
 
 
+def recogniser_reachable() -> bool:
+    """Whether this deployment can transcribe at all.
+
+    Depends on which recogniser it was pointed at. A streaming one is spoken to
+    over a plain websocket, which needs nothing beyond what the server already
+    has; a Wyoming one needs the optional dependency. Answering with the Wyoming
+    answer for both would hide a working microphone from a deployment that has
+    one.
+    """
+    if streaming.is_streaming_uri(service_uri()):
+        return True
+    return _stt_state.available
+
+
 def public_config(_app: web.Application) -> dict[str, Any]:
     """Non-secret recognition config for the browser."""
     # The URI is deliberately absent: the browser never speaks to the recogniser,
     # and an address is a fact about the network this deployment sits on.
-    return {"available": _stt_state.available}
+    return {"available": recogniser_reachable()}
 
 
 def _pcm_from_wav(raw: bytes) -> tuple[bytes, int, int, int]:

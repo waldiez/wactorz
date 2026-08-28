@@ -14,6 +14,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from ..ext.stt import service_uri, streaming
 from ..monitoring.log_redaction import redact
 from . import chat, events, lifecycle, origins, runtime, uploads
 
@@ -207,6 +208,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     # routing; defaults to the gateway id until a chat turn arrives.
     _reply_from = {"name": runtime.IO_GATEWAY_ID}
 
+    # This connection's recognition session, if it opens one.
+    listening = Listening()
+
     def _persist_chat(
         role: str,
         content: str,
@@ -300,6 +304,12 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     if msg_type == "command":
                         await handle_command(data)
 
+                    elif msg_type == "stt_start":
+                        await listening.start(ws)
+
+                    elif msg_type == "stt_stop":
+                        await listening.finish()
+
                     elif msg_type == "chat":
                         content = (data.get("content") or "").strip()
                         # Ids only travel on the wire; the name and type come
@@ -355,13 +365,110 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
 
                 except Exception as e:
                     logger.warning("[ws] Bad message: %s", e)
+            elif msg.type == WSMsgType.BINARY:
+                # Audio for an open recognition session. Frames only mean
+                # something while one is running; before `stt_start` there is
+                # nothing to feed and dropping them is the whole handling.
+                if listening.session is not None:
+                    await listening.session.feed(msg.data)
+
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
     finally:
+        await listening.stop()
         runtime.ws_clients.discard(channel)
         await channel.close()
         logger.info("WebSocket client disconnected. Total: %d", len(runtime.ws_clients))
     return ws
+
+
+class Listening:
+    """One browser's recognition session, for as long as it keeps the socket.
+
+    Tied to the connection rather than kept globally: two browsers may listen at
+    once, and a session belongs to whoever opened it. A closed tab ends its own
+    session and nobody else's.
+    """
+
+    def __init__(self) -> None:
+        self.session: streaming.LiveTranscription | None = None
+        self._pump: asyncio.Task[None] | None = None
+
+    async def start(self, ws: web.WebSocketResponse) -> None:
+        """Open a session, or say why there is not going to be one."""
+        if self.session is not None:
+            return  # already listening; a second start is not an error
+
+        uri = service_uri()
+        if not streaming.is_streaming_uri(uri):
+            # A batch recogniser answers once, at the end. Saying so is better
+            # than opening a session that will never produce a partial.
+            await _send(ws, {"type": "stt_error", "message": "this recogniser does not stream"})
+            return
+
+        self.session = streaming.LiveTranscription(uri)
+        await self.session.__aenter__()
+        self._pump = asyncio.create_task(self._forward(ws, self.session))
+
+    async def finish(self) -> None:
+        """Tell the recogniser the audio has ended; readings settle on their own."""
+        if self.session is not None:
+            await self.session.finish()
+
+    async def stop(self) -> None:
+        """End the session, whether it finished or the socket simply went away."""
+        if self._pump is not None and not self._pump.done():
+            self._pump.cancel()
+            await asyncio.gather(self._pump, return_exceptions=True)
+        await self._release()
+
+    async def _release(self) -> None:
+        """Let go of the session, so the next `stt_start` opens a fresh one.
+
+        Idempotent, because both the forwarding task and `stop` reach it: a turn
+        that ends on its own frees the session there, and one cut short frees it
+        here. Without that the guard in `start` sees a spent session and quietly
+        refuses, leaving a socket good for exactly one utterance.
+        """
+        self._pump = None
+        if self.session is not None:
+            await self.session.close()
+            self.session = None
+
+    async def _forward(
+        self, ws: web.WebSocketResponse, session: streaming.LiveTranscription
+    ) -> None:
+        """Send every reading to the browser as it arrives.
+
+        Takes the session as an argument rather than reading the attribute: the
+        attribute is cleared when the turn ends, and this loop outlives that.
+        """
+        try:
+            async for reading in session.readings():
+                await _send(
+                    ws,
+                    {
+                        "type": "stt_final" if reading.final else "stt_partial",
+                        "text": reading.text,
+                        "segment": reading.segment,
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("[ws] recognition ended: %s", exc)
+            await _send(ws, {"type": "stt_error", "message": "recognition stopped"})
+        # Reached when the turn ends on its own or fails and is reported, never
+        # when cancelled -- `stop` owns the session in that case.
+        await self._release()
+
+
+async def _send(ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:
+    """Send one frame, tolerating a socket that has already gone."""
+    try:
+        await ws.send_str(json.dumps(payload))
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
 
 
 # ── Browser commands ───────────────────────────────────────────────────────

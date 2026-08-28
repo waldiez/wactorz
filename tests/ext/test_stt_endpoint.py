@@ -330,3 +330,23 @@ class TestABranchNothingServes:
             stt.setup(web.Application())
 
         assert not caplog.text
+
+
+class TestWhetherThisDeploymentCanTranscribe:
+    """`available` decides whether the browser offers a microphone at all."""
+
+    def test_a_streaming_recogniser_needs_no_optional_dependency(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(stt, "service_uri", lambda: "ws://recogniser:6006/")
+        monkeypatch.setattr(stt._stt_state, "available", False)
+
+        # Spoken to over a plain websocket, so answering with the Wyoming answer
+        # would hide a working microphone from a deployment that has one.
+        assert stt.recogniser_reachable() is True
+
+    def test_a_batch_recogniser_still_needs_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(stt, "service_uri", lambda: "tcp://whisper:10300")
+        monkeypatch.setattr(stt._stt_state, "available", False)
+
+        assert stt.recogniser_reachable() is False

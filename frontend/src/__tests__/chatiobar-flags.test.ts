@@ -13,7 +13,12 @@ vi.mock("../ext/stt", () => {
             return true;
         }
     }
-    return { micOffered: () => true, SpeechToText };
+    return {
+        micOffered: () => true,
+        liveOffered: () => false,
+        liveMic: () => null,
+        SpeechToText,
+    };
 });
 vi.mock("../ui/dashboard/uploads", () => ({
     uploadsEnabled: () => true,

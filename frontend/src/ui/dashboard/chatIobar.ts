@@ -8,8 +8,8 @@
  * DOM construction — all behaviour is routed back through the `IobarDeps`.
  */
 import type { ChatInput } from "./chatInput";
-import type { SpeechToText } from "../../ext/stt";
-import { micOffered } from "../../ext/stt";
+import type { SpeechToText, LiveMic } from "../../ext/stt";
+import { micOffered, liveOffered, liveMic } from "../../ext/stt";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
@@ -228,14 +228,76 @@ async function toggleMic(
     }
 }
 
-/** Mic button: click to record, click again to transcribe into the input. */
-function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonElement {
+function listening(btn: HTMLButtonElement, on: boolean): void {
+    btn.classList.toggle("recording", on);
+    const label = on ? "Stop listening" : "Voice input";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+}
+
+async function startLive(mic: LiveMic, input: HTMLTextAreaElement, btn: HTMLButtonElement): Promise<void> {
+    // What the composer writes itself, so an edit by the person can be told
+    // apart from the reading being applied.
+    let written = input.value;
+    const edited = (): void => {
+        if (input.value !== written) {
+            mic.rebase(input.value);
+        }
+    };
+    input.addEventListener("input", edited);
+    try {
+        await mic.start(written, {
+            onText: text => {
+                written = text;
+                input.value = text;
+                input.dispatchEvent(new Event("input"));
+            },
+            onEnd: reason => {
+                input.removeEventListener("input", edited);
+                listening(btn, false);
+                input.focus();
+                if (reason) {
+                    toast.show({ type: "alert-error", title: "Voice input stopped", message: reason });
+                }
+            },
+        });
+        // Asked rather than assumed: the turn can already be over if it was
+        // ended while the permission prompt was still open.
+        listening(btn, mic.listening);
+    } catch {
+        input.removeEventListener("input", edited);
+        listening(btn, false);
+        toast.show({
+            type: "alert-error",
+            title: "Mic blocked",
+            message: "Microphone permission denied, or the connection dropped.",
+        });
+    }
+}
+
+async function toggleLive(mic: LiveMic, input: HTMLTextAreaElement, btn: HTMLButtonElement): Promise<void> {
+    if (mic.listening) {
+        mic.stop();
+        // Straight away, not on the turn ending: the microphone is shut now, and
+        // the reading of the last words is still on its way.
+        listening(btn, false);
+    } else {
+        await startLive(mic, input, btn);
+    }
+}
+
+/** Mic button: click to speak, click again to finish. With a recogniser that
+ *  streams the words appear as they are said; otherwise at the end. */
+function buildMicBtn(deps: IobarDeps, input: HTMLTextAreaElement): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "af-mic-btn";
     btn.title = "Voice input";
     btn.setAttribute("aria-label", "Voice input");
     btn.innerHTML = iconMarkup("mic", 16);
-    btn.addEventListener("click", () => void toggleMic(stt, input, btn));
+    btn.addEventListener("click", () => {
+        const mic = liveMic();
+        void (mic && liveOffered() ? toggleLive(mic, input, btn) : toggleMic(deps.stt, input, btn));
+    });
     return btn;
 }
 
@@ -342,7 +404,7 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
     const { inputWrap, input, mentionPanel } = buildInputArea(deps, select);
     bar.append(select, inputWrap);
     if (micOffered()) {
-        bar.appendChild(buildMicBtn(deps.stt, input));
+        bar.appendChild(buildMicBtn(deps, input));
     }
     if (uploadsEnabled()) {
         const { button, picker } = buildAttachBtn();

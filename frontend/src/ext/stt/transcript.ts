@@ -12,36 +12,78 @@
  * every discarded guess and put the correction after it.
  */
 
-/** Text the composer already held when listening began, and the segments since. */
+/**
+ * What the composer holds: the words around the live reading, and the reading.
+ *
+ * The reading sits between a prefix and a suffix rather than simply after the
+ * text, because a person can type on either side of it while it is still being
+ * revised. Keeping the two apart is what lets an edit survive the next reading,
+ * which would otherwise overwrite the whole field about once a second.
+ */
 export class Transcript {
-    private _base = "";
+    private _prefix = "";
+    private _suffix = "";
     private _segments = new Map<number, string>();
+    private _ignore = new Set<number>();
 
     /** Begin, keeping whatever the composer already had. */
     start(existing: string): void {
-        this._base = existing.trim();
+        this._prefix = existing.trim();
+        this._suffix = "";
         this._segments.clear();
     }
 
     /** Record one reading, replacing anything previously heard for its segment. */
     hear(text: string, segment: number): void {
+        if (this._ignore.has(segment)) {
+            return;
+        }
         this._segments.set(segment, normalise(text));
     }
 
-    /** Everything heard so far, after whatever was already written. */
-    get text(): string {
-        const spoken = [...this._segments.entries()]
+    /** The words heard, in the order they were said. */
+    get spoken(): string {
+        return [...this._segments.entries()]
             .sort((a, b) => a[0] - b[0])
             .map(([, text]) => text)
             .filter(Boolean)
             .join(" ");
-        return [this._base, spoken].filter(Boolean).join(" ");
+    }
+
+    /** Everything heard so far, among whatever was already written. */
+    get text(): string {
+        return [this._prefix, this.spoken, this._suffix].filter(Boolean).join(" ");
+    }
+
+    /**
+     * Take what the composer now holds as the truth, without losing the reading.
+     *
+     * The reading is found in that text and the words on either side of it
+     * become the new surroundings, so an edit anywhere outside it survives every
+     * revision that follows. An edit that leaves no trace of the reading is
+     * taken at its word: those segments are dropped and will not come back, even
+     * though the recogniser is still revising them.
+     */
+    rebase(current: string): void {
+        const spoken = this.spoken;
+        const at = spoken ? current.lastIndexOf(spoken) : -1;
+        if (at < 0) {
+            this._segments.forEach((_, segment) => this._ignore.add(segment));
+            this._segments.clear();
+            this._prefix = current.trim();
+            this._suffix = "";
+            return;
+        }
+        this._prefix = current.slice(0, at).trim();
+        this._suffix = current.slice(at + spoken.length).trim();
     }
 
     /** Forget everything, including what the composer started with. */
     clear(): void {
-        this._base = "";
+        this._prefix = "";
+        this._suffix = "";
         this._segments.clear();
+        this._ignore.clear();
     }
 }
 

@@ -132,9 +132,17 @@ export class LiveCapture {
         // Asked for explicitly rather than left to the browser: the recogniser
         // reports that it wants gain control and noise suppression applied
         // before it sees the audio, and raw capture has neither.
-        this._stream = await navigator.mediaDevices.getUserMedia({
+        const stream = await navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
+        if (!this._active) {
+            // Stopped while the permission prompt was open. Nothing holds this
+            // stream now, and the fields it would go in have already been
+            // cleared, so it is released here or not at all.
+            stream.getTracks().forEach(track => track.stop());
+            return;
+        }
+        this._stream = stream;
         this._context = new Ctx();
         const source = this._context.createMediaStreamSource(this._stream);
         this._node = this._context.createScriptProcessor(CAPTURE_BUFFER, 1, 1);

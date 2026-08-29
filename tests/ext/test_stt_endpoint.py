@@ -350,3 +350,20 @@ class TestWhetherThisDeploymentCanTranscribe:
         monkeypatch.setattr(stt._stt_state, "available", False)
 
         assert stt.recogniser_reachable() is False
+
+    def test_the_browser_is_told_a_streaming_recogniser_is_live(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(stt, "service_uri", lambda: "ws://recogniser:6006/")
+
+        # The composer captures differently for each branch from the first frame,
+        # so it has to be told rather than discover this by trying one.
+        assert stt.public_config(web.Application())["live"] is True
+
+    def test_the_browser_is_told_a_batch_recogniser_is_not(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(stt, "service_uri", lambda: "tcp://whisper:10300")
+        monkeypatch.setattr(stt._stt_state, "available", True)
+
+        assert stt.public_config(web.Application())["live"] is False

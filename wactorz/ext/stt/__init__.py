@@ -126,8 +126,14 @@ def recogniser_reachable() -> bool:
 def public_config(_app: web.Application) -> dict[str, Any]:
     """Non-secret recognition config for the browser."""
     # The URI is deliberately absent: the browser never speaks to the recogniser,
-    # and an address is a fact about the network this deployment sits on.
-    return {"available": recogniser_reachable()}
+    # and an address is a fact about the network this deployment sits on. Whether
+    # it streams is a capability rather than an address, and the composer has to
+    # know before it opens the microphone: the two branches capture differently
+    # from the first frame, so this cannot be discovered by trying one.
+    return {
+        "available": recogniser_reachable(),
+        "live": streaming.is_streaming_uri(service_uri()),
+    }
 
 
 def _pcm_from_wav(raw: bytes) -> tuple[bytes, int, int, int]:

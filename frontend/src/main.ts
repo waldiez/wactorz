@@ -42,6 +42,7 @@ import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { uploadsEnabled } from "./ui/dashboard/uploads";
+import { attachLiveSocket } from "./ext/stt";
 import type { AgentInfo } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import {
@@ -322,6 +323,9 @@ router.on("status", payload => {
 // The /ws transport owns the connection; the router only decodes events. Feed it
 // the server_event frames, and derive "live" from the transport + broker state.
 ws.onServerEvent((topic, payload) => router.route(topic, payload));
+// The composer's microphone speaks over the same socket, so it is given the
+// transport rather than opening one of its own.
+attachLiveSocket(ws);
 ws.onConnected(() => {
     _wsOpen = true;
     recomputeLive();

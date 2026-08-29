@@ -107,4 +107,62 @@ describe("making a reading readable", () => {
 
         expect(transcript.text).toBe("");
     });
+
+    it("keeps an edit made before the words being spoken", () => {
+        const transcript = new Transcript();
+        transcript.start("hi");
+        transcript.hear("there", 0);
+
+        transcript.rebase("hello there");
+        transcript.hear("there friend", 0);
+
+        expect(transcript.text).toBe("hello there friend");
+    });
+
+    it("keeps an edit made after the words being spoken", () => {
+        const transcript = new Transcript();
+        transcript.start("");
+        transcript.hear("call me", 0);
+
+        // Typed at the end while the recogniser was still revising.
+        transcript.rebase("call me later");
+        transcript.hear("call me back", 0);
+
+        expect(transcript.text).toBe("call me back later");
+    });
+
+    it("keeps edits on both sides at once", () => {
+        const transcript = new Transcript();
+        transcript.start("");
+        transcript.hear("buy milk", 0);
+
+        transcript.rebase("please buy milk today");
+        transcript.hear("buy milk and eggs", 0);
+
+        expect(transcript.text).toBe("please buy milk and eggs today");
+    });
+
+    it("does not bring back a reading that was deleted", () => {
+        const transcript = new Transcript();
+        transcript.start("");
+        transcript.hear("wrong words", 0);
+
+        transcript.rebase("never mind");
+        transcript.hear("wrong words again", 0);
+
+        // The recogniser is still revising that segment, but the person has
+        // already said what they want in its place.
+        expect(transcript.text).toBe("never mind");
+    });
+
+    it("still hears the next thing said after a deletion", () => {
+        const transcript = new Transcript();
+        transcript.start("");
+        transcript.hear("wrong words", 0);
+        transcript.rebase("never mind");
+
+        transcript.hear("here we go", 1);
+
+        expect(transcript.text).toBe("never mind here we go");
+    });
 });

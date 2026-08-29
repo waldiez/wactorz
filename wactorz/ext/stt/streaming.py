@@ -263,7 +263,7 @@ class LiveTranscription:
     async def _run(self) -> None:
         try:
             await transcribe_stream(self._uri, self._audio(), self._out.put_nowait)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # pylint: disable=try-except-raise
             raise
         except Exception as exc:  # pylint: disable=broad-exception-caught
             self._out.put_nowait(exc)

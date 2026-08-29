@@ -4,7 +4,15 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-import { STT_KEY, STT_AVAILABLE_KEY, sttMode, micOffered, SpeechToText } from "../../../ext/stt";
+import {
+    STT_KEY,
+    STT_AVAILABLE_KEY,
+    STT_LIVE_KEY,
+    sttMode,
+    micOffered,
+    liveOffered,
+    SpeechToText,
+} from "../../../ext/stt";
 import { safeStorage } from "../../../safeStorage";
 
 describe("the speech-to-text branch", () => {
@@ -99,5 +107,60 @@ describe("whether the composer offers a microphone", () => {
         safeStorage.set(STT_KEY, "host");
 
         expect(micOffered()).toBe(false);
+    });
+});
+
+describe("whether that microphone shows words as they are spoken", () => {
+    /** A deployment where everything the batch branch needs is already true. */
+    function ready(): void {
+        vi.spyOn(SpeechToText, "isSupported").mockReturnValue(true);
+        safeStorage.set(STT_KEY, "server");
+        safeStorage.set(STT_AVAILABLE_KEY, "1");
+        Reflect.set(window, "AudioContext", class {});
+        Reflect.set(navigator, "mediaDevices", { getUserMedia: () => {} });
+    }
+
+    beforeEach(() => {
+        safeStorage.remove(STT_LIVE_KEY);
+    });
+
+    afterEach(() => {
+        safeStorage.remove(STT_KEY);
+        safeStorage.remove(STT_AVAILABLE_KEY);
+        safeStorage.remove(STT_LIVE_KEY);
+        Reflect.deleteProperty(window, "AudioContext");
+        Reflect.deleteProperty(navigator, "mediaDevices");
+        vi.restoreAllMocks();
+    });
+
+    it("does when the recogniser streams and the browser can capture", () => {
+        ready();
+        safeStorage.set(STT_LIVE_KEY, "1");
+
+        expect(liveOffered()).toBe(true);
+    });
+
+    it("does not when the recogniser only takes whole recordings", () => {
+        ready();
+        safeStorage.set(STT_LIVE_KEY, "0");
+
+        // The button still works; it sends the recording at the end instead.
+        expect(liveOffered()).toBe(false);
+    });
+
+    it("does not when the browser cannot deliver frames", () => {
+        ready();
+        safeStorage.set(STT_LIVE_KEY, "1");
+        Reflect.deleteProperty(window, "AudioContext");
+
+        expect(liveOffered()).toBe(false);
+    });
+
+    it("does not when no microphone is offered at all", () => {
+        ready();
+        safeStorage.set(STT_LIVE_KEY, "1");
+        safeStorage.set(STT_AVAILABLE_KEY, "0");
+
+        expect(liveOffered()).toBe(false);
     });
 });

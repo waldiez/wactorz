@@ -13,11 +13,14 @@
  * on every use.
  */
 
+import { canCaptureLive } from "./liveCapture";
 import { registerConfigEntry } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
 import { SpeechToText } from "./Recorder";
 
 export { SpeechToText } from "./Recorder";
+export { LiveMic, attachLiveSocket, liveMic } from "./LiveMic";
+export type { LiveSocket, LiveMicHandlers } from "./LiveMic";
 export { toWav, encodeWav, resample, toMono, TARGET_RATE } from "./wav";
 
 /** Which speech-to-text branch the deployment offers. Mirrors `STT_MODES`. */
@@ -29,6 +32,9 @@ export const STT_KEY = "wactorz-stt-mode";
 /** Where the seeded recogniser reachability is kept. */
 export const STT_AVAILABLE_KEY = "wactorz-stt-available";
 
+/** Where the seeded recogniser kind is kept. */
+export const STT_LIVE_KEY = "wactorz-stt-live";
+
 // Registered at module load so seedServerConfig() picks them up. The branch is
 // core's field and reachability is this extension's, but both arrive under the
 // key named after the extension, which is why the backend merges rather than
@@ -37,6 +43,7 @@ registerConfigEntry(STT_KEY, c => (c.stt as Record<string, unknown> | undefined)
 registerConfigEntry(STT_AVAILABLE_KEY, c =>
     (c.stt as Record<string, unknown> | undefined)?.available ? "1" : "0",
 );
+registerConfigEntry(STT_LIVE_KEY, c => ((c.stt as Record<string, unknown> | undefined)?.live ? "1" : "0"));
 
 /**
  * The branch this deployment offers.
@@ -52,6 +59,22 @@ export function sttMode(): SttMode {
 /** Whether the server can actually reach a recogniser. */
 export function sttAvailable(): boolean {
     return safeStorage.get(STT_AVAILABLE_KEY) === "1";
+}
+
+/** Whether that recogniser returns words while the person is still speaking. */
+export function sttLive(): boolean {
+    return safeStorage.get(STT_LIVE_KEY) === "1";
+}
+
+/**
+ * Whether the microphone can show words as they are spoken.
+ *
+ * Both halves have to agree: a recogniser that streams is no use to a browser
+ * that cannot deliver frames, and vice versa. When either says no the button
+ * still works -- it records the whole utterance and sends it at the end.
+ */
+export function liveOffered(): boolean {
+    return micOffered() && sttLive() && canCaptureLive();
 }
 
 /**

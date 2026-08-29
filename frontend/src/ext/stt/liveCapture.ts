@@ -15,21 +15,62 @@
  * hardware runs at, usually 48 kHz. The conversion is the same one the recorder
  * does, reused rather than repeated.
  *
- * Capture goes through a ScriptProcessorNode, which is deprecated in favour of
- * AudioWorklet. At a tenth of a second per frame the main-thread hop it is
- * faulted for costs nothing anyone can hear, while a worklet would need its own
- * module file and message plumbing to reach the same place.
+ * Capture runs on the audio thread, in a worklet. The main thread is busy
+ * drawing the reply that is streaming in while someone is still talking, and a
+ * capture that shares it loses whatever arrives during a long frame -- silently,
+ * as a gap in the words rather than an error. Here a busy main thread delays the
+ * frames instead of dropping them.
+ *
+ * The worklet is loaded from a blob rather than a file it would have to be
+ * bundled as, which keeps it beside the code that uses it.
  */
 
-import { resample, toMono, TARGET_RATE } from "./wav";
+import { resample, TARGET_RATE } from "./wav";
 
 /** How much audio each frame carries, at the recogniser's rate. */
 const FRAME_SAMPLES = 1600; // 100 ms
 
-/** What the browser hands us per callback. Larger means fewer, later frames. */
-const CAPTURE_BUFFER = 4096;
+/** How much the worklet gathers before handing it over, in samples at the
+ *  hardware's rate. A multiple of the 128-sample quantum the audio thread runs
+ *  in; larger means fewer messages and later frames. */
+const CAPTURE_BLOCK = 2048;
+
+/** The worklet itself. It only gathers and forwards: converting rates and
+ *  cutting frames is the same work either way, and is left where it is tested.
+ *
+ *  Exported because it runs in a scope no test has, so a test builds that scope
+ *  around it -- a mistake in here reaches a person as silence, not an error. */
+export const PROCESSOR = `
+class CaptureProcessor extends AudioWorkletProcessor {
+    constructor(options) {
+        super();
+        this._block = new Float32Array(options.processorOptions.block);
+        this._filled = 0;
+    }
+    process(inputs) {
+        const channel = inputs[0] && inputs[0][0];
+        if (!channel) {
+            return true;
+        }
+        for (let i = 0; i < channel.length; i++) {
+            this._block[this._filled++] = channel[i];
+            if (this._filled === this._block.length) {
+                this.port.postMessage(this._block.slice());
+                this._filled = 0;
+            }
+        }
+        return true;
+    }
+}
+registerProcessor("wactorz-capture", CaptureProcessor);
+`;
 
 type AudioContextCtor = new () => AudioContext;
+
+/** The worklet as something `addModule` can fetch. */
+function workletUrl(): string {
+    return URL.createObjectURL(new Blob([PROCESSOR], { type: "text/javascript" }));
+}
 
 function audioContext(): AudioContextCtor | undefined {
     const scope = window as { AudioContext?: AudioContextCtor; webkitAudioContext?: AudioContextCtor };
@@ -99,7 +140,7 @@ export class FrameCutter {
 export class LiveCapture {
     private _stream: MediaStream | null = null;
     private _context: AudioContext | null = null;
-    private _node: ScriptProcessorNode | null = null;
+    private _node: AudioWorkletNode | null = null;
     private _cutter = new FrameCutter();
     private _active = false;
 
@@ -144,18 +185,40 @@ export class LiveCapture {
         }
         this._stream = stream;
         this._context = new Ctx();
+        if (!this._context.audioWorklet) {
+            throw new Error("this browser cannot capture audio");
+        }
+        const url = workletUrl();
+        try {
+            await this._context.audioWorklet.addModule(url);
+        } finally {
+            // The worklet is compiled by now, so the blob has served its purpose
+            // and would otherwise be held for the life of the page.
+            URL.revokeObjectURL(url);
+        }
+
         const source = this._context.createMediaStreamSource(this._stream);
-        this._node = this._context.createScriptProcessor(CAPTURE_BUFFER, 1, 1);
+        this._node = new AudioWorkletNode(this._context, "wactorz-capture", {
+            numberOfInputs: 1,
+            numberOfOutputs: 0,
+            // Mixed down here rather than in the worklet: a stereo microphone
+            // would otherwise be heard through its left side alone, which is
+            // quieter and misses whatever the other side picked up.
+            channelCount: 1,
+            channelCountMode: "explicit",
+            processorOptions: { block: CAPTURE_BLOCK },
+        });
 
         const from = this._context.sampleRate;
-        this._node.onaudioprocess = event => {
-            const block = toMono([event.inputBuffer.getChannelData(0)]);
+        this._node.port.onmessage = event => {
+            const block = event.data as Float32Array;
             for (const frame of this._cutter.take(resample(block, from, TARGET_RATE))) {
                 onFrame(framePayload(frame));
             }
         };
+        // No output: the microphone is being read, not played, and connecting to
+        // the destination would put the room through the speakers.
         source.connect(this._node);
-        this._node.connect(this._context.destination);
     }
 
     /** Release the microphone, returning any audio not yet sent. Send that tail
@@ -163,7 +226,7 @@ export class LiveCapture {
     stop(): ArrayBuffer[] {
         const tail = this._cutter.flush().map(framePayload);
         if (this._node) {
-            this._node.onaudioprocess = null;
+            this._node.port.onmessage = null;
             this._node.disconnect();
         }
         // Tracks stopped explicitly: closing the context alone leaves the

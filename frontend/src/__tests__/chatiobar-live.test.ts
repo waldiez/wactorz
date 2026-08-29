@@ -54,12 +54,19 @@ function installAudio(): void {
         createMediaStreamSource() {
             return { connect: vi.fn() };
         }
-        createScriptProcessor() {
-            return { connect: vi.fn(), disconnect: vi.fn(), onaudioprocess: null };
-        }
+        audioWorklet = { addModule: vi.fn(async () => {}) };
         close() {}
     }
     Reflect.set(window, "AudioContext", FakeContext);
+    Reflect.set(
+        window,
+        "AudioWorkletNode",
+        class {
+            constructor() {
+                return { connect: vi.fn(), disconnect: vi.fn(), port: { onmessage: null } };
+            }
+        },
+    );
     Reflect.set(navigator, "mediaDevices", {
         getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })),
     });
@@ -160,10 +167,12 @@ describe("the mic button with a recogniser that streams", () => {
         expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ message: "recogniser gone" }));
     });
 
-    it("toasts when the microphone is refused", async () => {
+    it("names the browser, not the person, when capture is impossible", async () => {
+        // A browser that cannot capture was never asked for permission, so
+        // naming one is a dead end for whoever reads the message.
         Reflect.set(navigator, "mediaDevices", {
             getUserMedia: vi.fn(async () => {
-                throw new Error("denied");
+                throw new Error("this browser cannot capture audio");
             }),
         });
         const btn = mount().querySelector<HTMLButtonElement>(".af-mic-btn")!;
@@ -171,7 +180,26 @@ describe("the mic button with a recogniser that streams", () => {
         btn.click();
 
         await vi.waitFor(() =>
-            expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ type: "alert-error" })),
+            expect(toast.show).toHaveBeenCalledWith(
+                expect.objectContaining({ message: "this browser cannot capture audio" }),
+            ),
+        );
+    });
+
+    it("toasts when the microphone is refused", async () => {
+        Reflect.set(navigator, "mediaDevices", {
+            getUserMedia: vi.fn(async () => {
+                throw new DOMException("denied", "NotAllowedError");
+            }),
+        });
+        const btn = mount().querySelector<HTMLButtonElement>(".af-mic-btn")!;
+
+        btn.click();
+
+        await vi.waitFor(() =>
+            expect(toast.show).toHaveBeenCalledWith(
+                expect.objectContaining({ message: "Microphone permission was denied." }),
+            ),
         );
         expect(btn.classList.contains("recording")).toBe(false);
     });

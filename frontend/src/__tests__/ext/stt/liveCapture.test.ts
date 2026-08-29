@@ -12,7 +12,13 @@
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 
-import { FrameCutter, framePayload, canCaptureLive, LiveCapture } from "../../../ext/stt/liveCapture";
+import {
+    FrameCutter,
+    framePayload,
+    canCaptureLive,
+    LiveCapture,
+    PROCESSOR,
+} from "../../../ext/stt/liveCapture";
 
 describe("cutting blocks into frames", () => {
     it("emits nothing until a whole frame is ready", () => {
@@ -89,41 +95,75 @@ describe("whether this browser can capture live", () => {
 
 /** A microphone and audio pipeline, so the wiring can be driven without either. */
 function installAudio(sampleRate = 16000): {
+    modules: () => string[];
+    breakWorklet: (failure: Error) => void;
+    removeWorkletSupport: () => void;
+    destinationNode: () => unknown;
+    connectedTo: () => unknown[];
     emit: (block: Float32Array) => void;
     stopped: () => number;
     closed: () => boolean;
     breakSetup: (broken: boolean) => void;
 } {
     const tracks = [{ stop: vi.fn() }, { stop: vi.fn() }];
-    let onaudioprocess: ((e: any) => void) | null = null;
+    let deliver: ((e: any) => void) | null = null;
     let closed = false;
     let broken = false;
 
     const node = {
         connect: vi.fn(),
         disconnect: vi.fn(),
-        set onaudioprocess(fn: ((e: any) => void) | null) {
-            onaudioprocess = fn;
-        },
-        get onaudioprocess() {
-            return onaudioprocess;
+        port: {
+            set onmessage(fn: ((e: any) => void) | null) {
+                deliver = fn;
+            },
+            get onmessage() {
+                return deliver;
+            },
         },
     };
+    Reflect.set(
+        window,
+        "AudioWorkletNode",
+        class {
+            constructor() {
+                return node;
+            }
+        },
+    );
+
+    const added: string[] = [];
+    let workletFailure: Error | null = null;
+    let worklets = true;
+    const speakers = {};
+    const source = { connect: vi.fn() };
 
     class FakeContext {
         sampleRate = sampleRate;
-        destination = {};
+        destination = speakers;
+        audioWorklet: { addModule: (url: string) => Promise<void> } | undefined = {
+            addModule: vi.fn(async (url: string) => {
+                if (workletFailure) {
+                    throw workletFailure;
+                }
+                added.push(url);
+            }),
+        };
         createMediaStreamSource() {
             if (broken) {
                 throw new Error("no such device");
             }
-            return { connect: vi.fn() };
+            return source;
         }
-        createScriptProcessor() {
-            return node;
-        }
+
         close() {
             closed = true;
+        }
+
+        constructor() {
+            if (!worklets) {
+                this.audioWorklet = undefined;
+            }
         }
     }
 
@@ -133,7 +173,16 @@ function installAudio(sampleRate = 16000): {
     });
 
     return {
-        emit: block => onaudioprocess?.({ inputBuffer: { getChannelData: () => block } }),
+        modules: () => added,
+        breakWorklet: (failure: Error) => {
+            workletFailure = failure;
+        },
+        removeWorkletSupport: () => {
+            worklets = false;
+        },
+        destinationNode: () => speakers,
+        connectedTo: () => source.connect.mock.calls.map(call => call[0]),
+        emit: block => deliver?.({ data: block }),
         stopped: () => tracks.filter(t => t.stop.mock.calls.length > 0).length,
         closed: () => closed,
         breakSetup: (value: boolean) => {
@@ -175,6 +224,31 @@ describe("holding the microphone open", () => {
         capture.stop();
     });
 
+    it("captures on the audio thread, not this one", async () => {
+        const audio = installAudio();
+        const capture = new LiveCapture();
+
+        await capture.start(() => {});
+
+        // A capture sharing the main thread loses whatever arrives while the
+        // page is busy drawing, which is exactly when someone is talking.
+        expect(audio.modules().length).toBe(1);
+        capture.stop();
+    });
+
+    it("does not put the microphone through the speakers", async () => {
+        const audio = installAudio();
+        const capture = new LiveCapture();
+
+        await capture.start(() => {});
+
+        // The node is read, never played: connecting it onward would put the
+        // room through the speakers and feed it back in.
+        expect(audio.connectedTo().length).toBe(1);
+        expect(audio.connectedTo()[0]).not.toBe(audio.destinationNode());
+        capture.stop();
+    });
+
     it("releases the microphone when it stops", async () => {
         const audio = installAudio();
         const capture = new LiveCapture();
@@ -199,6 +273,25 @@ describe("holding the microphone open", () => {
 
         expect(frames.length).toBe(0);
         expect(tail.length).toBe(1);
+    });
+
+    it("says so when the browser has no worklet to capture in", async () => {
+        const audio = installAudio();
+        audio.removeWorkletSupport();
+
+        // A browser old enough to lack this reaches the button at all only
+        // because everything else it needs is much older.
+        await expect(new LiveCapture().start(() => {})).rejects.toThrow(/cannot capture/);
+    });
+
+    it("releases the microphone when the worklet will not load", async () => {
+        const audio = installAudio();
+        audio.breakWorklet(new Error("blocked by the page's policy"));
+        const capture = new LiveCapture();
+
+        await expect(capture.start(() => {})).rejects.toThrow(/policy/);
+
+        expect(audio.stopped()).toBe(2);
     });
 
     it("says so when the browser cannot capture", async () => {
@@ -290,5 +383,65 @@ describe("holding the microphone only once", () => {
 
         await expect(capture.start(() => {})).resolves.toBeUndefined();
         capture.stop();
+    });
+});
+
+/** Run the audio-thread half in a scope shaped like the one the browser gives it. */
+function loadProcessor(): new (options: { processorOptions: { block: number } }) => {
+    port: { postMessage: ReturnType<typeof vi.fn> };
+    process: (inputs: Float32Array[][]) => boolean;
+} {
+    const registered: Record<string, unknown> = {};
+
+    class FakeBase {
+        port = { postMessage: vi.fn() };
+    }
+
+    const load = new Function("AudioWorkletProcessor", "registerProcessor", PROCESSOR);
+    load(FakeBase, (name: string, ctor: unknown) => {
+        registered[name] = ctor;
+    });
+    return registered["wactorz-capture"] as never;
+}
+
+describe("the half that runs on the audio thread", () => {
+    it("is valid and registers itself under the name the node asks for", () => {
+        // It never runs in this process, so nothing else would notice a mistake
+        // in it until someone pressed the button.
+        expect(loadProcessor()).toBeTypeOf("function");
+    });
+
+    it("hands over a block once it is full, and not before", () => {
+        const Processor = loadProcessor();
+        const worklet = new Processor({ processorOptions: { block: 4 } });
+
+        worklet.process([[new Float32Array([1, 2, 3])]]);
+        expect(worklet.port.postMessage).not.toHaveBeenCalled();
+
+        worklet.process([[new Float32Array([4, 5])]]);
+
+        expect(worklet.port.postMessage).toHaveBeenCalledTimes(1);
+        expect([...worklet.port.postMessage.mock.calls[0]![0]]).toEqual([1, 2, 3, 4]);
+    });
+
+    it("keeps running when the microphone delivers nothing", () => {
+        const Processor = loadProcessor();
+        const worklet = new Processor({ processorOptions: { block: 4 } });
+
+        // Returning false here would shut the worklet down for the rest of the
+        // turn; an input can be empty between quanta.
+        expect(worklet.process([[]])).toBe(true);
+        expect(worklet.port.postMessage).not.toHaveBeenCalled();
+    });
+
+    it("carries the remainder into the next block", () => {
+        const Processor = loadProcessor();
+        const worklet = new Processor({ processorOptions: { block: 2 } });
+
+        worklet.process([[new Float32Array([1, 2, 3, 4, 5])]]);
+
+        const posted = worklet.port.postMessage.mock.calls;
+        expect(posted.length).toBe(2);
+        expect([...posted[1]![0]]).toEqual([3, 4]);
     });
 });

@@ -56,26 +56,35 @@ function fakeSocket(): LiveSocket & {
 
 /** The microphone and audio pipeline, so a turn can run without either. */
 function installAudio(): { emit: (block: Float32Array) => void } {
-    let onaudioprocess: ((e: any) => void) | null = null;
+    let deliver: ((e: any) => void) | null = null;
     const node = {
         connect: vi.fn(),
         disconnect: vi.fn(),
-        set onaudioprocess(fn: ((e: any) => void) | null) {
-            onaudioprocess = fn;
-        },
-        get onaudioprocess() {
-            return onaudioprocess;
+        port: {
+            set onmessage(fn: ((e: any) => void) | null) {
+                deliver = fn;
+            },
+            get onmessage() {
+                return deliver;
+            },
         },
     };
+    Reflect.set(
+        window,
+        "AudioWorkletNode",
+        class {
+            constructor() {
+                return node;
+            }
+        },
+    );
     class FakeContext {
         sampleRate = 16000;
         destination = {};
         createMediaStreamSource() {
             return { connect: vi.fn() };
         }
-        createScriptProcessor() {
-            return node;
-        }
+        audioWorklet = { addModule: vi.fn(async () => {}) };
         close() {}
     }
     Reflect.set(window, "AudioContext", FakeContext);
@@ -83,7 +92,7 @@ function installAudio(): { emit: (block: Float32Array) => void } {
         getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })),
     });
     return {
-        emit: block => onaudioprocess?.({ inputBuffer: { getChannelData: () => block } }),
+        emit: block => deliver?.({ data: block }),
     };
 }
 

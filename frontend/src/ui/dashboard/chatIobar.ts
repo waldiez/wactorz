@@ -235,6 +235,20 @@ function listening(btn: HTMLButtonElement, on: boolean): void {
     btn.setAttribute("aria-label", label);
 }
 
+/** Why the microphone did not open, said in terms of what to do about it. */
+function micTrouble(error: unknown): string {
+    const name = error instanceof DOMException ? error.name : "";
+    if (name === "NotAllowedError" || name === "SecurityError") {
+        return "Microphone permission was denied.";
+    }
+    if (name === "NotFoundError" || name === "NotReadableError") {
+        return "No microphone is available.";
+    }
+    // Anything else is the reason the capture itself gave -- a browser that
+    // cannot do this, or a page not served from somewhere it is allowed on.
+    return error instanceof Error && error.message ? error.message : "The microphone could not be opened.";
+}
+
 async function startLive(mic: LiveMic, input: HTMLTextAreaElement, btn: HTMLButtonElement): Promise<void> {
     // What the composer writes itself, so an edit by the person can be told
     // apart from the reading being applied.
@@ -264,14 +278,10 @@ async function startLive(mic: LiveMic, input: HTMLTextAreaElement, btn: HTMLButt
         // Asked rather than assumed: the turn can already be over if it was
         // ended while the permission prompt was still open.
         listening(btn, mic.listening);
-    } catch {
+    } catch (error) {
         input.removeEventListener("input", edited);
         listening(btn, false);
-        toast.show({
-            type: "alert-error",
-            title: "Mic blocked",
-            message: "Microphone permission denied, or the connection dropped.",
-        });
+        toast.show({ type: "alert-error", title: "Voice input unavailable", message: micTrouble(error) });
     }
 }
 

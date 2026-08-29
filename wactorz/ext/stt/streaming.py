@@ -36,7 +36,7 @@ CONNECT_TIMEOUT = 10.0
 IDLE_TIMEOUT = 300.0
 
 #: The word the server waits for before it flushes and closes.
-DONE = "Done!"
+DONE = "Done"
 
 #: How much audio may wait to be sent before the oldest is dropped. A client
 #: that streams faster than the recogniser consumes -- or a recogniser that

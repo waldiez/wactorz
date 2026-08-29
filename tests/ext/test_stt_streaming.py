@@ -9,6 +9,7 @@ only when the server has moved past it.
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -24,6 +25,11 @@ from wactorz.ext.stt.streaming import (
     transcribe_stream,
 )
 
+#: What a sherpa-onnx server accepts as the end of the audio. Written out rather
+#: than imported from the client under test, which would let the two agree on a
+#: word the real server rejects.
+END_OF_AUDIO = "Done"
+
 
 class FakeRecogniser:
     """A sherpa-onnx-shaped server: replies with whatever it is told to."""
@@ -32,6 +38,7 @@ class FakeRecogniser:
         self.script = script
         self.audio: list[bytes] = []
         self.finished = False
+        self.rejected: str | None = None
 
     async def handle(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -41,7 +48,12 @@ class FakeRecogniser:
         async for message in ws:
             if message.type is web.WSMsgType.BINARY:
                 self.audio.append(message.data)
-            elif message.type is web.WSMsgType.TEXT and message.data == DONE:
+            elif message.type is web.WSMsgType.TEXT:
+                # The real server compares for equality and treats anything else
+                # as audio, which ends the connection rather than the utterance.
+                if message.data != END_OF_AUDIO:
+                    self.rejected = message.data
+                    break
                 self.finished = True
                 break
         await ws.close()
@@ -78,7 +90,7 @@ async def collect(uri: str, frames: list[bytes]) -> list[Partial]:
     """Run one session over `frames` and return every reading it produced."""
     seen: list[Partial] = []
 
-    async def audio() -> Any:
+    async def audio() -> AsyncIterator[bytes]:
         for frame in frames:
             yield frame
 
@@ -304,3 +316,20 @@ class TestAReplyThatMakesNoSense:
 
         # One malformed reply is not a reason to abandon a turn going fine.
         assert any(r.text == "still here" for r in readings)
+
+
+class TestTheEndOfAudioMarker:
+    """The word that ends an utterance is the server's, not ours to choose."""
+
+    async def test_the_server_is_told_the_word_it_waits_for(self, serve: Any) -> None:
+        uri, fake = await serve([{"text": "hello there", "segment": 0}])
+
+        await collect(uri, [b"\x00" * 8])
+
+        # A marker the server does not know is read as audio, which ends the
+        # connection before it can flush the last thing it heard.
+        assert fake.rejected is None
+        assert fake.finished
+
+    def test_the_marker_is_the_one_the_recogniser_expects(self) -> None:
+        assert DONE == END_OF_AUDIO

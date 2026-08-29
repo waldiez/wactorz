@@ -1293,6 +1293,8 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `DEPLOY_<NODE>_SSH_PORT` | SSH port (default `22`) |
 | `DEPLOY_KNOWN_HOSTS` | Where learned SSH host keys are stored (default `<WACTORZ_STATE_DIR>/known_hosts`) |
 | `DEPLOY_STRICT_HOST_KEYS` | `1` = never learn a host key on first contact; unknown hosts are refused |
+| `WACTORZ_STT` | Speech recognition branch: `off` (default), `browser`, `server` or `host`. The browser reads it from `/api/config`, so one build serves deployments that differ |
+| `WACTORZ_STT_URI` | Where the recogniser is. A `tcp://` address is a Wyoming service, which transcribes a whole recording at once; a `ws://` or `wss://` address is a sherpa-onnx streaming server, which returns words while you are still speaking. The scheme is what chooses between them |
 
 ---
 

@@ -166,7 +166,7 @@ antennas, gaze, speech, expressive gestures, and optional Home Assistant actions
 <h2 id="install-dependencies">Install dependencies</h2>
 <p>The catalogue installer can install recipe dependencies on first spawn. To install them
 manually:</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"reachy-mini==1.8.4"</span><span class="w"> </span>numpy<span class="w"> </span>edge-tts<span class="w"> </span>webrtcvad-wheels
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;reachy-mini==1.8.4&quot;</span><span class="w"> </span>numpy<span class="w"> </span>edge-tts<span class="w"> </span>webrtcvad-wheels
 </code></pre></div>
 
 <p><code>edge-tts</code> is required for the <code>say</code> command (speech synthesis); the other
@@ -193,7 +193,7 @@ running Wactorz if you want the louder speech.</p>
 <p>The Reachy SDK usually auto-detects the robot. If discovery is unreliable, publish the host
 once, then say <code>reconnect</code> to apply it (no restart needed):</p>
 <div class="highlight"><pre><span></span><code>topic: custom/reachy/config
-payload: {"robot_host": "192.168.1.42"}
+payload: {&quot;robot_host&quot;: &quot;192.168.1.42&quot;}
 </code></pre></div>
 
 <p>Use the robot's IP address or hostname. The current host is reported in
@@ -249,13 +249,13 @@ thing that actually overheats reports through the fault watch above.</p>
 run the robot wirelessly and do <strong>not</strong> have the Reachy Mini control app open, pin
 <code>network</code> so the agent connects straight to the robot and skips the localhost probe:</p>
 <div class="highlight"><pre><span></span><code>topic: custom/reachy/config
-payload: {"connection_mode": "network"}
+payload: {&quot;connection_mode&quot;: &quot;network&quot;}
 </code></pre></div>
 
 <p>When you do want the Reachy Mini control app or its <strong>simulator</strong> (for example a shared
 demo, or working with no physical robot), pin <code>local</code> instead:</p>
 <div class="highlight"><pre><span></span><code>topic: custom/reachy/config
-payload: {"connection_mode": "local"}
+payload: {&quot;connection_mode&quot;: &quot;local&quot;}
 </code></pre></div>
 
 <p>After publishing, say <code>reconnect</code> to apply the new mode. You can also set
@@ -279,13 +279,13 @@ turn on the light and nod
 </code></pre></div>
 
 <p>Other agents can send the same requests directly:</p>
-<div class="highlight"><pre><span></span><code><span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">"reachy-mini"</span><span class="p">,</span> <span class="s2">"do a happy gesture"</span><span class="p">)</span>
-<span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">"reachy-mini"</span><span class="p">,</span> <span class="s2">"say hello"</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-mini&quot;</span><span class="p">,</span> <span class="s2">&quot;do a happy gesture&quot;</span><span class="p">)</span>
+<span class="k">await</span> <span class="n">agent</span><span class="o">.</span><span class="n">send_to</span><span class="p">(</span><span class="s2">&quot;reachy-mini&quot;</span><span class="p">,</span> <span class="s2">&quot;say hello&quot;</span><span class="p">)</span>
 </code></pre></div>
 
 <h2 id="use-reachy-as-the-wactorz-interface">Use Reachy as the Wactorz interface</h2>
 <p>Use the explicit <code>ask Wactorz</code> prefix in chat to bypass Reachy's local robot planner:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">what</span><span class="err">'</span><span class="n">s</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">weather</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">Athens</span><span class="vm">?</span>
+<div class="highlight"><pre><span></span><code><span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">what</span><span class="err">&#39;</span><span class="n">s</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">weather</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">Athens</span><span class="vm">?</span>
 <span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">turn</span><span class="w"> </span><span class="k">off</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">living</span><span class="o">-</span><span class="n">room</span><span class="w"> </span><span class="n">light</span>
 <span class="nv">@reachy</span><span class="o">-</span><span class="n">mini</span><span class="w"> </span><span class="n">ask</span><span class="w"> </span><span class="n">Wactorz</span><span class="w"> </span><span class="n">summarize</span><span class="w"> </span><span class="n">my</span><span class="w"> </span><span class="n">calendar</span><span class="w"> </span><span class="n">today</span>
 </code></pre></div>
@@ -310,7 +310,7 @@ returns the answer to chat, and speaks it through Reachy:</p>
 
 <p>Or over MQTT:</p>
 <div class="highlight"><pre><span></span><code><span class="kc">t</span><span class="err">opic</span><span class="p">:</span><span class="w"> </span><span class="err">cus</span><span class="kc">t</span><span class="err">om/reachy/cmd/ask_voice</span>
-<span class="err">payload</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">}</span>
+<span class="err">payload</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span><span class="p">}</span>
 </code></pre></div>
 
 <p><code>ask_voice</code> remains one-shot. There is deliberately no always-on microphone or wake
@@ -328,7 +328,7 @@ pip<span class="w"> </span>install<span class="w"> </span>openai-whisper
 <span class="nv">REACHY_STT_MODEL</span><span class="o">=</span>base
 
 <span class="c1"># Hosted OpenAI transcription (explicit opt-in; audio leaves the host)</span>
-pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'wactorz[openai]'</span>
+pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;wactorz[openai]&#39;</span>
 <span class="nv">REACHY_STT_BACKEND</span><span class="o">=</span>openai
 <span class="nv">REACHY_STT_MODEL</span><span class="o">=</span>gpt-4o-transcribe
 <span class="nv">OPENAI_API_KEY</span><span class="o">=</span>...
@@ -584,13 +584,13 @@ cancellation.</p>
 </tbody>
 </table>
 <p>Examples:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"wake"</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;wake&quot;</span><span class="p">}</span>
 </code></pre></div>
 
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"pose"</span><span class="p">,</span><span class="w"> </span><span class="nt">"yaw"</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span><span class="w"> </span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.6</span><span class="p">,</span><span class="w"> </span><span class="nt">"method"</span><span class="p">:</span><span class="w"> </span><span class="s2">"minjerk"</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;pose&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;yaw&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.6</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;method&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;minjerk&quot;</span><span class="p">}</span>
 </code></pre></div>
 
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"antennas"</span><span class="p">,</span><span class="w"> </span><span class="nt">"left"</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">,</span><span class="w"> </span><span class="nt">"right"</span><span class="p">:</span><span class="w"> </span><span class="mi">-45</span><span class="p">,</span><span class="w"> </span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;antennas&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;left&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;right&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">-45</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="p">}</span>
 </code></pre></div>
 
 <h2 id="camera-and-microphone">Camera and microphone</h2>
@@ -599,19 +599,19 @@ bytes come back in the command result (and, optionally, on a one-shot MQTT topic
 saved to a file) — they are never written into the retained <code>custom/reachy/state</code>
 heartbeat.</p>
 <p>Capture a still frame (returns <code>image_b64</code>, plus <code>width</code>/<code>height</code>):</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"camera"</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;camera&quot;</span><span class="p">}</span>
 </code></pre></div>
 
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"camera"</span><span class="p">,</span><span class="w"> </span><span class="nt">"format"</span><span class="p">:</span><span class="w"> </span><span class="s2">"png"</span><span class="p">,</span><span class="w"> </span><span class="nt">"path"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/tmp/shot.png"</span><span class="p">,</span><span class="w"> </span><span class="nt">"publish"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;camera&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;format&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;png&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;path&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;/tmp/shot.png&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;publish&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}</span>
 </code></pre></div>
 
 <p>Record a short mic clip (returns <code>audio_b64</code> WAV, <code>samplerate</code>, <code>channels</code>,
 <code>duration_s</code>, and a best-effort <code>doa_deg</code>):</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"listen"</span><span class="p">,</span><span class="w"> </span><span class="nt">"duration"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;listen&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;duration&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">}</span>
 </code></pre></div>
 
 <p>Direction of arrival only, without recording:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"doa"</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;doa&quot;</span><span class="p">}</span>
 </code></pre></div>
 
 <p>These commands require a video/audio-capable media backend and that the daemon holds
@@ -629,14 +629,14 @@ then make up a line. Plain English "what do you see?", "what's in front of you?"
 behind you" use the dedicated <code>look_behind</code> path: Reachy turns to a mechanically safe
 155-degree rear view, captures without recentering, and stays there. Say "face me" or
 "turn back" to return forward.</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"describe"</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;describe&quot;</span><span class="p">}</span>
 </code></pre></div>
 
 <p>Ask a specific question about the view, or get the text without speaking it:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"describe"</span><span class="p">,</span><span class="w"> </span><span class="nt">"question"</span><span class="p">:</span><span class="w"> </span><span class="s2">"how many people are here?"</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;describe&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;question&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;how many people are here?&quot;</span><span class="p">}</span>
 </code></pre></div>
 
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"describe"</span><span class="p">,</span><span class="w"> </span><span class="nt">"say"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;describe&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;say&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
 </code></pre></div>
 
 <p>This needs the same video-capable media backend as <code>camera</code>, plus a configured LLM

@@ -9,7 +9,7 @@
   </picture>
 </p>
 
-<p align="center"><strong>AI agents that don't stop when you close the tab.</strong></p>
+<p align="center"><strong>Resilient AI agents that run 24/7 — built for physical AI.</strong></p>
 
 <p align="center">
 <a href="https://docs.waldiez.io/wactorz/">Docs</a> |
@@ -26,7 +26,7 @@
 <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python"/></a>
 <a href="https://mosquitto.org"><img src="https://img.shields.io/badge/transport-MQTT-purple.svg" alt="MQTT"/></a>
 <a href="https://github.com/waldiez/wactorz/blob/main/ha-addon/DOCS.md"><img src="https://img.shields.io/badge/Home%20Assistant-addon-41BDF5.svg" alt="Home Assistant"/></a>
-<img src="https://img.shields.io/badge/status-alpha-orange.svg" alt="Status: alpha"/>
+<img src="https://img.shields.io/badge/status-beta-yellow.svg" alt="Status: beta"/>
 </p>
 
 ---
@@ -40,9 +40,19 @@
   <p align="center"><img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/demo.gif" width="720" alt="Wactorz dashboard demo"/></p>
 -->
 
-Wactorz runs LLM-driven agents as long-lived actors on the hardware you already have - a Raspberry Pi in the garage, an old laptop, a VM in your closet. You describe what you want in chat; the planner writes the Python, spawns it on a node, and supervises it. When an agent crashes, only that one restarts. State persists across restarts and you can move an agent to a different machine without losing it.
+Wactorz is a runtime for **physical AI**: LLM-driven agents that live next to the
+sensors, machines and spaces they act on — not in a cloud notebook. Agents run as
+long-lived, supervised actors on the hardware you already have: a Raspberry Pi in
+the garage, a factory gateway, an old laptop, a VM in your closet. You describe
+what you want in chat; the planner writes the Python, spawns it on a node, and
+supervises it. When an agent crashes, only that one restarts — with its state
+intact — and you can migrate an agent to a different machine without losing it.
 
-It runs on MQTT, so anything happening inside the system surfaces as a topic external code can subscribe to. Home Assistant talks to it the same way Discord and Telegram do - it's one channel among several, alongside a REST API and an MCP server. The LLM provider is configurable (Anthropic, OpenAI, Gemini, NIM) or fully local via Ollama for offline use.
+Everything rides on MQTT, so anything happening inside the system surfaces as a
+topic external code can subscribe to. Home Assistant talks to it the same way
+Discord and Telegram do — one channel among several, alongside a REST API and an
+MCP server. The LLM provider is configurable (Anthropic, OpenAI, Gemini, NIM) or
+fully local via Ollama, so the system keeps running with no cloud at all.
 
 ---
 
@@ -86,11 +96,10 @@ python -m wactorz
 
 Dashboard: `http://localhost:8888`.
 
-> [!WARNING]
-> **Run Wactorz only on a trusted local network.** The dashboard, REST API, and MQTT
-> broker are unauthenticated by default, and agents can execute code. Do not expose
-> ports `8888`, `8000`, or `1883` to the internet or an untrusted LAN. See
-> [Security](#security) before deploying anywhere shared.
+> [!IMPORTANT]
+> Wactorz binds to `127.0.0.1` by default and its agents execute code. **Set `API_KEY`
+> before exposing it beyond loopback** — it warns at startup if you expose it without
+> one. See [Security](#security) before deploying anywhere shared.
 
 If you'd rather skip the clone, [pull the image from Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html). To run without an API key, use Ollama:
 
@@ -145,6 +154,7 @@ flowchart LR
 | REST API | `python -m wactorz --interface rest` |
 | Discord | `python -m wactorz --interface discord` |
 | Telegram | `python -m wactorz --interface telegram` |
+| WhatsApp | `python -m wactorz --interface whatsapp` |
 | MCP server | `wactorz-mcp` |
 | Home Assistant addon | One-click install inside the HA Supervisor |
 
@@ -215,28 +225,41 @@ See [docs/evaluation.md](docs/evaluation.md) for the benchmark format and metric
 
 ## Security
 
-> Wactorz is under active development. Treat the current release as **alpha** from a
-> security standpoint and deploy accordingly.
+> Wactorz is under active development. The perimeter is closed by default; the
+> remaining caveats below are about what an *authenticated* caller can do.
 
-**Threat model — what to assume today:**
+**What protects an install:**
 
-- The **monitor dashboard, REST API, WebSocket, and MQTT broker are unauthenticated**
-  by default. Anyone who can reach those ports can spawn, control, and delete agents.
-- **Agents can execute code** (the planner generates and runs Python; remote nodes run
-  spawned code over SSH/MQTT). Anyone who can reach the control plane can run code on
-  the host and on any connected node.
-- The bundled MQTT broker ships with **anonymous access** for local development.
+- **The API and dashboard require a key.** Set `API_KEY` and every route, the WebSocket
+  handshake, the Prometheus scrape, and the login flow are authenticated — constant-time
+  comparison, session cookies that survive a restart, and sign-in throttling.
+- **The server binds to `127.0.0.1`.** Reaching it from the network is deliberate: set
+  `WACTORZ_BIND_HOST` *and* `WACTORZ_EXPOSED_OK=1`. Startup warns if it is exposed
+  without a key, or with a guessable one.
+- **The broker requires credentials.** Anonymous MQTT is off, and remote nodes are given
+  credentials rather than connecting openly.
+- Origin and Host allow-lists guard the HTTP surface and the WebSocket handshake against
+  cross-site requests and DNS rebinding.
+
+**What to still assume:**
+
+- **Agents execute code.** The planner generates and runs Python, and remote nodes run
+  code delivered over MQTT. Anyone holding the API key or the broker credentials can run
+  code on the host and on every connected node — treat both as root-equivalent, the same
+  way you would an Ansible control node.
+- Generated code is screened by a best-effort blocklist, **not a sandbox**.
 
 **Deployment rules:**
 
-- ✅ Run on a **trusted local network** you control (a home LAN, a private VLAN).
+- ✅ Set `API_KEY` before exposing anything beyond loopback.
 - ✅ Prefer the **Home Assistant add-on**, which keeps the UI behind HA's ingress auth.
-- ❌ **Do not** expose ports `8888` (dashboard), `8000` (REST/WS), or `1883` (MQTT)
-  to the internet or a shared/untrusted network.
-- ❌ **Do not** run it as a multi-user or multi-tenant service yet.
-- If you must reach it remotely, put it behind a VPN or an authenticating reverse
-  proxy — never a bare port-forward.
+- ✅ Keep the broker on a network you control, with credentials set.
+- ❌ **Do not** run it as a multi-user or multi-tenant service — there is one key, not
+  per-user accounts, and no isolation between agents.
+- If you reach it remotely, prefer a VPN or an authenticating reverse proxy over a bare
+  port-forward, even with a key set.
 
+More detail in [docs/security.md](https://github.com/waldiez/wactorz/blob/main/docs/security.md).
 Found a security issue? Please see [SECURITY.md](https://github.com/waldiez/wactorz/blob/main/SECURITY.md)
 rather than opening a public issue.
 
@@ -269,6 +292,7 @@ rather than opening a public issue.
 | [API reference](https://github.com/waldiez/wactorz/blob/main/docs/api.md) | REST endpoints and payloads |
 | [Deployment](https://docs.waldiez.io/wactorz/guide/deployment.html) | Docker, Home Assistant add-on, environment setup |
 | [Prometheus](https://docs.waldiez.io/wactorz/guide/prometheus.html) | Metrics and monitoring |
+| [Security](https://github.com/waldiez/wactorz/blob/main/docs/security.md) | Auth, exposure, broker credentials, threat model |
 | [Evaluation harness](https://github.com/waldiez/wactorz/blob/main/docs/evaluation.md) | Compare models per LLM call site |
 | [Technical reference](https://github.com/waldiez/wactorz/blob/main/docs/reference.md) | Deeper internals |
 

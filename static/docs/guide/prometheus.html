@@ -196,10 +196,10 @@ through and the scrape config is rendered with the header when a key is set.</p>
 <p><strong>Your own Prometheus</strong> must be told:</p>
 <div class="highlight"><pre><span></span><code><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">job_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-python</span>
 <span class="w">    </span><span class="nt">static_configs</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">targets</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;wactorz:8000&quot;</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">targets</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"wactorz:8000"</span><span class="p p-Indicator">]</span>
 <span class="w">    </span><span class="nt">authorization</span><span class="p">:</span>
 <span class="w">      </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Bearer</span>
-<span class="w">      </span><span class="nt">credentials</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;your-api-key&#39;</span>
+<span class="w">      </span><span class="nt">credentials</span><span class="p">:</span><span class="w"> </span><span class="s">'your-api-key'</span>
 </code></pre></div>
 
 <p>Prefer <code>credentials_file</code> where the scraper reads its configuration from a
@@ -265,7 +265,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-fsS<span class="w"> </span>http://localhost:8000/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
 
 <span class="c1"># With API_KEY set:</span>
-curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>http://localhost:8000/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
+curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">"</span><span class="w"> </span>http://localhost:8000/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
 </code></pre></div>
 
 <p>You should see Prometheus-formatted output such as <code>wactorz_actors_total</code>, <code>wactorz_http_requests_total</code>, and process metrics.</p>

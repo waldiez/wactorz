@@ -178,20 +178,20 @@ no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># wactorz/ext/&lt;name&gt;/__init__.py</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">setup</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Register routes, create state, wire lifecycle hooks.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Register routes, create state, wire lifecycle hooks."""</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">public_config</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a dict merged into the /api/config response, namespaced by ext.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Return a dict merged into the /api/config response, namespaced by ext."""</span>
 
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_ready</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Called after every extension&#39;s setup() has run — for cross-extension</span>
-<span class="sd">       logic that needs another extension already wired.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Called after every extension's setup() has run — for cross-extension</span>
+<span class="sd">       logic that needs another extension already wired."""</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">actor_decorator</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">actor</span><span class="p">,</span> <span class="nb">dict</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a per-actor payload enricher (or None to opt out).&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Return a per-actor payload enricher (or None to opt out)."""</span>
 
 <span class="c1"># Optional: declare ordering dependencies for on_ready().</span>
-<span class="n">__deps__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;other-ext&quot;</span><span class="p">]</span>  <span class="c1"># this on_ready() runs after other-ext&#39;s</span>
+<span class="n">__deps__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"other-ext"</span><span class="p">]</span>  <span class="c1"># this on_ready() runs after other-ext's</span>
 </code></pre></div>
 
 <h3 id="protocol">Protocol</h3>
@@ -229,9 +229,9 @@ in place:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.core</span><span class="w"> </span><span class="kn">import</span> <span class="n">contract</span>  <span class="c1"># ACTOR_REGISTRY app-key (core-provided)</span>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">actor_decorator</span><span class="p">(</span><span class="n">app</span><span class="p">):</span>
-    <span class="n">index</span> <span class="o">=</span> <span class="n">app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;my-index&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>       <span class="c1"># your own per-actor data</span>
+    <span class="n">index</span> <span class="o">=</span> <span class="n">app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"my-index"</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>       <span class="c1"># your own per-actor data</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">decorate</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">payload</span><span class="p">):</span>
-        <span class="n">payload</span><span class="p">[</span><span class="s2">&quot;myField&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">actor</span><span class="o">.</span><span class="n">actor_id</span><span class="p">)</span>
+        <span class="n">payload</span><span class="p">[</span><span class="s2">"myField"</span><span class="p">]</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">actor</span><span class="o">.</span><span class="n">actor_id</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">decorate</span>
 </code></pre></div>
 
@@ -253,7 +253,7 @@ in place:</p>
 └── __init__.py     # setup() registers /api/tts + /api/tts/voices,
                     # public_config() reports availability,
                     # on_startup warms the voice list. edge-tts is imported
-                    # inside the handlers so the ext is a no-op when it&#39;s absent.
+                    # inside the handlers so the ext is a no-op when it's absent.
 </code></pre></div>
 
 <hr />
@@ -280,7 +280,7 @@ never by calling other components directly.</p>
 
 <h3 id="wiring-in-maints">Wiring in main.ts</h3>
 <p><code>register()</code> is called once during startup, after <code>/api/config</code> is seeded:</p>
-<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">register</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;./ext/myname&quot;</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">register</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"./ext/myname"</span><span class="p">;</span>
 
 <span class="nx">registerMyExt</span><span class="p">({</span><span class="w"> </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">_apiBase</span><span class="p">,</span><span class="w"> </span><span class="nx">available</span><span class="w"> </span><span class="p">});</span>
 </code></pre></div>
@@ -291,10 +291,10 @@ into <code>safeStorage</code> (paired with a <code>__server</code> baseline so a
 survives until the server value itself changes). Core registers only its own
 keys; your barrel contributes the extension's at module load — before
 <code>seedServerConfig()</code> runs:</p>
-<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerConfigEntry</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;../../config/serverConfig&quot;</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerConfigEntry</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"../../config/serverConfig"</span><span class="p">;</span>
 
 <span class="c1">// Fields your backend public_config() returns, namespaced by ext name.</span>
-<span class="nx">registerConfigEntry</span><span class="p">(</span><span class="s2">&quot;wactorz-myext-flag&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="w"> </span><span class="p">=&gt;</span>
+<span class="nx">registerConfigEntry</span><span class="p">(</span><span class="s2">"wactorz-myext-flag"</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="w"> </span><span class="p">=&gt;</span>
 <span class="w">    </span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">myext</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">unknown</span><span class="o">&gt;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">flag</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span><span class="p">,</span>
 <span class="p">);</span>
 </code></pre></div>
@@ -303,14 +303,14 @@ keys; your barrel contributes the extension's at module load — before
 <h3 id="dashboard-views-and-icons">Dashboard views and icons</h3>
 <p>An extension that adds a dashboard tab uses the two registries — core never
 imports extension views or icon names:</p>
-<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;../../ui/dashboard/icons&quot;</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">"../../ui/dashboard/icons"</span><span class="p">;</span>
 
 <span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="c1">// 1. Register the icon BEFORE registerView() uses its name.</span>
-<span class="w">    </span><span class="nx">registerIcon</span><span class="p">(</span><span class="s2">&quot;hexagon&quot;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&lt;path d=&quot;M21 16V8a2 …&quot;/&gt;&#39;</span><span class="p">);</span>
+<span class="w">    </span><span class="nx">registerIcon</span><span class="p">(</span><span class="s2">"hexagon"</span><span class="p">,</span><span class="w"> </span><span class="s1">'&lt;path d="M21 16V8a2 …"/&gt;'</span><span class="p">);</span>
 
 <span class="w">    </span><span class="c1">// 2. Register the tab: nav button + lazy view builder.</span>
-<span class="w">    </span><span class="nx">config</span><span class="p">.</span><span class="nx">registerView</span><span class="p">(</span><span class="s2">&quot;mytab&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;hexagon&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;My Tab&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">buildMyView</span><span class="p">(</span><span class="nx">config</span><span class="p">.</span><span class="nx">onRender</span><span class="p">));</span>
+<span class="w">    </span><span class="nx">config</span><span class="p">.</span><span class="nx">registerView</span><span class="p">(</span><span class="s2">"mytab"</span><span class="p">,</span><span class="w"> </span><span class="s2">"hexagon"</span><span class="p">,</span><span class="w"> </span><span class="s2">"My Tab"</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">buildMyView</span><span class="p">(</span><span class="nx">config</span><span class="p">.</span><span class="nx">onRender</span><span class="p">));</span>
 <span class="p">}</span>
 </code></pre></div>
 
@@ -385,7 +385,7 @@ the extension through an environment variable:</p>
 <span class="w">    </span><span class="nt">networks</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">wactorz-net</span><span class="p p-Indicator">]</span>
 </code></pre></div>
 
-<div class="highlight"><pre><span></span><code><span class="c1"># Layer the overlay onto either base stack; both read .env, so set the ext&#39;s</span>
+<div class="highlight"><pre><span></span><code><span class="c1"># Layer the overlay onto either base stack; both read .env, so set the ext's</span>
 <span class="c1"># activation var (e.g. MY_EXT_URL=…) there.</span>
 docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.yaml<span class="w">     </span>-f<span class="w"> </span>compose.&lt;ext&gt;.yaml<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
 docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>-f<span class="w"> </span>compose.&lt;ext&gt;.yaml<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d

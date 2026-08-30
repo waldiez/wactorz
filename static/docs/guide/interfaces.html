@@ -346,9 +346,9 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 </code></pre></div>
 
 <div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/chat<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;X-API-Key: my-secret-key&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;message&quot;: &quot;turn off the lights&quot;}&#39;</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"X-API-Key: my-secret-key"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"message": "turn off the lights"}'</span>
 </code></pre></div>
 
 <hr />
@@ -385,7 +385,7 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 wactorz<span class="w"> </span>--interface<span class="w"> </span>rest<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 
 <span class="c1"># Terminal 2: smoke-test MCP tool discovery</span>
-python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import asyncio, wactorz.interfaces.mcp_server as s; print([t.name for t in asyncio.run(s.mcp.list_tools())])&quot;</span>
+python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import asyncio, wactorz.interfaces.mcp_server as s; print([t.name for t in asyncio.run(s.mcp.list_tools())])"</span>
 </code></pre></div>
 
 <p>If your editable install does not have a <code>wactorz-mcp</code> script yet, use the module form:</p>
@@ -476,12 +476,12 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 <p>Run <code>list_agents</code>, <code>ask_wactorz</code> with <code>/agents</code>, and read <code>wactorz://config</code> first. Try <code>ha_list_entities</code> only after <code>HA_URL</code> and <code>HA_TOKEN</code> are configured and reachable.</p>
 <h4 id="client-config-example">Client config example</h4>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;wactorz&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;python&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;-m&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;wactorz.interfaces.mcp_server&quot;</span><span class="p">],</span>
-<span class="w">      </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nt">&quot;WACTORZ_URL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8000&quot;</span>
+<span class="w">  </span><span class="nt">"mcpServers"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"wactorz"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"python"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"-m"</span><span class="p">,</span><span class="w"> </span><span class="s2">"wactorz.interfaces.mcp_server"</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"env"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"WACTORZ_URL"</span><span class="p">:</span><span class="w"> </span><span class="s2">"http://localhost:8000"</span>
 <span class="w">      </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">}</span>
@@ -672,7 +672,7 @@ wactorz<span class="w"> </span>--no-monitor
 
 
 <span class="c1"># Register in cli.py alongside the other interfaces</span>
-<span class="k">elif</span> <span class="n">interface</span> <span class="o">==</span> <span class="s2">&quot;my-interface&quot;</span><span class="p">:</span>
+<span class="k">elif</span> <span class="n">interface</span> <span class="o">==</span> <span class="s2">"my-interface"</span><span class="p">:</span>
     <span class="n">iface</span> <span class="o">=</span> <span class="n">MyInterface</span><span class="p">(</span><span class="n">main_actor</span><span class="p">)</span>
     <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span><span class="n">iface</span><span class="o">.</span><span class="n">run</span><span class="p">(),</span> <span class="n">system</span><span class="o">.</span><span class="n">run_forever</span><span class="p">())</span>
 </code></pre></div>

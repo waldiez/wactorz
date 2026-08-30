@@ -226,30 +226,30 @@
 <h2 id="spawning-agents-on-a-remote-node">Spawning agents on a remote node</h2>
 <p>From the main Wactorz chat, add a <code>"node"</code> field to any spawn request. The planner and main_actor both support this — or you can do it manually.</p>
 <h4 id="natural-language-via-planner">Natural language (via planner)</h4>
-<div class="highlight"><pre><span></span><code>&quot;deploy a temperature sensor agent to rpi-livingroom&quot;
-&quot;spawn an agent on rpi-bedroom that reads the door sensor every 30 seconds&quot;
+<div class="highlight"><pre><span></span><code>"deploy a temperature sensor agent to rpi-livingroom"
+"spawn an agent on rpi-bedroom that reads the door sensor every 30 seconds"
 </code></pre></div>
 
 <h4 id="manual-spawn-via-chat">Manual spawn via chat</h4>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w">          </span><span class="s2">&quot;temp-sensor-agent&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;node&quot;</span><span class="p">:</span><span class="w">          </span><span class="s2">&quot;rpi-livingroom&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w">          </span><span class="s2">&quot;dynamic&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w">   </span><span class="s2">&quot;Reads temperature from DHT22 sensor&quot;</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;poll_interval&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;max_restarts&quot;</span><span class="p">:</span><span class="w">  </span><span class="mi">5</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;restart_delay&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">3.0</span><span class="p">,</span>
-<span class="w">  </span><span class="nt">&quot;install&quot;</span><span class="p">:</span><span class="w">       </span><span class="p">[</span><span class="s2">&quot;adafruit-circuitpython-dht&quot;</span><span class="p">],</span>
-<span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;</span>
+<span class="w">  </span><span class="nt">"name"</span><span class="p">:</span><span class="w">          </span><span class="s2">"temp-sensor-agent"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"node"</span><span class="p">:</span><span class="w">          </span><span class="s2">"rpi-livingroom"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"type"</span><span class="p">:</span><span class="w">          </span><span class="s2">"dynamic"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"description"</span><span class="p">:</span><span class="w">   </span><span class="s2">"Reads temperature from DHT22 sensor"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"poll_interval"</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"max_restarts"</span><span class="p">:</span><span class="w">  </span><span class="mi">5</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"restart_delay"</span><span class="p">:</span><span class="w"> </span><span class="mf">3.0</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"install"</span><span class="p">:</span><span class="w">       </span><span class="p">[</span><span class="s2">"adafruit-circuitpython-dht"</span><span class="p">],</span>
+<span class="w">  </span><span class="nt">"code"</span><span class="p">:</span><span class="w"> </span><span class="s2">"</span>
 <span class="s2">    async def setup(agent):</span>
-<span class="s2">        await agent.log(&#39;DHT22 sensor agent ready&#39;)</span>
+<span class="s2">        await agent.log('DHT22 sensor agent ready')</span>
 
 <span class="s2">    async def process(agent):</span>
 <span class="s2">        import random   # replace with real adafruit_dht read</span>
 <span class="s2">        temp = round(20 + random.uniform(-2, 2), 1)</span>
-<span class="s2">        await agent.publish(&#39;sensors/temperature&#39;, {&#39;value&#39;: temp, &#39;unit&#39;: &#39;C&#39;, &#39;node&#39;: agent.node})</span>
-<span class="s2">        await agent.log(f&#39;Temperature: {temp}C&#39;)</span>
-<span class="s2">  &quot;</span>
+<span class="s2">        await agent.publish('sensors/temperature', {'value': temp, 'unit': 'C', 'node': agent.node})</span>
+<span class="s2">        await agent.log(f'Temperature: {temp}C')</span>
+<span class="s2">  "</span>
 <span class="p">}</span>
 </code></pre></div>
 
@@ -297,7 +297,7 @@ to it whatever credentials a node holds.</p>
 <h3 id="host-key-verification">Host key verification</h3>
 <p>SSH host keys are checked on every connection. A machine that has not been connected to before has its key recorded on first contact — the same trust-on-first-use that interactive <code>ssh</code> does — and any later change to that key fails the connection instead of being accepted.</p>
 <p>Learned keys live in <code>&lt;WACTORZ_STATE_DIR&gt;/known_hosts</code>, or wherever <code>DEPLOY_KNOWN_HOSTS</code> points. Set <code>DEPLOY_STRICT_HOST_KEYS=1</code> to turn off first-use learning entirely; every target's key must then already be in the file:</p>
-<div class="highlight"><pre><span></span><code>ssh-keyscan<span class="w"> </span><span class="m">192</span>.168.1.52<span class="w"> </span>&gt;&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEPLOY_KNOWN_HOSTS</span><span class="s2">&quot;</span><span class="w">   </span><span class="c1"># after verifying the fingerprint</span>
+<div class="highlight"><pre><span></span><code>ssh-keyscan<span class="w"> </span><span class="m">192</span>.168.1.52<span class="w"> </span>&gt;&gt;<span class="w"> </span><span class="s2">"</span><span class="nv">$DEPLOY_KNOWN_HOSTS</span><span class="s2">"</span><span class="w">   </span><span class="c1"># after verifying the fingerprint</span>
 </code></pre></div>
 
 <hr />
@@ -472,8 +472,8 @@ to it whatever credentials a node holds.</p>
 <h2 id="agent-migration">Agent migration</h2>
 <p>A running agent can be moved from one node to another without stopping it manually. The runner on the source node captures the agent's config, publishes it as a spawn command to the target node, then stops the local instance.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># From the main machine, publish to MQTT:</span>
-mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/migrate&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-m<span class="w"> </span><span class="s1">&#39;{&quot;name&quot;: &quot;temp-sensor-agent&quot;, &quot;target_node&quot;: &quot;rpi-bedroom&quot;}&#39;</span>
+mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">"nodes/rpi-livingroom/migrate"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-m<span class="w"> </span><span class="s1">'{"name": "temp-sensor-agent", "target_node": "rpi-bedroom"}'</span>
 </code></pre></div>
 
 <p>Or trigger it from agent code using <code>agent.send_to()</code> if you build a migration manager. The result is published to <code>nodes/{source_node}/migrate_result</code>.</p>
@@ -496,22 +496,22 @@ mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span cl
 
 <p>Runs 7 supervisor tests: stable agent, crash + restart, budget exhaustion, deliberate stop, health credit, compile error, setup failure. All should pass.</p>
 <h4 id="watch-node-traffic-from-the-main-machine">Watch node traffic from the main machine</h4>
-<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;nodes/#&#39;</span><span class="w"> </span>-v
-mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;agents/+/heartbeat&#39;</span><span class="w"> </span>-v
+<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">'nodes/#'</span><span class="w"> </span>-v
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">'agents/+/heartbeat'</span><span class="w"> </span>-v
 </code></pre></div>
 
 <h4 id="list-agents-on-a-node">List agents on a node</h4>
-<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/list&quot;</span><span class="w"> </span>-m<span class="w"> </span><span class="s1">&#39;{}&#39;</span>
-mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/agents&quot;</span><span class="w"> </span>-C<span class="w"> </span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">"nodes/rpi-livingroom/list"</span><span class="w"> </span>-m<span class="w"> </span><span class="s1">'{}'</span>
+mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">"nodes/rpi-livingroom/agents"</span><span class="w"> </span>-C<span class="w"> </span><span class="m">1</span>
 </code></pre></div>
 
 <h4 id="stop-a-specific-remote-agent">Stop a specific remote agent</h4>
-<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/stop&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-m<span class="w"> </span><span class="s1">&#39;{&quot;name&quot;: &quot;temp-sensor-agent&quot;}&#39;</span>
+<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">"nodes/rpi-livingroom/stop"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-m<span class="w"> </span><span class="s1">'{"name": "temp-sensor-agent"}'</span>
 </code></pre></div>
 
 <h4 id="stop-the-entire-runner">Stop the entire runner</h4>
-<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">&quot;nodes/rpi-livingroom/stop_all&quot;</span><span class="w"> </span>-m<span class="w"> </span><span class="s1">&#39;{}&#39;</span>
+<div class="highlight"><pre><span></span><code>mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">"nodes/rpi-livingroom/stop_all"</span><span class="w"> </span>-m<span class="w"> </span><span class="s1">'{}'</span>
 </code></pre></div>
   </main>
 </div>

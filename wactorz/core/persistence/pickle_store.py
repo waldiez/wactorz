@@ -5,8 +5,8 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-from ..atomic_io import write_pickle
-from ..paths import resolve_state_dir
+from ..atomic_io import quarantine_unreadable, write_pickle
+from ..paths import agent_state_dir, resolve_state_dir
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +31,7 @@ class PickleStore:
         way a name can climb out, which matters because these files are
         unpickled, and unpickling a file an attacker placed is code execution.
         """
-        safe = agent_name.replace("/", "_").replace("\\", "_").strip()
-        if safe in {"", ".", ".."} or safe.startswith(".."):
-            raise ValueError(f"unsafe agent name for a state path: {agent_name!r}")
-
-        p = (self._base / safe).resolve()
-        if p != self._base and self._base not in p.parents:
-            raise ValueError(f"agent name escapes the state directory: {agent_name!r}")
-
+        p = agent_state_dir(self._base, agent_name)
         p.mkdir(parents=True, exist_ok=True)
         return p / "state.pkl"
 
@@ -61,9 +54,10 @@ class PickleStore:
     def load(self, agent_name: str) -> dict[str, Any]:
         """An agent's stored state, or an empty dict if there is none to read.
 
-        A file that exists but cannot be read is logged and treated as absent,
-        so a corrupt state file degrades to a fresh start rather than a crash
-        loop.
+        A file that exists but cannot be read is treated as absent, so a corrupt
+        state file degrades to a fresh start rather than a crash loop — but it is
+        moved aside first. Left in place it would be overwritten by this agent's
+        next save, destroying the only copy of whatever it held.
         """
         path = self._path(agent_name)
         if path.exists():
@@ -71,7 +65,13 @@ class PickleStore:
                 with open(path, "rb") as f:
                     return pickle.load(f)
             except Exception as e:
-                logger.warning("[Persistence] Pickle load failed for %s: %s", agent_name, e)
+                kept = quarantine_unreadable(path)
+                logger.warning(
+                    "[Persistence] Pickle load failed for %s: %s — %s",
+                    agent_name,
+                    e,
+                    f"kept at {kept}" if kept else "the file could not be preserved",
+                )
         return {}
 
     def delete(self, agent_name: str) -> None:

@@ -124,11 +124,21 @@ describe("WSClient", () => {
             data: JSON.stringify({
                 type: "chat",
                 content: "Hello!",
-                from: "io-agent",
+                from: "picam",
                 timestamp: 1_700_000_000,
+                source: "voice",
             }),
         });
-        expect(chatSpy).toHaveBeenCalledWith("Hello!", "io-agent", 1_700_000_000_000);
+        expect(chatSpy).toHaveBeenCalledWith(
+            "Hello!",
+            "picam",
+            1_700_000_000_000,
+            "user",
+            "voice",
+            "",
+            "",
+            "",
+        );
     });
 
     it("converts ms timestamp correctly in chat", () => {
@@ -390,8 +400,8 @@ describe("WSClient", () => {
     });
 
     it("reset message calls onStatePatch and clears log_feed via onLogFeed", () => {
-        // A scoped (non-"all") reset applies the state patch; "all" early-returns
-        // through af-wipe-all and is covered separately below.
+        // A scoped (non-"all") reset applies the state patch; "all" wipes first
+        // and then applies the survivors its frame carries (covered below).
         const c = new WSClient();
         const patchSpy = vi.fn();
         const feedSpy = vi.fn();
@@ -423,15 +433,40 @@ describe("WSClient", () => {
         expect(eventSpy).toHaveBeenCalled();
     });
 
-    it("reset message with scope='all' dispatches af-wipe-all event", () => {
+    it("reset message with scope='all' wipes, then applies the survivors the frame carries", () => {
         const c = new WSClient();
+        const patchSpy = vi.fn();
+        c.onStatePatch(patchSpy);
         c.connect("ws://localhost/ws");
         const eventSpy = vi.fn();
         document.addEventListener("af-wipe-all", eventSpy, { once: true });
         ws().emit("message", {
-            data: JSON.stringify({ type: "reset", scope: "all", state: { agents: [] } }),
+            data: JSON.stringify({
+                type: "reset",
+                scope: "all",
+                state: { agents: [{ agent_id: "m1", name: "main" }] },
+            }),
         });
         expect(eventSpy).toHaveBeenCalled();
+        expect(patchSpy).toHaveBeenCalledWith([{ agent_id: "m1", name: "main" }], undefined, {});
+    });
+
+    it("a delete_agent frame settles the list too, so a dead chat target is judged", () => {
+        // Deletion is the other way the chat target can vanish for good. The
+        // frame names the agent, so it is a fact rather than reset churn.
+        const c = new WSClient();
+        c.connect("ws://localhost/ws");
+        const settled = vi.fn();
+        document.addEventListener("af-agents-settled", settled, { once: true });
+        ws().emit("message", {
+            data: JSON.stringify({
+                type: "delete_agent",
+                agent_id: "a1",
+                state: { agents: [{ agent_id: "m1", name: "main" }] },
+            }),
+        });
+        expect(settled).toHaveBeenCalledTimes(1);
+        expect((settled.mock.calls[0]![0] as CustomEvent).detail).toEqual({ reason: "deleted" });
     });
 
     it("reset message with scope='logs' does not dispatch af-reset-chat event", () => {
@@ -564,6 +599,22 @@ describe("WSClient", () => {
         c.connect("ws://localhost/ws");
         ws().emit("message", { data: JSON.stringify({ type: "chat", from: "agent" }) });
         expect(spy.mock.calls[0]![0]).toBe("");
+    });
+
+    it("forwards a voice user's chat target", () => {
+        const c = new WSClient();
+        const spy = vi.fn();
+        c.onChat(spy);
+        c.connect("ws://localhost/ws");
+        ws().emit("message", {
+            data: JSON.stringify({
+                type: "chat",
+                from: "user",
+                to: "reachy-mini",
+                content: "turn on the light",
+            }),
+        });
+        expect(spy.mock.calls[0]![3]).toBe("reachy-mini");
     });
 
     it("stream_chunk with no content uses empty string", () => {

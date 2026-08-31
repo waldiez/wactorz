@@ -10,6 +10,7 @@ from typing import Any
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.persistence import get_db
+from .llm.attachments import HISTORY_TEXT_LIMIT, flatten
 from .llm.base import LLMProvider, ToolCall, ToolCompletion
 from .llm.cost import (
     accumulate_global_cost,
@@ -233,6 +234,49 @@ class LLMAgent(Actor):
         ]
         return summary_ctx + recent
 
+    def _record_user_turn(self, user_message: str, blocks: list[dict] | None, ts: float) -> None:
+        """Append the user's turn, keeping a text stand-in for any attachments.
+
+        The blocks themselves are never stored: a base64 payload in history is
+        written to disk every turn and re-sent on every turn after it. The
+        stand-in rides alongside the message rather than inside it, so the
+        content stays exactly what the user typed — callers that match on it
+        (main's live-context prefix swap) keep working.
+        """
+        turn: dict[str, Any] = {"role": "user", "content": user_message, "ts": ts}
+        if blocks:
+            turn["attachments_text"] = flatten(blocks, limit=HISTORY_TEXT_LIMIT)
+        self._conversation_history.append(turn)
+
+    def _history_for_request(self, blocks: list[dict] | None) -> list[dict]:
+        """The messages to send, with this turn's attachments spliced in.
+
+        Older turns carry their stand-in; the current one carries the real
+        thing — blocks where the provider takes them, and the full flattened
+        text where it does not, so a file is never silently dropped.
+        """
+        history: list[dict] = []
+        for m in self._build_messages_with_summary(self.max_history):
+            if not isinstance(m, dict):
+                continue
+            if m.get("role") not in ("user", "assistant") or m.get("content") is None:
+                continue
+            content = str(m["content"])
+            stand_in = m.get("attachments_text")
+            if stand_in:
+                content = f"{stand_in}\n\n{content}"
+            history.append({"role": m["role"], "content": content})
+
+        if blocks and history and history[-1]["role"] == "user":
+            text = str(self._conversation_history[-1].get("content", ""))
+            if self.llm is not None and self.llm.supports_blocks():
+                # Blocks lead, question follows: the turn reads as being about
+                # the files rather than the other way round.
+                history[-1]["content"] = [*blocks, {"type": "text", "text": text}]
+            else:
+                history[-1]["content"] = f"{flatten(blocks)}\n\n{text}"
+        return history
+
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
             await self._handle_task(msg)
@@ -335,8 +379,12 @@ class LLMAgent(Actor):
         finally:
             self._current_task = "idle"
 
-    async def chat(self, user_message: str) -> str:
-        """Direct async call - useful for the main conversation actor."""
+    async def chat(self, user_message: str, attachments: list[dict] | None = None) -> str:
+        """Direct async call - useful for the main conversation actor.
+
+        `attachments` are content blocks from `llm.attachments.to_blocks`, sent
+        with this turn only.
+        """
         if self.llm is None:
             return "[No LLM configured]"
         try:
@@ -346,15 +394,9 @@ class LLMAgent(Actor):
 
         self.metrics.messages_processed += 1
         ts_user = time.time()
-        self._conversation_history.append({"role": "user", "content": user_message, "ts": ts_user})
+        self._record_user_turn(user_message, attachments, ts_user)
 
-        safe_history = [
-            {"role": m["role"], "content": str(m["content"])}
-            for m in self._build_messages_with_summary(self.max_history)
-            if isinstance(m, dict)
-            and m.get("role") in ("user", "assistant")
-            and m.get("content") is not None
-        ]
+        safe_history = self._history_for_request(attachments)
         response, usage = await self.llm.complete(
             messages=safe_history,
             system=self._system_prompt_with_now(),
@@ -379,9 +421,14 @@ class LLMAgent(Actor):
         )
         return response
 
-    async def chat_stream(self, user_message: str) -> AsyncGenerator[str | dict[str, Any], None]:
+    async def chat_stream(
+        self, user_message: str, attachments: list[dict] | None = None
+    ) -> AsyncGenerator[str | dict[str, Any], None]:
         """Streaming version of chat(). Yields text chunks, then a final usage dict.
         The caller is responsible for printing chunks as they arrive.
+
+        `attachments` are content blocks from `llm.attachments.to_blocks`, sent
+        with this turn only.
 
         Usage:
             async for chunk in agent.chat_stream("hello"):
@@ -400,25 +447,17 @@ class LLMAgent(Actor):
         # one. What varies is whether the provider implemented it.
         if self.llm is None or not self.llm.supports_streaming():
             # Fallback: non-streaming — yield whole response as single chunk
-            response = await self.chat(user_message)
+            response = await self.chat(user_message, attachments)
             yield response
             return
 
         self.metrics.messages_processed += 1
-        self._conversation_history.append(
-            {"role": "user", "content": user_message, "ts": time.time()}
-        )
+        self._record_user_turn(user_message, attachments, time.time())
 
         full_text = []
         usage = {}
 
-        safe_history = [
-            {"role": m["role"], "content": str(m["content"])}
-            for m in self._build_messages_with_summary(self.max_history)
-            if isinstance(m, dict)
-            and m.get("role") in ("user", "assistant")
-            and m.get("content") is not None
-        ]
+        safe_history = self._history_for_request(attachments)
         try:
             async for chunk in self.llm.stream(
                 messages=safe_history,
@@ -469,21 +508,30 @@ class LLMAgent(Actor):
         yield usage
 
     def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
-        """Write both halves of a turn to SQLite chat_log and InfluxDB (if enabled)."""
+        """Write both halves of a turn to the SQLite chat_log."""
         db = get_db()
         if db is not None:
             try:
-                db.log_chat(self.name, "user", user_msg, ts=ts_user, session_id=self.actor_id)
-                db.log_chat(self.name, "assistant", reply, ts=ts_reply, session_id=self.actor_id)
+                db.write_chat_log(
+                    ts=ts_user,
+                    agent_name=self.name,
+                    role="user",
+                    content=user_msg,
+                    session_id=self.actor_id,
+                )
+                db.write_chat_log(
+                    ts=ts_reply,
+                    agent_name=self.name,
+                    role="assistant",
+                    content=reply,
+                    session_id=self.actor_id,
+                )
             except Exception as exc:
-                logger.debug("[%s] chat_log SQLite write failed: %s", self.name, exc)
-        try:
-            from ..monitoring.influx import write_chat as _influx_chat
-
-            _influx_chat(self.name, "user", user_msg, ts=ts_user)
-            _influx_chat(self.name, "assistant", reply, ts=ts_reply)
-        except Exception as exc:
-            logger.debug("[%s] chat_log InfluxDB write failed: %s", self.name, exc)
+                # Warning, not debug: this branch swallowed an AttributeError for
+                # every chat turn (the call named a method that does not exist),
+                # and at debug level nothing ever surfaced. Losing chat history is
+                # worth a log line even though it must not break the turn.
+                logger.warning("[%s] chat_log SQLite write failed: %s", self.name, exc)
 
     def _persist_cost(self):
         """Write lifetime cost to durable SQLite storage after each exchange."""

@@ -35,6 +35,7 @@ List all registered actors with live metrics.
     "name":               "main",
     "state":              "running",
     "protected":          true,
+    "essential":          false,
     "cpu":                1.4,
     "mem":                69.9,
     "task":               "idle",
@@ -81,21 +82,9 @@ Send a content message to an actor.
 
 ---
 
-### `POST /api/actors/{actor_id}/pause`
-
-Pause a running actor. **Response** `200 OK`, `404` if not found, `403` if protected.
-
----
-
-### `POST /api/actors/{actor_id}/resume`
-
-Resume a paused actor. **Response** `200 OK`.
-
----
-
 ### `DELETE /api/actors/{actor_id}`
 
-Stop and unregister an actor. **Response** `200 OK` (`stopping ({routed})`), `404` if not found, `403` if protected.
+Stop an actor, unregister it, and drop its spawn-registry entry so it is not restored on the next start. **Response** `200 OK` (`stopping ({routed})`), `404` if not found, `403` if the actor is protected.
 
 ---
 
@@ -204,9 +193,21 @@ Recent activity feed events.
 
 ---
 
-### `POST /api/ha/sync`
+### `POST /api/chat/stop`
 
-Trigger a Home Assistant snapshot/sync.
+Cancel every in-flight generation. Takes no request body, and stops all of them
+rather than one agent's — there is no per-agent targeting.
+
+```bash
+curl -X POST http://localhost:8888/api/chat/stop
+```
+
+```json
+{ "status": "stopped", "cancelled": 2 }
+```
+
+`cancelled` is how many generations were running. Each cancelled stream
+finalises and posts `⏹ Stopped.` over the WebSocket.
 
 ---
 
@@ -231,13 +232,11 @@ Started with `wactorz --interface rest --port 8000`. Endpoints are at bare paths
 | `GET` | `/actors` | List actors |
 | `GET` | `/actors/{actor_id}` | Single actor |
 | `POST` | `/actors/{actor_id}/message` | `{"content": "..."}` |
-| `POST` | `/actors/{actor_id}/pause` | Pause |
-| `POST` | `/actors/{actor_id}/resume` | Resume |
-| `DELETE` | `/actors/{actor_id}` | Stop |
+| `DELETE` | `/actors/{actor_id}` | Stop, unregister and forget |
 | `GET` | `/actors/{actor_id}/metrics` | Metrics |
 | `POST` | `/chat` | `{"message": "...", "agent_name": "main"}` |
 | `GET` | `/agents` | Alias for `/actors` |
-| `POST` | `/agents/command` | `{"target": "name", "command": "stop|pause|resume"}` |
+| `POST` | `/agents/command` | `{"target": "name", "command": "start|stop|delete"}` |
 
 #### Chat response shape
 
@@ -247,7 +246,9 @@ Started with `wactorz --interface rest --port 8000`. Endpoints are at bare paths
 
 #### Authentication
 
-Set `API_KEY` in `.env` to require a key on `/chat`:
+Set `API_KEY` in `.env` to require a key on **every** route except `/health`. Both
+`X-API-Key` and `Authorization: Bearer` are accepted. With no key set the API is
+open, which is why the default bind is loopback:
 
 ```bash
 curl -X POST http://localhost:8000/chat \
@@ -292,16 +293,15 @@ See [MQTT Topics](mqtt_topics.md) for the full reference. Key topics:
 
 | Topic | Direction | Notes |
 |---|---|---|
-| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, cpu, memory_mb, task, protected, timestamp}` |
+| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, cpu, memory_mb, task, protected, essential, timestamp}` |
 | `agents/{id}/metrics` | actor → all | Same cadence. LLM agents add `input_tokens`, `output_tokens`, `cost_usd`. |
 | `agents/{id}/status` | actor → all | On state change. |
 | `agents/{id}/logs` | actor → dashboard | Log entries. |
 | `agents/{id}/alert` | monitor / actor | Health / error alerts. Severity: `info|warning|error|critical`. |
-| `agents/{id}/commands` | dashboard → actor | `{"command": "stop|pause|resume|delete"}`. Protected actors ignore stop/pause/delete. |
+| `agents/{id}/commands` | dashboard → actor | `{"command": "start|stop|delete"}`. Protected actors ignore delete; essential ones ignore stop. |
 | `agents/{id}/spawned` | parent → all | `{child_id, child_name, timestamp}` when a parent spawns a child. |
 | `agents/{id}/manifest` | actor → all | Retained capability manifest. |
 | `agents/{id}/chat` | actor → UI | `{role, content, interface, ...}` |
-| `io/chat` | UI → IOAgent | `{from, content}` inbound chat from browser. |
 | `system/health` | monitor → all | Every 15 s. `{timestamp, total_actors, running, stopped, failed, degraded, actors: [...]}` |
 | `homeassistant/state_changes/#` | HA bridge → pipelines | HA state events. |
 | `nodes/{name}/spawn` | main → runner | Remote node agent spawn. |
@@ -315,7 +315,7 @@ See [MQTT Topics](mqtt_topics.md) for the full reference. Key topics:
 |---|---|
 | `200` | Success |
 | `400` | Bad request (missing field, invalid period, etc.) |
-| `403` | Actor is protected |
+| `403` | The command is not allowed for this actor — `delete` on a protected one, `stop` on an essential one |
 | `404` | Actor not found |
 | `503` | Registry not available |
 | `500` | Internal server error |
@@ -357,8 +357,6 @@ python -m wactorz.interfaces.mcp_server
 | `list_agents()` | `GET /agents` |
 | `list_capabilities(keyword)` | `POST /chat` with `/capabilities` |
 | `stop_agent(agent_id)` | `DELETE /actors/{agent_id}` |
-| `pause_agent(agent_id)` | `POST /actors/{agent_id}/pause` |
-| `resume_agent(agent_id)` | `POST /actors/{agent_id}/resume` |
 | `ha_list_entities(domain)` | Home Assistant `GET /api/states` |
 | `ha_get_state(entity_id)` | Home Assistant `GET /api/states/{entity_id}` |
 | `ha_call_service(domain, service, entity_id, data_json)` | Home Assistant `POST /api/services/{domain}/{service}` |

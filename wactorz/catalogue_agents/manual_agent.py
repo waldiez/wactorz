@@ -42,8 +42,7 @@ SPAWN CONFIG
 """
 
 AGENT_CODE = r'''
-"""
-manual-agent — searches the internet for device manuals, downloads PDFs,
+"""manual-agent — searches the internet for device manuals, downloads PDFs,
 extracts text, and answers questions using the agent's LLM.
 
 Recipe-style module: state lives in `agent.state`, the framework injects
@@ -51,33 +50,95 @@ Recipe-style module: state lives in `agent.state`, the framework injects
 """
 
 import asyncio
+import io
 import json
 import logging
+import random
 import re
-from typing import Optional
+import time
+import urllib.parse
+from collections.abc import Callable
+from typing import Any
 
 logger = logging.getLogger("manual-agent")
 
 TRUSTED_SITES = [
-    'manualslib.com', 'manualzz.com', 'manuals.plus',
-    'documents.philips.com', 'download.p4c.philips.com',
-    'support.brother.com', 'docs.brother.com',
-    'support.hp.com', 'support.epson.net',
-    'support.canon.com', 'dl.owneriq.net',
+    "manualslib.com",
+    "manualzz.com",
+    "manuals.plus",
+    "documents.philips.com",
+    "download.p4c.philips.com",
+    "support.brother.com",
+    "docs.brother.com",
+    "support.hp.com",
+    "support.epson.net",
+    "support.canon.com",
+    "dl.owneriq.net",
 ]
 
 _SEARCH_ENGINE_DOMAINS = {
-    'bing.com', 'microsoft.com', 'google.com', 'googleapis.com',
-    'gstatic.com', 'youtube.com', 'schema.org', 'w3.org',
-    'microsofttranslator.com', 'bingapis.com',
+    "bing.com",
+    "microsoft.com",
+    "google.com",
+    "googleapis.com",
+    "gstatic.com",
+    "youtube.com",
+    "schema.org",
+    "w3.org",
+    "microsofttranslator.com",
+    "bingapis.com",
 }
 
 _STOPWORDS = {
-    'how','do','i','the','a','an','is','are','what','where','when','why',
-    'can','does','to','for','of','in','on','at','my','this','that','it',
-    'its','with','and','or','be','was','will','has','have','use','using',
-    'get','me','please','tell','about','there','their','they','we','you',
-    'your','which','make','need',
+    "how",
+    "do",
+    "i",
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "what",
+    "where",
+    "when",
+    "why",
+    "can",
+    "does",
+    "to",
+    "for",
+    "of",
+    "in",
+    "on",
+    "at",
+    "my",
+    "this",
+    "that",
+    "it",
+    "its",
+    "with",
+    "and",
+    "or",
+    "be",
+    "was",
+    "will",
+    "has",
+    "have",
+    "use",
+    "using",
+    "get",
+    "me",
+    "please",
+    "tell",
+    "about",
+    "there",
+    "their",
+    "they",
+    "we",
+    "you",
+    "your",
+    "which",
+    "make",
+    "need",
 }
 
 
@@ -85,14 +146,15 @@ _STOPWORDS = {
 # setup — initialise state slots
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def setup(agent):
-    agent.state.setdefault("manual_text",   None)
+
+async def setup(agent) -> None:
+    agent.state.setdefault("manual_text", None)
     agent.state.setdefault("manual_device", None)
-    agent.state.setdefault("manual_url",    None)
-    agent.state.setdefault("manual_pages",  0)
+    agent.state.setdefault("manual_url", None)
+    agent.state.setdefault("manual_pages", 0)
     # Persistent cache: device-name → list of known-good PDF URLs
     # Survives across restarts because agent.state is persisted.
-    agent.state.setdefault("url_cache",     {})
+    agent.state.setdefault("url_cache", {})
     # Per-device conversation history (so follow-up questions can use context)
     agent.state.setdefault("_chat_history", [])
     await agent.log(
@@ -105,8 +167,10 @@ async def setup(agent):
 # handle_task — main entry point for @manual-agent messages
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def handle_task(agent, payload):
-    """
+
+async def handle_task(agent, payload: str | dict[str, Any]) -> dict[str, Any]:
+    """Handle a task.
+
     Two entry modes:
 
       1. Natural language (preferred):
@@ -160,8 +224,8 @@ async def handle_task(agent, payload):
     if not text:
         return {
             "error": "Empty request.",
-            "hint":  "Send a natural-language message like 'load the Philips 2200 manual' "
-                     "or 'how do I descale it?'",
+            "hint": "Send a natural-language message like 'load the Philips 2200 manual' "
+            "or 'how do I descale it?'",
         }
 
     if not agent.llm:
@@ -176,7 +240,8 @@ async def handle_task(agent, payload):
 # Action dispatcher (shared by legacy dict mode and LLM router)
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _dispatch_action(agent, action: str, payload: dict) -> dict:
+
+async def _dispatch_action(agent, action: str, payload: dict[str, Any]) -> dict[str, Any]:
     if action == "load_manual":
         device = payload.get("device") or payload.get("query") or payload.get("text", "")
         if not device:
@@ -194,10 +259,10 @@ async def _dispatch_action(agent, action: str, payload: dict) -> dict:
         return _status(agent)
 
     if action == "clear":
-        agent.state["manual_text"]   = None
+        agent.state["manual_text"] = None
         agent.state["manual_device"] = None
-        agent.state["manual_url"]    = None
-        agent.state["manual_pages"]  = 0
+        agent.state["manual_url"] = None
+        agent.state["manual_pages"] = 0
         agent.state["_chat_history"] = []
         return {"status": "cleared", "result": "Manual cleared."}
 
@@ -261,22 +326,18 @@ explanation, no extra keys beyond {tool, device, question}.
 """
 
 
-async def _llm_route(agent, text: str) -> dict:
+async def _llm_route(agent, text: str) -> dict[str, Any]:
     """Ask the LLM which tool to call, then call it."""
     loaded_device = agent.state.get("manual_device")
-    loaded_pages  = agent.state.get("manual_pages", 0)
+    loaded_pages = agent.state.get("manual_pages", 0)
 
     state_line = (
         f"Currently loaded manual: {loaded_device} ({loaded_pages} pages)"
-        if loaded_device else
-        "Currently loaded manual: (none)"
+        if loaded_device
+        else "Currently loaded manual: (none)"
     )
 
-    prompt = (
-        f"{state_line}\n\n"
-        f"User message: {text!r}\n\n"
-        f"Return the JSON tool call now."
-    )
+    prompt = f"{state_line}\n\nUser message: {text!r}\n\nReturn the JSON tool call now."
 
     await agent.log(f"Routing via LLM: {text!r}")
 
@@ -295,14 +356,16 @@ async def _llm_route(agent, text: str) -> dict:
         return await _heuristic_route(agent, text)
 
     tool = str(decision.get("tool") or "").strip().lower()
-    await agent.log(f"Router decision: tool={tool!r} args={ {k:v for k,v in decision.items() if k != 'tool'} }")
+    await agent.log(
+        f"Router decision: tool={tool!r} args={ {k: v for k, v in decision.items() if k != 'tool'} }"
+    )
 
     if tool == "load_manual":
         device = (decision.get("device") or "").strip()
         if not device:
             return {
                 "error": "I couldn't figure out which device manual to load.",
-                "hint":  "Try: 'load the manual for <device model>'.",
+                "hint": "Try: 'load the manual for <device model>'.",
             }
         return await _load_manual_async(agent, device)
 
@@ -321,9 +384,10 @@ async def _llm_route(agent, text: str) -> dict:
     return await _heuristic_route(agent, text)
 
 
-def _parse_router_json(raw: str) -> Optional[dict]:
-    """
-    Extract a JSON object from the LLM's response. Tolerates:
+def _parse_router_json(raw: Any) -> dict[str, Any] | None:
+    """Extract a JSON object from the LLM's response.
+
+    Tolerates:
       - Bare JSON
       - JSON inside ```json ... ``` fences
       - Leading/trailing prose around a single {...} block
@@ -365,14 +429,17 @@ def _parse_router_json(raw: str) -> Optional[dict]:
 
 # Cheap keyword detector — only used as a last resort. The LLM router above
 # is the primary path.
-_CLEAR_RE  = re.compile(r"\b(clear|reset|forget|unload|drop)\b", re.IGNORECASE)
-_STATUS_RE = re.compile(r"\b(status|what(?:'s| is) loaded|which manual|current manual)\b",
-                        re.IGNORECASE)
-_LOAD_RE   = re.compile(r"\b(load|fetch|get|find|download|search for)\b.*\b(manual|guide|instructions?)\b",
-                        re.IGNORECASE)
+_CLEAR_RE = re.compile(r"\b(clear|reset|forget|unload|drop)\b", re.IGNORECASE)
+_STATUS_RE = re.compile(
+    r"\b(status|what(?:'s| is) loaded|which manual|current manual)\b", re.IGNORECASE
+)
+_LOAD_RE = re.compile(
+    r"\b(load|fetch|get|find|download|search for)\b.*\b(manual|guide|instructions?)\b",
+    re.IGNORECASE,
+)
 
 
-async def _heuristic_route(agent, text: str) -> dict:
+async def _heuristic_route(agent, text: str) -> dict[str, Any]:
     """No-LLM fallback. Tries to do the right thing with regex/keywords."""
     if _CLEAR_RE.search(text) and len(text) < 40:
         return await _dispatch_action(agent, "clear", {})
@@ -398,7 +465,7 @@ async def _heuristic_route(agent, text: str) -> dict:
 
     return {
         "error": "No manual loaded yet, and I couldn't tell which device you mean.",
-        "hint":  "Try: 'load the manual for <device model>'.",
+        "hint": "Try: 'load the manual for <device model>'.",
     }
 
 
@@ -406,9 +473,11 @@ async def _heuristic_route(agent, text: str) -> dict:
 # Load manual
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _load_manual_async(agent, device: str, explicit_url: Optional[str] = None) -> dict:
-    """
-    User-facing load. The full search + download + extract can run well past the
+
+async def _load_manual_async(agent, device: str, explicit_url: str | None = None) -> dict[str, Any]:
+    """User-facing load.
+
+    The full search + download + extract can run well past the
     handle_task timeout, so kick it off in the background and return an immediate
     acknowledgement; the final outcome is pushed to the chat panel via
     notify_user() when it's ready.
@@ -423,7 +492,7 @@ async def _load_manual_async(agent, device: str, explicit_url: Optional[str] = N
     return await _load_manual(agent, device, explicit_url=explicit_url)
 
 
-async def _load_manual_bg(agent, device: str, explicit_url: Optional[str] = None) -> None:
+async def _load_manual_bg(agent, device: str, explicit_url: str | None = None) -> None:
     """Run the slow load, then notify the user with the outcome."""
     try:
         result = await _load_manual(agent, device, explicit_url=explicit_url)
@@ -442,7 +511,7 @@ async def _load_manual_bg(agent, device: str, explicit_url: Optional[str] = None
     await agent.log(message)
 
 
-def _ack_load(device: str) -> dict:
+def _ack_load(device: str) -> dict[str, Any]:
     return {
         "status": "loading",
         "result": (
@@ -452,9 +521,10 @@ def _ack_load(device: str) -> dict:
     }
 
 
-async def _load_manual(agent, device: str, explicit_url: Optional[str] = None) -> dict:
-    """
-    Try to load a manual for ``device``. On failure, ask the LLM for spelling/
+async def _load_manual(agent, device: str, explicit_url: str | None = None) -> dict[str, Any]:
+    """Try to load a manual for ``device``.
+
+    On failure, ask the LLM for spelling/
     naming variants and retry up to 2 more times. This catches misspellings
     (Phillips → Philips, Cannon → Canon) and brand-omission cases (just "2200"
     → "Philips 2200") that survived the router's normalization.
@@ -481,7 +551,7 @@ async def _load_manual(agent, device: str, explicit_url: Optional[str] = None) -
 
     tried = {device.lower().strip()}
     last_result = result
-    for v in variants[:2]:   # cap at 2 retries
+    for v in variants[:2]:  # cap at 2 retries
         if not v or v.lower().strip() in tried:
             continue
         tried.add(v.lower().strip())
@@ -499,10 +569,10 @@ async def _load_manual(agent, device: str, explicit_url: Optional[str] = None) -
     return last_result
 
 
-async def _suggest_device_variants(agent, device: str) -> list:
-    """
-    Ask the LLM for up to 3 alternate spellings/forms of the device name,
-    ordered most-likely first. Returns [] on any failure so the caller can
+async def _suggest_device_variants(agent, device: str) -> list[str]:
+    """Ask the LLM for up to 3 alternate spellings/forms of the device name
+
+    Ordered most-likely first. Returns [] on any failure so the caller can
     fall back gracefully.
     """
     prompt = (
@@ -517,7 +587,7 @@ async def _suggest_device_variants(agent, device: str) -> list:
         f"(Philips espresso 2200 → EP2200), include the prefixed form.\n"
         f"  • If a model number was given without the brand, include both.\n\n"
         f"Return ONLY a JSON array of strings — no prose, no markdown.\n"
-        f"Example output: [\"Philips EP2200\", \"Philips 2200 series\"]"
+        f'Example output: ["Philips EP2200", "Philips 2200 series"]'
     )
     try:
         raw = await agent.llm.complete(
@@ -548,7 +618,7 @@ async def _suggest_device_variants(agent, device: str) -> list:
     return []
 
 
-async def _load_manual_once(agent, device: str, explicit_url: Optional[str] = None) -> dict:
+async def _load_manual_once(agent, device: str, explicit_url: str | None = None) -> dict[str, Any]:
     await agent.log(f"Searching for manual: {device}")
 
     loop = asyncio.get_event_loop()
@@ -573,9 +643,7 @@ async def _load_manual_once(agent, device: str, explicit_url: Optional[str] = No
         # Fresh search — even if we have cached URLs, we still search so the
         # cache stays warm and we get new candidates if cached ones rot.
         # (Cached candidates come FIRST in priority.)
-        fresh = await loop.run_in_executor(
-            None, lambda: _find_manual_candidates(agent, device)
-        )
+        fresh = await loop.run_in_executor(None, lambda: _find_manual_candidates(agent, device))
 
         # Cache first, fresh second (dedupe preserving order)
         candidates = []
@@ -588,15 +656,15 @@ async def _load_manual_once(agent, device: str, explicit_url: Optional[str] = No
     if not candidates:
         await agent.alert(f"No PDF manual found for: {device}", "warning")
         return {
-            "error":  f"Could not find a PDF manual for: {device}",
+            "error": f"Could not find a PDF manual for: {device}",
             "result": (
                 f"I couldn't find a PDF manual for '{device}'. "
                 f"Search engines may be rate-limiting — try again in a few minutes, "
                 f"or send the URL directly: "
                 f'{{"action": "load_manual", "device": "{device}", "url": "https://..."}}'
             ),
-            "hint":  "Search engines may be rate-limiting. Try again in a few minutes, or "
-                     "pass an explicit url field with the manual URL.",
+            "hint": "Search engines may be rate-limiting. Try again in a few minutes, or "
+            "pass an explicit url field with the manual URL.",
         }
 
     await agent.log(f"Got {len(candidates)} candidate URLs — trying them in order")
@@ -612,33 +680,31 @@ async def _load_manual_once(agent, device: str, explicit_url: Optional[str] = No
         size_kb = len(pdf_bytes) // 1024
         await agent.log(f"[{i}/{len(candidates)}] Downloaded {size_kb} KB — extracting...")
 
-        text, pages = await loop.run_in_executor(
-            None, lambda b=pdf_bytes: _extract_text(agent, b)
-        )
+        text, pages = await loop.run_in_executor(None, lambda b=pdf_bytes: _extract_text(agent, b))
         if not text:
             await agent.log(f"[{i}/{len(candidates)}] No extractable text — next")
             continue
 
-        agent.state["manual_text"]   = text
+        agent.state["manual_text"] = text
         agent.state["manual_device"] = device
-        agent.state["manual_url"]    = pdf_url
-        agent.state["manual_pages"]  = pages
+        agent.state["manual_url"] = pdf_url
+        agent.state["manual_pages"] = pages
 
         # Update cache: put winning URL at the front, keep up to 5 backups
         existing = [u for u in (url_cache.get(cache_key) or []) if u != pdf_url]
-        url_cache[cache_key] = [pdf_url] + existing[:4]
+        url_cache[cache_key] = [pdf_url, *existing[:4]]
         agent.state["url_cache"] = url_cache
 
         await agent.log(f"✓ Manual loaded: {device} — {pages} pages, {len(text):,} chars")
 
         return {
             "success": True,
-            "device":  device,
-            "url":     pdf_url,
-            "pages":   pages,
-            "chars":   len(text),
+            "device": device,
+            "url": pdf_url,
+            "pages": pages,
+            "chars": len(text),
             "preview": text[:300].replace("\n", " ").strip(),
-            "result":  (
+            "result": (
                 f"Manual loaded: {device}\n"
                 f"  URL:   {pdf_url}\n"
                 f"  Pages: {pages}\n"
@@ -664,9 +730,11 @@ async def _load_manual_once(agent, device: str, explicit_url: Optional[str] = No
 # Search — collect candidates (don't pick just one)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _find_manual_candidates(agent, device: str) -> list:
-    """
-    Returns an ORDERED list of candidate URLs (best first). The loader tries
+
+def _find_manual_candidates(agent, device: str) -> list[str]:
+    """Returns an ORDERED list of candidate URLs (best first).
+
+    The loader tries
     them one by one, so a 404 or non-PDF HTML page doesn't end the search.
     De-duplicates while preserving order.
     """
@@ -676,22 +744,22 @@ def _find_manual_candidates(agent, device: str) -> list:
         return []
 
     headers = {
-        "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
 
-    candidates: list = []
+    candidates: list[str] = []
 
-    def add(url: str):
+    def add(url: str) -> None:
         if url and url.startswith("http") and url not in candidates:
             candidates.append(url)
 
     # ── Pass 1: direct vendor patterns (Philips EPxxxx model numbers) ────
-    model_m = re.search(r'EP\d{4}', device, re.IGNORECASE)
+    model_m = re.search(r"EP\d{4}", device, re.IGNORECASE)
     if model_m:
         model = model_m.group(0).upper()
-        ml    = model.lower()
+        ml = model.lower()
         logger.info(f"Pass 1: trying direct Philips URLs for model {model}")
         direct_urls = [
             f"https://www.download.p4c.philips.com/files/e/{ml}/{ml}_pss_aenghk.pdf",
@@ -736,7 +804,7 @@ def _find_manual_candidates(agent, device: str) -> list:
     return candidates
 
 
-def _ddgs_collect(agent, device: str) -> list:
+def _ddgs_collect(agent, device: str) -> list[str]:
     """Run DDGS queries, return ALL plausible manual URLs (best-tier first)."""
     queries = [
         f"{device} user manual filetype:pdf",
@@ -747,13 +815,15 @@ def _ddgs_collect(agent, device: str) -> list:
     def get_url(r):
         return r.get("href") or r.get("url") or r.get("link") or ""
 
-    out: list = []
+    out: list[str] = []
     try:
         try:
-            from ddgs import DDGS
+            from ddgs import DDGS  # pyright: ignore[reportMissingImports]
+
             logger.info("Pass 2: using ddgs package")
         except ImportError:
             from duckduckgo_search import DDGS
+
             logger.info("Pass 2: using legacy duckduckgo_search")
 
         # DDGS supports a comma-separated backend string for ordered fallback.
@@ -766,9 +836,7 @@ def _ddgs_collect(agent, device: str) -> list:
             for query in queries:
                 try:
                     try:
-                        results = list(ddgs.text(
-                            query, max_results=8, backend=BACKENDS
-                        ))
+                        results = list(ddgs.text(query, max_results=8, backend=BACKENDS))
                     except TypeError:
                         # very old API — no backend param
                         results = list(ddgs.text(query, max_results=8))
@@ -777,7 +845,9 @@ def _ddgs_collect(agent, device: str) -> list:
                     if results:
                         # log up to 3 URLs so you can see what we're getting
                         for i, r in enumerate(results[:3]):
-                            logger.info(f"    [{i}] {get_url(r)!r}  title={r.get('title','')[:50]!r}")
+                            logger.info(
+                                f"    [{i}] {get_url(r)!r}  title={r.get('title', '')[:50]!r}"
+                            )
 
                     ranked = _rank_manual_urls(results, get_url)
                     logger.info(f"    → {len(ranked)} URL(s) passed the manual filter")
@@ -790,9 +860,8 @@ def _ddgs_collect(agent, device: str) -> list:
     return out
 
 
-def _ddg_html_scrape(agent, device: str, headers: dict) -> list:
-    """
-    HTML-search-engine scraping with rate-limit handling.
+def _ddg_html_scrape(agent, device: str, headers: dict[str, Any]) -> list[str]:
+    """HTML-search-engine scraping with rate-limit handling.
 
     Strategy:
       1. Try DuckDuckGo HTML  (html.duckduckgo.com)
@@ -807,9 +876,6 @@ def _ddg_html_scrape(agent, device: str, headers: dict) -> list:
     """
     try:
         import httpx
-        import urllib.parse
-        import random
-        import time
     except ImportError:
         return []
 
@@ -829,7 +895,7 @@ def _ddg_html_scrape(agent, device: str, headers: dict) -> list:
 
     out: list = []
 
-    def _harvest(html: str, source: str) -> list:
+    def _harvest(html: str, source: str) -> list[str]:
         """Pull manual-shaped URLs out of an HTML response."""
         page_urls: list = []
 
@@ -844,7 +910,9 @@ def _ddg_html_scrape(agent, device: str, headers: dict) -> list:
         for m in re.finditer(r'/l/\?(?:kh=[^&]*&)?uddg=([^"&]+)', html):
             try:
                 decoded = urllib.parse.unquote(m.group(1))
-                if decoded.startswith("http") and not any(d in decoded for d in _SEARCH_ENGINE_DOMAINS):
+                if decoded.startswith("http") and not any(
+                    d in decoded for d in _SEARCH_ENGINE_DOMAINS
+                ):
                     page_urls.append(decoded)
             except Exception:
                 continue
@@ -854,10 +922,7 @@ def _ddg_html_scrape(agent, device: str, headers: dict) -> list:
             # Rewrite ManualsLib viewer pages → direct PDF download
             if "manualslib.com/manual/" in u and not u.endswith(".pdf"):
                 u = u.split("?")[0].rstrip("/")
-                if u.endswith(".html"):
-                    u = u[:-5] + "/download.pdf"
-                else:
-                    u = u + "/download.pdf"
+                u = u[:-5] + "/download.pdf" if u.endswith(".html") else u + "/download.pdf"
             cleaned.append(u)
 
         logger.info(f"  [{source}] harvested {len(cleaned)} URLs")
@@ -914,8 +979,7 @@ def _ddg_html_scrape(agent, device: str, headers: dict) -> list:
 
                 if r.status_code != 200 or len(r.text) < 500:
                     logger.info(
-                        f"  [Mojeek] query={query!r}: status={r.status_code} "
-                        f"body_len={len(r.text)}"
+                        f"  [Mojeek] query={query!r}: status={r.status_code} body_len={len(r.text)}"
                     )
                     continue
 
@@ -936,9 +1000,10 @@ def _ddg_html_scrape(agent, device: str, headers: dict) -> list:
     return deduped
 
 
-def _rank_manual_urls(results, get_url_fn) -> list:
-    """
-    Take a list of search-result dicts and return URLs in priority order:
+def _rank_manual_urls(results, get_url_fn: Callable[[str], str]) -> list[str]:
+    """Take a list of search-result dicts and return URLs.
+
+    In priority order:
       Tier 1: direct .pdf
       Tier 2: trusted manual host
       Tier 3: URL or body mentions 'manual' or 'pdf', not a search engine
@@ -977,7 +1042,8 @@ def _rank_manual_urls(results, get_url_fn) -> list:
 # Download
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _download_pdf(agent, url: str) -> Optional[bytes]:
+
+async def _download_pdf(agent, url: str) -> bytes | None:
     try:
         import httpx
     except ImportError:
@@ -1020,13 +1086,12 @@ async def _download_pdf(agent, url: str) -> Optional[bytes]:
 _MAX_PAGES_EXTRACTED = 80
 
 
-def _extract_text(agent, pdf_bytes: bytes) -> tuple:
-    import io
-    import time
+def _extract_text(agent, pdf_bytes: bytes) -> tuple[str, int]:
 
     # ── Strategy 1: PyMuPDF (fitz) — fast, used by the doc-to-pptx agent too ─
     try:
-        import fitz   # pymupdf
+        import fitz  # pymupdf
+
         t0 = time.time()
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         total_pages = len(doc)
@@ -1041,9 +1106,7 @@ def _extract_text(agent, pdf_bytes: bytes) -> tuple:
                 continue
         doc.close()
         elapsed = time.time() - t0
-        logger.info(
-            f"  PyMuPDF extracted {max_pages}/{total_pages} pages in {elapsed:.1f}s"
-        )
+        logger.info(f"  PyMuPDF extracted {max_pages}/{total_pages} pages in {elapsed:.1f}s")
         if parts:
             return "\n".join(parts), total_pages
     except ImportError:
@@ -1054,6 +1117,7 @@ def _extract_text(agent, pdf_bytes: bytes) -> tuple:
     # ── Strategy 2: pdfplumber fallback (slow but accurate) ──
     try:
         import pdfplumber
+
         t0 = time.time()
         parts = []
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -1073,9 +1137,7 @@ def _extract_text(agent, pdf_bytes: bytes) -> tuple:
                 except Exception:
                     continue
         elapsed = time.time() - t0
-        logger.info(
-            f"  pdfplumber extracted {len(parts)} pages in {elapsed:.1f}s"
-        )
+        logger.info(f"  pdfplumber extracted {len(parts)} pages in {elapsed:.1f}s")
         if parts:
             return "\n".join(parts), total_pages
     except ImportError:
@@ -1090,21 +1152,22 @@ def _extract_text(agent, pdf_bytes: bytes) -> tuple:
 # Ask
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _ask(agent, question: str) -> dict:
+
+async def _ask(agent, question: str) -> dict[str, Any]:
     manual_text = agent.state.get("manual_text")
     if not manual_text:
         return {
             "error": "No manual loaded yet.",
-            "hint":  "Tell me which device's manual to load first — "
-                     "e.g. 'load the Philips 2200 manual'.",
+            "hint": "Tell me which device's manual to load first — "
+            "e.g. 'load the Philips 2200 manual'.",
         }
     if not agent.llm:
         return {"error": "No LLM configured on this agent."}
 
     await agent.log(f"Answering: {question}")
 
-    chunks  = _chunk_text(manual_text, 600, 100)
-    ranked  = _rank_chunks(chunks, question)[:6]
+    chunks = _chunk_text(manual_text, 600, 100)
+    ranked = _rank_chunks(chunks, question)[:6]
     context = "\n\n---\n\n".join(ranked)
 
     prompt = (
@@ -1116,7 +1179,7 @@ async def _ask(agent, question: str) -> dict:
         f"If the manual doesn't contain the answer, say so."
     )
 
-    # agent.llm is a _LLMInterface wrapper around the underlying provider.
+    # agent.llm is a LLMInterface wrapper around the underlying provider.
     # Both .complete() and .chat() return just a string — the wrapper handles
     # the (response, usage) tuple unpacking internally and tracks tokens/cost.
     try:
@@ -1132,31 +1195,31 @@ async def _ask(agent, question: str) -> dict:
             )
         else:
             return {
-                "error":  "LLM provider has no recognised interface (complete/chat).",
+                "error": "LLM provider has no recognised interface (complete/chat).",
                 "result": "LLM provider has no recognised interface (complete/chat).",
             }
     except Exception as e:
         await agent.log(f"_ask: LLM call raised: {e}")
         return {
-            "error":  f"LLM call failed: {e}",
+            "error": f"LLM call failed: {e}",
             "result": f"Sorry — the LLM call failed: {e}",
         }
 
-    # The _LLMInterface returns "[LLM error: ...]" as the response string on
+    # The LLMInterface returns "[LLM error: ...]" as the response string on
     # provider failure rather than raising. Treat that as an error too so the
     # caller sees a proper error field instead of a fake answer.
     if isinstance(response, str) and response.startswith("[") and response.endswith("]"):
         await agent.log(f"_ask: LLM returned sentinel: {response}")
         return {
-            "error":  response.strip("[]"),
+            "error": response.strip("[]"),
             "result": response,
         }
 
     return {
-        "device":   agent.state.get("manual_device"),
+        "device": agent.state.get("manual_device"),
         "question": question,
-        "answer":   response,
-        "result":   response,   # so the chat panel renders the text directly
+        "answer": response,
+        "result": response,  # so the chat panel renders the text directly
     }
 
 
@@ -1164,17 +1227,18 @@ async def _ask(agent, question: str) -> dict:
 # Status
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _status(agent) -> dict:
+
+def _status(agent) -> dict[str, Any]:
     device = agent.state.get("manual_device")
     if not device:
         return {"status": "idle", "result": "No manual loaded."}
     return {
-        "status":  "loaded",
-        "device":  device,
-        "url":     agent.state.get("manual_url"),
-        "pages":   agent.state.get("manual_pages", 0),
-        "chars":   len(agent.state.get("manual_text") or ""),
-        "result":  (
+        "status": "loaded",
+        "device": device,
+        "url": agent.state.get("manual_url"),
+        "pages": agent.state.get("manual_pages", 0),
+        "chars": len(agent.state.get("manual_text") or ""),
+        "result": (
             f"Loaded: {device} "
             f"({agent.state.get('manual_pages', 0)} pages, "
             f"{len(agent.state.get('manual_text') or ''):,} chars)"
@@ -1186,11 +1250,13 @@ def _status(agent) -> dict:
 # Helpers
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _cache_key(device: str) -> str:
-    """
-    Normalise a device name into a cache key so that the LLM router's
-    rephrasings still hit the same cache entry. Examples:
 
+def _cache_key(device: str) -> str:
+    """Normalise a device name into a cache key.
+
+    So that the LLM router's rephrasings still hit the same cache entry.
+
+    Examples:
       "Philips 2200"       → "philips 2200"
       "philips ep2200"     → "philips ep2200"
       "Philips EP2200/10"  → "philips ep2200"
@@ -1200,27 +1266,26 @@ def _cache_key(device: str) -> str:
     # Strip variant suffix after a slash ("EP2200/10" → "EP2200")
     s = s.split("/")[0]
     # Collapse internal whitespace
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+    return re.sub(r"\s+", " ", s).strip()
 
 
-def _keywords(text: str) -> list:
-    words = re.findall(r'[a-z]+', text.lower())
+def _keywords(text: str) -> list[str]:
+    words = re.findall(r"[a-z]+", text.lower())
     return [w for w in words if w not in _STOPWORDS and len(w) > 2]
 
 
-def _chunk_text(text: str, chunk_size=600, overlap=100) -> list:
-    words  = text.split()
+def _chunk_text(text: str, chunk_size=600, overlap=100) -> list[str]:
+    words = text.split()
     chunks = []
     i = 0
     while i < len(words):
-        chunks.append(" ".join(words[i:i + chunk_size]))
+        chunks.append(" ".join(words[i : i + chunk_size]))
         i += chunk_size - overlap
     return chunks
 
 
-def _rank_chunks(chunks, question: str) -> list:
-    kws    = _keywords(question)
+def _rank_chunks(chunks: list[str], question: str) -> list[str]:
+    kws = _keywords(question)
     scored = [(sum(c.lower().count(kw) for kw in kws), c) for c in chunks]
     scored.sort(key=lambda x: x[0], reverse=True)
     return [c for _, c in scored]

@@ -12,9 +12,13 @@ get_config_safe() {
     local default="$2"
     local val=""
 
-    # Attempt 1: Direct read from options.json (FAST & SILENT)
-    if [ -f /data/options.json ]; then
-        val=$(jq -r ".$key" /data/options.json 2>/dev/null)
+    # Attempt 1: Direct read from options.json (FAST & SILENT).
+    # OPTIONS_PATH overrides the location so the add-on can be run outside
+    # Home Assistant against a sample file; unset it is the Supervisor's path,
+    # which is what runs in production.
+    local options_file="${OPTIONS_PATH:-/data/options.json}"
+    if [ -f "$options_file" ]; then
+        val=$(jq -r ".$key" "$options_file" 2>/dev/null)
     fi
 
     # Attempt 2: Fallback to bashio if not in file
@@ -156,18 +160,21 @@ export SOCIAL_RATE_LIMIT_PER_MIN="${SOCIAL_RATE_LIMIT_PER_MIN}"
 # recorded in the conversation history. Absent or empty leaves DEPLOY_TARGETS
 # unset, which simply means `/deploy` has nothing to offer.
 DEPLOY_TARGETS=""
-if [ -f /data/options.json ]; then
-    deploy_count=$(jq -r '(.deploy_targets // []) | length' /data/options.json 2>/dev/null || echo 0)
+# Same override as get_config_safe: the documented local-test invocation
+# must reach deploy targets too, or it silently loads none of them.
+options_file="${OPTIONS_PATH:-/data/options.json}"
+if [ -f "$options_file" ]; then
+    deploy_count=$(jq -r '(.deploy_targets // []) | length' "$options_file" 2>/dev/null || echo 0)
     deploy_i=0
     while [ "$deploy_i" -lt "$deploy_count" ]; do
-        deploy_name=$(jq -r ".deploy_targets[$deploy_i].name // \"\"" /data/options.json)
+        deploy_name=$(jq -r ".deploy_targets[$deploy_i].name // \"\"" "$options_file")
         if [ -n "$deploy_name" ]; then
             # Same slug rule as config.py's _env_slug: upper-case, and every run
             # of non-alphanumerics becomes a single underscore.
             deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
                 | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
-            for deploy_field in host user key password broker broker_port ssh_port; do
-                deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" /data/options.json)
+            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password; do
+                deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" "$options_file")
                 if [ -n "$deploy_value" ]; then
                     deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"
                     export "$deploy_var=$deploy_value"
@@ -186,23 +193,6 @@ export DEPLOY_TARGETS
 if [ -n "$DEPLOY_TARGETS" ]; then
     bashio::log.info "Deploy targets configured: ${DEPLOY_TARGETS}"
 fi
-OTEL_ENDPOINT=$(get_config_safe 'otel_endpoint' '')
-if [ -n "$OTEL_ENDPOINT" ]; then
-    export OTEL_EXPORTER_OTLP_ENDPOINT="$OTEL_ENDPOINT"
-    OTEL_SERVICE_NAME=$(get_config_safe 'otel_service_name' 'wactorz')
-    export OTEL_SERVICE_NAME="${OTEL_SERVICE_NAME}"
-fi
-
-INFLUX_URL=$(get_config_safe 'influx_url' '')
-if [ -n "$INFLUX_URL" ]; then
-    export INFLUX_URL="$INFLUX_URL"
-    INFLUX_TOKEN=$(get_config_safe 'influx_token' '')
-    export INFLUX_TOKEN="${INFLUX_TOKEN}"
-    INFLUX_ORG=$(get_config_safe 'influx_org' 'wactorz')
-    export INFLUX_ORG="${INFLUX_ORG}"
-    INFLUX_BUCKET=$(get_config_safe 'influx_bucket' 'wactorz')
-    export INFLUX_BUCKET="${INFLUX_BUCKET}"
-fi
 
 # Embedded services
 MOSQUITTO_EMBEDDED=$(get_config_safe 'mosquitto_embedded' 'false')
@@ -214,6 +204,34 @@ export PORT=8000
 # Durable state directory. /data is addon-private and survives addon updates,
 # so chat history / pickle / SQLite state is not lost on rebuild. Pinned here
 # as an absolute path instead of relying on CWD.
+# Ingress reaches the add-on over the container network, so it must listen on
+# every interface. No port is published (see config.yaml), so this is not a
+# route in from outside Home Assistant.
+export WACTORZ_BIND_HOST=0.0.0.0
+# The wide bind above is required for ingress, and the add-on sets no API key.
+# Without this the fail-closed rule refuses to start. It is honest here: the
+# add-on publishes no ports, so ingress is the only way in, and Home Assistant
+# authenticates the user before proxying.
+export WACTORZ_EXPOSED_OK=1
+# This deployment sits behind Home Assistant's ingress, which signs the user in
+# before proxying — so a request it forwards is allowed to skip the origin and
+# host checks. Nothing else may claim that: a plain Docker or bare install never
+# sets this, so the bypass does not exist there whatever headers arrive.
+export WACTORZ_INGRESS=1
+# The name Supervisor reaches this container under, so a request it forwards is
+# answered rather than refused as an unrecognised host. This is a backstop:
+# ingress requests are recognised by the header Supervisor sets on them, and
+# that is what the panel actually relies on. `hostname` is used rather than
+# $HOSTNAME so an empty value is a missing command and not an unexported shell
+# variable, and the result is logged — a backstop that silently resolves to
+# nothing is worse than none, because it reads as protection that is not there.
+WACTORZ_ALLOWED_HOSTS="$(hostname 2>/dev/null || true)"
+export WACTORZ_ALLOWED_HOSTS
+if bashio::var.has_value "${WACTORZ_ALLOWED_HOSTS}"; then
+    bashio::log.info "Answering to host name: ${WACTORZ_ALLOWED_HOSTS}"
+else
+    bashio::log.warning "Could not determine this container's host name; relying on ingress detection alone."
+fi
 export WACTORZ_STATE_DIR=/data/state
 mkdir -p "$WACTORZ_STATE_DIR"
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -23,28 +24,43 @@ import secrets
 import stat
 import sys
 import webbrowser
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
 
-try:
+# mcp is optional, so every name it provides has a stand-in for the case where
+# it is absent. Those stand-ins describe nothing, and several of these names are
+# used as base classes and annotations, so the real ones are declared separately
+# for type checking and the fallbacks are confined to the runtime branch.
+if TYPE_CHECKING:
     from mcp import ClientSession
     from mcp.client.auth import OAuthClientProvider, TokenStorage
     from mcp.client.streamable_http import streamablehttp_client
     from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
-except ImportError:  # pragma: no cover - optional dependency guard
-    ClientSession = None
-    OAuthClientProvider = None
-    TokenStorage = object
-    streamablehttp_client = None
-    OAuthClientInformationFull = None
-    OAuthClientMetadata = None
-    OAuthToken = None
+    from pydantic import AnyUrl
+else:
+    try:
+        from mcp import ClientSession
+        from mcp.client.auth import OAuthClientProvider, TokenStorage
+        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.shared.auth import (
+            OAuthClientInformationFull,
+            OAuthClientMetadata,
+            OAuthToken,
+        )
+    except ImportError:  # pragma: no cover - optional dependency guard
+        ClientSession = None
+        OAuthClientProvider = None
+        TokenStorage = object
+        streamablehttp_client = None
+        OAuthClientInformationFull = None
+        OAuthClientMetadata = None
+        OAuthToken = None
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +152,11 @@ def format_mcp_content(result: Any) -> str:
     return "\n".join(parts)
 
 
+#: Query parameters as the HTTP layer takes them. A mapping covers most calls;
+#: pairs are needed where a key repeats, as Gmail's `metadataHeaders` does.
+RestParams = Mapping[str, str] | Sequence[tuple[str, str]] | None
+
+
 def rest_error_message(data: Any) -> str:
     if isinstance(data, dict):
         err = data.get("error")
@@ -204,7 +225,7 @@ class _GoogleTokenStorage(TokenStorage):
                 client_id=client_id,
                 client_secret=client_secret,
                 token_endpoint_auth_method="client_secret_post",
-                redirect_uris=[self.config.redirect_uri()],
+                redirect_uris=cast("list[AnyUrl]", [self.config.redirect_uri()]),
             )
         raw = self._read().get("client_info")
         if OAuthClientInformationFull is None:
@@ -289,7 +310,7 @@ def build_auth(config: GoogleMcpConfig, interactive: bool = False):
     if not (client_id and client_secret):
         return None
     metadata = OAuthClientMetadata(
-        redirect_uris=[config.redirect_uri()],
+        redirect_uris=cast("list[AnyUrl]", [config.redirect_uri()]),
         token_endpoint_auth_method="client_secret_post",
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
@@ -430,13 +451,17 @@ class GoogleMcpClient:
             .decode()
         )
         redirect = self.config.redirect_uri()
+        # Kept, because it has to be compared to what comes back. Generating a
+        # `state` and discarding it is the same as not sending one: the check it
+        # exists for never happens.
+        expected_state = secrets.token_urlsafe(16)
         auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(
             {
                 "response_type": "code",
                 "client_id": client_id,
                 "redirect_uri": redirect,
                 "scope": scopes,
-                "state": secrets.token_urlsafe(16),
+                "state": expected_state,
                 "code_challenge": challenge,
                 "code_challenge_method": "S256",
                 "access_type": "offline",
@@ -446,9 +471,20 @@ class GoogleMcpClient:
         wait_task = asyncio.create_task(_make_callback_handler(self.config)())
         await asyncio.sleep(0.4)  # let the callback server bind before opening the browser
         await _make_redirect_handler(self.config)(auth_url)
-        code, _state = await wait_task
+        code, returned_state = await wait_task
         if not code:
             return f"{self.config.label}: authorization was cancelled"
+        # The point of `state`: the callback is an unauthenticated local URL,
+        # so anything that can reach it can deliver a code. Without this, an
+        # attacker's code could be exchanged and *their* account linked to this
+        # install — the user sees a successful connection to an account they do
+        # not own. `compare_digest` because this is a secret comparison.
+        if not returned_state or not hmac.compare_digest(returned_state, expected_state):
+            logger.warning(
+                "[%s] OAuth callback carried an unexpected state — refusing the code",
+                self.config.label,
+            )
+            return f"{self.config.label}: authorization failed a security check, please retry"
         async with aiohttp.ClientSession() as sess:
             async with sess.post(
                 GOOGLE_TOKEN_URL,
@@ -544,7 +580,14 @@ class GoogleMcpClient:
             self._save_access_token(access_token)
         return access_token
 
-    async def _http(self, method: str, url: str, token: str, params, json_body):
+    async def _http(
+        self,
+        method: str,
+        url: str,
+        token: str,
+        params: RestParams,
+        json_body: dict[str, Any] | None,
+    ) -> tuple[int, dict[str, Any]]:
         headers = {"Authorization": f"Bearer {token}"}
         async with aiohttp.ClientSession() as sess:
             async with sess.request(
@@ -556,9 +599,17 @@ class GoogleMcpClient:
                     data = await resp.json()
                 except Exception:
                     data = {"raw": await resp.text()}
-                return resp.status, data
+                # Callers read the body with `.get`, so anything that is not a
+                # JSON object is wrapped rather than handed on as one.
+                return resp.status, data if isinstance(data, dict) else {"raw": data}
 
-    async def _rest_request(self, method: str, path: str, params=None, json_body=None):
+    async def _rest_request(
+        self,
+        method: str,
+        path: str,
+        params: RestParams = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
         token = self._access_token()
         if not token:
             raise GoogleRestError(f"Not authenticated for Google {self.config.label}")

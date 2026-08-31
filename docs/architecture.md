@@ -21,8 +21,7 @@ The framework is built on three ideas: every agent is an independent **actor** w
 │  ActorRegistry  ──  name → actor lookup, MQTT publisher                │
 │                                                                        │
 │  MainActor                  LLM orchestrator, intent routing, spawn reg│
-│  MonitorAgent               heartbeat watchdog, alerts main on failure │
-│  IOAgent                    MQTT↔UI gateway, routes chat to main      │
+│  MonitorActor               heartbeat watchdog, alerts main on failure │
 │  CatalogAgent               pre-built recipe library, spawns on demand │
 │  InstallerAgent             pip installs deps for dynamic agents       │
 │  HomeAssistantAgent         HA REST API — entities, services, automa…  │
@@ -71,7 +70,7 @@ See the [Agents reference](agents.md) for full documentation. A summary of the c
 | **CatalogAgent** | Pre-built recipe library. Loads agents from `catalogue_agents/` and spawns them on request. |
 | **HomeAssistantAgent** | Wraps the HA REST API — entities, services, automations. Uses internal LLM calls for classification. |
 | **HomeAssistantStateBridgeAgent** | Streams HA state changes to MQTT so pipeline agents can react to device events in real time. |
-| **MonitorAgent** | Tracks heartbeats from all actors. Alerts main when an agent is unresponsive for >60 s. |
+| **MonitorActor** | Tracks heartbeats from all actors. Alerts main when an agent is unresponsive for >60 s. |
 | **InstallerAgent** | Runs `pip install` in a subprocess. Called automatically before spawning a recipe with declared dependencies. |
 | **LLMAgent** | Base class for LLM-backed agents. Handles conversation history, rolling summarisation, and cost tracking across all providers. |
 
@@ -91,7 +90,7 @@ class MyAgent(Actor):
 
     async def handle_message(self, msg: Message):
         # Called for every message in the inbox.
-        # msg.type is one of: START, STOP, PAUSE, RESUME, DELETE,
+        # msg.type is one of: START, STOP, DELETE,
         # TASK, RESULT, HEARTBEAT, SPAWN, TICK, STATUS_REQUEST, STATUS_RESPONSE.
         if msg.type == MessageType.TASK:
             result = await self._do_work(msg.payload)
@@ -128,9 +127,8 @@ On first startup after upgrading from an older version, `migrate_from_pickle()` 
 
 | Topic pattern | Publisher | Subscriber | Payload |
 |---------------|-----------|------------|---------|
-| `io/chat` | IOAgent / UI | main | `{from, content}` |
-| `agents/{id}/chat` | any actor | UI / IOAgent | `{role, content, interface}` |
-| `agents/{id}/heartbeat` | every actor | MonitorAgent | `{name, state, ts, ...}` |
+| `agents/{id}/chat` | any actor | UI | `{role, content, interface}` |
+| `agents/{id}/heartbeat` | every actor | MonitorActor | `{name, state, ts, ...}` |
 | `agents/{id}/logs` | any actor | dashboard | `{type, message, ts}` |
 | `agents/{id}/manifest` | any actor | main | capabilities, input/output schema |
 | `homeassistant/state_changes/#` | HA state bridge | pipeline agents | `{entity_id, domain, new_state, old_state}` |
@@ -217,6 +215,31 @@ ignored. `AnthropicProvider` therefore leaves the parameter off for the models k
 dropped it, and learns the rest the first time one refuses — that request is retried without the
 parameter, and it is omitted for the remainder of the process. Those models are effectively pinned
 to their own default, so pinning a temperature no longer makes runs comparable against them.
+
+### The `fake` provider
+
+`LLM_PROVIDER=fake` selects a provider that answers from a script and never calls
+a model. It is a real provider reached through the same factory, so it streams,
+reports token counts and a (tiny, non-zero) cost, and is subject to the same
+spend cap — the system around it behaves exactly as it would against a paid
+model.
+
+It is **not a small or offline model**. It does not reason about anything: the
+intent classifier is told a fixed answer, fact extraction is told there is
+nothing to store, and everything else matches the request against a script.
+Useful for running the dashboard without an API key, for end-to-end runs that
+need the same answer twice, and for recording a walkthrough without paying per
+take. Useless for anything that depends on the reply being *right*.
+
+```bash
+LLM_PROVIDER=fake
+LLM_FAKE_SCRIPT='{"weather": "It is 22 degrees and clear."}'   # substring → reply
+LLM_FAKE_INTENT=OTHER                                          # ACTUATE | HA | PIPELINE | OTHER
+```
+
+Both are optional; the defaults answer every request. Unmatched messages get a
+default reply that is deliberately obviously synthetic, so a recording made
+against it cannot be mistaken for a real session.
 
 ### Per-call-site overrides
 

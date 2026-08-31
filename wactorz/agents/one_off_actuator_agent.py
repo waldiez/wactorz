@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import shutil
 import time
 from typing import Any, ClassVar
@@ -26,7 +27,10 @@ logger = logging.getLogger(__name__)
 logger.info("one_off_actuator_agent loaded — resolver guard v2 active")
 
 _COLOR_RGB = {
+    "cyan": [0, 255, 255],
     "blue": [0, 0, 255],
+    "yellow": [255, 255, 0],
+    "orange": [255, 165, 0],
     "pink": [255, 105, 180],
     "red": [255, 0, 0],
     "green": [0, 255, 0],
@@ -42,6 +46,21 @@ _COLOR_SERVICE_KEYS = {
     "color_name",
 }
 _COLOR_MODES = {"hs", "rgb", "rgbw", "rgbww", "xy"}
+# When a generic "the light" has to be resolved to ONE bulb, prefer the room's
+# main/overhead light over an accent/strip. These are tiebreak hints only — an
+# explicit name the user said still wins via the token-overlap score.
+_PRIMARY_LIGHT_HINTS = ("main", "ceiling", "overhead", "primary", "central")
+_ACCENT_LIGHT_HINTS = (
+    "strip",
+    "accent",
+    "ambient",
+    "bias",
+    "backlight",
+    "undercabinet",
+    "under cabinet",
+    "nightlight",
+    "night light",
+)
 
 # Home Assistant domains an untrusted caller (Discord/Telegram/WhatsApp) may
 # actuate. Deliberately an allow-list: `domain`/`service` come out of the LLM's
@@ -110,6 +129,8 @@ Request: "turn off the TV" when NO tv/media_player entity exists in the payload
 
 Rules:
 - Return an array, never an object.
+- ``user_request`` is the only command to execute. ``conversation_context`` is
+  reference context only; never repeat or execute an older request from it.
 - Use the most specific matching entity_id available.
 - The chosen entity MUST be the device the user named. NEVER substitute a
   different device: if the user says "TV" and no TV-like entity exists in the
@@ -369,12 +390,14 @@ class OneOffActuatorAgent(Actor):
         llm_provider: LLMProvider | None,
         task_id: str,
         reply_to_id: str,
+        conversation_context: list[dict[str, Any]] | None = None,
         allowed_domains: frozenset[str] | set[str] | None = None,
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("name", f"one-off-actuator-{task_id[-8:]}")
         super().__init__(**kwargs)
         self.request = request
+        self.conversation_context = list(conversation_context or [])[-4:]
         self.llm = llm_provider
         self.task_id = task_id
         self.reply_to_id = reply_to_id
@@ -449,12 +472,16 @@ class OneOffActuatorAgent(Actor):
         return await self._execute_actions(actions)
 
     async def _resolve_actions(self, devices: list[dict[str, Any]]) -> list[ActuatorAction]:
+        common = self._resolve_simple_light_actions(devices)
+        if common is not None:
+            return common
         # Send the model only the fields it can act on. The dashboard payload is
         # ~3x larger, and the bulk of it (unique_id, platform, icons, feature
         # bitmasks) is never mentioned by the resolver prompt. Post-processing
         # below still reads the FULL payload, so colour repair keeps working.
         prompt_input = {
             "user_request": self.request,
+            "conversation_context": self.conversation_context,
             "devices": compact_devices_for_prompt(devices),
         }
         llm = self.llm
@@ -471,7 +498,17 @@ class OneOffActuatorAgent(Actor):
             timeout=120.0,
         )
         self._accumulate_usage(usage)
-        parsed = self._parse_actions_json(raw)
+        try:
+            parsed = self._parse_actions_json(raw)
+        except json.JSONDecodeError:
+            # Output with no array in it at all. Letting this propagate would
+            # surface a raw JSONDecodeError as the reply, which the voice path
+            # then reads aloud; a no-match is the same outcome said properly.
+            # Logged rather than swallowed so the bad output is still traceable.
+            logger.warning(
+                "[%s] Actuator resolver returned unparseable output: %r", self.name, raw[:200]
+            )
+            return []
         actions = [ActuatorAction.from_dict(item) for item in parsed]
         actions = self._repair_color_actions(actions, devices)
         kept, dropped = filter_unrequested_actions(self.request, actions, devices)
@@ -490,6 +527,8 @@ class OneOffActuatorAgent(Actor):
 
     def _parse_actions_json(self, raw: str) -> list[dict[str, Any]]:
         cleaned = (raw or "").strip()
+        if not cleaned:
+            return []
         if cleaned.startswith("```"):
             cleaned = cleaned.strip("`")
             cleaned = cleaned.removeprefix("json")
@@ -505,21 +544,172 @@ class OneOffActuatorAgent(Actor):
                 raise
             data = json.loads(cleaned[start : end + 1])
         if not isinstance(data, list):
-            raise json.JSONDecodeError("Expected a JSON array", cleaned, 0)
+            return []
         return [item for item in data if isinstance(item, dict)]
 
-    def _user_text(self) -> str:
-        """The user's own words — the request minus the entity list that
-        routing appends. Color/brightness detection and entity ranking must
-        never read the injected list: an entity like "Infrared Hub" would
-        otherwise make every request "ask for red".
+    def _clean_request(self) -> str:
+        """The user's own words, lowercased, with any injected entity-context
+        block stripped.
+
+        Main enriches the request with an ``[AVAILABLE HA ENTITIES ...]`` list
+        before spawning this agent. The keyword heuristics below (colour,
+        brightness, plurality) must read the user's actual phrasing, not entity
+        names in that block — otherwise a ``Living Room Lights`` entity makes a
+        singular "turn the light red" look plural, or a ``Red Lamp`` entity
+        looks like a colour request.
         """
-        return self.request.split("[AVAILABLE HA ENTITIES", 1)[0].lower()
+        text = self.request or ""
+        idx = text.find("\n\n[AVAILABLE HA ENTITIES")
+        if idx != -1:
+            text = text[:idx]
+        text = re.sub(r"\bman light\b", "main light", text, flags=re.IGNORECASE)
+        return text.lower()
+
+    def _resolve_simple_light_actions(
+        self,
+        devices: list[dict[str, Any]],
+    ) -> list[ActuatorAction] | None:
+        """Resolve ordinary light commands without relying on generated JSON."""
+        request = self._clean_request()
+        brightness_step = self._requested_brightness_step_pct()
+        brightness_request = brightness_step is not None or "brightness" in request
+        normal_request = self._requests_normal_light()
+        if not re.search(r"\blights?\b", request) and not brightness_request:
+            return None
+
+        rgb = [255, 255, 255] if normal_request else self._requested_rgb()
+        if re.search(r"\b(turn|then|switch|shut)\s+off\b", request):
+            service = "turn_off"
+        elif (
+            re.search(r"\b(turn|then|switch)\s+on\b", request)
+            or rgb is not None
+            or brightness_request
+            or normal_request
+        ):
+            service = "turn_on"
+        else:
+            return None
+
+        lights = list(self._iter_entities(devices))
+        if not lights:
+            return None
+
+        if self._request_targets_multiple_lights():
+            entity_ids = [str(entity.get("entity_id") or "") for entity in lights]
+        else:
+            entity_id = (
+                self._find_color_light(devices)
+                if rgb is not None and not normal_request
+                else self._find_requested_light(lights, request)
+            )
+            if not entity_id:
+                return None
+            entity_ids = [entity_id]
+
+        service_data = {}
+        if rgb is not None and service == "turn_on":
+            service_data["rgb_color"] = rgb
+        if brightness_step is not None and service == "turn_on":
+            service_data["brightness_step_pct"] = brightness_step
+        elif (self._requests_max_brightness() and service == "turn_on") or (
+            normal_request and service == "turn_on"
+        ):
+            service_data["brightness_pct"] = 100
+        return [
+            ActuatorAction(
+                domain="light",
+                service=service,
+                entity_id=entity_id,
+                service_data=dict(service_data),
+            )
+            for entity_id in dict.fromkeys(entity_ids)
+            if entity_id
+        ]
+
+    def _find_requested_light(
+        self,
+        lights: list[dict[str, Any]],
+        request: str,
+    ) -> str | None:
+        """Choose one explicitly named light, or the primary light if generic."""
+        ignored = {
+            "turn",
+            "switch",
+            "shut",
+            "make",
+            "set",
+            "please",
+            "light",
+            "lights",
+            "the",
+            "my",
+            "our",
+            "your",
+            "this",
+            "that",
+            "on",
+            "off",
+            "and",
+            "can",
+            "could",
+            "would",
+            "will",
+            "you",
+            "brightness",
+            "bright",
+            "brighter",
+            "dim",
+            "dimmer",
+            "lower",
+            "raise",
+            "increase",
+            "decrease",
+            "reduce",
+            "down",
+            "up",
+            "little",
+            "slightly",
+            "bit",
+            "some",
+            *list(_COLOR_RGB),
+            "normal",
+            "regular",
+            "default",
+        }
+        specific = {
+            token
+            for token in re.findall(r"[a-z0-9]+", request)
+            if len(token) > 2 and token not in ignored
+        }
+        recent_entity = self._recent_context_light(lights) if not specific else None
+        if recent_entity:
+            return recent_entity
+
+        ranked: list[tuple[int, int, str]] = []
+        for entity in lights:
+            entity_id = str(entity.get("entity_id") or "")
+            attrs = self._entity_attrs(entity)
+            haystack = " ".join(
+                str(value).lower().replace("_", " ")
+                for value in (
+                    entity_id,
+                    entity.get("name"),
+                    entity.get("friendly_name"),
+                    attrs.get("friendly_name"),
+                    entity.get("area"),
+                    entity.get("location"),
+                )
+                if value
+            )
+            score = sum(1 for token in specific if token in haystack)
+            ranked.append((score, self._primary_light_preference(haystack), entity_id))
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        if not ranked or (specific and ranked[0][0] == 0):
+            return None
+        return ranked[0][2]
 
     def _requested_rgb(self) -> list[int] | None:
-        import re
-
-        text = self._user_text()
+        text = self._clean_request()
         for color, rgb in _COLOR_RGB.items():
             # Whole-word match only: "infrared" must not count as "red",
             # "bluetooth" must not count as "blue".
@@ -528,8 +718,8 @@ class OneOffActuatorAgent(Actor):
         return None
 
     def _requests_max_brightness(self) -> bool:
-        request = self._user_text()
-        return any(
+        request = self._clean_request()
+        explicit = any(
             phrase in request
             for phrase in (
                 "max brightness",
@@ -540,6 +730,46 @@ class OneOffActuatorAgent(Actor):
                 "100 percent brightness",
             )
         )
+        return explicit or bool(re.search(r"\b(bright|brighter|brightly)\b", request))
+
+    def _requests_normal_light(self) -> bool:
+        """Return whether the user wants a neutral, fully lit default state."""
+        request = self._clean_request()
+        return bool(
+            re.search(
+                r"\b(?:(?:normal|regular|default)(?:\s+(?:white\s+)?)?light|"
+                r"light\s+(?:normal|regular|default))\b",
+                request,
+            )
+        )
+
+    def _requested_brightness_step_pct(self) -> int | None:
+        """Return a conservative relative brightness change, when requested."""
+        request = self._clean_request()
+        down = bool(re.search(r"\b(dim|dimmer|lower|decrease|reduce|turn\s+down)\b", request))
+        up = bool(re.search(r"\b(brighter|raise|increase|turn\s+up)\b", request))
+        if down == up:
+            return None
+        small = bool(re.search(r"\b(a\s+little|little\s+bit|a\s+bit|slightly)\b", request))
+        amount = 15 if small else 25
+        return -amount if down else amount
+
+    def _recent_context_light(self, lights: list[dict[str, Any]]) -> str | None:
+        """Resolve generic follow-ups to the most recently controlled light."""
+        available = {
+            str(entity.get("entity_id") or "") for entity in lights if entity.get("entity_id")
+        }
+        for item in reversed(self.conversation_context):
+            if not isinstance(item, dict):
+                continue
+            context = " ".join(
+                str(item.get(key) or "") for key in ("response", "raw_response", "transcript")
+            )
+            matches = re.findall(r"\blight\.[a-z0-9_]+\b", context.lower())
+            for entity_id in reversed(matches):
+                if entity_id in available:
+                    return entity_id
+        return None
 
     def _repair_color_actions(
         self,
@@ -577,7 +807,51 @@ class OneOffActuatorAgent(Actor):
                     service_data=service_data,
                 )
             )
-        return repaired
+        return self._collapse_generic_color_lights(repaired, color_entity)
+
+    def _request_targets_multiple_lights(self) -> bool:
+        r"""True when the user clearly means more than one light, so a generic
+        single-light collapse must NOT apply.
+
+        Scope/plural words ("all", "every", "each", "both", plural "lights"/
+        "lamps") mean keep them all; a singular "the light" / "my lamp" is
+        False. ``\\b`` boundaries keep "hallway" from matching "all".
+        """
+        return bool(re.search(r"\b(all|every|each|both|lights|lamps)\b", self._clean_request()))
+
+    def _collapse_generic_color_lights(
+        self,
+        actions: list[ActuatorAction],
+        preferred_entity: str | None,
+    ) -> list[ActuatorAction]:
+        """Collapse a generic colour request that fanned out across several
+        colour lights down to the single best one.
+
+        The resolver is handed every entity, so "change the light colour" in a
+        home with two colour-capable lights can come back as a ``turn_on`` for
+        BOTH — lighting the whole room instead of the one light the user meant.
+        When the request names no specific light and isn't explicitly plural
+        ("all/every/both lights"), keep only the best colour light (the one the
+        colour repair already prefers) and drop the rest. Non-light actions and
+        explicitly-plural requests pass through untouched.
+        """
+        if self._request_targets_multiple_lights():
+            return actions
+        light_ons = [a for a in actions if a.domain == "light" and a.service == "turn_on"]
+        distinct = {a.entity_id for a in light_ons}
+        if len(distinct) <= 1:
+            return actions
+        keep_id = preferred_entity if preferred_entity in distinct else min(distinct)
+        collapsed: list[ActuatorAction] = []
+        kept = False
+        for action in actions:
+            if action.domain == "light" and action.service == "turn_on":
+                if action.entity_id == keep_id and not kept:
+                    collapsed.append(action)
+                    kept = True
+                continue
+            collapsed.append(action)
+        return collapsed
 
     def _find_color_light(self, devices: list[dict[str, Any]]) -> str | None:
         lights = [
@@ -586,8 +860,8 @@ class OneOffActuatorAgent(Actor):
         if not lights:
             return None
 
-        request = self._user_text()
-        ranked: list[tuple[int, str]] = []
+        request = self._clean_request()
+        ranked: list[tuple[int, int, str]] = []
         for entity in lights:
             entity_id = str(entity.get("entity_id") or "")
             attrs = self._entity_attrs(entity)
@@ -608,9 +882,27 @@ class OneOffActuatorAgent(Actor):
                 token = token.strip(".,!?()[]{}'\"")
                 if len(token) > 2 and token in haystack:
                     score += 1
-            ranked.append((score, entity_id))
-        ranked.sort(key=lambda item: item[0], reverse=True)
-        return ranked[0][1] if ranked else None
+            # Tiebreak: when the user named no specific light, favour the main/
+            # overhead bulb over an accent strip so "change the light to blue"
+            # lands on the light they mean. Entity-id sort keeps it deterministic.
+            ranked.append((score, self._primary_light_preference(haystack), entity_id))
+        ranked.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+        return ranked[0][2] if ranked else None
+
+    def _primary_light_preference(self, haystack: str) -> int:
+        """Tiebreak score: +1 per main/overhead hint, -1 per accent/strip hint.
+
+        Only breaks ties between equally-matching colour lights; it never
+        overrides a name the user actually said (that lifts the token score).
+        """
+        score = 0
+        for hint in _PRIMARY_LIGHT_HINTS:
+            if hint in haystack:
+                score += 1
+        for hint in _ACCENT_LIGHT_HINTS:
+            if hint in haystack:
+                score -= 1
+        return score
 
     def _entity_id_supports_color(self, entity_id: str, devices: list[dict[str, Any]]) -> bool:
         for entity in self._iter_entities(devices):

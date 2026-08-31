@@ -14,6 +14,7 @@ checked all look exactly like success from the caller's side.
 
 import asyncio
 import dataclasses
+import os
 from pathlib import Path
 
 import asyncssh
@@ -219,7 +220,7 @@ async def _collect(agent, command: str) -> str:
 
 @pytest.fixture
 def main_actor(tmp_path: Path):
-    from wactorz.agents.main_actor import MainActor
+    from wactorz.agents.main.actor import MainActor
 
     return MainActor(llm_provider=None, persistence_dir=str(tmp_path))
 
@@ -448,8 +449,12 @@ async def test_first_contact_learns_the_key_then_verifies_against_it(
     assert first == str(known_hosts)
     assert fetches == ["10.0.0.5"]
     assert "10.0.0.5" in known_hosts.read_text()
-    # 0600 — the file is the only record of which key we trust.
-    assert known_hosts.stat().st_mode & 0o077 == 0
+    # 0600 — the file is the only record of which key we trust. POSIX only:
+    # Windows has no such mode bits, so chmod cannot express this and st_mode
+    # comes back 0o666 whatever the code did. The rest of the test is
+    # platform-independent and still runs there.
+    if os.name == "posix":
+        assert known_hosts.stat().st_mode & 0o077 == 0
 
     await installer._known_hosts("10.0.0.5", 22)
     assert fetches == ["10.0.0.5"], "a known host was re-learned instead of verified"

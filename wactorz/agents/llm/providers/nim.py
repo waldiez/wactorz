@@ -1,7 +1,12 @@
 """NIMProvider — NVIDIA NIM, OpenAI-shaped."""
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    # The shaping helpers are provider-agnostic and stay free of the SDK, so the
+    # SDK's own parameter types are attached here, at the one call that needs them.
+    from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolUnionParam
 
 from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..openai_shape import (
@@ -11,6 +16,7 @@ from ..openai_shape import (
     _openai_tools,
     _parse_tool_arguments,
     _usage_from_openai,
+    openai_messages,
 )
 from ..pricing import calc_cost
 
@@ -53,6 +59,13 @@ class NIMProvider(LLMProvider):
             base_url=base_url,
         )
 
+    @classmethod
+    def supports_blocks(cls) -> bool:
+        """Block content is translated to this format's parts on the way out
+        (see ``openai_shape.openai_content``), so a list content is safe here.
+        """
+        return True
+
     async def _create_completion(self, params: dict[str, Any]):
         """Create a completion, retrying without reasoning knobs if rejected.
 
@@ -75,7 +88,9 @@ class NIMProvider(LLMProvider):
             raise
 
     async def _complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
-        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
+        full_messages = (
+            [{"role": "system", "content": system}] if system else []
+        ) + openai_messages(messages)
         params: dict[str, Any] = {
             "model": self.model,
             "messages": full_messages,
@@ -101,14 +116,16 @@ class NIMProvider(LLMProvider):
         system: str = "",
         **kwargs: Any,
     ) -> ToolCompletion:
-        full_messages = ([{"role": "system", "content": system}] if system else []) + [
-            _openai_tool_result_message(m) if m.get("role") == "tool" else m for m in messages
-        ]
+        full_messages = (
+            [{"role": "system", "content": system}] if system else []
+        ) + openai_messages(
+            [_openai_tool_result_message(m) if m.get("role") == "tool" else m for m in messages]
+        )
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
-                messages=full_messages,
-                tools=_openai_tools(tools),
+                messages=cast("list[ChatCompletionMessageParam]", full_messages),
+                tools=cast("list[ChatCompletionToolUnionParam]", _openai_tools(tools)),
                 tool_choice=kwargs.get("tool_choice", "auto"),
                 max_tokens=kwargs.get("max_tokens", 8192),
                 **_temp_params(kwargs),
@@ -154,7 +171,9 @@ class NIMProvider(LLMProvider):
 
     async def _stream(self, messages: list[dict], system: str = "", **kwargs):
         """Yield text chunks as they arrive. Final item is a dict with usage."""
-        full_messages = ([{"role": "system", "content": system}] if system else []) + messages
+        full_messages = (
+            [{"role": "system", "content": system}] if system else []
+        ) + openai_messages(messages)
         input_tokens = output_tokens = 0
         params: dict[str, Any] = {
             "model": self.model,

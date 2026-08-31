@@ -37,6 +37,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, MessageType
+from ...core.paths import agent_state_dir
 from ..lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class SpawnMixin(_Host):
         *,
         register: bool = True,
         blocking_install: bool = False,
+        from_registry: bool = False,
     ) -> Actor | SpawnPlaceholder | None:
         """Spawn one agent locally from a spawn-config dict.
 
@@ -91,11 +93,16 @@ class SpawnMixin(_Host):
             immediately. When True (the planner's pipeline path), the install
             blocks until complete and the real actor is returned — pipelines
             need the agent live before the next step runs.
+        from_registry:
+            True only when the config came back out of the spawn registry, which
+            is the one place a ``trusted`` flag can have been earned. See
+            :meth:`_without_unearned_trust`.
 
         Returns the spawned ``Actor``, an existing actor (idempotent path), a
         ``SpawnPlaceholder`` (background install), or ``None`` on failure.
         """
         name = config.get("name", "spawned-agent")
+        config = self._without_unearned_trust(config, name, from_registry)
 
         # ── Idempotency / replace ──────────────────────────────────────────
         existing = self._find_existing(name)
@@ -149,6 +156,34 @@ class SpawnMixin(_Host):
             self._register_spawn(config)
 
         return actor
+
+    def _without_unearned_trust(self, config: dict, name: str, from_registry: bool) -> dict:
+        """Return the config without a ``trusted`` flag its source cannot claim.
+
+        ``trusted`` skips both the sanitizer and the code validator
+        (``DynamicAgent._trusted``), so it is not a preference — it is the
+        decision to execute the config's code unexamined. It is earned by being
+        a packaged catalog recipe, and the catalog does not come through here:
+        it constructs the agent with ``trusted=True`` directly and writes the
+        flag to the spawn registry for the next restart. A config therefore
+        carries it legitimately only on the way back out of that registry.
+        Every other caller is model-authored or arrived over MQTT.
+
+        Stripping here rather than at the point of use covers the whole family
+        at once — the registry is written from what this returns, so the flag
+        cannot be laundered by persisting it and being restored later.
+        """
+        if from_registry or not config.get("trusted"):
+            return config
+        logger.warning(
+            "[%s] Ignoring trusted=true on the spawn config for '%s' — the flag is honoured "
+            "only for agents restored from the spawn registry. The code will be validated.",
+            self.name,
+            name,
+        )
+        # A copy: callers reuse their dict, and mutating it would silently
+        # change what a retry or an error message sees.
+        return {key: value for key, value in config.items() if key != "trusted"}
 
     # ── Per-type spawn helpers ─────────────────────────────────────────────
 
@@ -344,7 +379,7 @@ class SpawnMixin(_Host):
         """
         await self._apply_initial_state(name, config)
 
-        from ..dynamic_agent import DynamicAgent
+        from ..dynamic import DynamicAgent
 
         actor = await self.spawn(
             DynamicAgent,
@@ -480,10 +515,8 @@ class SpawnMixin(_Host):
             )
             try:
                 import pickle
-                from pathlib import Path
 
-                safe = name.replace("/", "_").replace("\\", "_")
-                pdir = Path(str(self._persistence_dir.parent)) / safe
+                pdir = agent_state_dir(self._persistence_dir.parent, name)
                 pdir.mkdir(parents=True, exist_ok=True)
                 with open(pdir / "state.pkl", "wb") as fh:
                     pickle.dump(snapshot, fh)

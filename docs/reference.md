@@ -54,7 +54,7 @@ Wactorz was born out of the need for a framework that could operate on real-worl
 
 ### The Actor Model
 
-Each agent is an Actor: an independent unit with its own async message loop, mailbox (`asyncio.Queue`), and lifecycle (`IDLE → RUNNING → PAUSED → STOPPED / FAILED`). Actors never share memory. They communicate by sending typed `Message` objects to each other via the `ActorRegistry`, which maps actor IDs to actor instances.
+Each agent is an Actor: an independent unit with its own async message loop, mailbox (`asyncio.Queue`), and lifecycle (`IDLE → RUNNING → STOPPED / FAILED`). Actors never share memory. They communicate by sending typed `Message` objects to each other via the `ActorRegistry`, which maps actor IDs to actor instances.
 
 ```
 Message flow:
@@ -89,11 +89,11 @@ This replaces all previous keyword heuristics with a single LLM classification s
 | `core/actor.py` | Core | Base Actor class — mailbox, lifecycle, heartbeat, spawn, send, persist/recall |
 | `core/registry.py` | Core | ActorSystem & ActorRegistry — actor registration, message routing, broadcast |
 | `core/topic_bus.py` | Core | TopicBus — reactive pub/sub coordination layer: TopicContract with observed schema introspection, TopicRegistry for topic-based agent discovery, SharedStateHub for retained world state, StreamWindow for temporal reasoning |
-| `agents/main_actor.py` | Agent | The LLM orchestrator — intent classification, spawns agents, routes requests, memory & user facts |
+| `agents/main/` | Package | The LLM orchestrator (`actor.py`) and the machinery only it uses — commands, delegation, lifecycle, nodes, spawns, manifests, migration, the LLM bridge |
 | `agents/monitor_agent.py` | Agent | Health watcher — detects crashes, fires recovery actions, notifies user |
 | `agents/llm_agent.py` | Agent | Base LLM agent with rolling history summarization, cost tracking, streaming, and 5 providers |
-| `agents/dynamic_agent.py` | Agent | Runtime-generated agents — executes LLM-written Python code in a sandboxed namespace |
-| `agents/planner_agent.py` | Agent | Multi-step task planner + reactive pipeline builder — decomposes tasks, fans out to workers, synthesizes results |
+| `agents/dynamic/` | Agent | Runtime-generated agents — executes LLM-written Python code in a sandboxed namespace |
+| `agents/planner/` | Agent | Multi-step task planner + reactive pipeline builder — decomposes tasks, fans out to workers, synthesizes results |
 | `agents/installer_agent.py` | Agent | Package manager — installs pip packages locally and on remote nodes via SSH |
 | `agents/catalog_agent.py` | Agent | Recipe library — holds pre-built agent configs and spawns them on request without requiring code |
 | `agents/manual_agent.py` | Agent | PDF specialist — 3-layer search strategy to find and extract manual content |
@@ -743,7 +743,7 @@ wactorz-mcp
 python -m wactorz.interfaces.mcp_server
 ```
 
-MCP tools include `ask_wactorz`, `ask_agent`, `list_agents`, `list_capabilities`, `stop_agent`, `pause_agent`, `resume_agent`, `ha_list_entities`, `ha_get_state`, and `ha_call_service`. Resources include `wactorz://agents`, `wactorz://capabilities`, `wactorz://ha-map`, and `wactorz://config`.
+MCP tools include `ask_wactorz`, `ask_agent`, `list_agents`, `list_capabilities`, `stop_agent`, `ha_list_entities`, `ha_get_state`, and `ha_call_service`. Resources include `wactorz://agents`, `wactorz://capabilities`, `wactorz://ha-map`, and `wactorz://config`.
 
 Configure it with `WACTORZ_URL` and optional `WACTORZ_API_KEY`. Direct Home Assistant tools are enabled by `HA_URL` and `HA_TOKEN`.
 
@@ -1353,13 +1353,12 @@ wactorz/
 │
 ├── agents/
 │   ├── llm_agent.py                           LLMAgent — 5 providers, rolling summarization, cost tracking
-│   ├── main_actor.py                          MainActor — intent routing, memory, user facts, pipeline rules
-│   ├── dynamic_agent.py                       DynamicAgent — runtime code executor, error events
-│   ├── planner_agent.py                       PlannerAgent — task planning + reactive pipeline builder
+│   ├── main/                                  MainActor package — actor.py plus its commands and collaborators
+│   ├── dynamic/                               DynamicAgent package — agent.py plus api, streams, messaging, queries
+│   ├── planner/                               PlannerAgent package — agent.py plus detection, parsing, cache, validation
 │   ├── monitor_agent.py                       MonitorAgent — heartbeat, error registry, recovery
 │   ├── installer_agent.py                     InstallerAgent — pip install locally + SSH deploy to remote nodes
 │   ├── catalog_agent.py                       CatalogAgent — pre-built recipe library, spawns agents by name
-│   ├── io_agent.py                            IOAgent — MQTT↔UI gateway for browser chat
 │   ├── scheduled_agent.py                     ScheduledAgent — first-class time triggers (daily/weekly/cron/once)
 │   ├── one_off_actuator_agent.py              OneOffActuatorAgent — ephemeral one-shot HA actuator
 │   ├── home_assistant_agent.py                HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)

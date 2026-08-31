@@ -14,7 +14,7 @@ interface Harness {
     host: ChatInputHost & { setTarget: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
 }
 
-function setup(agents = ["main", "io-agent"]): Harness {
+function setup(agents = ["main", "picam"]): Harness {
     document.body.innerHTML = "";
     const wrap = document.createElement("div");
     const ghost = document.createElement("div");
@@ -59,10 +59,10 @@ describe("ChatInput @mentions", () => {
     });
 
     it("filters mention matches by prefix", () => {
-        h.input.value = "@i";
+        h.input.value = "@p";
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         expect(h.panel.querySelectorAll("button").length).toBe(1);
-        expect(h.panel.querySelector("button")!.textContent).toBe("io-agent");
+        expect(h.panel.querySelector("button")!.textContent).toBe("picam");
     });
 
     it("closes the panel when no match", () => {
@@ -72,10 +72,10 @@ describe("ChatInput @mentions", () => {
     });
 
     it("Tab accepts the first mention and sets the target", () => {
-        h.input.value = "hi @i";
+        h.input.value = "hi @p";
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         h.ci.onKeydown(key("Tab"), h.input, h.select, h.ghost, h.panel);
-        expect(h.host.setTarget).toHaveBeenCalledWith("io-agent");
+        expect(h.host.setTarget).toHaveBeenCalledWith("picam");
         expect(h.input.value).toBe("hi"); // trailing @query stripped
         expect(h.panel.classList.contains("open")).toBe(false);
     });
@@ -85,7 +85,7 @@ describe("ChatInput @mentions", () => {
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         h.ci.onKeydown(key("ArrowRight"), h.input, h.select, h.ghost, h.panel); // idx 0 -> 1
         h.ci.onKeydown(key("Enter"), h.input, h.select, h.ghost, h.panel);
-        expect(h.host.setTarget).toHaveBeenCalledWith("io-agent");
+        expect(h.host.setTarget).toHaveBeenCalledWith("picam");
     });
 
     it("Escape closes the mention panel", () => {
@@ -107,7 +107,7 @@ describe("ChatInput @mentions", () => {
         // A suggested name the <select> can't target (e.g. a non-messageable
         // agent). Accepting it must NOT setTarget, must NOT strip the @query,
         // and must dismiss the panel — never leaving a misleading placeholder.
-        (h.host.agentNames as ReturnType<typeof vi.fn>).mockReturnValue(["main", "io-agent", "ghost-agent"]);
+        (h.host.agentNames as ReturnType<typeof vi.fn>).mockReturnValue(["main", "picam", "ghost-agent"]);
         h.input.value = "@ghost";
         h.ci.onChange(h.input, h.select, h.ghost, h.panel);
         const chip = [...h.panel.querySelectorAll("button")].find(b => b.textContent === "ghost-agent")!;
@@ -128,7 +128,7 @@ describe("ChatInput send", () => {
     it("Enter sends the message", () => {
         h.input.value = "hello";
         h.ci.onKeydown(key("Enter"), h.input, h.select, h.ghost, h.panel);
-        expect(h.host.send).toHaveBeenCalledWith(h.input, h.select);
+        expect(h.host.send).toHaveBeenCalledWith(h.input);
     });
 
     it("Shift+Enter does not send", () => {

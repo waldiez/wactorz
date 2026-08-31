@@ -151,7 +151,7 @@ class TopicContract:
 
     def update_observed(self, topic: str, payload: dict):
         """Record the actual field names and types from a real published message.
-        Called automatically by _AgentAPI.publish() — agents don't need to
+        Called automatically by AgentAPI.publish() — agents don't need to
         call this themselves.
 
         This is what solves "temp" vs "temperature": the schema reflects

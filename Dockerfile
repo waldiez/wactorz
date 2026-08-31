@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
@@ -23,7 +23,11 @@ RUN pip install --no-cache-dir ".[all]" \
 # dropping to it — see docker-entrypoint.sh for why that cannot happen here.
 RUN adduser --system --uid 1000 --group --home /home/wactorz wactorz \
     && mkdir -p /home/wactorz /app/state \
-    && chown -R wactorz:wactorz /home/wactorz /app/state
+    && chown -R wactorz:wactorz /home/wactorz /app/state \
+    # su, mount, passwd and friends are unreachable from the runtime user —
+    # the entrypoint drops privilege with --no-new-privs. Clearing the bits
+    # anyway means the image does not depend on that flag being remembered.
+    && find / -xdev \( -perm -4000 -o -perm -2000 \) -type f -exec chmod -s {} + 2>/dev/null || true
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
@@ -49,6 +53,15 @@ ENV HOME=/app/state/home \
     PIP_CACHE_DIR=/tmp/pip-cache
 
 ENV INTERFACE=rest
+
+# A published port cannot reach a process bound to the container's own loopback,
+# so the image binds wide. It deliberately does *not* set WACTORZ_EXPOSED_OK:
+# that flag means "the only way in is already authenticated", and an image
+# cannot know whether its ports were published to a loopback mapping or to the
+# world. So `docker run -p 8888:8888 …` refuses to start until the operator
+# says which — `-e API_KEY=…` or `-e WACTORZ_EXPOSED_OK=1` — and the refusal
+# names both. Loud beats a container that starts and serves nothing.
+ENV WACTORZ_BIND_HOST=0.0.0.0
 
 EXPOSE 8000 8888
 

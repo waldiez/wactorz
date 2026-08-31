@@ -1,4 +1,4 @@
-.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt lint format clean \
+.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt fmt-py lint lint-py format clean \
         up down logs shell \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
@@ -80,7 +80,7 @@ dev: ## Start the MQTT broker only (mosquitto on 1883)
 	$(COMPOSE_DEV) up
 
 dev-down: ## Stop the dev compose stack (all profiles)
-	$(COMPOSE_DEV) --profile app --profile influx --profile full down
+	$(COMPOSE_DEV) --profile app --profile full down
 
 dev-app: ## Run the backend + metrics in containers (compose 'app' profile, UI on :8888)
 	$(COMPOSE_DEV) --profile app up
@@ -135,13 +135,17 @@ fmt-py: ## Format Python (ruff format + safe autofixes) — run this to pass the
 lint: ## Full frontend lint (typecheck + prettier + eslint)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint
 
-lint-py: ## Lint Python — gated ruff (fails) + advisory docstrings/typing (reports only)
+lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff families (report only)
 	$(PYTHON) -m ruff check wactorz tests scripts
 	$(PYTHON) -m ruff format --check wactorz tests scripts
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
 	-$(PYTHON) -m ruff check wactorz --extend-select G,LOG,TRY,C90,PTH,S,T20,DTZ --statistics
-	@echo "── advisory (non-blocking): basedpyright (basic) ──"
-	@command -v basedpyright >/dev/null 2>&1 && basedpyright wactorz || echo "(basedpyright not installed — run 'make install-dev')"
+	@echo "── gated: basedpyright (basic) ──"
+	@if command -v basedpyright >/dev/null 2>&1; then \
+		basedpyright wactorz; \
+	else \
+		echo "(basedpyright not installed — run 'make install-dev')"; \
+	fi
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 
@@ -154,13 +158,13 @@ down: ## Stop full stack
 logs: ## Follow full stack logs
 	$(COMPOSE) logs -f
 
-logs-%: ## Follow logs for a specific service, e.g. make logs-wactorz
+logs-%: ## Follow logs for a specific service, e.g. make logs-wactorz-python
 	$(COMPOSE) logs -f $*
 
 shell: ## Open a shell in the wactorz container
-	$(COMPOSE) exec wactorz sh
+	$(COMPOSE) exec wactorz-python sh
 
-shell-%: ## Open a shell in a running container, e.g. make shell-wactorz
+shell-%: ## Open a shell in a running container, e.g. make shell-wactorz-python
 	$(COMPOSE) exec $* sh
 
 # ── Misc ────────────────────────────────────────────────────────────────────
@@ -173,7 +177,7 @@ install: install-py install-frontend ## Install everything (Python + frontend)
 install-py: ## Install Python package in editable mode with all extras
 	$(PYTHON) -m pip install -e ".[all]"
 
-install-docs: ## Install docs dependencies (MkDocs Material + mkdocstrings + mike)
+install-docs: ## Install docs dependencies (markdown + pygments + pdoc)
 	$(PYTHON) -m pip install -e ".[docs]"
 
 install-dev: ## Install everything including dev/docs deps
@@ -191,7 +195,10 @@ precommit-run: ## Run all configured pre-commit hooks across the repo
 test: test-py test-frontend ## Run all tests (Python + frontend)
 
 test-py: ## Run Python tests (pytest) + the remote runner's own self-test
-	$(PYTHON) -m pytest tests
+	@# -n auto here and not in pyproject's addopts: parallel wins on the whole
+	@# suite and loses on a single file, where worker start-up costs more than
+	@# the tests. A focused run should stay serial without having to opt out.
+	$(PYTHON) -m pytest tests -n auto
 	@# remote_runner.py ships to nodes without pytest or the wactorz package, so
 	@# it carries its own tests. Nothing ran them and they had rotted silently.
 	$(PYTHON) wactorz/remote_runner.py --test
@@ -202,10 +209,11 @@ test-frontend: ## Run frontend tests (vitest)
 coverage: coverage-py coverage-frontend ## Generate coverage (Python + frontend)
 
 coverage-py: ## Generate Python coverage XML + terminal report
+	@# pytest-cov rather than `coverage run -m pytest`: the latter measures only
+	@# the parent process, so under -n auto it reports a fraction of the truth
+	@# with every test still passing. pytest-cov collects from the workers.
 	mkdir -p coverage
-	$(PYTHON) -m coverage run -m pytest tests
-	$(PYTHON) -m coverage xml -o coverage/python-coverage.xml
-	$(PYTHON) -m coverage report
+	$(PYTHON) -m pytest tests -n auto --cov --cov-report=xml:coverage/python-coverage.xml --cov-report=term
 
 coverage-frontend: ## Generate frontend coverage (gated vitest v8 — fails below the floor)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run coverage

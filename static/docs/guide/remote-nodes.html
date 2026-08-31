@@ -124,6 +124,7 @@
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="active">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
     </details>
@@ -258,11 +259,47 @@
 </blockquote>
 <hr />
 <h2 id="automated-deploy-from-chat">Automated deploy from chat</h2>
-<p>MainActor can deploy <code>remote_runner.py</code> to a new machine automatically via a devops agent that uses SSH. From the chat:</p>
-<div class="highlight"><pre><span></span><code><span class="s">&quot;deploy node rpi-bedroom to pi@192.168.1.52 with broker 192.168.1.10&quot;</span>
+<p>MainActor can deploy <code>remote_runner.py</code> to a new machine over SSH, but only to a machine you have configured as a <strong>deploy target</strong>. Add the node to your environment first:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">DEPLOY_TARGETS</span><span class="o">=</span>rpi-bedroom
+<span class="nv">DEPLOY_RPI_BEDROOM_HOST</span><span class="o">=</span><span class="m">192</span>.168.1.52
+<span class="nv">DEPLOY_RPI_BEDROOM_USER</span><span class="o">=</span>pi
+<span class="nv">DEPLOY_RPI_BEDROOM_KEY</span><span class="o">=</span>/path/to/id_ed25519<span class="w">    </span><span class="c1"># preferred; or _PASSWORD</span>
+<span class="nv">DEPLOY_RPI_BEDROOM_BROKER</span><span class="o">=</span><span class="m">192</span>.168.1.10<span class="w">        </span><span class="c1"># broker as seen FROM the Pi</span>
 </code></pre></div>
 
-<p>This spawns a devops agent that SSHes into the target machine, creates <code>~/agentflow/</code>, uploads <code>remote_runner.py</code>, installs the dependencies, and starts the runner as a background process. After that, the node is immediately available for agent spawning.</p>
+<p>The block is keyed by the node name upper-cased, with every run of non-alphanumerics collapsed to one underscore — <code>rpi-bedroom</code> → <code>DEPLOY_RPI_BEDROOM_*</code>. Restart Wactorz, then from the chat:</p>
+<div class="highlight"><pre><span></span><code>/deploy rpi-bedroom
+</code></pre></div>
+
+<p>The installer agent SSHes in, creates <code>~/wactorz/</code>, uploads <code>remote_runner.py</code>, installs the dependencies into a venv, and starts the runner in the background. After that, the node is available for agent spawning.</p>
+<blockquote>
+<p><strong>⚠ Credentials never go through chat.</strong> <code>/deploy</code> takes a node name and nothing else. The older <code>/deploy &lt;node&gt; &lt;host&gt; &lt;user&gt; &lt;password&gt;</code> form is refused: chat messages are written to the conversation history and the chat log, so a password typed there stays on disk long after the deploy. For the same reason, don't ask an agent to SSH somewhere with a password in the request — the installer reads credentials from the environment and ignores any supplied in a task payload.</p>
+</blockquote>
+<p>Leaving <code>DEPLOY_&lt;NODE&gt;_HOST</code> unset makes the deploy resolve <code>&lt;node&gt;.local</code> over mDNS instead. That is a single name lookup; earlier versions fell back to scanning the local <code>/24</code> for open SSH ports, which is gone.</p>
+<h3 id="the-broker-has-to-be-reachable-from-the-node">The broker has to be reachable from the node</h3>
+<p>A remote node connects back to the MQTT broker over the network, so <code>broker</code> in
+its target block is the address the <strong>node</strong> should dial — your main machine's
+LAN IP, not <code>localhost</code>.</p>
+<p>Broker credentials travel with the deploy. They are written to <code>~/wactorz/.env</code>
+on the node (mode <code>0600</code>) and sourced when the runner starts, so they appear in
+no command line — SSH runs the launch command through a shell whose own
+arguments any local user can read with <code>ps</code>, which is why they are not passed
+that way. A node uses <code>DEPLOY_&lt;NODE&gt;_BROKER_USER</code> / <code>_BROKER_PASSWORD</code> if set,
+and this server's <code>MQTT_USERNAME</code> / <code>MQTT_PASSWORD</code> otherwise.</p>
+<p>Sharing the server's account is the usable default for one broker with one
+account, and it has a cost worth stating: <strong>a stolen node holds full broker
+access</strong>, and the broker carries the code spawned agents run. Give a node its
+own account when that matters — a Mosquitto password file holds as many users
+as you need.</p>
+<p>The Wactorz add-on's embedded broker still cannot serve a remote node, but for a
+different reason: its port is deliberately not published, so there is no route
+to it whatever credentials a node holds.</p>
+<h3 id="host-key-verification">Host key verification</h3>
+<p>SSH host keys are checked on every connection. A machine that has not been connected to before has its key recorded on first contact — the same trust-on-first-use that interactive <code>ssh</code> does — and any later change to that key fails the connection instead of being accepted.</p>
+<p>Learned keys live in <code>&lt;WACTORZ_STATE_DIR&gt;/known_hosts</code>, or wherever <code>DEPLOY_KNOWN_HOSTS</code> points. Set <code>DEPLOY_STRICT_HOST_KEYS=1</code> to turn off first-use learning entirely; every target's key must then already be in the file:</p>
+<div class="highlight"><pre><span></span><code>ssh-keyscan<span class="w"> </span><span class="m">192</span>.168.1.52<span class="w"> </span>&gt;&gt;<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEPLOY_KNOWN_HOSTS</span><span class="s2">&quot;</span><span class="w">   </span><span class="c1"># after verifying the fingerprint</span>
+</code></pre></div>
+
 <hr />
 <h2 id="mqtt-topics">MQTT topics</h2>
 <p>The runner subscribes to a set of control topics scoped to its node name, and publishes heartbeats for itself and all its agents.</p>

@@ -6,13 +6,13 @@ All agents are Python classes that extend `Actor`. They communicate exclusively 
 
 ## Core agents
 
-Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ONE` restart policies. They are **protected** — they cannot be stopped or deleted from the dashboard.
+Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ONE` restart policies. They are **protected** — they cannot be deleted, since nothing could recreate them. They can be stopped and started again, except for `main`, which is also **essential**: stopping it would leave chat unanswered, which is where a user would go to start it again.
 
 ---
 
 ### MainActor `[core]` `[LLM]`
 
-**File:** `wactorz/agents/main_actor.py`
+**File:** `wactorz/agents/main/actor.py` (the `wactorz/agents/main/` package)
 
 | | |
 |---|---|
@@ -63,7 +63,7 @@ Every DynamicAgent spawned during the session is saved to the `_spawned_agents` 
 
 ### PlannerAgent `[core]` `[LLM]`
 
-**File:** `wactorz/agents/planner_agent.py`
+**File:** `wactorz/agents/planner/` (`agent.py` plus its extracted concerns)
 
 | | |
 |---|---|
@@ -115,19 +115,6 @@ Before generating code, the planner calls `prune_stale()` on the TopicBus regist
 | **heartbeat timeout** | 60 s |
 
 Tracks heartbeat timestamps from every registered actor. If an actor's last heartbeat is older than `heartbeat_timeout` seconds it publishes an alert to `agents/{monitor_id}/alert` and notifies MainActor directly. Does _not_ auto-restart actors — restart policy belongs to the Supervisor. Infrastructure agents (`monitor`, `installer`, `main`, `home-assistant-agent`, `code-agent`, `anomaly-detector`) are excluded from user-facing notifications.
-
----
-
-### IOAgent `[core]`
-
-**File:** `wactorz/agents/io_agent.py`
-
-| | |
-|---|---|
-| **name** | `io-agent` |
-| **subscribes** | `io/chat` |
-
-MQTT ↔ interface gateway. Bridges incoming messages from the web dashboard to MainActor and relays responses back. The CLI, Discord, WhatsApp, and Telegram interfaces bypass IOAgent and call `main_actor.process_user_input()` directly.
 
 ---
 
@@ -425,7 +412,7 @@ TS_BATCH_INTERVAL=5.0      # flush to SQLite every N seconds (default: 5)
 
 ## DynamicAgent
 
-**File:** `wactorz/agents/dynamic_agent.py`
+**File:** `wactorz/agents/dynamic/` (`agent.py` plus its extracted concerns)
 
 | | |
 |---|---|

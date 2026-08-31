@@ -16,7 +16,9 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.main_actor import SPAWN_REGISTRY_KEY, VANISH_MISS_THRESHOLD, MainActor
+from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.nodes import VANISH_MISS_THRESHOLD
+from wactorz.agents.main.spawns import SPAWN_REGISTRY_KEY
 from wactorz.core.actor import ActorState
 
 
@@ -255,17 +257,6 @@ class TestSlashCommands:
         assert "reversible" in out
         assert "alias of /delete" not in out
 
-    async def test_agents_pause_pauses(self, main: MainActor) -> None:
-        target = _Target()
-        main._registry = _Registry(target)  # type: ignore[assignment]
-        main._save_to_spawn_registry(_cfg("weather"))
-
-        out = await main.process_user_input("/agents pause weather")
-
-        # It ran stop() for this verb and reported the agent paused.
-        assert target.commands == ["pause"]
-        assert "paused" in out
-
     async def test_agents_stop_stops(self, main: MainActor) -> None:
         target = _Target()
         main._registry = _Registry(target)  # type: ignore[assignment]
@@ -295,23 +286,13 @@ class TestSlashCommands:
         assert "not found" in out.lower()
 
     async def test_a_bare_lifecycle_command_shows_its_usage(self, main: MainActor) -> None:
-        # "/pause" alone used to fall through to the LLM: the input is stripped
-        # before matching, so the "/pause " prefix never matched and the usage
-        # hint written for this case was unreachable.
-        for command in ("/pause", "/resume", "/start"):
+        # Stripped before matching, so a bare command never matches the prefix
+        # form and would otherwise fall through to the LLM with the usage hint
+        # written for this case left unreachable.
+        for command in ("/start",):
             out = await main.process_user_input(command)
             assert "usage" in out.lower(), command
             assert "<agent-name>" in out
-
-    async def test_the_pause_shortcut_pauses_too(self, main: MainActor) -> None:
-        target = _Target()
-        main._registry = _Registry(target)  # type: ignore[assignment]
-
-        out = await main.process_user_input("/pause weather")
-
-        # The two spellings must not disagree — they did.
-        assert target.commands == ["pause"]
-        assert "paused" in out
 
     async def test_start_is_refused_for_a_running_agent(self, main: MainActor) -> None:
         main._registry = _Registry(_Target())  # type: ignore[assignment]

@@ -79,22 +79,25 @@ SPAWN CONFIG
 AGENT_CODE = r'''
 import asyncio
 import json
-import math
+import os
 import time
+from datetime import datetime
+from typing import Any
 
+import aiomqtt
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 
-DEFAULT_BASELINE_HOURS       = 720      # 30 days of history for baseline
-DEFAULT_LEARNING_PERIOD_H    = 168      # 1 week minimum before detection
-DEFAULT_SENSITIVITY          = 0.3      # anomaly threshold (0=flag everything, 1=only extremes)
-DEFAULT_REBUILD_INTERVAL_H   = 168      # rebuild baseline weekly
-DEFAULT_ABSENCE_MULTIPLIER   = 3.0      # flag if no data for 3× normal interval
-DEFAULT_STAT_K               = 3.0      # z-score threshold for statistical anomaly
-DEFAULT_RATE_K               = 4.0      # max rate-of-change multiplier
-DEFAULT_MIN_SAMPLES          = 50       # minimum samples before trusting a baseline
-DEFAULT_SINERGYM_BASELINE_H  = 2        # sinergym: much shorter baseline (simulated time)
-DEFAULT_SINERGYM_LEARNING_H  = 0.5      # sinergym: start detecting after 30min of data
+DEFAULT_BASELINE_HOURS = 720  # 30 days of history for baseline
+DEFAULT_LEARNING_PERIOD_H = 168  # 1 week minimum before detection
+DEFAULT_SENSITIVITY = 0.3  # anomaly threshold (0=flag everything, 1=only extremes)
+DEFAULT_REBUILD_INTERVAL_H = 168  # rebuild baseline weekly
+DEFAULT_ABSENCE_MULTIPLIER = 3.0  # flag if no data for 3× normal interval
+DEFAULT_STAT_K = 3.0  # z-score threshold for statistical anomaly
+DEFAULT_RATE_K = 4.0  # max rate-of-change multiplier
+DEFAULT_MIN_SAMPLES = 50  # minimum samples before trusting a baseline
+DEFAULT_SINERGYM_BASELINE_H = 2  # sinergym: much shorter baseline (simulated time)
+DEFAULT_SINERGYM_LEARNING_H = 0.5  # sinergym: start detecting after 30min of data
 
 # Topics to subscribe to for real-time detection
 MONITOR_TOPICS = [
@@ -109,58 +112,75 @@ MONITOR_TOPICS = [
 # BASELINE MODEL
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 class EntityBaseline:
     """Statistical baseline for one entity+field combination."""
 
-    def __init__(self, entity_id: str, field: str):
+    def __init__(self, entity_id: str, field: str) -> None:
         self.entity_id = entity_id
         self.field = field
-        self.hourly_mean = [0.0] * 24      # mean value per hour-of-day
-        self.hourly_std  = [1.0] * 24      # std per hour-of-day
-        self.hourly_count = [0] * 24       # samples per hour slot
+        self.hourly_mean = [0.0] * 24  # mean value per hour-of-day
+        self.hourly_std = [1.0] * 24  # std per hour-of-day
+        self.hourly_count = [0] * 24  # samples per hour slot
         self.global_mean = 0.0
-        self.global_std  = 1.0
-        self.p1  = 0.0                      # 1st percentile
-        self.p99 = 0.0                      # 99th percentile
-        self.max_rate = 0.0                 # max |delta| between consecutive readings
-        self.mean_interval = 0.0            # mean seconds between readings
+        self.global_std = 1.0
+        self.p1 = 0.0  # 1st percentile
+        self.p99 = 0.0  # 99th percentile
+        self.max_rate = 0.0  # max |delta| between consecutive readings
+        self.mean_interval = 0.0  # mean seconds between readings
         self.total_samples = 0
         self.last_value = None
         self.last_ts = 0.0
-        self.is_binary = False              # on/off sensor
-        self.transition_freq = 0.0          # state changes per hour (binary)
-        self.ready = False                  # enough data to detect?
+        self.is_binary = False  # on/off sensor
+        self.transition_freq = 0.0  # state changes per hour (binary)
+        self.ready = False  # enough data to detect?
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
-            "entity_id": self.entity_id, "field": self.field,
-            "hourly_mean": self.hourly_mean, "hourly_std": self.hourly_std,
+            "entity_id": self.entity_id,
+            "field": self.field,
+            "hourly_mean": self.hourly_mean,
+            "hourly_std": self.hourly_std,
             "hourly_count": self.hourly_count,
-            "global_mean": self.global_mean, "global_std": self.global_std,
-            "p1": self.p1, "p99": self.p99,
-            "max_rate": self.max_rate, "mean_interval": self.mean_interval,
+            "global_mean": self.global_mean,
+            "global_std": self.global_std,
+            "p1": self.p1,
+            "p99": self.p99,
+            "max_rate": self.max_rate,
+            "mean_interval": self.mean_interval,
             "total_samples": self.total_samples,
-            "is_binary": self.is_binary, "transition_freq": self.transition_freq,
+            "is_binary": self.is_binary,
+            "transition_freq": self.transition_freq,
             "ready": self.ready,
         }
 
     @staticmethod
-    def from_dict(d: dict) -> "EntityBaseline":
+    def from_dict(d: dict[str, Any]) -> "EntityBaseline":
         b = EntityBaseline(d["entity_id"], d["field"])
-        for k in ("hourly_mean", "hourly_std", "hourly_count",
-                   "global_mean", "global_std", "p1", "p99",
-                   "max_rate", "mean_interval", "total_samples",
-                   "is_binary", "transition_freq", "ready"):
+        for k in (
+            "hourly_mean",
+            "hourly_std",
+            "hourly_count",
+            "global_mean",
+            "global_std",
+            "p1",
+            "p99",
+            "max_rate",
+            "mean_interval",
+            "total_samples",
+            "is_binary",
+            "transition_freq",
+            "ready",
+        ):
             if k in d:
                 setattr(b, k, d[k])
         return b
 
 
-def _build_baseline_from_data(entity_id: str, field: str,
-                              rows: list, min_samples: int) -> "EntityBaseline":
+def _build_baseline_from_data(
+    entity_id: str, field: str, rows: list[dict[str, Any]], min_samples: int
+) -> "EntityBaseline":
     """Build a baseline from query results (list of dicts with ts, value)."""
-    import datetime
-
     b = EntityBaseline(entity_id, field)
     values = []
     timestamps = []
@@ -182,13 +202,13 @@ def _build_baseline_from_data(entity_id: str, field: str,
     # Global stats
     b.global_mean = sum(values) / len(values)
     variance = sum((v - b.global_mean) ** 2 for v in values) / len(values)
-    b.global_std = max(variance ** 0.5, 1e-6)
+    b.global_std = max(variance**0.5, 1e-6)
 
     # Percentiles
     sorted_vals = sorted(values)
-    idx_1  = max(0, int(len(sorted_vals) * 0.01))
+    idx_1 = max(0, int(len(sorted_vals) * 0.01))
     idx_99 = min(len(sorted_vals) - 1, int(len(sorted_vals) * 0.99))
-    b.p1  = sorted_vals[idx_1]
+    b.p1 = sorted_vals[idx_1]
     b.p99 = sorted_vals[idx_99]
 
     # Binary detection (only 2 unique values)
@@ -198,8 +218,8 @@ def _build_baseline_from_data(entity_id: str, field: str,
 
     # Hourly profiles
     hourly_buckets = [[] for _ in range(24)]
-    for ts, v in zip(timestamps, values):
-        hour = datetime.datetime.fromtimestamp(ts).hour
+    for ts, v in zip(timestamps, values, strict=False):
+        hour = datetime.fromtimestamp(ts).hour
         hourly_buckets[hour].append(v)
 
     for h in range(24):
@@ -209,7 +229,7 @@ def _build_baseline_from_data(entity_id: str, field: str,
             b.hourly_mean[h] = sum(bucket) / len(bucket)
             if len(bucket) > 1:
                 var = sum((v - b.hourly_mean[h]) ** 2 for v in bucket) / len(bucket)
-                b.hourly_std[h] = max(var ** 0.5, 1e-6)
+                b.hourly_std[h] = max(var**0.5, 1e-6)
         else:
             b.hourly_mean[h] = b.global_mean
             b.hourly_std[h] = b.global_std
@@ -227,16 +247,17 @@ def _build_baseline_from_data(entity_id: str, field: str,
 
     # Mean interval between readings
     if len(timestamps) > 1:
-        intervals = [timestamps[i] - timestamps[i - 1]
-                     for i in range(1, len(timestamps))
-                     if timestamps[i] > timestamps[i - 1]]
+        intervals = [
+            timestamps[i] - timestamps[i - 1]
+            for i in range(1, len(timestamps))
+            if timestamps[i] > timestamps[i - 1]
+        ]
         if intervals:
             b.mean_interval = sum(intervals) / len(intervals)
 
     # Binary transition frequency
     if b.is_binary and len(values) > 1:
-        transitions = sum(1 for i in range(1, len(values))
-                          if values[i] != values[i - 1])
+        transitions = sum(1 for i in range(1, len(values)) if values[i] != values[i - 1])
         total_hours = (timestamps[-1] - timestamps[0]) / 3600
         if total_hours > 0:
             b.transition_freq = transitions / total_hours
@@ -248,19 +269,18 @@ def _build_baseline_from_data(entity_id: str, field: str,
 # ANOMALY SCORING
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _score_reading(value: float, ts: float, baseline: "EntityBaseline",
-                   stat_k: float, rate_k: float) -> list:
-    """
-    Score a single reading against the baseline.
+
+def _score_reading(
+    value: float, ts: float, baseline: "EntityBaseline", stat_k: float, rate_k: float
+) -> list[dict[str, Any]]:
+    """Score a single reading against the baseline.
     Returns list of anomaly dicts (empty = normal).
     """
-    import datetime
-
     if not baseline.ready:
         return []
 
     anomalies = []
-    hour = datetime.datetime.fromtimestamp(ts).hour
+    hour = datetime.fromtimestamp(ts).hour
 
     # 1. Statistical: value outside hourly_mean ± k*hourly_std
     hourly_m = baseline.hourly_mean[hour]
@@ -268,17 +288,19 @@ def _score_reading(value: float, ts: float, baseline: "EntityBaseline",
     if hourly_s > 0 and baseline.hourly_count[hour] >= 10:
         z_score = abs(value - hourly_m) / hourly_s
         if z_score > stat_k:
-            anomalies.append({
-                "type": "statistical",
-                "score": min(1.0, (z_score - stat_k) / stat_k),
-                "detail": (
-                    f"Value {value:.2f} is {z_score:.1f}σ from hourly mean "
-                    f"{hourly_m:.2f} (hour {hour}:00)"
-                ),
-                "z_score": round(z_score, 2),
-                "expected_mean": round(hourly_m, 2),
-                "expected_std": round(hourly_s, 2),
-            })
+            anomalies.append(
+                {
+                    "type": "statistical",
+                    "score": min(1.0, (z_score - stat_k) / stat_k),
+                    "detail": (
+                        f"Value {value:.2f} is {z_score:.1f}σ from hourly mean "
+                        f"{hourly_m:.2f} (hour {hour}:00)"
+                    ),
+                    "z_score": round(z_score, 2),
+                    "expected_mean": round(hourly_m, 2),
+                    "expected_std": round(hourly_s, 2),
+                }
+            )
 
     # 2. Range: outside adaptive percentile bounds
     if value < baseline.p1 or value > baseline.p99:
@@ -289,14 +311,16 @@ def _score_reading(value: float, ts: float, baseline: "EntityBaseline",
                 overshoot = (baseline.p1 - value) / rng
             else:
                 overshoot = (value - baseline.p99) / rng
-        anomalies.append({
-            "type": "range",
-            "score": min(1.0, overshoot),
-            "detail": (
-                f"Value {value:.2f} outside [{baseline.p1:.2f}, {baseline.p99:.2f}] "
-                f"(1st-99th percentile)"
-            ),
-        })
+        anomalies.append(
+            {
+                "type": "range",
+                "score": min(1.0, overshoot),
+                "detail": (
+                    f"Value {value:.2f} outside [{baseline.p1:.2f}, {baseline.p99:.2f}] "
+                    f"(1st-99th percentile)"
+                ),
+            }
+        )
 
     # 3. Rate: change too fast
     if baseline.last_value is not None and baseline.last_ts > 0 and baseline.max_rate > 0:
@@ -304,20 +328,23 @@ def _score_reading(value: float, ts: float, baseline: "EntityBaseline",
         if dt > 0:
             rate = abs(value - baseline.last_value) / dt
             if rate > baseline.max_rate * rate_k:
-                anomalies.append({
-                    "type": "rate",
-                    "score": min(1.0, (rate / (baseline.max_rate * rate_k)) - 1.0),
-                    "detail": (
-                        f"Rate of change {rate:.4f}/s exceeds "
-                        f"{rate_k}× baseline max {baseline.max_rate:.4f}/s"
-                    ),
-                })
+                anomalies.append(
+                    {
+                        "type": "rate",
+                        "score": min(1.0, (rate / (baseline.max_rate * rate_k)) - 1.0),
+                        "detail": (
+                            f"Rate of change {rate:.4f}/s exceeds "
+                            f"{rate_k}× baseline max {baseline.max_rate:.4f}/s"
+                        ),
+                    }
+                )
 
     return anomalies
 
 
-def _check_absence(baseline: "EntityBaseline", now: float,
-                   multiplier: float) -> dict | None:
+def _check_absence(
+    baseline: "EntityBaseline", now: float, multiplier: float
+) -> dict[str, Any] | None:
     """Check if an entity hasn't reported in too long."""
     if baseline.mean_interval <= 0 or baseline.last_ts <= 0:
         return None
@@ -328,8 +355,8 @@ def _check_absence(baseline: "EntityBaseline", now: float,
             "type": "absence",
             "score": min(1.0, (silence / threshold) - 1.0),
             "detail": (
-                f"No data for {silence/60:.0f}min — "
-                f"normal interval is {baseline.mean_interval/60:.1f}min"
+                f"No data for {silence / 60:.0f}min — "
+                f"normal interval is {baseline.mean_interval / 60:.1f}min"
             ),
             "silence_seconds": round(silence, 0),
             "expected_interval": round(baseline.mean_interval, 0),
@@ -341,8 +368,10 @@ def _check_absence(baseline: "EntityBaseline", now: float,
 # HUMAN-READABLE EXPLANATIONS
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _explain_anomaly(entity_id: str, field: str, value: float,
-                     anomalies: list, is_sinergym: bool) -> str:
+
+def _explain_anomaly(
+    entity_id: str, field: str, value: float, anomalies: list[dict[str, Any]], is_sinergym: bool
+) -> str:
     """Generate a human-readable explanation of detected anomalies."""
     top = max(anomalies, key=lambda a: a["score"])
 
@@ -370,22 +399,23 @@ def _explain_anomaly(entity_id: str, field: str, value: float,
 # SETUP
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def setup(agent):
+
+async def setup(agent) -> None:
     # Load config
-    baseline_hours    = int(agent.recall("baseline_hours")    or DEFAULT_BASELINE_HOURS)
+    baseline_hours = int(agent.recall("baseline_hours") or DEFAULT_BASELINE_HOURS)
     learning_period_h = int(agent.recall("learning_period_hours") or DEFAULT_LEARNING_PERIOD_H)
-    sensitivity       = float(agent.recall("sensitivity")     or DEFAULT_SENSITIVITY)
-    rebuild_interval  = int(agent.recall("rebuild_interval_hours") or DEFAULT_REBUILD_INTERVAL_H)
+    sensitivity = float(agent.recall("sensitivity") or DEFAULT_SENSITIVITY)
+    rebuild_interval = int(agent.recall("rebuild_interval_hours") or DEFAULT_REBUILD_INTERVAL_H)
     monitored_entities = agent.recall("entities") or []
 
-    agent.state["baseline_hours"]       = baseline_hours
-    agent.state["learning_period_h"]    = learning_period_h
-    agent.state["sensitivity"]          = sensitivity
-    agent.state["rebuild_interval_h"]   = rebuild_interval
-    agent.state["monitored_entities"]   = monitored_entities
-    agent.state["stat_k"]              = DEFAULT_STAT_K * (1.0 + sensitivity)
-    agent.state["rate_k"]              = DEFAULT_RATE_K * (1.0 + sensitivity)
-    agent.state["absence_multiplier"]  = DEFAULT_ABSENCE_MULTIPLIER
+    agent.state["baseline_hours"] = baseline_hours
+    agent.state["learning_period_h"] = learning_period_h
+    agent.state["sensitivity"] = sensitivity
+    agent.state["rebuild_interval_h"] = rebuild_interval
+    agent.state["monitored_entities"] = monitored_entities
+    agent.state["stat_k"] = DEFAULT_STAT_K * (1.0 + sensitivity)
+    agent.state["rate_k"] = DEFAULT_RATE_K * (1.0 + sensitivity)
+    agent.state["absence_multiplier"] = DEFAULT_ABSENCE_MULTIPLIER
 
     # Restore or init baselines
     saved_baselines = agent.recall("baselines")
@@ -398,11 +428,11 @@ async def setup(agent):
         agent.state["baselines"] = {}
 
     # Anomaly tracking
-    agent.state["anomalies_detected"]   = int(agent.recall("anomalies_detected") or 0)
-    agent.state["anomaly_history"]      = agent.recall("anomaly_history") or []
-    agent.state["last_baseline_build"]  = float(agent.recall("last_baseline_build") or 0)
-    agent.state["detection_active"]     = False
-    agent.state["start_time"]           = time.time()
+    agent.state["anomalies_detected"] = int(agent.recall("anomalies_detected") or 0)
+    agent.state["anomaly_history"] = agent.recall("anomaly_history") or []
+    agent.state["last_baseline_build"] = float(agent.recall("last_baseline_build") or 0)
+    agent.state["detection_active"] = False
+    agent.state["start_time"] = time.time()
 
     await agent.log(
         f"Anomaly detector ready | "
@@ -426,7 +456,8 @@ async def setup(agent):
 # PROCESS LOOP — periodic baseline rebuilding and absence checks
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def process(agent):
+
+async def process(agent) -> None:
     now = time.time()
     baselines = agent.state["baselines"]
 
@@ -450,27 +481,36 @@ async def process(agent):
 
     # Absence checks (only when detection is active)
     if agent.state["detection_active"]:
-        for key, baseline in baselines.items():
+        for _key, baseline in baselines.items():
             if not baseline.ready:
                 continue
-            absence = _check_absence(
-                baseline, now, agent.state["absence_multiplier"]
-            )
+            absence = _check_absence(baseline, now, agent.state["absence_multiplier"])
             if absence:
                 is_sinergym = baseline.entity_id.startswith("sinergym.")
                 explanation = _explain_anomaly(
-                    baseline.entity_id, baseline.field, 0.0,
-                    [absence], is_sinergym,
+                    baseline.entity_id,
+                    baseline.field,
+                    0.0,
+                    [absence],
+                    is_sinergym,
                 )
-                await _report_anomaly(agent, baseline.entity_id, baseline.field,
-                                       0.0, [absence], explanation, is_sinergym)
+                await _report_anomaly(
+                    agent,
+                    baseline.entity_id,
+                    baseline.field,
+                    0.0,
+                    [absence],
+                    explanation,
+                    is_sinergym,
+                )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # BASELINE BUILDING — queries SQLite time-series store
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _rebuild_baselines(agent):
+
+async def _rebuild_baselines(agent) -> None:
     """Query historical data and rebuild all baselines."""
     await agent.log("Rebuilding baselines from historical data...")
 
@@ -581,31 +621,28 @@ async def _rebuild_baselines(agent):
     agent.persist("baselines", {k: b.to_dict() for k, b in baselines.items()})
     agent.persist("last_baseline_build", agent.state["last_baseline_build"])
 
-    await agent.log(
-        f"Baselines rebuilt: {built} ready / {len(baselines)} total entities"
-    )
+    await agent.log(f"Baselines rebuilt: {built} ready / {len(baselines)} total entities")
 
 
-async def _discover_entities(agent) -> list:
+async def _discover_entities(agent) -> list[str]:
     """Auto-discover entities from the time-series store."""
     entities = set()
 
     try:
         # Check sensor_readings for distinct entity_ids
         from wactorz.core.persistence import get_db
+
         db = get_db()
         if db:
             rows = db.conn.execute(
-                "SELECT DISTINCT entity_id FROM sensor_readings "
-                "WHERE entity_id != '' LIMIT 200"
+                "SELECT DISTINCT entity_id FROM sensor_readings WHERE entity_id != '' LIMIT 200"
             ).fetchall()
             for r in rows:
                 entities.add(r[0])
 
             # Check ha_state_changes for distinct entity_ids
             rows = db.conn.execute(
-                "SELECT DISTINCT entity_id FROM ha_state_changes "
-                "WHERE entity_id != '' LIMIT 200"
+                "SELECT DISTINCT entity_id FROM ha_state_changes WHERE entity_id != '' LIMIT 200"
             ).fetchall()
             for r in rows:
                 entities.add(r[0])
@@ -619,11 +656,9 @@ async def _discover_entities(agent) -> list:
 # REAL-TIME MQTT DETECTION
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _mqtt_detector(agent):
-    """Subscribe to MQTT and score each reading against baselines."""
-    import aiomqtt
-    import os
 
+async def _mqtt_detector(agent) -> None:
+    """Subscribe to MQTT and score each reading against baselines."""
     while True:
         try:
             async with aiomqtt.Client(
@@ -644,16 +679,16 @@ async def _mqtt_detector(agent):
                             await _process_live_reading(agent, topic, payload)
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         pass
-                    except Exception as e:
+                    except Exception:
                         pass  # don't spam logs
 
         except asyncio.CancelledError:
             break
-        except Exception as e:
+        except Exception:
             await asyncio.sleep(5)
 
 
-async def _process_live_reading(agent, topic: str, payload: dict):
+async def _process_live_reading(agent, topic: str, payload: dict[str, Any]) -> None:
     """Process a single live MQTT reading for anomaly detection."""
     now = time.time()
     baselines = agent.state["baselines"]
@@ -726,18 +761,26 @@ async def _process_live_reading(agent, topic: str, payload: dict):
 
         if significant:
             is_sinergym = entity_id.startswith("sinergym.")
-            explanation = _explain_anomaly(entity_id, field, value,
-                                            significant, is_sinergym)
-            await _report_anomaly(agent, entity_id, field, value,
-                                   significant, explanation, is_sinergym)
+            explanation = _explain_anomaly(entity_id, field, value, significant, is_sinergym)
+            await _report_anomaly(
+                agent, entity_id, field, value, significant, explanation, is_sinergym
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ANOMALY REPORTING
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _report_anomaly(agent, entity_id: str, field: str, value: float,
-                           anomalies: list, explanation: str, is_sinergym: bool):
+
+async def _report_anomaly(
+    agent,
+    entity_id: str,
+    field: str,
+    value: float,
+    anomalies: list[dict[str, Any]],
+    explanation: str,
+    is_sinergym: bool,
+) -> None:
     """Report an anomaly through the appropriate channels."""
     now = time.time()
     max_score = max(a["score"] for a in anomalies)
@@ -745,14 +788,14 @@ async def _report_anomaly(agent, entity_id: str, field: str, value: float,
     anomaly_types = [a["type"] for a in anomalies]
 
     anomaly_record = {
-        "ts":        now,
+        "ts": now,
         "entity_id": entity_id,
-        "field":     field,
-        "value":     value,
+        "field": field,
+        "value": value,
         "anomalies": anomalies,
-        "score":     round(max_score, 3),
-        "severity":  severity,
-        "types":     anomaly_types,
+        "score": round(max_score, 3),
+        "severity": severity,
+        "types": anomaly_types,
         "explanation": explanation,
     }
 
@@ -775,10 +818,13 @@ async def _report_anomaly(agent, entity_id: str, field: str, value: float,
         await agent.publish(f"sinergym/anomalies/{env_id}", anomaly_record)
         # Notify optimizer if available
         try:
-            await agent.send_to("sinergym-optimizer", {
-                "action": "anomaly_detected",
-                **anomaly_record,
-            })
+            await agent.send_to(
+                "sinergym-optimizer",
+                {
+                    "action": "anomaly_detected",
+                    **anomaly_record,
+                },
+            )
         except Exception:
             pass
     else:
@@ -792,12 +838,14 @@ async def _report_anomaly(agent, entity_id: str, field: str, value: float,
 # handle_task — manual commands
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def handle_task(agent, payload):
+
+async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
     # Parse JSON from "text" field when routed via @mention
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
         try:
             parsed = json.loads(payload["text"])
-            if isinstance(parsed, dict): payload = parsed
+            if isinstance(parsed, dict):
+                payload = parsed
         except Exception:
             pass
 
@@ -832,8 +880,10 @@ async def handle_task(agent, payload):
         lines = [f"Last {len(recent)} anomalies:"]
         for a in reversed(recent):
             age = _format_age(a["ts"])
-            lines.append(f"  [{a['severity']}] {a['entity_id']}:{a['field']} "
-                         f"score={a['score']} types={a['types']} ({age})")
+            lines.append(
+                f"  [{a['severity']}] {a['entity_id']}:{a['field']} "
+                f"score={a['score']} types={a['types']} ({age})"
+            )
         return {"result": "\n".join(lines), "anomalies": recent}
 
     if cmd == "train" or cmd == "rebuild":
@@ -855,8 +905,13 @@ async def handle_task(agent, payload):
         return {"result": "Anomaly detector reset — all baselines and history cleared."}
 
     if cmd == "configure":
-        for key in ("baseline_hours", "learning_period_hours", "sensitivity",
-                     "rebuild_interval_hours", "entities"):
+        for key in (
+            "baseline_hours",
+            "learning_period_hours",
+            "sensitivity",
+            "rebuild_interval_hours",
+            "entities",
+        ):
             if key in payload:
                 agent.persist(key, payload[key])
                 agent.state[key] = payload[key]
@@ -881,7 +936,10 @@ async def handle_task(agent, payload):
         return {"result": f"{len(baselines)} baselines", "baselines": summary}
 
     if cmd == "entities":
-        return {"result": "Monitored entities", "entities": agent.state.get("monitored_entities", [])}
+        return {
+            "result": "Monitored entities",
+            "entities": agent.state.get("monitored_entities", []),
+        }
 
     return {
         "result": "Available commands: status, report, train, reset, configure, baselines, entities",
@@ -896,8 +954,9 @@ def _format_age(ts: float) -> str:
     if age < 60:
         return f"{age:.0f}s ago"
     if age < 3600:
-        return f"{age/60:.0f}min ago"
+        return f"{age / 60:.0f}min ago"
     if age < 86400:
-        return f"{age/3600:.1f}h ago"
-    return f"{age/86400:.1f}d ago"
+        return f"{age / 3600:.1f}h ago"
+    return f"{age / 86400:.1f}d ago"
+
 '''

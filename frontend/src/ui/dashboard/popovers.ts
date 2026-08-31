@@ -185,7 +185,9 @@ const RESET_ICONS: Record<string, string> = {
 };
 
 const RESET_SCOPES: { scope: string; label: string; danger?: boolean }[] = [
-    { scope: "chat", label: "Chat history" },
+    // Says "& files" because clearing the history deletes the attachments sent
+    // with it — the rows being cleared are the only thing that referenced them.
+    { scope: "chat", label: "Chat history & files" },
     { scope: "metrics", label: "Metrics & costs" },
     { scope: "spawns", label: "Spawn registry" },
     { scope: "state", label: "Agent state files" },

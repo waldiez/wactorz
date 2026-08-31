@@ -22,17 +22,20 @@ Or via main (natural language):
 """
 
 import asyncio
+import importlib
+import importlib.metadata
 import logging
 import pathlib
+import re
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
 from .lookup import find_main_actor
 
 if TYPE_CHECKING:
-    from .main_actor import MainActor
+    from .main import MainActor
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,44 @@ BETA_WARNING = (
     "Experimental/Beta agent: behavior may change, fail, or be removed. "
     "Use it for trials, not unattended production workflows."
 )
+
+_REACHY_MINI_SDK_VERSION = "1.8.4"
+_REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
+
+_IMPORT_NAME_MAP = {
+    "scikit-learn": "sklearn",
+    "stable-baselines3": "stable_baselines3",
+    "pillow": "PIL",
+    "pyyaml": "yaml",
+    "pymupdf": "fitz",
+    "beautifulsoup4": "bs4",
+    "python-dateutil": "dateutil",
+    "typing-extensions": "typing_extensions",
+    "opencv-python": "cv2",
+    "scikit-image": "skimage",
+    "webrtcvad-wheels": "webrtcvad",
+}
+
+
+def _dependency_is_satisfied(requirement: str) -> bool:
+    """Return whether a recipe dependency, including an exact pin, is installed."""
+    pip_name = re.split(r"[<>=!~;]", requirement, maxsplit=1)[0]
+    pip_name = pip_name.split("[", 1)[0].strip().lower()
+    import_name = _IMPORT_NAME_MAP.get(pip_name) or pip_name.replace("-", "_")
+    try:
+        importlib.import_module(import_name)
+    except ImportError:
+        return False
+
+    exact_version = re.search(r"(?<![<>=!~])==\s*([^,;\s]+)", requirement)
+    if exact_version is None:
+        return True
+    try:
+        installed_version = importlib.metadata.version(pip_name)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    return installed_version == exact_version.group(1)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # RECIPE IMPORTS
@@ -366,12 +407,14 @@ def _build_catalog() -> dict:
             "warning": BETA_WARNING,
             "description": (
                 "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
-                "speech, gestures, and optional Home Assistant actions."
+                "speech, opt-in voice conversation, gestures, and optional "
+                "Home Assistant actions."
             ),
             "docs": (
                 "Setup:\n"
                 "1. Install the recipe dependencies when prompted, or preinstall: "
-                "pip install reachy-mini numpy edge-tts.\n"
+                f"pip install {_REACHY_MINI_REQUIREMENT} numpy edge-tts pillow "
+                "webrtcvad-wheels faster-whisper.\n"
                 "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
                 "3. For Reachy Mini Lite, start the local daemon first: "
@@ -387,10 +430,16 @@ def _build_catalog() -> dict:
                 "- wiggle your antennas\n"
                 "- look left\n"
                 "- say hello\n"
+                "- take a photo\n"
+                "- listen\n"
+                "- listen and ask Wactorz\n"
+                "- start conversation\n"
                 "- turn on the light and nod\n"
                 "\n"
                 "For structured control, send a dict with cmd wake, sleep, pose, "
-                "antennas, look_at, emotion, say, volume, ha, bind, unbind, or stop."
+                "antennas, look_at, camera, listen, ask_voice, conversation_start, "
+                "conversation_stop, doa, emotion, say, volume, health, ha, "
+                "bind, unbind, or stop."
             ),
             "capabilities": [
                 "robot",
@@ -405,10 +454,27 @@ def _build_catalog() -> dict:
                 "actuator",
                 "expressive",
                 "human_robot_interaction",
+                "camera",
+                "vision",
+                "microphone",
+                "audio",
+                "perception",
+                "sensors",
             ],
-            "install": ["reachy-mini", "numpy", "edge-tts"],
+            "install": [
+                _REACHY_MINI_REQUIREMENT,
+                "numpy",
+                "edge-tts",
+                "pillow",
+                "webrtcvad-wheels",
+                # Speech recognition for `ask_voice` and `conversation_start`,
+                # and the default STT backend. Listed because leaving it out
+                # meant every voice feature failed on a robot installed exactly
+                # as instructed, with nothing said until the first attempt.
+                "faster-whisper",
+            ],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
                 "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
                 "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
@@ -421,6 +487,7 @@ def _build_catalog() -> dict:
                 "duration": "float — motion duration in seconds (pose/antennas/look_at)",
                 "method": "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
                 "yaw": "float — head yaw, degrees by default",
+                "angle": "float — cmd=turn relative body angle; left positive, right negative",
                 "pitch": "float — head pitch, degrees by default",
                 "roll": "float — head roll, degrees by default",
                 "x": "float — head x (mm) or look_at world x (m)",
@@ -431,6 +498,23 @@ def _build_catalog() -> dict:
                 "right": "float — antenna right (cmd=antennas convenience)",
                 "u": "int   — pixel u for look_pixel",
                 "v": "int   — pixel v for look_pixel",
+                "format": "str   — camera image format (cmd=camera): jpeg (default) or png",
+                "quality": "int   — camera JPEG quality 1-100 (cmd=camera), default 85",
+                "path": "str   — save the frame/clip to this file (cmd=camera|listen)",
+                "publish": "bool  — also emit on custom/reachy/camera|audio (cmd=camera|listen)",
+                "include_b64": "bool  — include the base64 blob in the result (cmd=camera|listen), default true",
+                "stt_backend": "str — ask_voice/conversation backend: faster-whisper (default)|whisper|openai",
+                "stt_model": "str — optional voice transcription model override",
+                "stt_language": "str — optional language lock; unset auto-detects",
+                "stt_hotwords": "str — optional comma-separated recognition hints",
+                "stt_fallback_language": "str — retry language for uncertain short speech",
+                "stt_min_language_probability": "float - reject/retry auto-language guesses below this (default 0.60)",
+                "barge_in": "bool - experimental speech interruption (default false)",
+                "inactivity_timeout": "float - optional conversation idle timeout; 0 keeps listening (default 0)",
+                "max_turns": "int - optional conversation turn limit; 0 is unbounded (default 0)",
+                "silence_s": "float - post-speech VAD silence (default 1.0s)",
+                "cooldown_s": "float - post-TTS mic drain time (default 0s)",
+                "vad_min_rms": "float - minimum speech-frame RMS (default 0.01)",
                 "name": "str   — emotion clip name (e.g. curious1, success1)",
                 "topic": "str   — MQTT topic to bind/unbind",
                 "when": "dict  — dotted-path equality matcher for bindings",
@@ -754,7 +838,10 @@ class CatalogAgent(Actor):
                 factory = recipe.get("factory")
                 if not factory:
                     return {"ok": False, "message": f"Native recipe '{resolved}' has no factory"}
-                native_kwargs = {"name": resolved, "persistence_dir": persistence_dir}
+                native_kwargs: dict[str, Any] = {
+                    "name": resolved,
+                    "persistence_dir": persistence_dir,
+                }
                 if llm_provider:
                     native_kwargs["llm_provider"] = llm_provider
                 actor = await self.spawn(factory, **native_kwargs)
@@ -779,36 +866,14 @@ class CatalogAgent(Actor):
                     return {"ok": True, "message": msg, "agent": resolved}
                 return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
-            from .dynamic_agent import DynamicAgent
+            from .dynamic import DynamicAgent
 
             install = recipe.get("install", [])
             if install:
                 # Fast-path: check which packages are already importable.
                 # Avoids a 120s installer wait when deps were installed in a
                 # previous session — same logic as main._spawn_dynamic_agent.
-                import importlib as _importlib
-
-                # Map pip package names to their actual import names where they differ.
-                _IMPORT_NAME_MAP = {
-                    "scikit-learn": "sklearn",
-                    "stable-baselines3": "stable_baselines3",
-                    "pillow": "PIL",
-                    "pyyaml": "yaml",
-                    "pymupdf": "fitz",
-                    "beautifulsoup4": "bs4",
-                    "python-dateutil": "dateutil",
-                    "typing-extensions": "typing_extensions",
-                    "opencv-python": "cv2",
-                    "scikit-image": "skimage",
-                }
-                needed = []
-                for pkg in install:
-                    pip_name = pkg.split("[")[0].lower()
-                    import_name = _IMPORT_NAME_MAP.get(pip_name) or pip_name.replace("-", "_")
-                    try:
-                        _importlib.import_module(import_name)
-                    except ImportError:
-                        needed.append(pkg)
+                needed = [pkg for pkg in install if not _dependency_is_satisfied(pkg)]
 
                 if needed:
                     installer = self._registry.find_by_name("installer") if self._registry else None

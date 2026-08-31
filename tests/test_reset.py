@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from wactorz.agents.main_actor import MainActor
+from wactorz.agents.main.actor import MainActor
 from wactorz.web import api_reset, cost, runtime
 
 
@@ -636,14 +636,14 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
         main.actor_id = "main-id"
-        io = MagicMock()
-        io.protected = False
-        io.name = "io-agent"
-        io.actor_id = "io-id"
-        io.stop = AsyncMock()
+        spawned = MagicMock()
+        spawned.protected = False
+        spawned.name = "weather-agent"
+        spawned.actor_id = "weather-id"
+        spawned.stop = AsyncMock()
 
         fake_registry = MagicMock()
-        fake_registry.all_actors.return_value = [main, io]
+        fake_registry.all_actors.return_value = [main, spawned]
         fake_registry.find_by_name.return_value = main
         fake_registry.unregister = AsyncMock()
         fake_registry._supervisor_ref = None
@@ -655,7 +655,10 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         runtime.mqtt_client_ref = AsyncMock()
         runtime.state["nodes"] = {}
         # Dashboard entries WITHOUT the protected flag — the exact bug condition.
-        runtime.state["agents"] = {"main-id": {"name": "main"}, "io-id": {"name": "io-agent"}}
+        runtime.state["agents"] = {
+            "main-id": {"name": "main"},
+            "weather-id": {"name": "weather-agent"},
+        }
         runtime.deleted_agent_ids = []
         try:
             with (
@@ -667,10 +670,10 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
                 resp = await api_reset.reset_handler(_make_request({"scope": "all"}))
             self.assertEqual(resp.status, 200)
             purged = {c.args[0] for c in purge.call_args_list}
-            self.assertIn("io-id", purged)
+            self.assertIn("weather-id", purged)
             self.assertNotIn("main-id", purged)  # protected: never purged
             tombstoned = {aid for aid, _ in runtime.deleted_agent_ids}
-            self.assertIn("io-id", tombstoned)
+            self.assertIn("weather-id", tombstoned)
             self.assertNotIn("main-id", tombstoned)  # protected: never tombstoned
         finally:
             runtime.registry = orig_registry
@@ -686,7 +689,7 @@ class FactoryResetKeepSetTest(unittest.TestCase):
 
     def test_protected_system_actors_are_kept(self):
 
-        for name in ("main", "monitor", "io-agent", "installer", "catalog"):
+        for name in ("main", "monitor", "installer", "catalog"):
             self.assertTrue(api_reset.survives_factory_reset(name, True), name)
 
     def test_ha_system_agents_kept_despite_being_unprotected(self):
@@ -709,13 +712,77 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
         src_txt = app_src.read_text(encoding="utf-8", errors="ignore")
         supervised = re.findall(r'supervise\(\s*"([^"]+)"', src_txt)
-        self.assertGreaterEqual(len(supervised), 8, "app.py supervise chain not found")
+        self.assertGreaterEqual(len(supervised), 7, "app.py supervise chain not found")
         # Protection lives on the actor class; treat the known protected names as
         # protected here so the guard checks name-coverage, not the flag itself.
-        protected = {"main", "monitor", "io-agent", "installer", "catalog"}
+        protected = {"main", "monitor", "installer", "catalog"}
         missing = [n for n in supervised if not api_reset.survives_factory_reset(n, n in protected)]
         self.assertEqual(missing, [], f"fresh-boot agents not kept by reset: {missing}")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. Stored attachments are wiped with the rows that referenced them
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ResetUploadsTest(unittest.TestCase):
+    """An upload is only reachable through the chat rows that name it.
+
+    So a wipe that clears those rows and keeps the files leaves bytes nothing
+    can afterwards identify — not the app, not someone reading the directory.
+    """
+
+    def _seed(self, tmp: str) -> Path:
+        """One stored attachment: the blob and the metadata beside it."""
+        uploads = Path(tmp) / "uploads"
+        uploads.mkdir(parents=True)
+        (uploads / ("a" * 32)).write_bytes(b"\x89PNG\r\n\x1a\n")
+        (uploads / ("a" * 32 + ".json")).write_text('{"name":"shot.png"}', encoding="utf-8")
+        return uploads
+
+    def test_a_full_chat_reset_takes_the_files_with_it(self):
+        from wactorz.reset import reset_chat
+
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads = self._seed(tmp)
+
+            reset_chat(db_path=str(Path(tmp) / "wactorz.db"), state_dir=tmp)
+
+            self.assertEqual(list(uploads.iterdir()), [])
+
+    def test_a_full_wipe_takes_them_too(self):
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads = self._seed(tmp)
+
+            reset_all(db_path=str(Path(tmp) / "wactorz.db"), state_dir=tmp)
+
+            self.assertEqual(list(uploads.iterdir()), [])
+
+    def test_one_agent_leaves_them_alone(self):
+        from wactorz.reset import reset_chat
+
+        # An upload records the file's name, type and size — never who attached
+        # it — so there is no way to select one agent's files. Deleting all of
+        # them here would take another agent's attachments with it.
+        with tempfile.TemporaryDirectory() as tmp:
+            uploads = self._seed(tmp)
+
+            reset_chat(agent_name="main", db_path=str(Path(tmp) / "wactorz.db"), state_dir=tmp)
+
+            self.assertEqual(len(list(uploads.iterdir())), 2)
+
+    def test_a_state_dir_with_no_uploads_is_not_created(self):
+        from wactorz.reset import reset_uploads
+
+        # A wipe must not bring a state directory into being on a machine that
+        # has none — the module resolves the path without ensuring it.
+        with tempfile.TemporaryDirectory() as tmp:
+            reset_uploads(state_dir=str(Path(tmp) / "absent"))
+
+            self.assertFalse((Path(tmp) / "absent").exists())

@@ -14,6 +14,9 @@ from prometheus_client.process_collector import ProcessCollector
 
 RegistryProvider = Callable[[], Any | None]
 
+#: Route label for requests that matched no route in the routing table.
+UNMATCHED_ROUTE = "<unmatched>"
+
 
 class ActorMetricsCollector:
     """Collects actor and LLM metrics from the live registry."""
@@ -198,12 +201,18 @@ class PrometheusMonitor:
 
     @staticmethod
     def _route_label(request: web.Request) -> str:
+        """Registered route pattern for a request, or a constant when none matched.
+
+        The label must come from the routing table, never from the request line:
+        an unrouted path is caller-supplied, so returning it would let anyone
+        open a new time series per request and grow the metric without bound.
+        """
         route = getattr(request.match_info, "route", None)
         resource = getattr(route, "resource", None)
         canonical = getattr(resource, "canonical", None)
         if canonical:
             return canonical
-        return request.path
+        return UNMATCHED_ROUTE
 
     @web.middleware
     async def middleware(self, request: web.Request, handler):

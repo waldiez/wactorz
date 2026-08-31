@@ -8,8 +8,9 @@
  * `af-stream-end`) and the activity feed. The dashboard chat (DashboardChat)
  * renders from those events — IOManager owns no UI.
  *
- * Messages go to the IOAgent via the WebSocket (direct_ws mode). The `@agent-name`
- * prefix is preserved in the content so IOAgent can route it.
+ * Messages go to the server over the WebSocket, which routes them into the actor
+ * system directly. The `@agent-name` prefix is preserved in the content so the
+ * server can resolve the recipient from it.
  */
 
 import type { AgentInfo, ChatMessage } from "../types/agent";
@@ -41,11 +42,11 @@ export class IOManager {
             emit("af-stream-chunk", { chunk, from });
         });
 
-        ws.onStreamEnd(() => {
-            // The end frame carries no agent — attribute by the most recent
-            // chunk (a protocol limit), but take only that agent's buffer so
-            // concurrent streams never merge.
-            const from = this._lastStreamFrom || MAIN_AGENT;
+        ws.onStreamEnd(frameFrom => {
+            // The frame names its own sender; the last chunk's agent is the
+            // fallback for a frame that arrives without one. Either way only
+            // that agent's buffer is taken, so concurrent streams never merge.
+            const from = frameFrom || this._lastStreamFrom || MAIN_AGENT;
             const text = this._streams.take(from);
             // A stream_end with no streamed text (e.g. agents that reply via a
             // single non-streamed `chat` frame) must NOT create a feed row —
@@ -65,7 +66,7 @@ export class IOManager {
     // Async for the caller-facing contract; the transport calls (WS send / MQTT
     // publish) are fire-and-forget, so there's nothing to await.
     // eslint-disable-next-line @typescript-eslint/require-await
-    async send(text: string, agent: AgentInfo | null): Promise<void> {
+    async send(text: string, agent: AgentInfo | null, attachments: string[] = []): Promise<void> {
         let content = text;
         // Prepend @name if a specific agent is selected and no prefix given.
         if (agent && !text.startsWith("@")) {
@@ -80,7 +81,7 @@ export class IOManager {
             timestampMs: Date.now(),
         };
 
-        const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT);
+        const sent = this._ws?.send(content, agent?.name ?? MAIN_AGENT, attachments);
         if (!sent) {
             toast.show({
                 type: "alert-error",

@@ -52,6 +52,32 @@ describe("buildChatMessageEl", () => {
         expect(el.querySelector(".af-chat-msg-time")).not.toBeNull();
     });
 
+    it("labels an interface-mediated voice exchange without exposing its brain", () => {
+        const user = buildChatMessageEl(
+            msg({
+                from: "user",
+                to: "reachy-mini",
+                source: "voice",
+                surface: "reachy-mini",
+                surfaceLabel: "Reachy",
+                brain: "main",
+            }),
+        );
+        const assistant = buildChatMessageEl(
+            msg({
+                from: "reachy-mini",
+                source: "voice",
+                surface: "reachy-mini",
+                surfaceLabel: "Reachy",
+                brain: "main",
+            }),
+        );
+
+        expect(user.querySelector(".af-chat-msg-from")!.textContent).toContain("you · via Reachy");
+        expect(assistant.querySelector(".af-chat-msg-from")!.textContent).toBe("Reachy");
+        expect(assistant.textContent).not.toContain("main");
+    });
+
     it("renders an image attachment as a thumbnail that opens the lightbox", () => {
         const el = buildChatMessageEl(
             msg({ attachments: [att({ mime: "image/png", url: "http://x/p.png", name: "p" })] }),

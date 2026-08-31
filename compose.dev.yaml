@@ -21,26 +21,38 @@ services:
     networks:
       - wactorz-net
     ports:
-      - "1883:1883"
+      # Loopback, unlike the production file: this stack ships a default
+      # password so `make dev` needs no setup, and a known password on a
+      # LAN-reachable broker is barely better than the anonymous one it
+      # replaced. Container-to-container traffic is unaffected — the app
+      # reaches the broker by service name on wactorz-net, not through this.
+      - "127.0.0.1:1883:1883"
     volumes:
       # Read-only — see compose.yaml: without it the image's entrypoint chowns
       # this tracked repo file through the bind mount.
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
+    environment:
+      # Defaulted rather than required: this is the development stack, and the
+      # same conf file is shared with compose.yaml, so it is authenticated here
+      # whether or not anyone set anything.
+      MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:-wactorz-dev}"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        umask 077
+        mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+        chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
+        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
     healthcheck:
       test:
         [
-          "CMD",
-          "mosquitto_sub",
-          "-t",
-          "$$SYS/#",
-          "-C",
-          "1",
-          "-i",
-          "hc",
-          "-W",
-          "3",
+          "CMD-SHELL",
+          "mosquitto_sub -t '$$SYS/#' -C 1 -i hc -W 3 -u \"$$MQTT_USERNAME\" -P \"$$MQTT_PASSWORD\"",
         ]
       interval: 5s
       timeout: 3s
@@ -60,12 +72,17 @@ services:
     env_file:
       - .env
     environment:
+      # A published port cannot reach a process bound to the container's own
+      # loopback, so the wide bind is required — and declared, since the
+      # mappings below publish only to the host's loopback.
+      WACTORZ_BIND_HOST: "0.0.0.0"
+      WACTORZ_EXPOSED_OK: "1"
       MQTT_HOST: mosquitto
+      # Same defaults as the broker above, or the two disagree and `make dev`
+      # comes up with an app that cannot connect to its own broker.
+      MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:-wactorz-dev}"
       MQTT_PORT: "1883"
-      INFLUX_URL: "${INFLUX_URL:-}"
-      INFLUX_TOKEN: "${INFLUX_TOKEN:-}"
-      INFLUX_ORG: "${INFLUX_ORG:-wactorz}"
-      INFLUX_BUCKET: "${INFLUX_BUCKET:-wactorz}"
       INTERFACE: rest
     # See compose.yaml for why these three, and only these three: the entrypoint
     # needs them to chown the state directory before dropping to uid 1000.
@@ -89,7 +106,10 @@ services:
       mosquitto:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8888"]
+      # /health, not /: every other route needs the key once API_KEY is set, and
+      # a probe cannot carry one. Curling / would report unhealthy forever while
+      # the process is fine, and anything acting on that restarts it in a loop.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8888/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -145,35 +165,6 @@ services:
     networks:
       - wactorz-net
 
-  # ── InfluxDB 2.x ─────────────────────────────────────────────────────────────
-  influxdb:
-    profiles: [influx]
-    image: influxdb:2.7
-    container_name: wactorz-influxdb
-    restart: unless-stopped
-    ports:
-      - "${INFLUX_EXTERNAL_PORT:-8086}:8086"
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      # No fallback values: these seed a real admin account and API token, and a
-      # default would be a published credential. Left unset, InfluxDB's own setup
-      # refuses to initialise — set INFLUX_USERNAME / INFLUX_PASSWORD /
-      # INFLUX_TOKEN in .env before enabling this profile.
-      DOCKER_INFLUXDB_INIT_USERNAME: "${INFLUX_USERNAME:-}"
-      DOCKER_INFLUXDB_INIT_PASSWORD: "${INFLUX_PASSWORD:-}"
-      DOCKER_INFLUXDB_INIT_ORG: "${INFLUX_ORG:-wactorz}"
-      DOCKER_INFLUXDB_INIT_BUCKET: "${INFLUX_BUCKET:-wactorz}"
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-}"
-    volumes:
-      - influxdb-data:/var/lib/influxdb2
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   homeassistant:
     profiles: [full]
     image: homeassistant/home-assistant:stable
@@ -200,7 +191,6 @@ services:
 volumes:
   mosquitto-data:
   mosquitto-logs:
-  influxdb-data:
   prometheus-data:
 
 networks:

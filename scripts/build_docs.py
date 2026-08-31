@@ -59,6 +59,7 @@ NAV = [
             ("Interfaces", "interfaces.md"),
             ("Pipelines", "pipelines.md"),
             ("Remote Nodes", "remote-nodes.md"),
+            ("Security", "security.md"),
             ("Prometheus", "prometheus.md"),
             ("Extensions", "extensions.md"),
         ],
@@ -281,7 +282,7 @@ def build_sidebar(active_md: str, active_subdir: str, root: str = "../") -> str:
             is_active_group = any(
                 child_md == active_md and subdir == active_subdir for _, child_md in children
             )
-            open_attr = " open" if is_active_group else ""
+            open_attr: str = " open" if is_active_group else ""
             lines.append(f'    <details class="sidebar-group"{open_attr}>')
             lines.append(f'      <summary class="sidebar-label">{label}</summary>')
             for child_label, child_md in children:
@@ -330,9 +331,9 @@ def build(site_dir: Path = SITE) -> None:
     if not favicon.exists():
         frontend_dir = ROOT / "frontend"
         front_icon = frontend_dir / "public" / "icon.ico"
-        if not front_icon.exists:
+        if not front_icon.exists():
             front_icon = frontend_dir / "public" / "favicon.ico"
-        if not front_icon.exists:
+        if not front_icon.exists():
             # Minimal valid ICO file (1x1 transparent)
             favicon.write_bytes(
                 bytes(
@@ -426,7 +427,8 @@ def build(site_dir: Path = SITE) -> None:
     landing = DOCS / "_landing.html"
     if landing.exists():
         text = landing.read_text(encoding="utf-8")
-        text = re.sub(r"v\d+\.\d+\.\d+ · Alpha", f"v{version} · Alpha", text)
+        # Stage word preserved, not assumed — see sync_versions.update_docs_landing.
+        text = re.sub(r"v\d+\.\d+\.\d+ · (\w+)", lambda m: f"v{version} · {m.group(1)}", text)
         (site_dir / "index.html").write_text(text, encoding="utf-8")
         print(f"  landing  → static/docs/index.html  (v{version})")
 

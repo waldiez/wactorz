@@ -1,9 +1,35 @@
+"""Runtime settings, read from the environment once at import.
+
+Two shapes, for one reason: an ``AppConfig`` instance carries the settings a
+caller wants as a group, and bare module constants carry the ones the web layer
+and extensions reach for individually. Both are values rather than lookups, so a
+setting takes effect when the process starts and not before.
+
+The ``.env`` file is loaded above all of them, and that position is load-bearing.
+Anything read further up the module sees only real environment variables, which
+leaves a file that is plainly obeyed elsewhere doing nothing for that one
+setting -- indistinguishable, from the outside, from a misspelled name. New
+settings go below the load. Real environment variables win over the file.
+"""
+
 import os
 import re
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
+
+# Loaded before anything below reads the environment. Settings further down are
+# read at import, so a file loaded after them would reach only the ones built
+# later -- the dataclass would see it and the bare constants would not, which is
+# the sort of split nobody can guess at from a .env that looks obeyed.
+# Real environment variables still win: load_dotenv does not override them.
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file)
+else:
+    load_dotenv(find_dotenv())
 
 
 def _env_truthy(name: str) -> bool:
@@ -17,7 +43,23 @@ def _env_int(name: str, default: int) -> int:
     value = value.strip()
     if not value:
         return default
-    return int(value)
+    try:
+        return int(value)
+    except ValueError:
+        # Raised at *import*, so a stray character in one variable took the
+        # process down with a traceback that named neither the variable nor the
+        # value. Falling back keeps a typo from being fatal, and says which
+        # setting was ignored.
+        #
+        # `warnings`, not `logging`: this module is imported before logging is
+        # configured, so a log record here would go to the root handler-of-last-
+        # resort and often nowhere at all.
+        warnings.warn(
+            f"{name}={value!r} is not a whole number — using {default} instead",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return default
 
 
 def _env_id_set(*names: str) -> frozenset[int]:
@@ -107,6 +149,58 @@ DEV_MODE = _env_truthy("WACTORZ_DEV_MODE")
 MAX_REQUEST_BYTES = 256 * 1024
 
 
+def _bind_host() -> str:
+    """The interface every HTTP/WebSocket server listens on.
+
+    Defaults to loopback. Most installs are single-host and should never have
+    been reachable from the network — the previous default served the dashboard
+    and the whole API to the LAN out of the box.
+
+    A container publishes its own ports and a process cannot see its own port
+    mappings, so a process bound to loopback inside one is unreachable through
+    them. Both shipped deployments therefore set this explicitly to `0.0.0.0`
+    and declare `WACTORZ_EXPOSED_OK=1` alongside it; a hand-rolled container
+    must do the same.
+    """
+    return os.getenv("WACTORZ_BIND_HOST", "").strip() or "127.0.0.1"
+
+
+#: Whether chat file attachments may be uploaded. On by default now that the
+#: feature is complete, and still a flag: the endpoint writes caller-supplied
+#: bytes to disk with nothing pruning them, and a deployment that does not want
+#: attachment storage growing there turns it off.  Like every other route it is
+#: unauthenticated, so an install exposed beyond its own network has an open
+#: 25 MB write endpoint until authentication lands.
+UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", "0", "false", "no")
+
+#: Largest single upload. Matches the limit the browser enforces before sending,
+#: so a file the UI accepts is not refused by the server.
+UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
+
+#: Whether this deployment sits behind Home Assistant's ingress. Off unless the
+#: add-on says so: the bypass below skips the origin and host checks, and a
+#: deployment with no Supervisor must never offer it. Inferring it from the peer's
+#: address is not enough — Docker's default pool covers the Supervisor's range, so
+#: an ordinary network can land on it by coincidence.
+INGRESS_ENABLED = os.getenv("WACTORZ_INGRESS", "0").strip().lower() not in ("", "0", "false", "no")
+
+#: Addresses the Home Assistant ingress bypass is accepted from, comma-separated
+#: CIDRs. Defaults to the Supervisor proxy's own range. The bypass exists because
+#: Supervisor authenticates the user before proxying; a header alone cannot show
+#: a request came from it, since any peer on the container network can set one.
+INGRESS_PEERS = os.getenv("WACTORZ_INGRESS_PEERS", "").strip() or "172.30.32.0/23"
+
+#: Extra browser origins allowed to call the API, comma-separated. The page the
+#: server serves is always allowed; this is for a dashboard hosted elsewhere.
+CORS_ORIGINS = os.getenv("WACTORZ_CORS_ORIGINS", "")
+
+#: Extra hostnames this server answers to, comma-separated. Loopback names and
+#: address literals are always accepted. A name that is neither is refused even
+#: when it resolves here, because that is what a DNS rebinding attack looks
+#: like — set this to reach the dashboard by an mDNS or LAN name.
+ALLOWED_HOSTS = os.getenv("WACTORZ_ALLOWED_HOSTS", "")
+
+
 @dataclass(frozen=True)
 class DeployTarget:
     """One SSH deploy target — a remote machine ``/deploy <name>`` can bootstrap.
@@ -128,9 +222,15 @@ class DeployTarget:
     user: str = "pi"
     key_path: str = ""
     password: str = field(default="", repr=False)
+    ssh_port: int = 22
     broker: str = ""
     broker_port: int = 1883
-    ssh_port: int = 22
+    #: Broker credentials for this node. Empty means "use the server's own" —
+    #: resolved at the point of use, not here, because this dataclass is built
+    #: inside the ``AppConfig(...)`` call where ``CONFIG`` is still unbound.
+    #: Resolving late also keeps the secret out of a frozen, logged dataclass.
+    broker_user: str = ""
+    broker_password: str = field(default="", repr=False)
 
 
 def _env_slug(name: str) -> str:
@@ -196,20 +296,27 @@ def _deploy_targets() -> tuple[DeployTarget, ...]:
                 broker=os.getenv(f"DEPLOY_{slug}_BROKER", "").strip(),
                 broker_port=_env_int(f"DEPLOY_{slug}_BROKER_PORT", 1883),
                 ssh_port=_env_int(f"DEPLOY_{slug}_SSH_PORT", 22),
+                broker_user=os.getenv(f"DEPLOY_{slug}_BROKER_USER", "").strip(),
+                broker_password=os.getenv(f"DEPLOY_{slug}_BROKER_PASSWORD", ""),
             )
         )
     return tuple(targets)
 
 
-_env_file = Path(__file__).parent / ".env"
-if _env_file.exists():
-    load_dotenv(_env_file)
-else:
-    load_dotenv(find_dotenv())
-
-
 @dataclass(frozen=True)
 class AppConfig:
+    """The settings a caller wants as a group, resolved once into `CONFIG`.
+
+    Frozen because these describe the process rather than the moment: a caller
+    that reads `CONFIG.port` halfway through a run gets what the process started
+    with, and nothing can hand it something else. Anything that genuinely varies
+    at runtime belongs in state, not here.
+
+    Fields carry secrets -- API keys, broker and Home Assistant credentials -- so
+    an instance is never serialised whole to a caller. `/api/config` names the
+    handful of fields the browser needs and sends only those.
+    """
+
     interface: str
     port: int
     llm_provider: str
@@ -228,9 +335,12 @@ class AppConfig:
     ha_state_bridge_domains: str
     ha_state_bridge_per_entity: bool
     discord_token: str
+    discord_webhook_url: str
     telegram_token: str
     telegram_allowed_user_id: int
     ws_port: int
+    #: Interface every HTTP/WebSocket server binds to. See _bind_host().
+    bind_host: str
     nim_api_key: str
     nvidia_api_key: str
     twilio_account_sid: str
@@ -269,6 +379,7 @@ CONFIG = AppConfig(
     # empty keeps each provider's own default (the previous behavior).
     llm_temperature=_env_opt_float("LLM_TEMPERATURE"),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
+    bind_host=_bind_host(),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
     mqtt_port=_env_int("MQTT_PORT", 1883),
     mqtt_username=os.getenv("MQTT_USERNAME", ""),
@@ -279,10 +390,10 @@ CONFIG = AppConfig(
         "HA_STATE_BRIDGE_OUTPUT_TOPIC", "homeassistant/state_changes"
     ),
     ha_state_bridge_domains=os.getenv("HA_STATE_BRIDGE_DOMAINS", ""),
-    ha_state_bridge_per_entity=os.getenv("HA_STATE_BRIDGE_PER_ENTITY", "0")
-    not in ("0", "false", "no"),
+    ha_state_bridge_per_entity=_env_truthy("HA_STATE_BRIDGE_PER_ENTITY"),
     # Also accept the shorter DISCORD_TOKEN / TELEGRAM_TOKEN names.
     discord_token=os.getenv("DISCORD_BOT_TOKEN", "") or os.getenv("DISCORD_TOKEN", ""),
+    discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
     ws_port=_env_int("WS_PORT", 8888),

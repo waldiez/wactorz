@@ -39,7 +39,8 @@ dependencies = [
     "prometheus-client>=0.24.0",
     "python-dotenv>=1.2.2",
     "websockets>=15.0",
-    "asyncssh>=2.14.0"
+    "asyncssh>=2.14.0",
+    "tzdata>=2026.3; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -51,19 +52,20 @@ telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
-otel      = [
-    "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
-]
-influx    = [
-    "influxdb-client>=1.44.0",
-]
 tts       = [
     "edge-tts>=6.1.9",
 ]
+cron      = ["croniter>=2.0.0"]
+data      = ["pandas>=2.0.0"]
+vision    = ["opencv-python>=4.8.0"]
 docs      = [
-    "markdown>=3.10.2",
-    "pygments>=2.19.2",
+    # Pinned exactly, not floored: both decide the bytes of the HTML committed
+    # under static/docs, which CI checks against the sources. Pygments in
+    # particular classifies box-drawing characters differently between minor
+    # versions, so a floating floor makes the freshness check fail on every pull
+    # request the day a new one is released, for a page nobody touched.
+    "markdown==3.10.2",
+    "pygments==2.20.0",
     "watchdog>=6.0.0",
     "pdoc>=16.0.0",
 ]
@@ -71,17 +73,25 @@ docs      = [
 # The pre-built static/docs/ is committed to the repo and bundled into the wheel as-is.
 dev       = [
     "wactorz[docs]",
+    # Test-only support for optional catalogue-agent media paths. These stay out
+    # of core and all, so Reachy Mini remains an opt-in catalogue agent.
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
     "pre-commit>=4.5.1",
     "coverage>=7.13.5",
-    "twine>=6.2.0",
     "watchdog>=6.0.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-cov>=7.1.0",
     "pytest-timeout>=2.4.0",
     "pytest-randomly>=4.1.0",
+    "pytest-xdist>=3.8.0",
+    "pyyaml>=6.0",
     "ruff>=0.15.0",
     "basedpyright>=1.20.0",
     "hatchling>=1.27.0",
+    "packaging>=26.3",
+    "twine>=7.0.0",
 ]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
@@ -93,9 +103,9 @@ all = [
     "wactorz[telegram]",
     "wactorz[whatsapp]",
     "wactorz[mcp]",
-    "wactorz[otel]",
-    "wactorz[influx]",
     "wactorz[tts]",
+    "wactorz[cron]",
+    "wactorz[data]",
 ]
 
 [project.scripts]
@@ -147,6 +157,29 @@ asyncio_mode = "auto"
 # hangs. pytest-randomly prints the seed on every run; pass it back with
 # `-p randomly --randomly-seed=<n>` to replay an ordering that failed.
 timeout = 60
+# `mcp.server.fastmcp`'s own settings model declares `lifespan` with a forward
+# reference it never resolves, so newer pydantic-settings warns once per run
+# about a model that is not ours and a value we never set from the environment.
+# Matched on the message alone: the warning class is `IncompleteFieldDefinitionWarning`,
+# which only exists in the newer pydantic-settings that CI resolves — naming it
+# here would fail at startup for anyone on an older one. The message is specific
+# enough to stay narrow, and no model in this codebase has a `lifespan` field, so
+# this cannot hide the same warning raised against something of ours.
+#
+# Each entry names one third-party warning we can neither fix nor act on, and is
+# matched on its own message so it cannot grow into a blanket rule. A warning
+# raised by our own code — including one of these shapes — is still reported.
+filterwarnings = [
+    "ignore:Field 'lifespan' has an incomplete definition",
+    # google-genai builds a Union alias the way Python 3.14 deprecated. Emitted
+    # at import, so it appears once per run on 3.14 and not at all below it.
+    "ignore:'_UnionGenericAlias' is deprecated",
+    # PyGObject deprecates one of its own GLib overrides while loading them, which
+    # happens during the Reachy SDK's import and only where that SDK is installed.
+    # It comes from inside the binding rather than from anything here, so there is
+    # nothing to migrate.
+    "ignore:GLib.unix_signal_add_full is deprecated",
+]
 
 # ── sdist (source distribution for PyPI) ──────────────────────────────────────
 [tool.hatch.build.targets.sdist]
@@ -206,6 +239,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]       # re-exports: imported here to expose the package's public API
 "tests/*" = ["B", "E402", "D"] # tests do odd things; docstrings not required in test code
+# The runner carries its own `--test` reporter, whose output is the point of it.
+# It also runs agent code it is sent and installs what that code imports, so
+# `exec` and the pip subprocess are the feature rather than an oversight; how far
+# either should be trusted is a design question, not one a lint rule settles.
+"wactorz/remote_runner.py" = ["T201", "S102", "S603", "S606"]
 
 [tool.ruff.lint.pydocstyle]
 # options: google, numpy, pep257
@@ -239,7 +277,8 @@ exclude_also = [
     "if __name__ == .__main__.:",
     "\\.\\.\\.",               # ellipsis / stub bodies
 ]
-# fail_under = 90
+# A ratchet: raise when coverage rises, never lower to pass a branch.
+fail_under = 64
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

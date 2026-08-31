@@ -9,6 +9,7 @@ the Home Assistant system agents in ``HA_SYSTEM_AGENTS``.
 import asyncio
 import json
 import logging
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
@@ -31,10 +32,41 @@ HA_SYSTEM_AGENTS = frozenset(
 )
 
 
+#: The legacy-pickle keys a *chat* reset owns. Mirrors `reset._CHAT_KV_KEYS`,
+#: which is what the same reset deletes from the database.
+CHAT_STATE_KEYS = ("conversation_history", "history_summary")
+
+
+def forget_legacy_state(actor: Any, keys: tuple[str, ...] | None = None) -> None:
+    """Drop the legacy pickle copy a wipe cannot otherwise reach.
+
+    `Actor._load_persistent_state` loads a legacy `state.pkl` into
+    `_persistent_state` even on the new store path, and `Actor.recall` falls
+    back to that dict whenever the new store returns `None`. A reset empties the
+    store and deletes the file, so `recall` then finds nothing, falls through,
+    and returns the very value that was just destroyed — for as long as the
+    process lives. On the legacy write path the next `persist` puts the file
+    back from the same dict.
+
+    `keys=None` clears the lot, for a factory reset: it has already deleted the
+    pickle from disk, so anything left in memory is the two halves disagreeing.
+    A chat reset passes `CHAT_STATE_KEYS` instead, because it clears the
+    conversation and nothing else.
+    """
+    state = getattr(actor, "_persistent_state", None)
+    if not isinstance(state, dict):
+        return
+    if keys is None:
+        state.clear()
+        return
+    for key in keys:
+        state.pop(key, None)
+
+
 def survives_factory_reset(name: str, protected: bool) -> bool:
     """Whether an agent is kept by ``reset all`` (factory reset).
 
-    Kept if it is a system-protected actor (main / monitor / io-agent / installer
+    Kept if it is a system-protected actor (main / monitor / installer
     / catalog) OR one of the HA system agents — i.e. exactly the set a fresh,
     empty boot brings up. Everything else (user- and catalog-spawned agents) is
     wiped. Note this is independent of manual delete, which keys off ``protected``
@@ -177,6 +209,10 @@ async def reset_handler(request: web.Request) -> Response:
                     actor._user_facts = {}  # pyright: ignore[reportAttributeAccessIssue]
                 if hasattr(actor, "_pipeline_rules"):
                     actor._pipeline_rules = []  # pyright: ignore[reportAttributeAccessIssue]
+                # The attributes above are the live copies; this is the one
+                # behind them. Without it `recall` keeps answering from the
+                # pickle this wipe deleted, and every reset looks like it failed.
+                forget_legacy_state(actor)
                 # NOTE: the kv-backed spawn registry is cleared by
                 # _purge_spawn_reconcile() above — assigning the _spawned_agents
                 # attribute was a no-op (the registry is read via recall()).
@@ -195,23 +231,26 @@ async def reset_handler(request: web.Request) -> Response:
             runtime.state["nodes"].clear()
             runtime.state["alerts"].clear()
             runtime.state["log_feed"].clear()
-            await ws.broadcast(
-                {
-                    "type": "reset",
-                    "scope": "all",
-                    "agent": None,
-                    "state": {
-                        "agents": [],
-                        "nodes": [],
-                        "alerts": [],
-                        "log_feed": [],
-                        "total_cost_usd": 0,
-                        "total_messages": 0,
-                    },
-                }
-            )
         finally:
             runtime.hard_resetting = False
+
+        # The kept agents were never stopped — only forgotten, because the state
+        # above was cleared. The registry knows them all, in memory, now — so
+        # rebuild from it and send ONE frame whose state already carries the
+        # survivors. Both calls must follow the flag clearing: `update_agent`
+        # drops writes and `snapshot` returns empty lists while a hard reset is
+        # in progress.
+        restored = events.rebuild_from_registry(runtime.registry)
+        if restored:
+            logger.info("[reset] restored %d running agent(s) to the dashboard", restored)
+        await ws.broadcast(
+            {
+                "type": "reset",
+                "scope": "all",
+                "agent": None,
+                "state": events.snapshot(),
+            }
+        )
         return web.json_response({"status": "ok", "scope": "all", "agent": None})
     if scope == "chat":
         _reset.reset_chat(agent)
@@ -227,11 +266,20 @@ async def reset_handler(request: web.Request) -> Response:
                 actor._conversation_history = []  # pyright: ignore[reportAttributeAccessIssue]
             if hasattr(actor, "_history_summary"):
                 actor._history_summary = ""  # pyright: ignore[reportAttributeAccessIssue]
+            # Only the conversation keys: a chat reset is not a factory reset,
+            # and the rest of the legacy dict is not its to drop.
+            forget_legacy_state(actor, CHAT_STATE_KEYS)
     elif scope == "state":
         if agent:
             _reset.reset_agent_state(agent)
         else:
             _reset._reset_all_pickles()
+        # The files are gone; the copies loaded from them are not.
+        live_actors = list(runtime.registry.all_actors()) if runtime.registry is not None else []
+        for actor in live_actors:
+            if agent and actor.name != agent:
+                continue
+            forget_legacy_state(actor)
     elif scope == "metrics":
         _reset.reset_metrics(agent)
         # Also zero the LIVE in-memory counters on running actors. reset_metrics

@@ -37,7 +37,7 @@ WHAT IT DOES NOT DO BY DEFAULT
   it's done" — these are RULES the user requests through main, which forwards
   them as TASK messages. The agent starts with zero rules.
 
-🔒 PLUG PROTECTION — THE HARD GUARD
+PLUG PROTECTION — THE HARD GUARD
 ───────────────────────────────────
   Every plug has a `protection` level:
     "locked"            → the agent will NEVER issue a turn-off for this plug.
@@ -103,14 +103,15 @@ SPAWN / TASK CONFIG
 """
 
 AGENT_CODE = r'''
-import asyncio
 import datetime
 import json
+import re
 import time
+from typing import Any
 
 
 # ── Defaults — read from env/config so deployers set ENERGY_RATE / ENERGY_CURRENCY
-def _default_rate():
+def _default_rate() -> float:
     try:
         from wactorz.config import CONFIG
         return float(CONFIG.energy_rate)
@@ -141,8 +142,8 @@ class PlugProtectedError(Exception):
     """Raised when something attempts to turn off a protected (locked) plug.
 
     This is the teeth behind the protection guarantee: it is not a soft skip,
-    it is an exception that aborts the turn-off path entirely."""
-    pass
+    it is an exception that aborts the turn-off path entirely.
+    """
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -155,7 +156,7 @@ def _ha_creds():
     return CONFIG.ha_url, CONFIG.ha_token
 
 
-async def _ha_get_states() -> dict:
+async def _ha_get_states() -> dict[Any, Any]:
     """Return {entity_id: state_dict} for all HA entities, or {} on failure."""
     url, token = _ha_creds()
     if not url or not token:
@@ -168,7 +169,7 @@ async def _ha_get_states() -> dict:
         return {}
 
 
-async def _ha_turn_off(entity_id: str):
+async def _ha_turn_off(entity_id: str) -> None:
     """Issue switch.turn_off for an entity. Caller MUST have passed the guard."""
     url, token = _ha_creds()
     if not url or not token:
@@ -180,11 +181,11 @@ async def _ha_turn_off(entity_id: str):
         await ha.call_service(domain, "turn_off", entity_id)
 
 
-def _read_watts(state: dict):
+def _read_watts(state: dict[str, Any] | None) -> float | None:
     """Pull a numeric wattage from an HA power sensor state dict."""
     if not state:
         return None
-    raw = state.get("state")
+    raw = state.get("state", "-")
     try:
         return float(raw)
     except (TypeError, ValueError):
@@ -195,11 +196,12 @@ def _read_watts(state: dict):
 # THE GUARD — single chokepoint for ALL turn-off attempts
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _assert_can_turn_off(plug: dict):
+def _assert_can_turn_off(plug: dict[str, Any]) -> None:
     """The ONE place turn-off permission is decided.
 
     Raises PlugProtectedError unless the plug is explicitly auto_off_on_idle.
-    locked and manual plugs can never be powered down by this agent."""
+    locked and manual plugs can never be powered down by this agent.
+    """
     prot = plug.get("protection", LOCKED)
     if prot != AUTO_OFF:
         raise PlugProtectedError(
@@ -208,7 +210,7 @@ def _assert_can_turn_off(plug: dict):
         )
 
 
-async def _safe_turn_off(agent, plug: dict, reason: str) -> bool:
+async def _safe_turn_off(agent, plug: dict[str, Any], reason: str) -> bool:
     """Turn a plug off, but only after passing the guard. Returns True if off."""
     try:
         _assert_can_turn_off(plug)
@@ -243,7 +245,7 @@ async def _safe_turn_off(agent, plug: dict, reason: str) -> bool:
 # COST / ENERGY ACCOUNTING
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _period_keys(now: float) -> dict:
+def _period_keys(now: float) -> dict[str, Any]:
     dt = datetime.datetime.fromtimestamp(now)
     iso = dt.isocalendar()
     return {
@@ -270,7 +272,8 @@ def _account(acc: dict, name: str, now: float, watts, dt_h,
         interval. Least accurate, and only counts from when we started watching.
 
     Buckets reset when their calendar period rolls over (a no-op for periods
-    fed by their own absolute meter, since that's overwritten every poll anyway)."""
+    fed by their own absolute meter, since that's overwritten every poll anyway).
+    """
     rec = acc.setdefault(name, {
         "day_kwh": 0.0, "week_kwh": 0.0, "month_kwh": 0.0, "total_kwh": 0.0,
         "day": "", "week": "", "month": "",
@@ -548,13 +551,19 @@ async def handle_task(agent, payload):
     if action == "list_plugs":
         return {"result": "plugs", "plugs": list(agent.state["plugs"].values())}
     if action == "remove_plug":
-        return _remove_plug(agent, payload.get("plug") or payload.get("name"))
+        name = payload.get("plug") or payload.get("name")
+        if not isinstance(name, str):
+            name = str(name)
+        return _remove_plug(agent, name)
     if action == "add_rule":
         return _add_rule(agent, payload.get("rule"))
     if action == "list_rules":
         return {"result": "rules", "rules": list(agent.state["rules"].values())}
     if action == "remove_rule":
-        return _remove_rule(agent, payload.get("rule") or payload.get("id"))
+        rule_id = payload.get("rule") or payload.get("id")
+        if not isinstance(rule_id, (str, int)):
+            rule_id = str(rule_id)
+        return _remove_rule(agent, rule_id)
     if action == "set_rate":
         return _set_rate(agent, payload.get("rate"), payload.get("currency"))
 
@@ -631,14 +640,16 @@ def _is_cancel(low: str) -> bool:
 
 
 def _parse_rate(low: str):
-    """Pull a kWh rate out of 'set rate to 0.20', 'electricity is 0.25 per kwh',
+    """Pull a kWh rate.
+
+    Out of 'set rate to 0.20', 'electricity is 0.25 per kwh',
     'my tariff is 0.30'. Requires an explicit rate keyword so phrases like
-    'I used 5 kwh' aren't mistaken for setting the tariff."""
-    import re as _re
+    'I used 5 kwh' aren't mistaken for setting the tariff.
+    """
     if not any(k in low for k in ("rate", "tariff", "price", "per kwh", "per kw",
                                   "cost per", "charge", "/kwh")):
         return None
-    m = _re.search(r"(\d+[.,]?\d*)", low)
+    m = re.search(r"(\d+[.,]?\d*)", low)
     if not m:
         return None
     try:
@@ -835,8 +846,7 @@ async def _interpret_selection(agent, text: str, candidates: list) -> list:
     selected = []
 
     # Numbers: "1", "1 and 3", "2,3"
-    import re as _re
-    nums = [int(n) for n in _re.findall(r"\d+", low)]
+    nums = [int(n) for n in re.findall(r"\d+", low)]
     for n in nums:
         if 1 <= n <= len(candidates) and candidates[n - 1] not in selected:
             selected.append(candidates[n - 1])
@@ -845,9 +855,8 @@ async def _interpret_selection(agent, text: str, candidates: list) -> list:
     if not selected:
         for c in candidates:
             words = [w for w in c["friendly"].lower().replace("_", " ").split() if len(w) > 2]
-            if any(w in low for w in words):
-                if c not in selected:
-                    selected.append(c)
+            if any(w in low for w in words)and c not in selected:
+                selected.append(c)
 
     if selected:
         return selected
@@ -865,9 +874,8 @@ async def _interpret_selection(agent, text: str, candidates: list) -> list:
             )
             picks = json.loads(ans[ans.find("["): ans.rfind("]") + 1])
             for n in picks:
-                if isinstance(n, int) and 1 <= n <= len(candidates):
-                    if candidates[n - 1] not in selected:
-                        selected.append(candidates[n - 1])
+                if isinstance(n, int) and 1 <= n <= len(candidates) and candidates[n - 1] not in selected:
+                    selected.append(candidates[n - 1])
         except Exception:
             pass
 
@@ -892,15 +900,17 @@ _ENERGY_SUFFIXES = (
 
 
 def _slug(s: str) -> str:
-    import re as _re
-    s = _re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
+    s = re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
     return s or "plug"
 
 
 def _base_entity(eid: str) -> str:
-    """Strip a power OR energy suffix so a device's power and energy sensors
+    """Strip a power OR energy suffix.
+
+    So a device's power and energy sensors
     collapse to the same base (e.g. sensor.ac_current_consumption and
-    sensor.ac_today_energy both → 'ac'), letting us pair them."""
+    sensor.ac_today_energy both → 'ac'), letting us pair them.
+    """
     n = eid.split(".", 1)[1] if "." in eid else eid
     for suf in (*_ENERGY_SUFFIXES, *_POWER_SUFFIXES):
         if n.endswith(suf):
@@ -909,8 +919,11 @@ def _base_entity(eid: str) -> str:
 
 
 def _energy_kind(eid: str, friendly: str) -> str:
-    """Classify an energy sensor: 'today' (daily-reset), 'month', or 'total'
-    (lifetime cumulative). 'today' is best for an accurate full-day figure."""
+    """Classify an energy sensor.
+
+    'today' (daily-reset), 'month', or 'total'
+    (lifetime cumulative). 'today' is best for an accurate full-day figure.
+    """
     s = (eid + " " + (friendly or "")).lower()
     if "today" in s or "daily" in s or "_day" in s or " day" in s:
         return "today"
@@ -920,11 +933,14 @@ def _energy_kind(eid: str, friendly: str) -> str:
 
 
 def _find_energy_sensor(states: dict, power_entity: str, kind: str):
-    """Find a sibling energy sensor of the given kind ('month'|'total') for the
-    same device as power_entity, by matching the entity's base name (the same
-    pairing logic _discover_candidates uses). Lets process() backfill a plug
-    that was onboarded before its dedicated month/total sensor was being read,
-    with no re-import required. Returns (entity_id, scale) or (None, 1.0)."""
+    """Find a sibling energy sensor of the given kind ('month'|'total').
+
+    For the same device as power_entity, by matching the entity's base name
+    (the same pairing logic _discover_candidates uses). Lets process() backfill
+    a plug that was onboarded before its dedicated month/total sensor was being
+    read, with no re-import required.
+    Returns (entity_id, scale) or (None, 1.0).
+    """
     base = _base_entity(power_entity)
     for eid, st in states.items():
         if not isinstance(st, dict) or not eid.startswith("sensor."):
@@ -949,7 +965,8 @@ def _discover_candidates(states: dict) -> list:
     A candidate only needs a power sensor — the switch is optional (and unused
     while everything is locked). Each candidate is also paired with the device's
     own energy (kWh) sensor when one exists, so cost can come from the real
-    meter rather than from integrating watts. Returns ordered candidate dicts."""
+    meter rather than from integrating watts. Returns ordered candidate dicts.
+    """
     power_sensors = []           # (entity_id, watts, scale, friendly)
     switches = {}                # base_name -> entity_id
     energy_by_base = {}          # base_name -> list of energy sensor dicts
@@ -973,7 +990,7 @@ def _discover_candidates(states: dict) -> list:
         # Instantaneous power (W/kW)
         if dc == "power" or unit in ("w", "kw", "watt", "watts"):
             try:
-                val = float(st.get("state"))
+                val = float(st.get("state", "-"))
             except (TypeError, ValueError):
                 val = None
             scale = 1000.0 if unit == "kw" else 1.0
@@ -989,10 +1006,12 @@ def _discover_candidates(states: dict) -> list:
                 "scale":  0.001 if unit == "wh" else 1.0,
             })
 
-    def _pick_energy(base):
-        """Choose the best energy sensor for a base: prefer a daily-reset
-        'today' sensor (gives an accurate full-day figure directly), then a
-        lifetime 'total', then 'month'."""
+    def _pick_energy(base: str):
+        """Choose the best energy sensor for a base.
+
+        Prefer a daily-reset 'today' sensor (gives an accurate full-day figure directly),
+        then a lifetime 'total', then 'month'.
+        """
         cands = energy_by_base.get(base, [])
         if not cands:
             # looser prefix match
@@ -1032,7 +1051,8 @@ def _discover_candidates(states: dict) -> list:
         n, base_name = name, name
         idx = 2
         while n in used_names:
-            n = f"{base_name}_{idx}"; idx += 1
+            n = f"{base_name}_{idx}"
+            idx += 1
         used_names.add(n)
 
         candidates.append({
@@ -1050,11 +1070,13 @@ def _discover_candidates(states: dict) -> list:
     return candidates
 
 
-def _src_label(rec) -> str:
+def _src_label(rec: Any) -> str:
+    if not isinstance(rec, dict):
+        return "estimated"
     return "metered" if rec.get("source") == "meter" else "estimated"
 
 
-def _status(agent) -> dict:
+def _status(agent) -> dict[str, Any]:
     plugs = agent.state["plugs"]
     rate  = agent.state["rate"]
     cur   = agent.state["currency"]
@@ -1090,7 +1112,7 @@ def _status(agent) -> dict:
     }
 
 
-async def _report(agent, payload) -> dict:
+async def _report(agent, payload: Any) -> dict[str, Any]:
     rate = agent.state["rate"]
     cur  = agent.state["currency"]
     plugs = agent.state["plugs"]
@@ -1099,7 +1121,9 @@ async def _report(agent, payload) -> dict:
     any_estimated = False
     for name, rec in agent.state["accum"].items():
         d, w, m = rec.get("day_kwh", 0), rec.get("week_kwh", 0), rec.get("month_kwh", 0)
-        grand["day"] += d; grand["week"] += w; grand["month"] += m
+        grand["day"] += d
+        grand["week"] += w
+        grand["month"] += m
         src = _src_label(rec)
         if src == "estimated":
             any_estimated = True
@@ -1124,7 +1148,7 @@ async def _report(agent, payload) -> dict:
     }
 
 
-def _add_plug(agent, plug) -> dict:
+def _add_plug(agent, plug: Any) -> dict[str, Any]:
     if isinstance(plug, str):
         return {"result": "error", "error": "add_plug needs a plug object, not a name"}
     if not isinstance(plug, dict) or not plug.get("name"):
@@ -1152,14 +1176,16 @@ _REMOVE_STOPWORDS = {
 }
 
 
-def _tokens(s: str) -> set:
-    import re as _re
-    return {t for t in _re.split(r"[^a-z0-9]+", (s or "").lower()) if len(t) >= 2}
+def _tokens(s: str) -> set[str]:
+    return {t for t in re.split(r"[^a-z0-9]+", (s or "").lower()) if len(t) >= 2}
 
 
-def _resolve_plug_name(agent, query) -> str:
-    """Find a plug key from free text by exact name/slug, else by best token
-    overlap between the (de-noised) query and each plug's name+friendly."""
+def _resolve_plug_name(agent, query: Any) -> str | None:
+    """Find a plug key from free text.
+
+    Either exact name/slug, else by best token
+    overlap between the (de-noised) query and each plug's name+friendly.
+    """
     if not query:
         return None
     plugs = agent.state["plugs"]
@@ -1182,7 +1208,7 @@ def _resolve_plug_name(agent, query) -> str:
     return best
 
 
-def _remove_plug(agent, name) -> dict:
+def _remove_plug(agent, name: str) -> dict[str, Any]:
     key = name if name in agent.state["plugs"] else _resolve_plug_name(agent, name)
     if key and key in agent.state["plugs"]:
         fr = agent.state["plugs"][key].get("friendly", key)
@@ -1194,7 +1220,7 @@ def _remove_plug(agent, name) -> dict:
     return {"result": "error", "error": f"I'm not monitoring a plug called '{name}'."}
 
 
-def _add_rule(agent, rule) -> dict:
+def _add_rule(agent, rule: Any) -> dict[str, Any]:
     if not isinstance(rule, dict) or not rule.get("type"):
         return {"result": "error", "error": "rule must be a dict with a 'type'"}
     requested_plug = rule.get("plug")
@@ -1222,7 +1248,7 @@ def _add_rule(agent, rule) -> dict:
             "rule": rule}
 
 
-def _remove_rule(agent, rid) -> dict:
+def _remove_rule(agent, rid: str | int) -> dict[str, Any]:
     if rid in agent.state["rules"]:
         del agent.state["rules"][rid]
         agent.persist("rules", agent.state["rules"])
@@ -1230,7 +1256,7 @@ def _remove_rule(agent, rid) -> dict:
     return {"result": "error", "error": f"no rule '{rid}'"}
 
 
-def _set_rate(agent, rate, currency) -> dict:
+def _set_rate(agent, rate: Any, currency: str | None) -> dict:
     try:
         agent.state["rate"] = float(rate)
     except (TypeError, ValueError):
@@ -1242,7 +1268,7 @@ def _set_rate(agent, rate, currency) -> dict:
     return {"result": f"Rate set to {agent.state['rate']} {agent.state['currency']}/kWh"}
 
 
-async def _ask_llm(agent, question: str) -> dict:
+async def _ask_llm(agent, question: str) -> dict[str, Any]:
     """Answer a free-text question using current readings + accumulators."""
     if agent.llm is None:
         return {"result": "No LLM configured — try: status, cost, list_plugs, list_rules"}
@@ -1281,4 +1307,6 @@ async def _ask_llm(agent, question: str) -> dict:
     except Exception as e:
         return {"result": f"LLM error: {e}", "snapshot": snapshot}
     return {"result": answer, "snapshot": snapshot}
+
+
 '''

@@ -12,8 +12,13 @@ import type { SpeechToText } from "../../io/SpeechToText";
 import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
-import { UPLOADS_ENABLED, uploadFile } from "./uploads";
+import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, listen } from "../../events";
+
+/** The composer's prompt: it names the recipient, or invites picking one. */
+export function composerPlaceholder(target: string): string {
+    return target ? `Message @${target}…` : "Message…";
+}
 
 export interface IobarDeps {
     chatInput: ChatInput;
@@ -25,7 +30,7 @@ export interface IobarDeps {
     /** Fill the target <select> with messageable agents. */
     populateSelect(select: HTMLSelectElement): void;
     /** Send the current message. */
-    send(input: HTMLTextAreaElement, select: HTMLSelectElement): void;
+    send(input: HTMLTextAreaElement): void;
     /** Stop the in-flight generation (POST /chat/stop). */
     stop(): void;
 }
@@ -42,7 +47,7 @@ function buildTextarea(
     input.name = "chat-message";
     input.setAttribute("aria-label", "Chat message");
     input.rows = 1;
-    input.placeholder = `Message @${deps.target()}…`;
+    input.placeholder = composerPlaceholder(deps.target());
 
     // Auto-expand up to MAX_ROWS lines, then scroll. The cap is derived from
     // the computed line-height + padding/border so it tracks the CSS.
@@ -70,17 +75,13 @@ function buildTextarea(
     input.addEventListener("blur", () => {
         setTimeout(() => deps.chatInput.closePanel(mentionPanel), 150);
     });
-    select.addEventListener("change", () => {
-        deps.setTarget(select.value);
-        input.placeholder = `Message @${select.value}…`;
-    });
+    select.addEventListener("change", () => deps.setTarget(select.value));
     return input;
 }
 
 function buildSendBtn(
     deps: IobarDeps,
     input: HTMLTextAreaElement,
-    select: HTMLSelectElement,
     mentionPanel: HTMLElement,
 ): HTMLButtonElement {
     const sendBtn = document.createElement("button");
@@ -90,7 +91,7 @@ function buildSendBtn(
     sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
     sendBtn.addEventListener("click", () => {
         deps.chatInput.closePanel(mentionPanel);
-        deps.send(input, select); // recordSent() clears the ghost
+        deps.send(input); // recordSent() clears the ghost
     });
     return sendBtn;
 }
@@ -266,9 +267,9 @@ function buildInputArea(
     const tray = document.createElement("div");
     tray.className = "af-attach-tray";
     tray.id = "af-attach-tray";
-    if (UPLOADS_ENABLED) {
-        input.addEventListener("paste", e => void handlePaste(e));
-    }
+    // Always attached, gated inside: the input is built before /api/config has
+    // answered, so a check here would decide with an answer nobody has yet.
+    input.addEventListener("paste", e => void handlePaste(e));
     inputWrap.append(tray, mentionPanel, ghost, input, hint);
     return { inputWrap, input, mentionPanel };
 }
@@ -276,11 +277,19 @@ function buildInputArea(
 /** Paste handler: turn clipboard files (e.g. a pasted screenshot) into pending
  *  attachments via the same event the drop zone uses. */
 async function handlePaste(e: ClipboardEvent): Promise<void> {
+    if (!uploadsEnabled()) {
+        return;
+    }
     const files = Array.from(e.clipboardData?.files ?? []);
     if (!files.length) {
         return;
     }
     e.preventDefault();
+    await attachFiles(files);
+}
+
+/** Upload files and offer each as a pending attachment, however it was chosen. */
+async function attachFiles(files: File[]): Promise<void> {
     const apiBase: string = window.__WACTORZ_INGRESS_PATH ?? "";
     for (const file of files) {
         try {
@@ -290,6 +299,38 @@ async function handlePaste(e: ClipboardEvent): Promise<void> {
             toast.show({ type: "alert-error", title: "Upload failed", message: String(err) });
         }
     }
+}
+
+/** Attach button: the same thing dropping a file does, for choosing one instead.
+ *  Dropping needs a window to drop onto and the file already in view, neither of
+ *  which holds on a phone or when it sits several folders deep. */
+function buildAttachBtn(): { button: HTMLButtonElement; picker: HTMLInputElement } {
+    const btn = document.createElement("button");
+    btn.className = "af-attach-btn";
+    btn.title = "Attach files";
+    btn.setAttribute("aria-label", "Attach files");
+    btn.innerHTML = iconMarkup("paperclip", 16);
+
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.multiple = true;
+    // ACCEPTED_MIME holds both prefixes ("image/") and exact types
+    // ("application/pdf"); only the former take a wildcard, and "application/pdf*"
+    // is not a token any browser accepts.
+    picker.accept = [
+        ...ACCEPTED_MIME.map(type => (type.endsWith("/") ? `${type}*` : type)),
+        ...ACCEPTED_EXT,
+    ].join(",");
+    picker.hidden = true;
+    picker.addEventListener("change", () => {
+        void attachFiles(Array.from(picker.files ?? []));
+        // Cleared so choosing the same file twice in a row still counts as a
+        // change; otherwise the second attempt looks like nothing happened.
+        picker.value = "";
+    });
+
+    btn.addEventListener("click", () => picker.click());
+    return { button: btn, picker };
 }
 
 /** Build the full chat input bar. */
@@ -306,10 +347,16 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
 
     const { inputWrap, input, mentionPanel } = buildInputArea(deps, select);
     bar.append(select, inputWrap);
+    if (uploadsEnabled()) {
+        const { button, picker } = buildAttachBtn();
+        // The picker is a sibling rather than a child: interactive content
+        // nested inside a button is invalid, hidden or not.
+        bar.append(button, picker);
+    }
     if (micAvailable()) {
         bar.appendChild(buildMicBtn(deps.stt, input));
     }
-    const sendBtn = buildSendBtn(deps, input, select, mentionPanel);
+    const sendBtn = buildSendBtn(deps, input, mentionPanel);
     const stopBtn = buildStopBtn(deps);
     wireGenerationLifecycle(sendBtn, stopBtn);
     bar.append(sendBtn, stopBtn);

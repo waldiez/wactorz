@@ -13,11 +13,12 @@ from aiohttp import web
 from aiohttp.web_request import Request
 from aiohttp.web_response import Response
 
-from ...config import MAX_REQUEST_BYTES
+from ...config import CONFIG, MAX_REQUEST_BYTES
+from ...core.actor import forbidden
 from ...monitoring import PrometheusMonitor
 
 if TYPE_CHECKING:
-    from ...agents.main_actor import MainActor
+    from ...agents.main import MainActor
     from ...core.actor import Actor
 
 logger = logging.getLogger(__name__)
@@ -158,8 +159,6 @@ class RESTInterface:
             cmd_map = {
                 "start": MessageType.START,
                 "stop": MessageType.STOP,
-                "pause": MessageType.PAUSE,
-                "resume": MessageType.RESUME,
             }
             if command in cmd_map and target:
                 await self.agent.send_command(target, cmd_map[command])
@@ -192,16 +191,22 @@ class RESTInterface:
         async def _lifecycle_endpoint(request: Request, command: str, status: str) -> Response:
             """Run a lifecycle command through the actor's own implementation.
 
-            These endpoints used to call ``actor.stop()``/``pause()``/``resume()``
-            directly. That skipped the supervision release, so an actor stopped
-            here looked to the watchdog exactly like one that had crashed and was
-            restarted moments later.
+            Through ``apply_command`` rather than the actor's own methods: it is
+            the one place the lifecycle rules live, so a stop releases the actor
+            from supervision first. Without that the watchdog reads the silence
+            as a crash and restarts what was deliberately stopped.
             """
             actor = _lookup_actor(request.match_info["actor_id"])
             if actor is None:
                 return web.json_response({"error": "actor not found"}, status=404)
-            if getattr(actor, "protected", False):
-                return web.json_response({"error": "actor is protected"}, status=403)
+            if forbidden(
+                command,
+                protected=bool(getattr(actor, "protected", False)),
+                essential=bool(getattr(actor, "essential", False)),
+            ):
+                return web.json_response(
+                    {"error": f"{command} is not allowed for this actor"}, status=403
+                )
             if not await actor.apply_command(command):
                 return web.json_response({"error": f"{command} was refused"}, status=409)
             return web.json_response({"status": status})
@@ -210,20 +215,27 @@ class RESTInterface:
             return await _lifecycle_endpoint(request, "start", "starting")
 
         async def stop_actor_endpoint(request: Request) -> Response:
-            # apply_command("stop") releases from supervision but leaves the
-            # actor registered; this endpoint has always removed it as well.
-            response = await _lifecycle_endpoint(request, "stop", "stopping")
+            """Stop, leaving the actor registered — it can be started again."""
+            return await _lifecycle_endpoint(request, "stop", "stopping")
+
+        async def delete_actor_endpoint(request: Request) -> Response:
+            """Delete: stop, unregister, and drop the spawn-registry entry.
+
+            The `delete` verb rather than `stop`: they are refused under
+            different rules, and asking the policy about a stop would let a
+            protected actor be deleted here. It also clears the spawn-registry
+            entry, which an unregister alone leaves behind to be restored on the
+            next start.
+            """
+            response = await _lifecycle_endpoint(request, "delete", "deleting")
+            # Belt and braces: apply_command unregisters through the actor's own
+            # registry reference, which an actor built outside the system may not
+            # carry. Unregistering twice is a no-op.
             if response.status == 200 and registry is not None:
                 actor = _lookup_actor(request.match_info["actor_id"])
                 if actor is not None:
                     await registry.unregister(actor.actor_id)
             return response
-
-        async def pause_actor_endpoint(request: Request) -> Response:
-            return await _lifecycle_endpoint(request, "pause", "pausing")
-
-        async def resume_actor_endpoint(request: Request) -> Response:
-            return await _lifecycle_endpoint(request, "resume", "resuming")
 
         async def metrics_endpoint(request: Request) -> Response:
             actor = _lookup_actor(request.match_info["actor_id"])
@@ -267,10 +279,9 @@ class RESTInterface:
         app.router.add_get("/actors", agents_endpoint)
         app.router.add_get("/actors/{actor_id}", actor_endpoint)
         app.router.add_post("/actors/{actor_id}/message", actor_message_endpoint)
-        app.router.add_delete("/actors/{actor_id}", stop_actor_endpoint)
+        app.router.add_delete("/actors/{actor_id}", delete_actor_endpoint)
         app.router.add_post("/actors/{actor_id}/start", start_actor_endpoint)
-        app.router.add_post("/actors/{actor_id}/pause", pause_actor_endpoint)
-        app.router.add_post("/actors/{actor_id}/resume", resume_actor_endpoint)
+        app.router.add_post("/actors/{actor_id}/stop", stop_actor_endpoint)
         app.router.add_get("/actors/{actor_id}/metrics", metrics_endpoint)
         app.router.add_post("/chat", chat_endpoint)
         app.router.add_get("/agents", agents_endpoint)
@@ -280,7 +291,7 @@ class RESTInterface:
     async def run(self) -> None:
         runner = web.AppRunner(self.build_app())
         await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", self.port)
+        site = web.TCPSite(runner, CONFIG.bind_host, self.port)
         await site.start()
-        logger.info("[REST] API running at http://0.0.0.0:%s", self.port)
+        logger.info("[REST] API running at http://%s:%s", CONFIG.bind_host, self.port)
         await asyncio.Event().wait()

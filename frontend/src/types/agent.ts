@@ -5,7 +5,7 @@
 /** All shared type definitions for agents, messages, and MQTT events. */
 
 /** Lifecycle state of an agent. */
-export type AgentState = "initializing" | "running" | "paused" | "stopped" | { failed: string };
+export type AgentState = "initializing" | "running" | "stopped" | { failed: string };
 
 /** Static info about a registered agent. */
 export interface AgentInfo {
@@ -13,6 +13,7 @@ export interface AgentInfo {
     name: string;
     state: AgentState;
     protected: boolean;
+    essential?: boolean;
     /** Agent role / type hint (e.g. "main", "dynamic", "monitor", "ml"). */
     agentType?: string;
     /** ISO timestamp of last heartbeat. */
@@ -78,6 +79,7 @@ export interface StatusPayload {
     agentName: string;
     state: AgentState;
     protected?: boolean;
+    essential?: boolean;
     messagesReceived: number;
     messagesProcessed: number;
     messagesFailed: number;
@@ -133,6 +135,14 @@ export interface ChatMessage {
     to: string; // agent name or "user"
     content: string;
     timestampMs: number;
+    /** Origin channel for special routing, such as an embodied voice turn. */
+    source?: string;
+    /** Agent surface carrying the turn while another agent may own reasoning. */
+    surface?: string;
+    /** Human-friendly name for the active interface surface. */
+    surfaceLabel?: string;
+    /** Internal reasoning agent, retained only as diagnostic metadata. */
+    brain?: string;
     /** Files attached to this turn, if any. */
     attachments?: Attachment[];
 }

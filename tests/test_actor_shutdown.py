@@ -193,7 +193,12 @@ class TestStopDoesNotHang:
 
         # It waited rather than cancelling and walking away, and it gave up
         # rather than letting one task hold up the whole shutdown.
-        assert 0.3 <= waited < 3
+        #
+        # The lower bound carries a tolerance because the event loop's timer and
+        # time.monotonic() are not the same clock: on Windows the wait returns a
+        # few milliseconds early (0.297 against a 0.3 timeout), which says
+        # nothing about the behaviour under test.
+        assert 0.3 - 0.02 <= waited < 3
         assert worker._tasks == []
 
     async def test_stopping_from_inside_a_task_does_not_deadlock(self, worker: _Worker) -> None:

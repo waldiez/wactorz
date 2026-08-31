@@ -9,6 +9,8 @@ import {
     dedupeAndSortFeed,
     buildFeedView,
     appendFeedItemToView,
+    DEFAULT_FILTERS,
+    type FeedFilters,
 } from "../ui/dashboard/feedView";
 import type { FeedItem } from "../types/feed";
 
@@ -19,7 +21,7 @@ function item(over: Partial<FeedItem>): FeedItem {
 describe("feedKey / dedupeAndSortFeed", () => {
     it("builds a stable identity key", () => {
         expect(feedKey(item({ timestamp: 5, type: "spawn", agentName: "a", label: "x" }))).toBe(
-            "5|spawn|a|x",
+            "agent|5|spawn|a|x",
         );
     });
 
@@ -70,53 +72,90 @@ describe("buildFeedView", () => {
         document.body.innerHTML = "";
     });
 
+    /** Filters with heartbeats shown and both sources visible, unless overridden. */
+    const shown = (over: Partial<FeedFilters> = {}): FeedFilters => ({
+        ...DEFAULT_FILTERS,
+        source: "all",
+        hideHeartbeats: false,
+        ...over,
+    });
+
+    const view = (items: Parameters<typeof buildFeedView>[0], over: Partial<FeedFilters> = {}) =>
+        buildFeedView(items, { filters: shown(over), onFiltersChange: vi.fn() });
+
     it("shows the empty state when nothing is visible", () => {
-        const wrap = buildFeedView([], { hideHeartbeats: false, onToggleHeartbeats: vi.fn() });
-        expect(wrap.querySelector(".af-feed-empty")!.textContent).toBe("No events yet.");
+        const wrap = view([]);
+        const empty = wrap.querySelector<HTMLElement>(".af-feed-empty")!;
+        expect(empty.textContent).toBe("No events yet.");
+        expect(empty.hidden).toBe(false);
     });
 
     it("marks the feed as a polite live-region log for screen readers", () => {
-        const wrap = buildFeedView([], { hideHeartbeats: false, onToggleHeartbeats: vi.fn() });
-        const feed = wrap.querySelector("#af-feed-view")!;
+        const feed = view([]).querySelector("#af-feed-view")!;
         expect(feed.getAttribute("role")).toBe("log");
         expect(feed.getAttribute("aria-live")).toBe("polite");
     });
 
     it("filters out system-agent rows", () => {
-        const wrap = buildFeedView([item({ agentName: "io-agent" }), item({ agentName: "worker" })], {
-            hideHeartbeats: false,
-            onToggleHeartbeats: vi.fn(),
-        });
+        const wrap = view([item({ agentName: "monitor-agent" }), item({ agentName: "worker" })]);
         expect(wrap.querySelectorAll(".af-feed-item").length).toBe(1);
     });
 
     it("heartbeat toggle notifies the caller and hides heartbeat rows", () => {
-        const onToggle = vi.fn();
+        const onFiltersChange = vi.fn();
         const wrap = buildFeedView([item({ type: "heartbeat", agentName: "worker" })], {
-            hideHeartbeats: false,
-            onToggleHeartbeats: onToggle,
+            filters: shown(),
+            onFiltersChange,
         });
         const hbRow = wrap.querySelector<HTMLElement>(".af-feed-heartbeat")!;
         expect(hbRow.hidden).toBe(false);
+
         wrap.querySelector<HTMLButtonElement>(".af-mini-btn")!.click();
-        expect(onToggle).toHaveBeenCalledWith(true);
+
+        expect(onFiltersChange).toHaveBeenCalledWith(expect.objectContaining({ hideHeartbeats: true }));
         expect(hbRow.hidden).toBe(true);
+    });
+
+    it("defaults to agents only, so the panel keeps the character it had", () => {
+        expect(DEFAULT_FILTERS.source).toBe("agent");
     });
 });
 
 describe("appendFeedItemToView", () => {
-    it("appends to the live feed and removes the empty placeholder", () => {
+    const shown = (over: Partial<FeedFilters> = {}): FeedFilters => ({
+        ...DEFAULT_FILTERS,
+        source: "all",
+        hideHeartbeats: false,
+        ...over,
+    });
+
+    it("appends to the live feed and hides the empty placeholder", () => {
         const root = document.createElement("div");
         root.innerHTML = `<div id="af-feed-view"><div class="af-feed-empty">No events yet.</div></div>`;
-        appendFeedItemToView(root, item({ agentName: "worker" }), false);
-        expect(root.querySelector(".af-feed-empty")).toBeNull();
+
+        appendFeedItemToView(root, item({ agentName: "worker" }), shown());
+
+        expect(root.querySelector<HTMLElement>(".af-feed-empty")!.hidden).toBe(true);
         expect(root.querySelectorAll(".af-feed-item").length).toBe(1);
     });
 
     it("skips hidden (system-agent) items", () => {
         const root = document.createElement("div");
         root.innerHTML = `<div id="af-feed-view"></div>`;
-        appendFeedItemToView(root, item({ agentName: "monitor-agent" }), false);
+
+        appendFeedItemToView(root, item({ agentName: "monitor-agent" }), shown());
+
         expect(root.querySelectorAll(".af-feed-item").length).toBe(0);
+    });
+
+    it("appends a row the current filters hide, but hidden", () => {
+        // It must still be in the DOM: flipping the filter back has to reveal it
+        // without refetching, which is the whole point of filtering in place.
+        const root = document.createElement("div");
+        root.innerHTML = `<div id="af-feed-view"></div>`;
+
+        appendFeedItemToView(root, item({ agentName: "worker" }), shown({ source: "app" }));
+
+        expect(root.querySelector<HTMLElement>(".af-feed-item")!.hidden).toBe(true);
     });
 });

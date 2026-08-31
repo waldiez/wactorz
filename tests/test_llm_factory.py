@@ -1,5 +1,7 @@
 """Tests for per-call-site LLM provider overrides (wactorz/llm_factory.py)."""
 
+import sys
+
 import pytest
 
 from wactorz.agents.llm_agent import OllamaProvider
@@ -188,3 +190,90 @@ def test_bad_override_falls_back_to_default():
 def test_override_none_disables_site_llm():
     default = object()
     assert provider_for("intent", default, overrides={"intent": "none"}) is None
+
+
+# ── model flags ──────────────────────────────────────────────────────────────
+
+
+class TestTheModelFlagsDoNotInventAModel:
+    """argparse fills a `default=` in whether or not the flag was passed.
+
+    A default on a model flag therefore reaches `create_provider` as an explicit
+    model on every run, outranking `LLM_MODEL` — which pinned Gemini to one
+    model no `.env` could change, and answered every request with a 404 once
+    that model was retired.
+    """
+
+    @pytest.mark.parametrize("flag", ["ollama_model", "nim_model", "gemini_model"])
+    def test_an_unpassed_flag_stays_unset(self, monkeypatch: pytest.MonkeyPatch, flag: str) -> None:
+        from wactorz.cli import get_args
+
+        monkeypatch.setattr(sys, "argv", ["wactorz"])
+
+        assert getattr(get_args(), flag) is None
+
+    def test_gemini_falls_back_to_the_configured_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wactorz.config import CONFIG
+
+        # Building the provider constructs a real SDK client, which refuses to
+        # exist without a key — and a machine with one configured would pass
+        # this while CI, having none, could not. The key is nothing to do with
+        # what is under test, so it is supplied rather than depended on.
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key-not-used")
+
+        provider = create_provider("gemini", None)
+
+        assert provider is not None
+        # `model_name` here, `model` on every other provider — see the startup
+        # log in app.py, which reads both.
+        assert provider.model_name == CONFIG.llm_model  # pyright: ignore[reportAttributeAccessIssue]
+
+
+class TestASecretOnTheCommandLineIsCalledOut:
+    """argv is world-readable on Linux: `ps` shows it to any local user, and
+    the shell writes it to history. The environment variable carries the same
+    value without either — so a token passed as a flag earns a warning.
+
+    Warned, not refused: an existing launcher should keep working, and it cannot
+    act on a failure it never sees.
+    """
+
+    @pytest.mark.parametrize("flag", ["--discord-token", "--telegram-token"])
+    def test_it_warns_and_still_accepts_the_value(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], flag: str
+    ) -> None:
+        from wactorz.cli import get_args
+
+        monkeypatch.setattr(sys, "argv", ["wactorz", flag, "s3cret"])
+
+        args = get_args()
+
+        warning = capsys.readouterr().err
+        assert flag in warning
+        assert "ps" in warning
+        assert getattr(args, flag.removeprefix("--").replace("-", "_")) == "s3cret"
+
+    def test_the_secret_itself_is_not_echoed(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Printing it would put the value in a second place — the logs.
+        from wactorz.cli import get_args
+
+        monkeypatch.setattr(sys, "argv", ["wactorz", "--discord-token", "s3cret"])
+
+        get_args()
+
+        assert "s3cret" not in capsys.readouterr().err
+
+    def test_a_run_without_tokens_is_silent(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from wactorz.cli import get_args
+
+        monkeypatch.setattr(sys, "argv", ["wactorz"])
+
+        get_args()
+
+        assert capsys.readouterr().err == ""

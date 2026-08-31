@@ -14,7 +14,7 @@ from typing import Any
 
 from ..core.mqtt import mqtt_client
 from ..monitoring.log_redaction import redact
-from . import events, runtime, ws
+from . import events, relay, runtime, ws
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,10 @@ async def handle_message(topic: str, payload: str) -> None:
     the loop around it is connection management, this is the part with rules.
     """
     event: dict[str, Any] | None = events.parse_topic(topic, payload)
-    await broadcast_mqtt_msg(topic, payload)
+    # State first, and for every message: the filter below decides only whether a
+    # browser is shown the raw frame, not whether the server takes it in.
+    if relay.is_relayed(topic):
+        await broadcast_mqtt_msg(topic, payload)
     if not event or runtime.hard_resetting:
         return
 
@@ -75,10 +78,18 @@ async def handle_message(topic: str, payload: str) -> None:
     if push:
         try:
             if runtime.db is not None and push.get("content"):
+                # A voice turn arrives as the user's own words (from="user"), so
+                # the role and the agent it belongs to come from opposite ends of
+                # the envelope; persisting it as "assistant" would replay the
+                # user's speech back as the agent's reply on reload.
+                role = "user" if push.get("from") == "user" else "assistant"
+                agent_name = (
+                    push.get("to", "agent") if role == "user" else push.get("from", "agent")
+                )
                 runtime.db.write_chat_log(
                     ts=push.get("timestamp", time.time()),
-                    agent_name=push.get("from", "agent"),
-                    role="assistant",
+                    agent_name=agent_name,
+                    role=role,
                     # Same treatment as the WS path: an agent can quote back
                     # something a user typed, and this row outlives the turn.
                     content=redact(push["content"]),
@@ -160,9 +171,11 @@ async def check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
             last = repr(exc)
             if i < attempts - 1:
                 await asyncio.sleep(delay)
-    msg = (
-        f"[startup] MQTT broker {runtime.MQTT_BROKER}:{runtime.MQTT_PORT} "
-        f"unreachable after {attempts} tries — {last}"
+    logger.error(
+        "[startup] MQTT broker %s:%s unreachable after %s tries — %s",
+        runtime.MQTT_BROKER,
+        runtime.MQTT_PORT,
+        attempts,
+        last,
     )
-    logger.error(msg)
     return False

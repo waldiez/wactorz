@@ -5,6 +5,19 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # Called by release.yml before it publishes, so a release runs the same
+  # checks a pull request does rather than a second, drifting copy of them.
+  workflow_call:
+
+# Least privilege: nothing here writes to the repository, and the default
+# token grants more than that.
+#
+# Action pinning, across every workflow: first-party `actions/*` by version
+# tag, everything else by commit sha with the tag kept as a comment. A tag is
+# a moving reference — for a third party that means code can change after it
+# was reviewed. The exception is documented at its own use site.
+permissions:
+  contents: read
 
 jobs:
   test-python:
@@ -16,9 +29,9 @@ jobs:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -26,15 +39,44 @@ jobs:
         run: pip install -e ".[all,dev]"
 
       - name: Test
-        run: python -m pytest tests
+        run: python -m pytest tests -n auto
+
+  test-other-os:
+    # The package claims OS Independent, and carries code that only runs off
+    # Linux: the Windows event-loop policy and console encoding in
+    # `_bootstrap`, and the `signal.signal` fallback for shutdown signals.
+    # Neither is reachable on ubuntu, so without this they ship untested.
+    #
+    # One interpreter rather than the full matrix: what differs here is the
+    # platform, not the Python version, and the version matrix above already
+    # covers that on Linux.
+    name: Python 3.13 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Test
+        run: python -m pytest tests -n auto
 
   coverage-python:
     name: Python coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.12'
 
@@ -45,7 +87,7 @@ jobs:
         run: make coverage-py
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: python-coverage
           path: coverage/python-coverage.xml
@@ -54,29 +96,50 @@ jobs:
     name: Python lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v6.2.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.12'
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        # vision as well: the type checker gates on this job, and the camera
+        # shim imports cv2, which it cannot resolve unless OpenCV is present.
+        # It stays out of [all] because it is large and the shim does without.
+        run: pip install -e ".[all,dev,vision]"
 
       - name: Lint
         run: make lint-py
+
+      # static/docs is committed and shipped in the wheel, so a change under
+      # docs/ without a rebuild releases documentation for the previous version
+      # — the same failure the static/app check below covers for the frontend.
+      # Markdown pages only: the build leaves api/js and api/python alone unless
+      # asked for them, so this needs no typedoc or pdoc and costs under a
+      # second. docs.yml builds those two for the published site.
+      - name: Build docs
+        run: python3 scripts/build_docs.py
+
+      - name: static/docs matches the documentation source
+        run: |
+          if [ -n "$(git status --porcelain -- static/docs)" ]; then
+            echo "::error::static/docs is stale. Run 'make docs-build' and commit static/docs."
+            git status --porcelain -- static/docs
+            exit 1
+          fi
+          echo "static/docs is up to date."
 
   test-frontend:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
 
       # Pinned from package.json's "packageManager" so the build below is
       # byte-reproducible — the staleness check compares its output against
       # committed bytes, and an unpinned toolchain would fail PRs on a hash
       # that changed for no reason of theirs.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: frontend/package.json
 

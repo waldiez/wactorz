@@ -6,25 +6,36 @@
  * File-attachment uploads for chat. Validates type/size, then resolves a file to
  * an {@link Attachment}.
  *
- * `UPLOADS_ENABLED` gates the whole attachment UI (drop zone, chip tray, paste).
+ * `uploadsEnabled()` gates the whole attachment UI (drop zone, chip tray, paste).
  * `STUB_UPLOADS` is a dev switch: when on, a file becomes a local object-URL
  * attachment instead of being POSTed — so the compose/preview UX can be built
- * and demoed before the backend `/api/upload` endpoint exists. In production both
- * the endpoint and `UPLOADS_ENABLED` go live and `STUB_UPLOADS` stays off.
+ * and demoed without the backend `/api/upload` endpoint. It ships off.
  */
 import type { Attachment } from "../../types/agent";
+import { safeStorage } from "../../safeStorage";
 import { uid } from "../../ids";
 
+/** Where the seeded server capability is kept. See `config/serverConfig.ts`. */
+export const UPLOADS_KEY = "wactorz-uploads-enabled";
+
 /**
- * Whether the attachment UI (drag-drop + paste) is shown. Off by default;
- * enable per-deploy at build time with `VITE_UPLOADS_ENABLED=true` once the
- * `/api/upload` backend is live.
+ * Whether the attachment UI (drag-drop + paste) is available.
+ *
+ * Answered by the server, not by how the bundle was built: the upload routes
+ * are only registered when the backend has uploads on, so a build-time flag
+ * could only ever guess — and guessing wrong means either a drop zone whose
+ * every upload 404s, or a feature hidden from a deployment that has it.
+ *
+ * Read through a function rather than exported as a const because the value
+ * arrives with `/api/config`, after the modules that ask have loaded.
  */
-export const UPLOADS_ENABLED = import.meta.env["VITE_UPLOADS_ENABLED"] === "true";
+export function uploadsEnabled(): boolean {
+    return safeStorage.get(UPLOADS_KEY) === "1";
+}
 
 /** Dev-only: set `true` to keep attachments client-side (object URL) instead of
  *  POSTing them, so the compose/preview UX can be demoed with no backend. Ships
- *  as `false`; flip it locally alongside `UPLOADS_ENABLED` when demoing offline. */
+ *  as `false`; flip it locally when demoing with no backend. */
 const STUB_UPLOADS = false;
 
 /** Accepted MIME-type prefixes. */

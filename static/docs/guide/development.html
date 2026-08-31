@@ -124,6 +124,7 @@
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
     </details>
@@ -163,7 +164,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 
 <hr />
 <h2 id="optional-dependencies">Optional dependencies</h2>
-<p>The <code>[all]</code> extra installs everything except the ML stack (heavy torch dependency). Install individual extras as needed:</p>
+<p>The <code>[all]</code> extra installs everything except the heavier stacks, <code>ml</code> and <code>vision</code>. Install individual extras as needed:</p>
 <table>
 <thead>
 <tr>
@@ -199,24 +200,34 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <td><code>--interface whatsapp</code></td>
 </tr>
 <tr>
+<td><code>wactorz[telegram]</code></td>
+<td><code>python-telegram-bot</code></td>
+<td><code>--interface telegram</code></td>
+</tr>
+<tr>
 <td><code>wactorz[mcp]</code></td>
 <td><code>mcp</code></td>
 <td>MCP-compatible clients</td>
 </tr>
 <tr>
-<td><code>wactorz[otel]</code></td>
-<td>OpenTelemetry SDK/exporter</td>
-<td>OTLP tracing</td>
-</tr>
-<tr>
-<td><code>wactorz[influx]</code></td>
-<td><code>influxdb-client</code></td>
-<td>InfluxDB time-series export</td>
-</tr>
-<tr>
 <td><code>wactorz[tts]</code></td>
 <td><code>edge-tts</code></td>
 <td>text-to-speech support</td>
+</tr>
+<tr>
+<td><code>wactorz[cron]</code></td>
+<td><code>croniter</code></td>
+<td>cron-expression schedules</td>
+</tr>
+<tr>
+<td><code>wactorz[data]</code></td>
+<td><code>pandas</code></td>
+<td>query results as a DataFrame</td>
+</tr>
+<tr>
+<td><code>wactorz[vision]</code></td>
+<td><code>opencv-python</code></td>
+<td>camera capture in generated code</td>
 </tr>
 <tr>
 <td><code>wactorz[ml]</code></td>
@@ -225,7 +236,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </tr>
 <tr>
 <td><code>wactorz[all]</code></td>
-<td>all of the above except <code>ml</code></td>
+<td>all of the above except <code>ml</code> and <code>vision</code></td>
 <td>recommended starting point</td>
 </tr>
 </tbody>
@@ -303,7 +314,10 @@ HA_STATE_BRIDGE_PER_ENTITY=0 # 0 = flat topic (default), 1 = per-entity topics
 <div class="highlight"><pre><span></span><code><span class="gh">#</span> Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
-<span class="gh">#</span> Optional — set for a broker with allow_anonymous false; blank = anonymous
+<span class="gh">#</span> The dev broker authenticates, with defaults (wactorz / wactorz-dev) and bound
+<span class="gh">#</span> to loopback, so no setup is needed either way: compose injects them for the
+<span class="gh">#</span> containers, and run.sh applies the same ones when WACTORZ_DEV_MODE=1 for a
+<span class="gh">#</span> host-run backend. Fill these in to point at a broker of your own instead.
 MQTT_USERNAME=
 MQTT_PASSWORD=
 </code></pre></div>
@@ -353,7 +367,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 
 <p>The registered tools are:</p>
 <div class="highlight"><pre><span></span><code>ask_wactorz, ask_agent, list_agents, list_capabilities,
-stop_agent, pause_agent, resume_agent,
+stop_agent,
 ha_list_entities, ha_get_state, ha_call_service
 </code></pre></div>
 
@@ -532,7 +546,7 @@ MQTT_HOST=mosquitto         # container name, not localhost
 │   │   └── <span class="n">migrations</span>.<span class="n">py</span>        ← <span class="n">Migration</span> <span class="nb">to</span> <span class="n">nodes</span>
 │   │   ├── <span class="n">topic_bus</span>.<span class="n">py</span>         ← <span class="n">Reactive</span> <span class="n">Pub</span><span class="o">/</span><span class="nb">Sub</span> <span class="n">Coordination</span> <span class="n">Layer</span>
 │   ├── <span class="n">agents</span>/
-│   │   ├── <span class="n">main_actor</span>.<span class="n">py</span>        ← <span class="n">LLM</span> <span class="n">orchestrator</span>
+│   │   ├── <span class="n">main</span>/                ← <span class="n">LLM</span> <span class="n">orchestrator</span> <span class="nb">package</span> (<span class="n">actor</span>.<span class="n">py</span> + <span class="n">its</span> <span class="n">machinery</span>)
 │   │   ├── <span class="n">llm_agent</span>.<span class="n">py</span>         ← <span class="n">LLM</span> <span class="nb">base</span> + <span class="nb">all</span> <span class="n">providers</span>
 │   │   ├── <span class="n">home_assistant_agent</span>.<span class="n">py</span>
 │   │   ├── <span class="n">prompts</span>/
@@ -541,7 +555,6 @@ MQTT_HOST=mosquitto         # container name, not localhost
 │   │   ├── <span class="n">home_assistant_map_agent</span>.<span class="n">py</span>
 │   │   ├── <span class="n">monitor_agent</span>.<span class="n">py</span>
 │   │   ├── <span class="n">installer_agent</span>.<span class="n">py</span>
-│   │   └── <span class="n">io_agent</span>.<span class="n">py</span>
 │   ├── <span class="n">catalogue_agents</span>/        ← <span class="n">pre-built</span> <span class="n">DynamicAgent</span> <span class="n">recipes</span>
 │   ├── <span class="n">interfaces</span>/
 │   │   ├── <span class="n">chat_interfaces</span>.<span class="n">py</span>   ← <span class="n">CLI</span>, <span class="n">REST</span>, <span class="n">Discord</span>, <span class="n">WhatsApp</span>, <span class="n">Telegram</span>

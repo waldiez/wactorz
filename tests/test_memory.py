@@ -1,4 +1,4 @@
-"""Tests for ``wactorz.agents.mixins.memory.MemoryMixin``.
+"""Tests for ``wactorz.agents.main.memory.MemoryMixin``.
 
 Exercises the real mixin against a fake host that supplies the Actor/LLMAgent
 surface it needs (recall/persist, registry, ``llm.complete``, token counters).
@@ -10,7 +10,7 @@ Run with ``pytest`` (or ``make test-py``). Async methods are driven through
 
 import asyncio
 
-from wactorz.agents.mixins.memory import MemoryMixin
+from wactorz.agents.main.memory import MemoryMixin
 
 
 def run(coro):
@@ -176,6 +176,28 @@ def test_extract_facts_saves_and_normalizes():
     assert facts.get("device_ha_url") == "http://ha"
     assert h.total_input_tokens == 10 and h.total_output_tokens == 5
     assert h.persisted_cost == 1
+
+
+def test_extract_facts_skips_voice_transcripts():
+    llm = FakeLLM('{"pref_user_name": "Adé"}')
+    h = host([], llm=llm)
+    h._current_interface_is_voice = lambda: True
+
+    run(h._extract_and_save_facts("Adé, Amishu", "Hello"))
+
+    assert h.get_user_facts() == {}
+    assert llm.calls == []
+
+
+def test_explicit_voice_memory_request_is_allowed():
+    llm = FakeLLM('{"pref_user_name": "Amalia"}')
+    h = host([], llm=llm)
+    h._current_interface_is_voice = lambda: True
+
+    run(h._extract_and_save_facts("Remember that my name is Amalia", "Okay"))
+
+    assert h.get_user_facts()["pref_user_name"] == "Amalia"
+    assert len(llm.calls) == 1
 
 
 def test_extract_facts_no_llm():

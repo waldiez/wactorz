@@ -252,8 +252,6 @@ class HomeAssistantActuatorAgent(Actor):
                     async for message in client.messages:
                         if self.state in (ActorState.STOPPED, ActorState.FAILED):
                             break
-                        if self.state == ActorState.PAUSED:
-                            continue
                         try:
                             import json
 
@@ -406,10 +404,41 @@ class HomeAssistantActuatorAgent(Actor):
 
     # ── Actor overrides ────────────────────────────────────────────────────────
 
+    def _spoken_status(self) -> str:
+        """What this agent is, said to whoever just asked it something.
+
+        There is no conversation here: it waits on a topic and calls a service.
+        Saying so is more use than answering with the state of the automation,
+        which is what a question used to get -- the same state whatever was
+        asked, because the question was never read.
+        """
+        topics = ", ".join(self.config.mqtt_topics) or "no topic"
+        if self._actuations_count:
+            when = time.strftime("%H:%M", time.localtime(self._last_actuation_time))
+            how_often = "once" if self._actuations_count == 1 else f"{self._actuations_count} times"
+            fired = f"It has fired {how_often}, most recently at {when}."
+        else:
+            fired = "It has not fired yet."
+        reachable = (
+            "Home Assistant is reachable."
+            if self._ha is not None
+            else "Home Assistant is not connected, so it cannot act right now."
+        )
+        return (
+            f"I cannot answer questions. I act when a topic fires: "
+            f"{self.config.description} I am watching {topics}. {fired} {reachable}"
+        )
+
     async def handle_message(self, msg: Message) -> None:
         if msg.type != MessageType.TASK:
             return
+        # `result` first, and it is not decoration: the chat surface reads a
+        # reply by looking for reply/message/text/content/result and printing
+        # `str(payload)` when it finds none. Without it this dict reached people
+        # as a Python repr. The structured fields stay for callers that delegate
+        # here and read them.
         status = {
+            "result": self._spoken_status(),
             "automation_id": self.config.automation_id,
             "description": self.config.description,
             "mqtt_topics": self.config.mqtt_topics,

@@ -3,7 +3,7 @@
 One counter per period plus an all-time total, both in the key-value store, so
 spend survives a restart and a cap set mid-period still sees what came before.
 
-⚠ These functions resolve ``get_db`` and ``datetime`` in *this* module. Tests
+These functions resolve ``get_db`` and ``datetime`` in *this* module. Tests
 that stub either must patch them here — the re-export in ``llm_agent`` is a
 separate binding and patching it does not reach this code.
 """
@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 def _period_key(period: str) -> str:
-    now = datetime.now()
+    # Local time, stated rather than inherited: a daily budget rolls over at
+    # the operator's midnight, not UTC's.
+    now = datetime.now().astimezone()
     if period == "daily":
         return now.strftime("%Y-%m-%d")
     if period == "weekly":

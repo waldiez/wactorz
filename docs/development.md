@@ -26,12 +26,11 @@ cd wactorz
 pip install -e ".[all]"
 ```
 
-
 ---
 
 ## Optional dependencies
 
-The `[all]` extra installs everything except the ML stack (heavy torch dependency). Install individual extras as needed:
+The `[all]` extra installs everything except the heavier stacks, `ml` and `vision`. Install individual extras as needed:
 
 | Extra | Installs | Needed for |
 |---|---|---|
@@ -40,12 +39,14 @@ The `[all]` extra installs everything except the ML stack (heavy torch dependenc
 | `wactorz[google]` | `google-genai` | `--llm gemini` |
 | `wactorz[discord]` | `discord.py` | `--interface discord` |
 | `wactorz[whatsapp]` | `twilio` | `--interface whatsapp` |
+| `wactorz[telegram]` | `python-telegram-bot` | `--interface telegram` |
 | `wactorz[mcp]` | `mcp` | MCP-compatible clients |
-| `wactorz[otel]` | OpenTelemetry SDK/exporter | OTLP tracing |
-| `wactorz[influx]` | `influxdb-client` | InfluxDB time-series export |
 | `wactorz[tts]` | `edge-tts` | text-to-speech support |
+| `wactorz[cron]` | `croniter` | cron-expression schedules |
+| `wactorz[data]` | `pandas` | query results as a DataFrame |
+| `wactorz[vision]` | `opencv-python` | camera capture in generated code |
 | `wactorz[ml]` | `ultralytics`, `torch`, `numpy` | webcam detection pipelines |
-| `wactorz[all]` | all of the above except `ml` | recommended starting point |
+| `wactorz[all]` | all of the above except `ml` and `vision` | recommended starting point |
 
 > **Tip:** You only need to install the dep for the provider you actually use. If you plan to switch providers, install `wactorz[all]` once and set the active provider via `--llm` flag or `LLM_PROVIDER` in `.env`.
 
@@ -136,7 +137,10 @@ WACTORZ_API_KEY=              # optional; mirrors API_KEY for REST auth
 # Only needed if using an external broker instead of the embedded one
 MQTT_HOST=localhost
 MQTT_PORT=1883
-# Optional — set for a broker with allow_anonymous false; blank = anonymous
+# The dev broker authenticates, with defaults (wactorz / wactorz-dev) and bound
+# to loopback, so no setup is needed either way: compose injects them for the
+# containers, and run.sh applies the same ones when WACTORZ_DEV_MODE=1 for a
+# host-run backend. Fill these in to point at a broker of your own instead.
 MQTT_USERNAME=
 MQTT_PASSWORD=
 ```
@@ -198,7 +202,7 @@ The registered tools are:
 
 ```text
 ask_wactorz, ask_agent, list_agents, list_capabilities,
-stop_agent, pause_agent, resume_agent,
+stop_agent,
 ha_list_entities, ha_get_state, ha_call_service
 ```
 
@@ -353,7 +357,7 @@ wactorz/                         ← repo root
 │   │   └── migrations.py        ← Migration to nodes
 │   │   ├── topic_bus.py         ← Reactive Pub/Sub Coordination Layer
 │   ├── agents/
-│   │   ├── main_actor.py        ← LLM orchestrator
+│   │   ├── main/                ← LLM orchestrator package (actor.py + its machinery)
 │   │   ├── llm_agent.py         ← LLM base + all providers
 │   │   ├── home_assistant_agent.py
 │   │   ├── prompts/
@@ -362,7 +366,6 @@ wactorz/                         ← repo root
 │   │   ├── home_assistant_map_agent.py
 │   │   ├── monitor_agent.py
 │   │   ├── installer_agent.py
-│   │   └── io_agent.py
 │   ├── catalogue_agents/        ← pre-built DynamicAgent recipes
 │   ├── interfaces/
 │   │   ├── chat_interfaces.py   ← CLI, REST, Discord, WhatsApp, Telegram

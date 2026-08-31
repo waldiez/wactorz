@@ -124,6 +124,7 @@
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
       <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
     </details>
@@ -161,8 +162,7 @@
 <span class="err">│</span><span class="w">  </span><span class="nx">ActorRegistry</span><span class="w">  </span><span class="err">──</span><span class="w">  </span><span class="nx">name</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="nx">actor</span><span class="w"> </span><span class="nx">lookup</span><span class="p">,</span><span class="w"> </span><span class="nx">MQTT</span><span class="w"> </span><span class="nx">publisher</span><span class="w">                </span><span class="err">│</span>
 <span class="err">│</span><span class="w">                                                                        </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">MainActor</span><span class="w">                  </span><span class="nx">LLM</span><span class="w"> </span><span class="nx">orchestrator</span><span class="p">,</span><span class="w"> </span><span class="nx">intent</span><span class="w"> </span><span class="nx">routing</span><span class="p">,</span><span class="w"> </span><span class="nx">spawn</span><span class="w"> </span><span class="nx">reg</span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">MonitorAgent</span><span class="w">               </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w"> </span><span class="err">│</span>
-<span class="err">│</span><span class="w">  </span><span class="nx">IOAgent</span><span class="w">                    </span><span class="nx">MQTT</span><span class="err">↔</span><span class="nx">UI</span><span class="w"> </span><span class="nx">gateway</span><span class="p">,</span><span class="w"> </span><span class="nx">routes</span><span class="w"> </span><span class="nx">chat</span><span class="w"> </span><span class="nx">to</span><span class="w"> </span><span class="nx">main</span><span class="w">      </span><span class="err">│</span>
+<span class="err">│</span><span class="w">  </span><span class="nx">MonitorActor</span><span class="w">               </span><span class="nx">heartbeat</span><span class="w"> </span><span class="nx">watchdog</span><span class="p">,</span><span class="w"> </span><span class="nx">alerts</span><span class="w"> </span><span class="nx">main</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">failure</span><span class="w"> </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">CatalogAgent</span><span class="w">               </span><span class="nx">pre</span><span class="o">-</span><span class="nx">built</span><span class="w"> </span><span class="nx">recipe</span><span class="w"> </span><span class="kn">library</span><span class="p">,</span><span class="w"> </span><span class="nx">spawns</span><span class="w"> </span><span class="nx">on</span><span class="w"> </span><span class="nx">demand</span><span class="w"> </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">InstallerAgent</span><span class="w">             </span><span class="nx">pip</span><span class="w"> </span><span class="nx">installs</span><span class="w"> </span><span class="nx">deps</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="nx">dynamic</span><span class="w"> </span><span class="nx">agents</span><span class="w">       </span><span class="err">│</span>
 <span class="err">│</span><span class="w">  </span><span class="nx">HomeAssistantAgent</span><span class="w">         </span><span class="nx">HA</span><span class="w"> </span><span class="nx">REST</span><span class="w"> </span><span class="nx">API</span><span class="w"> </span><span class="err">—</span><span class="w"> </span><span class="nx">entities</span><span class="p">,</span><span class="w"> </span><span class="nx">services</span><span class="p">,</span><span class="w"> </span><span class="nx">automa</span><span class="err">…</span><span class="w">  </span><span class="err">│</span>
@@ -248,7 +248,7 @@
 <td>Streams HA state changes to MQTT so pipeline agents can react to device events in real time.</td>
 </tr>
 <tr>
-<td><strong>MonitorAgent</strong></td>
+<td><strong>MonitorActor</strong></td>
 <td>Tracks heartbeats from all actors. Alerts main when an agent is unresponsive for &gt;60 s.</td>
 </tr>
 <tr>
@@ -273,7 +273,7 @@
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">Message</span><span class="p">):</span>
         <span class="c1"># Called for every message in the inbox.</span>
-        <span class="c1"># msg.type is one of: START, STOP, PAUSE, RESUME, DELETE,</span>
+        <span class="c1"># msg.type is one of: START, STOP, DELETE,</span>
         <span class="c1"># TASK, RESULT, HEARTBEAT, SPAWN, TICK, STATUS_REQUEST, STATUS_RESPONSE.</span>
         <span class="k">if</span> <span class="n">msg</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="n">MessageType</span><span class="o">.</span><span class="n">TASK</span><span class="p">:</span>
             <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_do_work</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="p">)</span>
@@ -330,21 +330,15 @@
 </thead>
 <tbody>
 <tr>
-<td><code>io/chat</code></td>
-<td>IOAgent / UI</td>
-<td>main</td>
-<td><code>{from, content}</code></td>
-</tr>
-<tr>
 <td><code>agents/{id}/chat</code></td>
 <td>any actor</td>
-<td>UI / IOAgent</td>
+<td>UI</td>
 <td><code>{role, content, interface}</code></td>
 </tr>
 <tr>
 <td><code>agents/{id}/heartbeat</code></td>
 <td>every actor</td>
-<td>MonitorAgent</td>
+<td>MonitorActor</td>
 <td><code>{name, state, ts, ...}</code></td>
 </tr>
 <tr>
@@ -467,6 +461,32 @@ Gemini default to <code>1.0</code>, Ollama to <code>0.8</code>, so pinning it is
 backends). Ollama receives it as <code>options.temperature</code>; the others take it as a top-level request
 parameter. An individual call site can still pass <code>temperature=</code> to <code>complete()</code> / <code>stream()</code>,
 which wins over the env setting. The resolved value is logged at startup.</p>
+<p>One exception, and it is not configurable: Anthropic removed the sampling parameters with Claude
+Opus 4.7, and a request that carries <code>temperature</code> to one of those models is refused rather than
+ignored. <code>AnthropicProvider</code> therefore leaves the parameter off for the models known to have
+dropped it, and learns the rest the first time one refuses — that request is retried without the
+parameter, and it is omitted for the remainder of the process. Those models are effectively pinned
+to their own default, so pinning a temperature no longer makes runs comparable against them.</p>
+<h3 id="the-fake-provider">The <code>fake</code> provider</h3>
+<p><code>LLM_PROVIDER=fake</code> selects a provider that answers from a script and never calls
+a model. It is a real provider reached through the same factory, so it streams,
+reports token counts and a (tiny, non-zero) cost, and is subject to the same
+spend cap — the system around it behaves exactly as it would against a paid
+model.</p>
+<p>It is <strong>not a small or offline model</strong>. It does not reason about anything: the
+intent classifier is told a fixed answer, fact extraction is told there is
+nothing to store, and everything else matches the request against a script.
+Useful for running the dashboard without an API key, for end-to-end runs that
+need the same answer twice, and for recording a walkthrough without paying per
+take. Useless for anything that depends on the reply being <em>right</em>.</p>
+<div class="highlight"><pre><span></span><code><span class="nv">LLM_PROVIDER</span><span class="o">=</span>fake
+<span class="nv">LLM_FAKE_SCRIPT</span><span class="o">=</span><span class="s1">&#39;{&quot;weather&quot;: &quot;It is 22 degrees and clear.&quot;}&#39;</span><span class="w">   </span><span class="c1"># substring → reply</span>
+<span class="nv">LLM_FAKE_INTENT</span><span class="o">=</span>OTHER<span class="w">                                          </span><span class="c1"># ACTUATE | HA | PIPELINE | OTHER</span>
+</code></pre></div>
+
+<p>Both are optional; the defaults answer every request. Unmatched messages get a
+default reply that is deliberately obviously synthetic, so a recording made
+against it cannot be mistaken for a real session.</p>
 <h3 id="per-call-site-overrides">Per-call-site overrides</h3>
 <p><code>LLM_OVERRIDES</code> routes individual call sites to different providers/models, falling back to the global <code>LLM_PROVIDER</code> for any site not listed (<code>wactorz/llm_factory.py</code>):</p>
 <div class="highlight"><pre><span></span><code><span class="nv">LLM_OVERRIDES</span><span class="o">=</span><span class="s2">&quot;intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6&quot;</span>
@@ -506,7 +526,8 @@ which wins over the env setting. The resolved value is logged at startup.</p>
 </tr>
 </tbody>
 </table>
-<p>The format is <code>&lt;site&gt;=&lt;provider&gt;[:&lt;model&gt;]</code>; only the first colon splits provider from model, so Ollama tags like <code>qwen3:4b</code> work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. <code>site=none</code> disables the LLM for that site.</p>
+<p>The format is <code>&lt;site&gt;=&lt;provider&gt;[:&lt;model&gt;]</code>; only the first colon splits provider from model, so Ollama tags like <code>qwen3:4b</code> work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. An entry naming a site not in the table above is skipped with a warning too — nothing would read it, and a silent no-op looks exactly like an override that did not work. <code>site=none</code> disables the LLM for that site.</p>
+<p>Surrounding quotes are stripped, from the value as a whole and from each site and model, as they are from <code>LLM_PROVIDER</code> and <code>LLM_MODEL</code>. Several ways of setting an environment variable keep the quotes as part of the value — Windows <code>set VAR="…"</code>, Docker's <code>env_file</code>, an unbalanced quote in a hand-edited <code>.env</code> — and split on <code>,</code> and <code>=</code> afterwards, those quotes land on the first site name and the last model name. The site then matches nothing and the model is one character away from real, which the API answers with <code>404 … model: claude-sonnet-4-6"</code>. The startup line logs the parsed table rather than the raw string, so an entry that was dropped is visible by its absence.</p>
 <p>For Ollama, <code>system</code> is encoded as the first <code>{"role": "system"}</code> entry in the native <code>/api/chat</code> <code>messages</code> array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.</p>
 <hr />
 <h2 id="supervision-tree">Supervision Tree</h2>

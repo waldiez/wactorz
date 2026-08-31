@@ -84,7 +84,7 @@ _CODEGEN_SYSTEM = (
     "Import libraries inside functions, never at module level.\n"
 )
 
-# Three seed cases per category so the harness runs out of the box.
+# A few seed cases per category so the harness runs out of the box.
 _SEED_CASES: list[dict[str, Any]] = [
     {
         "id": "intent-001",
@@ -105,10 +105,18 @@ _SEED_CASES: list[dict[str, Any]] = [
         "expected": "HA",
     },
     {
+        # The word "automation" does not make it HA: a new rule is a Wactorz
+        # pipeline, and nothing writes Home Assistant automations.
+        "id": "intent-004",
+        "category": "intent",
+        "prompt": "create an automation that turns off all lights at midnight",
+        "expected": "PIPELINE",
+    },
+    {
         "id": "ha-001",
         "category": "ha",
-        "prompt": "create an automation that turns off all lights at midnight",
-        "expected": "create_automation",
+        "prompt": "delete the automation that turns off all lights at midnight",
+        "expected": "delete_automation",
     },
     {
         "id": "ha-002",

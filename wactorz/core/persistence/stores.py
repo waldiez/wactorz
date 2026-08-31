@@ -32,7 +32,18 @@ class Stores:
 
 
 def install_stores(db: WactorzDB, pickle_store: PickleStore) -> None:
-    """Make these the stores the rest of the process uses."""
+    """Make these the stores the rest of the process uses.
+
+    Closes the database being replaced. Nothing else holds a reference to it
+    once this returns, so leaving it open strands the handle and its
+    write-ahead log until the garbage collector reaches it — and it sits in a
+    reference cycle, so that is a collection pass rather than the moment the
+    last name goes away.
+
+    Re-installing the same database is not a replacement and leaves it open.
+    """
+    if Stores.db is not None and Stores.db is not db:
+        Stores.db.close()
     Stores.db = db
     Stores.pickle = pickle_store
 

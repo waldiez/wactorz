@@ -90,18 +90,20 @@ AGENT_CODE = r'''
 import asyncio
 import json
 import os
+import re
 import subprocess
 import tempfile
-import time
-
+from typing import Any
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. DOCUMENT READING
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _read_pdf_text(path):
     """Extract text from PDF using pdfplumber (best for clean text)."""
     import pdfplumber
+
     pages = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -111,17 +113,17 @@ def _read_pdf_text(path):
     return "\n\n".join(pages)
 
 
-def _read_txt(path):
+def _read_txt(path: str) -> str:
     for enc in ("utf-8", "latin-1"):
         try:
-            with open(path, "r", encoding=enc) as f:
+            with open(path, encoding=enc) as f:
                 return f.read()
         except UnicodeDecodeError:
             continue
     raise ValueError(f"Cannot decode file: {path}")
 
 
-def _read_document(path):
+def _read_document(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
         return _read_pdf_text(path)
@@ -132,9 +134,9 @@ def _read_document(path):
 # 2. PDF IMAGE EXTRACTION  (PyMuPDF)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_pdf_images(pdf_path, work_dir, min_w=200, min_h=150):
-    """
-    Extract embedded images from a PDF using PyMuPDF (fitz).
+
+def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[dict[str, Any]]:
+    """Extract embedded images from a PDF using PyMuPDF (fitz).
 
     Returns a list of dicts:
       { "path": "/tmp/.../img_p0_x7.png",
@@ -148,14 +150,14 @@ def _extract_pdf_images(pdf_path, work_dir, min_w=200, min_h=150):
     import fitz  # PyMuPDF  (pip install pymupdf)
 
     results = []
-    doc     = fitz.open(pdf_path)
-    seen    = set()   # deduplicate by xref across pages
+    doc = fitz.open(pdf_path)
+    seen = set()  # deduplicate by xref across pages
 
     for page_idx in range(len(doc)):
-        page       = doc[page_idx]
+        page = doc[page_idx]
         image_list = page.get_images(full=True)
 
-        for img_idx, img_info in enumerate(image_list):
+        for _idx, img_info in enumerate(image_list):
             xref = img_info[0]
             if xref in seen:
                 continue
@@ -175,12 +177,14 @@ def _extract_pdf_images(pdf_path, work_dir, min_w=200, min_h=150):
 
                 out_path = os.path.join(work_dir, f"pdf_img_p{page_idx}_x{xref}.png")
                 pix.save(out_path)
-                results.append({
-                    "path":   out_path,
-                    "page":   page_idx,
-                    "width":  pix.width,
-                    "height": pix.height,
-                })
+                results.append(
+                    {
+                        "path": out_path,
+                        "page": page_idx,
+                        "width": pix.width,
+                        "height": pix.height,
+                    }
+                )
                 pix = None
 
             except Exception:
@@ -191,9 +195,8 @@ def _extract_pdf_images(pdf_path, work_dir, min_w=200, min_h=150):
     return results
 
 
-def _assign_images_to_slides(pdf_images, slides, pdf_page_count):
-    """
-    Assign extracted PDF images to slides by page proximity.
+def _assign_images_to_slides(pdf_images, slides, pdf_page_count) -> dict[str, Any]:
+    """Assign extracted PDF images to slides by page proximity.
 
     Strategy:
     - Map each slide index to a "target PDF page range" proportionally
@@ -207,17 +210,17 @@ def _assign_images_to_slides(pdf_images, slides, pdf_page_count):
     if not pdf_images or not slides:
         return {}
 
-    n_slides     = len(slides)
-    n_pages      = max(pdf_page_count, 1)
-    assignment   = {}
-    used_paths   = set()
+    n_slides = len(slides)
+    n_pages = max(pdf_page_count, 1)
+    assignment = {}
+    used_paths = set()
 
     # Sort images by size descending (prefer larger/more prominent images)
-    sorted_imgs  = sorted(pdf_images, key=lambda i: i["width"] * i["height"], reverse=True)
+    sorted_imgs = sorted(pdf_images, key=lambda i: i["width"] * i["height"], reverse=True)
 
     for slide in slides:
-        idx        = slide["index"]
-        stype      = slide.get("type", "content")
+        idx = slide["index"]
+        stype = slide.get("type", "content")
 
         # Title and closing slides get the largest available image
         if stype in ("title", "closing"):
@@ -232,9 +235,9 @@ def _assign_images_to_slides(pdf_images, slides, pdf_page_count):
 
         # Content slides: map slide position to a page range
         frac_start = (idx / n_slides) * n_pages
-        frac_end   = ((idx + 1) / n_slides) * n_pages
+        frac_end = ((idx + 1) / n_slides) * n_pages
         page_start = int(frac_start)
-        page_end   = max(int(frac_end), page_start + 1)
+        page_end = max(int(frac_end), page_start + 1)
 
         best = None
         for img in sorted_imgs:
@@ -248,7 +251,7 @@ def _assign_images_to_slides(pdf_images, slides, pdf_page_count):
             assignment[idx] = best["path"]
             used_paths.add(best["path"])
         else:
-            assignment[idx] = None   # will trigger NIM fallback
+            assignment[idx] = None  # will trigger NIM fallback
 
     return assignment
 
@@ -310,13 +313,13 @@ async def _extract_outline(agent, doc_text, slide_count):
         doc_text=doc_text[:4000],
     )
     raw = await agent.llm.chat(prompt)
-
+    if not isinstance(raw, str):
+        raw = str(raw)
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip().rstrip("```").strip()
+        raw = raw.removeprefix("json")
+    raw = raw.strip().rstrip("```").strip()  # noqa: B005
 
     return json.loads(raw)
 
@@ -325,9 +328,9 @@ async def _extract_outline(agent, doc_text, slide_count):
 # 4. NIM FALLBACK — generate images for slides that got no PDF image
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 async def _nim_generate_missing(agent, slides, assignment, work_dir):
-    """
-    For every slide whose assignment[idx] is None, request image generation
+    """For every slide whose assignment[idx] is None, request image generation
     from image-gen-agent (NIM FLUX.1-dev).  Updates assignment in-place.
     Returns count of successfully generated images.
     """
@@ -336,19 +339,22 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
         return 0
 
     async def _request(slide):
-        idx    = slide["index"]
+        idx = slide["index"]
         prompt = slide.get("image_prompt", "")
         if not prompt:
             return idx, None
         out_path = os.path.join(work_dir, f"nim_img_{idx}.png")
         try:
-            result = await agent.send_to("image-gen-agent", {
-                "prompt":      prompt,
-                "output_path": out_path,
-                "width":       1024,
-                "height":      576,
-                "steps":       20,
-            })
+            result = await agent.send_to(
+                "image-gen-agent",
+                {
+                    "prompt": prompt,
+                    "output_path": out_path,
+                    "width": 1024,
+                    "height": 576,
+                    "steps": 20,
+                },
+            )
             if result and result.get("image_path") and os.path.exists(result["image_path"]):
                 return idx, result["image_path"]
             return idx, None
@@ -369,18 +375,38 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
 # 5. PPTXGENJS SCRIPT BUILDER
 # ─────────────────────────────────────────────────────────────────────────────
 
+_HEX6 = re.compile(r"[0-9A-Fa-f]{6}")
+
+
+def _hex_color(value, fallback):
+    """Six hex digits, or the default.
+
+    These values are the only ones in the generated script that are not
+    passed through `json.dumps`: they go in raw, inside single quotes, into JS
+    that `node` then executes. And they are LLM-chosen from the *document's*
+    content — so a crafted document could close the quote and append statements:
+
+        x'}); require('child_process').execSync('...'); ({a:'
+
+    Refusing anything that is not six hex digits closes that. It falls back
+    rather than raising, because a bad palette is not a reason to fail a
+    conversion the user asked for.
+    """
+    return value if isinstance(value, str) and _HEX6.fullmatch(value) else fallback
+
+
 def _build_js(outline, image_assignment, output_path):
     """Generate a Node.js / pptxgenjs script as a string."""
-    title  = outline.get("title", "Presentation")
+    title = outline.get("title", "Presentation")
     slides = outline.get("slides", [])
     colors = outline.get("theme_colors", {})
 
     C = {
-        "bg_dark":    colors.get("bg_dark",    "1E2761"),
-        "bg_light":   colors.get("bg_light",   "F5F7FA"),
-        "accent":     colors.get("accent",     "4A90D9"),
-        "text_dark":  colors.get("text_dark",  "1A1A2E"),
-        "text_light": colors.get("text_light", "FFFFFF"),
+        "bg_dark": _hex_color(colors.get("bg_dark"), "1E2761"),
+        "bg_light": _hex_color(colors.get("bg_light"), "F5F7FA"),
+        "accent": _hex_color(colors.get("accent"), "4A90D9"),
+        "text_dark": _hex_color(colors.get("text_dark"), "1A1A2E"),
+        "text_light": _hex_color(colors.get("text_light"), "FFFFFF"),
     }
 
     L = [
@@ -392,15 +418,15 @@ def _build_js(outline, image_assignment, output_path):
     ]
 
     for slide in slides:
-        idx      = slide["index"]
-        stype    = slide.get("type", "content")
-        stitle   = slide.get("title", "")
+        idx = slide["index"]
+        stype = slide.get("type", "content")
+        stitle = slide.get("title", "")
         subtitle = slide.get("subtitle", "")
-        bullets  = slide.get("bullets", [])
-        img      = image_assignment.get(idx)
-        is_dark  = stype in ("title", "closing")
-        bg       = C["bg_dark"] if is_dark else C["bg_light"]
-        tc       = C["text_light"] if is_dark else C["text_dark"]
+        bullets = slide.get("bullets", [])
+        img = image_assignment.get(idx)
+        is_dark = stype in ("title", "closing")
+        bg = C["bg_dark"] if is_dark else C["bg_light"]
+        tc = C["text_light"] if is_dark else C["text_dark"]
 
         L.append(f"// ── Slide {idx}: {stype} ──────────────────────────")
         L.append("{ const s = pres.addSlide();")
@@ -486,15 +512,16 @@ def _build_js(outline, image_assignment, output_path):
             if bullets:
                 items = []
                 for i, b in enumerate(bullets[:5]):
-                    last = (i == len(bullets[:5]) - 1)
+                    last = i == len(bullets[:5]) - 1
                     items.append(
                         f"    {{ text:{json.dumps(b)}, options:{{"
                         f"bullet:true, breakLine:{'false' if last else 'true'}, "
                         f"fontSize:15, color:'{tc}', fontFace:'Calibri', paraSpaceAfter:9 }} }}"
                     )
                 L.append(
-                    f"  s.addText([\n" + ",\n".join(items) +
-                    f"\n  ], {{ x:0.25, y:1.1, w:{text_w}, h:4.2, valign:'top' }});"
+                    "  s.addText([\n"
+                    + ",\n".join(items)
+                    + f"\n  ], {{ x:0.25, y:1.1, w:{text_w}, h:4.2, valign:'top' }});"
                 )
 
         L.append("}")
@@ -502,10 +529,9 @@ def _build_js(outline, image_assignment, output_path):
 
     L.append(f"pres.writeFile({{ fileName:{json.dumps(output_path)} }})")
     L.append(f"  .then(() => console.log('OK:' + {json.dumps(output_path)}))")
-    L.append(f"  .catch(e => {{ console.error('ERR:' + e.message); process.exit(1); }});")
+    L.append("  .catch(e => { console.error('ERR:' + e.message); process.exit(1); });")
 
     return "\n".join(L)
-
 
 
 async def _run_blocking(cmd, **kwargs) -> "subprocess.CompletedProcess":
@@ -530,6 +556,7 @@ async def _run_blocking(cmd, **kwargs) -> "subprocess.CompletedProcess":
 # 6. AGENT LIFECYCLE
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 async def setup(agent):
     errors = []
 
@@ -541,20 +568,19 @@ async def setup(agent):
             errors.append(f"pip install {pkg}")
 
     # Check node is available (pptxgenjs is installed locally at runtime if needed)
-    r = await _run_blocking(["node", "--version"], capture_output=True, text=True,
-                            shell=(os.name == "nt"))
+    r = await _run_blocking(
+        ["node", "--version"], capture_output=True, text=True, shell=(os.name == "nt")
+    )
     if r.returncode != 0:
         errors.append("Node.js not found — install from nodejs.org")
 
     if errors:
-        await agent.alert(
-            f"doc-to-pptx-agent: missing deps — {'; '.join(errors)}", "warning"
-        )
+        await agent.alert(f"doc-to-pptx-agent: missing deps — {'; '.join(errors)}", "warning")
     else:
         await agent.log("doc-to-pptx-agent ready (PyMuPDF + pdfplumber + Node.js)")
 
 
-async def handle_task(agent, payload):
+async def handle_task(agent, payload: Any) -> Any:
     # Normalise payload — the CLI wraps the user's message as {"text": "..."}
     # so if the payload is a string or contains a JSON string in "text", parse it.
     if isinstance(payload, str):
@@ -571,20 +597,34 @@ async def handle_task(agent, payload):
                     break
                 except Exception:
                     pass
-
-    file_path    = payload.get("file_path", "")
-    output_path  = payload.get("output_path", "/tmp/presentation.pptx")
-    slide_count  = int(payload.get("slide_count", 8))
+    if not isinstance(payload, dict):
+        payload = {}
+    file_path = payload.get("file_path", "")
+    # A private temp dir, not a fixed `/tmp/presentation.pptx`. That name was
+    # predictable in a world-writable directory: two conversions at once
+    # clobbered each other, and anything that got there first — a symlink, say —
+    # decided where the file was actually written. `mkdtemp` is 0700 and honours
+    # TMPDIR, so it is also correct off Linux. The path goes back to the caller
+    # as `pptx_path`, so a generated name costs nothing.
+    output_path = payload.get("output_path") or os.path.join(
+        tempfile.mkdtemp(prefix="wactorz-pptx-"), "presentation.pptx"
+    )
+    slide_count = int(payload.get("slide_count", 8))
     nim_fallback = bool(payload.get("nim_fallback", True))
-    min_w        = int(payload.get("min_img_width",  200))
-    min_h        = int(payload.get("min_img_height", 150))
+    min_w = int(payload.get("min_img_width", 200))
+    min_h = int(payload.get("min_img_height", 150))
 
     if not file_path or not os.path.exists(file_path):
-        return {"pptx_path": None, "slide_count": 0, "title": "",
-                "images_extracted": 0, "images_generated": 0,
-                "error": f"File not found: {file_path}"}
+        return {
+            "pptx_path": None,
+            "slide_count": 0,
+            "title": "",
+            "images_extracted": 0,
+            "images_generated": 0,
+            "error": f"File not found: {file_path}",
+        }
 
-    is_pdf   = os.path.splitext(file_path)[1].lower() == ".pdf"
+    is_pdf = os.path.splitext(file_path)[1].lower() == ".pdf"
     work_dir = tempfile.mkdtemp(prefix="doc2pptx_")
 
     await agent.log(f"Processing: {os.path.basename(file_path)}")
@@ -594,9 +634,14 @@ async def handle_task(agent, payload):
         await agent.log("Step 1/4 — Reading document text...")
         doc_text = _read_document(file_path)
         if not doc_text.strip():
-            return {"pptx_path": None, "slide_count": 0, "title": "",
-                    "images_extracted": 0, "images_generated": 0,
-                    "error": "Document appears empty or unreadable"}
+            return {
+                "pptx_path": None,
+                "slide_count": 0,
+                "title": "",
+                "images_extracted": 0,
+                "images_generated": 0,
+                "error": "Document appears empty or unreadable",
+            }
         await agent.log(f"Extracted {len(doc_text):,} characters of text")
 
         # ── Step 2: Extract PDF images ──────────────────────────────────────
@@ -607,6 +652,7 @@ async def handle_task(agent, payload):
             await agent.log(f"Step 2/4 — Extracting embedded images (min {min_w}×{min_h}px)...")
             try:
                 import fitz
+
                 # Count pages for later page-to-slide mapping
                 doc_tmp = fitz.open(file_path)
                 pdf_page_count = len(doc_tmp)
@@ -626,9 +672,9 @@ async def handle_task(agent, payload):
 
         # ── Step 3: LLM outline ─────────────────────────────────────────────
         await agent.log("Step 3/4 — Extracting slide outline via LLM...")
-        outline     = await _extract_outline(agent, doc_text, slide_count)
-        slides      = outline.get("slides", [])
-        title       = outline.get("title", "Presentation")
+        outline = await _extract_outline(agent, doc_text, slide_count)
+        slides = outline.get("slides", [])
+        title = outline.get("title", "Presentation")
         await agent.log(f'Outline ready: "{title}" — {len(slides)} slides')
 
         # ── Assign PDF images to slides ─────────────────────────────────────
@@ -637,28 +683,24 @@ async def handle_task(agent, payload):
             n_extracted = sum(1 for p in assignment.values() if p)
             await agent.log(f"Assigned {n_extracted}/{len(slides)} slides from PDF images")
         else:
-            assignment  = {s["index"]: None for s in slides}
+            assignment = {s["index"]: None for s in slides}
             n_extracted = 0
 
         # ── NIM fallback for slides without a real image ────────────────────
         n_generated = 0
-        unassigned  = sum(1 for p in assignment.values() if p is None)
+        unassigned = sum(1 for p in assignment.values() if p is None)
 
         if unassigned > 0 and nim_fallback:
-            await agent.log(
-                f"  {unassigned} slide(s) without image — requesting NIM generation..."
-            )
+            await agent.log(f"  {unassigned} slide(s) without image — requesting NIM generation...")
             n_generated = await _nim_generate_missing(agent, slides, assignment, work_dir)
             await agent.log(f"  NIM generated {n_generated} image(s)")
         elif unassigned > 0:
-            await agent.log(
-                f"  {unassigned} slide(s) will be text-only (nim_fallback=false)"
-            )
+            await agent.log(f"  {unassigned} slide(s) will be text-only (nim_fallback=false)")
 
         # ── Step 4: Build PPTX ──────────────────────────────────────────────
         await agent.log("Step 4/4 — Building .pptx with pptxgenjs...")
         js_script = _build_js(outline, assignment, output_path)
-        js_path   = os.path.join(work_dir, "build.js")
+        js_path = os.path.join(work_dir, "build.js")
         with open(js_path, "w", encoding="utf-8") as f:
             f.write(js_script)
 
@@ -669,25 +711,41 @@ async def handle_task(agent, payload):
             await agent.log("Installing pptxgenjs locally...")
             npm = await _run_blocking(
                 ["npm", "install", "pptxgenjs", "--prefer-offline"],
-                capture_output=True, text=True, cwd=work_dir, timeout=120,
+                capture_output=True,
+                text=True,
+                cwd=work_dir,
+                timeout=120,
                 shell=(os.name == "nt"),
             )
             if npm.returncode != 0:
                 err = (npm.stderr or npm.stdout or "npm failed").strip()
-                return {"pptx_path": None, "slide_count": len(slides), "title": title,
-                        "images_extracted": n_extracted, "images_generated": n_generated,
-                        "error": f"npm install pptxgenjs failed: {err[:300]}"}
+                return {
+                    "pptx_path": None,
+                    "slide_count": len(slides),
+                    "title": title,
+                    "images_extracted": n_extracted,
+                    "images_generated": n_generated,
+                    "error": f"npm install pptxgenjs failed: {err[:300]}",
+                }
 
         result = await _run_blocking(
             ["node", js_path],
-            capture_output=True, text=True, cwd=work_dir, timeout=60,
+            capture_output=True,
+            text=True,
+            cwd=work_dir,
+            timeout=60,
             shell=(os.name == "nt"),
         )
         if result.returncode != 0 or not os.path.exists(output_path):
             err = (result.stderr or result.stdout or "Unknown error").strip()
-            return {"pptx_path": None, "slide_count": len(slides), "title": title,
-                    "images_extracted": n_extracted, "images_generated": n_generated,
-                    "error": f"pptxgenjs failed: {err[:400]}"}
+            return {
+                "pptx_path": None,
+                "slide_count": len(slides),
+                "title": title,
+                "images_extracted": n_extracted,
+                "images_generated": n_generated,
+                "error": f"pptxgenjs failed: {err[:400]}",
+            }
 
         size_kb = os.path.getsize(output_path) // 1024
         await agent.log(
@@ -696,28 +754,42 @@ async def handle_task(agent, payload):
             f"{n_extracted} PDF images, {n_generated} NIM images)"
         )
         return {
-            "pptx_path":        output_path,
-            "slide_count":      len(slides),
-            "title":            title,
+            "pptx_path": output_path,
+            "slide_count": len(slides),
+            "title": title,
             "images_extracted": n_extracted,
             "images_generated": n_generated,
-            "error":            None,
+            "error": None,
         }
 
     except json.JSONDecodeError as e:
         msg = f"LLM outline JSON parse failed: {e}"
         await agent.alert(msg, "error")
-        return {"pptx_path": None, "slide_count": 0, "title": "",
-                "images_extracted": 0, "images_generated": 0, "error": msg}
+        return {
+            "pptx_path": None,
+            "slide_count": 0,
+            "title": "",
+            "images_extracted": 0,
+            "images_generated": 0,
+            "error": msg,
+        }
 
     except Exception as e:
         msg = f"doc-to-pptx failed: {e}"
         await agent.alert(msg, "error")
-        return {"pptx_path": None, "slide_count": 0, "title": "",
-                "images_extracted": 0, "images_generated": 0, "error": msg}
+        return {
+            "pptx_path": None,
+            "slide_count": 0,
+            "title": "",
+            "images_extracted": 0,
+            "images_generated": 0,
+            "error": msg,
+        }
 
 
-async def process(agent):
+async def process(agent) -> None:
     # Task-driven only — no polling loop needed
     await asyncio.sleep(3600)
+
+
 '''

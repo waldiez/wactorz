@@ -26,6 +26,9 @@ services:
   # ── MQTT broker ─────────────────────────────────────────────────────────────
   mosquitto:
     image: eclipse-mosquitto:2.0
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-mosquitto
     restart: unless-stopped
     hostname: mosquitto
@@ -42,8 +45,35 @@ services:
       - mosquitto-logs:/mosquitto/log
     networks:
       - wactorz-net
+    environment:
+      # Required: the broker no longer accepts anonymous connections, and a
+      # generated-per-start secret would orphan every edge node on restart.
+      MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:?set MQTT_PASSWORD in .env — the broker carries agent commands and spawned code, and no longer accepts anonymous clients}"
+    # Written at start rather than committed, so there is no secret in the repo
+    # and no manual mosquitto_passwd step for an existing deployment. The file
+    # lives in the image, not a volume: regenerating it from the environment on
+    # every start is what keeps an edited credential from being shadowed by a
+    # stale one. chown because mosquitto drops to its own user and would then be
+    # unable to read a root-owned 0600 file.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        umask 077
+        mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+        chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
+        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
     healthcheck:
-      test: ["CMD", "mosquitto_sub", "-t", "$$SYS/#", "-C", "1", "-i", "hc", "-W", "3"]
+      # Authenticated, or the probe fails the moment anonymous access is off —
+      # and wactorz-python waits on service_healthy, so the whole stack would
+      # refuse to start.
+      test:
+        [
+          "CMD-SHELL",
+          "mosquitto_sub -t '$$SYS/#' -C 1 -i hc -W 3 -u \"$$MQTT_USERNAME\" -P \"$$MQTT_PASSWORD\"",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -63,7 +93,22 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
+      # Mirrors the broker's defaults above. Without this the app would take
+      # MQTT_USERNAME from .env, where it may be unset while the broker
+      # defaulted it — the two would disagree and every connection be refused.
+      MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
+      MQTT_PASSWORD: "${MQTT_PASSWORD:?set MQTT_PASSWORD in .env — the broker no longer accepts anonymous clients}"
       INTERFACE: "${INTERFACE:-rest}"
+      # Bind every interface *inside* the container. The ports above publish to
+      # the host's loopback, which is what keeps this off the network; a process
+      # bound to the container's own loopback would be unreachable through them.
+      WACTORZ_BIND_HOST: "0.0.0.0"
+      # Declares that the wide bind above is deliberate and already contained.
+      # Without it the process refuses to start: reachable with no API_KEY is
+      # the configuration that refusal exists to stop shipping. Here the
+      # containment is the port mapping above, which publishes only to the
+      # host's loopback.
+      WACTORZ_EXPOSED_OK: "1"
     # The entrypoint is root only long enough to chown the state directory, then
     # drops to uid 1000. These three are the only capabilities that step needs —
     # the app itself runs with none. Dropping the rest shrinks the bounding set,
@@ -92,38 +137,19 @@ services:
       mosquitto:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:${MONITOR_PORT:-8888}"]
+      # /health, not /: every other route needs the key once API_KEY is set, and
+      # a probe cannot carry one. Curling / would report unhealthy forever while
+      # the process is fine, and anything acting on that restarts it in a loop.
+      test: ["CMD", "curl", "-fsS", "http://localhost:${MONITOR_PORT:-8888}/health"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ── OpenTelemetry Collector ──────────────────────────────────────────────────
-  # docker compose --profile otel up -d
-  # Add to python profile:  --profile python --profile otel
-  # Receives OTLP HTTP on 4318; exposes /metrics on 8889 for Prometheus.
-  # Set OTEL_EXPORTER_OTLP_ENDPOINT=http://otelcol:4318 in .env to activate.
-  otelcol:
-    profiles: [otel]
-    image: otel/opentelemetry-collector-contrib:0.104.0
-    container_name: wactorz-otelcol
-    restart: unless-stopped
-    command: ["--config=/etc/otelcol/config.yaml"]
-    volumes:
-      - ./infra/otelcol/otel_config.yaml:/etc/otelcol/config.yaml:ro
-    ports:
-      - "${OTELCOL_OTLP_PORT:-4318}:4318"
-      - "${OTELCOL_METRICS_PORT:-8889}:8889"
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null", "http://localhost:13133/"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
   prometheus:
     profiles: [python]
     image: prom/prometheus:v2.54.1
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-prometheus
     restart: unless-stopped
     entrypoint:
@@ -133,8 +159,10 @@ services:
       PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz-python}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
-      PROMETHEUS_MONITOR_OTELCOL: "${PROMETHEUS_MONITOR_OTELCOL:-0}"
       REST_EXTERNAL_PORT: "${REST_EXTERNAL_PORT:-8000}"
+      # The scrape authenticates when the app is keyed. Without it the
+      # wactorz-python target answers 401 and goes quietly down.
+      API_KEY: "${API_KEY:-}"
     # Loopback-bound: the Prometheus UI has no auth and exposes agent names and
     # spend. Scraping happens over the internal network, not this port.
     ports:
@@ -165,6 +193,9 @@ services:
   blackbox-exporter:
     profiles: [python]
     image: prom/blackbox-exporter:v0.25.0
+    cap_drop: [ALL]
+    read_only: true
+    security_opt: [no-new-privileges:true]
     container_name: wactorz-blackbox
     restart: unless-stopped
     command:
@@ -173,39 +204,6 @@ services:
       - ./infra/prometheus/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
     networks:
       - wactorz-net
-
-  # ── InfluxDB 2.x (optional — chat log + time-series) ────────────────────────
-  # docker compose --profile influx up -d              (standalone)
-  # docker compose --profile full --profile influx up -d  (with Python)
-  influxdb:
-    profiles: [influx]
-    image: influxdb:2.7
-    container_name: wactorz-influxdb
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:${INFLUX_EXTERNAL_PORT:-8086}:8086"
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      # No fallback values: these seed a real admin account and API token, and a
-      # default would be a published credential. Left unset, InfluxDB's own setup
-      # refuses to initialise — set INFLUX_USERNAME / INFLUX_PASSWORD /
-      # INFLUX_TOKEN in .env before enabling this profile. (A `:?` guard here
-      # would break `docker compose up -d` for everyone, since compose
-      # interpolates every service regardless of the active profile.)
-      DOCKER_INFLUXDB_INIT_USERNAME: "${INFLUX_USERNAME:-}"
-      DOCKER_INFLUXDB_INIT_PASSWORD: "${INFLUX_PASSWORD:-}"
-      DOCKER_INFLUXDB_INIT_ORG: "${INFLUX_ORG:-wactorz}"
-      DOCKER_INFLUXDB_INIT_BUCKET: "${INFLUX_BUCKET:-wactorz}"
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: "${INFLUX_TOKEN:-}"
-    volumes:
-      - influxdb-data:/var/lib/influxdb2
-    networks:
-      - wactorz-net
-    healthcheck:
-      test: ["CMD", "influx", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   # ── Home Assistant ───────────────────────────────────────────────────────────
   # docker compose --profile full up -d
@@ -240,5 +238,4 @@ networks:
 volumes:
   mosquitto-data:
   mosquitto-logs:
-  influxdb-data:
   prometheus-data:

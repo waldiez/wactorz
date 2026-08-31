@@ -51,7 +51,7 @@ describe("toAgentInfo", () => {
     });
 
     it("passes through known states and falls back to running for unknown", () => {
-        expect(toAgentInfo({ agent_id: "a", state: "paused" } as StatePatchAgent).state).toBe("paused");
+        expect(toAgentInfo({ agent_id: "a", state: "stopped" } as StatePatchAgent).state).toBe("stopped");
         expect(toAgentInfo({ agent_id: "a", state: "weird" } as StatePatchAgent).state).toBe("running");
     });
 

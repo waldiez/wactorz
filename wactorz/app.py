@@ -20,6 +20,7 @@ from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
 from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_setup import setup_logging
+from wactorz.web.auth import exposure_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ async def _start_web_ui(
     runtime.MQTT_PORT = mqtt_port
     runtime.WS_PORT = port
 
-    # Wire the registry in so chat is routed directly — no IOAgent needed
+    # Wire the registry in so chat is routed directly
     if actor_registry is not None:
         runtime.set_registry(actor_registry)
     if persistence_db is not None:
@@ -59,11 +60,14 @@ def _print_ready_banner(port: int) -> None:
     must reach the terminal without also being written to the unrotated log file
     or shipped onward by a metrics exporter.
     """
-    from wactorz.web import static_site
+    from wactorz.web import login, static_site
 
     lines = [f"Dashboard   http://localhost:{port}/"]
     if static_site.DOCS_SITE.is_dir():
         lines.append(f"Docs        http://localhost:{port}/docs/")
+    sign_in = login.sign_in_line(port)
+    if sign_in is not None:
+        lines.append(sign_in)
     width = max(len(line) for line in lines) + 4
     print("\n    ┌" + "─" * width + "┐")
     for line in lines:
@@ -77,13 +81,14 @@ async def build_system(args: argparse.Namespace):
     from wactorz.agents.home_assistant_map_agent import HomeAssistantMapAgent
     from wactorz.agents.home_assistant_state_bridge_agent import HomeAssistantStateBridgeAgent
     from wactorz.agents.installer_agent import InstallerAgent
-    from wactorz.agents.io_agent import IOAgent
     from wactorz.agents.llm_agent import LLMProvider
-    from wactorz.agents.main_actor import MainActor
+    from wactorz.agents.main.actor import MainActor
     from wactorz.agents.monitor_agent import MonitorActor
     from wactorz.core.actor import Actor, SupervisorStrategy
+    from wactorz.core.mqtt import broker_exposure_warning
     from wactorz.core.registry import ActorSystem
     from wactorz.llm_factory import create_provider, parse_overrides, provider_for
+    from wactorz.web import auth
 
     llm = args.llm or CONFIG.llm_provider
     model_flag = {
@@ -122,6 +127,19 @@ async def build_system(args: argparse.Namespace):
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
     _sd = ensure_state_dir()
+
+    # Said once, before the first connection: the broker is where spawn code
+    # travels, so an exposed one is a bigger surface than it looks.
+    _broker_host = args.mqtt_broker or CONFIG.mqtt_host
+    _exposure = broker_exposure_warning(_broker_host, CONFIG.mqtt_username)
+    if _exposure:
+        logger.warning("[startup] %s", _exposure)
+
+    # Said once too: a key short enough to guess is worth hearing about while
+    # there is still a terminal open to read it.
+    _weak_key = auth.weak_key_warning(CONFIG.api_key)
+    if _weak_key:
+        logger.warning("[startup] %s", _weak_key)
 
     # ── Build the ActorSystem first (MQTT starts here) ────────────────────────
     system = ActorSystem(
@@ -215,9 +233,6 @@ async def build_system(args: argparse.Namespace):
             )
         )
 
-    def make_io_agent() -> Actor:
-        return _wire_persistence(IOAgent(name="io-agent", persistence_dir=_sd))
-
     def make_catalog() -> Actor:
         return _wire_persistence(CatalogAgent(name="catalog", persistence_dir=_sd))
 
@@ -232,13 +247,6 @@ async def build_system(args: argparse.Namespace):
         .supervise(
             "monitor",
             make_monitor,
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=10,
-            restart_delay=1.0,
-        )
-        .supervise(
-            "io-agent",
-            make_io_agent,
             strategy=SupervisorStrategy.ONE_FOR_ONE,
             max_restarts=10,
             restart_delay=1.0,
@@ -349,6 +357,16 @@ async def app(args: argparse.Namespace):
     setup_logging()
     install_log_buffer()
 
+    # Before anything binds, and at the *process* root rather than in one
+    # server's startup. Three servers read `CONFIG.bind_host` — the monitor, the
+    # REST API and the WhatsApp webhook — so a check that lived in the monitor
+    # alone left the REST interface serving chat and lifecycle commands to the
+    # network in exactly the configuration this refusal exists to stop.
+    refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key)
+    if refusal:
+        logger.error("[startup] %s", refusal)
+        raise SystemExit(1)
+
     if args.reload:
         start_reloader(logger)
 
@@ -357,11 +375,6 @@ async def app(args: argparse.Namespace):
     system, main_actor, _db = await build_system(args)
 
     from wactorz.core.persistence import close_persistence
-    from wactorz.monitoring.influx import setup_influx, shutdown_influx
-    from wactorz.monitoring.otel import setup_otel, shutdown_otel
-
-    setup_otel(lambda: system.registry)
-    setup_influx()
 
     if not getattr(args, "no_monitor", False):
         _print_ready_banner(args.monitor_port)
@@ -441,8 +454,6 @@ async def app(args: argparse.Namespace):
     except Exception as exc:
         logger.error(f"System error: {exc}", exc_info=True)
     finally:
-        shutdown_otel()
-        shutdown_influx()
         await system.stop_all()
         # Last: actors write state as they stop, so the connection has to outlive
         # them. Closing checkpoints the WAL rather than leaving -wal/-shm behind

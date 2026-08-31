@@ -5,6 +5,7 @@ import logging
 import queue
 from typing import Any
 
+from ..attachments import UNREADABLE
 from ..base import LLMProvider, ToolCall, ToolCompletion, _temp_params
 from ..pricing import calc_cost
 
@@ -12,6 +13,77 @@ logger = logging.getLogger(__name__)
 
 
 _GEMINI_STREAM_STALL_TIMEOUT = 60
+
+
+#: JSON Schema keywords Gemini's function-declaration format has no field for.
+#: Both spellings: the shared tool definitions use the JSON Schema name, and the
+#: SDK renames it on the way out, so a schema that has already been through it
+#: carries the other.
+_UNSUPPORTED_SCHEMA_KEYS = frozenset({"additionalProperties", "additional_properties"})
+
+
+def _gemini_schema(node: Any) -> Any:
+    """A tool's parameter schema, minus the keywords Gemini rejects.
+
+    Nothing fails until the request is made. The SDK's own `Schema` model
+    declares `additional_properties`, so it validates and serializes happily and
+    only the API refuses — with a 400 naming every declaration the keyword
+    appears in. A filter written against the SDK's field list would let it
+    straight through.
+
+    `additionalProperties: false` earns its place in the shared definition —
+    OpenAI's strict tool calling wants it — so it is dropped here at the
+    boundary rather than removed at the source, the same split the content
+    translation above uses.
+
+    Recursive, because a nested object property carries the keyword too.
+    """
+    if isinstance(node, dict):
+        return {k: _gemini_schema(v) for k, v in node.items() if k not in _UNSUPPORTED_SCHEMA_KEYS}
+    if isinstance(node, list):
+        return [_gemini_schema(v) for v in node]
+    return node
+
+
+def _gemini_parts(blocks: list[Any]) -> list[dict[str, Any]]:
+    """Attachment blocks (the ``llm.attachments.to_blocks`` shape) as Gemini parts.
+
+    Text stays text; images and documents become ``inline_data`` — Gemini reads
+    both, PDFs included, so unlike the OpenAI-shaped providers nothing needs to
+    be dropped to a marker here.
+
+    Anything that is not an attachment block is passed through untouched. A
+    list content is not always attachments: this provider's own tool loop feeds
+    an assistant turn back as Gemini parts (``{"text": ...}``,
+    ``{"function_call": ...}``), and translating those would drop the tool call
+    while the ``function_response`` answering it stayed — leaving a request
+    Gemini cannot make sense of.
+    """
+    parts: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            parts.append({"text": str(block)})
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            parts.append({"text": str(block.get("text", ""))})
+        elif block_type in ("image", "document"):
+            source = block.get("source") or {}
+            data = source.get("data") or ""
+            if data:
+                parts.append(
+                    {
+                        "inline_data": {
+                            "mime_type": source.get("media_type") or "application/octet-stream",
+                            "data": data,
+                        }
+                    }
+                )
+            else:
+                parts.append({"text": UNREADABLE})
+        else:
+            parts.append(block)
+    return parts
 
 
 class GeminiProvider(LLMProvider):
@@ -40,6 +112,13 @@ class GeminiProvider(LLMProvider):
         self.model_name = model
         self.client = genai.Client(api_key=api_key) if api_key else genai.Client()
         self._types = genai_types
+
+    @classmethod
+    def supports_blocks(cls) -> bool:
+        """Block content is translated to Gemini parts (``inline_data``) in
+        ``_to_gemini_contents``, so a list content is safe here.
+        """
+        return True
 
     async def _complete(
         self, messages: list[dict[str, Any]], system: str = "", **kwargs
@@ -97,6 +176,11 @@ class GeminiProvider(LLMProvider):
         )
         text_parts: list[str] = []
         tool_calls: list[ToolCall] = []
+        # Gemini 3 returns an opaque signature on the part that made a call and
+        # requires it back, on that same part, in the turn reporting the result.
+        # Rebuilding the call from `ToolCall` alone drops it and the next request
+        # is a 400. Collected in step with `tool_calls` so the two stay paired.
+        signatures: list[bytes | None] = []
         for candidate in getattr(response, "candidates", []) or []:
             content = getattr(candidate, "content", None)
             for part in getattr(content, "parts", []) or []:
@@ -116,16 +200,23 @@ class GeminiProvider(LLMProvider):
                             arguments=args if isinstance(args, dict) else dict(args),
                         )
                     )
+                    signatures.append(getattr(part, "thought_signature", None))
         usage_meta = getattr(response, "usage_metadata", None)
         input_tokens = getattr(usage_meta, "prompt_token_count", 0) if usage_meta else 0
         output_tokens = getattr(usage_meta, "candidates_token_count", 0) if usage_meta else 0
         assistant_parts: list[dict[str, Any]] = []
         if text_parts:
             assistant_parts.append({"text": "".join(text_parts)})
-        for call in tool_calls:
-            assistant_parts.append(
-                {"function_call": {"id": call.id, "name": call.name, "args": call.arguments}}
-            )
+        # strict: the two lists are appended in step, and a mismatch would pair a
+        # signature with the wrong call rather than fail.
+        for call, signature in zip(tool_calls, signatures, strict=True):
+            part: dict[str, Any] = {
+                "function_call": {"id": call.id, "name": call.name, "args": call.arguments}
+            }
+            if signature is not None:
+                # Sits on the part, not inside the call.
+                part["thought_signature"] = signature
+            assistant_parts.append(part)
         return ToolCompletion(
             content="".join(text_parts).strip(),
             usage={
@@ -141,7 +232,7 @@ class GeminiProvider(LLMProvider):
         return self._types.FunctionDeclaration(
             name=tool["name"],
             description=tool.get("description", ""),
-            parameters=tool.get("parameters", {"type": "object", "properties": {}}),
+            parameters=_gemini_schema(tool.get("parameters", {"type": "object", "properties": {}})),
         )
 
     async def _stream(self, messages: list[dict], system: str = "", **kwargs):
@@ -159,7 +250,7 @@ class GeminiProvider(LLMProvider):
             try:
                 for chunk in self.client.models.generate_content_stream(
                     model=self.model_name,
-                    contents=contents,
+                    contents=contents,  # pyright: ignore[reportArgumentType]
                     config=config,
                 ):
                     text = getattr(chunk, "text", "")
@@ -238,7 +329,9 @@ class GeminiProvider(LLMProvider):
                 )
                 continue
             content = m.get("content", "")
-            parts = content if isinstance(content, list) else [{"text": str(content)}]
+            parts = (
+                _gemini_parts(content) if isinstance(content, list) else [{"text": str(content)}]
+            )
             # Gemini uses "user" and "model" (not "assistant")
             gemini_role = "model" if role == "assistant" else "user"
             # Merge consecutive same-role messages (Gemini requires alternating)

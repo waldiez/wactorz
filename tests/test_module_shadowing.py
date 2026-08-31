@@ -51,6 +51,10 @@ _IMPORT_TIME_MODULES = (
 )
 
 
+# Package modules a test file could plausibly hand-load instead of importing.
+_CORE_MODULES = ("wactorz.core.actor", "wactorz.core.registry")
+
+
 def _is_placeholder(name: str) -> bool:
     """True when sys.modules holds an empty stand-in rather than a real module.
 
@@ -125,3 +129,27 @@ def test_the_safe_helper_still_covers_a_missing_module() -> None:
         assert _is_placeholder(name)
     finally:
         sys.modules.pop(name, None)
+
+
+@pytest.mark.parametrize("module_name", _IMPORT_TIME_MODULES)
+def test_importing_a_test_module_replaces_no_wactorz_module(module_name: str) -> None:
+    """Collecting a test file must not re-exec a package module under its own name.
+
+    Hand-loading ``wactorz.core.actor`` from its path and storing the result in
+    ``sys.modules`` leaves two live copies: whatever imported it earlier keeps
+    the first, everything after gets the second. Their classes are then distinct
+    objects that compare equal but fail ``is``, so every identity check on an
+    enum member silently flips to False.
+    """
+    for name in _CORE_MODULES:
+        importlib.import_module(name)
+    before = {name: sys.modules[name] for name in _CORE_MODULES}
+
+    importlib.import_module(module_name)
+
+    replaced = [name for name, module in before.items() if sys.modules[name] is not module]
+    assert not replaced, (
+        f"importing {module_name} replaced {replaced} in sys.modules. Import the "
+        "package normally instead of exec'ing its files through "
+        "importlib.util.spec_from_file_location."
+    )

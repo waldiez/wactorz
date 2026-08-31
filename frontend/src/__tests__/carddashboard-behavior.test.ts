@@ -45,31 +45,31 @@ describe("CardDashboard behaviour", () => {
             cd._setView("feed");
             const item = feedItem({ label: "first" });
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
             expect(cd.root.querySelector(".af-feed")?.textContent).toContain("first");
             // exact duplicate is dropped
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
         });
 
         it("af-feed-push while not on the feed view still records the item", () => {
             cd.show([agent("main")]);
             cd._setView("overview");
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem() } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
         });
 
         it("af-wipe-all and af-clear-feed empty the feed", () => {
             cd.show([agent("main")]);
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem() } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
             document.dispatchEvent(new CustomEvent("af-clear-feed"));
-            expect(cd.feedItems.length).toBe(0);
+            expect(cd._activity.count).toBe(0);
 
             document.dispatchEvent(new CustomEvent("af-feed-push", { detail: { item: feedItem() } }));
-            expect(cd.feedItems.length).toBe(1);
+            expect(cd._activity.count).toBe(1);
             document.dispatchEvent(new CustomEvent("af-wipe-all"));
-            expect(cd.feedItems.length).toBe(0);
+            expect(cd._activity.count).toBe(0);
         });
     });
 
@@ -151,9 +151,9 @@ describe("CardDashboard behaviour", () => {
             const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
             document.addEventListener("af-agent-command", onCmd);
             const btn = document.createElement("button");
-            cd._sendCommand("main", "pause", btn);
+            cd._sendCommand("main", "stop", btn);
             document.removeEventListener("af-agent-command", onCmd);
-            expect(seen).toEqual([{ command: "pause", agentId: "main" }]);
+            expect(seen).toEqual([{ command: "stop", agentId: "main" }]);
             expect(btn.disabled).toBe(true);
             expect(btn.classList.contains("sending")).toBe(true);
         });
@@ -202,10 +202,11 @@ describe("CardDashboard behaviour", () => {
             expect(() => cd.onChat("ghost", "user")).not.toThrow();
         });
 
-        it("_refreshTimestamps updates known cards and marks stale dots", () => {
+        it("the heartbeat refresh updates known cards and marks stale dots", () => {
             cd.show([agent("main")]);
-            cd.lastHb.set("main", Date.now() - 200_000); // older than STALE_MS (180s)
-            cd._refreshTimestamps();
+            // Older than STALE_MS (180s).
+            cd._heartbeats.lastSeen.set("main", Date.now() - 200_000);
+            cd._heartbeats.refresh();
             const dot = cd.root.querySelector('[data-id="main"] .af-card-state-dot');
             expect(dot.classList.contains("af-card-stale")).toBe(true);
         });
@@ -223,9 +224,9 @@ describe("CardDashboard behaviour", () => {
             const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
             document.addEventListener("af-agent-command", onCmd);
             cd.show([agent("main")]);
-            (cd.root.querySelector('[data-action="pause"]') as HTMLButtonElement).click();
+            (cd.root.querySelector('[data-action="stop"]') as HTMLButtonElement).click();
             document.removeEventListener("af-agent-command", onCmd);
-            expect(seen).toEqual([{ command: "pause", agentId: "main" }]);
+            expect(seen).toEqual([{ command: "stop", agentId: "main" }]);
         });
 
         it("a header view button switches the active view", () => {
@@ -260,7 +261,7 @@ describe("CardDashboard behaviour", () => {
         it("_sendCommand re-enables its button after the timeout", () => {
             vi.useFakeTimers();
             const btn = document.createElement("button");
-            cd._sendCommand("main", "pause", btn);
+            cd._sendCommand("main", "stop", btn);
             expect(btn.disabled).toBe(true);
             vi.advanceTimersByTime(600);
             expect(btn.disabled).toBe(false);
@@ -271,7 +272,7 @@ describe("CardDashboard behaviour", () => {
             vi.useFakeTimers();
             const fresh = new CardDashboard() as any;
             fresh.show([agent("main")]);
-            const spy = vi.spyOn(fresh, "_refreshTimestamps");
+            const spy = vi.spyOn(fresh._heartbeats, "refresh");
             vi.advanceTimersByTime(5000);
             expect(spy).toHaveBeenCalled();
             fresh.destroy();
@@ -281,7 +282,7 @@ describe("CardDashboard behaviour", () => {
             vi.useFakeTimers();
             const fresh = new CardDashboard() as any;
             fresh.show([agent("main")]);
-            const spy = vi.spyOn(fresh, "_refreshTimestamps");
+            const spy = vi.spyOn(fresh._heartbeats, "refresh");
             const hiddenSpy = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
             vi.advanceTimersByTime(5000);
             expect(spy).not.toHaveBeenCalled();
@@ -296,7 +297,7 @@ describe("CardDashboard behaviour", () => {
             cd._setView("chat");
             expect(() => {
                 cd.addAgent(agent("catalog"));
-                cd.updateAgent(agent("catalog", { state: "paused" }));
+                cd.updateAgent(agent("catalog", { state: "stopped" }));
                 cd.removeAgent("catalog");
             }).not.toThrow();
         });
@@ -305,7 +306,7 @@ describe("CardDashboard behaviour", () => {
             cd.show([agent("main")]);
             cd.hide();
             expect(() => {
-                cd.updateAgent(agent("main", { state: "paused" }));
+                cd.updateAgent(agent("main", { state: "stopped" }));
                 cd.removeAgent("main");
             }).not.toThrow();
         });
@@ -317,17 +318,17 @@ describe("CardDashboard behaviour", () => {
             expect(() => cd.onHeartbeat("catalog", Date.now())).not.toThrow();
         });
 
-        it("_refreshTimestamps skips ids with no rendered card", () => {
+        it("the heartbeat refresh skips ids with no rendered card", () => {
             cd.show([agent("main")]);
-            cd.lastHb.set("ghost", Date.now());
-            expect(() => cd._refreshTimestamps()).not.toThrow();
+            cd._heartbeats.lastSeen.set("ghost", Date.now());
+            expect(() => cd._heartbeats.refresh()).not.toThrow();
         });
 
-        it("removeAgent clears the agent's lastHb entry (no leak on churn)", () => {
+        it("removeAgent forgets the agent's heartbeat (no leak on churn)", () => {
             cd.show([agent("catalog")]);
-            cd.lastHb.set("catalog", Date.now());
+            cd._heartbeats.lastSeen.set("catalog", Date.now());
             cd.removeAgent("catalog");
-            expect(cd.lastHb.has("catalog")).toBe(false);
+            expect(cd._heartbeats.lastSeen.has("catalog")).toBe(false);
         });
     });
 
@@ -349,5 +350,48 @@ describe("CardDashboard behaviour", () => {
             expect(link.style.display).toBe("none");
             withHa.destroy();
         });
+    });
+});
+
+describe("entering the chat view opens a conversation", () => {
+    let cd: any;
+
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        localStorage.clear();
+        cd = new CardDashboard() as any;
+        cd.show([agent("main"), agent("worker")]);
+    });
+
+    afterEach(() => {
+        try {
+            cd.destroy();
+        } catch {
+            /* ignore */
+        }
+    });
+
+    const paneOpen = () => cd.root.querySelector(".af-chat")?.classList.contains("agent-selected");
+
+    it("arriving from another view clears a previous Back", () => {
+        cd._setView("chat");
+        cd.root.querySelector(".af-chat-back-btn")?.click();
+        expect(paneOpen()).toBe(false);
+
+        cd._setView("overview");
+        cd._setView("chat");
+
+        expect(paneOpen()).toBe(true);
+    });
+
+    it("re-rendering while already in chat leaves the list showing", () => {
+        // `_renderView` also runs for state updates. Resetting on every render
+        // would undo Back the moment anything changed on screen.
+        cd._setView("chat");
+        cd.root.querySelector(".af-chat-back-btn")?.click();
+
+        cd._setView("chat");
+
+        expect(paneOpen()).toBe(false);
     });
 });

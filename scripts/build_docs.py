@@ -427,7 +427,8 @@ def build(site_dir: Path = SITE) -> None:
     landing = DOCS / "_landing.html"
     if landing.exists():
         text = landing.read_text(encoding="utf-8")
-        text = re.sub(r"v\d+\.\d+\.\d+ · Alpha", f"v{version} · Alpha", text)
+        # Stage word preserved, not assumed — see sync_versions.update_docs_landing.
+        text = re.sub(r"v\d+\.\d+\.\d+ · (\w+)", lambda m: f"v{version} · {m.group(1)}", text)
         (site_dir / "index.html").write_text(text, encoding="utf-8")
         print(f"  landing  → static/docs/index.html  (v{version})")
 

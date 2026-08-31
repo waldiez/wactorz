@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.0
+
+- Added: `api_key` add-on option. It changes nothing for panel users — ingress means Home Assistant has already signed you in — but it is now required if you publish port `8000` or `8888` under Network settings, because Wactorz refuses an unauthenticated wide bind.
+- Added: the application log is readable from the dashboard. Startup lines, errors and tracebacks appear in the activity feed alongside agent events, with source, level and search filters; known credential shapes are scrubbed before anything is stored.
+- Added: files attached to a chat message now actually reach the model. Images go to every supported provider, PDFs are read inline by Anthropic and Gemini, text files are inlined, and a file that cannot be carried is named rather than dropped. Attachments cap at 25 MB.
+- Added: the chat shows that an agent is working, so a slow reply is no longer indistinguishable from one that went nowhere.
+- Added: `broker_user` / `broker_password` per entry in `deploy_targets`. `/deploy` now delivers broker credentials to the node over SSH, so a broker requiring authentication works — and `mosquitto_embedded` can serve remote nodes if you publish port `1883`. A node falls back to this add-on's broker account when given none of its own.
+- Added: the dashboard reopens on the agent you were last talking to, instead of always starting at `main`.
+- Changed: **pausing and resuming an agent are gone — an agent is either running or stopped.** Stopping already did what pausing was reached for, and starting brings it back.
+- Changed: **the system agents can now be stopped.** `monitor`, `catalog` and `installer` previously refused every control; they can be stopped and started, and still cannot be deleted. `main` still refuses stop, since stopping it leaves chat unanswered.
+- Changed: **edge nodes must be redeployed.** The broker-credential delivery and a package-name fix both ship in the runner, which is a file copied to each machine, so an old node keeps the old behaviour until `/deploy` runs again.
+- Changed: the dashboard is sent only the broker topics it actually uses. If you wrote a custom agent whose own topics you were reading from the browser, they are no longer relayed.
+- Removed: the OpenTelemetry options (`otel_endpoint`, `otel_service_name`) and the InfluxDB options (`influx_url`, `influx_token`, `influx_org`, `influx_bucket`). Both integrations are gone from Wactorz. Delete these from your add-on configuration if you had set them; point your own collector at `/metrics` instead of OTLP.
+- Fixed: chat history reaches the persistent feed again. Every turn handled by an LLM agent was failing to store and the error was swallowed, so a restart came back to an empty conversation even though the agent still remembered it.
+- Fixed: a reset now clears what it says it clears. A deleted conversation, fact or setting could be read back from an older state file and reappear — that fallback no longer outlives the reset.
+- Fixed: leaving the TTS voice blank now gives you the default voice instead of failing every attempt to speak with `Invalid voice ''`.
+- Fixed: an agent that cannot hold a conversation says so, instead of replying with a dump of its own internal state. Asking the Home Assistant actuator a question now gets a sentence.
+- Fixed: a dashboard whose connection died is noticed and closed, rather than lingering and receiving broadcasts nobody reads.
+- Fixed: a broker that is away no longer grows the outbound queue without limit. Telemetry gives way first; anything queued for guaranteed delivery is written to disk and never discarded.
+- Fixed: a state file that cannot be read is moved aside as `<name>.corrupt.<timestamp>` instead of being overwritten by the next save.
+- Fixed: a failed framework migration is retried on the next start instead of being recorded as done.
+- Fixed: an unrecognised URL can no longer add a permanent new series to `/metrics` on every distinct path.
+- Fixed: a port already in use is reported as one line naming the port, not an aiohttp traceback.
+- Fixed: agents on a runner node accept lifecycle commands over the REST API instead of answering `404`.
+
 ## 0.5.3
 
 - Added: `deploy_targets` add-on option — list the remote machines `/deploy <name>` may bootstrap as edge nodes over SSH. Credentials live in the add-on configuration, never in chat; private keys go under `/config` or `/share`. See "Remote edge nodes" in the documentation for the broker requirement — `mosquitto_embedded` cannot serve remote nodes.

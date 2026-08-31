@@ -48,6 +48,15 @@ export function registerConfigEntry(key: string, extract: ConfigExtract): void {
     _entries.set(key, extract);
 }
 
+/** Where the running server's version is kept. */
+export const VERSION_KEY = "wactorz-version";
+
+// Core entry — which Wactorz is answering. Taken from the server rather than
+// built into the bundle: `static/app` is committed and can lag the wheel, and a
+// version baked in at build time would then name the wrong one -- exactly when
+// someone is looking at it to find out what they are running.
+registerConfigEntry(VERSION_KEY, c => c["version"] as string | undefined);
+
 // Core entry — the HA URL for the external Devices link (never a token).
 registerConfigEntry(
     "wactorz-ha-url",

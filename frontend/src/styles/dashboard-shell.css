@@ -52,6 +52,17 @@
   letter-spacing: 0.03em;
 }
 
+/* Beside the name, and deliberately quieter than it: something to find when
+   looked for, not something to read every time the page is open. */
+.af-version {
+  font-size: 10px;
+  font-weight: 500;
+  color: #64748b;
+  letter-spacing: 0.02em;
+  align-self: flex-start;
+  margin-top: 1px;
+}
+
 .af-conn-badge {
   font-size: 11px;
   padding: 2px 8px;

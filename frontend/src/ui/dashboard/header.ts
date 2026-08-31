@@ -11,6 +11,8 @@ import type { View, ConnState } from "./types";
 import { BUILTIN_VIEWS, SETTINGS_VIEW } from "./types";
 import { uid } from "../../ids";
 import { buildAudioPopover, buildResetPopover, type ResetPopover } from "./popovers";
+import { VERSION_KEY } from "../../config/serverConfig";
+import { safeStorage } from "../../safeStorage";
 import { escapeHtml } from "../escapeHtml";
 import { buildSignOutButton } from "./signOut";
 import { iconMarkup, type IconName } from "./icons";
@@ -157,6 +159,23 @@ function wirePopover(btn: HTMLElement, popover: HTMLElement, onClose?: (pop: HTM
     openPopovers.push({ el: popover, outsideClick, keydown });
 }
 
+/** The running version, beside the name.
+ *
+ *  There rather than in a corner: it answers "which one is this?", which is
+ *  asked while looking at the thing it names. Empty until the server has said,
+ *  so it never shows a guess -- and it is the server's answer, not the bundle's,
+ *  because `static/app` is committed and can lag the wheel serving it. */
+function buildVersion(): HTMLElement {
+    const version = document.createElement("span");
+    version.className = "af-version";
+    const running = safeStorage.get(VERSION_KEY);
+    if (running) {
+        version.textContent = running;
+        version.title = `Wactorz ${running}`;
+    }
+    return version;
+}
+
 function buildHeaderLeft(connState: ConnState): HTMLElement {
     const left = document.createElement("div");
     left.className = "af-header-left";
@@ -176,7 +195,7 @@ function buildHeaderLeft(connState: ConnState): HTMLElement {
     connBadge.className = `af-conn-badge af-conn-${connState}`;
     connBadge.textContent = "○ Connecting…";
 
-    left.append(icon, title, connBadge);
+    left.append(icon, title, buildVersion(), connBadge);
     return left;
 }
 

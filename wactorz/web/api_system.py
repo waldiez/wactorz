@@ -101,7 +101,7 @@ async def chat_log_handler(request: web.Request) -> Response:
 
 async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
-    from .. import config
+    from .. import __version__, config
     from ..config import CONFIG
     from ..ext import collect_public_config
 
@@ -114,6 +114,10 @@ async def config_handler(request: web.Request) -> Response:
     ws_url = f"{protocol}://{ws_host}/ws"
 
     payload: dict = {
+        # Which Wactorz this is. The dashboard is served from the same wheel, but
+        # a browser can hold an old page for a long time, so the version it shows
+        # is the running one rather than the one it was built from.
+        "version": __version__,
         "ha": {
             # URL only — the dashboard links out to the HA UI and never talks to
             # HA directly, so the long-lived token must NOT reach the browser.

@@ -329,6 +329,37 @@ describe("a turn at the microphone", () => {
         mic.stop();
     });
 
+    it("says so when the turn cannot even be closed", async () => {
+        const socket = fakeSocket();
+        const mic = new LiveMic(socket);
+        const ends: (string | undefined)[] = [];
+        await mic.start("", { onText: () => {}, onEnd: reason => ends.push(reason) });
+        socket.stopListening = () => false;
+
+        mic.stop();
+
+        // The server never hears that the turn ended, so no settled reading is
+        // coming and waiting out the drain would end it as though one had.
+        expect(ends).toEqual(["connection lost"]);
+    });
+
+    it("treats a socket that throws as one that refused", async () => {
+        const socket = fakeSocket();
+        const mic = new LiveMic(socket);
+        const ends: (string | undefined)[] = [];
+        await mic.start("", { onText: () => {}, onEnd: reason => ends.push(reason) });
+        socket.sendAudio = () => {
+            throw new Error("socket is closing");
+        };
+
+        audio.emit(new Float32Array(1600));
+
+        // This runs inside the audio callback, where nothing is waiting to catch
+        // it: an uncaught throw there leaves the microphone open for good.
+        expect(ends).toEqual(["connection lost"]);
+        expect(mic.listening).toBe(false);
+    });
+
     it("refuses to start without a connection", async () => {
         const socket = fakeSocket();
         socket.startListening = () => false;

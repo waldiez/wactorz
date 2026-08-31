@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Read by the mocked barrel below, so a test can put the deployment on a branch.
 let mockMode = "server";
+let mockVoices: { name: string }[] = [{ name: "Microsoft Aria Online (Natural)" }, { name: "Google US" }];
 
 vi.mock("../ext/tts", () => ({
     ttsMode: () => mockMode,
@@ -14,7 +15,9 @@ vi.mock("../ext/tts", () => ({
         ttsEnabled: false,
         toggleBeep: vi.fn(() => true),
         toggleTTS: vi.fn(() => true),
-        voices: [{ name: "Microsoft Aria Online (Natural)" }, { name: "Google US" }],
+        get voices() {
+            return mockVoices;
+        },
         selectedVoice: "",
         setVoice: vi.fn(),
     },
@@ -33,6 +36,43 @@ import { buildHeader, releaseHeaderPopovers } from "../ui/dashboard/header";
 import { tts } from "../ext/tts";
 import { ambient } from "../io/AmbientManager";
 import { toast } from "../ui/ToastManager";
+import { emit } from "../events";
+
+/** The reading-aloud switch, which is the one that follows the branch. */
+function ttsToggle(pop: HTMLElement): HTMLButtonElement | undefined {
+    return [...pop.querySelectorAll<HTMLButtonElement>(".af-audio-toggle")].find(b =>
+        b.textContent?.includes("TTS"),
+    );
+}
+
+describe("the voice picker when there is nothing to pick", () => {
+    afterEach(() => {
+        mockVoices = [{ name: "Microsoft Aria Online (Natural)" }, { name: "Google US" }];
+        document.body.innerHTML = "";
+    });
+
+    it("says the service chooses, rather than sitting on 'loading'", () => {
+        mockVoices = [];
+        const pop = buildAudioPopover();
+
+        emit("tts-voices-loaded", { voices: [] });
+
+        // A synthesiser with one fixed voice offers nothing to choose between,
+        // and a list that never fills reads as one still loading.
+        const select = pop.querySelector<HTMLSelectElement>(".af-audio-select")!;
+        expect(select.options[0]!.textContent).toContain("chosen by the service");
+        expect(select.disabled).toBe(true);
+    });
+
+    it("leaves the picker alone while the list is still coming", () => {
+        mockVoices = [];
+        const pop = buildAudioPopover();
+
+        const select = pop.querySelector<HTMLSelectElement>(".af-audio-select")!;
+        expect(select.options[0]!.textContent).toContain("loading");
+        expect(select.disabled).toBe(false);
+    });
+});
 
 describe("what the audio popover offers on each branch", () => {
     afterEach(() => {
@@ -47,8 +87,7 @@ describe("what the audio popover offers on each branch", () => {
 
         // A switch that is on and silent reads as a fault, and there is nothing
         // to be done about it from here.
-        const labels = [...pop.querySelectorAll(".af-audio-toggle")].map(b => b.textContent);
-        expect(labels.some(label => label?.includes("TTS"))).toBe(false);
+        expect(ttsToggle(pop)?.style.display).toBe("none");
     });
 
     it("keeps the beep, which this browser makes itself", () => {
@@ -66,8 +105,29 @@ describe("what the audio popover offers on each branch", () => {
         const pop = buildAudioPopover();
 
         // The words come out of the machine, not the page.
-        const labels = [...pop.querySelectorAll(".af-audio-toggle")].map(b => b.textContent);
-        expect(labels.some(label => label?.includes("TTS"))).toBe(false);
+        expect(ttsToggle(pop)?.style.display).toBe("none");
+    });
+
+    it("takes the switch away when the server turns out not to speak", () => {
+        // The popover is built before the config arrives, so it is drawn on the
+        // assumption that this deployment speaks and has to answer again.
+        mockMode = "server";
+        const pop = buildAudioPopover();
+        expect(ttsToggle(pop)?.style.display).not.toBe("none");
+
+        emit("tts-mode-known", { speaks: false });
+
+        expect(ttsToggle(pop)?.style.display).toBe("none");
+    });
+
+    it("brings it back when the server says it does", () => {
+        mockMode = "off";
+        const pop = buildAudioPopover();
+        expect(ttsToggle(pop)?.style.display).toBe("none");
+
+        emit("tts-mode-known", { speaks: true });
+
+        expect(ttsToggle(pop)?.style.display).not.toBe("none");
     });
 
     it("offers it on the branch that speaks through this browser", () => {
@@ -75,8 +135,7 @@ describe("what the audio popover offers on each branch", () => {
 
         const pop = buildAudioPopover();
 
-        const labels = [...pop.querySelectorAll(".af-audio-toggle")].map(b => b.textContent);
-        expect(labels.some(label => label?.includes("TTS"))).toBe(true);
+        expect(ttsToggle(pop)?.style.display).not.toBe("none");
     });
 });
 

@@ -124,13 +124,22 @@ export class TTSManager {
                 }
                 this._voices = voices.map(v => ({ name: v.name, locale: v.lang, gender: "" }));
                 this._emitVoices();
-                resolve();
                 return true;
             };
 
-            if (!populate()) {
-                synth.addEventListener("voiceschanged", () => populate(), { once: true });
-                setTimeout(resolve, 2000); // give up gracefully if event never fires
+            // Listened to however many times it fires, and whether or not there
+            // is a list already: the first answer is often just the voices
+            // installed on the machine, with the rest arriving a moment later.
+            // Taking the first answer as the whole list loses everything after it.
+            synth.addEventListener("voiceschanged", () => {
+                if (populate()) {
+                    resolve();
+                }
+            });
+            if (populate()) {
+                resolve();
+            } else {
+                setTimeout(resolve, 2000); // give up gracefully if it never fires
             }
         });
     }

@@ -10,6 +10,7 @@
  * startup; the rest of the app talks to it via the event bus.
  */
 
+import { emit } from "../../events";
 import { registerConfigEntry } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
 import { tts } from "./TTSManager";
@@ -56,8 +57,13 @@ export interface TTSConfig {
  * The extension self-wires — no other file needs to know about TTSManager.
  */
 export function register(config: TTSConfig): void {
+    const mode = ttsMode();
     tts.setApiBase(config.apiBase);
-    tts.setMode(ttsMode());
+    tts.setMode(mode);
+    // Announced because the interface is built before the server has answered:
+    // controls for speech would otherwise be drawn on the assumption that this
+    // deployment speaks, and stay drawn once it turns out not to.
+    emit("tts-mode-known", { speaks: mode !== "off" && mode !== "host" });
     // Told rather than guessed: whether the server speaks is something it
     // reports, and a synthesiser with one fixed voice offers no list to infer it
     // from. `init` still runs when it does not, to find this browser's voices.

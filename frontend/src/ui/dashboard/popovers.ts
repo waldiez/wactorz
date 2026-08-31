@@ -13,6 +13,12 @@ import { tts, ttsMode } from "../../ext/tts";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
 
+/** Whether anything will be read aloud in this browser at all. */
+function speaksHere(): boolean {
+    const mode = ttsMode();
+    return mode !== "off" && mode !== "host";
+}
+
 /** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
 function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
     const toggleRow = document.createElement("div");
@@ -26,14 +32,6 @@ function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
         beepBtn.classList.toggle("on", tts.toggleBeep());
     });
 
-    // A deployment that will not speak offers no control for it: a switch that
-    // is on and silent reads as a fault, and there is nothing to be done about
-    // it from here. The beep stays -- that is made in this browser regardless.
-    if (ttsMode() === "off" || ttsMode() === "host") {
-        toggleRow.append(beepBtn);
-        return toggleRow;
-    }
-
     const ttsBtn = document.createElement("button");
     ttsBtn.className = `af-audio-toggle${tts.ttsEnabled ? " on" : ""}`;
     ttsBtn.textContent = `🗣 TTS`;
@@ -43,6 +41,17 @@ function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
         ttsBtn.classList.toggle("on", on);
         voiceRow.style.display = on ? "" : "none";
     });
+
+    // Hidden rather than absent, and answered again when the server says: this
+    // is built before the config arrives, so the branch is not known yet. A
+    // switch that is on and silent reads as a fault, and there is nothing to be
+    // done about it from here. The beep stays -- this browser makes that itself.
+    const follow = (speaks: boolean): void => {
+        ttsBtn.style.display = speaks ? "" : "none";
+        voiceRow.style.display = speaks && tts.ttsEnabled ? "" : "none";
+    };
+    follow(speaksHere());
+    listen("tts-mode-known", detail => follow(detail.speaks));
 
     toggleRow.append(beepBtn, ttsBtn);
     return toggleRow;

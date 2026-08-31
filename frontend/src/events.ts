@@ -40,6 +40,8 @@ export interface AppEventMap {
      *  turned into rows, not here. */
     "af-app-log": { entries: unknown[] };
     "tts-voices-loaded": { voices: TTSVoice[] };
+    /** The branch this deployment speaks through, once the server has said. */
+    "tts-mode-known": { speaks: boolean };
     "tts-audio-start": void;
     "tts-audio-end": void;
 }

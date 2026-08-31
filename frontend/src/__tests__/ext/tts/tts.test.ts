@@ -341,12 +341,10 @@ describe("TTSManager", () => {
         // Don't await — the promise resolves via setTimeout(resolve, 2000)
         const p = m.init();
         // At this point, addEventListener should have been called with "voiceschanged"
+        // Subscribed for as long as the page lives, not once: the list can grow
+        // more than once, and every later answer is the fuller one.
         await vi.waitFor(() =>
-            expect(addEventListenerSpy).toHaveBeenCalledWith(
-                "voiceschanged",
-                expect.any(Function),
-                expect.objectContaining({ once: true }),
-            ),
+            expect(addEventListenerSpy).toHaveBeenCalledWith("voiceschanged", expect.any(Function)),
         );
         // Let the 2-second timeout resolve the promise
         await vi.runAllTimersAsync().catch(() => {});
@@ -700,5 +698,41 @@ describe("which branch the browser speaks through", () => {
 
         expect(globalThis.fetch).toHaveBeenCalled();
         globalThis.fetch = original;
+    });
+});
+
+describe("the voices this browser offers", () => {
+    it("takes the fuller list when it arrives after the first answer", async () => {
+        const original = globalThis.fetch;
+        globalThis.fetch = vi.fn().mockRejectedValue(new Error("offline"));
+        let announce: (() => void) | undefined;
+        const getVoices = vi
+            .fn()
+            .mockReturnValueOnce([{ name: "Local One", lang: "en-US" }])
+            .mockReturnValue([
+                { name: "Local One", lang: "en-US" },
+                { name: "Google English", lang: "en-GB" },
+                { name: "Google Greek", lang: "el-GR" },
+            ]);
+        (globalThis as any).speechSynthesis = {
+            speak: vi.fn(),
+            cancel: vi.fn(),
+            getVoices,
+            addEventListener: (_type: string, fn: () => void) => {
+                announce = fn;
+            },
+        };
+        const { TTSManager } = await import("../../../ext/tts");
+        const manager = new TTSManager();
+        manager.setServerAvailable(false);
+        await manager.init();
+        expect(manager.voices).toHaveLength(1);
+
+        // What Chrome does: the machine's own voices first, the rest a moment later.
+        announce?.();
+
+        expect(manager.voices.map(v => v.name)).toContain("Google Greek");
+        globalThis.fetch = original;
+        (globalThis as any).speechSynthesis = { speak: vi.fn(), cancel: vi.fn() };
     });
 });

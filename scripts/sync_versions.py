@@ -75,9 +75,12 @@ def update_docs_landing(new_version: str) -> None:
     landing_file = ROOT_DIR / "docs" / "_landing.html"
     if landing_file.exists():
         content = landing_file.read_text(encoding="utf-8")
+        # The stage word is captured and put back rather than written in:
+        # hardcoding "Alpha" meant this quietly stopped matching the moment the
+        # badge became Beta, so the version stayed at whatever it last said.
         new_content = re.sub(
-            r'<div class="hero-badge">v.* · Alpha</div>',
-            f'<div class="hero-badge">v{new_version} · Alpha</div>',
+            r'<div class="hero-badge">v\S* · (\w+)</div>',
+            lambda m: f'<div class="hero-badge">v{new_version} · {m.group(1)}</div>',
             content,
         )
         landing_file.write_text(new_content, encoding="utf-8")

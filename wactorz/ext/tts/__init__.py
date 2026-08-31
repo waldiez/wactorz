@@ -86,6 +86,24 @@ def synthesiser_available() -> bool:
     return _tts_state.available
 
 
+def _reported_voice() -> str:
+    """The voice this deployment speaks in, as far as the browser needs to know.
+
+    Empty for a named service: its voices are its own, and naming the one this
+    process would have used describes a synthesiser that is not being asked.
+    """
+    configured = os.getenv("TTS_VOICE", "").strip()
+    if remote.names_a_service(remote.service_uri()):
+        return configured
+    # Stripped and `or`-ed rather than given as a default argument: a default
+    # applies only when the name is absent, and `.env.template` tells you to
+    # leave this one empty for it. `load_dotenv` then supplies "", which reached
+    # the synthesiser and was refused, so the documented setup produced no speech
+    # at all. Whitespace goes the same way, because a `.env` line keeps trailing
+    # spaces more often than anyone means it to.
+    return configured or _tts_state.default_voice
+
+
 def _why_silent() -> str:
     """Why this deployment will not speak, in terms of what to change.
 
@@ -110,13 +128,7 @@ def public_config(_app: web.Application) -> dict[str, Any]:
     return {
         "mode": config.TTS_MODE,
         "available": synthesiser_available(),
-        # Stripped and `or`-ed rather than given as a default argument: a
-        # default applies only when the name is absent, and `.env.template`
-        # tells you to leave this one empty for it. `load_dotenv` then supplies
-        # "", which reached the synthesiser and was refused, so the documented
-        # setup produced no speech at all. Whitespace goes the same way, because
-        # a `.env` line keeps trailing spaces more often than anyone means it to.
-        "voice": os.getenv("TTS_VOICE", "").strip() or _tts_state.default_voice,
+        "voice": _reported_voice(),
     }
 
 

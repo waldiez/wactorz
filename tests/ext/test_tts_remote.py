@@ -431,3 +431,33 @@ class TestWhatARefusalSays:
         # Where this deployment keeps its services is not the browser's business,
         # and a 503 body is the easiest place for that to slip out.
         assert "voice.internal.example" not in said
+
+
+class TestTheVoiceTheBrowserIsTold:
+    """`/api/config` describes the synthesiser that will actually be asked."""
+
+    def test_a_named_service_is_not_described_by_this_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
+        monkeypatch.delenv("TTS_VOICE", raising=False)
+
+        # Naming the voice this process would have used describes a synthesiser
+        # nothing is going to ask, and its names mean nothing to the one that is.
+        assert not tts.public_config(web.Application())["voice"]
+
+    def test_a_named_service_keeps_a_voice_that_was_configured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
+        monkeypatch.setenv("TTS_VOICE", "en_GB-alba-medium")
+
+        assert tts.public_config(web.Application())["voice"] == "en_GB-alba-medium"
+
+    def test_without_a_service_the_default_is_still_named(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("WACTORZ_TTS_URI", raising=False)
+        monkeypatch.delenv("TTS_VOICE", raising=False)
+
+        assert tts.public_config(web.Application())["voice"] == tts._tts_state.default_voice

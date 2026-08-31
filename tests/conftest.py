@@ -77,6 +77,24 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_voice_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore `WACTORZ_STT_URI` / `WACTORZ_TTS_URI` from the environment or `.env`.
+
+    Both are read at call time rather than through `CONFIG`, so a developer with
+    a recogniser or a synthesiser configured — to try the feature, which is the
+    likeliest reason anyone sets them — changes what unrelated tests see. A named
+    service reports itself available and brings its own voices, which turns tests
+    about the in-process default into failures nowhere near the diff.
+
+    CI has no `.env` and so never sees it: green there, broken only for whoever
+    is working on the feature. Tests that want a service set one explicitly and
+    win, because this only clears the ambient value.
+    """
+    monkeypatch.delenv("WACTORZ_STT_URI", raising=False)
+    monkeypatch.delenv("WACTORZ_TTS_URI", raising=False)
+
+
 #: The real factory, for the tests that exist to exercise it.
 real_mqtt_client = mqtt.mqtt_client
 

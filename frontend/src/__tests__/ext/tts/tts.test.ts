@@ -195,7 +195,7 @@ describe("TTSManager", () => {
         expect(m.serverAvailable).toBe(false);
     });
 
-    it("init() sets serverAvailable=true when server returns voices", async () => {
+    it("init() takes the voices the server offers", async () => {
         const origFetch = globalThis.fetch;
         globalThis.fetch = vi.fn().mockResolvedValue({
             ok: true,
@@ -205,9 +205,29 @@ describe("TTSManager", () => {
         });
         const { TTSManager } = await freshTTS();
         const m = new TTSManager();
+        m.setServerAvailable(true);
         await m.init();
-        expect(m.serverAvailable).toBe(true);
         expect(m.voices).toHaveLength(1);
+        globalThis.fetch = origFetch;
+    });
+
+    it("init() does not read an empty voice list as a server that cannot speak", async () => {
+        const origFetch = globalThis.fetch;
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve([]),
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        });
+        const { TTSManager } = await freshTTS();
+        const m = new TTSManager();
+        m.setServerAvailable(true);
+
+        await m.init();
+
+        // A synthesiser with one fixed voice offers no list. Taking that as "no
+        // server" would hand the words to this browser while it sat there working.
+        expect(m.serverAvailable).toBe(true);
         globalThis.fetch = origFetch;
     });
 
@@ -228,7 +248,7 @@ describe("TTSManager", () => {
         globalThis.fetch = origFetch;
     });
 
-    it("init() falls back to browser voices when server returns empty array", async () => {
+    it("init() loads this browser's voices when the server cannot speak", async () => {
         const origFetch = globalThis.fetch;
         globalThis.fetch = vi.fn().mockResolvedValue({
             ok: true,
@@ -244,7 +264,11 @@ describe("TTSManager", () => {
         };
         const { TTSManager } = await freshTTS();
         const m = new TTSManager();
+        m.setServerAvailable(false);
+
         await m.init();
+
+        // This browser is covering for it, and needs its own voices to do that.
         expect(m.voices.length).toBeGreaterThan(0);
         globalThis.fetch = origFetch;
         (globalThis as any).speechSynthesis = { speak: vi.fn(), cancel: vi.fn() };
@@ -416,6 +440,16 @@ describe("TTSManager", () => {
         localStorage.setItem("wactorz.ttsVoice", "en-US-AriaNeural");
         const { TTSManager } = await freshTTS();
         const m = new TTSManager();
+        // A chosen voice exists because a list was offered to choose from, and
+        // that list is what says the synthesiser knows the name.
+        m.setServerAvailable(true);
+        (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve([{ name: "en-US-AriaNeural", locale: "en-US", gender: "" }]),
+        });
+        await m.init();
+        (globalThis.fetch as ReturnType<typeof vi.fn>).mockClear();
         m.notify("test voice param");
         await new Promise(r => setTimeout(r, 50));
         const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] ?? [];
@@ -588,5 +622,83 @@ describe("TTSManager", () => {
     it("exports a singleton tts instance", async () => {
         const { tts, TTSManager } = await freshTTS();
         expect(tts).toBeInstanceOf(TTSManager);
+    });
+});
+
+describe("which branch the browser speaks through", () => {
+    async function speaker(mode: "off" | "browser" | "server" | "host") {
+        const mod = await import("../../../ext/tts");
+        const manager = new mod.TTSManager();
+        manager.setMode(mode);
+        return manager;
+    }
+
+    beforeEach(() => {
+        localStorage.clear();
+        localStorage.setItem("wactorz.tts", "1");
+        vi.clearAllMocks();
+    });
+
+    it("says nothing at all when the deployment is silent", async () => {
+        const fetched = vi.fn();
+        const original = globalThis.fetch;
+        globalThis.fetch = fetched;
+        const manager = await speaker("off");
+
+        manager.notify("hello there");
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        expect(fetched).not.toHaveBeenCalled();
+        expect((globalThis as any).speechSynthesis.speak).not.toHaveBeenCalled();
+        globalThis.fetch = original;
+    });
+
+    it("leaves the speaking to the server when the server has the speakers", async () => {
+        const fetched = vi.fn();
+        const original = globalThis.fetch;
+        globalThis.fetch = fetched;
+        const manager = await speaker("host");
+
+        manager.notify("hello there");
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        // The words come out of the machine's own device, so saying them here
+        // too would be one voice too many.
+        expect(fetched).not.toHaveBeenCalled();
+        expect((globalThis as any).speechSynthesis.speak).not.toHaveBeenCalled();
+        globalThis.fetch = original;
+    });
+
+    it("keeps the words on this machine when told to", async () => {
+        const fetched = vi.fn();
+        const original = globalThis.fetch;
+        globalThis.fetch = fetched;
+        const manager = await speaker("browser");
+
+        manager.notify("hello there");
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        // Not a fallback: a deployment choosing this is saying the text must not
+        // be handed to a synthesiser elsewhere, so nothing is sent.
+        expect(fetched).not.toHaveBeenCalled();
+        expect((globalThis as any).speechSynthesis.speak).toHaveBeenCalled();
+        globalThis.fetch = original;
+    });
+
+    it("asks the server when that is the branch", async () => {
+        const original = globalThis.fetch;
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            arrayBuffer: () => Promise.resolve(new ArrayBuffer(32)),
+            json: () => Promise.resolve(null),
+        });
+        const manager = await speaker("server");
+
+        manager.notify("hello there");
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        expect(globalThis.fetch).toHaveBeenCalled();
+        globalThis.fetch = original;
     });
 });

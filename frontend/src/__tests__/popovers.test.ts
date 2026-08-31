@@ -4,7 +4,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// Read by the mocked barrel below, so a test can put the deployment on a branch.
+let mockMode = "server";
+
 vi.mock("../ext/tts", () => ({
+    ttsMode: () => mockMode,
     tts: {
         beepEnabled: false,
         ttsEnabled: false,
@@ -29,6 +33,52 @@ import { buildHeader, releaseHeaderPopovers } from "../ui/dashboard/header";
 import { tts } from "../ext/tts";
 import { ambient } from "../io/AmbientManager";
 import { toast } from "../ui/ToastManager";
+
+describe("what the audio popover offers on each branch", () => {
+    afterEach(() => {
+        mockMode = "server";
+        document.body.innerHTML = "";
+    });
+
+    it("offers no reading-aloud switch where nothing will read aloud", () => {
+        mockMode = "off";
+
+        const pop = buildAudioPopover();
+
+        // A switch that is on and silent reads as a fault, and there is nothing
+        // to be done about it from here.
+        const labels = [...pop.querySelectorAll(".af-audio-toggle")].map(b => b.textContent);
+        expect(labels.some(label => label?.includes("TTS"))).toBe(false);
+    });
+
+    it("keeps the beep, which this browser makes itself", () => {
+        mockMode = "off";
+
+        const pop = buildAudioPopover();
+
+        const labels = [...pop.querySelectorAll(".af-audio-toggle")].map(b => b.textContent);
+        expect(labels.some(label => label?.includes("Beep"))).toBe(true);
+    });
+
+    it("offers no switch when the server has the speakers", () => {
+        mockMode = "host";
+
+        const pop = buildAudioPopover();
+
+        // The words come out of the machine, not the page.
+        const labels = [...pop.querySelectorAll(".af-audio-toggle")].map(b => b.textContent);
+        expect(labels.some(label => label?.includes("TTS"))).toBe(false);
+    });
+
+    it("offers it on the branch that speaks through this browser", () => {
+        mockMode = "browser";
+
+        const pop = buildAudioPopover();
+
+        const labels = [...pop.querySelectorAll(".af-audio-toggle")].map(b => b.textContent);
+        expect(labels.some(label => label?.includes("TTS"))).toBe(true);
+    });
+});
 
 describe("buildAudioPopover", () => {
     beforeEach(() => {

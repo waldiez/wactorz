@@ -213,6 +213,44 @@ def _stt_mode() -> str:
 #: the microphone is offered exactly where it can work.
 STT_MODE = _stt_mode()
 
+#: How this deployment speaks, if it does.
+#:
+#: ``browser`` and ``server`` differ in where the speech is made, and so in
+#: whether the words leave this machine at all: the browser's own voice never
+#: sends them anywhere, while ``server`` hands them to whatever synthesises. That
+#: is a choice a deployment makes rather than one its installed packages make.
+#:
+#: ``host`` speaks through the server's own audio device rather than the
+#: listener's, which is the branch that answers into a room instead of into a
+#: page. Named here because the interface has to know it is not the browser's
+#: job; nothing implements it yet.
+TTS_MODES = ("off", "browser", "server", "host")
+
+
+def _tts_mode() -> str:
+    """The configured branch, or ``server`` when unset.
+
+    Unset means what it has always meant: speak if this deployment can, and let
+    the browser cover it when it cannot. Saying ``browser`` is how a deployment
+    keeps the words on this machine while still having a voice.
+    """
+    value = _unquote(os.getenv("WACTORZ_TTS", "") or "").lower()
+    if not value:
+        return "server"
+    if value not in TTS_MODES:
+        warnings.warn(
+            f"WACTORZ_TTS={value!r} is not one of {', '.join(TTS_MODES)} — using 'server'",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return "server"
+    return value
+
+
+#: Which branch this deployment speaks through. Read by the browser from
+#: ``/api/config``, the same way the recognition branch is.
+TTS_MODE = _tts_mode()
+
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
 #: deployment with no Supervisor must never offer it. Inferring it from the peer's

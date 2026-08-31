@@ -1,9 +1,14 @@
-"""TTS extension — server-side text-to-speech via edge-tts.
+"""TTS extension — server-side text-to-speech.
 
-Optional dependency: ``pip install wactorz[tts]`` (installs edge-tts).
-If edge-tts is not installed the extension still loads — routes return 503
-and ``public_config()`` reports ``available: false`` so the frontend falls
-back to browser Web Speech API.
+Where the speech is made depends on ``WACTORZ_TTS_URI``. Unset, it is made here
+by edge-tts (``pip install wactorz[tts]``). Set, it is made by the service that
+address names: an HTTP endpoint, which needs nothing beyond what the server
+already has, or a Wyoming synthesiser over ``tcp://``, which is spoken to with
+``wactorz[voice]`` -- the same dependency the recogniser uses.
+
+If no backend can be reached the extension still loads: the routes answer 503
+and ``public_config()`` reports ``available: false``, so the browser falls back
+to the Web Speech API rather than going quiet.
 """
 
 from __future__ import annotations
@@ -14,6 +19,9 @@ import re
 from typing import Any
 
 from aiohttp import web
+
+from ... import config
+from . import remote
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +64,52 @@ def setup(app: web.Application) -> None:
     app.on_startup.append(_warm_tts_voices)
 
 
+def synthesiser_available() -> bool:
+    """Whether this deployment will make speech here for the browser to play.
+
+    False for every branch but ``server``: ``off`` wants silence, and ``browser``
+    wants its own voice, so answering yes would send the text somewhere the
+    chosen branch says it must not go.
+    """
+    if config.TTS_MODE != "server":
+        return False
+    uri = remote.service_uri()
+    # Taken at its word rather than probed: the browser asks this on every page
+    # load, and a synthesiser is allowed to be asleep until something needs
+    # speaking. What it is spoken to with still has to be installed, though --
+    # an HTTP one needs nothing beyond what the server already has, and a
+    # Wyoming one needs the optional dependency.
+    if remote.is_http_uri(uri):
+        return True
+    if remote.is_wyoming_uri(uri):
+        return remote.WYOMING
+    return _tts_state.available
+
+
+def _why_silent() -> str:
+    """Why this deployment will not speak, in terms of what to change.
+
+    Named exactly rather than listed: the reasons ask for different things, and
+    a message offering all of them points at the wrong one every time but once.
+    The address itself is never quoted -- the browser is told what to fix, not
+    where this deployment's network keeps its services.
+    """
+    if config.TTS_MODE != "server":
+        return f"this deployment does not speak here (WACTORZ_TTS={config.TTS_MODE})"
+    uri = remote.service_uri()
+    if remote.is_wyoming_uri(uri) and not remote.WYOMING:
+        return "WACTORZ_TTS_URI names a Wyoming synthesiser — pip install 'wactorz[voice]'"
+    return "no synthesiser: set WACTORZ_TTS_URI, or pip install 'wactorz[tts]'"
+
+
 def public_config(_app: web.Application) -> dict[str, Any]:
     """Non-secret TTS config for the browser."""
+    # The address is deliberately absent, as it is for recognition: the browser
+    # never speaks to the synthesiser, and where it lives is a fact about the
+    # network this deployment sits on.
     return {
-        "available": _tts_state.available,
+        "mode": config.TTS_MODE,
+        "available": synthesiser_available(),
         # Stripped and `or`-ed rather than given as a default argument: a
         # default applies only when the name is absent, and `.env.template`
         # tells you to leave this one empty for it. `load_dotenv` then supplies
@@ -92,17 +142,25 @@ async def _warm_tts_voices(_app: web.Application | None = None) -> None:
 # Handlers
 # ---------------------------------------------------------------------------
 async def tts_voices_handler(_request: web.Request) -> web.Response:
-    """GET /api/tts/voices — list available edge-tts voices."""
+    """GET /api/tts/voices — the voices this deployment can speak in.
+
+    A named service answers with nothing rather than a guess: its voices are its
+    own, and the browser reads an empty list as "no choice to make here" and
+    speaks in whatever the service is configured for.
+    """
+    if remote.names_a_service(remote.service_uri()):
+        return web.json_response([])
     if _tts_state.voices is None:
         await _warm_tts_voices()
     return web.json_response(_tts_state.voices or [])
 
 
 async def tts_handler(request: web.Request) -> web.Response:
-    """POST /api/tts {"text": ..., "voice": ...} — synthesize speech via edge-tts.
+    """POST /api/tts {"text": ..., "voice": ...} — speak the text.
 
-    Returns audio/mpeg. 503 if edge-tts is not installed so the frontend
-    falls back to the Web Speech API transparently.
+    Where the speech is made follows ``WACTORZ_TTS_URI``; the audio comes back
+    under whatever type that produced. 503 when this deployment will not speak,
+    so the browser falls back to the Web Speech API transparently.
 
     POST rather than GET because this route does work: each call synthesizes
     audio through an outbound service. A GET is assumed to be a read, and any
@@ -111,11 +169,8 @@ async def tts_handler(request: web.Request) -> web.Response:
     Origin check relies on. A POST carries a body, so it cannot be triggered
     that way.
     """
-    if not _tts_state.available:
-        return web.Response(
-            status=503,
-            text="edge-tts not installed — pip install 'wactorz[tts]'",
-        )
+    if not synthesiser_available():
+        return web.Response(status=503, text=_why_silent())
 
     try:
         body = await request.json()
@@ -131,10 +186,23 @@ async def tts_handler(request: web.Request) -> web.Response:
     # Mirror TTSManager.ts: strip code blocks, cap at 300 chars.
     text = re.sub(r"```[\s\S]*?```", "code block", text)[:300]
 
-    default_voice = os.environ.get("TTS_VOICE", "").strip() or _tts_state.default_voice
-    voice = str(body.get("voice") or "") or default_voice
+    asked_for = str(body.get("voice") or "").strip()
+    configured = os.environ.get("TTS_VOICE", "").strip()
 
+    uri = remote.service_uri()
     try:
+        if remote.names_a_service(uri):
+            # No fallback to the default below: that name belongs to the
+            # synthesiser this process would have used, and a service asked for
+            # a voice it has never heard of refuses the whole request. Sending
+            # none is how it is asked for the one it is configured with.
+            spoken = await remote.synthesise(uri, text, asked_for or configured)
+            return web.Response(
+                body=spoken.audio,
+                content_type=spoken.content_type,
+                headers={"Cache-Control": "no-store"},
+            )
+        voice = asked_for or configured or _tts_state.default_voice
         communicate = edge_tts.Communicate(text, voice)
         chunks: list[bytes] = []
         async for chunk in communicate.stream():

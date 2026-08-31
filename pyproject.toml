@@ -52,13 +52,29 @@ telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
+# The two halves of the voice loop, named for what they do rather than for what
+# they pull in. Either can be installed alone: a deployment that only listens
+# has no use for a synthesiser, and one that only answers has none for a
+# recogniser. `voice` is both, plus the sound device, for a machine doing all of it.
+stt       = [
+    "wyoming>=1.10.0",
+]
 tts       = [
     "edge-tts>=6.1.9",
-]
-# Wyoming is the protocol for both ends of the voice loop -- Whisper for
-# recognition, Piper for synthesis -- so it belongs to neither alone.
-voice     = [
     "wyoming>=1.10.0",
+]
+# Speakers and a microphone on the machine running Wactorz, for the branches
+# where it answers into a room rather than into a page. PortAudio ships inside
+# the wheel on Windows and macOS; on Linux it is a system package
+# (libportaudio2), which is why this is not simply part of the two above.
+host      = [
+    "sounddevice>=0.5.0",
+    "miniaudio>=1.59",
+]
+voice     = [
+    "wactorz[stt]",
+    "wactorz[tts]",
+    "wactorz[host]",
 ]
 cron      = ["croniter>=2.0.0"]
 data      = ["pandas>=2.0.0"]
@@ -108,7 +124,6 @@ all = [
     "wactorz[telegram]",
     "wactorz[whatsapp]",
     "wactorz[mcp]",
-    "wactorz[tts]",
     "wactorz[voice]",
     "wactorz[cron]",
     "wactorz[data]",

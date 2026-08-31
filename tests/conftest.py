@@ -79,20 +79,26 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _no_ambient_voice_services(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Ignore `WACTORZ_STT_URI` / `WACTORZ_TTS_URI` from the environment or `.env`.
+    """Ignore the voice settings from the developer's environment or `.env`.
 
-    Both are read at call time rather than through `CONFIG`, so a developer with
-    a recogniser or a synthesiser configured — to try the feature, which is the
-    likeliest reason anyone sets them — changes what unrelated tests see. A named
-    service reports itself available and brings its own voices, which turns tests
-    about the in-process default into failures nowhere near the diff.
+    Four of them, and all four are set by anyone trying the feature — which is
+    the likeliest reason a machine has them at all. The addresses are read when
+    they are used; the branches are read once, at import, so they are put back on
+    the module rather than in the environment.
 
-    CI has no `.env` and so never sees it: green there, broken only for whoever
-    is working on the feature. Tests that want a service set one explicitly and
-    win, because this only clears the ambient value.
+    A configured service reports itself available and brings its own voices, and
+    a branch other than the default answers 503 where a test expected audio, so
+    each of these turns tests elsewhere into failures nowhere near the diff. CI
+    has no `.env` and never sees any of it: green there, broken only for whoever
+    is working on the feature.
+
+    Tests that want a branch or a service set one explicitly and win, because
+    this only replaces what was picked up from outside.
     """
     monkeypatch.delenv("WACTORZ_STT_URI", raising=False)
     monkeypatch.delenv("WACTORZ_TTS_URI", raising=False)
+    monkeypatch.setattr(config, "STT_MODE", "off")
+    monkeypatch.setattr(config, "TTS_MODE", "server")
 
 
 #: The real factory, for the tests that exist to exercise it.

@@ -3,6 +3,14 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — pending
+
+### Added
+
+- **Words can appear in the composer while you are still speaking.** `WACTORZ_STT_URI` now accepts a `ws://` or `wss://` address as well as a `tcp://` one, and the scheme is what chooses the kind of recogniser: `tcp://` is a Wyoming service, which transcribes a recording once you stop talking, and `ws://` is a [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) streaming server, which returns text as it hears it and corrects that text as it hears more. Nothing else changes -- the same microphone button drives both, and a deployment that names neither is unaffected. The audio travels over the dashboard's existing WebSocket rather than a second connection, so it reaches the recogniser through the same door as everything else, and a session ends with the socket that opened it. Words that arrive while you are typing no longer overwrite what you wrote: an edit on either side of them survives, and a reading you delete stays deleted. `infra/voice/stt/` builds a recogniser you can run, which needs no GPU. **A batch Wyoming service remains the default**, so this is reached for by configuration rather than arrived at by upgrading.
+
+- **Speech can be made somewhere other than this process, and can come out of this machine.** `WACTORZ_TTS_URI` names a synthesiser the same way the recogniser's address does: a `tcp://` address is a Wyoming synthesiser such as [wyoming-piper](https://github.com/rhasspy/wyoming-piper), self-hosted so the words never leave the network, and an `http(s)://` address is an endpoint that takes text and answers with audio. Unset, speech is made here by edge-tts exactly as before. `WACTORZ_TTS` now says *where* it happens -- `off`, `browser` (the browser's own voice, so the text is sent nowhere at all), `server` (the default, played in the browser) or `host` (played through this machine's own speakers, for answering into a room rather than a page). **`browser` is the setting for a deployment that must not hand its text to a synthesiser**, which was previously only possible by not installing one. `host` reads only replies to a turn someone started, so agents talking among themselves stay quiet; it needs `pip install 'wactorz[host]'`, and says so at startup when it cannot speak. **The optional dependencies are now named for what they do**: `wactorz[stt]` to recognise speech, `wactorz[tts]` to make it, `wactorz[host]` to use this machine's own sound device, and `wactorz[voice]` for all three. `wactorz[voice]` still installs everything it did before, so nothing needs changing. The composer offers speech controls only where speech happens.
+
 ## [0.6.0] - 2026-08-31
 
 ### Removed — breaking

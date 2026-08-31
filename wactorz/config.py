@@ -222,8 +222,8 @@ STT_MODE = _stt_mode()
 #:
 #: ``host`` speaks through the server's own audio device rather than the
 #: listener's, which is the branch that answers into a room instead of into a
-#: page. Named here because the interface has to know it is not the browser's
-#: job; nothing implements it yet.
+#: page. Only replies to a turn someone started are read aloud, so a machine
+#: standing in a room does not narrate its own upkeep.
 TTS_MODES = ("off", "browser", "server", "host")
 
 

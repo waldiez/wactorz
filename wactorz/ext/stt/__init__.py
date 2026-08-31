@@ -1,6 +1,6 @@
 """STT extension — server-side speech-to-text via a Wyoming ASR service.
 
-Optional dependency: ``pip install wactorz[voice]`` (installs wyoming). If it is
+Optional dependency: ``pip install wactorz[stt]`` (installs wyoming). If it is
 not installed the extension still loads -- the route answers 503 and
 ``public_config()`` reports ``available: false``, so a deployment configured for
 a branch it cannot serve offers no microphone rather than one whose every
@@ -242,7 +242,7 @@ async def stt_handler(request: web.Request) -> web.Response:
     """
     if not _stt_state.available:
         return web.json_response(
-            {"error": "wyoming not installed — pip install 'wactorz[voice]'"}, status=503
+            {"error": "wyoming not installed — pip install 'wactorz[stt]'"}, status=503
         )
 
     # request.multipart() asserts rather than raising for a body that is not

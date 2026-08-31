@@ -285,7 +285,7 @@ class TestTheEndpoint:
         # 503 rather than 500: the deployment does not do this, which is a
         # different thing from having tried and failed.
         assert status == 503
-        assert "wactorz[voice]" in body["error"]
+        assert "wactorz[stt]" in body["error"]
 
 
 class TestWhatTheBrowserIsTold:

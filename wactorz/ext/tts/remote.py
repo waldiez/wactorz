@@ -98,7 +98,7 @@ async def _wyoming(uri: str, text: str, voice: str) -> Speech:
     that a hand-rolled reader is liable to mistake for the first.
     """
     if not WYOMING:
-        raise RuntimeError("wyoming not installed — pip install 'wactorz[voice]'")
+        raise RuntimeError("wyoming not installed — pip install 'wactorz[tts]'")
 
     request = Synthesize(text=text)
     if voice:

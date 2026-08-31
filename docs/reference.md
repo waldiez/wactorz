@@ -1295,7 +1295,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `DEPLOY_STRICT_HOST_KEYS` | `1` = never learn a host key on first contact; unknown hosts are refused |
 | `WACTORZ_STT` | Speech recognition branch: `off` (default), `browser`, `server` or `host`. The browser reads it from `/api/config`, so one build serves deployments that differ |
 | `WACTORZ_STT_URI` | Where the recogniser is. A `tcp://` address is a Wyoming service, which transcribes a whole recording at once; a `ws://` or `wss://` address is a sherpa-onnx streaming server, which returns words while you are still speaking. The scheme is what chooses between them |
-| `WACTORZ_TTS` | How this deployment speaks: `off`, `browser` (the browser's own voice, so the text is never sent anywhere), `server` (made here and played in the browser; the default) or `host` (played through this machine's speakers; not implemented) |
+| `WACTORZ_TTS` | How this deployment speaks: `off`, `browser` (the browser's own voice, so the text is never sent anywhere), `server` (made here and played in the browser; the default) or `host` (made here and played through this machine's own speakers, for answering into a room; reads only replies to a turn someone started, and needs `wactorz[host]`) |
 | `WACTORZ_TTS_URI` | Where speech is made. Unset, it is made in this process by edge-tts (`pip install 'wactorz[tts]'`); a `tcp://` address is a Wyoming synthesiser such as wyoming-piper, and an `http(s)://` address is an endpoint that takes text and answers with audio (the request carries `input`, `text` and `voice`; a service needing more, such as a model name or a key, wants a proxy in front of it). A named service brings its own voices, so `/api/tts/voices` answers with nothing |
 
 ---

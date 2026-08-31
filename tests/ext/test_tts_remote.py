@@ -393,10 +393,12 @@ class TestWhatARefusalSays:
 
         said = await self._refusal()
 
-        # Naming the other extra here sends whoever reads it to install a package
-        # that would change nothing.
-        assert "wactorz[voice]" in said
-        assert "wactorz[tts]" not in said
+        # The address is set and usable; what is missing is the library that
+        # speaks to it. Telling someone to set an address they already set is
+        # the wrong instruction, however right the package name is.
+        assert "Wyoming synthesiser" in said
+        assert "wactorz[tts]" in said
+        assert "set WACTORZ_TTS_URI" not in said
 
     async def test_a_silenced_branch_says_so_rather_than_naming_a_package(
         self, monkeypatch: pytest.MonkeyPatch
@@ -419,6 +421,8 @@ class TestWhatARefusalSays:
 
         said = await self._refusal()
 
+        # Nothing is configured and nothing is installed, so either would do.
+        assert "set WACTORZ_TTS_URI" in said
         assert "wactorz[tts]" in said
 
     async def test_the_address_is_never_quoted_back(self, monkeypatch: pytest.MonkeyPatch) -> None:

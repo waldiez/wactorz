@@ -31,7 +31,7 @@ const TYPE_CLASS: Record<string, string> = {
     chat: "af-feed-chat",
     "alert-error": "af-feed-alert",
     "alert-warning": "af-feed-alert",
-    health: "af-feed-heartbeat",
+    health: "af-feed-health",
     "qa-flag": "af-feed-chat",
 };
 
@@ -142,6 +142,9 @@ export function feedItemEl(container: HTMLElement, item: FeedItem): void {
     const row = document.createElement("div");
     row.className = `af-feed-item ${TYPE_CLASS[item.type] ?? ""}`.trim();
     row.dataset["source"] = "agent";
+    // Recorded rather than read back from the class: a class says how a row
+    // looks, and more than one kind of row can be made to look the same.
+    row.dataset["type"] = item.type;
 
     const icon = document.createElement("span");
     icon.className = "af-feed-icon";
@@ -333,7 +336,7 @@ function rowMatches(row: HTMLElement, filters: FeedFilters): boolean {
         if (own !== -1 && min !== -1 && own < min) {
             return false;
         }
-    } else if (filters.hideHeartbeats && row.classList.contains("af-feed-heartbeat")) {
+    } else if (filters.hideHeartbeats && row.dataset["type"] === "heartbeat") {
         return false;
     }
     const needle = filters.search.trim().toLowerCase();

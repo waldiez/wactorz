@@ -7,24 +7,60 @@
  *
  * The sole transport is the MQTT ha-state-bridge (`homeassistant/state_changes`).
  * The pusher de-duplicates identical entity+state pairs seen within a short
- * window and ignores noisy/non-actionable states.
+ * window and drops what is noise rather than activity.
+ *
+ * Noise is named, and everything else is shown. Naming what to *keep* instead
+ * would mean a domain Home Assistant adds later, or one this list never thought
+ * of, is absent with nothing to indicate it: the feed looks quiet and is in fact
+ * blind. Noise can at least be seen and named; silence cannot.
  */
 import type { FeedItem } from "../types/feed";
 
-/** Domains that produce meaningful on/off-style states worth showing in the feed. */
-const HA_FEED_DOMAINS = new Set([
-    "switch",
-    "light",
-    "fan",
-    "input_boolean",
-    "climate",
-    "cover",
-    "media_player",
-    "vacuum",
-    "humidifier",
-    "lock",
-    "alarm_control_panel",
+/**
+ * Domains whose changes are readings or bookkeeping rather than things that
+ * happened. A house has far more of these than of anything worth a row, and
+ * they change constantly.
+ */
+const HA_NOISE_DOMAINS = new Set([
+    "sensor",
+    "number",
+    "counter",
+    "input_number",
+    "input_text",
+    "select",
+    "input_select",
+    // Values someone set, not moments something happened. Their states are
+    // dates and times, which read as an event and are not one.
+    "input_datetime",
+    "datetime",
+    "date",
+    "time",
+    "update",
+    "zone",
+    "sun",
+    "weather",
+    "conversation",
+    "stt",
+    "tts",
+    "todo",
+    "image",
+    "camera",
 ]);
+
+/**
+ * Domains whose state is the moment the thing happened rather than a condition.
+ * Their state is a timestamp, which says nothing worth reading aloud in a feed,
+ * so the row is written from the domain instead.
+ */
+const HA_ACTIVATION_VERBS: Record<string, string> = {
+    button: "pressed",
+    input_button: "pressed",
+    event: "fired",
+    scene: "activated",
+};
+
+/** A plain number, which is a reading. An ISO timestamp is not one of these. */
+const A_READING = /^-?\d+([.,]\d+)?$/;
 
 /** Suppress duplicate entity+state events seen within this window (ms). */
 const DEDUP_WINDOW_MS = 5000;
@@ -39,15 +75,33 @@ export function createHaFeedPusher(
     const recent = new Map<string, number>();
 
     return (entityId, state, friendlyName) => {
-        const domain = entityId.split(".")[0] ?? "";
-        if (!HA_FEED_DOMAINS.has(domain)) {
+        // Every Home Assistant entity is `domain.name`. Something without one
+        // is not an entity, and showing it under a denylist would mean showing
+        // whatever malformed thing arrived.
+        const [domain, name] = entityId.split(".");
+        if (!domain || !name) {
             return;
         }
-        // Skip raw numeric states (sensors leaking through) and "unknown" spam.
-        if (/^\d/.test(state) || state === "unknown") {
+        if (HA_NOISE_DOMAINS.has(domain)) {
+            return;
+        }
+        // A reading is a measurement, not an event, wherever it comes from. Only
+        // plain numbers: an activation's state is a timestamp, which starts with
+        // a digit and is very much worth showing.
+        if (A_READING.test(state)) {
+            return;
+        }
+        // Nothing to say about a thing whose state nobody knows, and both of
+        // these arrive in bulk when an integration reloads.
+        if (state === "unknown" || state === "unavailable") {
             return;
         }
 
+        const verb = HA_ACTIVATION_VERBS[domain];
+        const label = verb ? `${friendlyName} ${verb}` : `${friendlyName} → ${state}`;
+        // Keyed on the state for a condition, and on the moment for an
+        // activation: pressing the same button twice is two events, where a
+        // light reporting "on" twice in a second is one.
         const key = `${entityId}:${state}`;
         const now = Date.now();
         // Evict entries past the dedup window so `recent` can't grow unbounded
@@ -61,7 +115,7 @@ export function createHaFeedPusher(
             return;
         }
         recent.set(key, now);
-        push({ type: "health", label: `${friendlyName} → ${state}`, agentName: "ha", timestamp: now });
+        push({ type: "health", label, agentName: "ha", timestamp: now });
     };
 }
 

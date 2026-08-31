@@ -58,6 +58,13 @@
 .af-feed-heartbeat {
   border-left-color: #22d3a0;
 }
+
+/* What the house and the machines did, as against an agent saying it is alive.
+   Its own colour so a light coming on is not read as the steady noise the
+   heartbeat filter exists to hide. */
+.af-feed-health {
+  border-left-color: #a78bfa;
+}
 .af-feed-spawn {
   border-left-color: #60a5fa;
 }
@@ -81,6 +88,10 @@
 }
 .af-feed-heartbeat .af-feed-icon {
   color: #22d3a0;
+}
+
+.af-feed-health .af-feed-icon {
+  color: #a78bfa;
 }
 .af-feed-alert .af-feed-icon {
   color: #f87171;

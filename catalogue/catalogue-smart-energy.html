@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Smart Energy agent — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Guide</summary>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+      <a href="../guide/extensions.html" class="">Extensions</a>
+    </details>
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="active">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
+  </aside>
+  <main class="content">
+<h1 id="smart-energy-agent">Smart Energy agent</h1>
+<p><code>smart-energy</code> — an LLM-powered energy helper for smart plugs via Home Assistant
+(brand-agnostic). It monitors live wattage, tracks per-plug kWh and cost (today/week/month),
+and can power plugs down through <strong>explicit, guarded rules</strong>.</p>
+<p>Requires a configured <a href="../guide/agents.html">Home Assistant</a> connection.</p>
+<h2 id="spawn">Spawn</h2>
+<div class="highlight"><pre><span></span><code>@catalog spawn smart-energy
+</code></pre></div>
+
+<h2 id="usage">Usage</h2>
+<p>Plain English is the primary interface:</p>
+<div class="highlight"><pre><span></span><code>import my plugs            # scans HA, shows what it found, asks which to monitor
+how much did the AC cost today?
+status                     # overview: plugs monitored, live watts
+turn off the heater if it&#39;s idle for 10 minutes
+</code></pre></div>
+
+<p><code>import my plugs</code> starts a conversational onboarding — no JSON needed.</p>
+<h2 id="safety">Safety</h2>
+<p>Plugs marked <strong>locked</strong> (e.g. AC, servers, AI rigs) are <strong>never</strong> turned off — this is
+hard-guarded in code, not just prompt guidance. Power-down only happens via rules you add
+explicitly.</p>
+<h2 id="configuration">Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Env</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ENERGY_RATE</code></td>
+<td>default €/kWh used for cost (default <code>0.138</code>; also settable at runtime with "set rate to 0.25")</td>
+</tr>
+<tr>
+<td><code>ENERGY_CURRENCY</code></td>
+<td>display currency (default <code>EUR</code>)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="structured-operations">Structured operations</h2>
+<p>For power users, <code>action</code> accepts: <code>status</code>, <code>cost</code>, <code>report</code>, <code>add_plug</code>, <code>list_plugs</code>,
+<code>remove_plug</code>, <code>add_rule</code>, <code>list_rules</code>, <code>remove_rule</code>, <code>set_rate</code> (with <code>plug</code>, <code>rule</code>, or
+<code>rate</code> payloads). Returns <code>plugs_monitored</code>, <code>active_rules</code>, and <code>total_watts</code>.</p>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

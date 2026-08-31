@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Extensions — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Guide</summary>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+      <a href="../guide/extensions.html" class="active">Extensions</a>
+    </details>
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
+  </aside>
+  <main class="content">
+<h1 id="extensions">Extensions</h1>
+<p>Extensions are self-contained feature modules that plug into Wactorz at both the
+backend (Python) and frontend (TypeScript) layers. They follow a shared protocol
+so the core system never needs to know about individual extension names, routes,
+or config — there is no <code>if extension == "tts"</code> anywhere.</p>
+<h2 id="overview">Overview</h2>
+<div class="highlight"><pre><span></span><code>wactorz/
+├── ext/                    # Backend extensions (Python)
+│   ├── __init__.py         #     discovery, setup_all(), collect_public_config(),
+│   │                        #     collect_actor_decorators()
+│   └── tts/                #     TTS — edge-tts voice synthesis
+
+frontend/src/
+├── ext/                    # Frontend extensions (TypeScript) — mirror backend
+│   └── tts/index.ts        #     register({ apiBase, available })
+├── ui/dashboard/
+│   └── icons.ts            #     Icon registry — registerIcon(name, svg)
+├── ui/CardDashboard.ts     #     View registry — registerView(key, icon, label, builder)
+└── config/serverConfig.ts  #     Config-seeding registry — registerConfigEntry(key, extract)
+</code></pre></div>
+
+<p>At startup the monitor calls <code>setup_all(app)</code>, which auto-discovers every module
+or package under <code>wactorz/ext/</code> that exposes a <code>setup(app)</code> hook and wires it in.
+<code>collect_public_config(app)</code> gathers each extension's non-secret browser config
+and merges it into <code>/api/config</code>. Nothing in core references a specific extension.</p>
+<p>An extension is <strong>opt-in and self-disabling</strong>: it reads its own environment and
+no-ops when unconfigured, so shipping one forces nothing on anyone.</p>
+<hr />
+<h2 id="backend">Backend</h2>
+<p>A backend extension lives in <code>wactorz/ext/&lt;name&gt;/</code>. Only <code>setup()</code> is required;
+<code>public_config</code> and <code>on_ready</code> are optional (duck-typed at discovery):</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># wactorz/ext/&lt;name&gt;/__init__.py</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">setup</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Register routes, create state, wire lifecycle hooks.&quot;&quot;&quot;</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">public_config</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a dict merged into the /api/config response, namespaced by ext.&quot;&quot;&quot;</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_ready</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Called after every extension&#39;s setup() has run — for cross-extension</span>
+<span class="sd">       logic that needs another extension already wired.&quot;&quot;&quot;</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">actor_decorator</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">web</span><span class="o">.</span><span class="n">Application</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">actor</span><span class="p">,</span> <span class="nb">dict</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a per-actor payload enricher (or None to opt out).&quot;&quot;&quot;</span>
+
+<span class="c1"># Optional: declare ordering dependencies for on_ready().</span>
+<span class="n">__deps__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;other-ext&quot;</span><span class="p">]</span>  <span class="c1"># this on_ready() runs after other-ext&#39;s</span>
+</code></pre></div>
+
+<h3 id="protocol">Protocol</h3>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>setup(app)</code></td>
+<td>(<strong>required</strong>) register routes + state</td>
+</tr>
+<tr>
+<td><code>public_config(app)</code></td>
+<td>(optional) merged into <code>/api/config</code> at startup</td>
+</tr>
+<tr>
+<td><code>on_ready(app)</code></td>
+<td>(optional) runs as <code>on_startup</code>, topo-sorted by <code>__deps__</code></td>
+</tr>
+<tr>
+<td><code>actor_decorator(app)</code></td>
+<td>(optional) enriches each actor in the <code>/api/actors</code> payload</td>
+</tr>
+</tbody>
+</table>
+<h3 id="enriching-the-actors-list">Enriching the actors list</h3>
+<p><code>actor_decorator(app)</code> lets an extension add fields to every actor the dashboard
+shows, without core knowing about them. Return a <code>(actor, payload) -&gt; None</code>
+closure — typically one that fetches your index once, then mutates each payload
+in place:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.core</span><span class="w"> </span><span class="kn">import</span> <span class="n">contract</span>  <span class="c1"># ACTOR_REGISTRY app-key (core-provided)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">actor_decorator</span><span class="p">(</span><span class="n">app</span><span class="p">):</span>
+    <span class="n">index</span> <span class="o">=</span> <span class="n">app</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;my-index&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="p">{}</span>       <span class="c1"># your own per-actor data</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">decorate</span><span class="p">(</span><span class="n">actor</span><span class="p">,</span> <span class="n">payload</span><span class="p">):</span>
+        <span class="n">payload</span><span class="p">[</span><span class="s2">&quot;myField&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">index</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">actor</span><span class="o">.</span><span class="n">actor_id</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">decorate</span>
+</code></pre></div>
+
+<p>The registry itself is on <code>app[contract.ACTOR_REGISTRY]</code> (set by core before
+<code>setup_all()</code>; <code>None</code> in standalone mode). A raising factory or one returning
+<code>None</code> is skipped — never fatal.</p>
+<h3 id="requirements">Requirements</h3>
+<ul>
+<li>Register routes on <code>app.router</code> and namespace them under <code>/api/&lt;ext&gt;/…</code>.</li>
+<li>State belongs to the extension, not shared <code>app["…"]</code> globals — a module
+  singleton or manager class keeps the feature self-contained.</li>
+<li>Config comes from <code>os.getenv(…)</code>, <strong>not</strong> <code>wactorz.config.CONFIG</code> (which stays
+  free of extension-specific fields).</li>
+<li>Disable gracefully when the extension's env var is unset — never raise at import
+  or startup because an optional dependency is missing.</li>
+</ul>
+<h3 id="example-tts">Example: TTS</h3>
+<div class="highlight"><pre><span></span><code>wactorz/ext/tts/
+└── __init__.py     # setup() registers /api/tts + /api/tts/voices,
+                    # public_config() reports availability,
+                    # on_startup warms the voice list. edge-tts is imported
+                    # inside the handlers so the ext is a no-op when it&#39;s absent.
+</code></pre></div>
+
+<hr />
+<h2 id="frontend">Frontend</h2>
+<p>A frontend extension lives in <code>src/ext/&lt;name&gt;/</code> and exports a <code>register()</code>
+function from its barrel file. It seeds itself from the config that
+<code>public_config()</code> merged into <code>/api/config</code>, then communicates with the rest of
+the app <strong>only through the typed event bus</strong> (<code>src/events.ts</code> — <code>emit</code>/<code>listen</code>),
+never by calling other components directly.</p>
+<div class="highlight"><pre><span></span><code><span class="c1">// src/ext/&lt;name&gt;/index.ts</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="nx">MyConfig</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">;</span>
+<span class="w">    </span><span class="nx">available</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">config</span><span class="p">.</span><span class="nx">available</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
+<span class="w">    </span><span class="c1">// Seed the singleton, then let it self-wire via the event bus.</span>
+<span class="w">    </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">setApiBase</span><span class="p">(</span><span class="nx">config</span><span class="p">.</span><span class="nx">apiBase</span><span class="p">);</span>
+<span class="w">    </span><span class="ow">void</span><span class="w"> </span><span class="nx">myManager</span><span class="p">.</span><span class="nx">init</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<h3 id="wiring-in-maints">Wiring in main.ts</h3>
+<p><code>register()</code> is called once during startup, after <code>/api/config</code> is seeded:</p>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">register</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">registerMyExt</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;./ext/myname&quot;</span><span class="p">;</span>
+
+<span class="nx">registerMyExt</span><span class="p">({</span><span class="w"> </span><span class="nx">apiBase</span><span class="o">:</span><span class="w"> </span><span class="kt">_apiBase</span><span class="p">,</span><span class="w"> </span><span class="nx">available</span><span class="w"> </span><span class="p">});</span>
+</code></pre></div>
+
+<h3 id="config-seeding">Config seeding</h3>
+<p><code>config/serverConfig.ts</code> fetches <code>/api/config</code> once and seeds registered keys
+into <code>safeStorage</code> (paired with a <code>__server</code> baseline so a user's local edit
+survives until the server value itself changes). Core registers only its own
+keys; your barrel contributes the extension's at module load — before
+<code>seedServerConfig()</code> runs:</p>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerConfigEntry</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;../../config/serverConfig&quot;</span><span class="p">;</span>
+
+<span class="c1">// Fields your backend public_config() returns, namespaced by ext name.</span>
+<span class="nx">registerConfigEntry</span><span class="p">(</span><span class="s2">&quot;wactorz-myext-flag&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">c</span><span class="w"> </span><span class="p">=&gt;</span>
+<span class="w">    </span><span class="p">(</span><span class="nx">c</span><span class="p">.</span><span class="nx">myext</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">Record</span><span class="o">&lt;</span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">unknown</span><span class="o">&gt;</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">flag</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="kt">string</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="kc">undefined</span><span class="p">,</span>
+<span class="p">);</span>
+</code></pre></div>
+
+<p>Keys not registered are never stored, even if the server sends them.</p>
+<h3 id="dashboard-views-and-icons">Dashboard views and icons</h3>
+<p>An extension that adds a dashboard tab uses the two registries — core never
+imports extension views or icon names:</p>
+<div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">registerIcon</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;../../ui/dashboard/icons&quot;</span><span class="p">;</span>
+
+<span class="k">export</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">register</span><span class="p">(</span><span class="nx">config</span><span class="o">:</span><span class="w"> </span><span class="kt">MyConfig</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="ow">void</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// 1. Register the icon BEFORE registerView() uses its name.</span>
+<span class="w">    </span><span class="nx">registerIcon</span><span class="p">(</span><span class="s2">&quot;hexagon&quot;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&lt;path d=&quot;M21 16V8a2 …&quot;/&gt;&#39;</span><span class="p">);</span>
+
+<span class="w">    </span><span class="c1">// 2. Register the tab: nav button + lazy view builder.</span>
+<span class="w">    </span><span class="nx">config</span><span class="p">.</span><span class="nx">registerView</span><span class="p">(</span><span class="s2">&quot;mytab&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;hexagon&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;My Tab&quot;</span><span class="p">,</span><span class="w"> </span><span class="p">()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">buildMyView</span><span class="p">(</span><span class="nx">config</span><span class="p">.</span><span class="nx">onRender</span><span class="p">));</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p><code>registerView(key, icon, label, builder)</code> is a <code>CardDashboard</code> method; <code>main.ts</code>
+passes it (plus an <code>onRender</code> re-render thunk) into <code>register()</code>. The builder is
+a <code>() =&gt; HTMLElement</code> thunk called lazily on navigation — keep it pure and build
+a fresh element tree per call.</p>
+<table>
+<thead>
+<tr>
+<th>Registry</th>
+<th>Module</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>registerIcon()</code></td>
+<td><code>ui/dashboard/icons.ts</code></td>
+<td>Add SVG icons by name</td>
+</tr>
+<tr>
+<td><code>registerView()</code></td>
+<td><code>CardDashboard</code> (method)</td>
+<td>Add a nav tab + view builder</td>
+</tr>
+<tr>
+<td><code>registerConfigEntry()</code></td>
+<td><code>config/serverConfig.ts</code></td>
+<td>Seed <code>/api/config</code> fields</td>
+</tr>
+</tbody>
+</table>
+<h3 id="event-bus">Event bus</h3>
+<p>If your extension emits or listens for new event types, add them to
+<code>AppEventMap</code> in <code>src/events.ts</code> so payloads stay typed. Other components react
+to those events — they never import your extension. (TTS, for example, emits
+<code>tts-audio-start</code> / <code>tts-audio-end</code>; the ambient-audio manager listens and ducks
+its volume, with no import between the two.)</p>
+<h3 id="testing">Testing</h3>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Barrel (<code>register()</code> logic)</td>
+<td><code>src/__tests__/ext/&lt;name&gt;/index.test.ts</code></td>
+</tr>
+<tr>
+<td>Manager / behaviour</td>
+<td><code>src/__tests__/ext/&lt;name&gt;/&lt;name&gt;.test.ts</code></td>
+</tr>
+</tbody>
+</table>
+<p>New extensions ship with tests; coverage is gated (<code>bun run coverage</code>).</p>
+<hr />
+<h2 id="optional-infrastructure-compose-overlay">Optional infrastructure (compose overlay)</h2>
+<p>If an extension needs an external service (a database, triple store, extra
+broker, …), <strong>do not add it to the base <code>compose.yaml</code>.</strong> Doing so forces the
+dependency on every user and turns the shared compose file into a merge-conflict
+magnet. Instead, ship an <strong>additive</strong> <code>compose.&lt;ext&gt;.yaml</code> overlay and activate
+the extension through an environment variable:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># compose.&lt;ext&gt;.yaml — additive, opt-in</span>
+<span class="nt">services</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">my-service</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">profiles</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">full</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">…</span>
+<span class="w">    </span><span class="nt">networks</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">wactorz-net</span><span class="p p-Indicator">]</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="c1"># Layer the overlay onto either base stack; both read .env, so set the ext&#39;s</span>
+<span class="c1"># activation var (e.g. MY_EXT_URL=…) there.</span>
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.yaml<span class="w">     </span>-f<span class="w"> </span>compose.&lt;ext&gt;.yaml<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>-f<span class="w"> </span>compose.&lt;ext&gt;.yaml<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>Because the extension reads its URL from <code>os.getenv(…)</code> and no-ops when unset,
+the base stack stays lean and the infrastructure is purely opt-in — the same
+"self-disabling" contract as the code.</p>
+<hr />
+<h2 id="checklist">Checklist</h2>
+<ul>
+<li>[ ] Backend <code>setup()</code> registers routes under <code>/api/&lt;ext&gt;/…</code></li>
+<li>[ ] Optional <code>public_config()</code> returns only non-secret keys (never tokens)</li>
+<li>[ ] Optional <code>on_ready()</code> handles cross-extension ordering via <code>__deps__</code></li>
+<li>[ ] Optional <code>actor_decorator()</code> enriches the <code>/api/actors</code> payload</li>
+<li>[ ] Config is read from <code>os.getenv(…)</code>, not <code>wactorz.config.CONFIG</code></li>
+<li>[ ] Extension no-ops gracefully when its env var / dependency is absent</li>
+<li>[ ] Frontend barrel exports a <code>register(config)</code> function; wires via the event bus</li>
+<li>[ ] Config fields registered from the barrel via <code>registerConfigEntry()</code></li>
+<li>[ ] Icons registered via <code>registerIcon()</code> before <code>registerView()</code></li>
+<li>[ ] New event types added to <code>AppEventMap</code> in <code>src/events.ts</code></li>
+<li>[ ] Any external service ships as an additive <code>compose.&lt;ext&gt;.yaml</code> overlay</li>
+<li>[ ] Tests in <code>wactorz</code>/<code>tests/ext/</code> and <code>src/__tests__/ext/&lt;name&gt;/</code></li>
+</ul>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

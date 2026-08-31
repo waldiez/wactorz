@@ -3,7 +3,7 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — pending
+## [0.6.0] - 2026-08-31
 
 ### Removed — breaking
 
@@ -864,7 +864,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Docker Compose stacks (dev and production)
 - `pyproject.toml` with optional dependency groups
 
-[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/waldiez/wactorz/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/waldiez/wactorz/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/waldiez/wactorz/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/waldiez/wactorz/compare/v0.5.0...v0.5.1

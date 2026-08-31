@@ -12,13 +12,10 @@
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 
-import {
-    FrameCutter,
-    framePayload,
-    canCaptureLive,
-    LiveCapture,
-    PROCESSOR,
-} from "../../../ext/stt/liveCapture";
+import { FrameCutter, framePayload, canCaptureLive, LiveCapture } from "../../../ext/stt/liveCapture";
+// The file the browser is served, read as text so the half that runs on the
+// audio thread can be run here too.
+import PROCESSOR from "../../../../public/capture-worklet.js?raw";
 
 describe("cutting blocks into frames", () => {
     it("emits nothing until a whole frame is ready", () => {

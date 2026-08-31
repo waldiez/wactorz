@@ -21,8 +21,9 @@
  * as a gap in the words rather than an error. Here a busy main thread delays the
  * frames instead of dropping them.
  *
- * The worklet is loaded from a blob rather than a file it would have to be
- * bundled as, which keeps it beside the code that uses it.
+ * The worklet is a file of its own, served from this origin. It has to be: a
+ * worklet module is fetched as a script, and the page's policy admits scripts
+ * from its own origin only.
  */
 
 import { resample, TARGET_RATE } from "./wav";
@@ -35,42 +36,10 @@ const FRAME_SAMPLES = 1600; // 100 ms
  *  in; larger means fewer messages and later frames. */
 const CAPTURE_BLOCK = 2048;
 
-/** The worklet itself. It only gathers and forwards: converting rates and
- *  cutting frames is the same work either way, and is left where it is tested.
- *
- *  Exported because it runs in a scope no test has, so a test builds that scope
- *  around it -- a mistake in here reaches a person as silence, not an error. */
-export const PROCESSOR = `
-class CaptureProcessor extends AudioWorkletProcessor {
-    constructor(options) {
-        super();
-        this._block = new Float32Array(options.processorOptions.block);
-        this._filled = 0;
-    }
-    process(inputs) {
-        const channel = inputs[0] && inputs[0][0];
-        if (!channel) {
-            return true;
-        }
-        for (let i = 0; i < channel.length; i++) {
-            this._block[this._filled++] = channel[i];
-            if (this._filled === this._block.length) {
-                this.port.postMessage(this._block.slice());
-                this._filled = 0;
-            }
-        }
-        return true;
-    }
-}
-registerProcessor("wactorz-capture", CaptureProcessor);
-`;
+/** Where the audio-thread half is served from, beside the page that loads it. */
+const PROCESSOR_URL = "capture-worklet.js";
 
 type AudioContextCtor = new () => AudioContext;
-
-/** The worklet as something `addModule` can fetch. */
-function workletUrl(): string {
-    return URL.createObjectURL(new Blob([PROCESSOR], { type: "text/javascript" }));
-}
 
 function audioContext(): AudioContextCtor | undefined {
     const scope = window as { AudioContext?: AudioContextCtor; webkitAudioContext?: AudioContextCtor };
@@ -188,14 +157,10 @@ export class LiveCapture {
         if (!this._context.audioWorklet) {
             throw new Error("this browser cannot capture audio");
         }
-        const url = workletUrl();
-        try {
-            await this._context.audioWorklet.addModule(url);
-        } finally {
-            // The worklet is compiled by now, so the blob has served its purpose
-            // and would otherwise be held for the life of the page.
-            URL.revokeObjectURL(url);
-        }
+        // Resolved against the page rather than the site root: the dashboard is
+        // served under a prefix behind Home Assistant's ingress, and an absolute
+        // path would look for this at the top of that host instead.
+        await this._context.audioWorklet.addModule(new URL(PROCESSOR_URL, document.baseURI).href);
 
         const source = this._context.createMediaStreamSource(this._stream);
         this._node = new AudioWorkletNode(this._context, "wactorz-capture", {

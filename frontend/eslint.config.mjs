@@ -124,11 +124,12 @@ export default [
         ...tseslint.configs.disableTypeChecked,
     },
     {
-        // The service worker ships to users but was linted by nothing: `public`
-        // was ignored above, and every block below matches only .ts/.tsx — so
-        // lifting the ignore alone still left it unchecked. It is plain script
-        // (no bundler, no imports), and its globals come from the ServiceWorker
-        // scope rather than the DOM, so it needs its own block.
+        // Files served to the browser as plain script rather than through the
+        // bundler: the service worker, and the microphone's audio-thread half.
+        // `public` was ignored above and every block below matches only
+        // .ts/.tsx, so lifting the ignore alone still left them unchecked. Their
+        // globals come from the scopes they run in rather than from the DOM,
+        // which is why they need a block of their own.
         files: ["public/**/*.js"],
         languageOptions: {
             ecmaVersion: "latest",
@@ -142,6 +143,11 @@ export default [
                 Response: "readonly",
                 Request: "readonly",
                 URL: "readonly",
+                // The AudioWorkletGlobalScope, where the capture processor runs.
+                AudioWorkletProcessor: "readonly",
+                registerProcessor: "readonly",
+                sampleRate: "readonly",
+                currentTime: "readonly",
             },
         },
         plugins: eslintPluginPrettierRecommended.plugins,

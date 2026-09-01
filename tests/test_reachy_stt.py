@@ -10,10 +10,11 @@ from wactorz.catalogue_agents import reachy_stt
 
 
 class STTConfigTest(unittest.TestCase):
-    def test_defaults_to_local_faster_whisper(self):
+    def test_defaults_to_deepgram_nova_3(self):
         config = reachy_stt.STTConfig.resolve({}, {})
-        self.assertEqual(config.backend, "faster-whisper")
-        self.assertEqual(config.model, "base")
+        self.assertEqual(config.backend, "deepgram")
+        self.assertEqual(config.model, "nova-3")
+        self.assertEqual(config.timeout_s, 60.0)
 
     def test_payload_overrides_environment(self):
         config = reachy_stt.STTConfig.resolve(
@@ -29,6 +30,12 @@ class STTConfigTest(unittest.TestCase):
         self.assertEqual(config.model, "tiny")
         self.assertEqual(config.language, "el")
         self.assertEqual(config.hotwords, "Reachy, Wactorz")
+
+    def test_deepgram_alias_and_timeout_are_resolved(self):
+        config = reachy_stt.STTConfig.resolve({"stt_backend": "nova-3", "stt_timeout_s": 15}, {})
+        self.assertEqual(config.backend, "deepgram")
+        self.assertEqual(config.model, "nova-3")
+        self.assertEqual(config.timeout_s, 15.0)
 
     def test_unknown_backend_fails_clearly(self):
         with self.assertRaisesRegex(ValueError, "unknown Reachy STT backend"):
@@ -133,6 +140,89 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertEqual(kwargs["file"], ("reachy.wav", b"RIFFmock", "audio/wav"))
         self.assertEqual(kwargs["model"], "whisper-1")
         self.assertEqual(kwargs["language"], "en")
+
+    def test_deepgram_backend_requires_key(self):
+        config = reachy_stt.STTConfig("deepgram", "nova-3")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "DEEPGRAM_API_KEY"):
+                asyncio.run(reachy_stt.DeepgramBackend().transcribe(b"RIFFmock", config))
+
+    def test_deepgram_backend_posts_wav_with_nova_options(self):
+        option_calls = []
+
+        class PrerecordedOptions:
+            def __init__(self, **kwargs):
+                option_calls.append(kwargs)
+
+        transcribe_file = mock.Mock(
+            return_value=types.SimpleNamespace(
+                results=types.SimpleNamespace(
+                    channels=[
+                        types.SimpleNamespace(
+                            detected_language="el",
+                            language_confidence=0.93,
+                            alternatives=[
+                                types.SimpleNamespace(
+                                    transcript=" Γεια σου Reachy ", confidence=0.97
+                                )
+                            ],
+                        )
+                    ]
+                )
+            )
+        )
+        prerecorded = types.SimpleNamespace(
+            v=mock.Mock(return_value=types.SimpleNamespace(transcribe_file=transcribe_file))
+        )
+        client = types.SimpleNamespace(listen=types.SimpleNamespace(prerecorded=prerecorded))
+        deepgram_module = types.SimpleNamespace(
+            DeepgramClient=mock.Mock(return_value=client),
+            PrerecordedOptions=PrerecordedOptions,
+        )
+        timeout = object()
+        httpx_module = types.SimpleNamespace(Timeout=mock.Mock(return_value=timeout))
+        config = reachy_stt.STTConfig(
+            "deepgram",
+            "nova-3",
+            "el",
+            hotwords="Reachy, Wactorz, Home Assistant",
+            timeout_s=45,
+        )
+        with (
+            mock.patch.dict(os.environ, {"DEEPGRAM_API_KEY": "test-only"}),
+            mock.patch.dict("sys.modules", {"deepgram": deepgram_module, "httpx": httpx_module}),
+        ):
+            result = asyncio.run(reachy_stt.DeepgramBackend().transcribe(b"RIFFmock", config))
+
+        self.assertEqual(result.text, "Γεια σου Reachy")
+        self.assertEqual(result.confidence, 0.97)
+        self.assertEqual(result.language, "el")
+        self.assertEqual(result.language_probability, 0.93)
+        deepgram_module.DeepgramClient.assert_called_once_with("test-only")
+        prerecorded.v.assert_called_once_with("1")
+        self.assertEqual(
+            option_calls,
+            [
+                {
+                    "model": "nova-3",
+                    "punctuate": True,
+                    "smart_format": True,
+                    "language": "el",
+                    "keyterm": ["Reachy", "Wactorz", "Home Assistant"],
+                }
+            ],
+        )
+        httpx_module.Timeout.assert_called_once_with(45, connect=10.0)
+        transcribe_file.assert_called_once_with(
+            {"buffer": b"RIFFmock", "mimetype": "audio/wav"},
+            mock.ANY,
+            timeout=timeout,
+        )
+
+    def test_deepgram_empty_response_fails_clearly(self):
+        response = types.SimpleNamespace(results=types.SimpleNamespace(channels=[]))
+        with self.assertRaisesRegex(RuntimeError, "no transcription channel"):
+            reachy_stt._deepgram_result(response)
 
 
 if __name__ == "__main__":

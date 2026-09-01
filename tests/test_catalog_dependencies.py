@@ -39,3 +39,4 @@ def test_unversioned_dependency_only_needs_to_import():
 
 def test_distribution_with_different_import_name_is_mapped():
     assert _IMPORT_NAME_MAP["webrtcvad-wheels"] == "webrtcvad"
+    assert _IMPORT_NAME_MAP["deepgram-sdk"] == "deepgram"

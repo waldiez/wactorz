@@ -59,6 +59,7 @@ _IMPORT_NAME_MAP = {
     "opencv-python": "cv2",
     "scikit-image": "skimage",
     "webrtcvad-wheels": "webrtcvad",
+    "deepgram-sdk": "deepgram",
 }
 
 
@@ -414,7 +415,8 @@ def _build_catalog() -> dict:
                 "Setup:\n"
                 "1. Install the recipe dependencies when prompted, or preinstall: "
                 f"pip install {_REACHY_MINI_REQUIREMENT} numpy edge-tts pillow "
-                "webrtcvad-wheels faster-whisper.\n"
+                "webrtcvad-wheels 'deepgram-sdk>=3,<4'. Set DEEPGRAM_API_KEY "
+                "before using voice input.\n"
                 "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
                 "3. For Reachy Mini Lite, start the local daemon first: "
@@ -467,19 +469,20 @@ def _build_catalog() -> dict:
                 "edge-tts",
                 "pillow",
                 "webrtcvad-wheels",
-                # Speech recognition for `ask_voice` and `conversation_start`,
-                # and the default STT backend. Listed because leaving it out
-                # meant every voice feature failed on a robot installed exactly
-                # as instructed, with nothing said until the first attempt.
-                "faster-whisper",
+                # Default cloud speech recognition for `ask_voice` and
+                # `conversation_start`. Local Whisper remains selectable when
+                # installed separately.
+                "deepgram-sdk>=3,<4",
             ],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha",
+                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha|life",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
-                "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
+                "voice": "str   — edge-tts voice (cmd=say); omit it, the voice follows the text's script",
+                "enabled": "bool  — ambient idle motion on/off (cmd=life); breathing, gaze drift, antenna flicks",
+                "amplitude": "float — 0-1 scale for ambient motion (cmd=life); 1 is full, 0 is still",
                 "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
                 "loud": "bool  — cmd=say; default true (compress+limit file to max); false plays raw quiet TTS",
-                "preset": "str   — speaking mode (cmd=volume): whisper(70)|normal(85)|louder(93)|presenter(100)",
+                "preset": "str   — cmd=volume: whisper(70)|normal(85)|louder(93)|presenter(100); cmd=life: off|calm|antennas|alive|showtime",
                 "level": "float — 0-100 robot speaker volume (cmd=volume); 100=loudest, 0=quietest (daemon /api/volume/set)",
                 "delta": "float — relative volume change in level points (cmd=volume), e.g. +15 / -25",
                 "mute": "bool  — cmd=volume; true silences (remembers level), false restores it",
@@ -503,8 +506,9 @@ def _build_catalog() -> dict:
                 "path": "str   — save the frame/clip to this file (cmd=camera|listen)",
                 "publish": "bool  — also emit on custom/reachy/camera|audio (cmd=camera|listen)",
                 "include_b64": "bool  — include the base64 blob in the result (cmd=camera|listen), default true",
-                "stt_backend": "str — ask_voice/conversation backend: faster-whisper (default)|whisper|openai",
+                "stt_backend": "str — ask_voice/conversation backend: deepgram (default)|faster-whisper|whisper|openai",
                 "stt_model": "str — optional voice transcription model override",
+                "stt_timeout_s": "float — hosted transcription timeout (default 60s)",
                 "stt_language": "str — optional language lock; unset auto-detects",
                 "stt_hotwords": "str — optional comma-separated recognition hints",
                 "stt_fallback_language": "str — retry language for uncertain short speech",

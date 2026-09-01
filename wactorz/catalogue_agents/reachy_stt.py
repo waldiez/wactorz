@@ -1,8 +1,8 @@
 """Configurable speech-to-text backends for the Reachy Mini voice interface.
 
-All optional dependencies are imported lazily. Selecting a hosted backend is
-explicit: the default is local ``faster-whisper`` and audio is never uploaded
-merely because an API key happens to exist in the environment.
+All optional dependencies are imported lazily. This experimental branch uses
+Deepgram by default, so voice clips are uploaded when a Deepgram API key is
+configured. Local Whisper backends remain available by explicit selection.
 """
 
 from __future__ import annotations
@@ -18,11 +18,14 @@ from pathlib import Path
 from typing import Any, Protocol
 
 _DEFAULT_MODELS = {
+    "deepgram": "nova-3",
     "faster-whisper": "base",
     "whisper": "base",
     "openai": "gpt-4o-transcribe",
 }
 _BACKEND_ALIASES = {
+    "nova": "deepgram",
+    "nova-3": "deepgram",
     "faster_whisper": "faster-whisper",
     "fasterwhisper": "faster-whisper",
     "local": "faster-whisper",
@@ -49,6 +52,7 @@ class STTConfig:
     #: a recording made while the loudspeaker was playing, discards the speech
     #: it was meant to protect and returns an empty transcript.
     vad_filter: bool = True
+    timeout_s: float = 60.0
 
     @classmethod
     def resolve(
@@ -59,7 +63,7 @@ class STTConfig:
         payload = payload or {}
         environ = os.environ if environ is None else environ
         raw_backend = (
-            str(payload.get("stt_backend") or environ.get("REACHY_STT_BACKEND") or "faster-whisper")
+            str(payload.get("stt_backend") or environ.get("REACHY_STT_BACKEND") or "deepgram")
             .strip()
             .lower()
         )
@@ -90,7 +94,11 @@ class STTConfig:
             or None
         )
         vad_filter = bool(payload.get("stt_vad_filter", True))
-        return cls(backend, model, language, device, compute_type, hotwords, vad_filter)
+        timeout_s = max(
+            1.0,
+            float(payload.get("stt_timeout_s") or environ.get("REACHY_STT_TIMEOUT_S") or 60.0),
+        )
+        return cls(backend, model, language, device, compute_type, hotwords, vad_filter, timeout_s)
 
 
 @dataclass(frozen=True)
@@ -247,7 +255,87 @@ class OpenAIBackend:
         return str(getattr(result, "text", "") or "").strip()
 
 
+def _deepgram_keyterms(hotwords: str | None) -> list[str] | None:
+    """Turn the shared comma-separated recognition hints into Nova-3 keyterms."""
+    if not hotwords:
+        return None
+    terms = [term.strip() for term in hotwords.split(",") if term.strip()]
+    return terms or None
+
+
+def _deepgram_result(response: Any) -> _BackendResult:
+    """Extract the first Deepgram channel without coupling callers to its SDK types."""
+    try:
+        channel = response.results.channels[0]
+        alternative = channel.alternatives[0]
+    except (AttributeError, IndexError, TypeError) as exc:
+        raise RuntimeError("Deepgram returned no transcription channel") from exc
+    return _BackendResult(
+        text=str(getattr(alternative, "transcript", "") or "").strip(),
+        confidence=getattr(alternative, "confidence", None),
+        language=str(getattr(channel, "detected_language", "") or "").strip() or None,
+        language_probability=getattr(channel, "language_confidence", None),
+    )
+
+
+def _transcribe_deepgram_sync(
+    wav_bytes: bytes,
+    config: STTConfig,
+    api_key: str,
+    client_cls: Any,
+    options_cls: Any,
+    httpx_module: Any,
+) -> _BackendResult:
+    """Send one bounded WAV clip through the synchronous Deepgram v3 client."""
+    options_kwargs: dict[str, Any] = {
+        "model": config.model,
+        "punctuate": True,
+        "smart_format": True,
+    }
+    if config.language:
+        options_kwargs["language"] = config.language
+    keyterms = _deepgram_keyterms(config.hotwords)
+    if keyterms:
+        options_kwargs["keyterm"] = keyterms
+    client = client_cls(api_key)
+    response = client.listen.prerecorded.v("1").transcribe_file(
+        {"buffer": wav_bytes, "mimetype": "audio/wav"},
+        options_cls(**options_kwargs),
+        timeout=httpx_module.Timeout(config.timeout_s, connect=min(10.0, config.timeout_s)),
+    )
+    return _deepgram_result(response)
+
+
+class DeepgramBackend:
+    """Hosted Nova transcription using the optional Deepgram SDK v3."""
+
+    async def transcribe(self, wav_bytes: bytes, config: STTConfig) -> _BackendResult:
+        api_key = os.environ.get("DEEPGRAM_API_KEY")
+        if not api_key:
+            raise RuntimeError("DEEPGRAM_API_KEY is required when REACHY_STT_BACKEND=deepgram")
+        try:
+            import httpx  # pyright: ignore[reportMissingImports]  # optional Deepgram dependency
+            from deepgram import (  # pyright: ignore[reportMissingImports]  # optional backend
+                DeepgramClient,
+                PrerecordedOptions,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "deepgram-sdk is not installed; run: pip install 'deepgram-sdk>=3,<4'"
+            ) from exc
+        return await asyncio.to_thread(
+            _transcribe_deepgram_sync,
+            wav_bytes,
+            config,
+            api_key,
+            DeepgramClient,
+            PrerecordedOptions,
+            httpx,
+        )
+
+
 _BACKENDS: dict[str, STTBackend] = {
+    "deepgram": DeepgramBackend(),
     "faster-whisper": FasterWhisperBackend(),
     "whisper": WhisperBackend(),
     "openai": OpenAIBackend(),

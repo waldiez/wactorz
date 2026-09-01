@@ -221,11 +221,17 @@ payload: {"duration": 5}
 
 `ask_voice` remains one-shot. There is deliberately no always-on microphone or wake
 word.
-The default backend is local `faster-whisper`; install and configure one backend before
-using `ask_voice`:
+The default backend on this test branch is hosted Deepgram Nova-3. It needs an API
+key and uploads each bounded WAV clip for transcription:
 
 ~~~bash
-# Local, recommended default
+# Hosted default
+pip install 'deepgram-sdk>=3,<4'
+DEEPGRAM_API_KEY=...
+REACHY_STT_BACKEND=deepgram
+REACHY_STT_MODEL=nova-3
+
+# Local alternative; audio stays on this machine
 pip install faster-whisper
 REACHY_STT_BACKEND=faster-whisper
 REACHY_STT_MODEL=Infomaniak-AI/faster-whisper-large-v3-turbo
@@ -245,7 +251,8 @@ OPENAI_API_KEY=...
 Optional `REACHY_STT_LANGUAGE`, `REACHY_STT_FALLBACK_LANGUAGE`,
 `REACHY_STT_DEVICE`, `REACHY_STT_COMPUTE_TYPE`, and `REACHY_STT_HOTWORDS`
 settings tune language, uncertain-language fallback, local inference, and recognition
-bias. Leave the primary language unset to auto-detect. Short utterances whose language
+bias. `REACHY_STT_TIMEOUT_S` bounds hosted calls and defaults to 60 seconds. Leave the
+primary language unset to use the backend default. Short utterances whose language
 probability is below `stt_min_language_probability` (default `0.60`) are retried in
 the configured fallback language; unresolved guesses are silently discarded instead
 of being routed as commands. The MQTT payload can override these settings with
@@ -318,6 +325,16 @@ previous-transcript conditioning, and reports confidence/no-speech scores. Resul
 below `stt_min_confidence` (default `0.25`) or above `stt_max_no_speech` (default
 `0.60`) are silently discarded without consuming a turn.
 
+Speech comes back out in whatever language the reply is written in. `TTS_VOICE`
+sets the voice; a *Multilingual* edge-tts voice
+(`en-US-BrianMultilingualNeural`, `en-AU-WilliamMultilingualNeural`, ...)
+pronounces every supported language itself, so Reachy keeps one voice across
+English and Greek. Any other voice speaks a single language and would read Greek
+out as Unicode letter names, so Greek text is redirected to `TTS_VOICE_EL`
+instead - `el-GR-AthinaNeural` (female) by default, or `el-GR-NestorasNeural`
+(male); edge-tts ships no others. A per-call `{"voice": "..."}` on `say`
+overrides both.
+
 Confident auto-detected languages become a session hint for later ambiguous turns.
 Voice-originated turns create no durable personal facts unless the user explicitly
 says to remember or save something. This prevents a bad transcript from becoming the
@@ -325,6 +342,121 @@ user's name or household profile while preserving intentional voice memory.
 
 Greek and English requests to lower or raise Reachy's own voice are handled locally
 as robot speaker-volume changes rather than being sent to Home Assistant.
+
+### Idle presets
+
+Amplitude, tempo, which joints move and how often attract beats play are five
+independent settings, and nobody wants to reason about five settings with an
+audience already in front of the robot. A preset sets all of them at once:
+
+| Preset | What it looks like |
+| --- | --- |
+| `off` | Completely still. Motors stay live and every command still works — this is stillness, not sleep. |
+| `calm` | Barely moving, and *slower* as well as smaller. Breathing that is only shallower reads as a robot turned down; breathing that is also slower reads as something at rest. |
+| `antennas` | Antennas alive, head and body held absolutely still. For a plinth where a sweeping head is a hazard, or when he should look like he is listening rather than performing. |
+| `alive` | **The default.** Breathing, gaze drift, an attract beat every half minute or so. |
+| `showtime` | Bigger and quicker, with beats two to three times as often. Too much for a quiet room, and meant to be. |
+
+Set it whichever way is nearest to hand:
+
+```json
+{"cmd": "life", "preset": "showtime"}
+```
+
+```text
+REACHY_IDLE_PRESET=alive                        # .env, at boot
+custom/reachy/config {"idle_preset": "calm"}    # persists
+```
+
+Or just say it — this is the control you reach for with people watching, so it
+works out loud, in English or Greek:
+
+> "calm down" · "settle down" · "antennas only" · "showtime" · "show off" ·
+> "stop moving" · "alive" · "back to normal"
+> "ηρέμησε" · "μόνο τις κεραίες" · "μη κουνιέσαι" · "πιο ζωηρά" · "κανονικά"
+
+Naming a preset next to any word meaning *how you move* also works, so
+"set preset animation alive", "idle showtime" and "motion calm" all land. A bare
+preset name is matched only as the whole message: "alive" changes the preset,
+"are you alive?" stays a question.
+
+If ambient motion is ever held down by a flag that outlived whatever set it,
+it releases itself after 25 seconds and logs which flag it was. Nothing
+legitimate holds one that long, and the alternative — a robot that stops moving
+permanently and silently while every command still reports success — is the
+worst failure this feature has.
+
+`{"cmd": "life"}` with no arguments reports the current preset and lists the
+rest with a description of each. Individual settings are applied *after* a
+preset, so `{"preset": "calm", "attract": true}` reads the way it looks: that
+mood, with one deliberate exception.
+
+### Ambient motion
+
+A robot holding one pose perfectly still is hard to tell from a prop, which
+matters most in a room where people are walking past. `REACHY_IDLE_LIFE=1` (or
+`{"cmd": "life", "enabled": true}`, or `custom/reachy/config {"idle_life":
+true}`) keeps a small amount of motion going: breathing on a 4.3s cycle, a slow
+weight shift on 11.3s, gaze that settles somewhere for a few seconds and then
+moves, and an occasional asymmetric antenna flick. The three periods do not
+divide into each other, so the sum never visibly repeats. Off by default.
+
+It cannot take the robot away from you, because it never names an absolute
+target. Every offset is added to the pose your last command established, so a
+`pose` moves the base and ambient motion breathes around the new one. It also
+stands down completely while any command is in flight (`busy`), while Reachy is
+speaking, and while he is asleep. Scale it with
+`{"cmd": "life", "amplitude": 0.5}` or `REACHY_IDLE_LIFE_AMPLITUDE` — 1.0 is the
+tuned default and 1.5 the maximum, and the hard ceilings in the code apply on
+top of whatever you set.
+
+A commanded pose is **held and then released**. It stays put for about three and
+a half seconds, then eases back toward neutral over another two and a half. A
+pose is transient intent, not a new resting posture: without this, aiming his
+head down for a `describe` left him breathing politely at the floor until
+something else moved him. The direction he is *facing* is never relaxed away —
+turn him toward the room and he stays turned. Set `REACHY_IDLE_RELAX=0` or
+`{"cmd": "life", "relax": false}` to pin a pose exactly where you put it.
+
+After `look_at`, `look_pixel` or an `emotion` clip the head pose has no name in
+pose space, so ambient motion leaves the head alone and keeps only the antennas
+alive. He holds that gaze for the same few seconds, then makes one smooth
+interpolated move back to neutral and resumes — a pause, never a dead end.
+
+### Attract beats
+
+Breathing stops him reading as switched off. It does not make anyone cross a
+room. Every 18-45 seconds, when nothing else is happening, Reachy plays one
+larger move drawn at random without immediate repeats: `scan` (a slow sweep of
+the room), `perk` (head cock, antennas up), `double_take` (glance away, snap
+back), `stretch`, `muse`. Each runs as a real trajectory under the motion lock
+with `busy` set, so it yields to your commands exactly as ambient motion does,
+and ends at neutral.
+
+They are suppressed while Reachy is mid-turn in a conversation — a big move
+while someone is being listened to reads as not paying attention. A session that
+is merely open and waiting is fine. Turn them off with `REACHY_ATTRACT=0` or
+`{"cmd": "life", "attract": false}`, retime with `REACHY_ATTRACT_MIN_GAP` /
+`REACHY_ATTRACT_MAX_GAP`, or fire one on demand to check it reads from where the
+audience will stand:
+
+```json
+{"cmd": "life", "beat": "perk"}
+```
+
+When ambient motion is on, spoken replies are animated against their own word
+timings: edge-tts reports the offset and duration of every word it synthesises,
+so accents land on the words rather than on a timer that would drift against the
+sentence within a couple of seconds. A small lift at the start of an utterance
+and a settle at the end give it a beginning and an end. Opt out for one line
+with `{"cmd": "say", "text": "...", "speech_motion": false}`.
+
+Emoji never reach the synthesiser. edge-tts does not skip them — it reads their
+Unicode names aloud, so a cheerful reply ended with Reachy solemnly announcing
+"smiling face with smiling eyes". They are stripped at synthesis, so every path
+is covered: a direct `say`, a spoken vision description, or a reply the planner
+wrote. Dashes, curly quotes and ellipsis are deliberately kept; they belong in
+speech.
 
 Audio is intentionally plainer than the dashboard response. Emoji, Markdown
 role-play directions such as `*waves*`, links, and raw Home Assistant service/entity
@@ -403,12 +535,12 @@ states are published on `custom/reachy/events`; events also report `session_id`,
 timings, `stop_reason`, `ok`, `error`, and `ts`.
 
 Physical idle motion defaults to `false` because Reachy's antenna servos are audible to
-its live microphone and can become convincing Whisper hallucinations. The robot stays
+its live microphone and can become convincing transcription false positives. The robot stays
 mechanically still while recording; personality remains in deliberate response
 gestures. Set `idle_motion:true` only to experiment on hardware with quiet servos. The
 opt-in motion uses small, eased antenna sweeps, stops when voice activity is confirmed,
 and never moves the head. Short mechanical bursts that trip VAD are rejected before
-Whisper and do not consume a turn or error budget, but keeping motors still is the
+the recognizer and do not consume a turn or error budget, but keeping motors still is the
 reliable default.
 
 Embodied requests stay on the robot. "Turn left" and "turn right" rotate the body
@@ -453,6 +585,7 @@ For direct control, send a dict with `cmd`:
 | `doa` | Report the mic array's current direction of arrival, no recording |
 | `emotion`, `list_emotions` | Recorded gesture clips |
 | `say`, `volume` | Speech and speaker volume |
+| `life` | Ambient idle motion on/off, and its amplitude |
 | `ha` | Home Assistant request |
 | `bind`, `unbind` | Persistent reaction to an MQTT/HA event |
 

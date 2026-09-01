@@ -3,6 +3,21 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Reachy has opt-in ambient life and speech-matched gestures.** The `life` command provides
+  `calm`, `antennas`, `alive`, and `showtime` presets, additive breathing and gaze motion,
+  occasional attract beats, and word-timed movement while speaking. Ambient motion remains off
+  until explicitly enabled so motor noise cannot interfere with microphone capture.
+
+### Changed
+
+- **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Set
+  `DEEPGRAM_API_KEY` before using `ask_voice` or a conversation. Local `faster-whisper`, Whisper,
+  and OpenAI transcription remain available through `REACHY_STT_BACKEND`.
+
 ## [0.6.0] - 2026-08-31
 
 ### Removed — breaking

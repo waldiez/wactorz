@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0.1
+
+An add-on rebuild of 0.6.0 — the library is unchanged; these are dashboard fixes
+that landed after the 0.6.0 image was built.
+
+- Added: the header names which Wactorz is running. It is read from the server rather than baked into the bundle, so it names the version actually answering rather than the one the dashboard was built against.
+- Fixed: the activity feed shows what the house *did*, not only what it measured. It listed the domains to keep, so a light turning on, a door opening or a switch firing could be missing while sensor readings filled the feed — and a domain Home Assistant added later was invisible with nothing to say so. It now names the noisy domains and shows everything else, so an unknown domain appears rather than disappears.
+- Fixed: "hide heartbeats" no longer hides Home Assistant activity with it. The filter matched a CSS class that health rows also carried, so turning it on removed rows that were never heartbeats; it now matches what a row actually is.
+
 ## 0.6.0
 
 - Added: `api_key` add-on option. It changes nothing for panel users — ingress means Home Assistant has already signed you in — but it is now required if you publish port `8000` or `8888` under Network settings, because Wactorz refuses an unauthenticated wide bind.

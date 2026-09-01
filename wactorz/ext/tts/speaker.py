@@ -17,6 +17,7 @@ import io
 import logging
 import threading
 import wave
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,10 @@ try:  # optional dependency — the module must import without a sound card
 except (ImportError, OSError):
     # OSError as well as ImportError: the Linux wheel carries no PortAudio, so
     # importing it without the system library raises rather than failing to find
-    # the module at all.
+    # the module at all. The name stays bound either way — every use sits behind
+    # the AUDIO flag, and an attribute that vanishes with the dependency cannot
+    # be patched in tests.
+    sounddevice: Any = None
     AUDIO = False
 
 

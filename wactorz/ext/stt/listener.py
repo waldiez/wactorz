@@ -21,6 +21,7 @@ import asyncio
 import io
 import logging
 import wave
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,10 @@ try:  # optional dependency — the module must import without a microphone
 except (ImportError, OSError):
     # OSError as well: the Linux wheel carries no PortAudio, so importing it
     # without the system library raises rather than failing to find the module.
+    # The name stays bound either way — every use sits behind the AUDIO flag,
+    # and an attribute that vanishes with the dependency cannot be patched in
+    # tests.
+    sounddevice: Any = None
     AUDIO = False
 
 #: What the recognisers want, and what the capture is opened at.

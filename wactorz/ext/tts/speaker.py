@@ -131,7 +131,11 @@ async def play(audio: bytes) -> None:
                 asyncio.to_thread(_play_blocking, samples, rate, channels),
                 seconds + MARGIN,
             )
-        except TimeoutError as exc:
+        except asyncio.TimeoutError as exc:
+            # Spelled this way on purpose: the two names are one object from 3.11
+            # and separate classes on 3.10, which this still supports, so the
+            # builtin catches nothing there and the timeout escapes.
+            #
             # The thread is left to finish on its own: it is blocked inside
             # portaudio, where there is nothing to cancel it with. Saying so
             # matters more than pretending the room went quiet.

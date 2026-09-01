@@ -1408,6 +1408,43 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.assertEqual(len(NS["_speech_chunks"](self.REPLY)), 3)
 
+    async def test_direct_say_does_not_truncate_after_500_characters(self):
+        agent = FakeAgent()
+        played = []
+        media = types.SimpleNamespace(
+            audio=types.SimpleNamespace(),
+            daemon_url="http://reachy.local",
+            play_sound=lambda path: played.append(path),
+        )
+        agent.state.update(
+            {
+                "mini": types.SimpleNamespace(media=media),
+                "life_enabled": False,
+                "stop_speaking": False,
+            }
+        )
+        long_text = "This sentence must reach synthesis intact. " * 20
+        self.assertGreater(len(long_text), 500)
+        prepared_text = []
+
+        async def prepare(_agent, text, _payload):
+            prepared_text.append(text)
+            return {
+                "raw_path": "/tmp/direct-long.mp3",
+                "play_path": "/tmp/direct-long.mp3",
+                "voice": "test-voice",
+                "speech_seconds": 0.0,
+                "trim_db": 0.0,
+                "beats": [],
+            }
+
+        with mock.patch.dict(NS, {"_prepare_speech": prepare}):
+            result = await NS["_say"](agent, {"text": long_text})
+
+        self.assertEqual(prepared_text, [long_text.strip()])
+        self.assertEqual(result["said"], long_text.strip())
+        self.assertEqual(played, ["/tmp/direct-long.mp3"])
+
     async def test_shutup_during_a_sentence_drops_the_rest_of_the_reply(self):
         agent = FakeAgent()
         agent.state["stop_speaking"] = False

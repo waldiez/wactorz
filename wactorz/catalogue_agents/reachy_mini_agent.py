@@ -5009,7 +5009,6 @@ async def _say(agent, payload):
     text = _strip_emoji(text)
     if not text:
         raise ValueError("say requires text with something speakable in it")
-    text = text[:500]
 
     mini = agent.state.get("mini")
     if mini is None:

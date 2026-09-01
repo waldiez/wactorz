@@ -67,6 +67,17 @@ class NoSpeakers(RuntimeError):
     """Raised when this machine cannot play audio."""
 
 
+def is_speaking() -> bool:
+    """Whether this machine is talking right now.
+
+    Asked by the microphone on the same machine: a room where both branches are
+    on has one device answering into the space the other is listening to, and a
+    reply captured as a question is a turn that asks itself, forever, billed by
+    the token.
+    """
+    return _speaking.locked()
+
+
 def silence() -> None:
     """Stop whatever is being said, now.
 

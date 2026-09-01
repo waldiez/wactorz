@@ -306,19 +306,42 @@ class TestWhatTheBrowserIsTold:
 class TestABranchNothingServes:
     """A valid setting that offers nothing must say so rather than go quiet."""
 
-    @pytest.mark.parametrize("mode", ["browser", "host"])
     def test_a_configured_branch_with_no_client_is_reported(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, mode: str
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
-        monkeypatch.setattr(config, "STT_MODE", mode)
+        monkeypatch.setattr(config, "STT_MODE", "browser")
 
         with caplog.at_level("WARNING"):
             stt.setup(web.Application())
 
         # Silence here is indistinguishable from a broken install: no microphone
         # appears, and nothing anywhere accounts for it.
-        assert mode in caplog.text
+        assert "browser" in caplog.text
         assert "server" in caplog.text
+
+    def test_the_branch_that_hears_the_room_says_what_it_is_missing(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.listener, "available", lambda: False)
+
+        with caplog.at_level("WARNING"):
+            stt.setup(web.Application())
+
+        # It listens here or nowhere, so a machine with no microphone on this
+        # branch is silent with nothing to say why.
+        assert "wactorz[host]" in caplog.text
+
+    def test_a_machine_that_can_hear_is_not_warned_at(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        monkeypatch.setattr(config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.listener, "available", lambda: True)
+
+        with caplog.at_level("WARNING"):
+            stt.setup(web.Application())
+
+        assert not caplog.text
 
     @pytest.mark.parametrize("mode", ["server", "off"])
     def test_nothing_is_said_about_a_branch_that_behaves(

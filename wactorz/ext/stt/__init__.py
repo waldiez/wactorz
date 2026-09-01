@@ -18,13 +18,17 @@ import asyncio
 import io
 import logging
 import os
+import time
 import wave
+from collections.abc import AsyncIterator
 from typing import Any
 
 from aiohttp import BodyPartReader, web
 
 from ... import config
-from . import streaming
+from ...monitoring.log_redaction import redact
+from ..tts import speaker
+from . import listener, streaming
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +96,19 @@ SERVED_MODES = ("server",)
 
 
 def setup(app: web.Application) -> None:
-    """Register the recognition route, and account for a branch nothing serves."""
+    """Register the recognition routes, and account for a branch nothing serves."""
     app.router.add_post("/api/stt", stt_handler)
+    app.router.add_post("/api/stt/listen", listen_handler)
 
     # Read through the module rather than bound at import, so the value is the
     # one in force when the app is built.
     mode = config.STT_MODE
-    if mode not in SERVED_MODES and mode != "off":
+    if mode == "host" and not listener.available():
+        logger.warning(
+            "[stt] WACTORZ_STT=host, but this machine has no microphone to listen "
+            "through — pip install 'wactorz[host]', or choose another branch"
+        )
+    if mode not in SERVED_MODES and mode != "host" and mode != "off":
         # Otherwise a valid setting produces an interface with no microphone and
         # nothing anywhere saying why, which reads as a broken install.
         logger.warning(
@@ -203,6 +213,160 @@ async def transcribe(raw: bytes, uri: str | None = None) -> str:
         # with no writer to close this does nothing, rather than raising over
         # the error that brought us here.
         await client.disconnect()
+
+
+async def hear(clip: bytes) -> str:
+    """Read a recorded clip, through whichever recogniser this deployment names.
+
+    The scheme decides, as it does everywhere else: a Wyoming service takes the
+    clip whole, and a streaming one is fed the same audio in frames and asked
+    what it settled on. Without this the branch that owns a microphone would work
+    against one kind of recogniser and raise against the other, including the one
+    `infra/voice/stt/` builds.
+    """
+    uri = service_uri()
+    if not streaming.is_streaming_uri(uri):
+        return await transcribe(clip)
+
+    frames, rate, _width, _channels = _pcm_from_wav(clip)
+    settled: dict[int, str] = {}
+
+    async def audio() -> AsyncIterator[bytes]:
+        step = max(1, int(rate * streaming.FRAME_SECONDS)) * 2
+        for start in range(0, len(frames), step):
+            yield streaming.as_float32(frames[start : start + step])
+
+    def keep(reading: streaming.Partial) -> None:
+        # Each reading replaces its segment rather than adding to it, so the last
+        # one for a segment is what was heard.
+        settled[reading.segment] = reading.text
+
+    await streaming.transcribe_stream(uri, audio(), keep)
+    return " ".join(settled[k] for k in sorted(settled) if settled[k]).strip()
+
+
+async def listen_handler(request: web.Request) -> web.Response:
+    """POST /api/stt/listen — hear the room, and act on what was said.
+
+    The branch that owns a microphone has no button to press, so something has to
+    ask it to listen. Answers with the text, and routes it as though it had been
+    typed: an ``@mention`` reaches the agent it names and anything else reaches
+    main, which is one path to reason about rather than two.
+    """
+    if config.STT_MODE != "host":
+        return web.json_response(
+            {"error": f"this deployment does not listen here (WACTORZ_STT={config.STT_MODE})"},
+            status=503,
+        )
+    if not listener.available():
+        return web.json_response(
+            {"error": "no microphone on this machine — pip install 'wactorz[host]'"}, status=503
+        )
+    if speaker.is_speaking():
+        # The same room, one device answering into what the other is listening
+        # to. Recording now takes the reply as the next question, and a machine
+        # that asks itself does not stop, or stop spending.
+        return web.json_response({"text": "", "heard": False, "speaking": True})
+
+    try:
+        clip = await listener.listen()
+    except listener.NoMicrophone as exc:
+        return web.json_response({"error": str(exc)}, status=503)
+    except asyncio.TimeoutError:
+        # Spelled this way on purpose: the two are one object from 3.11 and
+        # separate on 3.10, which this still supports, and only this spelling
+        # catches what `wait_for` raises on both.
+        # The microphone stopped delivering. That is the same thing to whoever
+        # asked as one that never opened, and is not this request's failure.
+        return web.json_response({"error": "the microphone stopped delivering audio"}, status=503)
+
+    if not clip:
+        # Silence is an answer: nobody spoke, and there is nothing to route.
+        return web.json_response({"text": "", "heard": False})
+
+    try:
+        said = (await hear(clip)).strip()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("[stt] Could not transcribe what the room said: %s", exc)
+        return web.json_response({"error": "transcription failed"}, status=502)
+
+    if said:
+        await _route_as_typed(request, said)
+    return web.json_response({"text": said, "heard": bool(said)})
+
+
+async def _route_as_typed(request: web.Request, said: str) -> None:
+    """Send what was heard down the path a typed message takes.
+
+    Typed means typed: the turn is written to the chat log and shown to whatever
+    browsers are open, exactly as one from the composer would be. A microphone
+    that listens to a room and leaves no record of what it heard or what was
+    answered is the wrong thing to build, and the answer would otherwise reach
+    nobody at all unless the same machine also speaks.
+
+    Imported here rather than at module scope: the web layer builds on the
+    extensions, so an extension reaching back to it at import time closes a
+    circle that neither side can start.
+    """
+    from ...web import chat, runtime, ws
+
+    addressed = "main" if said.startswith("/") else chat.parse_mention(said)[0]
+    _remember(runtime, "user", said, addressed)
+    await ws.broadcast({"type": "chat", "content": said, "from": "user", "to": addressed})
+
+    streamed: list[str] = []
+
+    async def whole(text: str | None) -> None:
+        """Keep and show one complete reply, as the socket would have."""
+        if not text:
+            return
+        _remember(runtime, "assistant", text, addressed)
+        await ws.broadcast({"type": "chat", "content": text, "from": addressed, "to": "user"})
+
+    async def piece(chunk: str) -> None:
+        """Hold one piece of a reply that is still arriving."""
+        streamed.append(chunk)
+
+    async def ended(*_args: object, **_kwargs: object) -> None:
+        """The reply is complete: record and show it once."""
+        text, streamed[:] = "".join(streamed), []
+        await whole(text)
+
+    # Gathered rather than written as it arrives: an agent that streams sends its
+    # answer in dozens of pieces, and treating each as a reply would put dozens of
+    # rows in the log, dozens of bubbles on the page, and -- where this machine
+    # also speaks -- dozens of separate utterances for one sentence.
+    async def safely() -> None:
+        """Answer the turn, and say so if answering it fails.
+
+        A task nobody awaits swallows what it raised: the reply never arrives,
+        nothing reaches the log or the page, and the only trace is a warning from
+        the collector long afterwards.
+        """
+        try:
+            await chat.route_chat(said, whole, stream_fn=piece, stream_end_fn=ended)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("[stt] The turn heard from the room could not be answered: %s", exc)
+
+    chat.track_chat_task(asyncio.create_task(safely()))
+
+
+def _remember(runtime: Any, role: str, content: str, agent_name: str) -> None:
+    """Write one turn to the chat log, or carry on without it."""
+    if runtime.db is None or not content:
+        return
+    try:
+        # Redacted like every other turn that reaches the log: someone can say a
+        # credential aloud as easily as type one, and this is a room microphone.
+        runtime.db.write_chat_log(
+            ts=time.time(), agent_name=agent_name, role=role, content=redact(content)
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # The turn still happened and was still answered; losing the record of
+        # it is not a reason to fail the request that heard it.
+        logger.warning("[stt] Could not record what the room said: %s", exc)
 
 
 async def _read_audio(request: web.Request) -> bytes:

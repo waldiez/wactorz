@@ -12,9 +12,11 @@ every discarded guess.
 
 from __future__ import annotations
 
+import array
 import asyncio
 import json
 import logging
+import sys
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -25,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 #: What the models are trained at, and what the server assumes it is being sent.
 SAMPLE_RATE = 16000
+
+#: How much audio goes in one frame. The browser sends this much at a time, and
+#: a recording replayed through here is cut the same way so the recogniser sees
+#: the shape it does live.
+FRAME_SECONDS = 0.1
 
 #: How long to wait for the server to accept a connection. A recogniser that is
 #: not there fails at once; this bounds one that accepts slowly.
@@ -43,6 +50,21 @@ DONE = "Done"
 #: stalls -- would otherwise grow this without limit. At 16 kHz float32 this is
 #: roughly ten seconds, which is far more slack than a live turn needs.
 MAX_PENDING_FRAMES = 100
+
+
+def as_float32(pcm16: bytes) -> bytes:
+    """Convert 16-bit samples to the little-endian float32 the recogniser reads.
+
+    A recording is stored as integers and a streaming recogniser is fed floats,
+    so something has to convert between them. The browser's capture is float all
+    the way down and needs none of this.
+    """
+    samples = array.array("h")
+    samples.frombytes(pcm16[: len(pcm16) - len(pcm16) % 2])
+    floats = array.array("f", (s / 32768.0 for s in samples))
+    if sys.byteorder != "little":
+        floats.byteswap()
+    return floats.tobytes()
 
 
 @dataclass(frozen=True)

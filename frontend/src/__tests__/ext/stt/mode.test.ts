@@ -164,3 +164,51 @@ describe("whether that microphone shows words as they are spoken", () => {
         expect(liveOffered()).toBe(false);
     });
 });
+
+describe("the branch where the browser recognises for itself", () => {
+    afterEach(() => {
+        safeStorage.remove(STT_KEY);
+        Reflect.deleteProperty(window, "webkitSpeechRecognition");
+        Reflect.deleteProperty(window, "SpeechRecognition");
+        vi.restoreAllMocks();
+    });
+
+    it("offers the microphone without needing anything of the server", () => {
+        safeStorage.set(STT_KEY, "browser");
+        safeStorage.set(STT_AVAILABLE_KEY, "0");
+        Reflect.set(window, "webkitSpeechRecognition", class {});
+        Reflect.set(window, "isSecureContext", true);
+
+        // The audio never reaches this deployment on that branch, so whether it
+        // can reach a recogniser has nothing to do with it.
+        expect(micOffered()).toBe(true);
+    });
+
+    it("does not offer it where the browser cannot recognise", () => {
+        safeStorage.set(STT_KEY, "browser");
+        Reflect.set(window, "isSecureContext", true);
+
+        expect(micOffered()).toBe(false);
+    });
+
+    it("does not offer it on a page the browser does not trust", () => {
+        safeStorage.set(STT_KEY, "browser");
+        Reflect.set(window, "webkitSpeechRecognition", class {});
+        Reflect.set(window, "isSecureContext", false);
+
+        expect(micOffered()).toBe(false);
+    });
+
+    it("does not stream audio anywhere on that branch", () => {
+        safeStorage.set(STT_KEY, "browser");
+        safeStorage.set(STT_LIVE_KEY, "1");
+        Reflect.set(window, "webkitSpeechRecognition", class {});
+        Reflect.set(window, "isSecureContext", true);
+        Reflect.set(window, "AudioContext", class {});
+        Reflect.set(navigator, "mediaDevices", { getUserMedia: () => {} });
+
+        // The browser's own recogniser returns words as it hears them without
+        // anything being sent, so the live path has no part here.
+        expect(liveOffered()).toBe(false);
+    });
+});

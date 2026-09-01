@@ -252,3 +252,158 @@ describe("the mic button with a recogniser that streams", () => {
         expect(input.value).toBe("all done and then some");
     });
 });
+
+describe("the mic button where the browser recognises for itself", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        vi.clearAllMocks();
+        Reflect.set(window, "isSecureContext", true);
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(window, "webkitSpeechRecognition");
+    });
+
+    it("puts what the browser heard into the composer", async () => {
+        const mod = await import("../ext/stt");
+        vi.spyOn(mod, "recognisesHere").mockReturnValue(true);
+        let heard: ((e: unknown) => void) | null = null;
+        let ended: (() => void) | null = null;
+        Reflect.set(
+            window,
+            "webkitSpeechRecognition",
+            class {
+                continuous = false;
+                interimResults = false;
+                lang = "";
+                set onresult(fn: (e: unknown) => void) {
+                    heard = fn;
+                }
+                onerror: unknown = null;
+                set onend(fn: () => void) {
+                    ended = fn;
+                }
+                start(): void {}
+                stop(): void {}
+                abort(): void {}
+                addEventListener(): void {}
+                removeEventListener(): void {}
+                dispatchEvent(): boolean {
+                    return true;
+                }
+            },
+        );
+
+        const bar = mount();
+        const btn = bar.querySelector<HTMLButtonElement>(".af-mic-btn")!;
+        const input = bar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+
+        btn.click();
+        (heard as unknown as (e: unknown) => void)?.({
+            resultIndex: 0,
+            results: { length: 1, 0: { isFinal: false, length: 1, 0: { transcript: "hello there" } } },
+        });
+
+        // No audio leaves for this deployment on that branch: the browser hands
+        // back words, and the composer takes them like any other reading.
+        expect(input.value).toBe("hello there");
+
+        // The recogniser outlives the test: it is one object for the page, and a
+        // turn left open decides whichever test runs next.
+        (ended as unknown as () => void)?.();
+    });
+});
+
+describe("ending a turn at the browser's own recogniser", () => {
+    const made: { it: any } = { it: null };
+
+    beforeEach(async () => {
+        document.body.innerHTML = "";
+        vi.clearAllMocks();
+        Reflect.set(window, "isSecureContext", true);
+        const mod = await import("../ext/stt");
+        vi.spyOn(mod, "recognisesHere").mockReturnValue(true);
+        Reflect.set(
+            window,
+            "webkitSpeechRecognition",
+            class {
+                continuous = false;
+                interimResults = false;
+                lang = "";
+                onresult: unknown = null;
+                onerror: ((e: { error?: string }) => void) | null = null;
+                onend: (() => void) | null = null;
+                stopped = 0;
+                constructor() {
+                    made.it = this;
+                }
+                start(): void {}
+                stop(): void {
+                    // A real one always ends the turn after being stopped, and a
+                    // fake that does not leaves the next turn thinking it is
+                    // still listening.
+                    this.stopped += 1;
+                    this.onend?.();
+                }
+                abort(): void {}
+                addEventListener(): void {}
+                removeEventListener(): void {}
+                dispatchEvent(): boolean {
+                    return true;
+                }
+            },
+        );
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(window, "webkitSpeechRecognition");
+    });
+
+    it("stops when the person types instead", () => {
+        const bar = mount();
+        const btn = bar.querySelector<HTMLButtonElement>(".af-mic-btn")!;
+        const input = bar.querySelector<HTMLTextAreaElement>("#af-iobar-input")!;
+        btn.click();
+
+        input.value = "typed instead";
+        input.dispatchEvent(new Event("input"));
+
+        // This recogniser hands back the whole turn each time, so there is
+        // nothing to fold an edit into: the turn ends and the words are theirs.
+        expect(made.it.stopped).toBe(1);
+    });
+
+    it("unlights the button on the second click", () => {
+        const bar = mount();
+        const btn = bar.querySelector<HTMLButtonElement>(".af-mic-btn")!;
+        btn.click();
+        expect(btn.classList.contains("recording")).toBe(true);
+
+        btn.click();
+
+        expect(btn.classList.contains("recording")).toBe(false);
+    });
+
+    it("says why when the browser refuses", () => {
+        const bar = mount();
+        const btn = bar.querySelector<HTMLButtonElement>(".af-mic-btn")!;
+        btn.click();
+
+        made.it.onerror?.({ error: "not-allowed" });
+
+        expect(btn.classList.contains("recording")).toBe(false);
+        expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ title: "Voice input stopped" }));
+    });
+
+    it("says nothing when the turn simply ends", () => {
+        const bar = mount();
+        const btn = bar.querySelector<HTMLButtonElement>(".af-mic-btn")!;
+        btn.click();
+
+        made.it.onend?.();
+
+        // Nobody spoke, or they stopped deliberately. Neither is a fault.
+        expect(btn.classList.contains("recording")).toBe(false);
+        expect(toast.show).not.toHaveBeenCalled();
+    });
+});

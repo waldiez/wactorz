@@ -16,7 +16,11 @@ vi.mock("../ext/stt", () => {
     return {
         micOffered: () => true,
         liveOffered: () => false,
+        recognisesHere: () => false,
         liveMic: () => null,
+        WebSpeech: class {
+            listening = false;
+        },
         SpeechToText,
     };
 });

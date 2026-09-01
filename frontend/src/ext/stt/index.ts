@@ -14,12 +14,15 @@
  */
 
 import { canCaptureLive } from "./liveCapture";
+import { canRecognise } from "./webSpeech";
 import { registerConfigEntry } from "../../config/serverConfig";
 import { safeStorage } from "../../safeStorage";
 import { SpeechToText } from "./Recorder";
 
 export { SpeechToText } from "./Recorder";
 export { LiveMic, attachLiveSocket, liveMic } from "./LiveMic";
+export { WebSpeech, canRecognise } from "./webSpeech";
+export type { WebSpeechHandlers } from "./webSpeech";
 export type { LiveSocket, LiveMicHandlers } from "./LiveMic";
 export { toWav, encodeWav, resample, toMono, TARGET_RATE } from "./wav";
 
@@ -74,20 +77,33 @@ export function sttLive(): boolean {
  * still works -- it records the whole utterance and sends it at the end.
  */
 export function liveOffered(): boolean {
-    return micOffered() && sttLive() && canCaptureLive();
+    // Not on `browser`: the browser's own recogniser has its own way of
+    // returning words as they are said, and does not need audio streamed
+    // anywhere to do it.
+    return sttMode() === "server" && micOffered() && sttLive() && canCaptureLive();
+}
+
+/** Whether this browser does the recognising itself. */
+export function recognisesHere(): boolean {
+    return sttMode() === "browser" && canRecognise();
 }
 
 /**
  * Whether the composer's microphone button can be offered.
  *
- * `server` is the one branch this button drives: the recorder captures here and
- * sends the clip to the recogniser, so it needs a browser that can record and a
- * recogniser the server can reach. The other branches are named by config and
- * supplied by whatever implements them -- `browser` transcribes on the client
- * and has no transcriber yet, and `host` records server-side and is driven by a
- * control message rather than by this button. Offering it for either would send
- * audio somewhere the chosen branch says it should not go.
+ * Two branches drive this button, and each needs something different to be true.
+ * `server` captures here and sends the clip on, so it wants a browser that can
+ * record and a recogniser the server can reach. `browser` never sends the audio
+ * anywhere this deployment can see, so it needs nothing of the server -- only a
+ * browser that recognises speech on a page trusted with a microphone, which is
+ * Chromium over localhost or TLS and nothing else.
+ *
+ * `host` records on the machine and is asked to by a control message rather than
+ * by this button, so it is offered nothing here.
  */
 export function micOffered(): boolean {
+    if (sttMode() === "browser") {
+        return canRecognise();
+    }
     return sttMode() === "server" && sttAvailable() && SpeechToText.isSupported();
 }

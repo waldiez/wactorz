@@ -476,7 +476,12 @@ const _liveActorsTimer = window.setInterval(() => {
 // that ended while the tab was closed refuses that one too, and installing after
 // it would leave the very first 401 unhandled and the page waiting on a poll
 // half a minute away.
-installSessionExpiry();
+installSessionExpiry(window, () => {
+    // The socket is the one thing that would keep trying: it reconnects on a
+    // timer, and every attempt goes to the same revoked prefix.
+    ws.disconnect();
+    window.clearInterval(_liveActorsTimer);
+});
 
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).

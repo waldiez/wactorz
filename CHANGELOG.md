@@ -21,6 +21,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
   `infra/voice/stt/` builds a streaming recogniser that needs no GPU. **The optional dependencies are now named for what they do**: `wactorz[stt]` to recognise speech, `wactorz[tts]` to make it, `wactorz[host]` to use this machine's own microphone and speakers, and `wactorz[voice]` for all three -- which installs everything it did before, so nothing needs changing.
 
+### Fixed
+
+- **A dashboard tab that can no longer reach Home Assistant now says so, instead of failing silently.** Behind Home Assistant ingress, the dashboard watches for requests that keep coming back 503 -- three or more in a row, over at least a minute -- and treats that as a link it cannot recover. It stops reconnecting the socket and shows a blocking notice asking you to reopen Wactorz from the Home Assistant sidebar. Shorter runs are ignored: a restarting add-on answers 503 for a few seconds and comes back on its own, and any successful response clears the count. A 401 still redirects to sign-in, and deployments not behind ingress are unaffected.
+
 ## [0.6.0] - 2026-08-31
 
 ### Removed — breaking

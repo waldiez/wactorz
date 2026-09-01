@@ -195,6 +195,50 @@ class ReachyVadTest(unittest.TestCase):
         self.assertGreater(result.audio.size, 0)
         started.assert_called_once()
 
+    def test_pcm_frames_can_be_forwarded_to_a_streaming_recognizer(self):
+        media = Media([stereo(0.3)] * 5 + [stereo(0)] * 4)
+        frames = []
+        config = VADConfig(
+            flush_s=0,
+            speech_start_timeout_s=0.2,
+            silence_s=0.09,
+            min_speech_s=0.03,
+            pre_roll_s=0,
+        )
+        with mock.patch.dict(sys.modules, {"webrtcvad": self.vad_module}):
+            result = capture_utterance(media, config=config, on_audio_frame=frames.append)
+
+        self.assertGreater(result.audio.size, 0)
+        self.assertGreaterEqual(len(frames), 5)
+        self.assertTrue(all(isinstance(frame, bytes) and len(frame) == 960 for frame in frames))
+
+    def test_remote_endpoint_can_finish_after_local_speech_onset(self):
+        media = Media([stereo(0.3)] * 20)
+        sent = 0
+
+        def forward(_frame):
+            nonlocal sent
+            sent += 1
+
+        config = VADConfig(
+            flush_s=0,
+            speech_start_timeout_s=0.2,
+            max_utterance_s=2,
+            min_speech_s=0.03,
+            pre_roll_s=0,
+        )
+        with mock.patch.dict(sys.modules, {"webrtcvad": self.vad_module}):
+            result = capture_utterance(
+                media,
+                config=config,
+                on_audio_frame=forward,
+                should_stop=lambda: sent >= 4,
+            )
+
+        self.assertGreater(result.audio.size, 0)
+        self.assertEqual(sent, 4)
+        self.assertGreater(len(media.samples), 0)
+
     def test_drain_discards_queued_samples(self):
         media = Media([stereo(0)] * 100)
         reads = drain_audio(media, 0.01)

@@ -90,6 +90,8 @@ def capture_utterance(
     cancel_event: Event | None = None,
     config: VADConfig | None = None,
     on_speech_start: Callable[[], None] | None = None,
+    on_audio_frame: Callable[[bytes], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> VoiceCapture:
     """Capture one utterance, ending after post-speech silence or a limit.
 
@@ -133,6 +135,8 @@ def capture_utterance(
         flushed = drain_audio(media, cfg.flush_s, cancel_event)
         listen_started = time.monotonic()
         while not _cancelled(cancel_event):
+            if speech_started and should_stop is not None and should_stop():
+                break
             if not speech_started:
                 if (
                     cfg.speech_start_timeout_s > 0
@@ -160,12 +164,13 @@ def capture_utterance(
             while pending.size >= frame_samples and not _cancelled(cancel_event):
                 frame = pending[:frame_samples]
                 pending = pending[frame_samples:]
+                pcm_bytes = _pcm16_bytes(frame)
+                if on_audio_frame is not None:
+                    on_audio_frame(pcm_bytes)
                 # WebRTC VAD can label very quiet WebRTC/codec noise as speech.
                 # Require a small absolute energy floor as well as its decision.
                 frame_rms = float(np.sqrt(np.mean(np.square(frame))))
-                voiced = frame_rms >= cfg.min_rms and bool(
-                    vad.is_speech(_pcm16_bytes(frame), samplerate)
-                )
+                voiced = frame_rms >= cfg.min_rms and bool(vad.is_speech(pcm_bytes, samplerate))
 
                 if not speech_started:
                     pre_roll.append((frame.copy(), voiced))
@@ -180,6 +185,9 @@ def capture_utterance(
                     continue
 
                 captured.append(frame.copy())
+                if should_stop is not None and should_stop():
+                    pending = np.zeros((0,), dtype=np.float32)
+                    break
                 trailing_silence = 0 if voiced else trailing_silence + 1
                 if voiced:
                     voiced_frames += 1
@@ -191,7 +199,8 @@ def capture_utterance(
                     break
 
             if speech_started and (
-                len(captured) >= max_frames
+                (should_stop is not None and should_stop())
+                or len(captured) >= max_frames
                 or (len(captured) >= min_speech_frames and trailing_silence >= silence_frames)
             ):
                 break

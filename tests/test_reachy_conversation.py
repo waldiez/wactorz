@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import threading
 import types
 import unittest
 from unittest import mock
@@ -9,7 +10,7 @@ from unittest import mock
 import numpy as np
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
-from wactorz.catalogue_agents.reachy_stt import Transcription
+from wactorz.catalogue_agents.reachy_stt import StreamingTurn, Transcription
 from wactorz.catalogue_agents.reachy_vad import VoiceCapture
 
 NS = {}
@@ -82,6 +83,24 @@ async def immediate_cooldown(agent, session, turn, _seconds):
 
 
 class ConversationTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Developer .env settings must not turn deterministic unit captures into
+        # real network streams or background motor loops.
+        self._environment = mock.patch.dict(
+            os.environ,
+            {
+                "REACHY_STT_STREAMING": "0",
+                "REACHY_STT_LANGUAGE": "",
+                "REACHY_STT_STREAM_LANGUAGE": "",
+                "REACHY_CONVERSATION_STATE_MOTION": "0",
+                "REACHY_CONVERSATION_IDLE_MOTION": "0",
+            },
+        )
+        self._environment.start()
+
+    def tearDown(self):
+        self._environment.stop()
+
     async def run_session(self, agent, payload, clips, texts, bridge):
         clips, texts = iter(clips), iter(texts)
 
@@ -1161,6 +1180,113 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch("wactorz.catalogue_agents.reachy_vad.capture_utterance", fake_capture):
             await NS["_conversation_capture"](agent, session, object())
         await asyncio.gather(idle_task, return_exceptions=True)
+
+    async def test_deepgram_streaming_reuses_reachy_media_and_publishes_interim_text(self):
+        agent = FakeAgent()
+        session = {
+            "state": "listening",
+            "cancel_event": threading.Event(),
+            "worker": None,
+            "pending_capture": None,
+            "stt_stream_fallbacks": 0,
+        }
+        turn = NS["_conversation_turn"](session)
+        transcription = Transcription(
+            "final words", "deepgram-streaming", "nova-3", confidence=0.95, language="en"
+        )
+
+        def stream(media, _cancel, _config, _payload, on_speech_start, on_interim):
+            self.assertIs(media, agent.state["mini"].media)
+            on_speech_start()
+            on_interim("final wor")
+            return StreamingTurn(captured(), transcription)
+
+        with (
+            mock.patch.dict(os.environ, {"DEEPGRAM_API_KEY": "test-only"}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.capture_deepgram_turn", stream),
+        ):
+            capture, result = await NS["_conversation_listen"](
+                agent,
+                session,
+                object(),
+                {"stt_backend": "deepgram", "stt_streaming": True},
+                turn,
+            )
+            await asyncio.sleep(0)
+
+        self.assertGreater(capture.audio.size, 0)
+        self.assertIs(result, transcription)
+        interim = [payload for _, payload in agent.published if payload.get("interim_transcript")]
+        self.assertEqual(interim[-1]["interim_transcript"], "final wor")
+
+    async def test_stream_error_keeps_the_same_capture_for_batch_fallback(self):
+        agent = FakeAgent()
+        session = {
+            "state": "listening",
+            "cancel_event": threading.Event(),
+            "worker": None,
+            "pending_capture": None,
+            "stt_stream_fallbacks": 0,
+        }
+        clip = captured()
+
+        def stream(*_args):
+            return StreamingTurn(clip, None, "socket lost")
+
+        with (
+            mock.patch.dict(os.environ, {"DEEPGRAM_API_KEY": "test-only"}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.capture_deepgram_turn", stream),
+        ):
+            capture, result = await NS["_conversation_listen"](
+                agent,
+                session,
+                object(),
+                {"stt_backend": "deepgram", "stt_streaming": True},
+                NS["_conversation_turn"](session),
+            )
+
+        self.assertIs(capture, clip)
+        self.assertIsNone(result)
+        self.assertEqual(session["stt_stream_fallbacks"], 1)
+        self.assertTrue(any("transcribing the captured turn" in text for _, text in agent.logs))
+
+    async def test_live_transcript_routes_without_a_second_recognizer_call(self):
+        agent = FakeAgent()
+        transcription = Transcription(
+            "Turn off the light",
+            "deepgram-streaming",
+            "nova-3",
+            confidence=0.96,
+            language="en",
+        )
+
+        async def listen(*_args):
+            return captured(), transcription
+
+        async def bridge(_agent, _text, _task_id, **kwargs):
+            await kwargs["before_speak"]("Done")
+            return {"result": "Done", "spoke": True, "spoken_result": "Done"}
+
+        batch = mock.AsyncMock(side_effect=AssertionError("batch STT should not run"))
+        with (
+            mock.patch.dict(
+                NS,
+                {
+                    "_conversation_listen": listen,
+                    "_conversation_cooldown": immediate_cooldown,
+                    "_bridge_to_main": bridge,
+                },
+            ),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", batch),
+        ):
+            await NS["_conversation_start"](agent, {"max_turns": 1})
+            session = agent.state["conversation_session"]
+            await session["task"]
+
+        batch.assert_not_awaited()
+        self.assertEqual(session["stop_reason"], "max_turns")
+        final = [payload for _, payload in agent.published if payload.get("state") == "stopped"][-1]
+        self.assertTrue(final["stt_streaming"])
 
     async def test_idle_sweep_is_fluid_and_antenna_only(self):
         agent, calls = FakeAgent(), []

@@ -316,7 +316,8 @@ returns the answer to chat, and speaks it through Reachy:</p>
 <p><code>ask_voice</code> remains one-shot. There is deliberately no always-on microphone or wake
 word.
 The default backend on this test branch is hosted Deepgram Nova-3. It needs an API
-key and uploads each bounded WAV clip for transcription:</p>
+key. <code>ask_voice</code> uploads one bounded WAV clip; conversation mode streams Reachy's
+WebRTC microphone as mono PCM while the user speaks:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Hosted default</span>
 pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;deepgram-sdk&gt;=3,&lt;4&#39;</span>
 <span class="nv">DEEPGRAM_API_KEY</span><span class="o">=</span>...
@@ -343,9 +344,12 @@ pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;
 <p>Optional <code>REACHY_STT_LANGUAGE</code>, <code>REACHY_STT_FALLBACK_LANGUAGE</code>,
 <code>REACHY_STT_DEVICE</code>, <code>REACHY_STT_COMPUTE_TYPE</code>, and <code>REACHY_STT_HOTWORDS</code>
 settings tune language, uncertain-language fallback, local inference, and recognition
-bias. <code>REACHY_STT_TIMEOUT_S</code> bounds hosted calls and defaults to 60 seconds. Leave the
-primary language unset to use the backend default. Short utterances whose language
-probability is below <code>stt_min_language_probability</code> (default <code>0.60</code>) are retried in
+bias. <code>REACHY_STT_TIMEOUT_S</code> bounds hosted calls and defaults to 60 seconds. Prerecorded
+Deepgram turns enable language detection when no language is supplied. Streaming requires
+a stable language choice and defaults to English; set <code>REACHY_STT_STREAM_LANGUAGE=el</code>
+for Greek, or set <code>REACHY_STT_STREAMING=0</code> to use per-turn language detection. Short
+utterances whose language probability is below <code>stt_min_language_probability</code> (default
+<code>0.60</code>) are retried in
 the configured fallback language; unresolved guesses are silently discarded instead
 of being routed as commands. The MQTT payload can override these settings with
 <code>stt_backend</code>, <code>stt_model</code>, <code>language</code>, <code>stt_fallback_language</code>, <code>stt_device</code>,
@@ -381,7 +385,13 @@ a validated <code>&lt;interface_action&gt;</code> block for the catalogue agent 
 less-literal embodied request can still move the robot without a Main → Reachy
 delegation loop. Wactorz core contains no Reachy dependency; without the catalogue
 agent, Main behaves exactly as before.</p>
-<p>Each turn uses voice-activity detection and ends after about one second of silence.
+<p>With Deepgram selected, each turn streams the PCM frames already being read from
+Reachy's WebRTC microphone. Local WebRTC VAD remains responsible for confirmed speech
+onset, motor-noise rejection, cancellation, and inactivity limits. Deepgram endpointing
+normally closes the turn after 500 ms of silence, with a 1200 ms utterance-end backstop.
+Interim recognition is published on <code>custom/reachy/events</code> while the user speaks. If the
+stream cannot start, disconnects, or returns no final transcript, the completed local
+capture goes through prerecorded Deepgram transcription without asking the user to repeat.
 The complete reply appears in Reachy's dashboard thread before playback begins, and
 the same sanitized reply is spoken in sentence-sized chunks without replacing its
 ending with a "rest in Wactorz chat" notice. Recognized
@@ -392,9 +402,10 @@ Execution receipts such as <code>ran 4 of 4</code> are also hidden by default; s
 <code>enable debug</code> to show them and
 <code>disable debug</code> to return to the normal user-facing view. Debug always starts off
 after an agent restart. Punctuation-only recognition noise is ignored.</p>
-<p>Conversation sessions auto-detect the spoken language, so English and Greek can be
-used without restarting the session. Set <code>stt_language</code> (or <code>REACHY_STT_LANGUAGE</code>)
-only when you deliberately want to lock recognition to one language. Common names
+<p>Prerecorded conversation turns auto-detect the spoken language. Streaming uses
+<code>stt_stream_language</code> (or <code>REACHY_STT_STREAM_LANGUAGE</code>) and defaults to English because
+Deepgram streaming language detection is unavailable. Set it to <code>el</code> for a Greek session,
+or disable streaming when automatic per-turn English/Greek selection matters. Common names
 and device terms are supplied as hotwords; override them with <code>stt_hotwords</code> or
 <code>REACHY_STT_HOTWORDS</code>. Common mishearings such as "Richie", "Riti", "Ritzy", and
 "Lizzy" are corrected to "Reachy" when used as the robot's name. Main is explicitly
@@ -596,14 +607,16 @@ start fields include <code>silence_s</code>, <code>max_utterance_s</code>, <code
 <code>flush_s</code>, <code>vad_mode</code>, <code>vad_min_rms</code>, <code>cooldown_s</code>, <code>barge_in</code>, <code>barge_guard_s</code>,
 <code>barge_onset_s</code>, <code>barge_silence_s</code>, <code>barge_min_speech_s</code>, <code>barge_flush_s</code>,
 <code>barge_min_rms</code>, <code>barge_verify_min_speech_s</code>, <code>voice_friendly</code>,
-<code>state_motion</code>, <code>idle_motion</code>, <code>stt_language</code>, <code>stt_hotwords</code>,
+<code>state_motion</code>, <code>idle_motion</code>, <code>stt_language</code>, <code>stt_streaming</code>, <code>stt_stream_language</code>,
+<code>stt_endpointing_ms</code>, <code>stt_utterance_end_ms</code>, <code>stt_hotwords</code>,
 <code>stt_min_confidence</code>, <code>stt_max_no_speech</code>, and <code>max_turns</code>. Barge-in defaults to
 false and is enabled only by an explicit <code>barge_in:true</code>; all physical conversation
 motion defaults to false.</p>
 <p>Set <code>state_motion:true</code> for subtle listening/speaking antenna cues. These use
 antenna-only <code>set_target</code> calls and do not command or reset the head. Conversation
 states are published on <code>custom/reachy/events</code>; events also report <code>session_id</code>,
-<code>turn_index</code>, <code>transcript</code>, <code>response</code>, <code>raw_response</code>, <code>spoken_response</code>, <code>interrupted</code>,
+<code>turn_index</code>, <code>interim_transcript</code>, <code>transcript</code>, <code>response</code>, <code>raw_response</code>,
+<code>spoken_response</code>, <code>interrupted</code>,
 timings, <code>stop_reason</code>, <code>ok</code>, <code>error</code>, and <code>ts</code>.</p>
 <p>Physical idle motion defaults to <code>false</code> because Reachy's antenna servos are audible to
 its live microphone and can become convincing transcription false positives. The robot stays

@@ -12,10 +12,12 @@ import math
 import os
 import tempfile
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
+
+from wactorz.catalogue_agents.reachy_vad import VADConfig, VoiceCapture, capture_utterance
 
 _DEFAULT_MODELS = {
     "deepgram": "nova-3",
@@ -36,6 +38,14 @@ _LOCAL_MODELS: dict[tuple[str, str, str, str], Any] = {}
 _MODEL_LOCK = threading.Lock()
 
 
+def _as_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
+
+
 @dataclass(frozen=True)
 class STTConfig:
     """Resolved backend settings for one transcription request."""
@@ -53,6 +63,7 @@ class STTConfig:
     #: it was meant to protect and returns an empty transcript.
     vad_filter: bool = True
     timeout_s: float = 60.0
+    detect_language: bool = True
 
     @classmethod
     def resolve(
@@ -93,12 +104,26 @@ class STTConfig:
             str(payload.get("stt_hotwords") or environ.get("REACHY_STT_HOTWORDS") or "").strip()
             or None
         )
-        vad_filter = bool(payload.get("stt_vad_filter", True))
+        vad_filter = _as_bool(payload.get("stt_vad_filter"), True)
         timeout_s = max(
             1.0,
             float(payload.get("stt_timeout_s") or environ.get("REACHY_STT_TIMEOUT_S") or 60.0),
         )
-        return cls(backend, model, language, device, compute_type, hotwords, vad_filter, timeout_s)
+        detect_language = _as_bool(
+            payload.get("stt_detect_language", environ.get("REACHY_STT_DETECT_LANGUAGE")),
+            language is None,
+        )
+        return cls(
+            backend,
+            model,
+            language,
+            device,
+            compute_type,
+            hotwords,
+            vad_filter,
+            timeout_s,
+            detect_language,
+        )
 
 
 @dataclass(frozen=True)
@@ -112,6 +137,15 @@ class Transcription:
     no_speech_probability: float | None = None
     language: str | None = None
     language_probability: float | None = None
+
+
+@dataclass(frozen=True)
+class StreamingTurn:
+    """One locally gated microphone capture and its live Deepgram result."""
+
+    capture: VoiceCapture
+    transcription: Transcription | None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -263,6 +297,20 @@ def _deepgram_keyterms(hotwords: str | None) -> list[str] | None:
     return terms or None
 
 
+def _deepgram_stream_language(
+    config: STTConfig,
+    payload: Mapping[str, Any],
+    environ: Mapping[str, str],
+) -> str:
+    """Resolve the fixed language required by Deepgram's streaming endpoint."""
+    return str(
+        payload.get("stt_stream_language")
+        or environ.get("REACHY_STT_STREAM_LANGUAGE")
+        or config.language
+        or "multi"
+    ).strip()
+
+
 def _deepgram_result(response: Any) -> _BackendResult:
     """Extract the first Deepgram channel without coupling callers to its SDK types."""
     try:
@@ -294,6 +342,8 @@ def _transcribe_deepgram_sync(
     }
     if config.language:
         options_kwargs["language"] = config.language
+    elif config.detect_language:
+        options_kwargs["detect_language"] = True
     keyterms = _deepgram_keyterms(config.hotwords)
     if keyterms:
         options_kwargs["keyterm"] = keyterms
@@ -332,6 +382,186 @@ class DeepgramBackend:
             PrerecordedOptions,
             httpx,
         )
+
+
+def capture_deepgram_turn(
+    media: Any,
+    cancel_event: threading.Event,
+    vad_config: VADConfig,
+    payload: Mapping[str, Any] | None = None,
+    on_speech_start: Callable[[], None] | None = None,
+    on_interim: Callable[[str], None] | None = None,
+) -> StreamingTurn:
+    """Stream Reachy's WebRTC PCM to Deepgram while local VAD gates the turn.
+
+    Local VAD remains the authority for speech onset, noise rejection, timeouts,
+    and cancellation. Deepgram can close a real utterance sooner through
+    ``speech_final``; if its socket fails, the completed local capture remains
+    available to the caller for prerecorded fallback.
+    """
+    resolved_payload = payload or {}
+    config = STTConfig.resolve(resolved_payload)
+    if config.backend != "deepgram":
+        raise ValueError("streaming capture requires the Deepgram backend")
+    api_key = os.environ.get("DEEPGRAM_API_KEY")
+    if not api_key:
+        raise RuntimeError("DEEPGRAM_API_KEY is required for Deepgram streaming")
+    try:
+        from deepgram import (  # pyright: ignore[reportMissingImports]  # optional backend
+            DeepgramClient,
+            LiveOptions,
+            LiveTranscriptionEvents,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "deepgram-sdk is not installed; run: pip install 'deepgram-sdk>=3,<4'"
+        ) from exc
+
+    samplerate = int(media.get_input_audio_samplerate() or 16000)
+    endpointing_ms = max(
+        100,
+        min(2000, int(resolved_payload.get("stt_endpointing_ms") or 500)),
+    )
+    utterance_end_ms = max(
+        1000,
+        min(5000, int(resolved_payload.get("stt_utterance_end_ms") or 1200)),
+    )
+    options_kwargs: dict[str, Any] = {
+        "model": config.model,
+        "language": _deepgram_stream_language(config, resolved_payload, os.environ),
+        "smart_format": True,
+        "punctuate": True,
+        "encoding": "linear16",
+        "sample_rate": samplerate,
+        "channels": 1,
+        "interim_results": True,
+        "utterance_end_ms": str(utterance_end_ms),
+        "vad_events": True,
+        "endpointing": endpointing_ms,
+    }
+    keyterms = _deepgram_keyterms(config.hotwords)
+    if keyterms:
+        options_kwargs["keyterm"] = keyterms
+
+    connection = DeepgramClient(api_key).listen.websocket.v("1")
+    endpoint = threading.Event()
+    final_result = threading.Event()
+    lock = threading.Lock()
+    chunks: list[str] = []
+    confidences: list[float] = []
+    language: str | None = None
+    language_probability: float | None = None
+    stream_error: str | None = None
+    last_interim = ""
+
+    def on_transcript(sender: Any, result: Any = None, **_kwargs: Any) -> None:
+        nonlocal language, language_probability, last_interim
+        result = sender if result is None else result
+        try:
+            channel = result.channel
+            alternative = channel.alternatives[0]
+            text = str(getattr(alternative, "transcript", "") or "").strip()
+        except (AttributeError, IndexError, TypeError):
+            return
+        if not text:
+            return
+        if bool(getattr(result, "is_final", False)):
+            with lock:
+                chunks.append(text)
+                confidence = getattr(alternative, "confidence", None)
+                if confidence is not None:
+                    confidences.append(float(confidence))
+                language = str(getattr(channel, "detected_language", "") or "").strip() or None
+                language_probability = getattr(channel, "language_confidence", None)
+            final_result.set()
+            if bool(getattr(result, "speech_final", False)):
+                endpoint.set()
+        elif on_interim is not None and text != last_interim:
+            last_interim = text
+            on_interim(text)
+
+    def on_utterance_end(_sender: Any, _event: Any = None, **_kwargs: Any) -> None:
+        with lock:
+            has_text = bool(chunks)
+        if has_text:
+            endpoint.set()
+
+    def on_error(sender: Any, error: Any = None, **_kwargs: Any) -> None:
+        nonlocal stream_error
+        error = sender if error is None else error
+        stream_error = str(error)
+
+    connection.on(LiveTranscriptionEvents.Transcript, on_transcript)
+    connection.on(LiveTranscriptionEvents.UtteranceEnd, on_utterance_end)
+    connection.on(LiveTranscriptionEvents.Error, on_error)
+    if not connection.start(LiveOptions(**options_kwargs)):
+        raise RuntimeError("Deepgram streaming connection did not start")
+
+    def send_frame(frame: bytes) -> None:
+        nonlocal stream_error
+        if stream_error is not None:
+            return
+        try:
+            connection.send(frame)
+        except Exception as exc:
+            stream_error = str(exc)
+
+    capture = None
+    try:
+        capture = capture_utterance(
+            media,
+            cancel_event,
+            vad_config,
+            on_speech_start,
+            send_frame,
+            endpoint.is_set,
+        )
+        # Local VAD owns capture timing, so it can finish before Deepgram emits
+        # its final result. Flush pending audio and give the listener thread a
+        # short, bounded window to deliver that result before closing the socket.
+        if capture.audio.size and not final_result.is_set() and stream_error is None:
+            finalize = getattr(connection, "finalize", None)
+            if callable(finalize):
+                try:
+                    if finalize() is False:
+                        stream_error = "Deepgram streaming finalize failed"
+                except Exception as exc:
+                    stream_error = str(exc)
+            if stream_error is None:
+                final_result.wait(
+                    timeout=max(
+                        0.5,
+                        min(
+                            3.0,
+                            float(resolved_payload.get("stt_finalize_timeout_s") or 1.5),
+                        ),
+                    )
+                )
+    finally:
+        try:
+            connection.finish()
+        except Exception as exc:
+            if stream_error is None:
+                stream_error = str(exc)
+
+    with lock:
+        text = " ".join(chunks).strip()
+        confidence = sum(confidences) / len(confidences) if confidences else None
+    transcription = None
+    if text:
+        transcription = Transcription(
+            text=text,
+            backend="deepgram-streaming",
+            model=config.model,
+            confidence=confidence,
+            language=language or options_kwargs["language"],
+            language_probability=language_probability,
+        )
+    elif capture is not None and capture.audio.size and stream_error is None:
+        stream_error = "Deepgram streaming returned no final transcript"
+    if capture is None:
+        raise RuntimeError(stream_error or "Deepgram streaming capture failed")
+    return StreamingTurn(capture, transcription, stream_error)
 
 
 _BACKENDS: dict[str, STTBackend] = {

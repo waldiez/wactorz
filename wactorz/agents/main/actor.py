@@ -57,6 +57,7 @@ _INTERFACE_ACTION_RE = re.compile(
     r"<interface_action>\s*(\{.*?\})\s*</interface_action>",
     re.IGNORECASE | re.DOTALL,
 )
+_DELEGATE_BLOCK_RE = re.compile(r"<delegate>(.*?)</delegate>", re.IGNORECASE | re.DOTALL)
 
 
 def _normalize_agent_name(name: str) -> str:
@@ -88,6 +89,25 @@ def _strip_live_context(message: str) -> str:
         return message
     # Skip past the marker and any whitespace following it
     return message[idx + len(end_marker) :].lstrip("\n").lstrip()
+
+
+def _response_delegates_to(response: str, agent_name: str) -> bool:
+    """Return whether model output asks a named agent to execute something."""
+    wanted = _normalize_agent_name(agent_name)
+    for match in _DELEGATE_BLOCK_RE.finditer(str(response or "")):
+        try:
+            payload = json.loads(match.group(1).strip())
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        named = str(payload.get("agent") or payload.get("name") or "")
+        if _normalize_agent_name(named) == wanted:
+            return True
+    return any(
+        _normalize_agent_name(match.group(1)) == wanted
+        for match in re.finditer(r"@([\w][\w-]*)", str(response or ""))
+    )
 
 
 #: Openings that mean the planner, whatever the intent classifier would say.
@@ -237,6 +257,24 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def on_start(self) -> None:
         await super().on_start()
+        # Executable blocks are transport syntax, not conversation. Older
+        # versions persisted the raw block, which taught the model to replay a
+        # completed or failed action on later, unrelated turns.
+        history_changed = False
+        for item in self._conversation_history:
+            if item.get("role") != "assistant":
+                continue
+            content = str(item.get("content") or "")
+            if not _DELEGATE_BLOCK_RE.search(content):
+                continue
+            if _response_delegates_to(content, "home-assistant-agent"):
+                cleaned = "I couldn't safely complete that request."
+            else:
+                cleaned = _DELEGATE_BLOCK_RE.sub("", content).strip()
+            item["content"] = cleaned
+            history_changed = True
+        if history_changed:
+            self.persist("conversation_history", self._conversation_history)
         await self._restore_spawned_agents()
         # Listen for remote node heartbeats so we know what's online
         self._tasks.append(asyncio.create_task(self._node_heartbeat_listener()))
@@ -588,6 +626,23 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # text and replace it with the user's original. The assistant turn after
         # it remains unchanged.
         self._restore_unprefixed_turn(prefixed_text, text)
+        raw_llm_response = response
+
+        # A voice transcript classified as OTHER is not authority for the LLM
+        # to resurrect a Home Assistant command from history. Correct device
+        # commands take the ACTUATE/HA branches above; anything reaching here
+        # must be repeated instead of being executed from stale context.
+        if self._current_interface_is_voice() and _response_delegates_to(
+            response, "home-assistant-agent"
+        ):
+            safe_reply = "I may have misheard that. Please repeat the device command."
+            logger.warning(
+                "[%s] Blocked Home Assistant delegation from an OTHER voice turn: %r",
+                self.name,
+                text[:80],
+            )
+            self._replace_latest_interface_reply(response, safe_reply)
+            return note_prefix + safe_reply
 
         # If the LLM wrote agent code but forgot the <spawn> wrapper, remind it once
         has_spawn = "<spawn>" in response
@@ -616,6 +671,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         # Execute any looser @agent-name delegation patterns the LLM produced
         clean = await self._execute_llm_delegations(clean)
+        self._replace_latest_interface_reply(raw_llm_response, clean)
 
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
@@ -832,6 +888,20 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         full_response = "".join(full_chunks)
 
+        if self._current_interface_is_voice() and _response_delegates_to(
+            full_response, "home-assistant-agent"
+        ):
+            safe_reply = "I may have misheard that. Please repeat the device command."
+            logger.warning(
+                "[%s] Blocked Home Assistant delegation from an OTHER streaming voice turn: %r",
+                self.name,
+                text[:80],
+            )
+            self._replace_latest_interface_reply(full_response, safe_reply)
+            yield "\n" + safe_reply
+            yield {"done": True, "spawned": [], "system_msg": ""}
+            return
+
         # Process any <spawn> blocks in the completed response
         _, spawned = await self._process_spawn_commands(full_response)
 
@@ -854,6 +924,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             if results:
                 yield "\n" + "\n".join(results)
         full_response = delegated
+        self._replace_latest_interface_reply("".join(full_chunks), full_response)
 
         system_msg = TurnActions(tuple(spawned), tuple(deleted), tuple(missing)).summary(
             full_response

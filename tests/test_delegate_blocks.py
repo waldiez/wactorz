@@ -20,7 +20,7 @@ delegation. That is enforced on the name before anything is resolved.
 import json
 from typing import Any
 
-from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.actor import MainActor, _response_delegates_to
 from wactorz.agents.main.delegation import (
     RESTRICTED_DELEGATION_ALLOW,
     DelegationManager,
@@ -113,6 +113,18 @@ class _Main:
 
 def delegate(**cfg: Any) -> str:
     return f"<delegate>{json.dumps(cfg)}</delegate>"
+
+
+def test_detects_structured_home_assistant_delegation_for_voice_guard() -> None:
+    response = delegate(agent="home-assistant-agent", task="turn off all lights")
+    assert _response_delegates_to(response, "home-assistant-agent")
+    assert not _response_delegates_to(response, "weather-agent")
+
+
+def test_detects_loose_home_assistant_delegation_for_voice_guard() -> None:
+    assert _response_delegates_to(
+        "@home-assistant-agent turn off all lights", "home-assistant-agent"
+    )
 
 
 class TestReadingADelegateBlock:

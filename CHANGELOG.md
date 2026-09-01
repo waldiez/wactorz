@@ -14,9 +14,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Set
-  `DEEPGRAM_API_KEY` before using `ask_voice` or a conversation. Local `faster-whisper`, Whisper,
-  and OpenAI transcription remain available through `REACHY_STT_BACKEND`.
+- **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Voice
+  conversations stream Reachy's WebRTC microphone while local VAD guards speech onset, motor
+  noise, cancellation, and timeouts; Deepgram endpointing closes a turn sooner and interim text is
+  published as it arrives. A broken stream falls back to prerecorded transcription of the same
+  captured audio. Set `DEEPGRAM_API_KEY` before using `ask_voice` or a conversation. Local
+  `faster-whisper`, Whisper, and OpenAI transcription remain available through
+  `REACHY_STT_BACKEND`.
+- **Reachy's bilingual voice-control path is safer and more responsive.** Nova-3 streaming uses
+  multilingual English/Greek recognition, explicitly flushes a locally-ended turn before closing
+  the socket, and keeps prerecorded recognition as a same-audio fallback. Greek device words now
+  survive the post-resolution actuation guard. Raw delegation blocks are removed from durable
+  conversation history, and an unrelated voice turn cannot replay an older Home Assistant action.
+  Conversation state antenna cues can be enabled independently from continuous listening motion,
+  which remains opt-in because servo noise can reach the live microphone.
 
 ## [0.6.0] - 2026-08-31
 

@@ -6522,6 +6522,22 @@ def _conversation_stt_payload(payload):
     return resolved
 
 
+def _conversation_streaming_enabled(payload):
+    """Use Deepgram live transcription when it is selected and configured."""
+    from wactorz.catalogue_agents.reachy_stt import STTConfig
+
+    raw = payload.get("stt_streaming", os.environ.get("REACHY_STT_STREAMING"))
+    if isinstance(raw, str):
+        enabled = raw.strip().lower() not in ("0", "false", "no", "off")
+    else:
+        enabled = True if raw is None else bool(raw)
+    return (
+        enabled
+        and STTConfig.resolve(payload).backend == "deepgram"
+        and bool(os.environ.get("DEEPGRAM_API_KEY"))
+    )
+
+
 async def _conversation_transcribe(agent, wav_bytes, payload, session):
     """Retry uncertain auto-language results with a stable session fallback."""
     from wactorz.catalogue_agents.reachy_stt import transcribe_wav
@@ -6603,6 +6619,7 @@ def _conversation_turn(session):
         "session_id": session.get("session_id"),
         "turn_index": int(session.get("turn_index") or 0),
         "state": session.get("state", "idle"),
+        "interim_transcript": "",
         "transcript": "",
         "response": "",
         "raw_response": "",
@@ -6613,6 +6630,7 @@ def _conversation_turn(session):
         "stt_language": None,
         "stt_language_probability": None,
         "stt_retried": False,
+        "stt_streaming": False,
         "routing_duration_s": 0.0,
         "spoken_response": "",
         "interrupted": False,
@@ -6703,9 +6721,12 @@ async def _conversation_idle_motion_loop(agent, session):
 
 
 def _schedule_conversation_idle_motion(agent, session, state):
-    """Run opt-in idle motion only during listening."""
+    """Run configured idle motion only during listening."""
     previous = session.get("_idle_motion_task")
-    enabled = session.get("payload", {}).get("idle_motion", False)
+    configured = session.get("payload", {}).get(
+        "idle_motion", os.environ.get("REACHY_CONVERSATION_IDLE_MOTION")
+    )
+    enabled = _truthy(configured)
     if state != "listening" or not enabled:
         _cancel_conversation_idle_motion(session)
         return
@@ -6717,7 +6738,10 @@ def _schedule_conversation_idle_motion(agent, session, state):
 
 
 def _schedule_conversation_state_motion(agent, session, state):
-    if not session.get("payload", {}).get("state_motion", False):
+    configured = session.get("payload", {}).get(
+        "state_motion", os.environ.get("REACHY_CONVERSATION_STATE_MOTION")
+    )
+    if not _truthy(configured):
         return
     if session.get("_motion_state") == state:
         return
@@ -6734,9 +6758,7 @@ async def _conversation_publish(
     session["state"] = state
     agent.state["conversation_state"] = state
     _schedule_conversation_state_motion(agent, session, state)
-    # Subtle listening idle "breath" disabled for now — not behaving as wanted.
-    # Re-enable by uncommenting; the loop/scheduler below are left intact.
-    # _schedule_conversation_idle_motion(agent, session, state)
+    _schedule_conversation_idle_motion(agent, session, state)
     event = _conversation_turn(session)
     if turn:
         event.update(turn)
@@ -6916,6 +6938,60 @@ async def _conversation_capture(agent, session, vad_config):
     )
 
 
+async def _conversation_listen(agent, session, vad_config, stt_payload, turn):
+    """Capture a turn, using Deepgram live results when the backend permits."""
+    if session.get("pending_capture") is not None or not _conversation_streaming_enabled(
+        stt_payload
+    ):
+        return await _conversation_capture(agent, session, vad_config), None
+
+    from wactorz.catalogue_agents.reachy_stt import capture_deepgram_turn
+
+    media = _require_mic(agent, record=True)
+    loop = asyncio.get_running_loop()
+
+    def _speech_started():
+        loop.call_soon_threadsafe(_cancel_conversation_idle_motion, session)
+
+    def _interim(text):
+        def _publish():
+            if session.get("state") == "listening" and not session["cancel_event"].is_set():
+                interim = dict(turn)
+                interim["interim_transcript"] = text
+                asyncio.create_task(_conversation_publish(agent, session, "listening", interim))
+
+        loop.call_soon_threadsafe(_publish)
+
+    try:
+        streamed = await _conversation_blocking_worker(
+            session,
+            capture_deepgram_turn,
+            media,
+            session["cancel_event"],
+            vad_config,
+            stt_payload,
+            _speech_started,
+            _interim,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        await agent.log(
+            f"Deepgram streaming unavailable; using recorded-turn transcription: {exc}",
+            level="warning",
+        )
+        return await _conversation_capture(agent, session, vad_config), None
+
+    if streamed.error:
+        session["stt_stream_fallbacks"] = int(session.get("stt_stream_fallbacks") or 0) + 1
+        await agent.log(
+            f"Deepgram stream incomplete; transcribing the captured turn instead: "
+            f"{streamed.error}",
+            level="warning",
+        )
+    return streamed.capture, streamed.transcription
+
+
 async def _conversation_cooldown(agent, session, turn, seconds):
     from wactorz.catalogue_agents.reachy_vad import drain_audio
 
@@ -6963,6 +7039,7 @@ async def _conversation_start(agent, payload):
         "history": [],
         "stt_language_hint": None,
         "stt_retry_count": 0,
+        "stt_stream_fallbacks": 0,
         "consecutive_errors": 0,
     }
     agent.state["conversation_session"] = session
@@ -7086,7 +7163,9 @@ async def _conversation_loop(agent, session):
             await _conversation_publish(agent, session, "listening", turn)
 
             try:
-                capture = await _conversation_capture(agent, session, vad_config)
+                capture, streamed_transcription = await _conversation_listen(
+                    agent, session, vad_config, stt_payload, turn
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -7130,7 +7209,10 @@ async def _conversation_loop(agent, session):
             carried = session.pop("pending_transcript", None)
             reused = carried[1] if carried is not None and carried[0] is capture else None
             try:
-                if reused is not None:
+                if streamed_transcription is not None:
+                    transcription, retried = streamed_transcription, False
+                    turn["stt_streaming"] = True
+                elif reused is not None:
                     transcription, retried = reused, False
                 else:
                     wav_b64, _frames = await _do(

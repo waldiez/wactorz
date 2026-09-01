@@ -222,7 +222,8 @@ payload: {"duration": 5}
 `ask_voice` remains one-shot. There is deliberately no always-on microphone or wake
 word.
 The default backend on this test branch is hosted Deepgram Nova-3. It needs an API
-key and uploads each bounded WAV clip for transcription:
+key. `ask_voice` uploads one bounded WAV clip; conversation mode streams Reachy's
+WebRTC microphone as mono PCM while the user speaks:
 
 ~~~bash
 # Hosted default
@@ -251,9 +252,12 @@ OPENAI_API_KEY=...
 Optional `REACHY_STT_LANGUAGE`, `REACHY_STT_FALLBACK_LANGUAGE`,
 `REACHY_STT_DEVICE`, `REACHY_STT_COMPUTE_TYPE`, and `REACHY_STT_HOTWORDS`
 settings tune language, uncertain-language fallback, local inference, and recognition
-bias. `REACHY_STT_TIMEOUT_S` bounds hosted calls and defaults to 60 seconds. Leave the
-primary language unset to use the backend default. Short utterances whose language
-probability is below `stt_min_language_probability` (default `0.60`) are retried in
+bias. `REACHY_STT_TIMEOUT_S` bounds hosted calls and defaults to 60 seconds. Prerecorded
+Deepgram turns enable language detection when no language is supplied. Streaming requires
+a stable language choice and defaults to English; set `REACHY_STT_STREAM_LANGUAGE=el`
+for Greek, or set `REACHY_STT_STREAMING=0` to use per-turn language detection. Short
+utterances whose language probability is below `stt_min_language_probability` (default
+`0.60`) are retried in
 the configured fallback language; unresolved guesses are silently discarded instead
 of being routed as commands. The MQTT payload can override these settings with
 `stt_backend`, `stt_model`, `language`, `stt_fallback_language`, `stt_device`,
@@ -300,7 +304,13 @@ less-literal embodied request can still move the robot without a Main → Reachy
 delegation loop. Wactorz core contains no Reachy dependency; without the catalogue
 agent, Main behaves exactly as before.
 
-Each turn uses voice-activity detection and ends after about one second of silence.
+With Deepgram selected, each turn streams the PCM frames already being read from
+Reachy's WebRTC microphone. Local WebRTC VAD remains responsible for confirmed speech
+onset, motor-noise rejection, cancellation, and inactivity limits. Deepgram endpointing
+normally closes the turn after 500 ms of silence, with a 1200 ms utterance-end backstop.
+Interim recognition is published on `custom/reachy/events` while the user speaks. If the
+stream cannot start, disconnects, or returns no final transcript, the completed local
+capture goes through prerecorded Deepgram transcription without asking the user to repeat.
 The complete reply appears in Reachy's dashboard thread before playback begins, and
 the same sanitized reply is spoken in sentence-sized chunks without replacing its
 ending with a "rest in Wactorz chat" notice. Recognized
@@ -312,9 +322,10 @@ Execution receipts such as `ran 4 of 4` are also hidden by default; say
 `disable debug` to return to the normal user-facing view. Debug always starts off
 after an agent restart. Punctuation-only recognition noise is ignored.
 
-Conversation sessions auto-detect the spoken language, so English and Greek can be
-used without restarting the session. Set `stt_language` (or `REACHY_STT_LANGUAGE`)
-only when you deliberately want to lock recognition to one language. Common names
+Prerecorded conversation turns auto-detect the spoken language. Streaming uses
+`stt_stream_language` (or `REACHY_STT_STREAM_LANGUAGE`) and defaults to English because
+Deepgram streaming language detection is unavailable. Set it to `el` for a Greek session,
+or disable streaming when automatic per-turn English/Greek selection matters. Common names
 and device terms are supplied as hotwords; override them with `stt_hotwords` or
 `REACHY_STT_HOTWORDS`. Common mishearings such as "Richie", "Riti", "Ritzy", and
 "Lizzy" are corrected to "Reachy" when used as the robot's name. Main is explicitly
@@ -523,25 +534,35 @@ start fields include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s
 `flush_s`, `vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_guard_s`,
 `barge_onset_s`, `barge_silence_s`, `barge_min_speech_s`, `barge_flush_s`,
 `barge_min_rms`, `barge_verify_min_speech_s`, `voice_friendly`,
-`state_motion`, `idle_motion`, `stt_language`, `stt_hotwords`,
+`state_motion`, `idle_motion`, `stt_language`, `stt_streaming`, `stt_stream_language`,
+`stt_endpointing_ms`, `stt_utterance_end_ms`, `stt_finalize_timeout_s`, `stt_hotwords`,
 `stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in defaults to
 false and is enabled only by an explicit `barge_in:true`; all physical conversation
 motion defaults to false.
 
-Set `state_motion:true` for subtle listening/speaking antenna cues. These use
+Set `state_motion:true` (or `REACHY_CONVERSATION_STATE_MOTION=1`) for subtle
+listening/speaking antenna cues. These use
 antenna-only `set_target` calls and do not command or reset the head. Conversation
 states are published on `custom/reachy/events`; events also report `session_id`,
-`turn_index`, `transcript`, `response`, `raw_response`, `spoken_response`, `interrupted`,
+`turn_index`, `interim_transcript`, `transcript`, `response`, `raw_response`,
+`spoken_response`, `interrupted`,
 timings, `stop_reason`, `ok`, `error`, and `ts`.
 
-Physical idle motion defaults to `false` because Reachy's antenna servos are audible to
+Physical listening motion defaults to `false` because Reachy's antenna servos are audible to
 its live microphone and can become convincing transcription false positives. The robot stays
 mechanically still while recording; personality remains in deliberate response
-gestures. Set `idle_motion:true` only to experiment on hardware with quiet servos. The
+gestures and the ambient-life layer. Set `idle_motion:true` or
+`REACHY_CONVERSATION_IDLE_MOTION=1` only to experiment on hardware with quiet servos. The
 opt-in motion uses small, eased antenna sweeps, stops when voice activity is confirmed,
 and never moves the head. Short mechanical bursts that trip VAD are rejected before
 the recognizer and do not consume a turn or error budget, but keeping motors still is the
 reliable default.
+
+For bilingual English/Greek use, set both `REACHY_STT_LANGUAGE=multi` and
+`REACHY_STT_STREAM_LANGUAGE=multi` with Nova-3. When local VAD closes a turn, the streaming
+client sends Deepgram `Finalize` and waits briefly for the final transcript before falling back
+to a prerecorded request using the same captured audio. This avoids closing the WebSocket while
+its final result is still in flight.
 
 Embodied requests stay on the robot. "Turn left" and "turn right" rotate the body
 45 degrees relative to its current heading; an explicit angle such as "turn left

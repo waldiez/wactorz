@@ -184,6 +184,23 @@ class TestCommandsWithoutASlash:
         assert not went_to_the_model(text)
 
 
+def test_other_voice_turn_cannot_replay_a_home_assistant_delegation() -> None:
+    main = _Main(agents=("home-assistant-agent",))
+    setattr(main.actor, "_current_interface_is_voice", lambda: True)
+
+    async def stale_reply(_text: str, attachments: Any = None) -> str:
+        return (
+            "Let me turn off the lights. "
+            '<delegate>{"agent":"home-assistant-agent","task":"turn off all lights"}</delegate>'
+        )
+
+    main.actor.chat = stale_reply  # pyright: ignore[reportAttributeAccessIssue]
+
+    response = main("Please see the photo")
+
+    assert response == "I may have misheard that. Please repeat the device command."
+
+
 class TestTheReadOnlyReports:
     """Commands that only look things up and print them.
 

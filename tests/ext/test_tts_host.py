@@ -264,7 +264,7 @@ class TestWhichTurnsAreSpokenAloud:
 
     @staticmethod
     def _host(monkeypatch: pytest.MonkeyPatch, spoken: list[str]) -> None:
-        monkeypatch.setattr(chat.config, "TTS_MODE", "host")
+        monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "host")
 
         async def say(text: str) -> None:
             spoken.append(text)
@@ -319,7 +319,7 @@ class TestWhichTurnsAreSpokenAloud:
     async def test_every_other_branch_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
         spoken: list[str] = []
         self._host(monkeypatch, spoken)
-        monkeypatch.setattr(chat.config, "TTS_MODE", "server")
+        monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "server")
 
         sent: list[str] = []
         reply, chunk, end = chat._also_spoken_here(_collect(sent), None, None)
@@ -353,7 +353,7 @@ class TestATurnActuallyReachesTheSpeakers:
 
     async def test_a_slash_command_answer_is_spoken(self, monkeypatch: pytest.MonkeyPatch) -> None:
         spoken: list[str] = []
-        monkeypatch.setattr(chat.config, "TTS_MODE", "host")
+        monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "host")
 
         async def say(text: str) -> None:
             spoken.append(text)
@@ -372,7 +372,7 @@ class TestATurnActuallyReachesTheSpeakers:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         spoken: list[str] = []
-        monkeypatch.setattr(chat.config, "TTS_MODE", "host")
+        monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "host")
 
         async def say(text: str) -> None:
             spoken.append(text)
@@ -398,7 +398,7 @@ class TestATurnActuallyReachesTheSpeakers:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         spoken: list[str] = []
-        monkeypatch.setattr(chat.config, "TTS_MODE", "host")
+        monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "host")
 
         async def say(text: str) -> None:
             spoken.append(text)
@@ -415,7 +415,7 @@ class TestATurnActuallyReachesTheSpeakers:
 
     async def test_no_other_branch_reaches_them(self, monkeypatch: pytest.MonkeyPatch) -> None:
         spoken: list[str] = []
-        monkeypatch.setattr(chat.config, "TTS_MODE", "server")
+        monkeypatch.setattr(chat.voice_settings, "speaking", lambda: "server")
 
         async def say(text: str) -> None:
             spoken.append(text)
@@ -450,7 +450,7 @@ class TestWhatStartupWarnsAbout:
 
     @staticmethod
     def _host(monkeypatch: pytest.MonkeyPatch, uri: str, decoder: bool) -> None:
-        monkeypatch.setattr(tts.config, "TTS_MODE", "host")
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: "host")
         monkeypatch.setattr(speaker, "DECODES", decoder)
         monkeypatch.setattr(speaker, "available", lambda: True)
         if uri:
@@ -463,7 +463,7 @@ class TestWhatStartupWarnsAbout:
     ) -> None:
         self._host(monkeypatch, "", decoder=False)
 
-        tts._warn_if_the_room_will_stay_quiet()
+        tts.warn_if_the_room_will_stay_quiet()
 
         assert "wactorz[host]" in caplog.text
 
@@ -472,7 +472,7 @@ class TestWhatStartupWarnsAbout:
     ) -> None:
         self._host(monkeypatch, "https://voice.example/speak", decoder=False)
 
-        tts._warn_if_the_room_will_stay_quiet()
+        tts.warn_if_the_room_will_stay_quiet()
 
         # It answers in whatever it likes, which without a decoder may be
         # nothing this can play.
@@ -483,7 +483,7 @@ class TestWhatStartupWarnsAbout:
     ) -> None:
         self._host(monkeypatch, "tcp://piper:10200", decoder=False)
 
-        tts._warn_if_the_room_will_stay_quiet()
+        tts.warn_if_the_room_will_stay_quiet()
 
         # It answers in raw samples, which are given a WAV header on the way
         # back, so the standard library is enough.
@@ -494,7 +494,7 @@ class TestWhatStartupWarnsAbout:
     ) -> None:
         self._host(monkeypatch, "", decoder=True)
 
-        tts._warn_if_the_room_will_stay_quiet()
+        tts.warn_if_the_room_will_stay_quiet()
 
         assert not caplog.text
 
@@ -504,7 +504,7 @@ class TestWhatStartupWarnsAbout:
         self._host(monkeypatch, "tcp://piper:10200", decoder=True)
         monkeypatch.setattr(speaker, "available", lambda: False)
 
-        tts._warn_if_the_room_will_stay_quiet()
+        tts.warn_if_the_room_will_stay_quiet()
 
         assert "no sound device" in caplog.text
 
@@ -512,8 +512,8 @@ class TestWhatStartupWarnsAbout:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         self._host(monkeypatch, "", decoder=False)
-        monkeypatch.setattr(tts.config, "TTS_MODE", "server")
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: "server")
 
-        tts._warn_if_the_room_will_stay_quiet()
+        tts.warn_if_the_room_will_stay_quiet()
 
         assert not caplog.text

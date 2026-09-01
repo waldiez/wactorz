@@ -8,10 +8,13 @@ config is merged in.
 import json
 import logging
 import time
+from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
 
+from ..core import voice_settings
+from ..ext import stt, tts
 from . import cost, origins, runtime
 
 logger = logging.getLogger(__name__)
@@ -99,10 +102,72 @@ async def chat_log_handler(request: web.Request) -> Response:
         return web.json_response({"error": "Could not read the chat log"}, status=500)
 
 
+async def voice_settings_handler(request: web.Request) -> Response:
+    """POST /api/voice — change which branch listens or speaks, while running.
+
+    The environment says what a deployment starts as; this is how someone tries
+    another without restarting. Addresses are not settable here on purpose: they
+    name services this process dials, and one a browser can write is one it can
+    point at anything reachable from this machine.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "expected a JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "expected a JSON object"}, status=400)
+
+    if body.get("reset"):
+        try:
+            voice_settings.forget()
+        except RuntimeError as exc:
+            return web.json_response({"error": str(exc)}, status=503)
+        return web.json_response(_voice_now())
+
+    changed = {k: v for k, v in body.items() if k in {"listening", "speaking", "voice"}}
+    if not changed:
+        return web.json_response(
+            {"error": "nothing to change: listening, speaking or voice"}, status=400
+        )
+    # Checked before any of it is kept: a request naming one good setting and one
+    # bad one would otherwise leave the deployment half-changed, in a state
+    # nobody asked for and the answer does not describe.
+    for setting, value in changed.items():
+        problem = voice_settings.refuses(setting, str(value))
+        if problem:
+            return web.json_response({"error": problem}, status=400)
+    try:
+        for setting, value in changed.items():
+            voice_settings.choose(setting, str(value))
+    except RuntimeError as exc:
+        return web.json_response({"error": str(exc)}, status=503)
+
+    # Said again on the way in: a deployment switched to `host` while running has
+    # heard nothing about the microphone it now needs.
+    _warn_about_the_new_branch()
+    return web.json_response(_voice_now())
+
+
+def _warn_about_the_new_branch() -> None:
+    """Repeat the startup checks for whichever branch is now in force."""
+    stt.warn_if_it_cannot_listen()
+    tts.warn_if_the_room_will_stay_quiet()
+
+
+def _voice_now() -> dict[str, Any]:
+    """What the voice settings resolve to at this moment."""
+    return {
+        "listening": voice_settings.listening(),
+        "speaking": voice_settings.speaking(),
+        "voice": voice_settings.voice(),
+    }
+
+
 async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from .. import __version__, config
     from ..config import CONFIG
+    from ..core import voice_settings
     from ..ext import collect_public_config
 
     # The /ws proxy is served by *this* server, so point the frontend at the
@@ -138,7 +203,7 @@ async def config_handler(request: web.Request) -> Response:
         # Which speech-to-text branch is offered, for the same reason as uploads:
         # a bundle cannot know, and the microphone must appear only where it can
         # actually work. "off" means the browser shows no microphone at all.
-        "stt": {"mode": config.STT_MODE},
+        "stt": {"mode": voice_settings.listening()},
         # Whether this browser holds a session it could end, which is not the
         # same question as "is a key configured". Under Home Assistant ingress
         # the user was authenticated by HA and carries no session here, so a

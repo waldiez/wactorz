@@ -18,13 +18,14 @@ from typing import Any
 from aiohttp import web
 from aiohttp.web import Response
 
-# The module, not the value: `TTS_MODE` is read when a turn is answered rather
-# than bound when this is imported, which is what lets a test put the process on
-# a branch. The names below are settings that do not change under one.
-from .. import config
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
+
+# Which branch speaks is asked for each turn rather than bound here: it can be
+# changed while running, and a value read at import would answer for the one the
+# process started with.
+from ..core import voice_settings
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from ..ext import tts
@@ -393,7 +394,7 @@ def _also_spoken_here(reply_fn, stream_fn, stream_end_fn):
     The text is gathered rather than spoken as it streams, because a synthesiser
     reads a sentence better than it reads the pieces of one.
     """
-    if config.TTS_MODE != "host":
+    if voice_settings.speaking() != "host":
         return reply_fn, stream_fn, stream_end_fn
 
     said: list[str] = []

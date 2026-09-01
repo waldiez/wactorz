@@ -185,17 +185,21 @@ class TestAskingTheMachineToListen:
     """`POST /api/stt/listen` is the control this branch has instead of a button."""
 
     async def test_every_other_branch_refuses(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(stt.config, "STT_MODE", "server")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "server")
 
         status, body = await _listen()
 
         assert status == 503
-        assert "WACTORZ_STT=server" in body["error"]
+        # Named without blaming the environment: the branch may have been chosen
+        # from the dashboard, and telling someone to edit a file they did not set
+        # sends them to the wrong place.
+        assert "'server'" in body["error"]
+        assert "Settings" in body["error"]
 
     async def test_a_machine_with_no_microphone_says_so(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(stt.config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
         monkeypatch.setattr(stt.listener, "available", lambda: False)
 
         status, body = await _listen()
@@ -204,7 +208,7 @@ class TestAskingTheMachineToListen:
         assert "wactorz[host]" in body["error"]
 
     async def test_silence_is_an_answer(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(stt.config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
         monkeypatch.setattr(stt.listener, "available", lambda: True)
 
         async def heard_nothing(**_kwargs: object) -> bytes:
@@ -222,7 +226,7 @@ class TestAskingTheMachineToListen:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         routed: list[str] = []
-        monkeypatch.setattr(stt.config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
         monkeypatch.setattr(stt.listener, "available", lambda: True)
 
         async def heard(**_kwargs: object) -> bytes:
@@ -250,7 +254,7 @@ class TestAskingTheMachineToListen:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         routed: list[str] = []
-        monkeypatch.setattr(stt.config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
         monkeypatch.setattr(stt.listener, "available", lambda: True)
         monkeypatch.setattr(stt, "service_uri", lambda: "ws://recogniser:6006")
 
@@ -281,7 +285,7 @@ class TestAskingTheMachineToListen:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         listened = {"did": False}
-        monkeypatch.setattr(stt.config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
         monkeypatch.setattr(stt.listener, "available", lambda: True)
         monkeypatch.setattr(stt.speaker, "is_speaking", lambda: True)
 
@@ -302,7 +306,7 @@ class TestAskingTheMachineToListen:
     async def test_a_microphone_that_wedges_is_answered_as_one_that_is_gone(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(stt.config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
         monkeypatch.setattr(stt.listener, "available", lambda: True)
         monkeypatch.setattr(stt.speaker, "is_speaking", lambda: False)
 
@@ -323,7 +327,7 @@ class TestAskingTheMachineToListen:
     async def test_a_microphone_that_fails_mid_capture_is_reported(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(stt.config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
         monkeypatch.setattr(stt.listener, "available", lambda: True)
         monkeypatch.setattr(stt.speaker, "is_speaking", lambda: False)
 
@@ -368,7 +372,7 @@ class TestAskingTheMachineToListen:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         routed: list[str] = []
-        monkeypatch.setattr(stt.config, "STT_MODE", "host")
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
         monkeypatch.setattr(stt.listener, "available", lambda: True)
 
         async def heard(**_kwargs: object) -> bytes:
@@ -625,7 +629,7 @@ class TestOneUtterancePerTurn:
         from wactorz.web import chat as chat_module
 
         spoken: list[str] = []
-        monkeypatch.setattr(chat_module.config, "TTS_MODE", "host")
+        monkeypatch.setattr(chat_module.voice_settings, "speaking", lambda: "host")
 
         async def say(text: str) -> None:
             spoken.append(text)

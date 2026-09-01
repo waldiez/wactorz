@@ -26,6 +26,7 @@ from typing import Any
 from aiohttp import BodyPartReader, web
 
 from ... import config
+from ...core import voice_settings
 from ...monitoring.log_redaction import redact
 from ..tts import speaker
 from . import listener, streaming
@@ -99,10 +100,12 @@ def setup(app: web.Application) -> None:
     """Register the recognition routes, and account for a branch nothing serves."""
     app.router.add_post("/api/stt", stt_handler)
     app.router.add_post("/api/stt/listen", listen_handler)
+    warn_if_it_cannot_listen()
 
-    # Read through the module rather than bound at import, so the value is the
-    # one in force when the app is built.
-    mode = config.STT_MODE
+
+def warn_if_it_cannot_listen() -> None:
+    """Say what the branch in force is missing, at startup and on a change."""
+    mode = voice_settings.listening()
     if mode == "host" and not listener.available():
         logger.warning(
             "[stt] WACTORZ_STT=host, but this machine has no microphone to listen "
@@ -253,9 +256,14 @@ async def listen_handler(request: web.Request) -> web.Response:
     typed: an ``@mention`` reaches the agent it names and anything else reaches
     main, which is one path to reason about rather than two.
     """
-    if config.STT_MODE != "host":
+    if voice_settings.listening() != "host":
         return web.json_response(
-            {"error": f"this deployment does not listen here (WACTORZ_STT={config.STT_MODE})"},
+            {
+                "error": (
+                    f"this deployment listens through '{voice_settings.listening()}', not here "
+                    "— change it in Settings, or set WACTORZ_STT=host"
+                )
+            },
             status=503,
         )
     if not listener.available():

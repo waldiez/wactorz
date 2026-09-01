@@ -302,7 +302,7 @@ class TestWhichBranchSpeaks:
     @staticmethod
     def _mode(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
         """Put the process on `mode`, as config resolves it once at import."""
-        monkeypatch.setattr(tts.config, "TTS_MODE", mode)
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: mode)
 
     def test_server_speaks_here(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._mode(monkeypatch, "server")
@@ -359,7 +359,7 @@ class TestASynthesiserThatCannotBeSpokenTo:
     """A named address is only usable with whatever speaks to it installed."""
 
     def test_wyoming_needs_its_dependency(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(tts.config, "TTS_MODE", "server")
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: "server")
         monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
         monkeypatch.setattr(remote, "WYOMING", False)
 
@@ -368,7 +368,7 @@ class TestASynthesiserThatCannotBeSpokenTo:
         assert tts.synthesiser_available() is False
 
     def test_an_http_one_needs_nothing_extra(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(tts.config, "TTS_MODE", "server")
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: "server")
         monkeypatch.setenv("WACTORZ_TTS_URI", "https://voice.example/speak")
         monkeypatch.setattr(remote, "WYOMING", False)
         monkeypatch.setattr(tts._tts_state, "available", False)
@@ -387,7 +387,7 @@ class TestWhatARefusalSays:
     async def test_a_missing_wyoming_asks_for_wyoming(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(tts.config, "TTS_MODE", "server")
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: "server")
         monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
         monkeypatch.setattr(remote, "WYOMING", False)
 
@@ -403,19 +403,20 @@ class TestWhatARefusalSays:
     async def test_a_silenced_branch_says_so_rather_than_naming_a_package(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(tts.config, "TTS_MODE", "browser")
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: "browser")
         monkeypatch.setattr(tts._tts_state, "available", True)
 
         said = await self._refusal()
 
         # Nothing is missing here; the deployment chose this.
-        assert "WACTORZ_TTS=browser" in said
+        assert "'browser'" in said
+        assert "Settings" in said
         assert "pip install" not in said
 
     async def test_nothing_configured_asks_for_either(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(tts.config, "TTS_MODE", "server")
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: "server")
         monkeypatch.delenv("WACTORZ_TTS_URI", raising=False)
         monkeypatch.setattr(tts._tts_state, "available", False)
 
@@ -426,7 +427,7 @@ class TestWhatARefusalSays:
         assert "wactorz[tts]" in said
 
     async def test_the_address_is_never_quoted_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(tts.config, "TTS_MODE", "server")
+        monkeypatch.setattr(tts.voice_settings, "speaking", lambda: "server")
         monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://voice.internal.example:10200")
         monkeypatch.setattr(remote, "WYOMING", False)
 
@@ -465,3 +466,33 @@ class TestTheVoiceTheBrowserIsTold:
         monkeypatch.delenv("TTS_VOICE", raising=False)
 
         assert tts.public_config(web.Application())["voice"] == tts._tts_state.default_voice
+
+
+class TestChoosingAVoiceFromTheDashboard:
+    """A voice picked in Settings is a voice the synthesiser is actually asked for."""
+
+    def test_a_chosen_voice_outranks_the_configured_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
+        monkeypatch.setenv("TTS_VOICE", "en_GB-alba-medium")
+        monkeypatch.setattr(tts.voice_settings, "voice", lambda: "en_US-amy-low")
+
+        assert tts.public_config(web.Application())["voice"] == "en_US-amy-low"
+
+    async def test_and_is_the_name_the_service_is_asked_for(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("WACTORZ_TTS_URI", "tcp://piper:10200")
+        monkeypatch.setenv("TTS_VOICE", "en_GB-alba-medium")
+        monkeypatch.setattr(tts.voice_settings, "voice", lambda: "en_US-amy-low")
+        asked: list[str] = []
+
+        async def _synthesise(_uri: str, _text: str, voice: str) -> object:
+            asked.append(voice)
+            return object()
+
+        monkeypatch.setattr(tts.remote, "synthesise", _synthesise)
+        await tts.make_speech("hello")
+
+        assert asked == ["en_US-amy-low"]

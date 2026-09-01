@@ -46,6 +46,11 @@ export function ttsMode(): TtsMode {
     return stored === "off" || stored === "browser" || stored === "host" ? stored : "server";
 }
 
+/** Whether the server will make speech for this browser to play. */
+export function ttsAvailable(): boolean {
+    return safeStorage.get("wactorz-tts-available") === "1";
+}
+
 /** Extension config passed to register() once at startup (see main.ts). */
 export interface TTSConfig {
     apiBase: string;

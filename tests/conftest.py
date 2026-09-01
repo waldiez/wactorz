@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from wactorz import config, llm_factory
-from wactorz.core import mqtt
+from wactorz.core import mqtt, voice_settings
 from wactorz.core.persistence.stores import Stores
 
 
@@ -99,6 +99,10 @@ def _no_ambient_voice_services(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WACTORZ_TTS_URI", raising=False)
     monkeypatch.setattr(config, "STT_MODE", "off")
     monkeypatch.setattr(config, "TTS_MODE", "server")
+    # And whatever was chosen at runtime, which now outranks the environment: a
+    # branch picked once from the dashboard is remembered in the developer's own
+    # store, and would decide tests that never mentioned it.
+    monkeypatch.setattr(voice_settings, "_stored", dict)
 
 
 #: The real factory, for the tests that exist to exercise it.

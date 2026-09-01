@@ -129,3 +129,55 @@ select.af-cfg-input option:checked {
 .af-mini-btn.danger:hover {
   background: rgba(239, 68, 68, 0.28);
 }
+
+/* One line of the voice section: what the setting is, and what it is set to. */
+.af-voice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+}
+.af-voice-term {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.75);
+  flex: 0 0 auto;
+}
+/* What the branch above means, under the control that sets it: these read as a
+   sentence rather than a value, and a sentence beside a select has nowhere to go. */
+.af-voice-detail {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.6);
+}
+.af-voice-group + .af-voice-group {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+/* Side by side while they fit: on a narrow dashboard they stack instead of
+   squeezing the labels. */
+.af-voice-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.af-settings-btn {
+  align-self: flex-start;
+  margin-top: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.af-settings-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+.af-settings-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

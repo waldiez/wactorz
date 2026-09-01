@@ -28,6 +28,7 @@ from typing import Any
 from aiohttp import web
 
 from ... import config
+from ...core import voice_settings
 from . import remote, speaker, spoken
 
 logger = logging.getLogger(__name__)
@@ -69,10 +70,10 @@ def setup(app: web.Application) -> None:
     app.router.add_get("/api/tts/voices", tts_voices_handler)
     app.router.add_post("/api/tts", tts_handler)
     app.on_startup.append(_warm_tts_voices)
-    _warn_if_the_room_will_stay_quiet()
+    warn_if_the_room_will_stay_quiet()
 
 
-def _warn_if_the_room_will_stay_quiet() -> None:
+def warn_if_the_room_will_stay_quiet() -> None:
     """Say at startup what would otherwise be found a turn at a time.
 
     ``host`` answers out loud and nowhere else, so a deployment that cannot do
@@ -80,7 +81,7 @@ def _warn_if_the_room_will_stay_quiet() -> None:
     asked, because their answer arrived on screen exactly as it should. Said
     once here rather than as a warning after every turn.
     """
-    if config.TTS_MODE != "host":
+    if voice_settings.speaking() != "host":
         return
     if not speaker.available():
         logger.warning(
@@ -105,7 +106,7 @@ def synthesiser_available() -> bool:
     wants its own voice, so answering yes would send the text somewhere the
     chosen branch says it must not go.
     """
-    if config.TTS_MODE != "server":
+    if voice_settings.speaking() != "server":
         return False
     uri = remote.service_uri()
     # Taken at its word rather than probed: the browser asks this on every page
@@ -137,7 +138,9 @@ def worth_saying(text: str) -> str:
 
 async def make_speech(text: str, asked_for: str = "") -> remote.Speech:
     """Turn `text` into audio, by whichever synthesiser this deployment names."""
-    configured = os.environ.get("TTS_VOICE", "").strip()
+    # Chosen first, configured second: the environment says what this started
+    # with, and picking another in the dashboard is how someone tries one.
+    configured = voice_settings.voice() or os.environ.get("TTS_VOICE", "").strip()
     uri = remote.service_uri()
     if remote.names_a_service(uri):
         # No fallback to the default below: that name belongs to the synthesiser
@@ -194,7 +197,7 @@ def _reported_voice() -> str:
     Empty for a named service: its voices are its own, and naming the one this
     process would have used describes a synthesiser that is not being asked.
     """
-    configured = os.getenv("TTS_VOICE", "").strip()
+    configured = voice_settings.voice() or os.getenv("TTS_VOICE", "").strip()
     if remote.names_a_service(remote.service_uri()):
         return configured
     # Stripped and `or`-ed rather than given as a default argument: a default
@@ -214,10 +217,13 @@ def _why_silent() -> str:
     The address itself is never quoted -- the browser is told what to fix, not
     where this deployment's network keeps its services.
     """
-    if config.TTS_MODE == "host":
+    if voice_settings.speaking() == "host":
         return "this deployment speaks through its own speakers (WACTORZ_TTS=host)"
-    if config.TTS_MODE != "server":
-        return f"this deployment does not speak here (WACTORZ_TTS={config.TTS_MODE})"
+    if voice_settings.speaking() != "server":
+        return (
+            f"this deployment speaks through '{voice_settings.speaking()}', not here "
+            "— change it in Settings, or set WACTORZ_TTS=server"
+        )
     uri = remote.service_uri()
     if remote.is_wyoming_uri(uri) and not remote.WYOMING:
         return "WACTORZ_TTS_URI names a Wyoming synthesiser — pip install 'wactorz[tts]'"
@@ -230,7 +236,7 @@ def public_config(_app: web.Application) -> dict[str, Any]:
     # never speaks to the synthesiser, and where it lives is a fact about the
     # network this deployment sits on.
     return {
-        "mode": config.TTS_MODE,
+        "mode": voice_settings.speaking(),
         "available": synthesiser_available(),
         "voice": _reported_voice(),
     }

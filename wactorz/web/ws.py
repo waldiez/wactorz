@@ -297,7 +297,14 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     data = json.loads(msg.data)
                     msg_type = data.get("type")
 
-                    if msg_type == "command":
+                    if msg_type == "ping":
+                        # Answered so the browser can tell a live socket from one
+                        # whose far end has gone. The protocol-level ping this
+                        # connection already sends is handled by the browser
+                        # itself and never reaches the page, so it cannot serve.
+                        await ws.send_str(json.dumps({"type": "pong"}))
+
+                    elif msg_type == "command":
                         await handle_command(data)
 
                     elif msg_type == "chat":

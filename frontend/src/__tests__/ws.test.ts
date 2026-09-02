@@ -32,7 +32,10 @@ class MockWebSocket {
         this.sent.push(data);
     }
     close() {
+        // A real socket fires "close" when closed from either side, and the
+        // watchdog relies on that to reach the reconnect path.
         this.readyState = MockWebSocket.CLOSED;
+        this.emit("close", {});
     }
 
     emit(event: string, payload: unknown) {
@@ -680,5 +683,135 @@ describe("WSClient", () => {
         c.connect("ws://localhost/ws");
         c.disconnect();
         expect(spy).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("a socket whose far end has gone away", () => {
+    // The server pings every 30s and the browser answers in its own protocol
+    // handling, which JS never sees — so an open socket proves nothing about
+    // whether anything is still listening at the other end. Under an ingress
+    // proxy the near leg can stay open after the far leg dies, and then `send()`
+    // succeeds into nowhere and `close` never fires, so nothing reconnects.
+
+    /** Long enough that the watchdog has given up. */
+    const PAST_PATIENCE = 90_000;
+
+    function connected(): WSClient {
+        const c = new WSClient();
+        c.connect("ws://x/ws");
+        ws().emit("open", {});
+        return c;
+    }
+
+    it("closes a socket that has gone quiet, so the reconnect path can run", () => {
+        const c = connected();
+        const socket = ws();
+
+        vi.advanceTimersByTime(PAST_PATIENCE);
+
+        expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+        // Closing is only half of it: the point is that the existing reconnect
+        // path takes over, which is what the page was never doing.
+        vi.advanceTimersByTime(2_000);
+        expect(instances.length).toBeGreaterThan(1);
+        expect(c.connected).toBe(true);
+    });
+
+    it("leaves a socket alone while frames keep arriving", () => {
+        const c = connected();
+        const socket = ws();
+
+        for (let i = 0; i < 6; i++) {
+            vi.advanceTimersByTime(20_000);
+            socket.emit("message", { data: JSON.stringify({ type: "mqtt_status", connected: true }) });
+        }
+
+        expect(socket.readyState).toBe(MockWebSocket.OPEN);
+        expect(instances.length).toBe(1);
+        expect(c.connected).toBe(true);
+    });
+
+    it("asks the server to say something, so an idle deployment still proves it is there", () => {
+        // Not because the socket would otherwise be silent: the periodic totals
+        // patch usually fills that. Because a liveness check that leans on
+        // another feature's traffic breaks when that feature changes, and this
+        // is the only thing that proves the outbound direction works.
+        connected();
+
+        vi.advanceTimersByTime(31_000);
+
+        expect(ws().sent.map(s => JSON.parse(s).type)).toContain("ping");
+    });
+
+    it("counts a frame it cannot parse as proof of life", () => {
+        // The bytes arrived, which is the whole question. Judging on parseable
+        // frames only would close a socket that is plainly still connected.
+        const c = connected();
+        const socket = ws();
+
+        for (let i = 0; i < 6; i++) {
+            vi.advanceTimersByTime(20_000);
+            socket.emit("message", { data: "not json" });
+        }
+
+        expect(socket.readyState).toBe(MockWebSocket.OPEN);
+        expect(c.connected).toBe(true);
+    });
+
+    it("stops watching the moment disconnect() is called, not when close arrives", () => {
+        // A real socket fires "close" asynchronously, so a disconnect that left
+        // the watchdog to the close handler would go on pinging in between.
+        const c = connected();
+        const socket = ws();
+        socket.close = () => {
+            socket.readyState = MockWebSocket.CLOSED;
+        };
+        c.disconnect();
+
+        // Observed directly rather than through its effects: the guard in the
+        // tick would stop it anyway, a tick later, so only the timer itself
+        // shows whether the disconnect cleared it or merely outlived it.
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("stops watching once disconnect() is called", () => {
+        // Otherwise a deliberate disconnect goes on pinging a socket nobody wants.
+        const c = connected();
+        const socket = ws();
+        c.disconnect();
+        const sentByThen = socket.sent.length;
+
+        vi.advanceTimersByTime(PAST_PATIENCE);
+
+        expect(socket.sent.length).toBe(sentByThen);
+        expect(instances.length).toBe(1);
+    });
+
+    it("gives up watching a socket that closed without saying so", () => {
+        // Belt and braces for the gap before a close event arrives: a tick that
+        // finds the socket already gone stops rather than pinging into it.
+        connected();
+        const socket = ws();
+        socket.readyState = MockWebSocket.CLOSED;
+        const sentByThen = socket.sent.length;
+
+        vi.advanceTimersByTime(PAST_PATIENCE);
+
+        expect(socket.sent.length).toBe(sentByThen);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("starts the clock again on each reconnect", () => {
+        // A watchdog that kept the old timestamp would close the fresh socket
+        // immediately, which is a reconnect loop rather than a recovery.
+        connected();
+        vi.advanceTimersByTime(PAST_PATIENCE);
+        vi.advanceTimersByTime(2_000);
+        const fresh = ws();
+        fresh.emit("open", {});
+
+        vi.advanceTimersByTime(20_000);
+
+        expect(fresh.readyState).toBe(MockWebSocket.OPEN);
     });
 });

@@ -13,16 +13,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { installSessionExpiry } from "../io/sessionExpiry";
+import { resetDeadSession } from "../ui/deadSession";
 
 type FakeWindow = {
     fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     location: { assign: ReturnType<typeof vi.fn>; pathname: string; search: string };
+    __WACTORZ_INGRESS_PATH?: string;
 };
 
-function fakeWindow(status: number): FakeWindow {
+function fakeWindow(status: number, ingress = ""): FakeWindow {
     return {
         fetch: vi.fn(async () => new Response("", { status })),
         location: { assign: vi.fn(), pathname: "/", search: "" },
+        ...(ingress ? { __WACTORZ_INGRESS_PATH: ingress } : {}),
     };
 }
 
@@ -33,6 +36,8 @@ beforeEach(() => {
     // property, so the absent case is expressed by deleting it — which is also
     // what "no ingress prefix" actually looks like.
     delete window.__WACTORZ_INGRESS_PATH;
+    document.body.innerHTML = "";
+    resetDeadSession();
 });
 
 afterEach(() => {
@@ -123,5 +128,22 @@ describe("installSessionExpiry", () => {
         await w.fetch("/api/actors");
 
         expect(w.location.assign.mock.calls[0]![0]).toContain("/api/hassio_ingress/abc/login");
+    });
+
+    it("shows recovery instructions after a sustained ingress 503", async () => {
+        vi.useFakeTimers();
+        const w = fakeWindow(503, "/api/hassio_ingress/abc");
+        const revoked = vi.fn();
+        restore = installSessionExpiry(w as unknown as Window, revoked);
+
+        await w.fetch("/api/actors");
+        vi.advanceTimersByTime(30_000);
+        await w.fetch("/api/actors");
+        vi.advanceTimersByTime(31_000);
+        await w.fetch("/api/actors");
+
+        expect(document.querySelector(".af-dead-session")?.textContent).toContain("Home Assistant sidebar");
+        expect(revoked).toHaveBeenCalledOnce();
+        vi.useRealTimers();
     });
 });

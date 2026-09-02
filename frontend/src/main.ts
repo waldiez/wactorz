@@ -468,7 +468,12 @@ const _liveActorsTimer = window.setInterval(() => {
 // that ended while the tab was closed refuses that one too, and installing after
 // it would leave the very first 401 unhandled and the page waiting on a poll
 // half a minute away.
-installSessionExpiry();
+installSessionExpiry(window, () => {
+    // A revoked ingress route cannot recover in this page, so stop its socket
+    // and periodic requests while the user is directed to reopen Wactorz.
+    ws.disconnect();
+    window.clearInterval(_liveActorsTimer);
+});
 
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).

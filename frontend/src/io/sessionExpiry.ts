@@ -19,6 +19,7 @@
  * each route.
  */
 import { log } from "./logger";
+import { showDeadSession } from "../ui/deadSession";
 
 /** Where the server's sign-in page lives, under any ingress prefix. */
 function loginUrl(target: Window): string {
@@ -42,13 +43,41 @@ function isSessionGone(response: Response): boolean {
     return response.status === 401;
 }
 
+const REVOKED_AFTER_TRIES = 3;
+const REVOKED_AFTER_MS = 60_000;
+
+/** Return whether this page was served through a Home Assistant ingress URL. */
+function ingressPath(target: Window): string {
+    return target.__WACTORZ_INGRESS_PATH ?? "";
+}
+
+/** Track a sustained ingress failure without mistaking an add-on restart for one. */
+function sessionRevokedTracker(target: Window): (response: Response) => boolean {
+    let failures = 0;
+    let since = 0;
+    return (response: Response): boolean => {
+        if (!ingressPath(target)) {
+            return false;
+        }
+        if (response.status !== 503) {
+            failures = 0;
+            return false;
+        }
+        failures += 1;
+        if (failures === 1) {
+            since = Date.now();
+        }
+        return failures >= REVOKED_AFTER_TRIES && Date.now() - since >= REVOKED_AFTER_MS;
+    };
+}
+
 /**
  * Replace `fetch` with one that redirects to sign-in on a 401.
  *
  * Returns a function that puts the original back, for tests and for a teardown
  * that wants the global left as it found it.
  */
-export function installSessionExpiry(target: Window = window): () => void {
+export function installSessionExpiry(target: Window = window, onRevoked: () => void = () => {}): () => void {
     // Kept unbound so releasing puts back the very function that was there —
     // a bound copy behaves the same and is not the same object, which makes
     // "restore" quietly untrue for anyone comparing. The lint rule guards
@@ -60,6 +89,7 @@ export function installSessionExpiry(target: Window = window): () => void {
     // the first navigation is cancelled by the second and the address bar can
     // end up somewhere between the two.
     let redirecting = false;
+    const revoked = sessionRevokedTracker(target);
 
     target.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const response = await original.call(target, input, init);
@@ -67,6 +97,9 @@ export function installSessionExpiry(target: Window = window): () => void {
             redirecting = true;
             log.warn("[auth] session expired — returning to sign-in");
             target.location.assign(loginUrl(target));
+        } else if (revoked(response) && showDeadSession()) {
+            log.warn("[auth] ingress session revoked — this page cannot recover");
+            onRevoked();
         }
         return response;
     };

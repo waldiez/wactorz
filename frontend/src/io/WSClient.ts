@@ -78,12 +78,19 @@ export class WSClient {
     private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to demo. */
     private _disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Checks that an open socket is still receiving traffic. */
+    private _watchdogTimer: ReturnType<typeof setInterval> | null = null;
+    /** Time at which the current socket most recently received a frame. */
+    private _lastFrameAt = 0;
     private _reconnectDelay = 1_000;
     private _url = "";
     private _closed = false;
     /** The agent the last chat was addressed to — used to attribute replies,
      *  which the server stamps with the generic transport id "io-gateway". */
     private _lastAgentName = MAIN_AGENT;
+
+    private static readonly PING_EVERY_MS = 30_000;
+    private static readonly SILENT_FOR_MS = 75_000;
 
     /** True while the WebSocket is open. */
     get connected(): boolean {
@@ -154,6 +161,7 @@ export class WSClient {
             clearTimeout(this._disconnectTimer);
             this._disconnectTimer = null;
         }
+        this._stopWatching();
         this.ws?.close();
         this.ws = null;
         this._onDisconnected?.();
@@ -210,10 +218,14 @@ export class WSClient {
                 clearTimeout(this._disconnectTimer);
                 this._disconnectTimer = null;
             }
+            this._startWatching();
             this._onConnected?.();
         });
 
         this.ws.addEventListener("message", (ev: MessageEvent) => {
+            // Any received bytes prove the connection is alive, even if the
+            // frame is not one the dashboard understands.
+            this._lastFrameAt = Date.now();
             let data: Record<string, unknown>;
             try {
                 data = JSON.parse(ev.data as string) as Record<string, unknown>;
@@ -224,6 +236,7 @@ export class WSClient {
         });
 
         this.ws.addEventListener("close", () => {
+            this._stopWatching();
             if (this._closed) {
                 return;
             }
@@ -241,6 +254,35 @@ export class WSClient {
         this.ws.addEventListener("error", () => {
             // "close" follows "error" — reconnect happens there
         });
+    }
+
+    /** Start a fresh liveness clock for the socket that has just opened. */
+    private _startWatching(): void {
+        this._stopWatching();
+        this._lastFrameAt = Date.now();
+        this._watchdogTimer = setInterval(() => this._checkAlive(), WSClient.PING_EVERY_MS);
+    }
+
+    /** Stop the liveness timer when its socket is no longer relevant. */
+    private _stopWatching(): void {
+        if (this._watchdogTimer !== null) {
+            clearInterval(this._watchdogTimer);
+            this._watchdogTimer = null;
+        }
+    }
+
+    /** Ping a quiet socket, or close one that has been silent too long. */
+    private _checkAlive(): void {
+        if (!this.connected) {
+            this._stopWatching();
+            return;
+        }
+        if (Date.now() - this._lastFrameAt >= WSClient.SILENT_FOR_MS) {
+            log.warn("[WS] silent too long — closing so it can reconnect");
+            this.ws?.close();
+            return;
+        }
+        this.sendRaw({ type: "ping" });
     }
 
     /** Route a parsed server frame by its `type` / `state` fields. */

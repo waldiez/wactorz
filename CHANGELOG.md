@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **The Home Assistant dashboard recovers more honestly from connection loss.** A WebSocket that
+  goes silently dead now reconnects automatically, while a revoked ingress session explains how
+  to reopen Wactorz instead of leaving a frozen-looking page. The Ultra add-on can build Reachy
+  Mini's graphics dependencies when its SDK is installed.
 - **Reachy has opt-in ambient life and speech-matched gestures.** The `life` command provides
   `calm`, `antennas`, `alive`, and `showtime` presets, additive breathing and gaze motion,
   occasional attract beats, and word-timed movement while speaking. Ambient motion remains off

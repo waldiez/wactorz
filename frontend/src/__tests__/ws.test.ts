@@ -33,6 +33,7 @@ class MockWebSocket {
     }
     close() {
         this.readyState = MockWebSocket.CLOSED;
+        this.emit("close", {});
     }
 
     emit(event: string, payload: unknown) {
@@ -680,5 +681,19 @@ describe("WSClient", () => {
         c.connect("ws://localhost/ws");
         c.disconnect();
         expect(spy).toHaveBeenCalledTimes(1);
+    });
+
+    it("pings an otherwise quiet socket and reconnects one that stays silent", () => {
+        const c = new WSClient();
+        c.connect("ws://localhost/ws");
+        ws().emit("open", {});
+
+        vi.advanceTimersByTime(30_001);
+        expect(ws().sent.map(message => JSON.parse(message).type)).toContain("ping");
+
+        vi.advanceTimersByTime(60_001);
+        vi.advanceTimersByTime(1_001);
+        expect(instances).toHaveLength(2);
+        c.disconnect();
     });
 });

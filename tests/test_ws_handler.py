@@ -368,3 +368,34 @@ class TestAttachmentsOnATurn:
 
         resolve.assert_called_once_with([{"id": "x", "name": "invoice.pdf"}])
         assert db.rows[0]["attachments"] == []
+
+
+class TestProvingTheConnectionIsAlive:
+    """A browser has no other way to tell a live socket from an abandoned one.
+
+    The heartbeat this connection already carries is answered by the browser's
+    own protocol handling and never reaches the page, so it cannot tell the page
+    anything. Under a proxy the near leg can outlive the far one, and then a
+    socket that is open and useless looks exactly like one that is merely quiet.
+    """
+
+    async def test_a_ping_is_answered(self, client: TestClient[Any, Any]) -> None:
+        async with client.ws_connect("/ws") as socket:
+            await _opening(socket)
+            await socket.send_str(json.dumps({"type": "ping"}))
+
+            reply = (await _frames(socket, 1))[0]
+
+        assert reply["type"] == "pong"
+
+    async def test_a_ping_is_not_mistaken_for_a_turn(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        # It travels the same channel as chat, so a handler that fell through to
+        # the chat branch would write "ping" into the log every thirty seconds.
+        async with client.ws_connect("/ws") as socket:
+            await _opening(socket)
+            await socket.send_str(json.dumps({"type": "ping"}))
+            await _frames(socket, 1)
+
+        assert not db.rows

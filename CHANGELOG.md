@@ -3,6 +3,14 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — pending
+
+### Fixed
+
+- **A dashboard tab that can no longer reach Home Assistant now says so, instead of failing silently.** Behind Home Assistant ingress, the dashboard watches for requests that keep coming back 503 -- three or more in a row, over at least a minute -- and treats that as a link it cannot recover. It stops reconnecting the socket and shows a blocking notice asking you to reopen Wactorz from the Home Assistant sidebar. Shorter runs are ignored: a restarting add-on answers 503 for a few seconds and comes back on its own, and any successful response clears the count. A 401 still redirects to sign-in, and deployments not behind ingress are unaffected.
+
+- **A dashboard that has lost the server now reconnects instead of waiting for ever.** The connection carries a heartbeat, but the browser answers it in its own protocol handling and never tells the page, so an open socket proved nothing about whether anything was still listening at the other end. Behind a proxy the near half can outlive the far half -- the add-on restarting on a saved setting is enough -- and the page then looked connected while being connected to nothing: sending a message reported success, no reconnect was attempted because the close never came, and the reply never arrived. The dashboard now asks the server to say something every thirty seconds, and gives up on a connection that has carried nothing for seventy-five, closing it so the reconnect that already existed can run. Not specific to Home Assistant: a laptop that slept or a router that dropped the connection went the same way.
+
 ## [0.6.0] - 2026-08-31
 
 ### Removed — breaking
@@ -66,6 +74,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **The voice for Greek can be chosen without editing the source.** `TTS_VOICE_EL` selects between
   the two Greek voices edge-tts offers, and applies only when `TTS_VOICE` cannot speak Greek
   itself.
+- **The dashboard header says which Wactorz is answering it.** Finding the running version meant
+  reaching the machine, because nothing on the page named it. It is read from the server rather than
+  built into the bundle: `static/app` is committed and can lag the wheel, so a version baked in at
+  build time would name the wrong one exactly when someone is looking to find out what they are
+  running. It sits beside the name and deliberately quieter than it — something to find when looked
+  for, not something to read every time the page is open.
 
 - **The chat shows that an agent is working.** Nothing appeared between sending a message and the
   first word of the reply, so a slow answer was indistinguishable from one that had gone nowhere. A
@@ -190,6 +204,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **A state file that cannot be read is kept instead of overwritten.** Every load path treated an unreadable file as absent — log it, start empty, carry on — which is the right call for keeping an agent running, but the agent's next save then wrote straight over the file. The only copy of whatever it remembered was destroyed moments after the single log line about it scrolled past, so an agent that had quietly lost everything looked perfectly healthy. Such a file is now moved aside first, to `<name>.corrupt.<timestamp>` beside the original, and the failure is reported with the path it was kept at. The remote node runner did this worst of all: it discarded the error silently, leaving no record anywhere that anything had been lost.
 - **A framework migration that failed is retried on the next start.** The stored version stood for two separate things — that the database schema was at version N, and that agent state data had been migrated to N — so when a schema migration succeeded and its paired data migration failed, the version was stamped anyway. The following start saw an up-to-date version, skipped everything, and the half-migrated data stayed that way permanently, with the one warning about it never appearing again. Data migrations are now tracked by what has actually completed, so a failed one is attempted on every start until it succeeds, and it no longer holds back the schema version, which is genuinely up to date. The schema version now also records how far the schema really got rather than assuming a run that stopped part-way finished.
+
+- **The activity feed shows what the house did, not only what it measured.** It named the Home
+  Assistant domains to keep, so a light turning on, a door opening or a switch firing could be
+  missing while sensor readings filled the feed — and a domain Home Assistant added later was
+  absent with nothing to indicate it, leaving a feed that looked quiet and was in fact blind. The
+  noisy domains are named instead and everything else is shown, so an unknown domain appears rather
+  than disappears. Noise can at least be seen and named; silence cannot.
+- **"Hide heartbeats" no longer hides Home Assistant activity with it.** The filter matched a CSS
+  class that health rows also carried, so turning it on removed rows that were never heartbeats. A
+  row now records what it is, and the filter reads that rather than how the row was made to look.
 
 ## [0.5.3] - 2026-08-10
 

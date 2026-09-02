@@ -9,11 +9,11 @@
   </picture>
 </p>
 
-<p align="center"><strong>Resilient AI agents that run 24/7 — built for physical AI.</strong></p>
+<p align="center"><strong>Build AI agents that keep running — across your home, robots, and spare computers.</strong></p>
 
 <p align="center">
 <a href="https://docs.waldiez.io/wactorz/">Docs</a> |
-<a href="https://docs.waldiez.io/wactorz/guide/development.html">Installation</a> |
+<a href="https://docs.waldiez.io/wactorz/guide/deployment.html">Get started</a> |
 <a href="https://docs.waldiez.io/wactorz/guide/architecture.html">Architecture</a> |
 <a href="https://github.com/waldiez/wactorz/blob/main/ha-addon/DOCS.md">Home Assistant Addon</a> |
 <a href="https://github.com/waldiez/wactorz/issues">Issues</a>
@@ -40,79 +40,87 @@
   <p align="center"><img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/demo.gif" width="720" alt="Wactorz dashboard demo"/></p>
 -->
 
-Wactorz is a runtime for **physical AI**: LLM-driven agents that live next to the
-sensors, machines and spaces they act on — not in a cloud notebook. Agents run as
-long-lived, supervised actors on the hardware you already have: a Raspberry Pi in
-the garage, a factory gateway, an old laptop, a VM in your closet. You describe
-what you want in chat; the planner writes the Python, spawns it on a node, and
-supervises it. When an agent crashes, only that one restarts — with its state
-intact — and you can migrate an agent to a different machine without losing it.
+Wactorz is a self-hosted runtime for AI that needs to do more than answer once.
+Describe an automation in chat and its planner can write a Python agent, run it as
+a supervised actor, and show you what it is doing in a live dashboard. Agents can
+listen to sensors and MQTT topics, act through Home Assistant or other services,
+keep state across restarts, and run on another machine when the job belongs closer
+to the hardware.
 
-Everything rides on MQTT, so anything happening inside the system surfaces as a
-topic external code can subscribe to. Home Assistant talks to it the same way
-Discord and Telegram do — one channel among several, alongside a REST API and an
-MCP server. The LLM provider is configurable (Anthropic, OpenAI, Gemini, NIM) or
-fully local via Ollama, so the system keeps running with no cloud at all.
+Bring a hosted model from Anthropic, OpenAI, Gemini, or NVIDIA NIM, or keep model
+inference local with Ollama. The runtime, agent state, dashboard, and MQTT control
+plane remain on hardware you control.
 
 ---
 
-## How Wactorz is different
+## Who it is for
 
-Most agent frameworks build a **crew that runs a task and exits**. Wactorz builds a
-**system that keeps running**. Agents are long-lived, supervised actors — they persist
-their state, restart themselves when they crash, and can move between machines — rather
-than functions you call inside one script.
+Wactorz is built first for **technical hobbyists and makers**: people connecting a
+smart home, robot, camera, Raspberry Pi, or old laptop who are comfortable using a
+terminal and editing a configuration file. It is also useful to **Python developers**
+who want an extensible actor runtime instead of a one-shot agent script.
 
-| | Wactorz | Orchestration libraries (LangChain, CrewAI, AutoGen) | Visual automation (n8n, Node-RED) | HA native automations |
-|---|---|---|---|---|
-| **Lifecycle** | Long-lived, self-supervising actors | Task-scoped, exit when the script ends | Long-lived flows | Long-lived rules |
-| **Failure handling** | Per-agent crash isolation + restart | Your code handles it | Per-flow | Per-rule |
-| **Distribution** | Agents spawn and migrate across nodes over MQTT | Single process | Single instance | Single instance |
-| **How agents are built** | LLM writes and runs the Python at runtime | You write the chain | You wire nodes by hand | You write YAML |
-| **Runs offline / self-hosted** | Yes — BYO key or fully local via Ollama | Varies | Yes | Yes |
+It is currently a beta, not a no-code consumer app or a multi-user hosted service.
+Agents can execute generated Python, so use it on systems you control and review the
+[security model](https://docs.waldiez.io/wactorz/guide/security.html) before exposing
+it to a network.
 
-It's **not** a replacement for Home Assistant — it sits alongside it, adding an LLM
-planner and dynamic agents on top of the home you already automate.
+## What you can build
+
+- Persistent automations that react to sensor readings, schedules, and MQTT events.
+- Home Assistant actions described in chat rather than hand-authored for every case.
+- Robot and edge-device agents that run close to their cameras, microphones, or motors.
+- Small groups of agents that keep state, restart independently, and move between nodes.
+- Custom Python agents with REST, MCP, Discord, Telegram, or WhatsApp as an interface.
 
 ---
 
-## Quick Start
+## Quick start
+
+The most predictable first run uses Docker Compose. You need Git, Docker with the
+Compose plugin, and an API key for your chosen model provider.
 
 ```bash
 git clone https://github.com/waldiez/wactorz
 cd wactorz
-pip install -e ".[all]"
-
-# Start the MQTT broker
-docker compose up -d mosquitto
-
-# Set your provider, model, and key (or put them in .env)
-export LLM_PROVIDER=anthropic   # anthropic | openai | ollama | nim | gemini | fake
-export LLM_MODEL=claude-sonnet-4-6
-export LLM_API_KEY=your-key-here
-
-python -m wactorz
+cp .env.template .env
 ```
 
-Dashboard: `http://localhost:8888`.
+Open `.env` and set at least these values:
 
-> [!IMPORTANT]
-> Wactorz binds to `127.0.0.1` by default and its agents execute code. **Set `API_KEY`
-> before exposing it beyond loopback** — it warns at startup if you expose it without
-> one. See [Security](#security) before deploying anywhere shared.
+```dotenv
+MQTT_PASSWORD=choose-a-long-random-password
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-sonnet-4-6
+LLM_API_KEY=your-key-here
+```
 
-If you'd rather skip the clone, [pull the image from Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html). To run without an API key, use Ollama:
+Then start Wactorz:
 
 ```bash
-ollama pull llama3
-python -m wactorz --llm ollama --ollama-model llama3
+docker compose --profile python up -d
 ```
 
-Windows setup is in [docs/windows.md](https://github.com/waldiez/wactorz/blob/main/docs/windows.md); the full set of deployment options lives in [docs/deployment.md](https://docs.waldiez.io/wactorz/guide/deployment.html).
+Open the dashboard at [http://localhost:8888](http://localhost:8888). Follow the
+logs with `docker compose logs -f wactorz-python` and stop everything with
+`docker compose --profile python down`.
+
+> [!IMPORTANT]
+> Docker Compose publishes the dashboard to `127.0.0.1` and Wactorz agents execute
+> code. **Set `API_KEY` before changing that binding or exposing it beyond loopback.**
+> See [Security](#security) before deploying anywhere shared.
+
+On Windows, use `Copy-Item .env.template .env` instead of `cp`. To install from
+PyPI, use Ollama, or run inside Home Assistant, see the
+[deployment guide](https://docs.waldiez.io/wactorz/guide/deployment.html). Repository
+contributors should start with the
+[development setup](https://docs.waldiez.io/wactorz/guide/development.html).
 
 ---
 
-## Example prompts
+## Try an automation
+
+Once the dashboard is connected to the services or devices named in a request, try:
 
 ```text
 when a person is detected in my pc camera, open the office light
@@ -160,66 +168,23 @@ flowchart LR
 
 ---
 
-## LLM Configuration
+## Choose a model
 
-Set these three env vars in `.env` or export them in your shell:
+Set `LLM_PROVIDER`, `LLM_MODEL`, and `LLM_API_KEY` in `.env`. The generic key works
+with every hosted provider, or you can use its provider-specific variable.
 
-```bash
-# Options: anthropic | openai | ollama | nim | gemini | none | fake
-#   none = no provider at all; fake = deterministic canned replies, calls nothing
-LLM_PROVIDER=anthropic
+| Provider | `LLM_PROVIDER` | Example model | Provider-specific key |
+|---|---|---|---|
+| Anthropic | `anthropic` | `claude-sonnet-4-6` | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | `gpt-4o` | `OPENAI_API_KEY` |
+| Google Gemini | `gemini` | `gemini-2.5-flash` | `GEMINI_API_KEY` |
+| NVIDIA NIM | `nim` | `meta/llama-3.3-70b-instruct` | `NIM_API_KEY` |
+| Ollama | `ollama` | `llama3` | No key; configure `OLLAMA_URL` |
 
-# Model ID — examples:
-#   anthropic  →  claude-sonnet-4-6
-#   openai     →  gpt-4o
-#   ollama     →  llama3
-#   nim        →  meta/llama-3.3-70b-instruct
-#   gemini     →  gemini-2.5-flash
-LLM_MODEL=claude-sonnet-4-6
-
-# Generic key — used for anthropic / openai / nim / gemini
-# For Ollama, set OLLAMA_URL instead (default: http://localhost:11434)
-# For OpenAI-compatible endpoints (Groq, Together, vLLM…), set OPENAI_URL to redirect
-LLM_API_KEY=your-key-here
-
-# Optional — sampling temperature for every LLM call.
-# 0 = deterministic (recommended for device control and classification);
-# leave unset/empty to keep each provider's own default.
-# Ignored on Claude models from Opus 4.7 onward, which no longer accept it.
-LLM_TEMPERATURE=0
-```
-
-At startup Wactorz logs the configuration it resolved, so you can confirm it at a glance:
-
-```text
-LLM: anthropic/claude-sonnet-4-6 | temperature=0.0
-```
-
-### Per-call-site overrides (hybrid setups)
-
-Optionally, route individual call sites to different models with `LLM_OVERRIDES` —
-for example run the cheap, high-frequency calls on a local model and keep the
-planner on a hosted one:
-
-```bash
-# <site>=<provider>[:<model>], comma-separated. Unlisted sites use the global provider.
-LLM_OVERRIDES="intent=ollama:qwen3:4b,actuator=ollama:llama3,planner=anthropic:claude-sonnet-4-6"
-```
-
-Sites: `main` (conversation), `intent` (intent routing), `planner` (pipeline
-planning/codegen), `actuator` (one-off device control), `ha` (Home Assistant
-agent), `dynamic` (the `get_llm()` shim inside generated agents).
-
-To compare models per call site before choosing an override, run the built-in
-evaluation harness — it scores each site automatically and reports accuracy,
-latency and cost:
-
-```bash
-python -m wactorz.evalharness \
-  --models "ollama:qwen3:4b,anthropic:claude-sonnet-4-6" --temperature 0
-```
-
-See [docs/evaluation.md](docs/evaluation.md) for the benchmark format and metrics.
+Wactorz logs the resolved provider and model at startup. Advanced setups can
+[route different jobs to different models](https://docs.waldiez.io/wactorz/guide/architecture.html#per-call-site-overrides)
+and use the [evaluation harness](https://github.com/waldiez/wactorz/blob/main/docs/evaluation.md)
+before choosing them.
 
 ---
 

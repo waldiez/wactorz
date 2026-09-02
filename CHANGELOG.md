@@ -14,6 +14,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **The README now has a maker-first onboarding path.** It states the intended audience,
+  removes product comparisons, and gives a Docker Compose quick start that includes the
+  broker password required by current releases.
 - **Reachy routes framework, health, and Home Assistant questions more reliably.** Questions about
   running Wactorz agents now bypass smart-home planning, natural connection-health wording reads
   live robot diagnostics, and device-state questions use Home Assistant's information path rather

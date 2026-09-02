@@ -265,16 +265,10 @@ async def _configure_conversation_audio(agent) -> bool:
         )
 
     agent.state["conversation_echo_control"] = configured
-    if configured:
+    if not configured:
         await agent.log(
-            f"Conversation echo control configured via {route}; automatic voice "
-            "interruption remains off unless barge_in=true is requested."
-        )
-    else:
-        await agent.log(
-            "Conversation echo control is unavailable; automatic voice interruption "
-            "is disabled so Reachy cannot cut off its own speech. Set barge_in=true "
-            "explicitly only if this audio setup has working echo cancellation.",
+            "Voice interruption is unavailable, so Reachy will finish speaking before "
+            "listening again.",
             level="warning",
         )
     return configured
@@ -389,7 +383,6 @@ async def _open_robot(agent):
             agent.state["connection_mode"] = attempted_mode
         try:
             mini = await loop.run_in_executor(None, _open_sync, kwargs)
-            await agent.log(f"Connected to Reachy via {kwargs or 'autodetect'}")
             break
         except TypeError as e:
             # Older SDK without connection_mode/host kwargs — keep trying simpler forms.
@@ -408,7 +401,7 @@ async def _bring_up_robot(agent):
     """Post-connect bring-up. Requires agent.state['mini'] to be a live handle.
 
     Runs on both the setup() path and cmd=reconnect, so a reconnected robot is
-    in the same state a freshly-spawned one is: audio routing reported, volume
+    in the same state a freshly-spawned one is: audio routing selected, volume
     synced from the daemon, motor torque on, awake.
     """
     mini = agent.state.get("mini")
@@ -419,13 +412,10 @@ async def _bring_up_robot(agent):
         _audio = getattr(getattr(mini, "media", None), "audio", None)
         _on_robot = bool(getattr(_audio, "daemon_url", None))
         agent.state["audio_on_robot"] = _on_robot
-        if _on_robot:
-            await agent.log("Audio routes to the ROBOT speaker (WebRTC backend).")
-        else:
+        if not _on_robot:
             await agent.log(
-                "Audio will play on THIS HOST, not the robot. For robot "
-                'speech publish {"media_backend": "webrtc"} to '
-                "custom/reachy/config and reconnect.",
+                "Speech will play on this computer, not Reachy. Set "
+                "REACHY_MEDIA_BACKEND=webrtc and reconnect to use the robot speaker.",
                 level="warning",
             )
     except Exception:
@@ -441,7 +431,6 @@ async def _bring_up_robot(agent):
     live = await _get_daemon_volume(agent)
     if live is not None:
         agent.state["volume_level"] = live
-        await agent.log(f"Robot speaker volume is {live}/100 (from daemon).")
 
     # Enable motor torque so the robot actually MOVES: wake_up()/goto_target()
     # only stream target positions; with torque OFF the daemon accepts them and
@@ -795,16 +784,12 @@ async def setup(agent):
         # and so users get a friendly "reachy not connected" instead of a crash
         # loop. Setup() must NOT raise — the supervisor would auto-restart us.
         await agent.log(
-            f"Reachy daemon unreachable (tried: {tried}). Last error: {last_err}. "
-            f"Agent stays up and refuses robot commands with 'reachy not connected'. "
-            f'Power the robot on, then say "reconnect" (or publish {{"cmd":"reconnect"}} '
-            f"to custom/reachy/cmd) to retry — no agent restart needed. "
-            f"To run WITHOUT the Reachy Mini control app, publish "
-            f'{{"connection_mode":"network","robot_host":"<ip>"}} to custom/reachy/config '
-            f'and say "reconnect" — or set REACHY_CONNECTION_MODE=network and '
-            f"REACHY_ROBOT_HOST=<robot ip/hostname> in .env, which is only re-read on "
-            f"a restart.",
+            'Reachy is not connected yet. Check its power and network, then say "reconnect". '
+            "Home Assistant features remain available.",
             level="warning",
+        )
+        await agent.log(
+            f"Reachy connection details: tried {tried}; last error: {last_err}", level="debug"
         )
 
     # ---- HA is delegated to the home-assistant-agent ----
@@ -843,7 +828,7 @@ async def setup(agent):
             except Exception:
                 names = []
         agent.state["emotion_names"] = names
-        await agent.log(f"Emotion library loaded ({len(names)} clips)")
+        await agent.log(f"Emotion library ready ({len(names)} clips)", level="debug")
     except Exception as e:
         await agent.log(f"Emotion library unavailable (continuing without): {e}", level="warning")
 
@@ -1020,8 +1005,6 @@ async def setup(agent):
 
     if agent.state.get("life_enabled"):
         _start_life_loop(agent)
-        preset = agent.state.get("life_preset", _LIFE_DEFAULT_PRESET)
-        await agent.log(f"ambient life on (preset: {preset})")
         # `awake` gates every frame and is only set when wake_up succeeds
         # during bring-up. Without this line a failed wake leaves a robot that
         # reports itself ready, accepts every command, and never moves, with
@@ -1033,7 +1016,14 @@ async def setup(agent):
                 level="warning",
             )
 
-    await agent.log("reachy-mini ready")
+    connection_mode = agent.state.get("connection_mode")
+    connection = "Wi-Fi" if connection_mode == "network" else "the local control app"
+    speaker = "the robot speaker" if agent.state.get("audio_on_robot") else "this computer"
+    life = " Ambient motion is on." if agent.state.get("life_enabled") else ""
+    await agent.log(
+        f"Reachy is ready via {connection}; speech uses {speaker}.{life} "
+        'Say "start listening" to talk by voice.'
+    )
 
 
 async def process(agent):

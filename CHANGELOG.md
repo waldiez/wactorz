@@ -30,6 +30,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Structured agent delegations remain structured end to end.** Dictionary payloads such as a
   weather city are no longer converted into JSON text before local or remote dispatch, preventing
   an agent from silently falling back to its default input.
+- **Reachy's lifecycle messages are concise and actionable.** Its spawn notice explains that robot
+  and voice support are being prepared, while the startup log collapses connection, audio, and
+  ambient-motion details into one ready message with the next voice action. Setup-only internals
+  now stay in debug logs; a failed connection names the recovery action first.
 
 - **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Voice
   conversations stream Reachy's WebRTC microphone while local VAD guards speech onset, motor

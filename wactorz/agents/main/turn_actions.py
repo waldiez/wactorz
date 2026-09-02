@@ -50,6 +50,19 @@ class TurnActions:
         parts: list[str] = []
         live = [a.name for a in self.spawned if not isinstance(a, SpawnPlaceholder)]
         installing = [a.name for a in self.spawned if isinstance(a, SpawnPlaceholder)]
+        reachy_live = [name for name in live if name == "reachy-mini"]
+        reachy_installing = [name for name in installing if name == "reachy-mini"]
+        live = [name for name in live if name != "reachy-mini"]
+        installing = [name for name in installing if name != "reachy-mini"]
+        if reachy_live:
+            parts.append(
+                "Reachy Mini started — it will announce when the robot connection is ready"
+            )
+        if reachy_installing:
+            parts.append(
+                "Preparing Reachy Mini — installing its robot and voice support; "
+                "it will announce when ready"
+            )
         if live:
             replaced = '"replace": true' in response or '"replace":true' in response
             action = "Replaced" if replaced else "Spawned"

@@ -881,7 +881,7 @@ class TestItIsAliveFromSpawnWithNoCommands:
         """Ordering, not vibes: `awake` gates every frame, and bring-up sets it."""
         source = recipe_source()
         bring_up = source.index("await _bring_up_robot(agent)")
-        start = source.index("_start_life_loop(agent)\n        preset =")
+        start = source.index("_start_life_loop(agent)\n        # `awake`")
 
         assert bring_up < start, (
             "ambient life starts before the robot is woken, so the first frames "
@@ -902,9 +902,9 @@ class TestItIsAliveFromSpawnWithNoCommands:
         """Otherwise: ready in the log, every command succeeds, and nothing moves."""
         assert "ambient life is on but Reachy is not awake" in recipe_source()
 
-    def test_the_startup_line_names_the_preset(self) -> None:
-        """Before he moves, the log is where the mood is visible."""
-        assert 'f"ambient life on (preset: {preset})"' in recipe_source()
+    def test_the_startup_line_says_when_ambient_motion_is_on(self) -> None:
+        """The ready message makes the visible idle behaviour explicit."""
+        assert 'life = " Ambient motion is on."' in recipe_source()
 
 
 class TestNothingRequiresAConversationSession:

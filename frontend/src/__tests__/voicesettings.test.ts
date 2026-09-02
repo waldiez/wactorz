@@ -9,6 +9,7 @@ vi.mock("../ui/ToastManager", () => ({ toast: { show: vi.fn() } }));
 import { buildVoiceSection, listeningSays, speakingSays } from "../ui/dashboard/voiceSettings";
 import { safeStorage } from "../safeStorage";
 import { toast } from "../ui/ToastManager";
+import { tts } from "../ext/tts";
 
 function configured(stt: string, tts: string, extra: Record<string, string> = {}): void {
     safeStorage.set("wactorz-stt-mode", stt);
@@ -95,10 +96,10 @@ describe("what the settings view says about voice", () => {
 
     it("offers the listen control only to the branch that has no other", () => {
         configured("host", "off");
-        expect(buttonLabels(buildVoiceSection(""))).toContain("Listen now");
+        expect(buttonLabels(buildVoiceSection(""))).toContain("Test microphone");
 
         configured("server", "off", { "wactorz-stt-available": "1" });
-        expect(buttonLabels(buildVoiceSection(""))).not.toContain("Listen now");
+        expect(buttonLabels(buildVoiceSection(""))).not.toContain("Test microphone");
     });
 
     const clickButton = (section: HTMLElement, label: string): void => {
@@ -119,7 +120,7 @@ describe("what the settings view says about voice", () => {
         answering({}, false);
 
         const section = buildVoiceSection("")!;
-        clickButton(section, "Listen now");
+        clickButton(section, "Test microphone");
         await vi.waitFor(() => expect(toast.show).toHaveBeenCalled());
         expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ message: "" }));
 
@@ -140,10 +141,102 @@ describe("what the settings view says about voice", () => {
         configured("host", "off");
         answering({ heard: true });
 
-        clickButton(buildVoiceSection("")!, "Listen now");
+        clickButton(buildVoiceSection("")!, "Test microphone");
         await vi.waitFor(() => expect(toast.show).toHaveBeenCalled());
 
-        expect(toast.show).toHaveBeenCalledWith({ type: "system", title: "Heard", message: "" });
+        expect(toast.show).toHaveBeenCalledWith({ type: "system", title: "Microphone works", message: "" });
+    });
+
+    it("asks to hear without acting, so a hardware check costs nothing", () => {
+        // Routing what it heard would put the answer through a model and leave a
+        // row in the chat log: a check that spends a turn is not a check.
+        configured("host", "off");
+        const sent: unknown[] = [];
+        vi.stubGlobal(
+            "fetch",
+            vi.fn((_url: string, init: RequestInit) => {
+                sent.push(JSON.parse(init.body as string));
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ heard: false }) });
+            }),
+        );
+
+        clickButton(buildVoiceSection("")!, "Test microphone");
+
+        expect(sent[0]).toEqual({ act: false });
+    });
+
+    const withVoices = (names: string[]): void => {
+        vi.spyOn(tts, "voices", "get").mockReturnValue(names.map(name => ({ name }) as never));
+    };
+
+    it("sets the voice the deployment speaks in, not just this browser's", () => {
+        // The popover's picker is per-browser local storage, which means nothing
+        // on `host`: nobody is at a browser when the machine speaks into a room.
+        configured("off", "server", { "wactorz-tts-available": "1" });
+        withVoices(["en-GB-Alba", "en-US-Amy"]);
+        const sent: unknown[] = [];
+        vi.stubGlobal(
+            "fetch",
+            vi.fn((url: string, init: RequestInit) => {
+                sent.push([url, JSON.parse(init.body as string)]);
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+            }),
+        );
+
+        const select = [...buildVoiceSection("")!.querySelectorAll("select")].find(
+            s => s.getAttribute("aria-label") === "Voice",
+        )!;
+        select.value = "en-US-Amy";
+        select.dispatchEvent(new Event("change"));
+
+        expect(sent[0]).toEqual(["/api/voice", { voice: "en-US-Amy" }]);
+    });
+
+    it("shows the voice that is actually in force", () => {
+        // The choice outlives a restart, so a picker stuck on "as configured"
+        // tells someone their setting did not take when it did.
+        configured("off", "server", { "wactorz-tts-available": "1", "wactorz-tts-voice": "en-US-Amy" });
+        withVoices(["en-GB-Alba", "en-US-Amy"]);
+
+        const select = [...buildVoiceSection("")!.querySelectorAll("select")].find(
+            s => s.getAttribute("aria-label") === "Voice",
+        )!;
+
+        expect(select.value).toBe("en-US-Amy");
+    });
+
+    it("goes back to the voice in force when a change is refused", async () => {
+        // Blank would claim the deployment fell back to its configured voice,
+        // which a refused change has not done.
+        configured("off", "server", { "wactorz-tts-available": "1", "wactorz-tts-voice": "en-US-Amy" });
+        withVoices(["en-GB-Alba", "en-US-Amy"]);
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(() => Promise.reject(new Error("no answer"))),
+        );
+
+        const select = [...buildVoiceSection("")!.querySelectorAll("select")].find(
+            s => s.getAttribute("aria-label") === "Voice",
+        )!;
+        select.value = "en-GB-Alba";
+        select.dispatchEvent(new Event("change"));
+        await vi.waitFor(() => expect(toast.show).toHaveBeenCalled());
+
+        expect(select.value).toBe("en-US-Amy");
+    });
+
+    it("says the service chose, when this deployment cannot enumerate voices", () => {
+        // A named synthesiser answers with an empty list, which is an answer and
+        // not a list still loading.
+        configured("off", "server", { "wactorz-tts-available": "1" });
+        withVoices([]);
+
+        const select = [...buildVoiceSection("")!.querySelectorAll("select")].find(
+            s => s.getAttribute("aria-label") === "Voice",
+        )!;
+
+        expect(select.disabled).toBe(true);
+        expect(select.textContent).toContain("chosen by the service");
     });
 
     it("always offers the way back, because the choices are kept", () => {
@@ -225,7 +318,8 @@ describe("what the settings view says about voice", () => {
         const section = buildVoiceSection("")!;
         // Two things it must be clear about: the branches are changeable here,
         // and where the services live is not.
-        expect(section.querySelectorAll("select")).toHaveLength(2);
+        // Listening, speaking, and the voice the deployment speaks in.
+        expect(section.querySelectorAll("select")).toHaveLength(3);
         expect(section.textContent).toContain("Where the services live is set on the machine");
     });
 
@@ -362,6 +456,6 @@ describe("what the settings view says about voice", () => {
         btn.click();
         await vi.waitFor(() => expect(btn.disabled).toBe(false));
 
-        expect(btn.textContent).toBe("Listen now");
+        expect(btn.textContent).toBe("Test microphone");
     });
 });

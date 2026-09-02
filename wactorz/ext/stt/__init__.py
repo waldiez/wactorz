@@ -249,13 +249,29 @@ async def hear(clip: bytes) -> str:
 
 
 async def listen_handler(request: web.Request) -> web.Response:
-    """POST /api/stt/listen — hear the room, and act on what was said.
+    """POST /api/stt/listen — hear the room, and usually act on what was said.
 
     The branch that owns a microphone has no button to press, so something has to
     ask it to listen. Answers with the text, and routes it as though it had been
     typed: an ``@mention`` reaches the agent it names and anything else reaches
     main, which is one path to reason about rather than two.
+
+    ``{"act": false}`` hears without routing, for asking whether the microphone
+    works at all. A check that spends a turn and leaves a row in the chat log is
+    not a check, and someone testing hardware should not have to pay a model to
+    find out that the device is plugged in.
     """
+    act = True
+    if request.can_read_body:
+        try:
+            body = await request.json()
+        except Exception:  # pylint: disable=broad-exception-caught
+            # An unreadable body is not worth refusing over: the default is the
+            # behaviour every existing caller already gets.
+            body = {}
+        if isinstance(body, dict):
+            act = body.get("act", True) is not False
+
     if voice_settings.listening() != "host":
         return web.json_response(
             {
@@ -298,9 +314,9 @@ async def listen_handler(request: web.Request) -> web.Response:
         logger.warning("[stt] Could not transcribe what the room said: %s", exc)
         return web.json_response({"error": "transcription failed"}, status=502)
 
-    if said:
+    if said and act:
         await _route_as_typed(request, said)
-    return web.json_response({"text": said, "heard": bool(said)})
+    return web.json_response({"text": said, "heard": bool(said), "acted": bool(said) and act})
 
 
 async def _route_as_typed(request: web.Request, said: str) -> None:

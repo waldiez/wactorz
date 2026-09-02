@@ -21,7 +21,7 @@
  */
 
 import { sttMode, sttAvailable, sttLive, canRecognise } from "../../ext/stt";
-import { ttsMode, ttsAvailable } from "../../ext/tts";
+import { ttsMode, ttsAvailable, tts, ttsVoice } from "../../ext/tts";
 import { toast } from "../ToastManager";
 
 /** How this deployment listens, said plainly. */
@@ -70,8 +70,15 @@ function detailLine(detail: string): HTMLElement {
     return said;
 }
 
-/** Ask this machine to listen, for the branch with nowhere else to be asked. */
-async function listenNow(btn: HTMLButtonElement, apiBase: string): Promise<void> {
+/**
+ * Ask this machine whether its microphone works.
+ *
+ * Hears without acting: this answers "is the device plugged in and pointing at
+ * the room", which is a hardware question. Routing what it heard would put the
+ * answer through a model and leave a row in the chat log, so a check would cost
+ * a turn and read like a conversation nobody started.
+ */
+async function checkMicrophone(btn: HTMLButtonElement, apiBase: string): Promise<void> {
     btn.disabled = true;
     const was = btn.textContent;
     btn.textContent = "Listening…";
@@ -81,6 +88,8 @@ async function listenNow(btn: HTMLButtonElement, apiBase: string): Promise<void>
         // the button saying "Listening…" for the life of the page.
         const res = await fetch(`${apiBase}/api/stt/listen`, {
             method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ act: false }),
             signal: AbortSignal.timeout(LISTEN_TIMEOUT_MS),
         });
         const body = (await res.json()) as {
@@ -96,9 +105,13 @@ async function listenNow(btn: HTMLButtonElement, apiBase: string): Promise<void>
             // it does not hear the reply and answer it.
             toast.show({ type: "alert-warning", title: "Still speaking", message: "Try again in a moment." });
         } else if (body.heard) {
-            toast.show({ type: "system", title: "Heard", message: body.text ?? "" });
+            toast.show({ type: "system", title: "Microphone works", message: body.text ?? "" });
         } else {
-            toast.show({ type: "system", title: "Nothing heard", message: "Nobody spoke." });
+            toast.show({
+                type: "system",
+                title: "Nothing heard",
+                message: "The microphone opened, but nobody spoke.",
+            });
         }
     } catch {
         toast.show({ type: "alert-error", title: "Could not listen", message: "The server did not answer." });
@@ -192,13 +205,95 @@ function buildBranchPicker(
     return group;
 }
 
-/** The control the `host` branch has nowhere else to be driven from. */
-function buildListenButton(apiBase: string): HTMLButtonElement {
+/**
+ * Which voice this deployment speaks in.
+ *
+ * Distinct from the one in the audio popover, which is this browser's own and
+ * lives in its local storage. On `host` nobody is at a browser -- the machine
+ * speaks into a room -- so the choice has to belong to the deployment, and this
+ * is the only control that sets it.
+ *
+ * Read once rather than subscribed to: this section is rebuilt whenever the view
+ * is, and a listener per build with nothing to release it leaks. By the time
+ * anyone opens Settings the list has long since loaded, and a list that has not
+ * says so and fills on reopening.
+ */
+function voiceOptions(voices: readonly { name: string }[], current: string): HTMLSelectElement {
+    const select = document.createElement("select");
+    select.className = "af-audio-select";
+    select.setAttribute("aria-label", "Voice");
+    select.disabled = !voices.length;
+
+    const configured = document.createElement("option");
+    configured.value = "";
+    // An empty list is an answer, not a list still loading: a named synthesiser
+    // has voices of its own that this deployment cannot enumerate.
+    configured.textContent = voices.length ? "— as configured —" : "— chosen by the service —";
+    select.appendChild(configured);
+
+    for (const voice of voices) {
+        const option = document.createElement("option");
+        option.value = voice.name;
+        option.textContent = voice.name.replace(/^Microsoft\s+/, "").replace(/\s+Online.*$/i, "");
+        select.appendChild(option);
+    }
+    // Set once the options exist, and only for a voice this list actually has:
+    // a control that cannot say what the setting currently is reads as though
+    // nothing were chosen, and this choice outlives a restart.
+    if (current) {
+        select.value = current;
+    }
+    return select;
+}
+
+function buildVoicePicker(apiBase: string, onChanged: () => void): HTMLElement {
+    const group = document.createElement("div");
+    group.className = "af-voice-group";
+
+    const row = document.createElement("div");
+    row.className = "af-voice-row";
+
+    const name = document.createElement("span");
+    name.className = "af-voice-term";
+    name.textContent = "Voice";
+
+    const voices = tts.voices;
+    const select = voiceOptions(voices, ttsVoice());
+
+    const current = ttsVoice();
+    select.addEventListener("change", () => {
+        const wanted = select.value;
+        select.disabled = true;
+        void chooseBranch("voice", wanted, apiBase).then(ok => {
+            select.disabled = false;
+            onChanged();
+            if (!ok) {
+                // Back to what is in force, not to blank: a refused change has
+                // not altered anything, and blank would claim it had.
+                select.value = current;
+            }
+        });
+    });
+
+    row.append(name, select);
+    group.append(
+        row,
+        detailLine(
+            voices.length
+                ? "What this deployment speaks in, including when it speaks into a room."
+                : "The synthesiser this deployment names chooses its own voice.",
+        ),
+    );
+    return group;
+}
+
+/** Whether this machine's microphone works, which nothing else here answers. */
+function buildCheckButton(apiBase: string): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "af-settings-btn";
-    btn.textContent = "Listen now";
-    btn.title = "Record one turn through this machine's microphone";
-    btn.addEventListener("click", () => void listenNow(btn, apiBase));
+    btn.textContent = "Test microphone";
+    btn.title = "Record one turn and show what was heard. Nothing is sent to the chat.";
+    btn.addEventListener("click", () => void checkMicrophone(btn, apiBase));
     return btn;
 }
 
@@ -237,7 +332,7 @@ function buildButtons(apiBase: string, onChanged: () => void): HTMLElement {
     const buttons = document.createElement("div");
     buttons.className = "af-voice-buttons";
     if (sttMode() === "host") {
-        buttons.appendChild(buildListenButton(apiBase));
+        buttons.appendChild(buildCheckButton(apiBase));
     }
     buttons.appendChild(buildResetButton(apiBase, onChanged));
     return buttons;
@@ -286,6 +381,9 @@ export function buildVoiceSection(apiBase: string, onChanged: () => void = () =>
     note.textContent = "Changed here, and kept until reset. Where the services live is set on the machine.";
     section.appendChild(note);
 
+    if (ttsMode() !== "off") {
+        section.appendChild(buildVoicePicker(apiBase, onChanged));
+    }
     section.appendChild(buildButtons(apiBase, onChanged));
     return section;
 }

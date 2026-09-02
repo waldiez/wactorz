@@ -114,7 +114,7 @@ describe("CardDashboard render", () => {
         try {
             const settings = cd._buildSettingsView();
             const buttons = [...settings.querySelectorAll("button")] as HTMLButtonElement[];
-            buttons.find(b => b.textContent === "Listen now")!.click();
+            buttons.find(b => b.textContent === "Test microphone")!.click();
             buttons.find(b => b.textContent === "Reset to configured")!.click();
 
             expect(asked).toEqual(["/ha/api/stt/listen", "/ha/api/voice"]);

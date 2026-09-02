@@ -169,13 +169,20 @@ class TestDecidingWhenSomeoneHasFinished:
 class _Request:
     """Just enough of a request for the listen route."""
 
-    def __init__(self) -> None:
+    def __init__(self, body: Any = None) -> None:
         self.app = web.Application()
+        self._body = body
+        self.can_read_body = body is not None
+
+    async def json(self) -> Any:
+        if isinstance(self._body, Exception):
+            raise self._body
+        return self._body
 
 
-async def _listen() -> tuple[int, dict[str, Any]]:
+async def _listen(body: Any = None) -> tuple[int, dict[str, Any]]:
     """Call the route and decode what it answered."""
-    response = await stt.listen_handler(_Request())  # type: ignore[arg-type]
+    response = await stt.listen_handler(_Request(body))  # type: ignore[arg-type]
     body = response.body
     assert isinstance(body, bytes)
     return response.status, json.loads(body)
@@ -245,7 +252,7 @@ class TestAskingTheMachineToListen:
         status, body = await _listen()
 
         assert status == 200
-        assert body == {"text": "turn on the lights", "heard": True}
+        assert body == {"text": "turn on the lights", "heard": True, "acted": True}
         # One routing path, not two: an @mention reaches the agent it names and
         # anything else reaches main, exactly as from the composer.
         assert routed == ["turn on the lights"]
@@ -666,3 +673,69 @@ def _nothing_ended() -> Any:
         return None
 
     return ended
+
+
+class TestCheckingTheMicrophoneWithoutSpending:
+    """`{"act": false}` asks whether the device works, and nothing more.
+
+    Someone testing hardware should not have to pay a model to find out that it
+    is plugged in, and a check that leaves a row in the chat log is not a check.
+    """
+
+    @staticmethod
+    def _a_machine_that_hears(
+        monkeypatch: pytest.MonkeyPatch, said: str, routed: list[str]
+    ) -> None:
+        async def heard(**_kwargs: object) -> bytes:
+            return b"a clip"
+
+        async def read(_clip: bytes) -> str:
+            return said
+
+        async def route(_request: object, what: str) -> None:
+            routed.append(what)
+
+        monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
+        monkeypatch.setattr(stt.listener, "available", lambda: True)
+        monkeypatch.setattr(stt.listener, "listen", heard)
+        monkeypatch.setattr(stt, "transcribe", read)
+        monkeypatch.setattr(stt, "_route_as_typed", route)
+
+    async def test_what_was_heard_comes_back_unrouted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        routed: list[str] = []
+        self._a_machine_that_hears(monkeypatch, "turn on the lights", routed)
+
+        status, body = await _listen({"act": False})
+
+        assert status == 200
+        assert body == {"text": "turn on the lights", "heard": True, "acted": False}
+        assert not routed
+
+    async def test_acting_is_what_happens_unless_it_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Every caller that predates the flag, and the wake word that will drive
+        # this later, wants the turn to happen.
+        routed: list[str] = []
+        self._a_machine_that_hears(monkeypatch, "turn on the lights", routed)
+
+        for asked in (None, {}, {"act": True}, {"act": "yes"}):
+            routed.clear()
+            _status, body = await _listen(asked)
+            assert body["acted"] is True
+            assert routed == ["turn on the lights"]
+
+    async def test_a_body_that_will_not_read_still_acts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Refusing over an unreadable body would turn a working call into an
+        # error for callers that never sent one on purpose.
+        routed: list[str] = []
+        self._a_machine_that_hears(monkeypatch, "hello", routed)
+
+        _status, body = await _listen(ValueError("not json"))
+
+        assert body["acted"] is True
+        assert routed == ["hello"]

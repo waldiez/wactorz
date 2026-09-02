@@ -78,7 +78,7 @@ describe("buildSettingsView", () => {
         );
 
         const el = buildSettingsView(null, cbs(), "/ha", onVoiceChanged);
-        byText<HTMLButtonElement>(el, "button", "Listen now").click();
+        byText<HTMLButtonElement>(el, "button", "Test microphone").click();
 
         expect(asked).toEqual(["/ha/api/stt/listen"]);
     });

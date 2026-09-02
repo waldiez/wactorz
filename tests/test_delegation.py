@@ -185,6 +185,15 @@ class TestChoosingWhereTheTaskGoes:
 
         assert main.sent[0][1] == MessageType.TASK
 
+    async def test_a_structured_task_stays_structured(self) -> None:
+        main = _Main(running=("weather",))
+
+        await main.actor.delegation.delegate_task("weather", {"city": "Athens"})
+
+        payload = main.sent[0][2]
+        assert payload["city"] == "Athens"
+        assert "text" not in payload
+
     async def test_the_target_is_told_where_to_answer(self) -> None:
         main = _Main(running=("weather",))
 
@@ -203,6 +212,18 @@ class TestChoosingWhereTheTaskGoes:
         topic, payload = main.published[0]
         assert topic == "agents/by-name/sensor/task"
         assert payload["_remote_task"] is True
+
+    async def test_a_remote_structured_task_stays_structured(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        main = _Main(known_nodes={"rpi": {"agents": ["weather"]}})
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+
+        await main.actor.delegation.delegate_task("weather", {"city": "Athens"}, timeout=0.05)
+
+        _topic, payload = main.published[0]
+        assert payload["city"] == "Athens"
+        assert "text" not in payload
 
     async def test_a_local_agent_is_preferred_over_the_same_name_on_a_node(self) -> None:
         # The in-process mailbox is immediate and needs no broker.

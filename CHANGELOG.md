@@ -14,6 +14,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Reachy routes framework, health, and Home Assistant questions more reliably.** Questions about
+  running Wactorz agents now bypass smart-home planning, natural connection-health wording reads
+  live robot diagnostics, and device-state questions use Home Assistant's information path rather
+  than an actuator. Reachy no longer claims to perform gestures with hands or arms it does not have,
+  and dashboard-formatted answers are cleaned before speech.
+- **Reachy's network media failures recover locally.** A dropped WebRTC microphone or speaker link
+  gets one bounded reconnect-and-retry with a cooldown. Empty Deepgram results no longer trigger a
+  second language request, Home Assistant status tables are reduced to their answer for speech,
+  repeated verified unknown device requests use a short-lived negative cache, and health replies
+  use conversational wording.
+- **Long Reachy speech is no longer canceled at the generated-agent timeout.** The bounded task
+  budget now accommodates real-time media playback while remaining below the dashboard gateway's
+  own deadline.
+- **Structured agent delegations remain structured end to end.** Dictionary payloads such as a
+  weather city are no longer converted into JSON text before local or remote dispatch, preventing
+  an agent from silently falling back to its default input.
+
 - **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Voice
   conversations stream Reachy's WebRTC microphone while local VAD guards speech onset, motor
   noise, cancellation, and timeouts; Deepgram endpointing closes a turn sooner and interim text is
@@ -23,11 +40,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   `REACHY_STT_BACKEND`.
 - **Reachy's bilingual voice-control path is safer and more responsive.** Nova-3 streaming uses
   multilingual English/Greek recognition, explicitly flushes a locally-ended turn before closing
-  the socket, and keeps prerecorded recognition as a same-audio fallback. Greek device words now
-  survive the post-resolution actuation guard. Raw delegation blocks are removed from durable
-  conversation history, and an unrelated voice turn cannot replay an older Home Assistant action.
-  Conversation state antenna cues can be enabled independently from continuous listening motion,
-  which remains opt-in because servo noise can reach the live microphone.
+  the socket, and keeps prerecorded recognition as a same-audio fallback. A low-confidence
+  multilingual result gets one Greek retry using the same recording, while confident English stays
+  on the fast single-pass path. Greek device words now survive the post-resolution actuation guard.
+  Raw delegation blocks are removed from durable conversation history, and an unrelated voice turn
+  cannot replay an older Home Assistant action. Conversation state antenna cues can be enabled
+  independently from continuous listening motion, which remains opt-in because servo noise can
+  reach the live microphone.
 
 ## [0.6.0] - 2026-08-31
 

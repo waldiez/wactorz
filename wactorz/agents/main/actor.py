@@ -1270,7 +1270,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return await self.delegation.delegate_to_installer(payload, timeout)
 
     async def delegate_task(
-        self, target_name: str, task: str, timeout: float = 60.0
+        self, target_name: str, task: Any, timeout: float = 60.0
     ) -> dict[str, Any] | None:
         return await self.delegation.delegate_task(target_name, task, timeout)
 

@@ -556,7 +556,10 @@ class DynamicAgent(Actor):
     # Max time a single process() or handle_task() call can take before
     # we assume it's stuck in a blocking call and cancel it.
     _PROCESS_TIMEOUT = 120.0  # seconds
-    _HANDLE_TASK_TIMEOUT = 60.0
+    # A task may include real-time media playback. Keep this below the chat
+    # gateway's 150-second deadline, but leave enough room for a healthy long
+    # utterance or hardware trajectory to finish.
+    _HANDLE_TASK_TIMEOUT = 140.0
 
     # ── How many consecutive process() errors before we attempt LLM self-fix ──
     _PROCESS_LLM_FIX_THRESHOLD = 3  # try to fix after this many errors in a row

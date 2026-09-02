@@ -160,7 +160,7 @@ class DelegationManager:
             self.host._result_futures.pop(topic, None)
 
     async def delegate_task(
-        self, target_name: str, task: str, timeout: float = 60.0
+        self, target_name: str, task: Any, timeout: float = 60.0
     ) -> dict | None:
         """Send a task to a named agent and wait for its result.
 
@@ -178,16 +178,15 @@ class DelegationManager:
             task_id = uuid.uuid4().hex
             future = asyncio.get_event_loop().create_future()
             self.host._result_futures[task_id] = future
-            await self.host.send(
-                target.actor_id,
-                MessageType.TASK,
+            payload = dict(task) if isinstance(task, dict) else {"text": str(task)}
+            payload.update(
                 {
-                    "text": task,
                     "_task_id": task_id,
                     "task": task_id,
                     "reply_to": self.host.actor_id,
-                },
+                }
             )
+            await self.host.send(target.actor_id, MessageType.TASK, payload)
             try:
                 return await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:
@@ -209,10 +208,11 @@ class DelegationManager:
             return None
 
         async with self._reply_topic() as (reply_topic, future):
-            await self.host._mqtt_publish(
-                f"agents/by-name/{target_name}/task",
-                {"text": task, "payload": task, "_reply_topic": reply_topic, "_remote_task": True},
+            payload = (
+                dict(task) if isinstance(task, dict) else {"text": str(task), "payload": str(task)}
             )
+            payload.update({"_reply_topic": reply_topic, "_remote_task": True})
+            await self.host._mqtt_publish(f"agents/by-name/{target_name}/task", payload)
             try:
                 return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
             except asyncio.TimeoutError:
@@ -258,12 +258,12 @@ class DelegationManager:
         """Dispatch one already-resolved delegation and format the result string.
         Shared by @mention delegations and <delegate> blocks.
         """
-        json_str = json.dumps(payload)
+        rendered = json.dumps(payload)
         logger.info(
-            "[%s] Executing LLM delegation → @%s %s", self.host.name, agent_name, json_str[:80]
+            "[%s] Executing LLM delegation → @%s %s", self.host.name, agent_name, rendered[:80]
         )
         try:
-            result = await self.delegate_task(agent_name, json_str, timeout=300.0)
+            result = await self.delegate_task(agent_name, payload, timeout=300.0)
         except Exception as e:
             return f"[{agent_name} error: {e}]"
         # Formatting the reply is outside the guard on purpose: only the

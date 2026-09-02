@@ -382,6 +382,11 @@ async def _open_robot(agent):
     mini = None
     last_err = None
     for kwargs in attempts:
+        attempted_mode = _normalize_connection_mode(kwargs.get("connection_mode") or "")
+        if attempted_mode:
+            # Auto mode can end on an explicit network fallback; preserve the
+            # selected mode for diagnostics and future reconnect attempts.
+            agent.state["connection_mode"] = attempted_mode
         try:
             mini = await loop.run_in_executor(None, _open_sync, kwargs)
             await agent.log(f"Connected to Reachy via {kwargs or 'autodetect'}")
@@ -650,26 +655,29 @@ async def _health(agent, payload=None) -> dict[str, Any]:
 
     parts = []
     if not ok_link:
-        parts.append(link_reason or "not connected")
+        parts.append("I'm not connected to my body right now")
+    else:
+        parts.append("I'm connected to my body")
     if temperature is not None:
-        parts.append(f"internal temperature {temperature}°C")
+        parts.append(f"My internal temperature is {temperature}°C")
     if faults:
-        parts.append("motor faults seen this session: " + ", ".join(faults))
+        parts.append("I detected motor faults this session: " + ", ".join(faults))
     elif watching:
-        parts.append("no motor faults reported")
+        parts.append("My motors report no faults")
     if not watching and ok_link:
         # The Lite has no log stream, so silence there means "not watched",
         # which must not be read as "nothing wrong".
         parts.append(
-            "motor fault warnings need the wireless robot's daemon; this link does not serve them"
+            "This connection cannot provide live motor-fault warnings"
         )
     # Said plainly rather than left to be inferred from an absent number.
-    parts.append("Reachy reports no battery level — the SDK exposes none")
+    parts.append("Reachy Mini doesn't provide a battery reading")
 
     return {
         "ok": True,
         "cmd": "health",
         "connected": ok_link,
+        "connection_reason": link_reason,
         "imu_temperature_c": temperature,
         "motor_faults": faults,
         "watching_faults": watching,
@@ -769,7 +777,6 @@ async def setup(agent):
         agent.recall("connection_mode") or os.environ.get("REACHY_CONNECTION_MODE") or ""
     )
     agent.state["connection_mode"] = conn_mode or "auto"
-
     mini, last_err, tried = await _open_robot(agent)
 
     # Note: numpy + create_head_pose are stored regardless — they're pure helpers
@@ -1366,6 +1373,22 @@ def _explicit_interface_request(text):
     return None
 
 
+def _is_wactorz_orchestration_request(text):
+    """Keep framework questions away from robot and smart-home planners."""
+    low = str(text or "").lower()
+    if "wactorz" in low:
+        return True
+    if not re.search(r"\bagents?\b", low):
+        return False
+    return bool(
+        re.search(
+            r"\b(spawn|start|stop|delete|remove|create|delegate|ask|use|running|"
+            r"available|exist|list|which|what|who)\b",
+            low,
+        )
+    )
+
+
 def _extract_ha_request(text):
     """Best-effort smart-home clause for malformed planner HA commands."""
     raw = (text or "").strip()
@@ -1633,6 +1656,18 @@ def _embodied_command_for_text(text: str):
     if normalized in ("disable debug", "debug off", "hide debug", "hide action sequences"):
         return {"cmd": "debug", "enabled": False}
 
+    if re.search(r"\b(wave|raise|move|lift|shake)\b.*\b(hand|arm|finger)s?\b", normalized):
+        return {
+            "cmd": "capability",
+            "result": "I don't have arms or hands, but I can move my head and antennas.",
+        }
+
+    if re.search(
+        r"\b(?:are you|you are|systems?)\b.*\b(?:healthy|connected|online|okay|ok)\b",
+        normalized,
+    ):
+        return {"cmd": "health"}
+
     room_scope = bool(
         re.search(
             r"\b(around (?:the )?room|around you|around here|surroundings?|"
@@ -1790,6 +1825,18 @@ async def handle_task(agent, payload):
                     f"routing explicit interface request to main: {interface_text[:80]}"
                 )
                 bridged = await _bridge_to_main(agent, interface_text, _tid)
+                if bridged is not None:
+                    return bridged
+                return {
+                    "ok": False,
+                    "cmd": "bridge",
+                    "error": "Wactorz main is unavailable",
+                    "result": "I could not reach Wactorz main.",
+                    "_task_id": _tid,
+                    "task": _tid,
+                }
+            if _is_wactorz_orchestration_request(stripped):
+                bridged = await _bridge_to_main(agent, stripped, _tid)
                 if bridged is not None:
                     return bridged
                 return {
@@ -2182,14 +2229,18 @@ async def handle_task(agent, payload):
                         # the execution plan in structured fields, not chat bubbles.
                         result_msg = "\n\n".join(spoken_replies)
                     elif single_result:
-                        result_msg = single_result
+                        result_msg = (
+                            _natural_actuation_speech(single_result, stripped) or single_result
+                        )
                     else:
                         natural_results = [
-                            str(step.get("result")).strip()
+                            _natural_actuation_speech(str(step.get("result")), stripped)
+                            or str(step.get("result")).strip()
                             for step in steps
                             if isinstance(step, dict) and step.get("result")
                         ]
-                        result_msg = natural_results[-1] if natural_results else "Done."
+                        natural_results = list(dict.fromkeys(natural_results))
+                        result_msg = " ".join(natural_results) if natural_results else "Done."
                     return {
                         "ok": not failures and not skipped,
                         "cmd": "nl",
@@ -2416,6 +2467,34 @@ def _voice_workflow_reply(value):
     return None
 
 
+def _verified_delegation_reply(value):
+    """Prefer an agent's returned value over prose the orchestrator guessed around it."""
+    match = re.search(
+        r"(?:^|\n)\s*(?:✅\s*)?[\w.-]+\s+completed:\s*"
+        r"(?:result|message|output|text)=(.*)$",
+        str(value or ""),
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return str(value or "")
+    return match.group(1).split("\n\n", 1)[0].strip()
+
+
+def _voice_ha_status_summary(value, user_text):
+    """Speak the answer to an HA state question without reading its table aloud."""
+    request = str(user_text or "").lower()
+    if not re.search(r"\b(light|lights|switch|switches|device|devices)\b", request):
+        return None
+    if not re.search(r"\b(what|which|is|are|status|state|on|off)\b", request):
+        return None
+    first_line = next((line.strip() for line in str(value or "").splitlines() if line.strip()), "")
+    first_line = re.sub(r"[*_~`]+", "", first_line)
+    if not re.search(r"\b(on|off|open|closed|unavailable|available)\b", first_line.lower()):
+        return None
+    sentence = re.match(r"^(.+?[.!?])(?:\s|$)", first_line)
+    return sentence.group(1) if sentence else first_line
+
+
 def _voice_friendly_reply(text, limit=None, user_text=""):
     """Turn a visual dashboard answer into natural human-only spoken text."""
     value = _sanitize_reachy_identity_reply(text, user_text=user_text).strip()
@@ -2427,6 +2506,9 @@ def _voice_friendly_reply(text, limit=None, user_text=""):
     actuation = _natural_actuation_speech(value, user_text)
     if actuation:
         return actuation
+    ha_summary = _voice_ha_status_summary(value, user_text)
+    if ha_summary:
+        return ha_summary
     value = re.sub(r"```[\s\S]*?```", " I've put the code in Wactorz chat. ", value)
     value = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", value)
     # Italic role-play directions and emoji are visual flourishes, not speech.
@@ -2657,20 +2739,20 @@ async def _bridge_to_main(
         reply = "Okay."
 
     reply = _sanitize_reachy_identity_reply(reply, user_text=text)
+    reply = _verified_delegation_reply(reply)
     # Voice it through the robot when connected; the text is returned either way
     # (and is the only channel when the robot is offline).
     spoke = False
     interrupted = False
-    spoken_reply = _voice_friendly_reply(reply, user_text=text) if voice_friendly else reply
+    spoken_reply = _voice_friendly_reply(reply, user_text=text)
     # An actuation acknowledgement — "Done: light.turn_on -> light.tapo_l920." —
     # is the one answer whose raw form is worse than its spoken one in every
     # channel: it names a service and an entity id, and drops the colour or
     # brightness that was actually asked for, so three different requests all
     # read identically. Chat gets the human sentence for those.
     #
-    # Deliberately only for those. A long answer's spoken form is truncated and
-    # ends "I've put the rest in Wactorz chat" — show that in chat and the
-    # sentence points at itself, so everything else keeps its full text.
+    # Deliberately only for those. Everything else keeps its complete text in
+    # chat, including dashboard detail that the speech cleaner may simplify.
     display_reply = _natural_actuation_speech(reply, text) or reply
     spoken_result = ""
     speech_error = None
@@ -2838,6 +2920,45 @@ async def _reconnect(agent, payload=None):
     }
 
 
+_MEDIA_LINK_ERROR_MARKERS = (
+    "receiver is gone",
+    "signalling error",
+    "signaling error",
+    "connection closed",
+    "connection reset",
+    "connection refused",
+    "broken pipe",
+    "not connected",
+    "websocket is closed",
+    "websocket connection is closed",
+)
+
+
+def _is_media_link_error(error):
+    text = str(error or "").lower()
+    return any(marker in text for marker in _MEDIA_LINK_ERROR_MARKERS)
+
+
+async def _recover_media_link(agent, error):
+    """Re-open a dropped network media link once, with a short retry cooldown."""
+    if not _is_media_link_error(error):
+        return False
+    if agent.state.get("media_backend") != "webrtc" and not agent.state.get("audio_on_robot"):
+        return False
+    now = time.monotonic()
+    if now - float(agent.state.get("_last_media_reconnect_at") or 0.0) < 15.0:
+        return False
+    agent.state["_last_media_reconnect_at"] = now
+    await agent.log(f"Reachy media link dropped ({error}); reconnecting once", level="warning")
+    try:
+        await _reconnect(agent, {"force": True})
+    except Exception as exc:
+        await agent.log(f"automatic Reachy media reconnect failed: {exc}", level="warning")
+        return False
+    await agent.log("Reachy media link recovered")
+    return True
+
+
 def _is_connected(agent):
     """Quick check that the SDK handle is alive. Returns (ok, reason)."""
     mini = agent.state.get("mini")
@@ -2897,7 +3018,9 @@ async def _dispatch(agent, cmd, payload, return_result=False):
     started = time.time()
 
     try:
-        if cmd == "wake":
+        if cmd == "capability":
+            result = {"result": str(payload.get("result") or "I can't do that physically.")}
+        elif cmd == "wake":
             result = await _wake(agent)
         elif cmd == "sleep":
             result = await _sleep(agent)
@@ -5057,7 +5180,16 @@ async def _say(agent, payload):
         agent.state["stop_speaking"] = False
 
     # -- Play through the robot's speaker (non-blocking GStreamer playbin) --
-    await _do(media.play_sound, play_path)
+    try:
+        await _do(media.play_sound, play_path)
+    except Exception as exc:
+        if not await _recover_media_link(agent, exc):
+            raise
+        recovered = agent.state.get("mini")
+        media = getattr(recovered, "media", None) or getattr(recovered, "media_manager", None)
+        if media is None:
+            raise RuntimeError("Reachy reconnected without a media manager") from exc
+        await _do(media.play_sound, play_path)
     agent.state["_speaking"] = True
 
     # Speech-matched motion starts with the audio and is cancelled with it, so
@@ -5557,14 +5689,33 @@ def _ha_delegate_for_request(request):
         "recommend",
         "recommendation",
     )
-    return (
-        "home-assistant-agent" if any(marker in low for marker in ha_agent_markers) else "actuator"
+    state_question = bool(
+        re.match(r"^\s*(?:is|are)\b", low)
+        and re.search(r"\b(?:on|off|open|closed|locked|unlocked|available|unavailable)\b", low)
     )
+    return "home-assistant-agent" if state_question or any(
+        marker in low for marker in ha_agent_markers
+    ) else "actuator"
 
 
 async def _ha_actuate(agent, request):
     """Run the same one-off Home Assistant actuator used by main chat actuation."""
     from wactorz.agents.one_off_actuator_agent import OneOffActuatorAgent
+
+    cache_key = " ".join(str(request or "").lower().split())
+    now = time.monotonic()
+    negative_cache = agent.state.setdefault("_ha_negative_cache", {})
+    negative_cache = {
+        key: item
+        for key, item in negative_cache.items()
+        if now - float(item.get("at", 0.0)) < 600.0
+    }
+    agent.state["_ha_negative_cache"] = negative_cache
+    if cache_key in negative_cache:
+        return {
+            "result": negative_cache[cache_key]["result"],
+            "cached_no_match": True,
+        }
 
     actor = agent._actor
 
@@ -5583,7 +5734,13 @@ async def _ha_actuate(agent, request):
             reply_to_id=actor.actor_id,
             persistence_dir=str(actor._persistence_dir.parent),
         )
-        return await asyncio.wait_for(future, timeout=120.0)
+        result = await asyncio.wait_for(future, timeout=120.0)
+        message = (
+            str(result.get("result") or "") if isinstance(result, dict) else str(result or "")
+        )
+        if "couldn't identify a matching device" in message.lower():
+            negative_cache[cache_key] = {"at": time.monotonic(), "result": message}
+        return result
     except asyncio.TimeoutError:
         return {"result": "Actuation timed out, please retry."}
     finally:
@@ -6537,22 +6694,45 @@ def _conversation_streaming_enabled(payload):
     )
 
 
-async def _conversation_transcribe(agent, wav_bytes, payload, session):
+def _conversation_language_retry_reason(transcription, payload):
+    """Why a multilingual result deserves one pass in the fallback language."""
+    if not _conversation_transcript_is_meaningful(getattr(transcription, "text", "")):
+        # A language retry cannot rescue silence; it only spends another API
+        # request and gives a second model an opportunity to hallucinate words.
+        return ""
+    configured = str(payload.get("language") or payload.get("stt_language") or "").lower()
+    if configured and configured not in ("auto", "multi"):
+        return ""
+    probability = getattr(transcription, "language_probability", None)
+    minimum_language = max(
+        0.0,
+        min(1.0, float(payload.get("stt_min_language_probability", 0.60))),
+    )
+    if probability is not None and float(probability) < minimum_language:
+        return f"language probability {float(probability):.2f}"
+    confidence = getattr(transcription, "confidence", None)
+    retry_confidence = max(
+        0.0,
+        min(1.0, float(payload.get("stt_retry_min_confidence", 0.75))),
+    )
+    if confidence is not None and float(confidence) < retry_confidence:
+        return f"confidence {float(confidence):.2f}"
+    return ""
+
+
+async def _conversation_transcribe(agent, wav_bytes, payload, session, initial=None):
     """Retry uncertain auto-language results with a stable session fallback."""
     from wactorz.catalogue_agents.reachy_stt import transcribe_wav
 
-    initial = await transcribe_wav(wav_bytes, payload)
-    if payload.get("language") or payload.get("stt_language"):
-        return initial, False
-
-    language = str(getattr(initial, "language", "") or "").strip().lower()
-    probability = getattr(initial, "language_probability", None)
-    minimum = max(0.0, min(1.0, float(payload.get("stt_min_language_probability", 0.60))))
-    if probability is None or float(probability) >= minimum:
-        if language:
+    initial = initial or await transcribe_wav(wav_bytes, payload)
+    reason = _conversation_language_retry_reason(initial, payload)
+    if not reason:
+        language = str(getattr(initial, "language", "") or "").strip().lower()
+        if language and language not in ("auto", "multi"):
             session["stt_language_hint"] = language
         return initial, False
 
+    language = str(getattr(initial, "language", "") or "").strip().lower()
     fallback = (
         str(payload.get("stt_fallback_language") or session.get("stt_language_hint") or "")
         .strip()
@@ -6562,15 +6742,26 @@ async def _conversation_transcribe(agent, wav_bytes, payload, session):
         return initial, False
 
     await agent.log(
-        f"uncertain STT language {language or 'unknown'!r} "
-        f"({float(probability):.2f}); retrying as {fallback}",
+        f"uncertain STT result ({reason}); retrying as {fallback}",
         level="info",
     )
     retry_payload = dict(payload)
     retry_payload["stt_language"] = fallback
     retried = await transcribe_wav(wav_bytes, retry_payload)
     session["stt_retry_count"] = int(session.get("stt_retry_count") or 0) + 1
-    return retried, True
+    retry_text = str(getattr(retried, "text", "") or "")
+    initial_confidence = float(getattr(initial, "confidence", None) or 0.0)
+    retry_confidence = float(getattr(retried, "confidence", None) or 0.0)
+    if _conversation_transcript_is_meaningful(retry_text) and (
+        not _conversation_transcript_is_meaningful(getattr(initial, "text", ""))
+        or retry_confidence >= initial_confidence
+    ):
+        return retried, True
+    await agent.log(
+        "language retry was less confident; keeping the multilingual transcript",
+        level="info",
+    )
+    return initial, True
 
 
 def _conversation_transcript_is_meaningful(text):
@@ -6859,7 +7050,7 @@ async def _conversation_embodied_bridge(agent, transcript, command, task_id, bef
             reply = str(action.get("result") or "Done.")
             if command["cmd"] in ("describe", "look_behind", "look_around"):
                 spoken = _voice_friendly_reply(reply, user_text=transcript)
-            elif command["cmd"] in ("debug", "face_forward"):
+            elif command["cmd"] in ("capability", "debug", "face_forward", "health"):
                 spoken = reply
             else:
                 spoken = {
@@ -6975,6 +7166,9 @@ async def _conversation_listen(agent, session, vad_config, stt_payload, turn):
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        if await _recover_media_link(agent, exc):
+            await agent.log("Reachy microphone recovered; listening again")
+            return await _conversation_capture(agent, session, vad_config), None
         await agent.log(
             f"Deepgram streaming unavailable; using recorded-turn transcription: {exc}",
             level="warning",
@@ -6983,6 +7177,7 @@ async def _conversation_listen(agent, session, vad_config, stt_payload, turn):
 
     if streamed.error:
         session["stt_stream_fallbacks"] = int(session.get("stt_stream_fallbacks") or 0) + 1
+        await _recover_media_link(agent, streamed.error)
         await agent.log(
             f"Deepgram stream incomplete; transcribing the captured turn instead: "
             f"{streamed.error}",
@@ -7209,7 +7404,28 @@ async def _conversation_loop(agent, session):
             reused = carried[1] if carried is not None and carried[0] is capture else None
             try:
                 if streamed_transcription is not None:
-                    transcription, retried = streamed_transcription, False
+                    retry_reason = _conversation_language_retry_reason(
+                        streamed_transcription, stt_payload
+                    )
+                    fallback = stt_payload.get("stt_fallback_language") or session.get(
+                        "stt_language_hint"
+                    )
+                    if retry_reason and fallback:
+                        wav_b64, _frames = await _do(
+                            _pcm_to_wav_b64,
+                            capture.audio,
+                            capture.samplerate,
+                            capture.channels,
+                        )
+                        transcription, retried = await _conversation_transcribe(
+                            agent,
+                            base64.b64decode(wav_b64),
+                            stt_payload,
+                            session,
+                            initial=streamed_transcription,
+                        )
+                    else:
+                        transcription, retried = streamed_transcription, False
                     turn["stt_streaming"] = True
                 elif reused is not None:
                     transcription, retried = reused, False

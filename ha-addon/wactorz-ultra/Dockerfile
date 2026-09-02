@@ -7,7 +7,8 @@ ENV DEBCONF_NONINTERACTIVE_SEEN=true
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git jq gcc linux-libc-dev libffi-dev libssl-dev python3-pip locales \
+    curl git jq gcc linux-libc-dev libffi-dev libssl-dev python3-pip python3-dev locales \
+    pkg-config libcairo2-dev libgirepository1.0-dev \
     mosquitto mosquitto-clients build-essential cmake libjpeg62-turbo-dev libpng-dev libopenblas-dev \
     libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libxcb1 libx11-6 libgomp1 \
     && sed -i -e 's/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen \

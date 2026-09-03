@@ -21,6 +21,7 @@
  */
 
 import { sttMode, sttAvailable, sttLive, canRecognise } from "../../ext/stt";
+import { waking, wakeReady, wakePhrases } from "../../ext/wake";
 import { ttsMode, ttsAvailable, tts, ttsVoice } from "../../ext/tts";
 import { toast } from "../ToastManager";
 
@@ -205,6 +206,78 @@ function buildBranchPicker(
     return group;
 }
 
+/** What waking on a phrase does, said plainly. */
+export function wakingSays(): string {
+    if (!wakeReady()) {
+        return "This deployment has no wake-word model, so nothing can listen for a phrase.";
+    }
+    const phrases = wakePhrases();
+    if (!waking()) {
+        return phrases
+            ? `Nothing is waiting for a phrase. Turned on, this machine would wake on "${phrases}".`
+            : "Nothing is waiting for a phrase.";
+    }
+    return phrases
+        ? `This machine is listening for "${phrases}", and starts a turn when it hears it.`
+        : "This machine is listening for its phrase, and starts a turn when it hears it.";
+}
+
+/** The switch itself, showing what is in force. */
+function onOrOff(): HTMLSelectElement {
+    const select = document.createElement("select");
+    select.className = "af-audio-select";
+    select.setAttribute("aria-label", "Wake word");
+    // Disabled rather than hidden when there is no model: a switch that vanishes
+    // reads as a feature this build does not have, where the truth is a
+    // deployment one file short of having it.
+    select.disabled = !wakeReady();
+    for (const choice of ["off", "on"]) {
+        const option = document.createElement("option");
+        option.value = choice;
+        option.textContent = choice;
+        select.appendChild(option);
+    }
+    select.value = waking() ? "on" : "off";
+    return select;
+}
+
+/**
+ * Whether a phrase starts a turn on this machine.
+ *
+ * Offered only where there is a microphone to own. Every other branch records in
+ * a browser or not at all, so a phrase would have no device to interrupt and the
+ * switch would turn on nothing.
+ */
+function buildWakePicker(apiBase: string, onChanged: () => void): HTMLElement {
+    const group = document.createElement("div");
+    group.className = "af-voice-group";
+
+    const row = document.createElement("div");
+    row.className = "af-voice-row";
+
+    const name = document.createElement("span");
+    name.className = "af-voice-term";
+    name.textContent = "Wake word";
+
+    const select = onOrOff();
+
+    select.addEventListener("change", () => {
+        const wanted = select.value;
+        select.disabled = true;
+        void chooseBranch("waking", wanted, apiBase).then(ok => {
+            select.disabled = false;
+            onChanged();
+            if (!ok) {
+                select.value = waking() ? "on" : "off";
+            }
+        });
+    });
+
+    row.append(name, select);
+    group.append(row, detailLine(wakingSays()));
+    return group;
+}
+
 /**
  * Which voice this deployment speaks in.
  *
@@ -381,6 +454,9 @@ export function buildVoiceSection(apiBase: string, onChanged: () => void = () =>
     note.textContent = "Changed here, and kept until reset. Where the services live is set on the machine.";
     section.appendChild(note);
 
+    if (sttMode() === "host") {
+        section.appendChild(buildWakePicker(apiBase, onChanged));
+    }
     if (ttsMode() !== "off") {
         section.appendChild(buildVoicePicker(apiBase, onChanged));
     }

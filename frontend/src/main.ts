@@ -36,6 +36,9 @@ import { register as registerTTS } from "./ext/tts";
 // entries at module load, and seedServerConfig() seeds only what is
 // registered by then. It has nothing to bootstrap, so there is no register().
 import "./ext/stt";
+// Imported for its side effect, like the recognition extension above: the module
+// registers the /api/config fields it seeds when it loads, not when it is called.
+import "./ext/wake";
 import { seedServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";

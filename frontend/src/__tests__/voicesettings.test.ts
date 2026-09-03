@@ -27,6 +27,9 @@ describe("what the settings view says about voice", () => {
 
     afterEach(() => {
         for (const key of [
+            "wactorz-wake-mode",
+            "wactorz-wake-ready",
+            "wactorz-wake-phrases",
             "wactorz-stt-mode",
             "wactorz-tts-mode",
             "wactorz-stt-available",
@@ -237,6 +240,67 @@ describe("what the settings view says about voice", () => {
 
         expect(select.disabled).toBe(true);
         expect(select.textContent).toContain("chosen by the service");
+    });
+
+    const wakeSelect = (section: HTMLElement | null): HTMLSelectElement | undefined =>
+        [...(section?.querySelectorAll("select") ?? [])].find(
+            s => s.getAttribute("aria-label") === "Wake word",
+        );
+
+    it("offers the wake word only where there is a microphone to own", () => {
+        // Every other branch records in a browser or not at all, so a phrase has
+        // no device to interrupt and the switch would turn on nothing.
+        configured("host", "off", { "wactorz-wake-ready": "1" });
+        expect(wakeSelect(buildVoiceSection(""))).toBeDefined();
+
+        configured("server", "off", { "wactorz-stt-available": "1", "wactorz-wake-ready": "1" });
+        expect(wakeSelect(buildVoiceSection(""))).toBeUndefined();
+    });
+
+    it("sets the wake word deployment-wide", () => {
+        configured("host", "off", { "wactorz-wake-ready": "1" });
+        const sent: unknown[] = [];
+        vi.stubGlobal(
+            "fetch",
+            vi.fn((url: string, init: RequestInit) => {
+                sent.push([url, JSON.parse(init.body as string)]);
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+            }),
+        );
+
+        const select = wakeSelect(buildVoiceSection(""))!;
+        select.value = "on";
+        select.dispatchEvent(new Event("change"));
+
+        expect(sent[0]).toEqual(["/api/voice", { waking: "on" }]);
+    });
+
+    it("shows whether it is already on", () => {
+        configured("host", "off", { "wactorz-wake-ready": "1", "wactorz-wake-mode": "on" });
+
+        expect(wakeSelect(buildVoiceSection(""))!.value).toBe("on");
+    });
+
+    it("says what to say to wake it", () => {
+        // A switch that turns on listening for a phrase, without saying which
+        // phrase, leaves someone guessing at their own configuration.
+        configured("host", "off", {
+            "wactorz-wake-ready": "1",
+            "wactorz-wake-phrases": "hey waldiez",
+        });
+
+        expect(buildVoiceSection("")!.textContent).toContain("hey waldiez");
+    });
+
+    it("says so when there is nothing to wake with", () => {
+        // The model is weights fetched at deploy time, not shipped with the code,
+        // so a deployment can be set to wake and have nothing to wake with.
+        configured("host", "off", { "wactorz-wake-ready": "0" });
+
+        const select = wakeSelect(buildVoiceSection(""))!;
+
+        expect(select.disabled).toBe(true);
+        expect(buildVoiceSection("")!.textContent).toContain("no wake-word model");
     });
 
     it("always offers the way back, because the choices are kept", () => {

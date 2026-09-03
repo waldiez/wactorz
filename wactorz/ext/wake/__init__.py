@@ -12,6 +12,7 @@ serves startup and a change made while running.
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 from aiohttp import web
 
@@ -51,6 +52,21 @@ async def _on_startup(_app: web.Application) -> None:
 
 async def _on_cleanup(_app: web.Application) -> None:
     await shutdown()
+
+
+def public_config(_app: web.Application) -> dict[str, Any]:
+    """Non-secret wake config for the browser.
+
+    The model's location is deliberately absent: it is a path on this machine,
+    and where a deployment keeps its files is not the browser's business. The
+    phrases are here because someone has to be told what to say, and a wake word
+    is not a secret -- it is spoken out loud in a room by design.
+    """
+    return {
+        "mode": voice_settings.waking(),
+        "ready": bool(config.WAKE_MODEL_DIR),
+        "phrases": list(config.WAKE_WORDS),
+    }
 
 
 def wanted() -> bool:
@@ -122,6 +138,8 @@ def _route_from_the_room(clip: bytes) -> None:
     # import either way round cannot be resolved at start.
     from ..stt import route_heard_clip
 
-    task = asyncio.ensure_future(route_heard_clip(clip, source="wake"))
+    # Written as it should read in a chat log: the surface is shown to whoever
+    # opens the page, and "wake" alone tells them nothing they did not know.
+    task = asyncio.ensure_future(route_heard_clip(clip, source="wake word"))
     _routing.add(task)
     task.add_done_callback(_routing.discard)

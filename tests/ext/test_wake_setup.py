@@ -159,7 +159,8 @@ class TestHandingATurnBackToTheEventLoop:
             await asyncio.sleep(0)
             await asyncio.sleep(0)
 
-            assert routed == [(b"a clip", "wake")]
+            # Named as it reads in a chat log, where it is shown to a person.
+            assert routed == [(b"a clip", "wake word")]
         finally:
             await wake.shutdown()
 
@@ -172,7 +173,7 @@ class TestHandingATurnBackToTheEventLoop:
         release = asyncio.Event()
 
         async def _route(_clip: bytes, source: str = "") -> None:
-            assert source == "wake"
+            assert source == "wake word"
             started.set()
             await release.wait()
 
@@ -238,3 +239,29 @@ class TestShuttingDown:
         await wake.shutdown()
 
         assert not built
+
+
+class TestWhatTheBrowserIsTold:
+    """`/api/config` carries what a page needs to describe waking, and no more."""
+
+    def test_the_state_and_the_phrase_but_not_the_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The phrase is spoken aloud in a room by design, so it is not a secret.
+        # Where this machine keeps its files is not the browser's business.
+        monkeypatch.setattr(voice_settings, "waking", lambda: "on")
+        monkeypatch.setattr(config, "WAKE_MODEL_DIR", "/srv/models/kws")
+        monkeypatch.setattr(config, "WAKE_WORDS", ("hey waldiez",))
+
+        told = wake.public_config(web.Application())
+
+        assert told == {"mode": "on", "ready": True, "phrases": ["hey waldiez"]}
+        assert "/srv/models" not in str(told)
+
+    def test_a_deployment_with_no_model_says_it_is_not_ready(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Better than a switch that turns on and does nothing.
+        monkeypatch.setattr(config, "WAKE_MODEL_DIR", "")
+
+        assert wake.public_config(web.Application())["ready"] is False

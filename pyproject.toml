@@ -71,10 +71,17 @@ host      = [
     "sounddevice>=0.5.0",
     "miniaudio>=1.59",
 ]
+# Keyword spotting, for the branch that hears a room rather than a button. The
+# wheel carries its own onnxruntime, so there is no separate runtime to match --
+# and no musl build, which is why this is not available on the Alpine image.
+wake      = [
+    "sherpa-onnx>=1.13.0",
+]
 voice     = [
     "wactorz[stt]",
     "wactorz[tts]",
     "wactorz[host]",
+    "wactorz[wake]",
 ]
 cron      = ["croniter>=2.0.0"]
 data      = ["pandas>=2.0.0"]

@@ -14,7 +14,7 @@ from aiohttp import web
 from aiohttp.web import Response
 
 from ..core import voice_settings
-from ..ext import stt, tts
+from ..ext import collect_public_config, stt, tts
 from . import cost, origins, runtime
 
 logger = logging.getLogger(__name__)
@@ -124,10 +124,10 @@ async def voice_settings_handler(request: web.Request) -> Response:
             return web.json_response({"error": str(exc)}, status=503)
         return web.json_response(_voice_now())
 
-    changed = {k: v for k, v in body.items() if k in {"listening", "speaking", "voice"}}
+    changed = {k: v for k, v in body.items() if k in {"listening", "speaking", "waking", "voice"}}
     if not changed:
         return web.json_response(
-            {"error": "nothing to change: listening, speaking or voice"}, status=400
+            {"error": "nothing to change: listening, speaking, waking or voice"}, status=400
         )
     # Checked before any of it is kept: a request naming one good setting and one
     # bad one would otherwise leave the deployment half-changed, in a state
@@ -159,6 +159,7 @@ def _voice_now() -> dict[str, Any]:
     return {
         "listening": voice_settings.listening(),
         "speaking": voice_settings.speaking(),
+        "waking": voice_settings.waking(),
         "voice": voice_settings.voice(),
     }
 
@@ -167,8 +168,6 @@ async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
     from .. import __version__, config
     from ..config import CONFIG
-    from ..core import voice_settings
-    from ..ext import collect_public_config
 
     # The /ws proxy is served by *this* server, so point the frontend at the
     # monitor's actual port (WS_PORT), not a hardcoded one.

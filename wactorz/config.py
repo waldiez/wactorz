@@ -208,6 +208,46 @@ def _stt_mode() -> str:
     return value
 
 
+#: Whether the machine listens for a phrase before a turn, and what it listens
+#: for. Only meaningful on the ``host`` branch: it is the one that owns a
+#: microphone, and a wake word is how a room without a screen starts a turn.
+WAKE_MODES = ("off", "on")
+
+
+def _wake_mode() -> str:
+    """Whether a phrase wakes this deployment, ``off`` when unset."""
+    value = _unquote(os.getenv("WACTORZ_WAKE", "") or "").lower()
+    if not value:
+        return "off"
+    if value not in WAKE_MODES:
+        warnings.warn(
+            f"WACTORZ_WAKE={value!r} is not one of {', '.join(WAKE_MODES)} — using 'off'",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return "off"
+    return value
+
+
+WAKE_MODE = _wake_mode()
+
+#: The phrases that wake it, separated by commas.
+#:
+#: Given as words rather than a prepared model: the spotter converts them at
+#: startup, so an invented name costs no more than a common one. Short phrases
+#: are heard less reliably, so a name on its own is a poorer wake word than the
+#: same name with a word in front of it.
+WAKE_WORDS = tuple(
+    phrase.strip()
+    for phrase in _unquote(os.getenv("WACTORZ_WAKE_WORDS", "") or "hey waldiez").split(",")
+    if phrase.strip()
+)
+
+#: Where the keyword model lives. Absent by default: it is weights, not code, and
+#: a deployment that does not wake should not be made to carry them.
+WAKE_MODEL_DIR = _unquote(os.getenv("WACTORZ_WAKE_MODEL", "") or "")
+
+
 #: Which branch this deployment offers. The browser learns it from here rather
 #: than from how the bundle was built, so one wheel serves every deployment and
 #: the microphone is offered exactly where it can work.

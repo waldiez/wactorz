@@ -135,24 +135,48 @@ def _listen_blocking(max_seconds: float, silence_seconds: float) -> bytes:
     except Exception as exc:  # pylint: disable=broad-exception-caught
         raise NoMicrophone(f"could not open the microphone: {exc}") from exc
 
-    spoken: list[bytes] = []
     with stream:
-        floor = _room_floor(stream, block_frames)
-        threshold = max(floor * OVER_FLOOR, FLOOR_MINIMUM)
-        quiet_for = 0.0
-        heard_anything = False
-        for _ in range(int(max_seconds / BLOCK_SECONDS)):
-            block = bytes(stream.read(block_frames)[0])
-            spoken.append(block)
-            if loudness(block) >= threshold:
-                heard_anything = True
-                quiet_for = 0.0
-                continue
-            quiet_for += BLOCK_SECONDS
-            # Only once someone has actually said something: otherwise the turn
-            # ends on the silence it opened with, before anyone drew breath.
-            if heard_anything and quiet_for >= silence_seconds:
-                break
+        floor = room_floor(stream, block_frames)
+        pcm = gather_turn(stream, block_frames, threshold_over(floor), max_seconds, silence_seconds)
+    return as_wav(pcm) if pcm else b""
+
+
+def threshold_over(floor: float) -> float:
+    """How loud a block must be to count as speech in a room this noisy."""
+    return max(floor * OVER_FLOOR, FLOOR_MINIMUM)
+
+
+def gather_turn(
+    stream: Any,
+    block_frames: int,
+    threshold: float,
+    max_seconds: float,
+    silence_seconds: float,
+) -> bytes:
+    """Read one turn from an already-open stream, and answer with its samples.
+
+    Takes the stream rather than opening one: a wake word owns the microphone
+    continuously, and closing it to reopen for the turn loses whatever was said
+    in between -- which is the beginning of the sentence, since people carry
+    straight on from the wake word.
+
+    Answers with raw samples, or nothing when the room stayed quiet.
+    """
+    spoken: list[bytes] = []
+    quiet_for = 0.0
+    heard_anything = False
+    for _ in range(int(max_seconds / BLOCK_SECONDS)):
+        block = bytes(stream.read(block_frames)[0])
+        spoken.append(block)
+        if loudness(block) >= threshold:
+            heard_anything = True
+            quiet_for = 0.0
+            continue
+        quiet_for += BLOCK_SECONDS
+        # Only once someone has actually said something: otherwise the turn
+        # ends on the silence it opened with, before anyone drew breath.
+        if heard_anything and quiet_for >= silence_seconds:
+            break
 
     if not heard_anything:
         return b""
@@ -160,10 +184,10 @@ def _listen_blocking(max_seconds: float, silence_seconds: float) -> bytes:
     # anything in the log to show for it is worse than one that does not.
     seconds = sum(len(b) for b in spoken) / (RATE * 2)
     logger.info("[stt] Heard %.1fs from the room", seconds)
-    return _as_wav(b"".join(spoken))
+    return b"".join(spoken)
 
 
-def _room_floor(stream: object, block_frames: int) -> float:
+def room_floor(stream: object, block_frames: int) -> float:
     """Measure the room's own noise, so the threshold suits where it is."""
     levels = [
         loudness(bytes(stream.read(block_frames)[0]))  # type: ignore[attr-defined]
@@ -172,10 +196,11 @@ def _room_floor(stream: object, block_frames: int) -> float:
     return sum(levels) / len(levels)
 
 
-def _as_wav(pcm: bytes) -> bytes:
+def as_wav(pcm: bytes) -> bytes:
     """Wrap the samples in the container the recognisers are given."""
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as out:
+        # pylint: disable=no-member
         out.setnchannels(1)
         out.setsampwidth(2)
         out.setframerate(RATE)

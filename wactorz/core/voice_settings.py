@@ -31,6 +31,7 @@ _KEY = "_voice_settings"
 SETTINGS: dict[str, tuple[str, ...]] = {
     "listening": config.STT_MODES,
     "speaking": config.TTS_MODES,
+    "waking": config.WAKE_MODES,
 }
 
 
@@ -56,6 +57,11 @@ def listening() -> str:
 def speaking() -> str:
     """Which branch speaks, as chosen or as configured."""
     return _resolved("speaking", config.TTS_MODE)
+
+
+def waking() -> str:
+    """Whether a phrase starts a turn, as chosen or as configured."""
+    return _resolved("waking", config.WAKE_MODE)
 
 
 def voice() -> str:

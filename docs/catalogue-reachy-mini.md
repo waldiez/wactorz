@@ -1,96 +1,149 @@
-# Reachy Mini agent
+# Reachy Mini
 
-`reachy-mini` controls a Reachy Mini from Wactorz. Use it for wake/sleep, head pose,
-antennas, gaze, speech, expressive gestures, and optional Home Assistant actions.
+Connect a Reachy Mini to Wactorz, then control it in plain language. Reachy can move,
+look around, speak, listen, take photos, perform expressive gestures, and optionally
+control Home Assistant devices.
 
-## Hardware setup
+> **Beta:** Reachy Mini is an experimental agent. Use it for supervised trials, not
+> unattended production workflows. Keep the robot within reach while testing motion.
 
-Reachy Mini Wireless:
+## Quick start
 
-1. Power on the robot.
-2. Put the robot and the Wactorz host on the same WiFi network.
-3. Make sure the network does not block local device discovery.
-4. Stop any Hugging Face app running on the robot before Wactorz connects.
+This path gets the robot moving from the Wactorz dashboard. Start with text commands;
+voice setup is optional and comes later.
 
-Reachy Mini Lite:
+### 1. Prepare the robot
 
-1. Connect the robot over USB.
-2. Start the local daemon before spawning the agent:
+Choose the model you have:
+
+**Reachy Mini Wireless**
+
+1. Power on Reachy.
+2. Connect Reachy and the computer running Wactorz to the same Wi-Fi network.
+3. Close any Hugging Face or Reachy Mini control app that is controlling the robot.
+
+**Reachy Mini Lite**
+
+1. Connect Reachy to the computer over USB.
+2. Find the robot's serial port. It looks like `COM3` on Windows or `/dev/ttyACM0`
+   on Linux.
+3. Open a terminal and start the daemon, replacing `<serial_port>` with that value:
 
 ```bash
 reachy-mini-daemon -p <serial_port>
 ```
 
-## Install dependencies
+Leave that terminal open while using Reachy.
 
-The catalogue installer can install recipe dependencies on first spawn. To install them
-manually:
+### 2. Add Reachy to Wactorz
 
-```bash
-pip install "reachy-mini==1.8.4" numpy edge-tts webrtcvad-wheels
-```
-
-`edge-tts` is required for the `say` command (speech synthesis); the other
-commands work without it.
-
-**Optional:** install `ffmpeg` (a system binary, not a pip package) on the host
-if the robot's speech comes out too quiet. It is used only to boost the TTS
-loudness by roughly 3-4x. Without it, `say` still works - it plays the raw,
-quieter audio and says so once per session. The Home Assistant add-on image does
-not carry it, since it serves this one optional agent; install it on the host
-running Wactorz if you want the louder speech.
-
-## Spawn
+Open the Wactorz dashboard at `http://localhost:8888`, enter this in chat, and send it:
 
 ```text
 @catalog spawn reachy-mini
 ```
 
-Confirm it is running:
+The first launch may pause while Wactorz installs the robot and voice packages. Wait for
+the dashboard to say that Reachy Mini started and then report whether the robot connection
+is ready. You do not need to run `pip install` yourself for the normal setup.
+
+### 3. Check the connection
+
+Send:
 
 ```text
-/agents
+@reachy-mini health
 ```
 
-If the robot was disconnected and reconnected:
+A successful reply describes the live robot connection. If it says Reachy is not
+connected, jump to [If Reachy does not connect](#if-reachy-does-not-connect).
+
+### 4. Try the first commands
+
+Send these one at a time:
+
+```text
+@reachy-mini wake up
+@reachy-mini look left
+@reachy-mini do a happy gesture
+@reachy-mini say hello
+```
+
+Reachy should move for the first three commands and speak for the last one. The dashboard
+also shows the result, so an audio or motor problem does not look like a successful command.
+
+### Where to go next
+
+- To talk with Reachy, continue to [Push-to-talk voice input](#push-to-talk-voice-input).
+- For an ongoing voice session, see [Opt-in conversation mode](#opt-in-conversation-mode).
+- To use Wactorz and Home Assistant through Reachy, see
+  [Use Reachy as the Wactorz interface](#use-reachy-as-the-wactorz-interface).
+- For MQTT or code-driven control, see [Structured commands](#structured-commands).
+
+## If Reachy does not connect
+
+Work through these checks in order:
+
+1. Make sure Reachy is powered on and that the preparation steps above still apply.
+2. For Wireless, confirm the robot and Wactorz host are on the same local network. Guest
+   Wi-Fi often blocks devices from seeing one another.
+3. For Wireless, close the Reachy Mini control app. For Lite, confirm the daemon terminal
+   is still running and shows no connection error.
+4. Ask the already-running agent to try again with `@reachy-mini reconnect`.
+5. If Wireless discovery still fails, set the robot address explicitly as described in
+   [Set a Wireless address](#set-a-wireless-address).
+
+Use `@reachy-mini reconnect force` when the dashboard claims the link is alive but the
+robot does not respond. Reinstalling or respawning should not be the first troubleshooting
+step.
+
+## Detailed setup
+
+### Set a Wireless address
+
+Automatic discovery is easiest when it works. If it is unreliable, add the robot's IP
+address or hostname to your local `.env` file:
+
+```dotenv
+REACHY_CONNECTION_MODE=network
+REACHY_ROBOT_HOST=192.168.1.42
+```
+
+Replace the example address, save the file, then restart the agent:
 
 ```text
 /agents restart reachy-mini
 ```
 
-## Pin a Wireless host
-
-The Reachy SDK usually auto-detects the robot. If discovery is unreliable, publish the host
-once, then say `reconnect` to apply it (no restart needed):
+For runtime configuration without editing `.env`, publish the address and reconnect:
 
 ```text
 topic: custom/reachy/config
 payload: {"robot_host": "192.168.1.42"}
 ```
 
-Use the robot's IP address or hostname. The current host is reported in
-`custom/reachy/state` as `robot_host`.
-
-## Reconnect after the robot was off
-
-The agent connects once at spawn. If the robot was powered off then — or the daemon
-link drops — the agent stays up and refuses robot commands with a `reachy not
-connected` message. Power the robot on and say:
-
 ```text
 @reachy-mini reconnect
 ```
 
-`connect`, `try again`, and `retry` work too, as does publishing `{"cmd": "reconnect"}`
-to `custom/reachy/cmd`. It re-runs the same connection ladder `setup()` uses and brings
-the robot back up (volume sync, motor torque, wake), reporting what actually happened —
-a failed attempt says so rather than claiming success. Use `reconnect force` to re-open
-a link that looks alive but isn't behaving.
+The active address is published in `custom/reachy/state` as `robot_host`. Runtime
+configuration takes effect on reconnect; `.env` values are read when the agent starts.
 
-Because the ladder reads the *current* config, a `custom/reachy/config` publish followed
-by `reconnect` re-targets a new host or mode without a restart. Values set in `.env`
-(`REACHY_ROBOT_HOST`, `REACHY_CONNECTION_MODE`, `REACHY_MEDIA_BACKEND`) are read only at
-spawn, so changing those still needs a restart.
+### Install dependencies manually
+
+The catalogue installer handles these dependencies during the first spawn. If you manage
+the environment yourself, install them with:
+
+```bash
+pip install "reachy-mini==1.8.4" numpy edge-tts pillow webrtcvad-wheels "deepgram-sdk>=3,<4"
+```
+
+`edge-tts` enables speech. Deepgram is used only for voice input and needs an API key;
+text control and speech output do not need one.
+
+Optional: install the `ffmpeg` system binary on the Wactorz host if synthesized speech is
+too quiet. Without it, speech still works, but plays at its original, quieter level. The
+Home Assistant add-on image does not include `ffmpeg`.
 
 ## Hardware warnings and what Reachy can tell you about itself
 
@@ -129,7 +182,7 @@ The one temperature available is the IMU's own, reported by `health` when the ro
 IMU. It is the inertial chip, not a motor, so treat it as the robot's internal ambient — the
 thing that actually overheats reports through the fault watch above.
 
-## Choose a connection mode
+## Connection modes (advanced)
 
 By default the SDK auto-detects: it probes `localhost` first, then the robot. If you
 run the robot wirelessly and do **not** have the Reachy Mini control app open, pin
@@ -158,18 +211,43 @@ routing is set separately by `media_backend`.
 > stream but not its motor control. Use `network` mode (no control app), or make sure
 > the control app / simulator is running for `local` mode.
 
-## Use it
+## Everyday commands
 
 Plain English works for normal use:
 
 ```text
-wake up
-do a happy gesture
-wiggle your antennas
-look left
-say hello
-turn on the light and nod
+@reachy-mini wake up
+@reachy-mini do a happy gesture
+@reachy-mini wiggle your antennas
+@reachy-mini look left
+@reachy-mini say hello
+@reachy-mini turn on the light and nod
 ```
+
+### Ask Reachy for help
+
+Help is built into the agent and works even when the robot is disconnected. In chat—or
+while an opt-in conversation is running—say:
+
+```text
+@reachy-mini help
+```
+
+The full answer shows examples and keywords for movement, speech, voice input, camera,
+connection status, volume, and Wactorz/Home Assistant. Ask for a shorter topic guide with:
+
+```text
+@reachy-mini help movement
+@reachy-mini help voice
+@reachy-mini help camera
+@reachy-mini help connection
+@reachy-mini help volume
+@reachy-mini help home
+```
+
+Natural questions work too: `what can you do?`, `how do I use the camera?`, and
+`how can I start a conversation?`. In voice mode, Reachy speaks a short answer and puts
+the complete command guide in its dashboard thread.
 
 Other agents can send the same requests directly:
 
@@ -583,10 +661,21 @@ cancellation.
 
 ## Structured commands
 
+Request all help or one help topic without an LLM call or robot connection:
+
+```json
+{"cmd": "help"}
+```
+
+```json
+{"cmd": "help", "topic": "camera"}
+```
+
 For direct control, send a dict with `cmd`:
 
 | Command | Purpose |
 |---------|---------|
+| `help` | All help or one topic: movement, voice, camera, connection, volume, home |
 | `wake`, `sleep`, `stop` | Basic robot state |
 | `pose` | Head yaw, pitch, roll, x/y/z |
 | `antennas` | Left and right antenna angles |
@@ -685,10 +774,3 @@ Ask a specific question about the view, or get the text without speaking it:
 
 This needs the same video-capable media backend as `camera`, plus a configured LLM
 provider (the model must support images).
-
-## Troubleshooting
-
-- If Wireless does not connect, check that the robot and Wactorz host are on the same LAN.
-- If discovery fails, pin `robot_host` with `custom/reachy/config`.
-- If motion commands do nothing, check that another app is not already controlling the robot.
-- For Lite, restart `reachy-mini-daemon`, then restart `reachy-mini`.

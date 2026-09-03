@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **Reachy now has built-in, topic-aware help.** Typed or spoken requests such as `help`,
+  `what can you do?`, and `how do I use the camera?` return commands and keywords without
+  an LLM call or robot connection. Focused guides cover movement, voice, camera, connection,
+  volume, and Wactorz/Home Assistant.
 - **The Home Assistant dashboard recovers more honestly from connection loss.** A WebSocket that
   goes silently dead now reconnects automatically, while a revoked ingress session explains how
   to reopen Wactorz instead of leaving a frozen-looking page. The Ultra add-on can build Reachy
@@ -18,6 +22,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,
+  first-run installation, connection checks, first commands, and recovery steps are presented
+  before the advanced MQTT, media, and motion reference.
 - **The Reachy template now includes its Deepgram setup.** A copied `.env` names the required
   API-key variable, Nova-3 bilingual English/Greek settings, streaming controls, and a local
   faster-whisper alternative without including any credential.

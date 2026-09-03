@@ -427,6 +427,8 @@ def _build_catalog() -> dict:
                 "the agent.\n"
                 "\n"
                 "Try:\n"
+                "- help\n"
+                "- help voice\n"
                 "- wake up\n"
                 "- do a happy gesture\n"
                 "- wiggle your antennas\n"
@@ -438,7 +440,7 @@ def _build_catalog() -> dict:
                 "- start conversation\n"
                 "- turn on the light and nod\n"
                 "\n"
-                "For structured control, send a dict with cmd wake, sleep, pose, "
+                "For structured control, send a dict with cmd help, wake, sleep, pose, "
                 "antennas, look_at, camera, listen, ask_voice, conversation_start, "
                 "conversation_stop, doa, emotion, say, volume, health, ha, "
                 "bind, unbind, or stop."
@@ -475,7 +477,7 @@ def _build_catalog() -> dict:
                 "deepgram-sdk>=3,<4",
             ],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha|life",
+                "cmd": "str  — help|wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha|life",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
                 "voice": "str   — edge-tts voice (cmd=say); omit it, the voice follows the text's script",
                 "enabled": "bool  — ambient idle motion on/off (cmd=life); breathing, gaze drift, antenna flicks",
@@ -524,7 +526,7 @@ def _build_catalog() -> dict:
                 "cooldown_s": "float - post-TTS mic drain time (default 0s)",
                 "vad_min_rms": "float - minimum speech-frame RMS (default 0.01)",
                 "name": "str   — emotion clip name (e.g. curious1, success1)",
-                "topic": "str   — MQTT topic to bind/unbind",
+                "topic": "str   — help category, or MQTT topic for bind/unbind",
                 "when": "dict  — dotted-path equality matcher for bindings",
                 "do": "dict  — payload to dispatch when binding fires",
                 "id": "str   — optional correlation id; ack on custom/reachy/cmd_result/{id}",

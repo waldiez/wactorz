@@ -684,6 +684,122 @@ async def _health(agent, payload=None) -> dict[str, Any]:
     }
 
 
+_HELP_TOPICS = {
+    "movement": {
+        "keywords": "wake up, sleep, look left/right/up/down, turn left/right, nod, dance, wiggle your antennas",
+        "examples": (
+            "Try `look left`, `turn right 45 degrees`, `nod`, or `do a happy gesture`."
+        ),
+        "spoken": (
+            "For movement, try: look left, turn right 45 degrees, nod, dance, or "
+            "wiggle your antennas."
+        ),
+    },
+    "voice": {
+        "keywords": "say, listen, push-to-talk, start conversation, stop conversation, be quiet",
+        "examples": (
+            "Use `say hello` for speech output. Use `listen and ask Wactorz` for one "
+            "voice question, or `start conversation` for a continuing session. Voice input "
+            "needs a configured transcription service."
+        ),
+        "spoken": (
+            "For voice, say: say hello, listen and ask Wactorz, or start conversation. "
+            "Say stop conversation when you are finished. Voice input needs transcription setup."
+        ),
+    },
+    "camera": {
+        "keywords": "take a photo, what do you see, look closer, look around",
+        "examples": (
+            "Use `take a photo` to capture an image, `what do you see` for a description, "
+            "`look closer` for more detail, or `look around` to scan the room. Descriptions "
+            "need a vision-capable LLM."
+        ),
+        "spoken": (
+            "For the camera, say: take a photo, what do you see, look closer, or look "
+            "around. Scene descriptions need a vision-capable language model."
+        ),
+    },
+    "connection": {
+        "keywords": "health, reconnect, reconnect force, diagnostics",
+        "examples": (
+            "Use `health` to check the robot link, `reconnect` after powering the robot on, "
+            "or `diagnostics` when Reachy can speak but cannot move."
+        ),
+        "spoken": (
+            "For connection help, say health, reconnect, or diagnostics. Use reconnect "
+            "force only when the link claims to be alive but the robot does not respond."
+        ),
+    },
+    "home": {
+        "keywords": "ask Wactorz, light, switch, plug, scene, thermostat",
+        "examples": (
+            "Start with `ask Wactorz`, for example: `ask Wactorz turn off the living-room "
+            "light`. Reachy sends the request to Wactorz and speaks the answer."
+        ),
+        "spoken": (
+            "For Wactorz or Home Assistant, start with ask Wactorz. For example, ask "
+            "Wactorz to turn off the living-room light."
+        ),
+    },
+    "volume": {
+        "keywords": "volume, louder, quieter, mute, unmute, whisper, normal, presenter",
+        "examples": (
+            "Try `speak louder`, `lower your voice`, `mute`, or `set volume to normal`. "
+            "Named levels are whisper, normal, louder, and presenter."
+        ),
+        "spoken": (
+            "For volume, say speak louder, lower your voice, mute, or set volume to "
+            "normal. Named levels are whisper, normal, louder, and presenter."
+        ),
+    },
+}
+
+
+def _help(agent, payload=None) -> dict[str, Any]:
+    """Return discoverable, connection-independent help for a user or UI."""
+    del agent
+    topic = str((payload or {}).get("topic") or "").strip().lower()
+    if topic in ("home assistant", "wactorz"):
+        topic = "home"
+    detail = _HELP_TOPICS.get(topic)
+    if detail:
+        result = (
+            f"Reachy help — {topic}\n\n{detail['examples']}\n\n"
+            f"Keywords: {detail['keywords']}\n\nSay `help` to see every category."
+        )
+        return {
+            "topic": topic,
+            "topics": list(_HELP_TOPICS),
+            "keywords": detail["keywords"],
+            "spoken_result": detail["spoken"],
+            "result": result,
+        }
+
+    result = (
+        "Reachy help\n\n"
+        "Talk to me in plain English. Here are good commands to start with:\n\n"
+        "- Movement — `wake up`, `look left`, `nod`, `dance`, `wiggle your antennas`\n"
+        "- Speech — `say hello`, `speak louder`, `be quiet`\n"
+        "- Voice — `listen and ask Wactorz`, `start conversation`, `stop conversation`\n"
+        "- Camera — `take a photo`, `what do you see`, `look around`\n"
+        "- Status — `health`, `reconnect`, `diagnostics`\n"
+        "- Wactorz/Home — `ask Wactorz turn off the living-room light`\n\n"
+        "For a shorter guide, say `help movement`, `help voice`, `help camera`, "
+        "`help connection`, `help volume`, or `help home`."
+    )
+    return {
+        "topic": "all",
+        "topics": list(_HELP_TOPICS),
+        "keywords": {name: item["keywords"] for name, item in _HELP_TOPICS.items()},
+        "spoken_result": (
+            "I can move, gesture, speak, listen, use my camera, check my connection, and "
+            "pass requests to Wactorz. Say help movement, help voice, help camera, help "
+            "connection, help volume, or help home. The full guide is in chat."
+        ),
+        "result": result,
+    }
+
+
 async def setup(agent):
     # ---- Heavy imports inside setup (never at module level) ----
     import numpy as np
@@ -939,6 +1055,7 @@ async def setup(agent):
 
     # Convenience: per-verb topics rewrite payload through the same dispatcher.
     for verb in (
+        "help",
         "wake",
         "sleep",
         "reconnect",
@@ -1647,6 +1764,9 @@ def _embodied_command_for_text(text: str):
     """Return a deterministic local command for obvious embodiment requests."""
     low = str(text or "").lower()
     normalized = low.strip().rstrip("!.?")
+    help_command = _help_command_for_text(normalized)
+    if help_command:
+        return help_command
     # One command cannot answer two requests, and this function returns one.
     if _asks_for_more_than_one_thing(low, normalized):
         return None
@@ -1787,6 +1907,49 @@ def _embodied_command_for_text(text: str):
     if re.search(r"\b(look curious|be curious|curious gesture)\b", low):
         return {"cmd": "gesture", "name": "curious"}
     return None
+
+
+def _help_command_for_text(text):
+    """Map natural help wording to a local guide, optionally scoped by topic."""
+    normalized = re.sub(r"\s+", " ", str(text or "").lower()).strip().rstrip("!.?")
+    normalized = re.sub(r"^(?:hey|hi|hello|okay|ok)\s+reachy[, ]*", "", normalized)
+    normalized = re.sub(r"^reachy[, ]+", "", normalized)
+    generic = {
+        "help",
+        "help me",
+        "commands",
+        "show commands",
+        "show me the commands",
+        "options",
+        "instructions",
+        "what can you do",
+        "what do you do",
+        "show me what you can do",
+        "how do i use you",
+        "how can i use you",
+        "how does this work",
+    }
+    if normalized in generic:
+        return {"cmd": "help"}
+
+    asks_for_help = bool(
+        re.match(r"^(?:help|help me|show me help|how (?:do|can) i|how to)\b", normalized)
+    )
+    if not asks_for_help:
+        return None
+
+    topic_terms = (
+        ("home", ("home assistant", "wactorz", "light", "switch", "plug", "thermostat")),
+        ("connection", ("connect", "connection", "offline", "health", "diagnostic")),
+        ("camera", ("camera", "photo", "picture", "see", "vision", "look around")),
+        ("voice", ("voice", "talk", "listen", "conversation", "microphone", "speech")),
+        ("volume", ("volume", "louder", "quieter", "mute", "speaker")),
+        ("movement", ("move", "movement", "gesture", "dance", "head", "antenna", "turn")),
+    )
+    for topic, terms in topic_terms:
+        if any(term in normalized for term in terms):
+            return {"cmd": "help", "topic": topic}
+    return {"cmd": "help"}
 
 
 async def handle_task(agent, payload):
@@ -2280,7 +2443,15 @@ async def handle_task(agent, payload):
     # HA-only commands ("ha") still work — that's the whole point of the
     # "stay alive in disconnected mode" design. "reconnect" is exempt for the
     # obvious reason: it is the command you reach for BECAUSE we're offline.
-    if cmd not in ("ha", "list_emotions", "conversation_stop", "reconnect", "debug", None):
+    if cmd not in (
+        "help",
+        "ha",
+        "list_emotions",
+        "conversation_stop",
+        "reconnect",
+        "debug",
+        None,
+    ):
         ok, reason = _is_connected(agent)
         if not ok:
             return {
@@ -3059,7 +3230,9 @@ async def _dispatch(agent, cmd, payload, return_result=False):
     started = time.time()
 
     try:
-        if cmd == "capability":
+        if cmd == "help":
+            result = _help(agent, payload)
+        elif cmd == "capability":
             result = {"result": str(payload.get("result") or "I can't do that physically.")}
         elif cmd == "wake":
             result = await _wake(agent)
@@ -7109,6 +7282,8 @@ async def _conversation_embodied_bridge(agent, transcript, command, task_id, bef
             reply = str(action.get("result") or "Done.")
             if command["cmd"] in ("describe", "look_behind", "look_around"):
                 spoken = _voice_friendly_reply(reply, user_text=transcript)
+            elif command["cmd"] == "help":
+                spoken = str(action.get("spoken_result") or reply)
             elif command["cmd"] in ("capability", "debug", "face_forward", "health"):
                 spoken = reply
             else:

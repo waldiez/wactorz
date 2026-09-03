@@ -18,6 +18,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **The Reachy template now includes its Deepgram setup.** A copied `.env` names the required
+  API-key variable, Nova-3 bilingual English/Greek settings, streaming controls, and a local
+  faster-whisper alternative without including any credential.
 - **Reachy distinguishes working audio from failed motor commands.** A movement-task timeout now
   directs the user to reconnect instead of implying the robot is offline, animation presets say
   when they are only saved for later, and health reports whether its live motor-fault monitor is

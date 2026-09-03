@@ -252,13 +252,11 @@ OPENAI_API_KEY=...
 Optional `REACHY_STT_LANGUAGE`, `REACHY_STT_FALLBACK_LANGUAGE`,
 `REACHY_STT_DEVICE`, `REACHY_STT_COMPUTE_TYPE`, and `REACHY_STT_HOTWORDS`
 settings tune language, uncertain-language fallback, local inference, and recognition
-bias. `REACHY_STT_TIMEOUT_S` bounds hosted calls and defaults to 60 seconds. Prerecorded
-Deepgram turns enable language detection when no language is supplied. Streaming requires
-a stable language choice and defaults to English; set `REACHY_STT_STREAM_LANGUAGE=el`
-for Greek, or set `REACHY_STT_STREAMING=0` to use per-turn language detection. Short
-utterances whose language probability is below `stt_min_language_probability` (default
-`0.60`) are retried in
-the configured fallback language; unresolved guesses are silently discarded instead
+bias. `REACHY_STT_TIMEOUT_S` bounds hosted calls and defaults to 60 seconds. Use
+`REACHY_STT_LANGUAGE=multi` and `REACHY_STT_STREAM_LANGUAGE=multi` with Nova-3 for
+English and Greek in one conversation; set either to `en` or `el` to constrain a session.
+Short utterances whose language probability is below `stt_min_language_probability`
+(default `0.60`) are retried in the configured fallback language; unresolved guesses are silently discarded instead
 of being routed as commands. The MQTT payload can override these settings with
 `stt_backend`, `stt_model`, `language`, `stt_fallback_language`, `stt_device`,
 `stt_compute_type`, `stt_hotwords`, and `stt_min_language_probability`. Keys are read

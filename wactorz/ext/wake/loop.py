@@ -13,8 +13,6 @@ who need it most are the ones whose wake word is not being heard, and they canno
 tell the microphone, the model and the phrase apart by saying the phrase.
 """
 
-from __future__ import annotations
-
 import array
 import asyncio
 import logging
@@ -122,10 +120,13 @@ class WakeLoop:
                     yielded = await asyncio.to_thread(self._listen_blocking)
                 except listener.NoMicrophone as exc:
                     logger.warning("[wake] %s — trying again in %.0fs", exc, RETRY_SECONDS)
-                except spotter.NoSpotter as exc:
+                except spotter.NoSpotter:
                     # Not retried: a missing model or an unconvertible phrase is
                     # a configuration answer, trying again cannot change it.
-                    logger.error("[wake] %s", exc)
+                    # Without the exception in the message: the traceback the
+                    # handler already attaches carries it, and saying it twice
+                    # makes the line harder to read, not more informative.
+                    logger.exception("[wake] cannot listen for a phrase")
                     return
                 except Exception:  # pylint: disable=broad-exception-caught
                     logger.exception("[wake] the listening loop failed")
@@ -177,7 +178,7 @@ class WakeLoop:
         # with no sound device would pay it on every retry only to be told what
         # this line says immediately.
         if not listener.AUDIO:
-            raise listener.NoMicrophone("sounddevice not installed — pip install 'wactorz[host]'")
+            raise listener.NoMicrophone.uninstalled()
         if self._yield_asked.is_set():
             # Before opening, not only while running: a request that arrived
             # while this was parked would otherwise be answered by opening the
@@ -196,7 +197,7 @@ class WakeLoop:
                 samplerate=listener.RATE, channels=1, dtype="int16", blocksize=block_frames
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            raise listener.NoMicrophone(f"could not open the microphone: {exc}") from exc
+            raise listener.NoMicrophone.would_not_open(exc) from exc
 
         try:
             with stream:

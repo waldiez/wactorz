@@ -5,8 +5,6 @@ Driven against a fake device, the way the host listener's own tests are: what a
 real model hears is a question for a room, not for a unit test.
 """
 
-from __future__ import annotations
-
 import asyncio
 import threading
 from pathlib import Path
@@ -33,7 +31,7 @@ class _Stream:
             return self.blocks.pop(0), False
         return b"\x00\x00" * 800, False
 
-    def __enter__(self) -> _Stream:
+    def __enter__(self) -> "_Stream":
         return self
 
     def __exit__(self, *_exc: object) -> None:

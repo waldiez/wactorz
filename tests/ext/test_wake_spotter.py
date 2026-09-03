@@ -5,8 +5,6 @@ deploy time -- so these drive the wrapper against a double. What the real model
 answers is a question for the machine sheet, not for a unit test.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

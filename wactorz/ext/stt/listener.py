@@ -70,7 +70,23 @@ _listening = asyncio.Lock()
 
 
 class NoMicrophone(RuntimeError):
-    """Raised when this machine cannot listen."""
+    """Raised when this machine cannot listen.
+
+    The reasons are named here rather than written at each raise: the same two
+    are reached from the branch that records on demand and from the loop that
+    waits for a phrase, and a message that differs between them describes the
+    caller rather than the machine.
+    """
+
+    @classmethod
+    def uninstalled(cls) -> NoMicrophone:
+        """The optional dependency that opens a device is absent."""
+        return cls("sounddevice not installed — pip install 'wactorz[host]'")
+
+    @classmethod
+    def would_not_open(cls, exc: object) -> NoMicrophone:
+        """A device is there in principle and refused in practice."""
+        return cls(f"could not open the microphone: {exc}")
 
 
 #: Whether a microphone was found, once asked. Enumerating devices talks to the
@@ -117,7 +133,7 @@ async def listen(
     has a dashboard to keep answering meanwhile.
     """
     if not AUDIO:
-        raise NoMicrophone("sounddevice not installed — pip install 'wactorz[host]'")
+        raise NoMicrophone.uninstalled()
     async with _listening:
         return await asyncio.wait_for(
             asyncio.to_thread(_listen_blocking, max_seconds, silence_seconds),
@@ -133,7 +149,7 @@ def _listen_blocking(max_seconds: float, silence_seconds: float) -> bytes:
             samplerate=RATE, channels=1, dtype="int16", blocksize=block_frames
         )
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        raise NoMicrophone(f"could not open the microphone: {exc}") from exc
+        raise NoMicrophone.would_not_open(exc) from exc
 
     with stream:
         floor = room_floor(stream, block_frames)

@@ -48,7 +48,27 @@ BPE_MODEL = "bpe.model"
 
 
 class NoSpotter(RuntimeError):
-    """This deployment cannot listen for a phrase, and why."""
+    """This deployment cannot listen for a phrase, and why.
+
+    The reasons are named here rather than written at each raise: they are the
+    whole vocabulary of "this cannot start", and someone reading the class should
+    see what can go wrong without going looking for the places that say so.
+    """
+
+    @classmethod
+    def uninstalled(cls) -> "NoSpotter":
+        """The optional dependency is absent."""
+        return cls("sherpa-onnx not installed — pip install 'wactorz[wake]'")
+
+    @classmethod
+    def nothing_to_listen_for(cls) -> "NoSpotter":
+        """Configured with no phrases at all."""
+        return cls("no wake phrases configured")
+
+    @classmethod
+    def incomplete_model(cls, model_dir: Path, missing: list[str]) -> "NoSpotter":
+        """The model directory is short of files the spotter reads."""
+        return cls(f"{model_dir} is missing {', '.join(missing)}")
 
 
 class Spotter:
@@ -61,9 +81,9 @@ class Spotter:
 
     def __init__(self, model_dir: Path, phrases: list[str], threshold: float = THRESHOLD) -> None:
         if not SPOTTING:
-            raise NoSpotter("sherpa-onnx not installed — pip install 'wactorz[wake]'")
+            raise NoSpotter.uninstalled()
         if not phrases:
-            raise NoSpotter("no wake phrases configured")
+            raise NoSpotter.nothing_to_listen_for()
 
         # BPE_MODEL among them: the conversion below reads it, and leaving it out
         # turned a configuration answer into an exception the loop retried for
@@ -72,7 +92,7 @@ class Spotter:
             f for f in (ENCODER, DECODER, JOINER, TOKENS, BPE_MODEL) if not (model_dir / f).exists()
         ]
         if missing:
-            raise NoSpotter(f"{model_dir} is missing {', '.join(missing)}")
+            raise NoSpotter.incomplete_model(model_dir, missing)
 
         self._phrases = phrases
         # Written to a file rather than passed per stream: the library documents
@@ -136,7 +156,7 @@ def as_tokens(model_dir: Path, phrases: list[str]) -> str:
     wake word before it works is a step that will be got wrong.
     """
     if not SPOTTING:
-        raise NoSpotter("sherpa-onnx not installed — pip install 'wactorz[wake]'")
+        raise NoSpotter.uninstalled()
     encoded = sherpa_onnx.text2token(
         [p.upper() for p in phrases],
         tokens=str(model_dir / TOKENS),

@@ -757,6 +757,14 @@ class TestPresetsCanBeSaidOutLoud:
             "cmd": "volume",
             "delta": -25,
         }
+        assert NS["_embodied_command_for_text"]("raise your volume") == {
+            "cmd": "volume",
+            "delta": 25,
+        }
+        assert NS["_embodied_command_for_text"]("decrease your volume") == {
+            "cmd": "volume",
+            "delta": -25,
+        }
 
     def test_an_ordinary_request_is_not_swallowed(self) -> None:
         assert NS["_embodied_command_for_text"]("turn the light on") is None

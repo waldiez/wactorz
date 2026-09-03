@@ -1725,10 +1725,14 @@ def _embodied_command_for_text(text: str):
         return {"cmd": "volume", "delta": delta}
 
     english_voice = bool(re.search(r"\b(voice|volume|speak|talk)\b", low))
-    if english_voice and re.search(r"\b(lower|quieter|softer|turn (?:it|your voice) down)\b", low):
+    if english_voice and re.search(
+        r"\b(lower|decrease|quieter|softer|turn (?:it|your voice) down)\b", low
+    ):
         delta = -15 if re.search(r"\b(a little|a bit|slightly)\b", low) else -25
         return {"cmd": "volume", "delta": delta}
-    if english_voice and re.search(r"\b(louder|speak up|turn (?:it|your voice) up)\b", low):
+    if english_voice and re.search(
+        r"\b(raise|increase|louder|speak up|turn (?:it|your voice) up)\b", low
+    ):
         delta = 15 if re.search(r"\b(a little|a bit|slightly)\b", low) else 25
         return {"cmd": "volume", "delta": delta}
 
@@ -2103,9 +2107,27 @@ async def handle_task(agent, payload):
                     payload = {"cmd": "volume", "mute": True}
                 elif low in ("unmute", "sound on", "speak up", "speak up again"):
                     payload = {"cmd": "volume", "mute": False}
-                elif low in ("louder", "turn it up", "volume up", "speak louder"):
+                elif low in (
+                    "louder",
+                    "turn it up",
+                    "volume up",
+                    "raise volume",
+                    "raise your volume",
+                    "increase volume",
+                    "increase your volume",
+                    "speak louder",
+                ):
                     payload = {"cmd": "volume", "delta": 25}
-                elif low in ("quieter", "turn it down", "volume down", "too loud"):
+                elif low in (
+                    "quieter",
+                    "turn it down",
+                    "volume down",
+                    "lower volume",
+                    "lower your volume",
+                    "decrease volume",
+                    "decrease your volume",
+                    "too loud",
+                ):
                     payload = {"cmd": "volume", "delta": -25}
                 elif low in ("max volume", "full volume", "loudest", "maximum volume"):
                     payload = {"cmd": "volume", "level": 100}

@@ -22,6 +22,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   directs the user to reconnect instead of implying the robot is offline, animation presets say
   when they are only saved for later, and health reports whether its live motor-fault monitor is
   actually connected. “Overheating status” now reaches Reachy's local health check.
+- **Reachy understands natural volume adjustments locally.** “Raise,” “increase,” “lower,” and
+  “decrease” volume or voice wording now controls the robot speaker without falling through to
+  the general chat agent.
 - **The README now has a maker-first onboarding path.** It states the intended audience,
   removes product comparisons, and gives a Docker Compose quick start that includes the
   broker password required by current releases.

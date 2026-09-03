@@ -208,6 +208,32 @@ class HealthReportTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(report["watching_faults"])
         self.assertIn("wireless", report["result"].lower())
 
+    async def test_a_configured_but_disconnected_fault_watch_is_not_called_live(self):
+        agent = FakeAgent(daemon_url="http://192.168.1.42:8000")
+
+        report = await NS["_health"](agent)
+
+        self.assertFalse(report["watching_faults"])
+        self.assertTrue(report["fault_watch_configured"])
+        self.assertIn("cannot currently read", report["result"].lower())
+
+    async def test_a_live_fault_watch_can_truthfully_report_no_faults_seen(self):
+        agent = FakeAgent(daemon_url="http://192.168.1.42:8000")
+        agent.state["motor_fault_watch_connected"] = True
+
+        report = await NS["_health"](agent)
+
+        self.assertTrue(report["watching_faults"])
+        self.assertIn("has not seen a fault", report["result"].lower())
+
+
+class MotionLinkStatusTest(unittest.IsolatedAsyncioTestCase):
+    def test_task_timeout_is_recognised_as_a_motor_link_problem(self):
+        self.assertTrue(NS["_is_motion_link_error"]("Task did not complete in time"))
+
+    def test_audio_errors_are_not_mistaken_for_motor_link_problems(self):
+        self.assertFalse(NS["_is_motion_link_error"]("speaker volume is low"))
+
     async def test_the_imu_temperature_is_reported_when_the_robot_has_one(self):
         agent = FakeAgent()
         agent.state["mini"] = types.SimpleNamespace(get_imu_data=lambda: {"temperature": 41.27})

@@ -576,6 +576,7 @@ async def _watch_motor_faults(agent, reconnect_s=20.0) -> None:
     """
     import aiohttp
 
+    agent.state["motor_fault_watch_connected"] = False
     while True:
         url = _daemon_log_ws_url(agent)
         if not url:
@@ -585,6 +586,7 @@ async def _watch_motor_faults(agent, reconnect_s=20.0) -> None:
             timeout = aiohttp.ClientTimeout(total=None, sock_read=None)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.ws_connect(url, heartbeat=30) as ws:
+                    agent.state["motor_fault_watch_connected"] = True
                     await agent.log("watching the robot's log for motor faults")
                     async for message in ws:
                         if message.type is not aiohttp.WSMsgType.TEXT:
@@ -593,10 +595,13 @@ async def _watch_motor_faults(agent, reconnect_s=20.0) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            agent.state["motor_fault_watch_connected"] = False
             # Never fatal and never noisy: no fault stream is the normal state
             # for a Lite, and a wireless robot that is simply off should not
             # fill the log with connection failures.
             await agent.log(f"motor fault watch unavailable: {exc}", level="debug")
+        else:
+            agent.state["motor_fault_watch_connected"] = False
         await asyncio.sleep(reconnect_s)
 
 
@@ -640,7 +645,8 @@ async def _health(agent, payload=None) -> dict[str, Any]:
     ok_link, link_reason = _is_connected(agent)
     temperature = await _imu_temperature(agent) if ok_link else None
     faults = sorted(agent.state.get("_motor_faults_seen") or {})
-    watching = bool(_daemon_log_ws_url(agent))
+    watching = bool(agent.state.get("motor_fault_watch_connected"))
+    watch_configured = bool(_daemon_log_ws_url(agent))
 
     parts = []
     if not ok_link:
@@ -652,12 +658,14 @@ async def _health(agent, payload=None) -> dict[str, Any]:
     if faults:
         parts.append("I detected motor faults this session: " + ", ".join(faults))
     elif watching:
-        parts.append("My motors report no faults")
-    if not watching and ok_link:
+        parts.append("My live motor-fault monitor has not seen a fault")
+    if watch_configured and not watching and ok_link:
+        parts.append("I cannot currently read the live motor-fault monitor")
+    elif not watch_configured and ok_link:
         # The Lite has no log stream, so silence there means "not watched",
         # which must not be read as "nothing wrong".
         parts.append(
-            "This connection cannot provide live motor-fault warnings"
+            "This wireless connection cannot provide live motor-fault warnings"
         )
     # Said plainly rather than left to be inferred from an absent number.
     parts.append("Reachy Mini doesn't provide a battery reading")
@@ -670,6 +678,7 @@ async def _health(agent, payload=None) -> dict[str, Any]:
         "imu_temperature_c": temperature,
         "motor_faults": faults,
         "watching_faults": watching,
+        "fault_watch_configured": watch_configured,
         "battery": None,
         "result": ". ".join(parts) + ".",
     }
@@ -1947,6 +1956,8 @@ async def handle_task(agent, payload):
                     "are you ok",
                     "are you okay",
                     "are you overheating",
+                    "overheating status",
+                    "overheating",
                     "temperature",
                     "what is your temperature",
                     "are you hot",
@@ -2984,6 +2995,24 @@ def _is_connected(agent):
     return True, None
 
 
+_MOTION_COMMANDS = frozenset(
+    {"wake", "sleep", "pose", "turn", "antennas", "gesture", "emotion", "motors", "face_forward"}
+)
+_MOTION_LINK_ERROR_MARKERS = ("task did not complete in time", "lost connection with the server")
+
+
+def _is_motion_link_error(error):
+    """Whether a motor command lost Reachy's task-control link, not its audio route."""
+    text = str(error or "").lower()
+    return any(marker in text for marker in _MOTION_LINK_ERROR_MARKERS)
+
+
+def _note_motion_link_failure(agent, error):
+    """Remember a motor-task failure so later configuration replies stay honest."""
+    if _is_motion_link_error(error):
+        agent.state["motion_link_error"] = str(error)
+
+
 # ============================================================
 # Dispatcher — the single place every command flows through.
 # ============================================================
@@ -3084,6 +3113,8 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         ack = {"ok": True, "cmd": cmd, "duration_s": round(time.time() - started, 3)}
         if isinstance(result, dict):
             ack.update(result)
+        if cmd in _MOTION_COMMANDS:
+            agent.state.pop("motion_link_error", None)
         # Per-command result — correlation id if provided
         rid = payload.get("id")
         if rid:
@@ -3096,6 +3127,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         if return_result:
             return ack
     except Exception as e:
+        _note_motion_link_failure(agent, e)
         err = dict(getattr(e, "fields", {}) or {})
         if isinstance(e, _CommandStageError):
             err["stage"] = e.stage
@@ -3103,7 +3135,13 @@ async def _dispatch(agent, cmd, payload, return_result=False):
             {
                 "ok": False,
                 "cmd": cmd,
-                "error": str(e),
+                "error": (
+                    "Motor command did not finish although audio is still connected. "
+                    'Say "reconnect" and try again. '
+                    f"({e})"
+                    if _is_motion_link_error(e)
+                    else str(e)
+                ),
                 "duration_s": round(time.time() - started, 3),
             }
         )
@@ -4268,7 +4306,11 @@ async def _life_apply(agent, offsets, antenna_offsets):
         kw["antennas"] = np.deg2rad([right, left])
     if not kw:
         return  # this preset moves nothing; sending an empty target is a no-op
-    await _do(setter, **kw)
+    try:
+        await _do(setter, **kw)
+    except Exception as exc:
+        _note_motion_link_failure(agent, exc)
+        raise
 
 
 async def _life_loop(agent):
@@ -4550,6 +4592,10 @@ async def _life(agent, payload=None):
     if agent.state.get("life_enabled"):
         _start_life_loop(agent)
     preset = agent.state.get("life_preset", _LIFE_DEFAULT_PRESET)
+    motion_error = agent.state.get("motion_link_error")
+    result = f"Idle preset: {preset}. {_LIFE_PRESETS[preset]['blurb']}"
+    if motion_error:
+        result += ' Motor commands are unavailable right now; this setting is saved for after "reconnect" succeeds.'
     return {
         "life": bool(agent.state.get("life_enabled")),
         "preset": preset,
@@ -4558,7 +4604,8 @@ async def _life(agent, payload=None):
         "relax": bool(agent.state.get("life_relax", True)),
         "presets": {name: spec["blurb"] for name, spec in _LIFE_PRESETS.items()},
         "beats": sorted(_ATTRACT_BEATS),
-        "result": f"Idle preset: {preset}. {_LIFE_PRESETS[preset]['blurb']}",
+        "motion_available": not bool(motion_error),
+        "result": result,
     }
 
 

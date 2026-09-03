@@ -14,7 +14,7 @@ from aiohttp import web
 from aiohttp.web import Response
 
 from ..core import voice_settings
-from ..ext import collect_public_config, stt, tts
+from ..ext import collect_public_config, stt, tts, wake
 from . import cost, origins, runtime
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,9 @@ async def voice_settings_handler(request: web.Request) -> Response:
     # Said again on the way in: a deployment switched to `host` while running has
     # heard nothing about the microphone it now needs.
     _warn_about_the_new_branch()
+    # And the loop that waits for a phrase is started or stopped to match, since
+    # whether it runs decides who holds the microphone.
+    await wake.reconcile()
     return web.json_response(_voice_now())
 
 

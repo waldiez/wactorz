@@ -242,7 +242,7 @@ class TestAskingTheMachineToListen:
         async def read(_clip: bytes) -> str:
             return "  turn on the lights  "
 
-        async def route(_request: object, said: str) -> None:
+        async def route(said: str) -> None:
             routed.append(said)
 
         monkeypatch.setattr(stt.listener, "listen", heard)
@@ -273,7 +273,7 @@ class TestAskingTheMachineToListen:
                 pass
             on_reading(streaming.Partial(text="lights on", segment=0, final=True))
 
-        async def route(_request: object, said: str) -> None:
+        async def route(said: str) -> None:
             routed.append(said)
 
         monkeypatch.setattr(stt.listener, "listen", heard)
@@ -367,7 +367,7 @@ class TestAskingTheMachineToListen:
         monkeypatch.setattr(chat_module, "route_chat", fails)
         monkeypatch.setattr(chat_module, "track_chat_task", lambda task: task)
 
-        await stt._route_as_typed(None, "hello")  # type: ignore[arg-type]
+        await stt._route_as_typed("hello")
         await asyncio.sleep(0)
 
         # Said in these words, not merely present in the log: an unretrieved
@@ -388,7 +388,7 @@ class TestAskingTheMachineToListen:
         async def refuse(_clip: bytes) -> str:
             raise RuntimeError("recogniser gone")
 
-        async def route(_request: object, said: str) -> None:
+        async def route(said: str) -> None:
             routed.append(said)
 
         monkeypatch.setattr(stt.listener, "listen", heard)
@@ -531,7 +531,7 @@ class TestWhatTheRoomLeavesBehind:
         monkeypatch.setattr(chat_module, "route_chat", route)
         monkeypatch.setattr(chat_module, "track_chat_task", lambda task: task)
 
-        await stt._route_as_typed(None, "turn on the lights")  # type: ignore[arg-type]
+        await stt._route_as_typed("turn on the lights")
         await asyncio.sleep(0)
 
         roles = [w["role"] for w in written]
@@ -569,7 +569,7 @@ class TestWhatTheRoomLeavesBehind:
         monkeypatch.setattr(chat_module, "route_chat", route)
         monkeypatch.setattr(chat_module, "track_chat_task", lambda task: task)
 
-        await stt._route_as_typed(None, "are the lights on")  # type: ignore[arg-type]
+        await stt._route_as_typed("are the lights on")
         await asyncio.sleep(0)
 
         # One answer, not one per piece: otherwise a forty-chunk reply is forty
@@ -622,7 +622,7 @@ class TestWhatTheRoomLeavesBehind:
         monkeypatch.setattr(chat_module, "route_chat", route)
         monkeypatch.setattr(chat_module, "track_chat_task", lambda task: task)
 
-        await stt._route_as_typed(None, "hello")  # type: ignore[arg-type]
+        await stt._route_as_typed("hello")
         await asyncio.sleep(0)
 
         # An install with no database still answers; it just remembers nothing.
@@ -692,7 +692,7 @@ class TestCheckingTheMicrophoneWithoutSpending:
         async def read(_clip: bytes) -> str:
             return said
 
-        async def route(_request: object, what: str) -> None:
+        async def route(what: str) -> None:
             routed.append(what)
 
         monkeypatch.setattr(stt.voice_settings, "listening", lambda: "host")
@@ -739,3 +739,90 @@ class TestCheckingTheMicrophoneWithoutSpending:
 
         assert body["acted"] is True
         assert routed == ["hello"]
+
+
+class TestWhenSomethingElseHoldsTheMicrophone:
+    """One device, two callers: a turn on demand, and a loop waiting for a phrase.
+
+    The loop owns the device while it runs, so recording on demand has to ask for
+    it and give it back -- otherwise the check that tells you whether the
+    microphone works is the one thing that cannot run while it is being used.
+    """
+
+    class _Owner:
+        """Stands in for the loop that owns the device."""
+
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def yield_device(self, _timeout: float = 0.0) -> bool:
+            self.events.append("yielded")
+            return True
+
+        def resume(self) -> None:
+            self.events.append("resumed")
+
+    async def test_the_device_is_asked_for_and_handed_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        owner = self._Owner()
+        recorded: list[str] = []
+        monkeypatch.setattr(listener, "AUDIO", True)
+        monkeypatch.setattr(listener, "_owner", owner)
+        monkeypatch.setattr(
+            listener, "_listen_blocking", lambda *_a: recorded.append("recorded") or b"a clip"
+        )
+
+        assert await listener.listen() == b"a clip"
+
+        # Asked before recording, handed back after: the other order is two
+        # streams on one device, which is the failure this exists to avoid.
+        assert owner.events == ["yielded", "resumed"]
+        assert recorded == ["recorded"]
+
+    async def test_the_device_is_handed_back_even_when_recording_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Otherwise one failed turn leaves the room deaf until a restart.
+        owner = self._Owner()
+
+        def _fail(*_a: object) -> bytes:
+            raise listener.NoMicrophone.would_not_open("busy")
+
+        monkeypatch.setattr(listener, "AUDIO", True)
+        monkeypatch.setattr(listener, "_owner", owner)
+        monkeypatch.setattr(listener, "_listen_blocking", _fail)
+
+        with pytest.raises(listener.NoMicrophone):
+            await listener.listen()
+
+        assert owner.events == ["yielded", "resumed"]
+
+    async def test_nothing_is_asked_when_nothing_holds_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(listener, "AUDIO", True)
+        monkeypatch.setattr(listener, "_owner", None)
+        monkeypatch.setattr(listener, "_listen_blocking", lambda *_a: b"a clip")
+
+        assert await listener.listen() == b"a clip"
+
+    async def test_an_owner_that_will_not_let_go_is_refused_rather_than_waited_on(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Opening the device anyway would be two streams on one microphone, and
+        # waiting for ever would hang the request that asked.
+        class _Stuck(self._Owner):
+            def yield_device(self, _timeout: float = 0.0) -> bool:
+                self.events.append("yielded")
+                return False
+
+        owner = _Stuck()
+        monkeypatch.setattr(listener, "AUDIO", True)
+        monkeypatch.setattr(listener, "_owner", owner)
+        monkeypatch.setattr(listener, "_listen_blocking", lambda *_a: b"a clip")
+
+        with pytest.raises(listener.NoMicrophone, match="still in use"):
+            await listener.listen()
+
+        assert owner.events == ["yielded", "resumed"]

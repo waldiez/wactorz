@@ -68,6 +68,27 @@ MARGIN = 10.0
 #: twice, and on a device that allows a single reader the second simply fails.
 _listening = asyncio.Lock()
 
+#: Whatever holds the microphone open between turns, or nothing.
+#:
+#: The loop that waits for a phrase owns the device for as long as it runs, so a
+#: turn recorded on demand has to ask for it. Kept here rather than known to
+#: either caller: the device is what they share, and a module that imported the
+#: other to ask would close a circle -- the loop already reads this one.
+_owner: Any = None
+
+
+def claim(owner: Any) -> None:
+    """Say that `owner` holds the microphone between turns."""
+    # One device, so its holder is named in one place.
+    global _owner
+    _owner = owner
+
+
+def release() -> None:
+    """Say that nothing holds it any more."""
+    global _owner
+    _owner = None
+
 
 class NoMicrophone(RuntimeError):
     """Raised when this machine cannot listen.
@@ -87,6 +108,11 @@ class NoMicrophone(RuntimeError):
     def would_not_open(cls, exc: object) -> NoMicrophone:
         """A device is there in principle and refused in practice."""
         return cls(f"could not open the microphone: {exc}")
+
+    @classmethod
+    def still_in_use(cls) -> NoMicrophone:
+        """Whatever holds the device did not let go of it when asked."""
+        return cls("the microphone is still in use by the wake word")
 
 
 #: Whether a microphone was found, once asked. Enumerating devices talks to the
@@ -135,10 +161,23 @@ async def listen(
     if not AUDIO:
         raise NoMicrophone.uninstalled()
     async with _listening:
-        return await asyncio.wait_for(
-            asyncio.to_thread(_listen_blocking, max_seconds, silence_seconds),
-            max_seconds + MARGIN,
-        )
+        owner = _owner
+        if owner is not None and not await asyncio.to_thread(owner.yield_device):
+            # Refused rather than opened anyway: two streams on one device is
+            # the failure asking exists to avoid, and waiting for ever would
+            # hang whoever asked instead of telling them.
+            owner.resume()
+            raise NoMicrophone.still_in_use()
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_listen_blocking, max_seconds, silence_seconds),
+                max_seconds + MARGIN,
+            )
+        finally:
+            # Whatever happened to the turn: a failed one that kept the device
+            # would leave the room deaf until a restart.
+            if owner is not None:
+                owner.resume()
 
 
 def _listen_blocking(max_seconds: float, silence_seconds: float) -> bytes:

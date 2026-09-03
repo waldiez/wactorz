@@ -315,11 +315,28 @@ async def listen_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "transcription failed"}, status=502)
 
     if said and act:
-        await _route_as_typed(request, said)
+        await _route_as_typed(said)
     return web.json_response({"text": said, "heard": bool(said), "acted": bool(said) and act})
 
 
-async def _route_as_typed(request: web.Request, said: str) -> None:
+async def route_heard_clip(clip: bytes, source: str) -> None:
+    """Read a clip something else captured, and route what it says.
+
+    For whatever hears without being asked -- the loop that waits for a phrase
+    today, a device in another room later. `source` says which, so a turn can be
+    told apart from one typed into a browser and, when there is more than one
+    thing listening, from a turn heard somewhere else.
+    """
+    try:
+        said = (await hear(clip)).strip()
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("[stt] Could not transcribe what the room said: %s", exc)
+        return
+    if said:
+        await _route_as_typed(said, source=source)
+
+
+async def _route_as_typed(said: str, source: str = "") -> None:
     """Send what was heard down the path a typed message takes.
 
     Typed means typed: the turn is written to the chat log and shown to whatever
@@ -336,7 +353,12 @@ async def _route_as_typed(request: web.Request, said: str) -> None:
 
     addressed = "main" if said.startswith("/") else chat.parse_mention(said)[0]
     _remember(runtime, "user", said, addressed)
-    await ws.broadcast({"type": "chat", "content": said, "from": "user", "to": addressed})
+    heard = {"type": "chat", "content": said, "from": "user", "to": addressed}
+    if source:
+        # Marked as spoken, and by what: a turn nobody typed should not look like
+        # one that was, and a room is not the same room as the next one.
+        heard |= {"source": "voice", "surface": source, "surface_label": source}
+    await ws.broadcast(heard)
 
     streamed: list[str] = []
 

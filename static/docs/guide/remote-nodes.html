@@ -252,10 +252,16 @@ at <code>~/.config/systemd/user/wactorz-node.service</code>.</p>
 <h4 id="logs">Logs</h4>
 <p>Under a unit, the runner logs to the journal rather than to
 <code>~/wactorz/&lt;node&gt;.log</code>:</p>
-<div class="highlight"><pre><span></span><code>journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz-node<span class="w"> </span>-f<span class="w">          </span><span class="c1"># system unit</span>
-journalctl<span class="w"> </span>--user<span class="w"> </span>-u<span class="w"> </span>wactorz-node<span class="w"> </span>-f<span class="w">   </span><span class="c1"># user unit</span>
+<div class="highlight"><pre><span></span><code>journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz-node<span class="w"> </span>-f<span class="w">              </span><span class="c1"># system unit</span>
+journalctl<span class="w"> </span>--user-unit<span class="o">=</span>wactorz-node<span class="w"> </span>-f<span class="w">     </span><span class="c1"># user unit</span>
 </code></pre></div>
 
+<p>Note the second form: <code>--user-unit=</code> queries the system journal for a <em>user</em>
+unit. <code>journalctl --user -u wactorz-node</code> looks like the same thing and is not —
+<code>--user</code> reads the invoking user's own journal, which on a default Debian or
+Raspberry Pi OS install does not exist (no per-user journal files are split out,
+and the account is not in the <code>systemd-journal</code> group), so it reports
+"No journal files were found" while the logs sit in the system journal.</p>
 <p>The <code>~/wactorz/&lt;node&gt;.log</code> file is only written on the <code>nohup</code> fallback.</p>
 <blockquote>
 <p><strong>💡 Self-test</strong> — Run <code>python3 remote_runner.py --test</code> to execute the built-in supervisor test suite without needing a broker. Useful to verify the script works on a new device before connecting it.</p>

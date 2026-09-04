@@ -153,13 +153,13 @@
 </code></pre></div>
 
 <h4 id="latest-from-github">Latest from GitHub</h4>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;wactorz[all] @ git+https://github.com/waldiez/wactorz.git&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"wactorz[all] @ git+https://github.com/waldiez/wactorz.git"</span>
 </code></pre></div>
 
 <h4 id="from-source-editable">From source (editable)</h4>
 <div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/waldiez/wactorz.git
 <span class="nb">cd</span><span class="w"> </span>wactorz
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[all]&quot;</span>
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[all]"</span>
 </code></pre></div>
 
 <hr />
@@ -250,7 +250,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 cp<span class="w"> </span>.env.template<span class="w"> </span>.env
 <span class="c1"># edit .env and set LLM_API_KEY (or whichever provider you use)</span>
 
-<span class="c1"># 2. Get/run MQTT broker (if you don&#39;t have already) and open port 1883</span>
+<span class="c1"># 2. Get/run MQTT broker (if you don't have already) and open port 1883</span>
 docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>mosquitto<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span>:1883<span class="w"> </span>eclipse-mosquitto
 
 <span class="c1"># 3. Start Wactorz</span>
@@ -356,13 +356,13 @@ wactorz<span class="w"> </span>--no-monitor
 <hr />
 <h2 id="mcp">MCP</h2>
 <p>Wactorz includes an optional Model Context Protocol server for local MCP clients. Install the extra, start Wactorz's REST interface, then point your MCP client at the stdio server.</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[mcp]&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[mcp]"</span>
 
 <span class="c1"># Terminal 1</span>
 wactorz<span class="w"> </span>--interface<span class="w"> </span>rest<span class="w"> </span>--port<span class="w"> </span><span class="m">8000</span>
 
 <span class="c1"># Terminal 2: verify registered tools</span>
-python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import asyncio, wactorz.interfaces.mcp_server as s; print([t.name for t in asyncio.run(s.mcp.list_tools())])&quot;</span>
+python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import asyncio, wactorz.interfaces.mcp_server as s; print([t.name for t in asyncio.run(s.mcp.list_tools())])"</span>
 </code></pre></div>
 
 <p>The registered tools are:</p>
@@ -378,12 +378,12 @@ ha_list_entities, ha_get_state, ha_call_service
 <p>Use <code>list_agents</code>, <code>ask_wactorz</code> with <code>/agents</code>, and <code>wactorz://config</code> as the first read-only checks. Home Assistant tools require <code>HA_URL</code> and <code>HA_TOKEN</code>; service calls can change real devices, so test read-only tools before <code>ha_call_service</code>.</p>
 <p>MCP client config:</p>
 <div class="highlight"><pre><span></span><code><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;wactorz&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;python&quot;</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;-m&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;wactorz.interfaces.mcp_server&quot;</span><span class="p">],</span>
-<span class="w">      </span><span class="nt">&quot;env&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="nt">&quot;WACTORZ_URL&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;http://localhost:8000&quot;</span>
+<span class="w">  </span><span class="nt">"mcpServers"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"wactorz"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"command"</span><span class="p">:</span><span class="w"> </span><span class="s2">"python"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"args"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"-m"</span><span class="p">,</span><span class="w"> </span><span class="s2">"wactorz.interfaces.mcp_server"</span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"env"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"WACTORZ_URL"</span><span class="p">:</span><span class="w"> </span><span class="s2">"http://localhost:8000"</span>
 <span class="w">      </span><span class="p">}</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">}</span>
@@ -575,7 +575,7 @@ MQTT_HOST=mosquitto         # container name, not localhost
 <h3 id="editable-install">Editable install</h3>
 <div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/waldiez/wactorz.git
 <span class="nb">cd</span><span class="w"> </span>wactorz
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[all]&quot;</span>
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[all]"</span>
 
 <span class="c1"># Start with hot-reload (restarts on .py/.yaml file changes)</span>
 wactorz<span class="w"> </span>--reload
@@ -583,13 +583,13 @@ wactorz<span class="w"> </span>--reload
 
 <h3 id="adding-a-catalog-recipe">Adding a catalog recipe</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># 1. Create the recipe file</span>
-<span class="c1">#    Must export AGENT_CODE = r&#39;&#39;&#39;...&#39;&#39;&#39;</span>
+<span class="c1">#    Must export AGENT_CODE = r'''...'''</span>
 touch<span class="w"> </span>wactorz/catalogue_agents/my_agent.py
 
 <span class="c1"># 2. Register it in catalog_agent.py → _build_catalog()</span>
-<span class="c1">#    code = _load_recipe(&quot;my_agent.py&quot;)</span>
+<span class="c1">#    code = _load_recipe("my_agent.py")</span>
 <span class="c1">#    if code:</span>
-<span class="c1">#        catalog[&quot;my-agent&quot;] = { ...spawn config..., &quot;code&quot;: code }</span>
+<span class="c1">#        catalog["my-agent"] = { ...spawn config..., "code": code }</span>
 
 <span class="c1"># 3. Restart wactorz — recipe is immediately available</span>
 @catalog<span class="w"> </span>list
@@ -597,64 +597,64 @@ touch<span class="w"> </span>wactorz/catalogue_agents/my_agent.py
 </code></pre></div>
 
 <h3 id="running-tests">Running tests</h3>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[dev]&quot;</span>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">".[dev]"</span>
 make<span class="w"> </span>test-py<span class="w">          </span><span class="c1"># or: python -m pytest tests</span>
 </code></pre></div>
 
 <hr />
 <h2 id="debugging">Debugging</h2>
 <h4 id="watch-all-mqtt-traffic">Watch all MQTT traffic</h4>
-<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;#&#39;</span><span class="w"> </span>-v
+<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-p<span class="w"> </span><span class="m">1883</span><span class="w"> </span>-t<span class="w"> </span><span class="s1">'#'</span><span class="w"> </span>-v
 </code></pre></div>
 
 <h4 id="watch-a-specific-agents-logs">Watch a specific agent's logs</h4>
-<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;agents/+/logs&#39;</span><span class="w"> </span>-v
+<div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">'agents/+/logs'</span><span class="w"> </span>-v
 </code></pre></div>
 
 <h4 id="check-agent-status-directly">Check agent status directly</h4>
-<div class="highlight"><pre><span></span><code><span class="nv">@monitor</span><span class="w"> </span><span class="err">{</span><span class="ss">&quot;action&quot;</span><span class="err">:</span><span class="w"> </span><span class="ss">&quot;status&quot;</span><span class="err">}</span>
+<div class="highlight"><pre><span></span><code><span class="nv">@monitor</span><span class="w"> </span><span class="err">{</span><span class="ss">"action"</span><span class="err">:</span><span class="w"> </span><span class="ss">"status"</span><span class="err">}</span>
 <span class="nv">@catalog</span><span class="w"> </span><span class="n">list</span>
 </code></pre></div>
 
 <h4 id="read-persistence-state">Read persistence state</h4>
 <p>The spawn registry, user facts, and pipeline rules now live in SQLite (<code>state/wactorz.db</code>), routed automatically by <code>PersistenceAPI</code>. Read them with:</p>
-<div class="highlight"><pre><span></span><code><span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s2">&quot;</span>
+<div class="highlight"><pre><span></span><code><span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s2">"</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sqlite3</span><span class="o">,</span><span class="w"> </span><span class="nn">json</span>
-<span class="n">conn</span> <span class="o">=</span> <span class="n">sqlite3</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s1">&#39;state/wactorz.db&#39;</span><span class="p">)</span>
+<span class="n">conn</span> <span class="o">=</span> <span class="n">sqlite3</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s1">'state/wactorz.db'</span><span class="p">)</span>
 <span class="n">row</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-    \<span class="s2">&quot;SELECT value FROM kv_store WHERE agent=&#39;main&#39; AND key=&#39;_spawned_agents&#39;</span><span class="se">\&quot;</span>
+    \<span class="s2">"SELECT value FROM kv_store WHERE agent='main' AND key='_spawned_agents'</span><span class="se">\"</span>
 <span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
 <span class="n">spawned</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="k">else</span> <span class="p">{}</span>
-<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Spawn registry:&#39;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">spawned</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">'Spawn registry:'</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">spawned</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
 
 <span class="n">row</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-    \<span class="s2">&quot;SELECT value FROM kv_store WHERE agent=&#39;main&#39; AND key=&#39;_user_facts&#39;</span><span class="se">\&quot;</span>
+    \<span class="s2">"SELECT value FROM kv_store WHERE agent='main' AND key='_user_facts'</span><span class="se">\"</span>
 <span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
-<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;User facts:&#39;</span><span class="p">,</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="k">else</span> <span class="p">{})</span>
-<span class="s2">&quot;</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">'User facts:'</span><span class="p">,</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="k">else</span> <span class="p">{})</span>
+<span class="s2">"</span>
 </code></pre></div>
 
 <p>The <code>spawn_registry</code> table also holds spawn configs in a structured form:</p>
-<div class="highlight"><pre><span></span><code>sqlite3<span class="w"> </span>state/wactorz.db<span class="w"> </span><span class="s2">&quot;SELECT name, node FROM spawn_registry;&quot;</span>
+<div class="highlight"><pre><span></span><code>sqlite3<span class="w"> </span>state/wactorz.db<span class="w"> </span><span class="s2">"SELECT name, node FROM spawn_registry;"</span>
 </code></pre></div>
 
 <h4 id="remove-a-stuck-agent-from-the-spawn-registry">Remove a stuck agent from the spawn registry</h4>
-<div class="highlight"><pre><span></span><code><span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s2">&quot;</span>
+<div class="highlight"><pre><span></span><code><span class="n">python3</span> <span class="o">-</span><span class="n">c</span> <span class="s2">"</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sqlite3</span><span class="o">,</span><span class="w"> </span><span class="nn">json</span>
-<span class="n">conn</span> <span class="o">=</span> <span class="n">sqlite3</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s1">&#39;state/wactorz.db&#39;</span><span class="p">)</span>
+<span class="n">conn</span> <span class="o">=</span> <span class="n">sqlite3</span><span class="o">.</span><span class="n">connect</span><span class="p">(</span><span class="s1">'state/wactorz.db'</span><span class="p">)</span>
 <span class="n">row</span> <span class="o">=</span> <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-    \<span class="s2">&quot;SELECT value FROM kv_store WHERE agent=&#39;main&#39; AND key=&#39;_spawned_agents&#39;</span><span class="se">\&quot;</span>
+    \<span class="s2">"SELECT value FROM kv_store WHERE agent='main' AND key='_spawned_agents'</span><span class="se">\"</span>
 <span class="p">)</span><span class="o">.</span><span class="n">fetchone</span><span class="p">()</span>
 <span class="n">spawned</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="k">if</span> <span class="n">row</span> <span class="k">else</span> <span class="p">{}</span>
-<span class="n">spawned</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">&#39;my-stuck-agent&#39;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+<span class="n">spawned</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="s1">'my-stuck-agent'</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
 <span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
-    \<span class="s2">&quot;UPDATE kv_store SET value=? WHERE agent=&#39;main&#39; AND key=&#39;_spawned_agents&#39;</span><span class="se">\&quot;</span><span class="s2">,</span>
+    \<span class="s2">"UPDATE kv_store SET value=? WHERE agent='main' AND key='_spawned_agents'</span><span class="se">\"</span><span class="s2">,</span>
     <span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">spawned</span><span class="p">),),</span>
 <span class="p">)</span>
-<span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>\<span class="s2">&quot;DELETE FROM spawn_registry WHERE name=&#39;my-stuck-agent&#39;</span><span class="se">\&quot;</span><span class="s2">)</span>
+<span class="n">conn</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>\<span class="s2">"DELETE FROM spawn_registry WHERE name='my-stuck-agent'</span><span class="se">\"</span><span class="s2">)</span>
 <span class="n">conn</span><span class="o">.</span><span class="n">commit</span><span class="p">()</span>
-<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;Done. Remaining:&#39;</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">spawned</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
-<span class="s2">&quot;</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">'Done. Remaining:'</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">spawned</span><span class="o">.</span><span class="n">keys</span><span class="p">()))</span>
+<span class="s2">"</span>
 </code></pre></div>
   </main>
 </div>

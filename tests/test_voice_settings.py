@@ -10,6 +10,16 @@ import pytest
 from wactorz.core import voice_settings
 from wactorz.web import api_system
 
+
+def _records_async(into: list[str], what: str) -> Any:
+    """An async double that records it was called."""
+
+    async def _called(*_args: object, **_kwargs: object) -> None:
+        into.append(what)
+
+    return _called
+
+
 #: The real resolution, captured before the suite-wide fixture replaces it. That
 #: fixture exists so a developer's own choices cannot decide unrelated tests;
 #: these tests are about the resolution itself, so they put it back.
@@ -179,6 +189,35 @@ class TestChangingItOverTheWire:
 
         assert status == 200
         assert body["speaking"] == "server"
+
+    async def test_handing_everything_back_settles_the_wake_loop_too(
+        self, monkeypatch: pytest.MonkeyPatch, store: _Store
+    ) -> None:
+        # Reset changes which branch is in force just as a named change does, so
+        # it decides whether the loop should be running and who holds the
+        # microphone. Returning early left it running against settings that no
+        # longer asked for it, contradicting the answer this very call returns.
+        settled: list[str] = []
+        monkeypatch.setattr(api_system.wake, "reconcile", _records_async(settled, "reconciled"))
+        monkeypatch.setattr(
+            api_system, "_warn_about_the_new_branch", lambda: settled.append("warned")
+        )
+
+        status, _body = await self._post({"reset": True})
+
+        assert status == 200
+        assert settled == ["warned", "reconciled"]
+
+    async def test_a_reset_that_was_not_asked_for(self, store: _Store) -> None:
+        # A string is not a decision: "false" is truthy, and a client sending the
+        # word would have every choice dropped without asking for it.
+        await self._post({"speaking": "off"})
+
+        status, body = await self._post({"reset": "false"})
+
+        assert status == 400
+        assert voice_settings.speaking() == "off"
+        assert "nothing to change" in body["error"]
 
     async def test_a_body_that_is_not_an_object(self, store: _Store) -> None:
         status, _body = await self._post(["speaking", "off"])

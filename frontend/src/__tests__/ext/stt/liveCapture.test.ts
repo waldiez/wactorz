@@ -442,3 +442,63 @@ describe("the half that runs on the audio thread", () => {
         expect([...posted[1]![0]]).toEqual([3, 4]);
     });
 });
+
+describe("stopping and starting again while the permission prompt is open", () => {
+    afterEach(() => {
+        Reflect.deleteProperty(window, "AudioContext");
+        Reflect.deleteProperty(navigator, "mediaDevices");
+    });
+
+    it("releases the microphone when stopped and not started again", async () => {
+        // No restart to bump anything: the stop itself has to make the attempt
+        // still inside the prompt find that it is no longer the current one.
+        installAudio();
+        const media = navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>;
+        let letItThrough: (() => void) | null = null;
+        const tracks = [{ stop: vi.fn() }];
+        media.mockImplementationOnce(
+            () =>
+                new Promise(resolve => {
+                    letItThrough = () => resolve({ getTracks: () => tracks });
+                }),
+        );
+
+        const capture = new LiveCapture();
+        const abandoned = capture.start(() => {});
+        capture.stop();
+        letItThrough!();
+        await abandoned;
+
+        expect(tracks[0]!.stop).toHaveBeenCalled();
+    });
+
+    it("releases the microphone the abandoned attempt opened", async () => {
+        // Three presses on a slow prompt: start, stop, start. The first call is
+        // still inside getUserMedia, and by the time it returns the restart has
+        // set the flag it checks -- so without a token of its own it walks on and
+        // its stream, context and node become unreachable. The browser goes on
+        // recording, with the interface showing the microphone off.
+        const audio = installAudio();
+        const media = navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>;
+        let letFirstThrough: (() => void) | null = null;
+        const tracks = [{ stop: vi.fn() }];
+        media.mockImplementationOnce(
+            () =>
+                new Promise(resolve => {
+                    letFirstThrough = () => resolve({ getTracks: () => tracks });
+                }),
+        );
+
+        const capture = new LiveCapture();
+        const abandoned = capture.start(() => {});
+        capture.stop();
+        await capture.start(() => {});
+        letFirstThrough!();
+        await abandoned;
+
+        expect(tracks[0]!.stop).toHaveBeenCalled();
+        // And exactly one pipeline is left holding the device.
+        expect(audio.modules().length).toBe(1);
+        capture.stop();
+    });
+});

@@ -180,8 +180,12 @@ async def speak_here(text: str) -> None:
         return
     spoken = worth_saying(text)
     try:
-        made = await make_speech(spoken)
-        await speaker.play(made.audio)
+        # Around the making as well as the playing: until the audio exists there
+        # is nothing holding the playback lock, and a turn that started listening
+        # in that window would hear this reply begin and answer it.
+        with speaker.about_to_speak():
+            made = await make_speech(spoken)
+            await speaker.play(made.audio)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.warning("[tts] Could not speak here: %s", exc)
 

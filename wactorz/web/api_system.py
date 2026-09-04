@@ -117,11 +117,17 @@ async def voice_settings_handler(request: web.Request) -> Response:
     if not isinstance(body, dict):
         return web.json_response({"error": "expected a JSON object"}, status=400)
 
-    if body.get("reset"):
+    # `is True`, not truthiness: "false" is a truthy string, and a client sending
+    # the word would have every choice dropped without having asked for it.
+    if body.get("reset") is True:
         try:
             voice_settings.forget()
         except RuntimeError as exc:
             return web.json_response({"error": str(exc)}, status=503)
+        # Settled like any other change: reset decides which branch is in force
+        # just as a named setting does, so it decides whether the loop should be
+        # running and who holds the microphone.
+        await _settle()
         return web.json_response(_voice_now())
 
     changed = {k: v for k, v in body.items() if k in {"listening", "speaking", "waking", "voice"}}
@@ -142,13 +148,18 @@ async def voice_settings_handler(request: web.Request) -> Response:
     except RuntimeError as exc:
         return web.json_response({"error": str(exc)}, status=503)
 
-    # Said again on the way in: a deployment switched to `host` while running has
-    # heard nothing about the microphone it now needs.
+    await _settle()
+    return web.json_response(_voice_now())
+
+
+async def _settle() -> None:
+    """Make the running deployment match the settings it now has."""
+    # Said again: one switched to `host` while running has heard nothing about
+    # the microphone it now needs.
     _warn_about_the_new_branch()
     # And the loop that waits for a phrase is started or stopped to match, since
     # whether it runs decides who holds the microphone.
     await wake.reconcile()
-    return web.json_response(_voice_now())
 
 
 def _warn_about_the_new_branch() -> None:

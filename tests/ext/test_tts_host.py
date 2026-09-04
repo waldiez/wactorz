@@ -517,3 +517,40 @@ class TestWhatStartupWarnsAbout:
         tts.warn_if_the_room_will_stay_quiet()
 
         assert not caplog.text
+
+
+class TestNotHearingItsOwnReply:
+    """The room must count as spoken-to from before there is any audio.
+
+    Making the speech takes as long as a synthesiser takes, and a turn that
+    started listening in that window records the room and then the machine's own
+    reply as it begins -- which is the self-asking loop the guard exists to stop.
+    """
+
+    async def test_it_counts_as_speaking_while_the_speech_is_being_made(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        during: list[bool] = []
+
+        async def _slow_synthesis(_text: str, _asked: str = "") -> Any:
+            during.append(speaker.is_speaking())
+            raise RuntimeError("stop here, the answer is already recorded")
+
+        monkeypatch.setattr(tts, "make_speech", _slow_synthesis)
+
+        await tts.speak_here("the lights are on")
+
+        assert during == [True]
+
+    async def test_and_stops_counting_once_the_turn_is_over(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Otherwise one turn silences the room's microphone for ever.
+        async def _fails(_text: str, _asked: str = "") -> Any:
+            raise RuntimeError("no synthesiser")
+
+        monkeypatch.setattr(tts, "make_speech", _fails)
+
+        await tts.speak_here("hello")
+
+        assert not speaker.is_speaking()

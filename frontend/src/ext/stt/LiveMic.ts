@@ -102,11 +102,17 @@ export class LiveMic {
             this.socket.stopListening();
             throw error;
         }
-        if (this._draining || this._handlers !== handlers) {
-            // Ended while the permission prompt was open. Nothing was recorded,
-            // so there is no reading on its way to wait for.
-            this._finish();
+        if (this._handlers !== handlers) {
+            // A newer turn owns this state: the person stopped and pressed again
+            // while the permission prompt was open, and that turn's own start
+            // already ended this one. Finishing here would read the current
+            // handlers and end the turn they are speaking into instead.
             return;
+        }
+        if (this._draining) {
+            // This turn was ended while it waited. Nothing was recorded, so there
+            // is no reading on its way to wait for.
+            this._finish();
         }
     }
 

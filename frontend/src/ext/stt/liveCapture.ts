@@ -112,6 +112,16 @@ export class LiveCapture {
     private _node: AudioWorkletNode | null = null;
     private _cutter = new FrameCutter();
     private _active = false;
+    /**
+     * Which attempt is the current one.
+     *
+     * Bumped by every start and every stop. A flag cannot answer "is this still
+     * mine" across an await: stopping and starting again while the permission
+     * prompt is open clears it and sets it back, so the abandoned attempt finds
+     * it true and carries on -- leaving a stream, a context and a worklet node
+     * that nothing holds and nothing can close.
+     */
+    private _generation = 0;
 
     /** Open the microphone and call `onFrame` as audio arrives. Starting while
      *  already listening does nothing. */
@@ -128,8 +138,9 @@ export class LiveCapture {
         // fields holding the first microphone, leaving it open with nothing
         // left to close it.
         this._active = true;
+        const mine = ++this._generation;
         try {
-            await this._open(Ctx, onFrame);
+            await this._open(Ctx, onFrame, mine);
         } catch (error) {
             // A half-built pipeline still holds the microphone if getUserMedia
             // already resolved.
@@ -138,17 +149,23 @@ export class LiveCapture {
         }
     }
 
-    private async _open(Ctx: AudioContextCtor, onFrame: (frame: ArrayBuffer) => void): Promise<void> {
+    private async _open(
+        Ctx: AudioContextCtor,
+        onFrame: (frame: ArrayBuffer) => void,
+        mine: number,
+    ): Promise<void> {
         // Asked for explicitly rather than left to the browser: the recogniser
         // reports that it wants gain control and noise suppression applied
         // before it sees the audio, and raw capture has neither.
         const stream = await navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
-        if (!this._active) {
-            // Stopped while the permission prompt was open. Nothing holds this
-            // stream now, and the fields it would go in have already been
-            // cleared, so it is released here or not at all.
+        if (this._generation !== mine) {
+            // Stopped -- or stopped and started again -- while the permission
+            // prompt was open. Nothing holds this stream, and the fields it
+            // would go in belong to a later attempt, so it is released here or
+            // not at all. Asking whether capture is active would answer yes for
+            // the attempt that replaced this one.
             stream.getTracks().forEach(track => track.stop());
             return;
         }
@@ -161,6 +178,13 @@ export class LiveCapture {
         // served under a prefix behind Home Assistant's ingress, and an absolute
         // path would look for this at the top of that host instead.
         await this._context.audioWorklet.addModule(new URL(PROCESSOR_URL, document.baseURI).href);
+        if (this._generation !== mine) {
+            // Stopped while the worklet was loading. The stream and context are
+            // in the fields, but they belong to a later attempt now, so this one
+            // releases only what it opened.
+            stream.getTracks().forEach(track => track.stop());
+            return;
+        }
 
         const source = this._context.createMediaStreamSource(this._stream);
         this._node = new AudioWorkletNode(this._context, "wactorz-capture", {
@@ -196,6 +220,10 @@ export class LiveCapture {
         }
         // Tracks stopped explicitly: closing the context alone leaves the
         // browser's recording indicator on, which reads as still listening.
+        // Bumped here too: an attempt still inside the permission prompt has to
+        // find that it is no longer the current one, whether or not another
+        // start follows.
+        this._generation += 1;
         this._stream?.getTracks().forEach(track => track.stop());
         void this._context?.close();
         this._node = null;

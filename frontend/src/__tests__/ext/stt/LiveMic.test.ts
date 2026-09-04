@@ -428,3 +428,42 @@ describe("the page's microphone", () => {
         expect(liveMic()).toBeInstanceOf(LiveMic);
     });
 });
+
+describe("starting again while the last permission prompt is still open", () => {
+    afterEach(() => {
+        Reflect.deleteProperty(window, "AudioContext");
+        Reflect.deleteProperty(window, "AudioWorkletNode");
+        Reflect.deleteProperty(navigator, "mediaDevices");
+    });
+
+    it("does not let the abandoned turn tear down the one that replaced it", async () => {
+        // Press, stop, press again on a slow prompt. The first turn's start is
+        // still waiting; when it finally continues, the state it finds belongs to
+        // the second turn. Ending "the current turn" there ends the wrong one:
+        // the microphone the person is speaking into stops, and the session it
+        // opened on the server is never closed.
+        installAudio();
+        const media = navigator.mediaDevices.getUserMedia as ReturnType<typeof vi.fn>;
+        let letFirstThrough: (() => void) | null = null;
+        media.mockImplementationOnce(
+            () =>
+                new Promise(resolve => {
+                    letFirstThrough = () => resolve({ getTracks: () => [{ stop: vi.fn() }] });
+                }),
+        );
+        const socket = fakeSocket();
+        const mic = new LiveMic(socket);
+        const first = { onText: vi.fn(), onEnd: vi.fn() };
+        const second = { onText: vi.fn(), onEnd: vi.fn() };
+
+        const abandoned = mic.start("", first);
+        mic.stop();
+        await mic.start("", second);
+        letFirstThrough!();
+        await abandoned;
+
+        // The turn someone is actually speaking into is still running.
+        expect(second.onEnd).not.toHaveBeenCalled();
+        expect(mic.listening).toBe(true);
+    });
+});

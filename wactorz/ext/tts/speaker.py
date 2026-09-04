@@ -13,10 +13,12 @@ reported the same way, because to whoever set this up they are the same problem.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import threading
 import wave
+from collections.abc import Iterator
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -66,6 +68,9 @@ CHUNK_SECONDS = 0.1
 #: quiet within one of them rather than at the end of the sentence.
 _stopped = threading.Event()
 
+#: Turns that are going to speak but have not started. See `about_to_speak`.
+_intending = 0
+
 
 class NoSpeakers(RuntimeError):
     """Raised when this machine cannot play audio."""
@@ -79,7 +84,27 @@ def is_speaking() -> bool:
     reply captured as a question is a turn that asks itself, forever, billed by
     the token.
     """
-    return _speaking.locked()
+    return _speaking.locked() or _intending > 0
+
+
+@contextlib.contextmanager
+def about_to_speak() -> Iterator[None]:
+    """Count a turn as speaking from before its audio exists.
+
+    Making the speech takes as long as the synthesiser takes, and until it is
+    made there is nothing holding the playback lock. A turn that started
+    listening in that window would record the room and then the reply as it
+    began -- the machine asking itself, which is what the guard is for.
+
+    Counted rather than flagged: two turns can be in flight, and the first to
+    finish must not declare the room quiet while the second is still speaking.
+    """
+    global _intending
+    _intending += 1
+    try:
+        yield
+    finally:
+        _intending -= 1
 
 
 def silence() -> None:

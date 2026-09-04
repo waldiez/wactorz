@@ -16,6 +16,7 @@ import asyncio
 import dataclasses
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import asyncssh
 import pytest
@@ -533,6 +534,125 @@ async def test_deploy_refuses_an_unusable_name_before_touching_the_network(
 
     assert result["success"] is False
     assert "MQTT topic" in result["error"]
+
+
+# ── Installer: where a deploy puts things ──────────────────────────────────
+
+
+class _FakeSftpClient:
+    """Records uploads, standing in for asyncssh's SFTP client."""
+
+    def __init__(self) -> None:
+        self.uploads: list[str] = []
+        self.opened: list[str] = []
+
+    async def __aenter__(self) -> "_FakeSftpClient":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def put(self, _local: str, remote: str) -> None:
+        self.uploads.append(remote)
+
+    def open(self, path: str, _mode: str):
+        self.opened.append(path)
+        outer = self
+
+        class _Handle:
+            async def write(self, _body: str) -> None:
+                assert outer is not None
+
+            async def __aenter__(self) -> "_Handle":
+                return self
+
+            async def __aexit__(self, *_exc: object) -> None:
+                return None
+
+        return _Handle()
+
+    async def chmod(self, _path: str, _mode: int) -> None:
+        return None
+
+
+class _FakeConn:
+    """An SSH connection that answers `cd ~ && pwd` with a home of our choosing."""
+
+    def __init__(self, home: str) -> None:
+        self.home = home
+        self.commands: list[str] = []
+        self.sftp = _FakeSftpClient()
+
+    async def __aenter__(self) -> "_FakeConn":
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        return None
+
+    async def run(self, command: str, check: bool = False):
+        self.commands.append(command)
+        stdout = self.home if "cd ~ && pwd" in command else ""
+        # `id -u` non-zero keeps the ladder off the root rung; the point of
+        # these tests is the paths, not which unit gets installed.
+        if "id -u" in command:
+            stdout = "1000"
+        return SimpleNamespace(stdout=stdout, stderr="", exit_status=0)
+
+    def start_sftp_client(self) -> _FakeSftpClient:
+        return self.sftp
+
+
+async def _deploy_with_home(installer, targets, monkeypatch, home: str) -> _FakeConn:
+    targets(DeployTarget(name="rpi-kitchen", host="10.0.0.5", user="pi", password="pw"))
+    conn = _FakeConn(home)
+
+    async def _known_hosts(_host: str, _port: int) -> str:
+        # Never read: asyncssh.connect is stubbed. Without this the deploy
+        # dials the target for its host key and the test hangs on the network.
+        return "known_hosts"
+
+    monkeypatch.setattr(installer, "_known_hosts", _known_hosts)
+    monkeypatch.setattr(installer_module.asyncssh, "connect", lambda **_kw: conn)
+    monkeypatch.setattr(installer, "_persist_node_info", lambda **_kw: None)
+
+    await installer._node_deploy({"host": "10.0.0.5", "node_name": "rpi-kitchen"})
+    return conn
+
+
+async def test_uploads_follow_the_home_the_node_reports(
+    installer, targets, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing is addressed as `/home/<user>`.
+
+    Every shell step in the deploy uses `~`, so a home that is not under
+    `/home` -- root's `/root` above all -- would put the runner and its `.env`
+    somewhere the venv is not. Deploying as root failed on exactly this.
+    """
+    conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
+
+    assert conn.sftp.uploads == ["/root/wactorz/remote_runner.py"]
+    assert conn.sftp.opened == ["/root/wactorz/.env"]
+
+
+async def test_an_unusual_home_is_honoured_end_to_end(
+    installer, targets, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = await _deploy_with_home(installer, targets, monkeypatch, "/var/lib/node")
+
+    assert conn.sftp.uploads == ["/var/lib/node/wactorz/remote_runner.py"]
+    assert conn.sftp.opened == ["/var/lib/node/wactorz/.env"]
+
+
+async def test_the_unit_is_written_against_that_home(
+    installer, targets, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The unit is what actually runs after a reboot, so a home it disagrees with
+    # is a node that never comes back.
+    conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
+
+    unit = next(c for c in conn.commands if "WZUNIT" in c)
+    assert "ExecStart=/root/wactorz/venv/bin/python /root/wactorz/remote_runner.py" in unit
+    assert "/home/pi" not in unit
 
 
 # ── Installer: host keys, against a real SSH server ────────────────────────

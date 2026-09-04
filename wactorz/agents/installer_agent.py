@@ -483,12 +483,16 @@ class InstallerAgent(Actor):
         self,
         sftp: Any,
         target: DeployTarget,
-        user: str,
+        home: str,
         node_name: str,
         broker: str,
         port: int,
     ) -> bool:
-        """Write ``~/wactorz/.env``, mode 0600. Returns whether it holds credentials.
+        """Write ``<home>/wactorz/.env``, mode 0600. Returns whether it holds credentials.
+
+        ``home`` is the node's own answer for the deploy user's home directory,
+        not ``/home/<user>``. The two differ for root, whose home is ``/root``,
+        and wherever homes are not laid out under ``/home``.
 
         The file is always written, because it carries the node's identity as
         well as its broker account, and the systemd unit reads every argument
@@ -532,7 +536,7 @@ class InstallerAgent(Actor):
             lines.append(f"MQTT_PASSWORD={shlex.quote(password)}")
 
         body = "\n".join(lines) + "\n"
-        remote = f"/home/{user}/wactorz/.env"
+        remote = f"{home}/wactorz/.env"
         async with sftp.open(remote, "w") as handle:
             await handle.write(body)
         # After writing, not before: SFTP creates with the umask, so there is a
@@ -786,14 +790,21 @@ class InstallerAgent(Actor):
             async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
                 # 1. Create directory
                 await self._ssh_run(conn, "mkdir -p ~/wactorz")
-                self._log_remote(f"[{node_name}] Directory created.")
+                # Ask the node where that landed rather than assuming
+                # /home/<user>. Every shell step here uses `~`, so a home that
+                # is not under /home — root's /root, an LDAP or /var/lib one —
+                # would put the uploads and the unit somewhere the venv is not.
+                # This is why deploying as root never worked.
+                _, resolved = await self._ssh_run(conn, "cd ~ && pwd")
+                home_dir = resolved.strip() or f"/home/{user}"
+                self._log_remote(f"[{node_name}] Directory created at {home_dir}/wactorz.")
 
                 # 2. Upload remote_runner.py and, if the broker needs them, the
                 # credentials it will read from its environment.
                 async with conn.start_sftp_client() as sftp:
-                    await sftp.put(str(runner_path), f"/home/{user}/wactorz/remote_runner.py")
+                    await sftp.put(str(runner_path), f"{home_dir}/wactorz/remote_runner.py")
                     has_credentials = await self._put_node_env(
-                        sftp, target, user, node_name, str(broker), int(mqtt_port)
+                        sftp, target, home_dir, node_name, str(broker), int(mqtt_port)
                     )
                 self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
                 self._log_remote(f"[{node_name}] Node environment written to ~/wactorz/.env.")
@@ -832,7 +843,7 @@ class InstallerAgent(Actor):
                 async def run_on_node(command: str) -> tuple[bool, str]:
                     return await self._ssh_run(conn, command)
 
-                rung = await node_service.install(run_on_node, user=user, home=f"/home/{user}")
+                rung = await node_service.install(run_on_node, user=user, home=home_dir)
                 if rung is node_service.NOHUP:
                     await self._ssh_run(conn, self._nohup_launch(node_name, broker, mqtt_port))
                 self._log_remote(f"[{node_name}] Runner started — supervision: {rung.label}.")

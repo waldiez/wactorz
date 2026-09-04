@@ -113,8 +113,26 @@ class TestWhenSystemdIsThereButUnusable:
 
         assert await node_service.install(node, user="pi", home="/home/pi") is NOHUP
 
+    async def test_the_unit_is_restarted_not_merely_enabled(self) -> None:
+        # Measured on hardware: the caller's pkill makes the runner exit 0, which
+        # Restart=on-failure rightly declines to bring back, and `enable --now`
+        # does not start a unit that is still deactivating -- so a redeploy left
+        # the node dead. `restart` also adopts newly uploaded code, which
+        # `--now` skips on an already-active unit.
+        node = _unprivileged()
+
+        assert await node_service.install(node, user="pi", home="/home/pi") is USER
+
+        assert node.ran("systemctl --user restart wactorz-node.service")
+        assert not node.ran("enable --now")
+
+    async def test_a_failed_restart_falls_back(self) -> None:
+        node = _unprivileged(**{"restart wactorz-node": (False, "Job failed")})
+
+        assert await node_service.install(node, user="pi", home="/home/pi") is NOHUP
+
     async def test_a_failed_enable_falls_back_too(self) -> None:
-        node = _unprivileged(**{"enable --now": (False, "Failed to enable unit")})
+        node = _unprivileged(**{"enable wactorz-node": (False, "Failed to enable unit")})
 
         assert await node_service.install(node, user="pi", home="/home/pi") is NOHUP
 
@@ -150,7 +168,7 @@ class TestStaleUnits:
     async def test_a_unit_that_fails_to_enable_is_cleared_too(self) -> None:
         # Same class: privileges enough to probe, not enough to install, and an
         # older unit still enabled from a deploy that had them.
-        node = _unprivileged(**{"enable --now": (False, "Failed to enable unit")})
+        node = _unprivileged(**{"enable wactorz-node": (False, "Failed to enable unit")})
 
         assert await node_service.install(node, user="pi", home="/home/pi") is NOHUP
 

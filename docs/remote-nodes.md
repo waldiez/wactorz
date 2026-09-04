@@ -106,9 +106,16 @@ Under a unit, the runner logs to the journal rather than to
 `~/wactorz/<node>.log`:
 
 ```bash
-journalctl -u wactorz-node -f          # system unit
-journalctl --user -u wactorz-node -f   # user unit
+journalctl -u wactorz-node -f              # system unit
+journalctl --user-unit=wactorz-node -f     # user unit
 ```
+
+Note the second form: `--user-unit=` queries the system journal for a *user*
+unit. `journalctl --user -u wactorz-node` looks like the same thing and is not —
+`--user` reads the invoking user's own journal, which on a default Debian or
+Raspberry Pi OS install does not exist (no per-user journal files are split out,
+and the account is not in the `systemd-journal` group), so it reports
+"No journal files were found" while the logs sit in the system journal.
 
 The `~/wactorz/<node>.log` file is only written on the `nohup` fallback.
 

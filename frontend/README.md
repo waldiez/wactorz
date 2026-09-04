@@ -196,19 +196,6 @@ topic there without touching the router.
 Two things are gated, for two different reasons — and the difference decides
 where the switch belongs.
 
-### Not built yet — build-time
-
-| Flag | Enables | Needs backend |
-| ---- | ------- | ------------- |
-| `VITE_STT_ENABLED=true` | Voice/mic button (speech-to-text) | `/api/stt` |
-
-`STT_ENABLED` (`src/io/SpeechToText.ts`) is off by default because **`/api/stt`
-does not exist**. The client half is written and waiting; turning the flag on
-without the endpoint gives a mic button whose every recording fails. It is a
-switch for developing the feature, not a per-deploy option — when the endpoint
-lands, this should become a server capability like the one below and the flag
-should go.
-
 ### Optional per deployment — runtime, from the server
 
 Attachments (drag-drop + paste) are **not** a build-time flag. The server only
@@ -219,3 +206,14 @@ assumes: the `uploads.enabled` field of `/api/config` is seeded into
 A build genuinely cannot know the answer here — one bundle is served by
 deployments that differ, and the committed `static/app` goes to all of them. Set
 `WACTORZ_UPLOADS` on the backend; the UI follows it.
+
+Speech-to-text works the same way, with a mode rather than a flag. `WACTORZ_STT`
+names one of `off`, `browser`, `server` or `host`; `/api/config` reports it under
+`stt.mode`, seeded into `wactorz-stt-mode` and read by `sttMode()`
+(`src/io/SpeechToText.ts`). It is a mode because the branches differ in who owns
+the microphone, which the browser needs to know rather than merely whether.
+
+`micOffered()` covers the two branches that capture in the browser, and so also
+requires a browser that can record. `host` is captured server-side and driven by
+a control message instead of the composer's button, so it is offered by the
+branch that implements it. A mode this bundle does not recognise reads as `off`.

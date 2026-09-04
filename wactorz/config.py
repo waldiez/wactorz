@@ -177,6 +177,120 @@ UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", 
 #: so a file the UI accepts is not refused by the server.
 UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
 
+#: The speech-to-text branches, in the order they concede privacy.
+#:
+#: ``off``      no transcription; the browser hides the microphone.
+#: ``browser``  the client transcribes locally and sends only text.
+#: ``server``   the browser captures, the host transcribes.
+#: ``host``     the host captures from its own microphone and transcribes.
+#:
+#: ``server`` and ``host`` differ in who owns the microphone, which is what
+#: decides whether a secure context is needed: only browser capture calls
+#: ``getUserMedia``, so ``host`` is the branch that works over plain HTTP -- and
+#: the only one where the server hears the room.
+STT_MODES = ("off", "browser", "server", "host")
+
+
+def _stt_mode() -> str:
+    """The configured branch, or ``off`` when unset or unrecognised."""
+    value = _unquote(os.getenv("WACTORZ_STT", "") or "").lower()
+    if not value:
+        return "off"
+    if value not in STT_MODES:
+        # Named rather than ignored: a typo here shows up as a microphone that
+        # never appears, which looks like a broken feature rather than a setting.
+        warnings.warn(
+            f"WACTORZ_STT={value!r} is not one of {', '.join(STT_MODES)} — using 'off'",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return "off"
+    return value
+
+
+#: Whether the machine listens for a phrase before a turn, and what it listens
+#: for. Only meaningful on the ``host`` branch: it is the one that owns a
+#: microphone, and a wake word is how a room without a screen starts a turn.
+WAKE_MODES = ("off", "on")
+
+
+def _wake_mode() -> str:
+    """Whether a phrase wakes this deployment, ``off`` when unset."""
+    value = _unquote(os.getenv("WACTORZ_WAKE", "") or "").lower()
+    if not value:
+        return "off"
+    if value not in WAKE_MODES:
+        warnings.warn(
+            f"WACTORZ_WAKE={value!r} is not one of {', '.join(WAKE_MODES)} — using 'off'",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return "off"
+    return value
+
+
+WAKE_MODE = _wake_mode()
+
+#: The phrases that wake it, separated by commas.
+#:
+#: Given as words rather than a prepared model: the spotter converts them at
+#: startup, so an invented name costs no more than a common one. Short phrases
+#: are heard less reliably, so a name on its own is a poorer wake word than the
+#: same name with a word in front of it.
+WAKE_WORDS = tuple(
+    phrase.strip()
+    for phrase in _unquote(os.getenv("WACTORZ_WAKE_WORDS", "") or "hey waldiez").split(",")
+    if phrase.strip()
+)
+
+#: Where the keyword model lives. Absent by default: it is weights, not code, and
+#: a deployment that does not wake should not be made to carry them.
+WAKE_MODEL_DIR = _unquote(os.getenv("WACTORZ_WAKE_MODEL", "") or "")
+
+
+#: Which branch this deployment offers. The browser learns it from here rather
+#: than from how the bundle was built, so one wheel serves every deployment and
+#: the microphone is offered exactly where it can work.
+STT_MODE = _stt_mode()
+
+#: How this deployment speaks, if it does.
+#:
+#: ``browser`` and ``server`` differ in where the speech is made, and so in
+#: whether the words leave this machine at all: the browser's own voice never
+#: sends them anywhere, while ``server`` hands them to whatever synthesises. That
+#: is a choice a deployment makes rather than one its installed packages make.
+#:
+#: ``host`` speaks through the server's own audio device rather than the
+#: listener's, which is the branch that answers into a room instead of into a
+#: page. Only replies to a turn someone started are read aloud, so a machine
+#: standing in a room does not narrate its own upkeep.
+TTS_MODES = ("off", "browser", "server", "host")
+
+
+def _tts_mode() -> str:
+    """The configured branch, or ``server`` when unset.
+
+    Unset means what it has always meant: speak if this deployment can, and let
+    the browser cover it when it cannot. Saying ``browser`` is how a deployment
+    keeps the words on this machine while still having a voice.
+    """
+    value = _unquote(os.getenv("WACTORZ_TTS", "") or "").lower()
+    if not value:
+        return "server"
+    if value not in TTS_MODES:
+        warnings.warn(
+            f"WACTORZ_TTS={value!r} is not one of {', '.join(TTS_MODES)} — using 'server'",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return "server"
+    return value
+
+
+#: Which branch this deployment speaks through. Read by the browser from
+#: ``/api/config``, the same way the recognition branch is.
+TTS_MODE = _tts_mode()
+
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
 #: deployment with no Supervisor must never offer it. Inferring it from the peer's

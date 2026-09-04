@@ -7,6 +7,7 @@
  * limit (fetch / save / reset against `/api/cost*`) and the host-resource bar
  * painting. Owns this telemetry state and routes re-renders back through the host.
  */
+import { seedServerConfig } from "../../config/serverConfig";
 import { buildSettingsView, type CostLimitInfo } from "./settings";
 import { postOrWarn } from "./mutate";
 import { hostBarValues } from "./cards";
@@ -107,20 +108,34 @@ export class MetricsController {
 
     /** Build the settings view, wiring its save-limit / reset-spend actions. */
     buildSettingsView(): HTMLElement {
-        return buildSettingsView(this._costLimitInfo, {
-            onSaveLimit: async (limit, period) => {
-                await this._saveCostLimit(limit, period);
-                if (this.host.getView() === "settings") {
-                    this.host.renderView();
-                }
+        return buildSettingsView(
+            this._costLimitInfo,
+            {
+                onSaveLimit: async (limit, period) => {
+                    await this._saveCostLimit(limit, period);
+                    if (this.host.getView() === "settings") {
+                        this.host.renderView();
+                    }
+                },
+                onResetSpend: async () => {
+                    await this._resetCost();
+                    if (this.host.getView() === "settings") {
+                        this.host.renderView();
+                    }
+                },
             },
-            onResetSpend: async () => {
-                await this._resetCost();
-                if (this.host.getView() === "settings") {
-                    this.host.renderView();
-                }
+            this._ingress,
+            () => {
+                // The branch decides what the rest of the section says, and
+                // whether the composer offers a microphone at all, so the seeded
+                // config has to catch up before anything is drawn again.
+                void seedServerConfig().then(() => {
+                    if (this.host.getView() === "settings") {
+                        this.host.renderView();
+                    }
+                });
             },
-        });
+        );
     }
 
     private async _fetchCostInfo(): Promise<void> {

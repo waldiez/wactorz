@@ -99,11 +99,41 @@ describe("CardDashboard render", () => {
         expect(() => buildResetPopover()).not.toThrow();
     });
 
+    it("builds the settings view under the ingress prefix", () => {
+        // A bare path reaches the top of the host rather than the dashboard, so
+        // what matters is that the prefix reaches the request the view makes --
+        // not merely that the view was built.
+        localStorage.setItem("wactorz-stt-mode", "host");
+        Reflect.set(window, "__WACTORZ_INGRESS_PATH", "/ha");
+        const asked: string[] = [];
+        const realFetch = globalThis.fetch;
+        globalThis.fetch = ((url: string) => {
+            asked.push(url);
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+        }) as unknown as typeof fetch;
+        try {
+            const settings = cd._buildSettingsView();
+            const buttons = [...settings.querySelectorAll("button")] as HTMLButtonElement[];
+            buttons.find(b => b.textContent === "Test microphone")!.click();
+            buttons.find(b => b.textContent === "Reset to configured")!.click();
+
+            expect(asked).toEqual(["/ha/api/stt/listen", "/ha/api/voice"]);
+        } finally {
+            globalThis.fetch = realFetch;
+            Reflect.deleteProperty(window, "__WACTORZ_INGRESS_PATH");
+        }
+    });
+
     it("builds the settings view with the cost-limit section", () => {
         const settings = cd._buildSettingsView();
         expect(settings.classList.contains("af-settings")).toBe(true);
-        // Only the spend-limit section remains (HA config was removed).
-        expect(settings.querySelectorAll(".af-settings-section").length).toBe(1);
+        // No Home Assistant section: its URL comes from /api/config and the
+        // browser never holds a token.
+        const headings = [...settings.querySelectorAll(".af-settings-section-heading")].map(
+            h => h.textContent,
+        );
+        expect(headings).toContain("🪙 LLM Spend Limit");
+        expect(headings.some(h => h?.includes("Home Assistant"))).toBe(false);
     });
 
     it("addAgent / updateAgent / removeAgent keep the agents map in sync", () => {

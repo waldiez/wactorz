@@ -32,12 +32,20 @@ import { createOutageTracker } from "./io/outage";
 import { emit, listen } from "./events";
 import { WSClient } from "./io/WSClient";
 import { register as registerTTS } from "./ext/tts";
+// Imported for its side effect: the extension registers its /api/config
+// entries at module load, and seedServerConfig() seeds only what is
+// registered by then. It has nothing to bootstrap, so there is no register().
+import "./ext/stt";
+// Imported for its side effect, like the recognition extension above: the module
+// registers the /api/config fields it seeds when it loads, not when it is called.
+import "./ext/wake";
 import { seedServerConfig } from "./config/serverConfig";
 import { installSessionExpiry } from "./io/sessionExpiry";
 import { toast } from "./ui/ToastManager";
 import { createHaFeedPusher, parseHaRawEvent } from "./ui/haFeed";
 import { DropZone } from "./ui/DropZone";
 import { uploadsEnabled } from "./ui/dashboard/uploads";
+import { attachLiveSocket } from "./ext/stt";
 import type { AgentInfo } from "./types/agent";
 import type { FeedItem } from "./types/feed";
 import {
@@ -318,6 +326,9 @@ router.on("status", payload => {
 // The /ws transport owns the connection; the router only decodes events. Feed it
 // the server_event frames, and derive "live" from the transport + broker state.
 ws.onServerEvent((topic, payload) => router.route(topic, payload));
+// The composer's microphone speaks over the same socket, so it is given the
+// transport rather than opening one of its own.
+attachLiveSocket(ws);
 ws.onConnected(() => {
     _wsOpen = true;
     recomputeLive();

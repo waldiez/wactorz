@@ -9,9 +9,15 @@
  * and the reset REST endpoint), so they live outside the CardDashboard class.
  */
 import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
-import { tts } from "../../ext/tts";
+import { tts, ttsMode } from "../../ext/tts";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
+
+/** Whether anything will be read aloud in this browser at all. */
+function speaksHere(): boolean {
+    const mode = ttsMode();
+    return mode !== "off" && mode !== "host";
+}
 
 /** Beep + TTS toggle buttons; the TTS toggle shows/hides `voiceRow`. */
 function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
@@ -35,6 +41,17 @@ function buildAudioToggles(voiceRow: HTMLElement): HTMLElement {
         ttsBtn.classList.toggle("on", on);
         voiceRow.style.display = on ? "" : "none";
     });
+
+    // Hidden rather than absent, and answered again when the server says: this
+    // is built before the config arrives, so the branch is not known yet. A
+    // switch that is on and silent reads as a fault, and there is nothing to be
+    // done about it from here. The beep stays -- this browser makes that itself.
+    const follow = (speaks: boolean): void => {
+        ttsBtn.style.display = speaks ? "" : "none";
+        voiceRow.style.display = speaks && tts.ttsEnabled ? "" : "none";
+    };
+    follow(speaksHere());
+    listen("tts-mode-known", detail => follow(detail.speaks));
 
     toggleRow.append(beepBtn, ttsBtn);
     return toggleRow;
@@ -61,11 +78,19 @@ function buildVoiceRow(): { row: HTMLElement; release: () => void } {
     placeholderOpt.textContent = "— loading voices… —";
     voiceSel.appendChild(placeholderOpt);
 
-    const populateVoices = (): void => {
+    const populateVoices = (loaded = false): void => {
         const voices = tts.voices;
         if (!voices.length) {
+            if (loaded) {
+                // A synthesiser with one fixed voice offers nothing to pick
+                // between, and a list that never fills reads as one still
+                // loading -- which is a fault, where this is an answer.
+                placeholderOpt.textContent = "— chosen by the service —";
+                voiceSel.disabled = true;
+            }
             return;
         }
+        voiceSel.disabled = false;
         while (voiceSel.options.length > 1) {
             voiceSel.remove(1);
         }
@@ -82,7 +107,7 @@ function buildVoiceRow(): { row: HTMLElement; release: () => void } {
     };
 
     populateVoices();
-    const voicesListener = listen("tts-voices-loaded", () => populateVoices());
+    const voicesListener = listen("tts-voices-loaded", () => populateVoices(true));
     voiceSel.addEventListener("change", () => tts.setVoice(voiceSel.value));
 
     voiceRow.appendChild(voiceSel);

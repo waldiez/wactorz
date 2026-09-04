@@ -148,6 +148,7 @@ def build_app() -> web.Application:
     app.router.add_get("/chats", api_system.chat_log_handler)
 
     app.router.add_get("/api/config", api_system.config_handler)
+    app.router.add_post("/api/voice", api_system.voice_settings_handler)
     app.router.add_get("/config", api_system.config_handler)
 
     # `/api/` only, unlike the pairs above: whatever authentication lands will be

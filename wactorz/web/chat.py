@@ -21,8 +21,14 @@ from aiohttp.web import Response
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
+
+# Which branch speaks is asked for each turn rather than bound here: it can be
+# changed while running, and a value read at import would answer for the one the
+# process started with.
+from ..core import voice_settings
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
+from ..ext import tts
 from . import runtime, uploads
 
 logger = logging.getLogger(__name__)
@@ -377,6 +383,52 @@ def _takes_attachments(fn: Callable[..., Any]) -> bool:
         return False
 
 
+def _also_spoken_here(reply_fn, stream_fn, stream_end_fn):
+    """Wrap a turn's callbacks so the machine says what it answered.
+
+    Only on ``WACTORZ_TTS=host``, and only here: this is the path a person's
+    question takes, so agents talking among themselves and everything running in
+    the background stay silent. A machine in a room narrating its own upkeep is
+    a worse neighbour than a quiet one.
+
+    The text is gathered rather than spoken as it streams, because a synthesiser
+    reads a sentence better than it reads the pieces of one.
+    """
+    if voice_settings.speaking() != "host":
+        return reply_fn, stream_fn, stream_end_fn
+
+    said: list[str] = []
+
+    async def speaking_reply(text: str | None) -> None:
+        await reply_fn(text)
+        # A turn can end with nothing to say -- a command that only acted, or a
+        # reply that timed out -- and silence is the right answer to that.
+        if text:
+            await tts.speak_here(text)
+
+    async def gathering_chunk(chunk: str) -> None:
+        said.append(chunk)
+        if stream_fn is not None:
+            await stream_fn(chunk)
+
+    async def speak_the_whole(*args: object, **kwargs: object) -> None:
+        if stream_end_fn is not None:
+            await stream_end_fn(*args, **kwargs)
+        whole, said[:] = "".join(said), []
+        # Only what streamed. A turn answered whole has already been spoken by
+        # the reply above, and saying it again here would say it twice.
+        if whole:
+            await tts.speak_here(whole)
+
+    # Every callback, not only the streaming ones: a slash command and an agent
+    # that answers in one piece both reply through `reply_fn` even when the
+    # caller offered somewhere to stream to, and those were the turns that came
+    # back silent.
+    if stream_fn is None and stream_end_fn is None:
+        return speaking_reply, None, None
+    return speaking_reply, gathering_chunk, speak_the_whole
+
+
 async def route_chat(
     content: str,
     reply_fn,
@@ -396,6 +448,7 @@ async def route_chat(
     route that cannot carry them says so instead of answering as though the user
     attached nothing.
     """
+    reply_fn, stream_fn, stream_end_fn = _also_spoken_here(reply_fn, stream_fn, stream_end_fn)
     _chunk_fn = stream_fn or reply_fn
     _end_fn = stream_end_fn or no_op_async
     blocks = to_blocks(attachments, uploads.read_bytes) if attachments else []
@@ -649,6 +702,11 @@ async def rest_chat_stop_handler(request: web.Request | None) -> Response:
     tasks = [t for t in inflight_chat_tasks if not t.done()]
     for t in tasks:
         t.cancel()
+    # Cancelling the task does not reach into the device: playback is blocked in
+    # portaudio, on a thread with nothing to interrupt it, so a machine
+    # answering into a room would go on talking after the interface said it had
+    # stopped. This is what actually makes it quiet.
+    tts.stop_speaking()
 
     return web.json_response(
         {

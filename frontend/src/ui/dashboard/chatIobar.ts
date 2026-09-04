@@ -8,8 +8,8 @@
  * DOM construction — all behaviour is routed back through the `IobarDeps`.
  */
 import type { ChatInput } from "./chatInput";
-import type { SpeechToText } from "../../io/SpeechToText";
-import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
+import type { SpeechToText, LiveMic } from "../../ext/stt";
+import { micOffered, liveOffered, liveMic, recognisesHere, WebSpeech } from "../../ext/stt";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
@@ -228,20 +228,138 @@ async function toggleMic(
     }
 }
 
-/** Whether the voice mic button should be shown: backend enabled and the
- *  browser can actually capture audio. Otherwise it's simply not rendered. */
-function micAvailable(): boolean {
-    return STT_ENABLED && Stt.isSupported();
+function listening(btn: HTMLButtonElement, on: boolean): void {
+    btn.classList.toggle("recording", on);
+    const label = on ? "Stop listening" : "Voice input";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
 }
 
-/** Mic button: click to record, click again to transcribe into the input. */
-function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonElement {
+/** Why the microphone did not open, said in terms of what to do about it. */
+function micTrouble(error: unknown): string {
+    const name = error instanceof DOMException ? error.name : "";
+    if (name === "NotAllowedError" || name === "SecurityError") {
+        return "Microphone permission was denied.";
+    }
+    if (name === "NotFoundError" || name === "NotReadableError") {
+        return "No microphone is available.";
+    }
+    // Anything else is the reason the capture itself gave -- a browser that
+    // cannot do this, or a page not served from somewhere it is allowed on.
+    return error instanceof Error && error.message ? error.message : "The microphone could not be opened.";
+}
+
+async function startLive(mic: LiveMic, input: HTMLTextAreaElement, btn: HTMLButtonElement): Promise<void> {
+    // What the composer writes itself, so an edit by the person can be told
+    // apart from the reading being applied.
+    let written = input.value;
+    const edited = (): void => {
+        if (input.value !== written) {
+            mic.rebase(input.value);
+        }
+    };
+    input.addEventListener("input", edited);
+    try {
+        await mic.start(written, {
+            onText: text => {
+                written = text;
+                input.value = text;
+                input.dispatchEvent(new Event("input"));
+            },
+            onEnd: reason => {
+                input.removeEventListener("input", edited);
+                listening(btn, false);
+                input.focus();
+                if (reason) {
+                    toast.show({ type: "alert-error", title: "Voice input stopped", message: reason });
+                }
+            },
+        });
+        // Asked rather than assumed: the turn can already be over if it was
+        // ended while the permission prompt was still open.
+        listening(btn, mic.listening);
+    } catch (error) {
+        input.removeEventListener("input", edited);
+        listening(btn, false);
+        toast.show({ type: "alert-error", title: "Voice input unavailable", message: micTrouble(error) });
+    }
+}
+
+async function toggleLive(mic: LiveMic, input: HTMLTextAreaElement, btn: HTMLButtonElement): Promise<void> {
+    if (mic.listening) {
+        mic.stop();
+        // Straight away, not on the turn ending: the microphone is shut now, and
+        // the reading of the last words is still on its way.
+        listening(btn, false);
+    } else {
+        await startLive(mic, input, btn);
+    }
+}
+
+/** The browser's own recogniser, kept for the life of the page: it holds no
+ *  device open between turns, so there is nothing to release. */
+const browserEar = new WebSpeech();
+
+function toggleHere(input: HTMLTextAreaElement, btn: HTMLButtonElement): void {
+    if (browserEar.listening) {
+        browserEar.stop();
+        // The browser is still deciding the last words, and they arrive after
+        // this; the button says it stopped because the microphone has.
+        listening(btn, false);
+        return;
+    }
+    let written = input.value;
+    const edited = (): void => {
+        if (input.value !== written) {
+            // Nothing to rebase onto: this recogniser hands back the whole turn
+            // each time, so the person's edit becomes what it is added to.
+            browserEar.stop();
+        }
+    };
+    input.addEventListener("input", edited);
+    try {
+        browserEar.start(written, {
+            onText: text => {
+                written = text;
+                input.value = text;
+                input.dispatchEvent(new Event("input"));
+            },
+            onEnd: reason => {
+                input.removeEventListener("input", edited);
+                listening(btn, false);
+                input.focus();
+                if (reason) {
+                    toast.show({ type: "alert-error", title: "Voice input stopped", message: reason });
+                }
+            },
+        });
+        listening(btn, browserEar.listening);
+    } catch (error) {
+        input.removeEventListener("input", edited);
+        listening(btn, false);
+        toast.show({ type: "alert-error", title: "Voice input unavailable", message: micTrouble(error) });
+    }
+}
+
+/** Mic button: click to speak, click again to finish. With a recogniser that
+ *  streams the words appear as they are said; otherwise at the end. */
+function buildMicBtn(deps: IobarDeps, input: HTMLTextAreaElement): HTMLButtonElement {
     const btn = document.createElement("button");
     btn.className = "af-mic-btn";
     btn.title = "Voice input";
     btn.setAttribute("aria-label", "Voice input");
     btn.innerHTML = iconMarkup("mic", 16);
-    btn.addEventListener("click", () => void toggleMic(stt, input, btn));
+    btn.addEventListener("click", () => {
+        // Three ways to hear the same button, decided by what this deployment
+        // said it does: the browser's own recogniser, audio streamed to one, or
+        // a recording sent when the person stops.
+        if (recognisesHere()) {
+            toggleHere(input, btn);
+            return;
+        }
+        const mic = liveMic();
+        void (mic && liveOffered() ? toggleLive(mic, input, btn) : toggleMic(deps.stt, input, btn));
+    });
     return btn;
 }
 
@@ -347,14 +465,14 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
 
     const { inputWrap, input, mentionPanel } = buildInputArea(deps, select);
     bar.append(select, inputWrap);
+    if (micOffered()) {
+        bar.appendChild(buildMicBtn(deps, input));
+    }
     if (uploadsEnabled()) {
         const { button, picker } = buildAttachBtn();
         // The picker is a sibling rather than a child: interactive content
         // nested inside a button is invalid, hidden or not.
         bar.append(button, picker);
-    }
-    if (micAvailable()) {
-        bar.appendChild(buildMicBtn(deps.stt, input));
     }
     const sendBtn = buildSendBtn(deps, input, mentionPanel);
     const stopBtn = buildStopBtn(deps);

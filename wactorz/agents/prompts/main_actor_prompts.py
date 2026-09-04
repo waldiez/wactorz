@@ -596,7 +596,8 @@ or when a node is misbehaving but still reachable over MQTT):
 
 To shut down a remote runner (stops all agents, runner exits):
   /nodes shutdown rpi-livingroom
-  Note: if systemd manages the runner on that machine, it will auto-restart.
+  Note: the node stays down until it is redeployed — a shutdown is a clean
+  exit, and the systemd unit only restarts the runner after a failure.
 
 To remove a node entirely from Wactorz (clears spawn registry + retained MQTT):
   /nodes remove rpi-livingroom

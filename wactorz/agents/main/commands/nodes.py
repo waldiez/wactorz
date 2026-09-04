@@ -84,5 +84,6 @@ async def shutdown_node(ctx: CommandContext, argument: str) -> str:
     return (
         f"Shutdown signal sent to node '{node_name}'. "
         f"All agents will stop. The node will disappear from /nodes within 30s. "
-        f"(If systemd manages the runner, it will restart automatically.)"
+        f"(It stays down until redeployed: the unit restarts on failure, and a "
+        f"shutdown is not one.)"
     )

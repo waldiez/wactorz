@@ -1,6 +1,37 @@
 """Reading structure back out of an LLM response, and keying it for the cache."""
 
 import hashlib
+import json
+import re
+from typing import Any
+
+#: A backslash that does not start a JSON escape. Generated Python lands in
+#: the plan as a JSON string, and a model writing a regex (``\d``), a quote
+#: (``\'``) or a Windows path inside it escapes for Python, not for JSON —
+#: ``json.loads`` then refuses the whole plan with "Invalid \escape".
+_INVALID_JSON_ESCAPE = re.compile(r'\\(?!["\\/bfnrtu])')
+
+
+def loads_lenient(text: str) -> Any:
+    """``json.loads`` for model output.
+
+    Two things a model gets wrong that do not change what it meant: a raw
+    newline or tab inside a string (``strict=False`` accepts those), and a
+    backslash that is valid in the Python it was writing but not in JSON.
+    Doubling such a backslash yields the same Python source the model wrote,
+    so the repair cannot alter a plan that was already valid. Anything else
+    still raises the original ``JSONDecodeError``.
+    """
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError as first:
+        repaired = _INVALID_JSON_ESCAPE.sub(r"\\\\", text)
+        if repaired == text:
+            raise
+        try:
+            return json.loads(repaired, strict=False)
+        except json.JSONDecodeError:
+            raise first from None
 
 
 def extract_json_array(response: str) -> str:

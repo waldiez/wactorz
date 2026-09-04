@@ -410,6 +410,8 @@ PATTERN 7 — One-shot camera snapshot (e.g. 'take a snapshot of the office came
 - If user provides a Discord webhook URL, use it directly in code
 - If user provides a condition threshold (e.g. 'above 28 degrees'), encode it in the filter agent code
 - Dynamic agent code must be a single string with actual \\n newlines (not literal backslash-n)
+- The code is a JSON string: every backslash the Python needs must be doubled
+  (a regex \\d is written \\\\d, a CRLF \\r\\n is written \\\\r\\\\n, and \\' is never valid — write a plain ')
 - TOPIC-BASED WIRING: if LIVE DATA FLOWS shows an agent already publishing relevant data,
   subscribe to that topic instead of spawning a duplicate agent.
   Example: if 'person-detector' publishes 'rpi-kitchen/camera/detections',

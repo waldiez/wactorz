@@ -25,7 +25,7 @@ from ..prompts.planner_prompts import (
     PIPELINE_DESIGN_PROMPT,
     RULE_CONFLICT_PROMPT,
 )
-from .parsing import extract_json_array, extract_json_object
+from .parsing import extract_json_array, extract_json_object, loads_lenient
 
 if TYPE_CHECKING:
     from .hosts import PipelineHost
@@ -275,7 +275,7 @@ class PipelineMixin(_Host):
                 max_tokens=400,
             )
             self._accrue_usage(_usage)
-            data = json.loads(extract_json_object(response))
+            data = loads_lenient(extract_json_object(response))
         except Exception as e:
             logger.debug("[%s] Rule-conflict check failed: %s", self.name, e)
             return ""
@@ -372,7 +372,7 @@ class PipelineMixin(_Host):
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
-            plan = json.loads(extract_json_array(response))
+            plan = loads_lenient(extract_json_array(response))
             if isinstance(plan, list):
                 # Validate generated code — catch common LLM mistakes
                 plan = self._validate_pipeline_code(plan)

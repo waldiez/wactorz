@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased] — pending
 
+### Added
+
+- **A deployed node now runs under systemd, so it comes back after a reboot.** The runner was launched with `nohup`, which meant a power cut left the node gone until someone redeployed it by hand, and a crash left it gone until someone noticed. A deploy now installs a `wactorz-node` unit, choosing the least privilege the machine actually offers: root if the deploy user is root, otherwise a user unit when lingering is enabled, otherwise passwordless sudo. When a machine offers none of those the old `nohup` launch still happens, but the deploy result now says `nohup — unsupervised` rather than reporting the same success as a supervised install — the two used to be indistinguishable until the power blinked. Redeploying an existing node stops its old runner first, and clears any unit left at a location an earlier deploy chose, so a node whose privileges changed does not end up starting two runners after a reboot. `~/wactorz/.env` now also carries the node's name, broker and port, so the unit needs no per-node text.
+
+### Changed
+
+- **`/nodes shutdown` no longer claims the node will come back on its own.** The unit restarts the runner after a failure, and a shutdown is a clean exit — so the node stays down until it is redeployed, and the command now says that. Under the previously documented `Restart=always` unit the old wording was true but the command was unusable, because shutting a node down simply restarted it.
+
 ### Fixed
 
 - **A dashboard tab that can no longer reach Home Assistant now says so, instead of failing silently.** Behind Home Assistant ingress, the dashboard watches for requests that keep coming back 503 -- three or more in a row, over at least a minute -- and treats that as a link it cannot recover. It stops reconnecting the socket and shows a blocking notice asking you to reopen Wactorz from the Home Assistant sidebar. Shorter runs are ignored: a restarting add-on answers 503 for a few seconds and comes back on its own, and any successful response clears the count. A 401 still redirects to sign-in, and deployments not behind ingress are unaffected.

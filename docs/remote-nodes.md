@@ -52,20 +52,65 @@ Replace `192.168.1.10` with the IP of the machine running the MQTT broker. The `
 
 #### Run as a service (systemd)
 
+**A deploy from the dashboard installs this for you.** It picks the least
+privilege the node supports — root, then a user unit with lingering enabled,
+then passwordless sudo — and falls back to `nohup` only when the node offers
+none of them. The deploy result says which it got, so a node reported as
+`nohup — unsupervised` is one that will not come back after a reboot.
+
+The unit it writes, for a node deployed as user `pi`:
+
 ```ini
 [Unit]
 Description=Wactorz remote node
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
-ExecStart=/usr/bin/python3 /home/pi/remote_runner.py --broker 192.168.1.10 --name rpi-livingroom
-Restart=always
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/wactorz
+EnvironmentFile=/home/pi/wactorz/.env
+ExecStart=/home/pi/wactorz/venv/bin/python /home/pi/wactorz/remote_runner.py --broker ${WACTORZ_BROKER} --port ${WACTORZ_PORT} --name ${WACTORZ_NODE}
+Restart=on-failure
 RestartSec=5
-Environment=WACTORZ_BROKER=192.168.1.10
+RestartPreventExitStatus=2
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+A user unit is the same minus `User=`, with `WantedBy=default.target`, and lives
+at `~/.config/systemd/user/wactorz-node.service`.
+
+Three details worth knowing if you write one by hand:
+
+- **`Restart=on-failure`, not `always`.** `/nodes shutdown` exits cleanly on
+  purpose. Under `Restart=always` that command restarts the node instead of
+  stopping it.
+- **`RestartPreventExitStatus=2`.** Exit 2 means a node name that can never
+  work — it contains an MQTT wildcard — or a malformed `ExecStart`. Neither
+  succeeds on retry, so restarting is just noise.
+- **Every argument comes from `~/wactorz/.env`**, which the deploy writes at
+  mode 0600 with `WACTORZ_NODE`, `WACTORZ_BROKER`, `WACTORZ_PORT` and, when the
+  broker needs them, `MQTT_USERNAME`/`MQTT_PASSWORD`. Values are quoted so the
+  same file is safe both sourced by a shell and read by systemd — but note that
+  a `VAR=$(cmd)` you add by hand is executed by the shell and taken literally by
+  systemd, so avoid them.
+
+#### Logs
+
+Under a unit, the runner logs to the journal rather than to
+`~/wactorz/<node>.log`:
+
+```bash
+journalctl -u wactorz-node -f          # system unit
+journalctl --user -u wactorz-node -f   # user unit
+```
+
+The `~/wactorz/<node>.log` file is only written on the `nohup` fallback.
 
 > **💡 Self-test** — Run `python3 remote_runner.py --test` to execute the built-in supervisor test suite without needing a broker. Useful to verify the script works on a new device before connecting it.
 

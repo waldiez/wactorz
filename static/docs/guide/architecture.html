@@ -367,7 +367,7 @@
 <hr />
 <h2 id="message-flow">Message Flow</h2>
 <h3 id="user-agent-any-interface">User → Agent (any interface)</h3>
-<div class="highlight"><pre><span></span><code><span class="n">User</span><span class="w"> </span><span class="n">types</span><span class="p">:</span><span class="w">  </span><span class="s2">"@my-agent {"</span><span class="n">action</span><span class="s2">": "</span><span class="n">status</span><span class="s2">"}"</span>
+<div class="highlight"><pre><span></span><code><span class="n">User</span><span class="w"> </span><span class="n">types</span><span class="p">:</span><span class="w">  </span><span class="s2">&quot;@my-agent {&quot;</span><span class="n">action</span><span class="s2">&quot;: &quot;</span><span class="n">status</span><span class="s2">&quot;}&quot;</span>
 <span class="w">  </span><span class="err">│</span>
 <span class="w">  </span><span class="err">▼</span>
 <span class="n">Interface</span><span class="w"> </span><span class="p">(</span><span class="n">CLIInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">DiscordInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">RESTInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">WhatsAppInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TelegramInterface</span><span class="p">)</span>
@@ -402,9 +402,9 @@ Mosquitto
   │
   ▼
 lamp-on-discord-notify (DynamicAgent)
-  │  setup(): agent.subscribe("homeassistant/state_changes/#", on_state)
-  │  on_state(): if entity_id == "light.wiz_..." and new_state["state"] == "on":
-  │      httpx.post(discord_webhook, {"content": "Lamp is on!"})
+  │  setup(): agent.subscribe(&quot;homeassistant/state_changes/#&quot;, on_state)
+  │  on_state(): if entity_id == &quot;light.wiz_...&quot; and new_state[&quot;state&quot;] == &quot;on&quot;:
+  │      httpx.post(discord_webhook, {&quot;content&quot;: &quot;Lamp is on!&quot;})
   ▼
 Discord channel
 </code></pre></div>
@@ -480,7 +480,7 @@ Useful for running the dashboard without an API key, for end-to-end runs that
 need the same answer twice, and for recording a walkthrough without paying per
 take. Useless for anything that depends on the reply being <em>right</em>.</p>
 <div class="highlight"><pre><span></span><code><span class="nv">LLM_PROVIDER</span><span class="o">=</span>fake
-<span class="nv">LLM_FAKE_SCRIPT</span><span class="o">=</span><span class="s1">'{"weather": "It is 22 degrees and clear."}'</span><span class="w">   </span><span class="c1"># substring → reply</span>
+<span class="nv">LLM_FAKE_SCRIPT</span><span class="o">=</span><span class="s1">&#39;{&quot;weather&quot;: &quot;It is 22 degrees and clear.&quot;}&#39;</span><span class="w">   </span><span class="c1"># substring → reply</span>
 <span class="nv">LLM_FAKE_INTENT</span><span class="o">=</span>OTHER<span class="w">                                          </span><span class="c1"># ACTUATE | HA | PIPELINE | OTHER</span>
 </code></pre></div>
 
@@ -489,7 +489,7 @@ default reply that is deliberately obviously synthetic, so a recording made
 against it cannot be mistaken for a real session.</p>
 <h3 id="per-call-site-overrides">Per-call-site overrides</h3>
 <p><code>LLM_OVERRIDES</code> routes individual call sites to different providers/models, falling back to the global <code>LLM_PROVIDER</code> for any site not listed (<code>wactorz/llm_factory.py</code>):</p>
-<div class="highlight"><pre><span></span><code><span class="nv">LLM_OVERRIDES</span><span class="o">=</span><span class="s2">"intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6"</span>
+<div class="highlight"><pre><span></span><code><span class="nv">LLM_OVERRIDES</span><span class="o">=</span><span class="s2">&quot;intent=ollama:qwen3:4b,planner=anthropic:claude-sonnet-4-6&quot;</span>
 </code></pre></div>
 
 <table>
@@ -533,10 +533,10 @@ against it cannot be mistaken for a real session.</p>
 <h2 id="supervision-tree">Supervision Tree</h2>
 <p>The supervisor is configured in <code>cli.py</code> inside <code>build_system()</code>. Each actor is registered with a factory function (called fresh on each restart), a strategy, and restart limits:</p>
 <div class="highlight"><pre><span></span><code><span class="n">system</span><span class="o">.</span><span class="n">supervisor</span>
-  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">"main"</span><span class="p">,</span>     <span class="n">make_main</span><span class="p">,</span>     <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">"monitor"</span><span class="p">,</span>  <span class="n">make_monitor</span><span class="p">,</span>  <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">"catalog"</span><span class="p">,</span>  <span class="n">make_catalog</span><span class="p">,</span>  <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
-  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">"home-assistant-agent"</span><span class="p">,</span> <span class="n">make_ha_agent</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">&quot;main&quot;</span><span class="p">,</span>     <span class="n">make_main</span><span class="p">,</span>     <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">&quot;monitor&quot;</span><span class="p">,</span>  <span class="n">make_monitor</span><span class="p">,</span>  <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">&quot;catalog&quot;</span><span class="p">,</span>  <span class="n">make_catalog</span><span class="p">,</span>  <span class="n">strategy</span><span class="o">=</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+  <span class="o">.</span><span class="n">supervise</span><span class="p">(</span><span class="s2">&quot;home-assistant-agent&quot;</span><span class="p">,</span> <span class="n">make_ha_agent</span><span class="p">,</span> <span class="n">max_restarts</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
   <span class="c1"># ... etc</span>
 </code></pre></div>
 

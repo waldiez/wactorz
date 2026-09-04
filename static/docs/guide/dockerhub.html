@@ -183,14 +183,14 @@ log_dest stdout
 <span class="w">    </span><span class="nt">container_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-mosquitto</span>
 <span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">unless-stopped</span>
 <span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"1883:1883"</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;1883:1883&quot;</span>
 <span class="w">    </span><span class="nt">volumes</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mosquitto-data:/mosquitto/data</span>
 <span class="w">    </span><span class="nt">networks</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-net</span>
 <span class="w">    </span><span class="nt">healthcheck</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"CMD"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"mosquitto_sub"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-t"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"$$SYS/#"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-C"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"1"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-i"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"hc"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"-W"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"3"</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="nt">test</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;CMD&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;mosquitto_sub&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-t&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;$$SYS/#&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-C&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;1&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-i&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;hc&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;-W&quot;</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">&quot;3&quot;</span><span class="p p-Indicator">]</span>
 <span class="w">      </span><span class="nt">interval</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10s</span>
 <span class="w">      </span><span class="nt">timeout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5s</span>
 <span class="w">      </span><span class="nt">retries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
@@ -203,11 +203,11 @@ log_dest stdout
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.env</span>
 <span class="w">    </span><span class="nt">environment</span><span class="p">:</span>
 <span class="w">      </span><span class="nt">MQTT_HOST</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mosquitto</span>
-<span class="w">      </span><span class="nt">MQTT_PORT</span><span class="p">:</span><span class="w"> </span><span class="s">"1883"</span>
+<span class="w">      </span><span class="nt">MQTT_PORT</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;1883&quot;</span>
 <span class="w">      </span><span class="nt">INTERFACE</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">rest</span>
 <span class="w">    </span><span class="nt">ports</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"8000:8000"</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"8888:8888"</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8000:8000&quot;</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">&quot;8888:8888&quot;</span>
 <span class="w">    </span><span class="nt">networks</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-net</span>
 <span class="w">    </span><span class="nt">depends_on</span><span class="p">:</span>
@@ -270,8 +270,8 @@ log_dest stdout
 <div class="highlight"><pre><span></span><code><span class="n">mkdir</span> <span class="n">wactorz</span>
 <span class="nb">cd </span><span class="n">wactorz</span>
 <span class="nb">Invoke-WebRequest</span> <span class="p">`</span>
-  <span class="n">-Uri</span> <span class="s2">"https://raw.githubusercontent.com/waldiez/wactorz/main/.env.template"</span> <span class="p">`</span>
-  <span class="n">-OutFile</span> <span class="s2">".env.template"</span>
+  <span class="n">-Uri</span> <span class="s2">&quot;https://raw.githubusercontent.com/waldiez/wactorz/main/.env.template&quot;</span> <span class="p">`</span>
+  <span class="n">-OutFile</span> <span class="s2">&quot;.env.template&quot;</span>
 <span class="nb">Copy-Item</span> <span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">template</span> <span class="p">.</span><span class="n">env</span>
 </code></pre></div>
 
@@ -290,16 +290,16 @@ log_dest stdout
 </blockquote>
 <h3 id="step-3-start-mosquitto">Step 3 — Start Mosquitto</h3>
 <div class="highlight"><pre><span></span><code><span class="no">[System.IO.File]</span><span class="p">::</span><span class="n">WriteAllText</span><span class="p">(</span>
-  <span class="p">(</span><span class="nb">Join-Path</span> <span class="p">(</span><span class="nb">Get-Location</span><span class="p">)</span> <span class="s2">"mosquitto.conf"</span><span class="p">),</span>
-  <span class="s2">"listener 1883</span><span class="se">`n</span><span class="s2">allow_anonymous true</span><span class="se">`n</span><span class="s2">persistence true</span><span class="se">`n</span><span class="s2">persistence_location /mosquitto/data/</span><span class="se">`n</span><span class="s2">log_dest stdout</span><span class="se">`n</span><span class="s2">"</span><span class="p">,</span>
+  <span class="p">(</span><span class="nb">Join-Path</span> <span class="p">(</span><span class="nb">Get-Location</span><span class="p">)</span> <span class="s2">&quot;mosquitto.conf&quot;</span><span class="p">),</span>
+  <span class="s2">&quot;listener 1883</span><span class="se">`n</span><span class="s2">allow_anonymous true</span><span class="se">`n</span><span class="s2">persistence true</span><span class="se">`n</span><span class="s2">persistence_location /mosquitto/data/</span><span class="se">`n</span><span class="s2">log_dest stdout</span><span class="se">`n</span><span class="s2">&quot;</span><span class="p">,</span>
   <span class="no">[System.Text.UTF8Encoding]</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="nv">$false</span><span class="p">)</span>
 <span class="p">)</span>
 
 <span class="n">docker</span> <span class="n">network</span> <span class="n">create</span> <span class="n">wactorz-net</span>
 <span class="n">docker</span> <span class="n">run</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-name</span> <span class="n">wactorz-mosquitto</span> <span class="p">`</span>
   <span class="p">-</span><span class="n">-network</span> <span class="n">wactorz-net</span> <span class="p">`</span>
-  <span class="n">-p</span> <span class="s2">"1883:1883"</span> <span class="p">`</span>
-  <span class="n">-v</span> <span class="s2">"${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf"</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">&quot;1883:1883&quot;</span> <span class="p">`</span>
+  <span class="n">-v</span> <span class="s2">&quot;${PWD}\mosquitto.conf:/mosquitto/config/mosquitto.conf&quot;</span> <span class="p">`</span>
   <span class="n">eclipse-mosquitto</span><span class="p">:</span><span class="n">2</span><span class="p">.</span><span class="n">0</span>
 </code></pre></div>
 
@@ -307,9 +307,9 @@ log_dest stdout
 <h3 id="step-4-start-wactorz">Step 4 — Start Wactorz</h3>
 <div class="highlight"><pre><span></span><code><span class="n">docker</span> <span class="n">run</span> <span class="n">-d</span> <span class="p">-</span><span class="n">-name</span> <span class="n">wactorz</span> <span class="p">`</span>
   <span class="p">-</span><span class="n">-network</span> <span class="n">wactorz-net</span> <span class="p">`</span>
-  <span class="n">-p</span> <span class="s2">"8000:8000"</span> <span class="p">`</span>
-  <span class="n">-p</span> <span class="s2">"8888:8888"</span> <span class="p">`</span>
-  <span class="p">-</span><span class="n">-env</span><span class="o">-file</span> <span class="s2">"${PWD}\.env"</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">&quot;8000:8000&quot;</span> <span class="p">`</span>
+  <span class="n">-p</span> <span class="s2">&quot;8888:8888&quot;</span> <span class="p">`</span>
+  <span class="p">-</span><span class="n">-env</span><span class="o">-file</span> <span class="s2">&quot;${PWD}\.env&quot;</span> <span class="p">`</span>
   <span class="n">-e</span> <span class="n">MQTT_HOST</span><span class="p">=</span><span class="n">wactorz-mosquitto</span> <span class="p">`</span>
   <span class="n">waldiez</span><span class="p">/</span><span class="n">wactorz</span><span class="p">:</span><span class="n">latest</span>
 </code></pre></div>

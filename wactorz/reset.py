@@ -8,7 +8,9 @@ state       per-agent pickle file (state/<name>/state.pkl)
 metrics     cost and message-count kv entries
 spawns      spawn_registry table
 logs        truncate wactorz.log and monitor.log (safe while running)
-all         everything above
+all         everything above, plus the durable memory main keeps in the
+            database: pipeline rules, user facts, notification URLs, topic
+            contracts and agent manifests
 
 Each function is safe to call while the system is down (offline reset) or
 while it is running (the next heartbeat / restart will repopulate from scratch).
@@ -28,6 +30,19 @@ logger = logging.getLogger(__name__)
 
 _CHAT_KV_KEYS = ("conversation_history", "history_summary")
 _METRIC_KV_KEYS = ("_final_cost", "_messages_processed")
+#: Durable memory kept in kv_store and read back through recall() on every
+#: call, so nothing in memory stands between a wipe and the rows: pipeline
+#: rules, user facts, notification webhook URLs, topic contracts and agent
+#: manifests. Each of the other scopes deletes only its own keys, and main is
+#: a kept actor, so its rows are never purged wholesale — without this list a
+#: "wipe everything" left every rule and fact in place.
+_MEMORY_KV_KEYS = (
+    "_pipeline_rules",
+    "_user_facts",
+    "_notification_urls",
+    "_topic_contracts",
+    "_agent_manifests",
+)
 
 
 # Resolved, not ensured: a wipe must target the same durable location the app
@@ -138,6 +153,26 @@ def reset_metrics(agent_name: str | None = None, db_path: str | None = None) -> 
     )
 
 
+def reset_memory(agent_name: str | None = None, db_path: str | None = None) -> None:
+    """Clear pipeline rules, user facts, notification URLs, topic contracts and
+    agent manifests (optionally for one agent).
+
+    These live in ``kv_store`` and are read through ``recall()`` on every use,
+    so clearing an in-memory attribute does nothing: the next read comes
+    straight back from the database. Part of a full wipe only — no scope of
+    its own — because a reset that forgets the agents but keeps the rules
+    that spawned them is exactly the half-reset this exists to prevent.
+    """
+    with _db(db_path) as db:
+        agents: list[str] = [agent_name] if agent_name else _all_kv_agents(db)
+        for agent in agents:
+            for key in _MEMORY_KV_KEYS:
+                db.kv_delete(agent, key)
+    logger.info(
+        "[reset] memory kv cleared%s", f" for {agent_name!r}" if agent_name else " (all agents)"
+    )
+
+
 _SPAWN_REGISTRY_KV_KEY = "_spawned_agents"
 
 
@@ -243,10 +278,11 @@ def reset_logs(log_dir: str | None = None) -> None:
 def reset_all(
     agent_name: str | None = None, db_path: str | None = None, state_dir: str | None = None
 ) -> None:
-    """Full wipe: chat, metrics, spawns, pickle state, attachments, and logs."""
+    """Full wipe: chat, metrics, spawns, memory, pickle state, attachments, and logs."""
     reset_chat(agent_name, db_path, state_dir)
     reset_metrics(agent_name, db_path)
     reset_spawns(agent_name, db_path)
+    reset_memory(agent_name, db_path)
     if agent_name:
         reset_agent_state(agent_name, state_dir)
     else:

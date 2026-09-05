@@ -29,6 +29,7 @@ from ...core.actor import Actor, ActorState, Message, MessageType
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
 from .api import AgentAPI
+from .carryover import carry_over_globals
 from .cv2_shim import resilient_cv2_module
 from .resources import release_open_resources
 from .safety import extract_function_body, validate_code_safety
@@ -218,6 +219,10 @@ class DynamicAgent(Actor):
         code is stored, persisted for restarts, and started the same way
         on_start() starts a program; the caller must return from the loop it
         is running in, since that loop belongs to the old program.
+
+        What the old program remembered is kept: `agent.state` and persisted
+        keys live outside the namespace, and its plain module-level values are
+        copied into the new one before setup() runs.
         """
         old_ns = self._ns
         self._ns = {}
@@ -231,6 +236,7 @@ class DynamicAgent(Actor):
         new_ns = self._ns
         self._ns = old_ns
         await self._tear_down_program()
+        carry_over_globals(old_ns, new_ns, self.name)
         self._ns = new_ns
         self._code = fixed
         self._consecutive_errors = 0  # give the fixed code a clean slate
@@ -501,6 +507,7 @@ class DynamicAgent(Actor):
                 # A partial setup() may have opened a camera or a file the
                 # repaired one needs to open again.
                 await self._tear_down_program()
+                old_ns = self._ns
 
                 # Recompile the fixed code
                 self._ns = {}
@@ -520,6 +527,7 @@ class DynamicAgent(Actor):
                     else:
                         break
 
+                carry_over_globals(old_ns, self._ns, self.name)
                 self._code = fixed
                 current_code = fixed
                 setup = self._fn_setup
@@ -619,6 +627,12 @@ class DynamicAgent(Actor):
             "  RIGHT: w.latest()           — returns latest payload dict (or None)\n"
             "  RIGHT: w.values('temp')     — list of all 'temp' values in window\n"
             "  RIGHT: w.mean('temp')       — average of 'temp' over window\n\n"
+            "KEEP THE AGENT'S MEMORY: the repaired code takes over from the running "
+            "agent, and its counters, module-level values, agent.state and persisted "
+            "keys are carried across. Do not reset, clear or re-initialise any of them "
+            "as part of the fix unless that state is itself the cause of the error. "
+            "Remove or correct the failing logic; do not wrap it in a catch that "
+            "starts the agent over.\n\n"
             "Fix the error. Return ONLY the corrected Python code — no explanations, "
             "no markdown fences, no commentary.\n\n"
             f"```python\n{code}\n```"

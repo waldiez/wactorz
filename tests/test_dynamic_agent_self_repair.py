@@ -228,6 +228,115 @@ class TestRepairingProcess:
 
         assert "Counts to five and reports each step" in llm.prompts[0]
 
+    async def test_the_prompt_tells_the_model_to_keep_the_agents_memory(
+        self, tmp_path: Path
+    ) -> None:
+        """A fix that catches the error and starts the counters over loses what
+        the carry-over just preserved."""
+        llm = ScriptedLLM(REPAIRED_PROCESS)
+        agent = make_agent(tmp_path, CRASHING_PROCESS, llm)
+        await agent.on_start()
+
+        await until(lambda: len(llm.prompts) >= 1)
+        await shut_down(agent)
+
+        assert "KEEP THE AGENT'S MEMORY" in llm.prompts[0]
+        assert "Do not reset" in llm.prompts[0]
+
+
+COUNTING_CRASH = """
+count = 0
+history = []
+
+async def setup(agent):
+    agent.state.setdefault("seen", [])
+
+async def process(agent):
+    global count
+    count += 1
+    history.append(f"turn {count}")
+    agent.state["seen"].append(count)
+    if count >= 3:
+        raise RuntimeError("Intentional crash: reached count of 3")
+"""
+
+COUNTING_REPAIRED = """
+count = 0
+history = []
+camera = None
+
+class FakeCamera:
+    def isOpened(self):
+        return True
+
+    def release(self):
+        pass
+
+async def setup(agent):
+    global camera
+    camera = FakeCamera()
+    agent.state.setdefault("seen", [])
+
+async def process(agent):
+    global count
+    count += 1
+    history.append(f"turn {count}")
+    agent.state["seen"].append(count)
+    agent.state["snapshot"] = {"count": count, "history": list(history)}
+"""
+
+
+class TestMemoryAcrossARepair:
+    """An error can come at any time; what the agent has learnt must not go with it."""
+
+    async def test_module_level_counters_and_histories_carry_over(self, tmp_path: Path) -> None:
+        llm = ScriptedLLM(COUNTING_REPAIRED)
+        agent = make_agent(tmp_path, COUNTING_CRASH, llm)
+        await agent.on_start()
+
+        await until(lambda: agent._api.state.get("snapshot", {}).get("count", 0) >= 6)
+        await shut_down(agent)
+
+        snapshot = agent._api.state["snapshot"]
+        assert snapshot["count"] == 6
+        assert snapshot["history"][:4] == ["turn 1", "turn 2", "turn 3", "turn 4"]
+
+    async def test_agent_state_carries_over(self, tmp_path: Path) -> None:
+        llm = ScriptedLLM(COUNTING_REPAIRED)
+        agent = make_agent(tmp_path, COUNTING_CRASH, llm)
+        await agent.on_start()
+
+        await until(lambda: len(agent._api.state.get("seen", [])) >= 6)
+        await shut_down(agent)
+
+        assert agent._api.state["seen"][:6] == [1, 2, 3, 4, 5, 6]
+
+    async def test_resources_are_rebuilt_by_the_new_setup_not_carried(self, tmp_path: Path) -> None:
+        """A camera the old program held is released; the new setup() opens its own."""
+        llm = ScriptedLLM(COUNTING_REPAIRED, COUNTING_REPAIRED)
+        agent = make_agent(tmp_path, COUNTING_REPAIRED, llm)
+        await agent.on_start()
+        await until(lambda: agent._ns.get("camera") is not None)
+        first_camera = agent._ns["camera"]
+
+        # Force a repair from the outside: the running code is fine, so the
+        # crash is injected by replacing its process() with a failing one.
+        async def failing(_api: Any) -> None:
+            raise RuntimeError("Intentional crash from outside")
+
+        agent._ns["process"] = failing
+        for task in list(agent._program_tasks):
+            task.cancel()
+        await asyncio.gather(*agent._program_tasks, return_exceptions=True)
+        agent._program_tasks.clear()
+        agent._fn_process = failing
+        agent._track_program_task(asyncio.create_task(agent._process_loop()))
+
+        await until(lambda: agent._ns.get("camera") not in (None, first_camera))
+        await shut_down(agent)
+
+        assert agent._ns["camera"] is not first_camera
+
 
 class TestRepairingSetup:
     async def test_the_repaired_setup_is_the_one_retried(self, tmp_path: Path) -> None:

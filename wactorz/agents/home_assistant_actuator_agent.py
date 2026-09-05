@@ -63,6 +63,41 @@ class ActuatorAction:
         )
 
 
+_PAYLOAD_REF_PREFIX = "$payload"
+
+
+def _lookup_payload_path(payload: dict, path: str) -> Any:
+    """Resolve "$payload.a.b" against the trigger payload. Returns None if missing."""
+    value: Any = payload
+    for part in path.split(".")[1:]:  # skip the leading "$payload"
+        if isinstance(value, dict):
+            value = value.get(part)
+        elif isinstance(value, list) and part.isdigit():
+            idx = int(part)
+            value = value[idx] if idx < len(value) else None
+        else:
+            return None
+        if value is None:
+            return None
+    return value
+
+
+def resolve_payload_refs(data: Any, payload: dict) -> Any:
+    """Recursively replace "$payload.x.y" strings in service_data with values
+    from the trigger payload. Non-reference values are returned unchanged."""
+    if isinstance(data, str):
+        if data == _PAYLOAD_REF_PREFIX:
+            return payload
+        if data.startswith(_PAYLOAD_REF_PREFIX + "."):
+            return _lookup_payload_path(payload, data)
+        return data
+    if isinstance(data, dict):
+        return {k: resolve_payload_refs(v, payload) for k, v in data.items()}
+    if isinstance(data, list):
+        return [resolve_payload_refs(v, payload) for v in data]
+    return data
+
+
 @dataclass
 class ActuatorCondition:
     """A condition checked against a live HA entity state before actuating."""
@@ -286,7 +321,25 @@ class HomeAssistantActuatorAgent(Actor):
             return
 
         for action in self.config.actions:
-            await self._call_service(action)
+            resolved = ActuatorAction(
+                domain=action.domain,
+                service=action.service,
+                entity_id=resolve_payload_refs(action.entity_id, payload),
+                service_data=resolve_payload_refs(action.service_data, payload),
+            )
+            missing = [k for k, v in resolved.service_data.items() if v is None]
+            if missing:
+                logger.warning(
+                    "[%s] Skipping %s.%s — payload refs unresolved for %s (payload keys: %s)",
+                    self.name,
+                    action.domain,
+                    action.service,
+                    missing,
+                    sorted(payload.keys()),
+                )
+                self.metrics.tasks_failed += 1
+                continue
+            await self._call_service(resolved)
 
         self._last_actuation_time = now
         self._actuations_count += 1

@@ -182,6 +182,15 @@ TYPE 1 — "ha_actuator"
     "conditions": []
     "detection_filter": {"<top-level-key>": <value>} or null
     "cooldown_seconds": <number>
+  DYNAMIC service_data — any string value of the form "$payload.<key>" (dotted paths and
+  list indices allowed, e.g. "$payload.color.rgb", "$payload.rgb.0") is replaced at trigger
+  time with that field from the incoming MQTT payload. Use this whenever the value is
+  computed upstream (a detected color, a measured temperature, a chosen scene):
+    upstream publishes {"detected": true, "rgb": [200, 30, 40]}
+    action: {"domain": "light", "service": "turn_on", "entity_id": "light.wiz_...",
+             "service_data": {"rgb_color": "$payload.rgb", "brightness": 200}}
+  The upstream agent MUST publish plain JSON types (cast numpy values with int()/float()).
+  If a referenced key is missing from the payload, the action is skipped and logged.
 
 TYPE 2 — "scheduled"
   Purpose: fire an event at a SPECIFIC time or interval. THE ONLY correct way
@@ -410,8 +419,6 @@ PATTERN 7 — One-shot camera snapshot (e.g. 'take a snapshot of the office came
 - If user provides a Discord webhook URL, use it directly in code
 - If user provides a condition threshold (e.g. 'above 28 degrees'), encode it in the filter agent code
 - Dynamic agent code must be a single string with actual \\n newlines (not literal backslash-n)
-- The code is a JSON string: every backslash the Python needs must be doubled
-  (a regex \\d is written \\\\d, a CRLF \\r\\n is written \\\\r\\\\n, and \\' is never valid — write a plain ')
 - TOPIC-BASED WIRING: if LIVE DATA FLOWS shows an agent already publishing relevant data,
   subscribe to that topic instead of spawning a duplicate agent.
   Example: if 'person-detector' publishes 'rpi-kitchen/camera/detections',

@@ -116,6 +116,9 @@ class StreamsMixin(_Host):
 
         task = asyncio.create_task(run_subscription_listener(actor, topic, callback))
         actor._tasks.append(task)
+        # The listener belongs to the generated program: an in-place code
+        # repair cancels it so the old namespace's callback stops being called.
+        getattr(actor, "_program_tasks", []).append(task)
 
         # Auto-register subscription in TopicBus
         try:

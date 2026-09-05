@@ -297,7 +297,16 @@ PATTERN 3 — Webcam/camera object detection triggers HA action:
       and REQUIRE the HA token as a Bearer header. Before calling cv2.VideoCapture, set:
         import os
         os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = f"headers;Authorization: Bearer {os.environ['HA_TOKEN']}\\r\\n"
-      Then load YOLO model and open the stream with cv2.VideoCapture(<url>)
+      VISION MODELS — use Ultralytics for ALL camera tasks. Exact filenames (no "v"):
+          object detection        YOLO('yolo26n.pt')
+          pose / keypoints /      YOLO('yolo26n-pose.pt')   — 17 COCO keypoints; results[0].keypoints.xy
+            gestures / fall
+          segmentation / masks    YOLO('yolo26n-seg.pt')
+          classification          YOLO('yolo26n-cls.pt')
+          depth / distance        YOLO('yolo26n-depth.pt')
+          NEVER use mediapipe, opencv-dnn, or yolov5/yolov8/yolo11.
+          Install: ultralytics, opencv-python — nothing else for vision.
+      Then load selected YOLO model and open the stream with cv2.VideoCapture(<url>)
       using the EXACT URL from CAMERA STREAM URLS below — never /dev/video0 or a guessed proxy path
       IMPORTANT: read the token from os.environ['HA_TOKEN'] — NEVER hardcode the token value.
     process(agent): capture frame, run inference, determine if target object is detected,
@@ -381,7 +390,7 @@ PATTERN 7 — One-shot camera snapshot (e.g. 'take a snapshot of the office came
         async with httpx.AsyncClient() as client:
             resp = await client.get('<snapshot-url-from-CAMERA-SNAPSHOT-URLS>', headers=headers)
             image_bytes = resp.content
-        # ... process image_bytes (e.g. run YOLO on it once, save to disk, etc.)
+        # ... process image_bytes (e.g. run YOLOv26 on it once, save to disk, etc.)
   IMPORTANT: read the token from os.environ['HA_TOKEN'] — NEVER hardcode the token value.
   If the result feeds an HA action (e.g. 'if there is a desk, turn on the light'),
   publish the detection result to a topic and pair with an ha_actuator (see PATTERN 3 agent 2).

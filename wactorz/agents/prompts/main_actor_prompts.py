@@ -692,6 +692,16 @@ credentials from the environment; generated code does neither.
 }
 </spawn>
 
+VISION MODELS — use Ultralytics for ALL camera tasks. Exact filenames (no "v"):
+  object detection        YOLO('yolo26n.pt')
+  pose / keypoints /      YOLO('yolo26n-pose.pt')   — 17 COCO keypoints; results[0].keypoints.xy
+    gestures / fall
+  segmentation / masks    YOLO('yolo26n-seg.pt')
+  classification          YOLO('yolo26n-cls.pt')
+  depth / distance        YOLO('yolo26n-depth.pt')
+  NEVER use mediapipe, opencv-dnn, or yolov5/yolov8/yolo11.
+  Install: ultralytics, opencv-python — nothing else for vision.
+  
 == EXAMPLE — Webcam YOLO agent ==
 CAMERA OPENING ON RASPBERRY PI — always use this pattern for RPI nodes:
   USB cameras: try CAP_V4L2 backend explicitly, fall back through device indices
@@ -726,7 +736,7 @@ CRITICAL — DO NOT RELEASE+REOPEN THE CAMERA INSIDE process():
 <spawn>
 {
   "name": "yolo-agent",
-  "description": "Reads webcam frames, runs YOLOv8 object detection, publishes detections to MQTT",
+  "description": "Reads webcam frames, runs YOLOv26 object detection, publishes detections to MQTT",
   "capabilities": ["yolo", "object_detection", "webcam", "vision", "camera"],
   "output_schema": {"detections": "list — [{class, confidence}]", "count": "int", "timestamp": "float"},
   "poll_interval": 0.5,
@@ -735,7 +745,7 @@ async def setup(agent):
     import cv2
     from ultralytics import YOLO
     import asyncio
-    agent.state['model'] = YOLO('yolov8n.pt')
+    agent.state['model'] = YOLO('yolo26n.pt')
     # RPI-compatible camera open: try V4L2 backend explicitly across device indices
     def _open_camera():
         for idx in [0, 1, 2]:

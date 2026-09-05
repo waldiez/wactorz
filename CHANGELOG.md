@@ -11,6 +11,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- **Vision agents default to Ultralytics YOLO26.** The planner and orchestrator prompts now name the model per task (`yolo26n.pt`, `yolo26n-pose.pt`, `yolo26n-seg.pt`, `yolo26n-cls.pt`, `yolo26n-depth.pt`) and rule out MediaPipe, torchvision and older YOLO releases. Left to its own knowledge the model reached for `yolov8n.pt`, or `yolov26n.pt` (which does not exist), or MediaPipe for pose. **Requires an `ultralytics` release that knows YOLO26** — older versions fail with `FileNotFoundError` on the weights file.
 - **`/nodes shutdown` no longer claims the node will come back on its own.** The unit restarts the runner after a failure, and a shutdown is a clean exit — so the node stays down until it is redeployed, and the command now says that. Under the previously documented `Restart=always` unit the old wording was true but the command was unusable, because shutting a node down simply restarted it.
 
 ### Fixed

@@ -84,7 +84,8 @@ def _lookup_payload_path(payload: dict, path: str) -> Any:
 
 def resolve_payload_refs(data: Any, payload: dict) -> Any:
     """Recursively replace "$payload.x.y" strings in service_data with values
-    from the trigger payload. Non-reference values are returned unchanged."""
+    from the trigger payload. Non-reference values are returned unchanged.
+    """
     if isinstance(data, str):
         if data == _PAYLOAD_REF_PREFIX:
             return payload

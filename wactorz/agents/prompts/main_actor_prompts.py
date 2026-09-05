@@ -701,7 +701,7 @@ VISION MODELS — use Ultralytics for ALL camera tasks. Exact filenames (no "v")
   depth / distance        YOLO('yolo26n-depth.pt')
   NEVER use mediapipe, opencv-dnn, or yolov5/yolov8/yolo11.
   Install: ultralytics, opencv-python — nothing else for vision.
-  
+
 == EXAMPLE — Webcam YOLO agent ==
 CAMERA OPENING ON RASPBERRY PI — always use this pattern for RPI nodes:
   USB cameras: try CAP_V4L2 backend explicitly, fall back through device indices

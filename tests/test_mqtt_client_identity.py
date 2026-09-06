@@ -17,6 +17,11 @@ from wactorz.core.mqtt_publisher import MQTTPublisher
 
 #: Connections that serve one request and must keep a random id -- see
 #: TestTheEphemeralSet for why a stable one would be actively harmful.
+#: The node's own one-shots, named by the function that opens them. These build
+#: `aiomqtt.Client` directly -- remote_runner.py imports nothing from wactorz --
+#: so the module scan below cannot see them.
+NODE_EPHEMERAL = ["_listen", "_fetch"]
+
 EPHEMERAL = [
     "wactorz/web/chat.py",
     "wactorz/interfaces/chat/cli.py",
@@ -24,6 +29,20 @@ EPHEMERAL = [
     "wactorz/agents/planner/context.py",
     "wactorz/core/topic_bus.py",
 ]
+
+
+def _node_client_calls(function_name: str) -> list[ast.Call]:
+    """Every `aiomqtt.Client(...)` built inside one runner function."""
+    tree = ast.parse(Path("wactorz/remote_runner.py").read_text(encoding="utf-8"))
+    return [
+        call
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == function_name
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "Client"
+    ]
 
 
 @pytest.fixture(name="state_dir")
@@ -156,6 +175,15 @@ class TestTheEphemeralSet:
         ]
 
         assert not named, f"{module_path} gave a request-scoped connection a stable id"
+
+    @pytest.mark.parametrize("function_name", NODE_EPHEMERAL)
+    def test_a_node_one_shot_passes_no_identifier(self, function_name: str) -> None:
+        calls = _node_client_calls(function_name)
+
+        assert calls, f"{function_name} builds no client -- has it moved or been renamed?"
+        assert not [c for c in calls if any(kw.arg == "identifier" for kw in c.keywords)], (
+            f"{function_name} gave a one-shot connection a stable id"
+        )
 
     def test_the_list_is_not_vacuous(self) -> None:
         # A path typo would make every case above pass by finding no calls.

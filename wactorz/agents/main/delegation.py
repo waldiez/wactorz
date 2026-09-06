@@ -29,7 +29,13 @@ from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ...core.actor import MessageType
-from ...core.mqtt import client_id, install_id, mqtt_client
+from ...core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    install_id,
+    mqtt_client,
+    session_kwargs,
+)
 
 if TYPE_CHECKING:
     from .hosts import DelegationHost
@@ -126,7 +132,7 @@ class DelegationManager:
                     self.host._mqtt_broker,
                     self.host._mqtt_port,
                     identifier=client_id("srv", install_id(), "delegation"),
-                    clean_session=False,
+                    **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     await client.subscribe(topic, qos=1)
                     subscribed.set()

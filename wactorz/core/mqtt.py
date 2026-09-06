@@ -121,6 +121,38 @@ def _read_minted(path: Path) -> str:
     return ""
 
 
+#: How long the broker keeps an infrastructure connection's session after it
+#: disconnects. Long enough that a server restart, a node reboot or an overnight
+#: outage resumes where it left off; short enough that an install that is
+#: decommissioned, or a node that never comes back, stops costing broker state.
+SERVER_SESSION_EXPIRY_SECONDS = 86400
+
+
+def session_kwargs(expiry_seconds: int) -> dict[str, Any]:
+    """Connect arguments that make the broker hold this session for a while.
+
+    MQTT v5 rather than v3.1.1, which is what ``clean_session=False`` speaks.
+    A v3.1.1 durable session has **no expiry**: the broker keeps it until the
+    client returns with a clean session, and with ``persistence true`` -- which
+    every broker this ships with sets -- it survives a broker restart too. So an
+    abandoned client leaves state behind for ever, and nothing in the protocol
+    reclaims it. Naming a lifetime is the whole point of moving.
+
+    The protocol version is per connection, so callers adopt this one at a time.
+    """
+    import aiomqtt
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.properties import Properties
+
+    properties = Properties(PacketTypes.CONNECT)
+    properties.SessionExpiryInterval = expiry_seconds
+    return {
+        "protocol": aiomqtt.ProtocolVersion.V5,
+        "clean_start": False,
+        "properties": properties,
+    }
+
+
 def client_id(role: str, scope: str, detail: str | None = None) -> str:
     """Build an MQTT client id: ``wactorz-<role>-<scope>[-<detail>]``.
 

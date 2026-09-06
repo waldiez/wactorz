@@ -24,7 +24,7 @@ class MQTTPublisher:
     """Reliable async MQTT publisher with:
       - Persistent in-memory outbox queue (messages survive reconnects)
       - SQLite-backed durable outbox (messages survive process crashes)
-      - clean_session=False + fixed client_id (broker holds QoS 1 messages)
+      - a kept session + fixed client_id (broker holds QoS 1 messages)
       - QoS 1 for critical messages, QoS 0 for telemetry
       - Automatic reconnection with exponential backoff
       - Never blocks callers — publish() always returns immediately
@@ -302,11 +302,13 @@ class MQTTPublisher:
 
     async def _run(self, broker: str, port: int) -> None:
         """Background loop: maintain persistent MQTT connection and drain the outbox.
-        - clean_session=False: broker holds subscriptions + QoS 1 messages across reconnects
+        - a kept session: the broker holds subscriptions and QoS 1 messages across
+          reconnects, and forgets them once the expiry passes
         - Fixed client_id: same session resumed after reconnect
         - Messages are NOT dequeued until successfully published (no loss on disconnect)
         """
-        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
+        # local: avoids core/__init__ import cycle
+        from .mqtt import SERVER_SESSION_EXPIRY_SECONDS, mqtt_client, session_kwargs
 
         backoff = 1.0
         _last_exc_str: str | None = None
@@ -317,7 +319,7 @@ class MQTTPublisher:
                     broker,
                     port,
                     identifier=self.client_id,
-                    clean_session=False,
+                    **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                     keepalive=30,
                 ) as client:
                     self._connected = True

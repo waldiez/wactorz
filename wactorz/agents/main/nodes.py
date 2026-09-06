@@ -22,7 +22,13 @@ import time
 from typing import Any
 
 from ...core.actor import derive_actor_id
-from ...core.mqtt import client_id, install_id, mqtt_client
+from ...core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    install_id,
+    mqtt_client,
+    session_kwargs,
+)
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
 
@@ -177,7 +183,7 @@ class NodeManager:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "nodes"),
-                    clean_session=False,
+                    **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     await client.subscribe("nodes/+/heartbeat", qos=1)
                     await client.subscribe("nodes/+/migrate_result", qos=1)

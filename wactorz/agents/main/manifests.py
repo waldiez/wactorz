@@ -18,7 +18,13 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ...core.mqtt import client_id, install_id, mqtt_client
+from ...core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    install_id,
+    mqtt_client,
+    session_kwargs,
+)
 
 if TYPE_CHECKING:
     from .hosts import ManifestHost
@@ -84,7 +90,7 @@ class ManifestRegistry:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "manifests"),
-                    clean_session=False,
+                    **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     await client.subscribe("agents/+/manifest", qos=1)
                     logger.info("[main] Subscribed to agent manifests.")
@@ -300,7 +306,7 @@ class ManifestRegistry:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "samples"),
-                    clean_session=False,
+                    **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     for pattern in OBSERVED_TOPIC_PATTERNS:
                         await client.subscribe(pattern, qos=1)

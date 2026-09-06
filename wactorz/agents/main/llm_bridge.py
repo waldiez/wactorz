@@ -23,7 +23,13 @@ import logging
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ...core.mqtt import client_id, install_id, mqtt_client
+from ...core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    install_id,
+    mqtt_client,
+    session_kwargs,
+)
 
 if TYPE_CHECKING:
     from ...core.actor import ActorState
@@ -89,7 +95,7 @@ class LLMBridge:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "llm"),
-                    clean_session=False,
+                    **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     await client.subscribe(REQUEST_TOPIC, qos=1)
                     logger.info("[main] LLM bridge listening on %s", REQUEST_TOPIC)

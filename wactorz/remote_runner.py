@@ -205,6 +205,29 @@ def _tolerant_invoker(
     return _invoke
 
 
+#: How long the broker keeps a node's session. Mirrors
+#: SERVER_SESSION_EXPIRY_SECONDS in wactorz/core/mqtt.py.
+NODE_SESSION_EXPIRY_SECONDS = 86400
+
+
+def _session_kwargs(aiomqtt: Any, expiry_seconds: int) -> dict[str, Any]:
+    """Connect arguments that hold this session for a bounded time.
+
+    Mirrors `session_kwargs` in wactorz/core/mqtt.py; spelled out because this
+    file is deployed to a node with no wactorz package beside it.
+    """
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.properties import Properties
+
+    properties = Properties(PacketTypes.CONNECT)
+    properties.SessionExpiryInterval = expiry_seconds
+    return {
+        "protocol": aiomqtt.ProtocolVersion.V5,
+        "clean_start": False,
+        "properties": properties,
+    }
+
+
 def _topic_matches(pattern: str, topic: str) -> bool:
     """Match a topic against an MQTT filter with `#` and `+` wildcards.
 
@@ -315,24 +338,10 @@ class _NodeSubscriptionHub:
                 binding.worker = asyncio.create_task(self._drain(binding))
 
     def _session_kwargs(self, aiomqtt: Any) -> dict[str, Any]:
-        """Connect arguments that make the broker keep this session, or not.
-
-        v5 rather than v3.1.1: a v3.1.1 durable session never expires, so an
-        agent that is deleted, or a node that never returns, would leave broker
-        state behind for ever.
-        """
+        """Connect arguments that make the broker keep this session, or not."""
         if not self._durable:
             return {}
-        from paho.mqtt.packettypes import PacketTypes
-        from paho.mqtt.properties import Properties
-
-        properties = Properties(PacketTypes.CONNECT)
-        properties.SessionExpiryInterval = self.SESSION_EXPIRY_SECONDS
-        return {
-            "protocol": aiomqtt.ProtocolVersion.V5,
-            "clean_start": False,
-            "properties": properties,
-        }
+        return _session_kwargs(aiomqtt, self.SESSION_EXPIRY_SECONDS)
 
     async def _subscribe_now(self, topic: str) -> None:
         client = self._client
@@ -2033,6 +2042,8 @@ class _RemoteRunner:
         """
         import paho.mqtt.client as paho_mqtt
         from paho.mqtt.enums import CallbackAPIVersion
+        from paho.mqtt.packettypes import PacketTypes
+        from paho.mqtt.properties import Properties
 
         # Mirrors core/mqtt.py `client_id`. Spelled out rather than imported:
         # this file is deployed to a node on its own, with no wactorz package
@@ -2047,14 +2058,20 @@ class _RemoteRunner:
             # would otherwise break deploys with nothing in the tree to catch it.
             CallbackAPIVersion.VERSION2,
             client_id=f"wactorz-nodepub-{self.node_name}",
-            # Durable, so QoS 1 messages in flight when the link drops are
-            # redelivered rather than discarded with the session.
-            clean_session=False,
+            # v5, so the kept session below can name a lifetime. v3.1.1 has no
+            # expiry, and a decommissioned node would leave broker state for ever.
+            protocol=paho_mqtt.MQTTv5,
         )
         user = os.environ.get("MQTT_USERNAME") or None
         if user:
             client.username_pw_set(user, os.environ.get("MQTT_PASSWORD") or None)
-        client.connect(self.broker, self.port, keepalive=60)
+        properties = Properties(PacketTypes.CONNECT)
+        properties.SessionExpiryInterval = NODE_SESSION_EXPIRY_SECONDS
+        # Durable, so QoS 1 messages in flight when the link drops are
+        # redelivered rather than discarded with the session.
+        client.connect(
+            self.broker, self.port, keepalive=60, clean_start=False, properties=properties
+        )
         client.loop_start()
         return client
 
@@ -2330,8 +2347,11 @@ class _RemoteRunner:
                     password=os.environ.get("MQTT_PASSWORD") or None,
                     identifier=f"wactorz-node-{self.node_name}",  # mirrors core/mqtt.py client_id
                     # Durable: the broker holds control messages sent while this
-                    # node was away, instead of dropping them on the floor.
-                    clean_session=False,
+                    # node was away, instead of dropping them on the floor. v5
+                    # with an expiry rather than v3.1.1, which has none -- a
+                    # decommissioned node would otherwise cost broker state for
+                    # ever. Mirrors core/mqtt.py session_kwargs.
+                    **_session_kwargs(aiomqtt, NODE_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     for topic in topics:
                         await client.subscribe(topic, qos=1)

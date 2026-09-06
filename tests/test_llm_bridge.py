@@ -13,6 +13,7 @@ provider or the call raises.
 import asyncio
 import json
 import logging
+import uuid
 from typing import Any
 
 import pytest
@@ -37,7 +38,7 @@ class _Client:
         self._on_drained = on_drained
         self.subscribed: list[str] = []
 
-    async def subscribe(self, topic: str) -> None:
+    async def subscribe(self, topic: str, qos: int = 0, **_kwargs: Any) -> None:
         self.subscribed.append(topic)
 
     @property
@@ -112,9 +113,14 @@ PERSISTED = "<persisted>"
 
 
 def request(**over: Any) -> _Message:
-    """A bridge request as a remote agent publishes it."""
+    """A bridge request as a remote agent publishes it.
+
+    The reply topic is unique per call, as the runner makes it -- it mints a
+    fresh uuid for every request. Two requests sharing one would be a
+    redelivery of the same request, which the bridge deliberately ignores.
+    """
     body: dict[str, Any] = {
-        "_reply_topic": "nodes/rpi/llm_reply/1",
+        "_reply_topic": f"nodes/rpi/reply/{uuid.uuid4().hex[:8]}",
         "agent": "collector",
         "node": "rpi-kitchen",
         "prompt": "how warm is it?",
@@ -168,9 +174,11 @@ class TestAnsweringARequest:
     async def test_the_reply_goes_to_the_topic_the_caller_named(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        run = await run_bridge(monkeypatch, [request()], llm=_LLM())
+        named = request(_reply_topic="nodes/rpi/reply/chosen-by-the-caller")
 
-        assert run.replies[0][0] == "nodes/rpi/llm_reply/1"
+        run = await run_bridge(monkeypatch, [named], llm=_LLM())
+
+        assert run.replies[0][0] == "nodes/rpi/reply/chosen-by-the-caller"
 
     async def test_the_reply_carries_the_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = await run_bridge(monkeypatch, [request()], llm=_LLM(text="22 degrees"))
@@ -247,6 +255,34 @@ class TestWhenTheCallCannotBeMade:
         llm = _LLM(error=RuntimeError("rate limit"))
 
         run = await run_bridge(monkeypatch, [request(), request()], llm=llm)
+
+        assert len(run.replies) == 2
+
+
+class TestRedeliveredRequests:
+    """QoS 1 is at-least-once, and answering twice spends the budget twice.
+
+    The broker resends anything it did not see acknowledged, so a drop between
+    receipt and acknowledgement replays a request whose answer was already
+    published.
+    """
+
+    async def test_the_same_request_twice_is_answered_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        usage = {"input_tokens": 5, "output_tokens": 7, "cost_usd": 0.001}
+        repeat = request()
+
+        run = await run_bridge(monkeypatch, [repeat, repeat], llm=_LLM(usage=usage))
+
+        assert len(run.replies) == 1
+        assert run.main.total_cost_usd == pytest.approx(0.001), "budget spent twice"
+
+    async def test_distinct_requests_are_both_answered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The guard keys on the reply topic, so it must not swallow real traffic.
+        run = await run_bridge(monkeypatch, [request(), request()], llm=_LLM())
 
         assert len(run.replies) == 2
 

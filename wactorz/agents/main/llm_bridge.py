@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ...core.mqtt import client_id, install_id, mqtt_client
@@ -34,6 +35,12 @@ REQUEST_TOPIC = "main/llm_request"
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
+
+#: How many answered requests to remember, for the duplicate check below.
+#: A redelivery follows its original closely -- the broker resends when it did
+#: not see the acknowledgement -- so this only has to outlast a reconnect, and
+#: bounding it keeps a long-running main from accumulating request ids.
+ANSWERED_MEMORY = 256
 
 
 class BridgeHost(Protocol):
@@ -64,6 +71,8 @@ class LLMBridge:
 
     def __init__(self, host: BridgeHost) -> None:
         self.host = host
+        #: Reply topics already answered, newest last -- see :meth:`answer`.
+        self._answered: OrderedDict[str, None] = OrderedDict()
 
     async def listen(self) -> None:
         """Answer requests until the actor stops.
@@ -80,8 +89,9 @@ class LLMBridge:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "llm"),
+                    clean_session=False,
                 ) as client:
-                    await client.subscribe(REQUEST_TOPIC)
+                    await client.subscribe(REQUEST_TOPIC, qos=1)
                     logger.info("[main] LLM bridge listening on %s", REQUEST_TOPIC)
                     last_error = None
                     async for message in client.messages:
@@ -121,6 +131,19 @@ class LLMBridge:
         reply_topic = data.get("_reply_topic")
         if not reply_topic:
             return
+
+        # QoS 1 is at-least-once: the broker redelivers anything it did not see
+        # acknowledged, so a drop between receipt and acknowledgement replays the
+        # request. Most handlers on the durable topics are naturally idempotent;
+        # this one is not -- a replay spends main's LLM budget a second time for
+        # an answer already published. The reply topic carries a uuid per
+        # request, which makes it the correlation id this needs.
+        if reply_topic in self._answered:
+            logger.info("[main] LLM bridge: ignoring a redelivered request for %s", reply_topic)
+            return
+        self._answered[reply_topic] = None
+        while len(self._answered) > ANSWERED_MEMORY:
+            self._answered.popitem(last=False)
 
         agent_name = data.get("agent", "remote-agent")
         node_name = data.get("node", "?")

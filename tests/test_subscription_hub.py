@@ -330,7 +330,7 @@ class TestTheErrorBudget:
         hub.bind("bad/topic", always_fails)
         await _settle()
 
-        for _ in range(listener_module.CB_MAX_ESCALATIONS):
+        for _ in range(listener_module.CB_MAX_CONSECUTIVE_FAILURES):
             await broker.deliver("bad/topic")
             await _settle()
 
@@ -360,6 +360,126 @@ class TestTheErrorBudget:
         await _settle()
 
         assert "flaky/topic" not in actor._cb_error_count
+        hub._task.cancel()
+
+
+class TestEveryFailureCounts:
+    """The budget counts failures, not reporting windows.
+
+    Reporting to supervision is rate-limited so a callback failing on every
+    message does not flood the monitor, but the budget used to advance only
+    once per window too: a callback failing every second took minutes to fail
+    the actor, and the log's "#N/5" never matched what had happened.
+    """
+
+    async def test_five_fast_failures_fail_the_actor_inside_one_report_window(
+        self, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(listener_module, "CB_ERROR_REPORT_INTERVAL", 3600.0)
+        actor = FakeActor()
+        hub = SubscriptionHub(actor)
+
+        async def always_fails(_payload: Any) -> None:
+            raise RuntimeError("callback is broken")
+
+        hub.bind("bad/topic", always_fails)
+        await _settle()
+        for _ in range(listener_module.CB_MAX_CONSECUTIVE_FAILURES):
+            await broker.deliver("bad/topic")
+            await _settle()
+
+        assert actor._cb_error_count["bad/topic"] == listener_module.CB_MAX_CONSECUTIVE_FAILURES
+        assert str(actor.state) == "ActorState.FAILED"
+        hub._task.cancel()
+
+    async def test_reports_are_rate_limited_but_the_fatal_one_always_goes_out(
+        self, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(listener_module, "CB_ERROR_REPORT_INTERVAL", 3600.0)
+        actor = FakeActor()
+        hub = SubscriptionHub(actor)
+
+        async def always_fails(_payload: Any) -> None:
+            raise RuntimeError("callback is broken")
+
+        hub.bind("bad/topic", always_fails)
+        await _settle()
+        for _ in range(listener_module.CB_MAX_CONSECUTIVE_FAILURES):
+            await broker.deliver("bad/topic")
+            await _settle()
+
+        # First failure reported at once, the fatal fifth always; 2-4 only counted.
+        assert [e["fatal"] for e in actor.published_errors] == [False, True]
+        hub._task.cancel()
+
+    async def test_the_program_is_repaired_at_the_third_failure(
+        self, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(listener_module, "CB_ERROR_REPORT_INTERVAL", 3600.0)
+        actor = FakeActor()
+        hub = SubscriptionHub(actor)
+        repairs: list[dict[str, Any]] = []
+
+        actor._can_repair_in_place = lambda: True  # type: ignore[attr-defined]
+
+        async def repair(error: Exception, tb: str, *, phase: str, failures: int) -> bool:
+            repairs.append({"error": error, "tb": tb, "phase": phase, "failures": failures})
+            await hub.clear()  # what the agent's repair does through _tear_down_program
+            return True
+
+        actor._repair_program_in_place = repair  # type: ignore[attr-defined]
+        calls = {"n": 0}
+
+        async def always_fails(_payload: Any) -> None:
+            calls["n"] += 1
+            raise RuntimeError("callback is broken")
+
+        hub.bind("bad/topic", always_fails)
+        await _settle()
+        for _ in range(6):
+            await broker.deliver("bad/topic")
+            await _settle()
+
+        assert calls["n"] == listener_module.CB_LLM_FIX_AT
+        assert len(repairs) == 1
+        assert repairs[0]["failures"] == listener_module.CB_LLM_FIX_AT
+        assert repairs[0]["phase"] == "subscribe callback on 'bad/topic'"
+        assert "RuntimeError" in repairs[0]["tb"]
+        assert str(actor.state) == "RUNNING"
+        assert "bad/topic" not in actor._cb_error_count
+        # The worker the repair ran in ended with its binding.
+        await _settle()
+        assert not [w for w in [b.worker for b in hub._bindings] if w]
+        hub._task.cancel()
+
+    async def test_a_repair_that_is_refused_leaves_the_budget_running(
+        self, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(listener_module, "CB_ERROR_REPORT_INTERVAL", 3600.0)
+        actor = FakeActor()
+        hub = SubscriptionHub(actor)
+        asked = {"n": 0}
+
+        actor._can_repair_in_place = lambda: True  # type: ignore[attr-defined]
+
+        async def refuse(error: Exception, tb: str, *, phase: str, failures: int) -> bool:
+            asked["n"] += 1
+            return False
+
+        actor._repair_program_in_place = refuse  # type: ignore[attr-defined]
+
+        async def always_fails(_payload: Any) -> None:
+            raise RuntimeError("callback is broken")
+
+        hub.bind("bad/topic", always_fails)
+        await _settle()
+        for _ in range(listener_module.CB_MAX_CONSECUTIVE_FAILURES):
+            await broker.deliver("bad/topic")
+            await _settle()
+
+        # Asked at 3 and again at 4; the fifth failure is fatal, not a repair.
+        assert asked["n"] == 2
+        assert str(actor.state) == "ActorState.FAILED"
         hub._task.cancel()
 
 

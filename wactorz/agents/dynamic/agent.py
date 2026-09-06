@@ -29,6 +29,7 @@ from ...core.actor import Actor, ActorState, Message, MessageType
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
 from .api import AgentAPI
+from .carryover import carry_over_globals
 from .cv2_shim import resilient_cv2_module
 from .resources import release_open_resources
 from .safety import extract_function_body, validate_code_safety
@@ -84,6 +85,18 @@ class DynamicAgent(Actor):
         self._error_threshold: int = 3  # DEGRADED after this many
         self._last_error_time: float = 0.0
         self._error_phase: str = ""  # compile|setup|process|handle_task
+        # In-place process() repairs since the last clean run, and what each
+        # repaired version still failed with. Bounds the LLM spend on one
+        # crash and lets the next prompt say that the previous fix did not
+        # take.
+        self._process_fix_rounds: int = 0
+        self._process_fix_errors: list[str] = []
+
+        # Tasks that belong to the generated program (setup runner, process
+        # loop, subscription listeners), as opposed to the actor's own loops in
+        # ``_tasks``. An in-place code repair tears these down and starts the
+        # program again; the actor's message loop and heartbeat keep running.
+        self._program_tasks: list[asyncio.Task] = []
 
         # Public API exposed to generated code via `agent` parameter
         # Owned here rather than grafted on by AgentAPI at first use: a
@@ -146,18 +159,95 @@ class DynamicAgent(Actor):
             )
             return
 
-        # ── setup() ───────────────────────────────────────────────────────
-        if self._fn_setup:
-            # Run setup as a background task so long-running loops (e.g. aiomqtt
-            # subscriptions) don't block on_start() and prevent heartbeats from firing.
-            self._tasks.append(asyncio.create_task(self._run_setup()))
-        else:
-            if self._fn_process:
-                self._tasks.append(asyncio.create_task(self._process_loop()))
+        self._start_program()
 
         # Publish manifest immediately so main's registry knows this agent exists
         # even if it never calls publish() (pure handle_task agents, etc.)
         await self._api._publish_manifest()
+
+    def _track_program_task(self, task: asyncio.Task) -> None:
+        """Track a task the generated program owns, for stop and for repair."""
+        self._tasks.append(task)
+        self._program_tasks.append(task)
+
+    def _start_program(self) -> None:
+        """Start the compiled program: setup() first when it exists, else process().
+
+        setup() runs as a background task so a long-running one (an aiomqtt
+        subscription loop) does not block on_start() and starve the heartbeat;
+        it starts the process loop itself once it returns.
+        """
+        if self._fn_setup:
+            self._track_program_task(asyncio.create_task(self._run_setup()))
+        elif self._fn_process:
+            self._track_program_task(asyncio.create_task(self._process_loop()))
+
+    async def _tear_down_program(self) -> None:
+        """Stop everything the current program left running, before it is replaced.
+
+        Subscription listeners keep calling callbacks from the old namespace,
+        and a camera or file the old setup() opened would block the repaired
+        setup() from opening it again. The task this runs in is left alone: a
+        repair is started from inside the process loop it replaces, and that
+        loop returns right after.
+        """
+        current = asyncio.current_task()
+        others = [task for task in self._program_tasks if task is not current and not task.done()]
+        for task in others:
+            task.cancel()
+        if others:
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(asyncio.gather(*others, return_exceptions=True)),
+                    timeout=self.TASK_SHUTDOWN_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[%s] %d task(s) of the old program did not stop in time.",
+                    self.name,
+                    sum(1 for task in others if not task.done()),
+                )
+        self._program_tasks = [task for task in self._program_tasks if not task.done()]
+        self._subscribed_topics.clear()
+        # The subscription connection is shared and outlives any one program, so
+        # cancelling tasks above does not stop its callbacks. Unbind explicitly.
+        hub = getattr(self, "_sub_hub", None)
+        if hub is not None:
+            await hub.clear()
+        release_open_resources(self._api, self._ns, self.name)
+
+    async def _replace_program(self, fixed: str) -> str | None:
+        """Swap the running program for repaired code and start it from setup().
+
+        Returns the compile error when the repaired code does not compile, in
+        which case the current program is left untouched. On success the new
+        code is stored, persisted for restarts, and started the same way
+        on_start() starts a program; the caller must return from the loop it
+        is running in, since that loop belongs to the old program.
+
+        What the old program remembered is kept: `agent.state` and persisted
+        keys live outside the namespace, and its plain module-level values are
+        copied into the new one before setup() runs.
+        """
+        old_ns = self._ns
+        self._ns = {}
+        compile_err = self._compile_code(fixed)
+        if compile_err is not None:
+            self._ns = old_ns
+            self._fn_setup = old_ns.get("setup")
+            self._fn_process = old_ns.get("process")
+            self._fn_handle_task = old_ns.get("handle_task")
+            return compile_err
+        new_ns = self._ns
+        self._ns = old_ns
+        await self._tear_down_program()
+        carry_over_globals(old_ns, new_ns, self.name)
+        self._ns = new_ns
+        self._code = fixed
+        self._consecutive_errors = 0  # give the fixed code a clean slate
+        self._persist_fixed_code(fixed)
+        self._start_program()
+        return None
 
     async def _publish_final_metrics(self) -> None:
         """The last metrics before the heartbeat loop stops, flagged final."""
@@ -237,6 +327,7 @@ class DynamicAgent(Actor):
         # Give cancelled tasks a moment to actually stop
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._program_tasks.clear()
 
     # ── Code compilation ───────────────────────────────────────────────────
 
@@ -376,11 +467,16 @@ class DynamicAgent(Actor):
     _MAX_SETUP_RETRIES = 2
 
     async def _attempt_setup_with_repair(self, setup: Any, current_code: str) -> Any:
-        """Run setup(), asking the model to repair the code between attempts."""
+        """Run setup(), asking the model to repair the code between attempts.
+
+        Each repair recompiles into a fresh namespace, so the setup() to run
+        next is the one that namespace defines, not the one handed in.
+        """
         last_error = None
         for attempt in range(1 + self._MAX_SETUP_RETRIES):
             try:
-                await setup(self._api)
+                if setup is not None:
+                    await setup(self._api)
                 if attempt > 0:
                     logger.info("[%s] setup() succeeded after %s fix(es).", self.name, attempt)
                     # ── Write fixed code back to spawn registry so restart uses it ──
@@ -413,6 +509,11 @@ class DynamicAgent(Actor):
                     logger.warning("[%s] LLM unavailable — cannot fix setup() error", self.name)
                     break
 
+                # A partial setup() may have opened a camera or a file the
+                # repaired one needs to open again.
+                await self._tear_down_program()
+                old_ns = self._ns
+
                 # Recompile the fixed code
                 self._ns = {}
                 compile_err = self._compile_code(fixed)
@@ -430,12 +531,11 @@ class DynamicAgent(Actor):
                         fixed = fixed2
                     else:
                         break
-                else:
-                    # compile_err is None — code is good
-                    pass
 
+                carry_over_globals(old_ns, self._ns, self.name)
                 self._code = fixed
                 current_code = fixed
+                setup = self._fn_setup
                 logger.info(
                     "[%s] Retrying setup() with LLM-fixed code (attempt %s)...",
                     self.name,
@@ -474,25 +574,41 @@ class DynamicAgent(Actor):
 
         # setup() returned cleanly — start process() loop if defined
         if self._fn_process and self.state not in (ActorState.STOPPED, ActorState.FAILED):
-            self._tasks.append(asyncio.create_task(self._process_loop()))
+            self._track_program_task(asyncio.create_task(self._process_loop()))
 
     async def _fix_runtime_with_llm(
-        self, code: str, error_msg: str, traceback_str: str, extra_rules: str = ""
+        self,
+        code: str,
+        error_msg: str,
+        traceback_str: str,
+        previous_errors: list[str] | None = None,
     ) -> str | None:
         """Ask the LLM to fix a runtime error in agent code (setup/process).
 
         Similar to _fix_syntax_with_llm but provides the traceback and
         explicit guidance about the agent API (sync vs async methods).
-        `extra_rules` is appended to the API rules for a caller with more
-        context about what the fix must preserve.
+        `previous_errors` are what earlier repairs of this same code still
+        failed with, so the model does not hand back the fix that did not take.
         """
         if self._llm_provider is None:
             return None
 
+        purpose = f"The agent's purpose: {self.description}\n\n" if self.description else ""
+        history = ""
+        if previous_errors:
+            listed = "\n".join(f"  - {err}" for err in previous_errors)
+            history = (
+                "This code has already been repaired automatically, and each "
+                "repaired version failed again with:\n"
+                f"{listed}\n"
+                "Make a different, more thorough fix this time.\n\n"
+            )
         prompt = (
             "The following Python code raised a RUNTIME ERROR when executed.\n\n"
+            f"{purpose}"
             f"Error: {error_msg}\n"
             f"Traceback (last 800 chars):\n{traceback_str[-800:]}\n\n"
+            f"{history}"
             "IMPORTANT API RULES — these are the most common mistakes:\n"
             "  - agent.subscribe(topic, callback) is SYNCHRONOUS — do NOT use await\n"
             "  - agent.window(topic, seconds=N) is SYNCHRONOUS — do NOT use await\n"
@@ -516,7 +632,12 @@ class DynamicAgent(Actor):
             "  RIGHT: w.latest()           — returns latest payload dict (or None)\n"
             "  RIGHT: w.values('temp')     — list of all 'temp' values in window\n"
             "  RIGHT: w.mean('temp')       — average of 'temp' over window\n\n"
-            f"{extra_rules}"
+            "KEEP THE AGENT'S MEMORY: the repaired code takes over from the running "
+            "agent, and its counters, module-level values, agent.state and persisted "
+            "keys are carried across. Do not reset, clear or re-initialise any of them "
+            "as part of the fix unless that state is itself the cause of the error. "
+            "Remove or correct the failing logic; do not wrap it in a catch that "
+            "starts the agent over.\n\n"
             "Fix the error. Return ONLY the corrected Python code — no explanations, "
             "no markdown fences, no commentary.\n\n"
             f"```python\n{code}\n```"
@@ -554,76 +675,6 @@ class DynamicAgent(Actor):
         else:
             return fixed
 
-    #: What a fix for a subscribe callback must keep, so the restarted agent
-    #: carries on from the state the crashed one persisted.
-    _SUBSCRIBE_FIX_RULES = (
-        "THIS ERROR CAME FROM AN agent.subscribe() CALLBACK. The agent will be "
-        "restarted with your code and must continue from its persisted state, so:\n"
-        "  - keep every agent.persist()/agent.recall() key name exactly as it is\n"
-        "  - keep the subscribed topics and the published topics unchanged\n"
-        "  - do not reset persisted counters or totals\n"
-        "  - remove or guard the failing operation instead of the feature around it\n\n"
-    )
-
-    def _validate_code(self, code: str) -> str | None:
-        """Sanitize, safety-check and compile `code` without executing it.
-
-        Returns the error message on failure, None when the code is usable.
-        `_compile_code` execs into the live namespace; this is for code that
-        must not replace the running functions, only be checked.
-        """
-        clean = self._sanitize_code(code) if not self._trusted else code
-        if not self._trusted:
-            safety_error = self._validate_code_safety(clean)
-            if safety_error:
-                return safety_error
-        try:
-            compile(clean, f"<{self.name}>", "exec")
-        except Exception as e:
-            return f"{type(e).__name__}: {e}"
-        return None
-
-    async def _fix_subscribe_callback_with_llm(self, error: Exception, traceback_str: str) -> bool:
-        """Ask the LLM to fix a failing subscribe callback and stage it for restart.
-
-        The running callback is a closure created by setup(), so a fix cannot
-        be swapped in under it. Instead the fixed code is validated, stored on
-        this actor and written to the spawn registry and the Supervisor factory,
-        so the restart the listener triggers next runs the fixed version.
-        Persisted state is keyed by the agent's name, so the restarted agent
-        continues from the same totals.
-
-        Returns True when fixed code was validated and staged.
-        """
-        if self._llm_provider is None:
-            return False
-        fixed = await self._fix_runtime_with_llm(
-            self._code, str(error), traceback_str, extra_rules=self._SUBSCRIBE_FIX_RULES
-        )
-        if not fixed or not fixed.strip():
-            return False
-        problem = self._validate_code(fixed)
-        if problem is not None:
-            logger.warning(
-                "[%s] LLM fix for subscribe callback is not usable: %s", self.name, problem
-            )
-            return False
-        self._code = fixed
-        self._persist_fixed_code(fixed)
-        logger.info(
-            "[%s] LLM fixed subscribe callback code — the next restart runs the patched version.",
-            self.name,
-        )
-        await self._mqtt_publish(
-            f"agents/{self.actor_id}/logs",
-            {
-                "type": "log",
-                "message": "subscribe callback error fixed by LLM; restarting with patched code.",
-                "timestamp": time.time(),
-            },
-        )
-        return True
-
     # ── Process loop ───────────────────────────────────────────────────────
 
     # Max time a single process() or handle_task() call can take before
@@ -635,10 +686,81 @@ class DynamicAgent(Actor):
     _PROCESS_LLM_FIX_THRESHOLD = 3  # try to fix after this many errors in a row
     # How many consecutive process() errors trigger state=FAILED (Supervisor sees this)
     _PROCESS_FAIL_THRESHOLD = 5
+    # In-place repairs allowed for one crash before the Supervisor takes over.
+    _MAX_PROCESS_FIX_ROUNDS = 2
+
+    def _can_repair_in_place(self) -> bool:
+        """Whether an in-place repair is still on the table for this crash."""
+        return (
+            self._llm_provider is not None
+            and self._process_fix_rounds < self._MAX_PROCESS_FIX_ROUNDS
+        )
+
+    async def _repair_process_in_place(self, error: Exception, tb: str) -> bool:
+        """Repair a crashing process(); see `_repair_program_in_place`."""
+        return await self._repair_program_in_place(
+            error, tb, phase="process()", failures=self._consecutive_errors
+        )
+
+    async def _repair_program_in_place(
+        self, error: Exception, tb: str, *, phase: str, failures: int
+    ) -> bool:
+        """Ask the model to repair the crashing program and start the repaired one.
+
+        `phase` names what crashed for the log and the model -- "process()" or
+        a subscribe callback and its topic -- and `failures` is how many times
+        in a row it did. The same repair budget covers both: a program is one
+        piece of code, and its rounds are spent on it as a whole.
+
+        Returns True when a repaired program is now running and the caller's
+        loop, which belongs to the old program, must end. Returns False when no
+        repair was made: the model is unavailable, its rounds are spent, or
+        the code it returned does not compile.
+        """
+        if not self._can_repair_in_place():
+            return False
+        self._process_fix_rounds += 1
+        logger.warning(
+            "[%s] %s consecutive %s errors — asking LLM to fix code in-place (round %s/%s).",
+            self.name,
+            failures,
+            phase,
+            self._process_fix_rounds,
+            self._MAX_PROCESS_FIX_ROUNDS,
+        )
+        error_msg = str(error) if phase == "process()" else f"{error} (raised in the {phase})"
+        fixed = await self._fix_runtime_with_llm(
+            self._code, error_msg, tb, previous_errors=self._process_fix_errors
+        )
+        if fixed is None:
+            return False
+        compile_err = await self._replace_program(fixed)
+        if compile_err is not None:
+            logger.warning("[%s] LLM fix introduced compile error: %s", self.name, compile_err)
+            return False
+        self._process_fix_errors.append(f"{type(error).__name__}: {error}")
+        logger.info(
+            "[%s] LLM fixed %s code — restarting the program with the patched version.",
+            self.name,
+            phase,
+        )
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/logs",
+            {
+                "type": "log",
+                "message": f"{phase} runtime error fixed by LLM in-place.",
+                "timestamp": time.time(),
+            },
+        )
+        return True
 
     async def _run_process_forever(self, process: Any) -> None:
-        """Call process() on each tick until the agent stops or fails."""
-        _llm_fix_attempted = False
+        """Call process() on each tick until the agent stops or fails.
+
+        A successful in-place repair starts a new program, with its own loop,
+        and this one returns: it holds the old process() and would keep
+        calling it.
+        """
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 await asyncio.wait_for(
@@ -646,7 +768,6 @@ class DynamicAgent(Actor):
                     timeout=self._PROCESS_TIMEOUT,
                 )
                 self._reset_error_count()
-                _llm_fix_attempted = False  # reset after a clean run
             except asyncio.TimeoutError:
                 self.metrics.errors += 1
                 logger.exception(
@@ -680,44 +801,12 @@ class DynamicAgent(Actor):
                 logger.exception("[%s] process() error", self.name)
                 await self._publish_error(phase="process", error=e, traceback_str=tb)
 
-                # ── LLM self-healing: try to fix the code in-place ────────────
+                # ── LLM self-healing: repair the code and restart the program ──
                 if (
-                    not _llm_fix_attempted
-                    and self._consecutive_errors >= self._PROCESS_LLM_FIX_THRESHOLD
-                    and self._llm_provider is not None
+                    self._consecutive_errors >= self._PROCESS_LLM_FIX_THRESHOLD
+                    and await self._repair_process_in_place(e, tb)
                 ):
-                    _llm_fix_attempted = True
-                    logger.warning(
-                        "[%s] %s consecutive process() errors — asking LLM to fix code in-place.",
-                        self.name,
-                        self._consecutive_errors,
-                    )
-                    fixed = await self._fix_runtime_with_llm(self._code, str(e), tb)
-                    if fixed is not None:
-                        self._ns = {}
-                        compile_err = self._compile_code(fixed)
-                        if compile_err is None:
-                            self._code = fixed
-                            self._consecutive_errors = 0  # give the fixed code a clean slate
-                            # ── Write fixed code back to spawn registry so restart uses it ──
-                            self._persist_fixed_code(fixed)
-                            logger.info(
-                                "[%s] LLM fixed process() code — resuming with patched version.",
-                                self.name,
-                            )
-                            await self._mqtt_publish(
-                                f"agents/{self.actor_id}/logs",
-                                {
-                                    "type": "log",
-                                    "message": "process() runtime error fixed by LLM in-place.",
-                                    "timestamp": time.time(),
-                                },
-                            )
-                            await asyncio.sleep(self.poll_interval)
-                            continue
-                        logger.warning(
-                            "[%s] LLM fix introduced compile error: %s", self.name, compile_err
-                        )
+                    return
 
                 # ── Erlang: too many errors → FAILED → Supervisor restarts us ──
                 if self._consecutive_errors >= self._PROCESS_FAIL_THRESHOLD:
@@ -742,8 +831,8 @@ class DynamicAgent(Actor):
 
         Erlang/OTP semantics:
         - Each error increments _consecutive_errors.
-        - At _PROCESS_LLM_FIX_THRESHOLD consecutive errors, ask the LLM to fix the code
-          and recompile in-place (self-healing).
+        - At _PROCESS_LLM_FIX_THRESHOLD consecutive errors, ask the LLM to fix the code,
+          recompile, and start the repaired program from setup() (self-healing).
         - At _PROCESS_FAIL_THRESHOLD consecutive errors (or after LLM fix fails),
           set state=FAILED — the Supervisor's _watch_loop will detect this and restart us.
           This is the "let it crash" principle: don't spin in degraded mode forever.
@@ -751,8 +840,6 @@ class DynamicAgent(Actor):
         process = self._fn_process
         if process is None:  # the caller checks this; kept so the type is honest
             return
-
-        _llm_fix_attempted = False  # only try the LLM fix once per process_loop lifetime
 
         await self._run_process_forever(process)
 
@@ -902,7 +989,9 @@ class DynamicAgent(Actor):
             "degraded": self._consecutive_errors >= self._error_threshold,
             "timestamp": time.time(),
         }
-        await self._mqtt_publish(f"agents/{self.actor_id}/errors", event)
+        # QoS 1, for the same reason as chat: an error frame lost during a
+        # monitor reconnect is the one an operator most wants to have seen.
+        await self._mqtt_publish(f"agents/{self.actor_id}/errors", event, qos=1)
         # Direct actor message to monitor (works without MQTT broker)
         if self._registry:
             monitor = self._registry.find_by_name("monitor")
@@ -943,6 +1032,8 @@ class DynamicAgent(Actor):
             logger.info("[%s] Recovered — resetting error counter.", self.name)
             self._consecutive_errors = 0
             self._error_phase = ""
+        self._process_fix_rounds = 0
+        self._process_fix_errors = []
 
     def _persist_fixed_code(self, fixed_code: str) -> Any:
         """Write the LLM-fixed code back to:

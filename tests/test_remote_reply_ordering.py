@@ -28,7 +28,7 @@ class _Client:
         self._log = log
         self.messages = _never()
 
-    async def subscribe(self, topic: str) -> None:
+    async def subscribe(self, topic: str, qos: int = 0, **_kwargs: Any) -> None:
         self._log.append(f"subscribe {topic}")
 
     async def __aenter__(self) -> "_Client":

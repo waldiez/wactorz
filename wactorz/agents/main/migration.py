@@ -64,8 +64,9 @@ class Migration:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "migration"),
+                    clean_session=False,
                 ) as client:
-                    await client.subscribe("nodes/+/state_return")
+                    await client.subscribe("nodes/+/state_return", qos=1)
                     logger.info("[main] Subscribed to state_return topics.")
                     last_error = None
                     async for message in client.messages:

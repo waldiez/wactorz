@@ -70,7 +70,7 @@ class _Client:
         self._messages = messages
         self._on_drained = on_drained
 
-    async def subscribe(self, pattern: str) -> None:
+    async def subscribe(self, pattern: str, qos: int = 0, **_kwargs: Any) -> None:
         self.subscribed.append(pattern)
 
     def __aiter__(self) -> "_Client":

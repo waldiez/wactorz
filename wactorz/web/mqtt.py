@@ -108,6 +108,7 @@ async def mqtt_listener() -> None:
                     runtime.MQTT_BROKER,
                     runtime.MQTT_PORT,
                     identifier=client_id("mon", install_id()),
+                    clean_session=False,
                 ) as client:
                     runtime.mqtt_client_ref = client
                     logger.info("MQTT connected.")
@@ -126,7 +127,7 @@ async def mqtt_listener() -> None:
                         )
 
                     for topic in runtime.MQTT_TOPICS:
-                        await client.subscribe(topic)
+                        await client.subscribe(topic, qos=1)
 
                     await set_mqtt_status(True)
 

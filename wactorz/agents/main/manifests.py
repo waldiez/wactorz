@@ -84,8 +84,9 @@ class ManifestRegistry:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "manifests"),
+                    clean_session=False,
                 ) as client:
-                    await client.subscribe("agents/+/manifest")
+                    await client.subscribe("agents/+/manifest", qos=1)
                     logger.info("[main] Subscribed to agent manifests.")
                     last_error = None
                     async for message in client.messages:
@@ -299,9 +300,10 @@ class ManifestRegistry:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "samples"),
+                    clean_session=False,
                 ) as client:
                     for pattern in OBSERVED_TOPIC_PATTERNS:
-                        await client.subscribe(pattern)
+                        await client.subscribe(pattern, qos=1)
                     async for message in client.messages:
                         found = self._sample_from(message)
                         if found is not None:

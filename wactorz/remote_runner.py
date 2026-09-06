@@ -1978,11 +1978,25 @@ class _RemoteRunner:
         first read.
         """
         import paho.mqtt.client as paho_mqtt
+        from paho.mqtt.enums import CallbackAPIVersion
 
         # Mirrors core/mqtt.py `client_id`. Spelled out rather than imported:
         # this file is deployed to a node on its own, with no wactorz package
         # beside it, so the shape has to be kept in step by hand.
-        client = paho_mqtt.Client(client_id=f"wactorz-nodepub-{self.node_name}")
+        client = paho_mqtt.Client(
+            # Explicit, not defaulted: omitting it selects paho's callback API
+            # version 1, which is deprecated and warns on every construction.
+            # Nothing here registers a paho callback, so version 2 costs no
+            # migration -- and paho is not pinned anywhere (it arrives through
+            # aiomqtt, which allows <3.0.0), while a node runs `pip install
+            # aiomqtt` fresh on every deploy. A release that drops the old API
+            # would otherwise break deploys with nothing in the tree to catch it.
+            CallbackAPIVersion.VERSION2,
+            client_id=f"wactorz-nodepub-{self.node_name}",
+            # Durable, so QoS 1 messages in flight when the link drops are
+            # redelivered rather than discarded with the session.
+            clean_session=False,
+        )
         user = os.environ.get("MQTT_USERNAME") or None
         if user:
             client.username_pw_set(user, os.environ.get("MQTT_PASSWORD") or None)
@@ -2261,9 +2275,12 @@ class _RemoteRunner:
                     username=os.environ.get("MQTT_USERNAME") or None,
                     password=os.environ.get("MQTT_PASSWORD") or None,
                     identifier=f"wactorz-node-{self.node_name}",  # mirrors core/mqtt.py client_id
+                    # Durable: the broker holds control messages sent while this
+                    # node was away, instead of dropping them on the floor.
+                    clean_session=False,
                 ) as client:
                     for topic in topics:
-                        await client.subscribe(topic)
+                        await client.subscribe(topic, qos=1)
                     logger.info(
                         "[runner] Subscribed to control topics on node '%s'", self.node_name
                     )

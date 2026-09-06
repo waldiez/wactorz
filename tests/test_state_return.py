@@ -37,7 +37,7 @@ class _Client:
         self._on_drained = on_drained
         self.subscribed: list[str] = []
 
-    async def subscribe(self, topic: str) -> None:
+    async def subscribe(self, topic: str, qos: int = 0, **_kwargs: Any) -> None:
         self.subscribed.append(topic)
 
     @property

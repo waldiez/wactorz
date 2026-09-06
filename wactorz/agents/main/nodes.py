@@ -177,9 +177,10 @@ class NodeManager:
                     host._mqtt_broker,
                     host._mqtt_port,
                     identifier=client_id("srv", install_id(), "nodes"),
+                    clean_session=False,
                 ) as client:
-                    await client.subscribe("nodes/+/heartbeat")
-                    await client.subscribe("nodes/+/migrate_result")
+                    await client.subscribe("nodes/+/heartbeat", qos=1)
+                    await client.subscribe("nodes/+/migrate_result", qos=1)
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None
                     async for message in client.messages:

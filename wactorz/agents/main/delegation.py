@@ -126,8 +126,9 @@ class DelegationManager:
                     self.host._mqtt_broker,
                     self.host._mqtt_port,
                     identifier=client_id("srv", install_id(), "delegation"),
+                    clean_session=False,
                 ) as client:
-                    await client.subscribe(topic)
+                    await client.subscribe(topic, qos=1)
                     subscribed.set()
                     async for msg in client.messages:
                         try:

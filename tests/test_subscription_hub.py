@@ -35,7 +35,7 @@ class FakeClient:
     async def __aexit__(self, *_exc: object) -> None:
         return None
 
-    async def subscribe(self, topic: str) -> None:
+    async def subscribe(self, topic: str, qos: int = 0, **_kwargs: Any) -> None:
         self.subscribed.append(topic)
 
     async def unsubscribe(self, topic: str) -> None:

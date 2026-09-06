@@ -269,9 +269,18 @@ class _NodeSubscriptionHub:
 
     RECONNECT_DELAY = 5.0
     QUEUE_MAX = 100
+    #: How long the broker keeps a durable agent's session. Mirrors
+    #: SubscriptionHub.SESSION_EXPIRY_SECONDS in the server-side twin.
+    SESSION_EXPIRY_SECONDS = 3600
 
-    def __init__(self, agent_name: str, actor_id: str, broker: str, port: int) -> None:
+    def __init__(
+        self, agent_name: str, actor_id: str, broker: str, port: int, durable: bool = False
+    ) -> None:
         self._agent_name = agent_name
+        #: Only an agent whose name was chosen can hold a session: an unnamed
+        #: one is given a random name per spawn, so its id changes with it and a
+        #: session kept for the old one could never be resumed.
+        self._durable = durable
         self._actor_id = actor_id
         self._broker = broker
         self._port = port
@@ -293,12 +302,44 @@ class _NodeSubscriptionHub:
             return self._task
         return None
 
+    def _ensure_workers(self) -> None:
+        """Give every binding a live worker, reviving any that were cancelled.
+
+        Mirrors SubscriptionHub._ensure_workers: cancelling this task cancels
+        the workers with it, and `bind` revives the task once it has ended, so
+        a revived hub would otherwise re-subscribe and queue into queues nobody
+        drains.
+        """
+        for binding in self._bindings:
+            if binding.worker is None or binding.worker.done():
+                binding.worker = asyncio.create_task(self._drain(binding))
+
+    def _session_kwargs(self, aiomqtt: Any) -> dict[str, Any]:
+        """Connect arguments that make the broker keep this session, or not.
+
+        v5 rather than v3.1.1: a v3.1.1 durable session never expires, so an
+        agent that is deleted, or a node that never returns, would leave broker
+        state behind for ever.
+        """
+        if not self._durable:
+            return {}
+        from paho.mqtt.packettypes import PacketTypes
+        from paho.mqtt.properties import Properties
+
+        properties = Properties(PacketTypes.CONNECT)
+        properties.SessionExpiryInterval = self.SESSION_EXPIRY_SECONDS
+        return {
+            "protocol": aiomqtt.ProtocolVersion.V5,
+            "clean_start": False,
+            "properties": properties,
+        }
+
     async def _subscribe_now(self, topic: str) -> None:
         client = self._client
         if client is None:
             return
         try:
-            await client.subscribe(topic)
+            await client.subscribe(topic, qos=1 if self._durable else 0)
         except Exception:
             logger.debug("[%s] Deferred subscribe of %s to reconnect", self._agent_name, topic)
 
@@ -311,6 +352,7 @@ class _NodeSubscriptionHub:
             return
         while True:
             try:
+                self._ensure_workers()
                 async with aiomqtt.Client(
                     self._broker,
                     self._port,
@@ -318,11 +360,12 @@ class _NodeSubscriptionHub:
                     password=os.environ.get("MQTT_PASSWORD") or None,
                     # Mirrors core/mqtt.py client_id.
                     identifier=f"wactorz-agent-{self._actor_id}",
+                    **self._session_kwargs(aiomqtt),
                 ) as client:
                     self._client = client
                     topics = list(dict.fromkeys(b.topic for b in self._bindings))
                     for topic in topics:
-                        await client.subscribe(topic)
+                        await client.subscribe(topic, qos=1 if self._durable else 0)
                     logger.info(
                         "[%s] Subscribed to %d topic(s) on one connection",
                         self._agent_name,
@@ -924,7 +967,15 @@ class _RemoteAgentAPI:
         hub = getattr(self, "_sub_hub", None)
         if hub is None:
             runner = self._agent._runner
-            hub = _NodeSubscriptionHub(self.name, str(self.actor_id), runner.broker, runner.port)
+            hub = _NodeSubscriptionHub(
+                self.name,
+                str(self.actor_id),
+                runner.broker,
+                runner.port,
+                # A spawn config without a name gets a random one, so the id is
+                # stable only within an incarnation -- nothing to resume.
+                durable=bool(self._agent._config.get("name")),
+            )
             self._sub_hub = hub
         return hub
 
@@ -1272,6 +1323,9 @@ class _RemoteAgent:
 
     def __init__(self, config: dict, runner: _RemoteRunner, state_dir: str | None = None) -> None:
         self.name = config.get("name", f"remote-agent-{uuid.uuid4().hex[:6]}")
+        # Mirrors core/actor.py `derive_actor_id`. The one copy that has to
+        # stay: this file is deployed to a node alone. If the two drift, nothing
+        # raises -- main and the node simply disagree about which agent is which.
         self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{self.name}"))
         self.node_name = runner.node_name
         self._runner = runner

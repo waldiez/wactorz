@@ -19,9 +19,9 @@ import asyncio
 import json
 import logging
 import time
-import uuid
 from typing import Any
 
+from ...core.actor import derive_actor_id
 from ...core.mqtt import client_id, install_id, mqtt_client
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
@@ -64,7 +64,7 @@ def remote_actor_id(agent_name: str) -> str:
     Deterministic so main and the node arrive at the same id without either
     telling the other — the node builds it the same way for `_RemoteAgent`.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{agent_name}"))
+    return derive_actor_id(agent_name)
 
 
 class NodeManager:

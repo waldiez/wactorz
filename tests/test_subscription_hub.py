@@ -7,12 +7,15 @@ per actor makes that cost constant however the program is written.
 """
 
 import asyncio
+import uuid
 from typing import Any
 
+import aiomqtt
 import pytest
 
 from wactorz.agents.dynamic import listener as listener_module
 from wactorz.agents.dynamic.listener import SubscriptionHub
+from wactorz.core.actor import derive_actor_id
 
 
 class FakeMessage:
@@ -27,6 +30,7 @@ class FakeClient:
     def __init__(self, broker: "FakeBroker") -> None:
         self._broker = broker
         self.subscribed: list[str] = []
+        self.subscribed_qos: list[int] = []
         self.unsubscribed: list[str] = []
 
     async def __aenter__(self) -> "FakeClient":
@@ -37,6 +41,7 @@ class FakeClient:
 
     async def subscribe(self, topic: str, qos: int = 0, **_kwargs: Any) -> None:
         self.subscribed.append(topic)
+        self.subscribed_qos.append(qos)
 
     async def unsubscribe(self, topic: str) -> None:
         self.unsubscribed.append(topic)
@@ -58,9 +63,11 @@ class FakeBroker:
         self.connections: list[FakeClient] = []
         self.queue: asyncio.Queue = asyncio.Queue()
         self.identifiers: list[str] = []
+        self.kwargs: list[dict[str, Any]] = []
 
     def __call__(self, _host: str, _port: int, **kwargs: Any) -> FakeClient:
         self.identifiers.append(kwargs.get("identifier", ""))
+        self.kwargs.append(kwargs)
         client = FakeClient(self)
         self.connections.append(client)
         return client
@@ -130,6 +137,61 @@ class TestOneConnectionPerActor:
         await _settle()
 
         assert broker.identifiers == [f"wactorz-agent-{actor.actor_id}"]
+        hub._task.cancel()
+
+
+class TestDurability:
+    """Only an actor whose id survives a restart holds a session.
+
+    A named actor derives its id from its name, so it reconnects as the same
+    client and resumes what the broker held. An anonymous one gets a fresh id
+    every incarnation, so a session kept under the old id is unreachable --
+    durability there is meaningless rather than harmful.
+    """
+
+    def test_a_named_actor_is_durable(self) -> None:
+        actor = FakeActor()
+        actor.name = "kitchen-sensor"
+        actor.actor_id = derive_actor_id("kitchen-sensor")
+
+        assert listener_module.is_durable_actor(actor)
+
+    def test_an_anonymous_actor_is_not(self) -> None:
+        # Actor() without a name: a uuid4 id and a name derived from it.
+        actor = FakeActor()
+        actor.actor_id = str(uuid.uuid4())
+        actor.name = f"actor-{actor.actor_id[:8]}"
+
+        assert not listener_module.is_durable_actor(actor)
+
+    async def test_a_durable_hub_asks_for_a_v5_session_with_an_expiry(
+        self, broker: FakeBroker
+    ) -> None:
+        hub = SubscriptionHub(FakeActor(), durable=True)
+
+        hub.bind("a/one", lambda _p: None)
+        await _settle()
+
+        kwargs = broker.kwargs[0]
+        # The protocol itself, not just its properties: v3.1.1 has no session
+        # expiry at all, which is the whole reason this role speaks v5.
+        assert kwargs["protocol"] is aiomqtt.ProtocolVersion.V5
+        assert kwargs["clean_start"] is False
+        assert kwargs["properties"].SessionExpiryInterval == hub.SESSION_EXPIRY_SECONDS
+        assert broker.connections[0].subscribed_qos == [1]
+        hub._task.cancel()
+
+    async def test_a_non_durable_hub_keeps_a_clean_session(self, broker: FakeBroker) -> None:
+        # QoS 1 on a clean session buys nothing -- there is no session for the
+        # broker to hold a message in -- so it stays at 0 rather than implying it.
+        hub = SubscriptionHub(FakeActor(), durable=False)
+
+        hub.bind("a/one", lambda _p: None)
+        await _settle()
+
+        assert "clean_start" not in broker.kwargs[0]
+        assert "properties" not in broker.kwargs[0]
+        assert broker.connections[0].subscribed_qos == [0]
         hub._task.cancel()
 
 
@@ -298,6 +360,29 @@ class TestTheErrorBudget:
         await _settle()
 
         assert "flaky/topic" not in actor._cb_error_count
+        hub._task.cancel()
+
+
+class TestRestart:
+    async def test_a_revived_hub_still_delivers(self, broker: FakeBroker) -> None:
+        # Cancelling the hub task cancels the binding workers with it, and
+        # `bind` revives the task once it has ended. Without reviving the
+        # workers too, the hub re-subscribes and then queues into queues nobody
+        # drains -- silently deaf. Found against a real broker, not here.
+        seen: list[str] = []
+        hub = SubscriptionHub(FakeActor())
+        hub.bind("topic/x", lambda _p: seen.append("got"))
+        await _settle()
+
+        hub._task.cancel()
+        await _settle()
+        hub._task = asyncio.create_task(hub.run())
+        await _settle()
+
+        await broker.deliver("topic/x")
+        await _settle()
+
+        assert seen == ["got"], "a restarted hub stopped delivering"
         hub._task.cancel()
 
 

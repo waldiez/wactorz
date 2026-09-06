@@ -25,8 +25,9 @@ import json
 import logging
 import re
 import shutil
-import uuid
 from typing import TYPE_CHECKING, Any
+
+from ...core.actor import derive_actor_id
 
 if TYPE_CHECKING:
     from .hosts import LifecycleHost
@@ -226,7 +227,7 @@ class LifecycleService:
         if not actor_id:
             # Remote agents (and local ones missing from the registry) follow the
             # same uuid5 scheme used by _RemoteAgent and Actor — derive it.
-            actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+            actor_id = derive_actor_id(name)
 
         self.host._remove_from_spawn_registry(name)
 

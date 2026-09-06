@@ -22,7 +22,6 @@ the monitor all purge, so a delete completes even when one of them is down.
 """
 
 import json
-import uuid
 from typing import Any
 
 import pytest
@@ -32,13 +31,14 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import derive_actor_id
 
 _STORE_LOCKED = "database is locked"
 
 
 #: The scheme every side derives an agent's id from, so all three agree.
 def actor_id_for(name: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+    return derive_actor_id(name)
 
 
 class _Persistence:
@@ -476,3 +476,19 @@ class TestDeleteBlocksTheModelWrote:
 
         assert "<delete>" not in clean
         assert "Removing that." in clean
+
+
+def test_the_runner_derives_the_same_id_as_the_server() -> None:
+    """The node keeps its own copy of the derivation; drift is silent.
+
+    `remote_runner.py` is deployed to a node with no wactorz package beside it,
+    so it cannot import `derive_actor_id` and spells the formula out. Nothing
+    raises if the two diverge -- main and the node just disagree about which
+    agent is which, and a held broker session stops being resumed.
+    """
+    import uuid
+
+    name = "kitchen-collector"
+    node_copy = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+
+    assert node_copy == derive_actor_id(name)

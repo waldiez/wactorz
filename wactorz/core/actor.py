@@ -71,6 +71,22 @@ def forbidden(command: str, *, protected: bool, essential: bool) -> bool:
     return (protected and command == "delete") or (essential and command == "stop")
 
 
+def derive_actor_id(name: str) -> str:
+    """The actor id a named actor gets, derived from its name and nothing else.
+
+    Deterministic on purpose: the same agent must come back as the same id
+    across restarts, because the broker keys a held session on it and the
+    registry keys everything else on it.
+
+    Exported because several places need to *recognise* a derived id rather than
+    mint one -- deciding whether an actor can hold a broker session, addressing
+    an agent by name. Spelled once so those cannot drift apart: if the formula
+    changed under a copy, nothing would raise, sessions would simply stop being
+    resumed and durability would quietly become clean.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+
+
 class ActorState(str, Enum):
     """Where an actor is in its lifecycle."""
 
@@ -161,7 +177,7 @@ class Actor(ABC):
             self.actor_id = actor_id
         elif name:
             # Deterministic UUID from name — same name always gets same ID across restarts
-            self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+            self.actor_id = derive_actor_id(name)
         else:
             self.actor_id = str(uuid.uuid4())
         self.name = name or f"actor-{self.actor_id[:8]}"

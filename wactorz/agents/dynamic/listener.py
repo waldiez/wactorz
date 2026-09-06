@@ -103,9 +103,20 @@ class SubscriptionHub:
     RECONNECT_DELAY = 5.0
     #: Messages held per subscription while its callback catches up.
     QUEUE_MAX = 100
+    #: How long the broker keeps a durable actor's session after it disconnects.
+    #: Bounded deliberately: durability here is about surviving a reconnect or a
+    #: reboot, not about replaying hours of stale readings the queue above would
+    #: discard oldest-first anyway. MQTT v3.1.1 offers no expiry at all, which is
+    #: why this role speaks v5.
+    SESSION_EXPIRY_SECONDS = 3600
 
-    def __init__(self, actor: Any) -> None:
+    def __init__(self, actor: Any, durable: bool = False) -> None:
         self._actor = actor
+        #: Whether the broker should hold this actor's subscriptions while it is
+        #: away. Only meaningful for an actor whose id survives a restart -- an
+        #: anonymous one gets a fresh id per incarnation, so a session kept for
+        #: the old id could never be resumed by the new one.
+        self._durable = durable
         #: A list, not keyed by topic: two callbacks may watch the same
         #: filter, and keying by topic would silently drop the first.
         self._bindings: list[_Binding] = []
@@ -166,6 +177,40 @@ class SubscriptionHub:
                 binding.dropped,
             )
 
+    def _ensure_workers(self) -> None:
+        """Give every binding a live worker, reviving any that were cancelled."""
+        for binding in self._bindings:
+            if binding.worker is None or binding.worker.done():
+                binding.worker = asyncio.create_task(self._drain(binding))
+
+    def _qos(self) -> int:
+        """QoS 1 only where a session exists to queue into.
+
+        Delivery is `min(publish, subscribe)`, but a QoS 1 subscription on a
+        clean session buys nothing: the broker discards the session the moment
+        the client goes away, so there is nowhere for a held message to wait.
+        """
+        return 1 if self._durable else 0
+
+    def _session_kwargs(self) -> dict[str, Any]:
+        """Connect arguments that make the broker keep this session, or not."""
+        if not self._durable:
+            return {}
+        import aiomqtt
+        from paho.mqtt.packettypes import PacketTypes
+        from paho.mqtt.properties import Properties
+
+        properties = Properties(PacketTypes.CONNECT)
+        properties.SessionExpiryInterval = self.SESSION_EXPIRY_SECONDS
+        return {
+            # v5, not v3.1.1: a v3.1.1 durable session has no expiry, so an
+            # agent that is deleted -- or whose node never comes back -- leaves
+            # broker state for ever.
+            "protocol": aiomqtt.ProtocolVersion.V5,
+            "clean_start": False,
+            "properties": properties,
+        }
+
     def _topics(self) -> list[str]:
         """The distinct filters to subscribe, in bind order."""
         return list(dict.fromkeys(b.topic for b in self._bindings))
@@ -191,14 +236,19 @@ class SubscriptionHub:
             return
         while True:
             try:
+                # Workers are cancelled when this task is, so a hub that is
+                # restarted -- `bind` revives it once the task has ended -- would
+                # otherwise re-subscribe and queue into queues nobody drains.
+                self._ensure_workers()
                 async with mqtt_client(
                     self._actor._mqtt_broker,
                     self._actor._mqtt_port,
                     identifier=client_id("agent", str(self._actor.actor_id)),
+                    **self._session_kwargs(),
                 ) as client:
                     self._client = client
                     for topic in self._topics():
-                        await client.subscribe(topic)
+                        await client.subscribe(topic, qos=self._qos())
                     logger.info(
                         "[%s] Subscribed to %d topic(s) on one connection",
                         self._actor.name,
@@ -311,10 +361,30 @@ class SubscriptionHub:
         actor.state = ActorState.FAILED
 
 
+def is_durable_actor(actor: Any) -> bool:
+    """Whether this actor's id survives a restart, and so can hold a session.
+
+    A named actor derives its id from its name, so the same agent reconnects as
+    the same client and resumes what the broker held. An anonymous one gets a
+    fresh id every incarnation, so a session kept under the old id is
+    unreachable -- durability there is not harmful, it is meaningless.
+
+    ⚠ **This asks whether the id is name-derived, not whether it is stable.** An
+    actor constructed with an explicit `actor_id` that happens to be stable is
+    classified as not durable. That is the safe direction -- a clean session and
+    no broker state -- but it does mean such an actor forgoes durability it
+    could in principle have had.
+    """
+    from ...core.actor import derive_actor_id
+
+    name = getattr(actor, "name", "") or ""
+    return derive_actor_id(name) == str(getattr(actor, "actor_id", ""))
+
+
 def hub_for(actor: Any) -> SubscriptionHub:
     """The actor's subscription hub, created on first subscribe."""
     hub = getattr(actor, "_sub_hub", None)
     if hub is None:
-        hub = SubscriptionHub(actor)
+        hub = SubscriptionHub(actor, durable=is_durable_actor(actor))
         actor._sub_hub = hub
     return hub

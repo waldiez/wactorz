@@ -397,7 +397,7 @@ async def _open_robot(agent):
     return mini, last_err, tried
 
 
-async def _bring_up_robot(agent):
+async def _bring_up_robot(agent, *, require_motion=False):
     """Post-connect bring-up. Requires agent.state['mini'] to be a live handle.
 
     Runs on both the setup() path and cmd=reconnect, so a reconnected robot is
@@ -444,7 +444,13 @@ async def _bring_up_robot(agent):
         agent.state["awake"] = True
         await agent.publish("custom/reachy/events", {"type": "wake", "ts": time.time()})
     except Exception as e:
+        # A handle and media stream can both be live while the independent
+        # motor-task websocket is unusable. Any failed wake means motion was
+        # not proved, even when a new SDK release changes the error wording.
+        _note_motion_link_failure(agent, e, force=True)
         await agent.alert(f"wake_up failed: {e}", severity="warning")
+        if require_motion:
+            raise
 
 
 #: Motor faults the daemon reads from the servos, with what to do about each.
@@ -1012,6 +1018,7 @@ async def setup(agent):
     agent.state["_life_antenna_base"] = (0.0, 0.0)
     agent.state["_life_task"] = None
     agent.state["_attract_task"] = None
+    agent.state["_motion_reconnect_task"] = None
     agent.state["_speech_motion"] = False
     # Speech interrupt state — a 'shutup'/'stop' sets stop_speaking to cut a say.
     agent.state["stop_speaking"] = False
@@ -1141,6 +1148,9 @@ async def setup(agent):
                 'move. Say "wake" (or publish {"cmd":"wake"}) to start it.',
                 level="warning",
             )
+
+    if mini is None:
+        _start_motion_reconnect(agent)
 
     connection_mode = agent.state.get("connection_mode")
     connection = "Wi-Fi" if connection_mode == "network" else "the local control app"
@@ -2306,6 +2316,9 @@ async def handle_task(agent, payload):
                     "audience",
                     "audience mode",
                     "fill the room",
+                    "set presenter mode",
+                    "set volume presenter mode",
+                    "volume presenter mode",
                 ):
                     payload = {"cmd": "volume", "preset": "presenter"}
                 else:
@@ -2996,7 +3009,7 @@ async def cleanup(agent):
     # Stop ambient motion first: it streams targets continuously, and a frame
     # that lands after the SDK object is released raises against a dead
     # connection, once per frame.
-    for key in ("_life_task", "_attract_task"):
+    for key in ("_life_task", "_attract_task", "_motion_reconnect_task"):
         task = agent.state.get(key)
         if task is not None and not task.done():
             task.cancel()
@@ -3099,10 +3112,11 @@ async def _reconnect(agent, payload=None):
                     ),
                 },
             )
-        await _bring_up_robot(agent)
+        await _bring_up_robot(agent, require_motion=True)
     finally:
         agent.state["_reconnecting"] = False
 
+    agent.state.pop("motion_link_error", None)
     where = agent.state.get("robot_host") or "autodetect"
     return {
         "connected": True,
@@ -3155,6 +3169,11 @@ async def _recover_media_link(agent, error):
 
 def _is_connected(agent):
     """Quick check that the SDK handle is alive. Returns (ok, reason)."""
+    motion_error = agent.state.get("motion_link_error")
+    if motion_error:
+        return False, (
+            f"reachy motor link dropped ({motion_error}); automatic reconnect is in progress"
+        )
     mini = agent.state.get("mini")
     if mini is None:
         # Surface WHY setup couldn't connect + how to run without the control app,
@@ -3192,6 +3211,8 @@ _MOTION_COMMANDS = frozenset(
     {"wake", "sleep", "pose", "turn", "antennas", "gesture", "emotion", "motors", "face_forward"}
 )
 _MOTION_LINK_ERROR_MARKERS = ("task did not complete in time", "lost connection with the server")
+_MOTION_RECONNECT_INITIAL_S = 1.0
+_MOTION_RECONNECT_MAX_S = 30.0
 
 
 def _is_motion_link_error(error):
@@ -3200,10 +3221,90 @@ def _is_motion_link_error(error):
     return any(marker in text for marker in _MOTION_LINK_ERROR_MARKERS)
 
 
-def _note_motion_link_failure(agent, error):
+def _note_motion_link_failure(agent, error, *, force=False):
     """Remember a motor-task failure so later configuration replies stay honest."""
-    if _is_motion_link_error(error):
+    if force or _is_motion_link_error(error):
         agent.state["motion_link_error"] = str(error)
+        agent.state["awake"] = False
+        return _start_motion_reconnect(agent)
+    return None
+
+
+def _start_motion_reconnect(agent):
+    """Start one recovery task; repeated failed animation frames share it."""
+    task = agent.state.get("_motion_reconnect_task")
+    if task is not None and not task.done():
+        return task
+    task = agent.run_in_background(_motion_reconnect_loop(agent))
+    agent.state["_motion_reconnect_task"] = task
+    return task
+
+
+async def _motion_reconnect_loop(agent):
+    """Keep rebuilding the motor link until bring-up proves it can wake."""
+    delay = _MOTION_RECONNECT_INITIAL_S
+    while True:
+        try:
+            await agent.log("Reachy motor link is down; attempting automatic reconnect", level="warning")
+            if not await _reconnect_motion_client(agent):
+                await _reconnect(agent, {"force": True})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await agent.log(
+                f"automatic motor reconnect failed: {exc}; retrying in {delay:.0f}s",
+                level="warning",
+            )
+            await asyncio.sleep(delay)
+            delay = min(_MOTION_RECONNECT_MAX_S, delay * 2.0)
+            continue
+        await agent.log("Reachy motor link recovered; ambient animations resumed")
+        return
+
+
+async def _reconnect_motion_client(agent):
+    """Replace only the SDK control WebSocket, preserving live WebRTC media.
+
+    Reachy's motion and media use independent transports. Rebuilding the whole
+    SDK handle closes GStreamer/WebRTC and can take many seconds at a crowded
+    venue, while the SDK's control-client constructor can restore `/ws/sdk` in
+    roughly one handshake. Return False when this SDK does not expose the
+    connector so the caller can use the full reconnect path.
+    """
+    mini = agent.state.get("mini")
+    old_client = getattr(mini, "client", None)
+    connector = getattr(mini, "_connect_single", None)
+    host = getattr(old_client, "host", None)
+    port = getattr(old_client, "port", None)
+    if mini is None or not callable(connector) or not host or not port:
+        return False
+    if agent.state.get("_reconnecting"):
+        return False
+
+    agent.state["_reconnecting"] = True
+    new_client = None
+    try:
+        new_client = await _do(connector, host=host, port=port, timeout=5.0)
+        mini.client = new_client
+        await _ensure_motors_enabled(agent)
+        await _do(mini.wake_up)
+        agent.state["awake"] = True
+        agent.state.pop("motion_link_error", None)
+        await agent.publish("custom/reachy/events", {"type": "wake", "ts": time.time()})
+    except Exception:
+        if new_client is not None:
+            await _do(new_client.disconnect)
+        raise
+    finally:
+        agent.state["_reconnecting"] = False
+
+    # The replacement is already active, so closing the dead client cannot
+    # interrupt motion. Keep the potentially blocking close off the actor loop.
+    try:
+        await _do(old_client.disconnect)
+    except Exception:
+        pass
+    return True
 
 
 # ============================================================
@@ -4585,10 +4686,13 @@ async def _life_loop(agent):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            recovery = _note_motion_link_failure(agent, exc)
             amplitude = 0.0
             if time.monotonic() - last_complaint > 30.0:
                 last_complaint = time.monotonic()
                 await agent.log(f"ambient life frame skipped: {exc}", level="warning")
+            if recovery is not None:
+                await recovery
 
 
 # ---------------------------------------------------------------------------
@@ -4740,7 +4844,10 @@ async def _attract_loop(agent):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            recovery = _note_motion_link_failure(agent, exc)
             await agent.log(f"attract beat skipped: {exc}", level="warning")
+            if recovery is not None:
+                await recovery
 
 
 def _start_life_loop(agent):

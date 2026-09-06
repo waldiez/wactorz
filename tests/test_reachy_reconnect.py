@@ -81,6 +81,7 @@ class FakeAgent:
         self.logs: list[str] = []
         self.alerts: list[str] = []
         self.persisted: dict = {}
+        self.background: list[asyncio.Task] = []
 
     async def publish(self, topic, payload):
         self.published.append((topic, payload))
@@ -96,6 +97,11 @@ class FakeAgent:
 
     def persist(self, key, value):
         self.persisted[key] = value
+
+    def run_in_background(self, coro):
+        task = asyncio.create_task(coro)
+        self.background.append(task)
+        return task
 
     def events(self):
         return [p for t, p in self.published if t == "custom/reachy/events"]
@@ -400,3 +406,113 @@ class ConcurrentReconnectTest(unittest.TestCase):
         self.assertTrue(first["ok"])
         self.assertFalse(second["ok"])
         self.assertIn("already in progress", second["error"])
+
+
+class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
+    async def test_motion_only_reconnect_preserves_media_handle(self):
+        mini = _fake_mini()
+        old_client = types.SimpleNamespace(
+            host="192.168.68.64",
+            port=8000,
+            disconnect=mock.Mock(),
+        )
+        new_client = types.SimpleNamespace(disconnect=mock.Mock())
+        mini.client = old_client
+        mini._connect_single = mock.Mock(return_value=new_client)
+        agent = FakeAgent(mini=mini)
+        agent.state["motion_link_error"] = "Lost connection with the server"
+
+        recovered = await NS["_reconnect_motion_client"](agent)
+
+        self.assertTrue(recovered)
+        self.assertIs(mini.client, new_client)
+        mini._connect_single.assert_called_once_with(host="192.168.68.64", port=8000, timeout=5.0)
+        old_client.disconnect.assert_called_once()
+        mini.wake_up.assert_called_once()
+        self.assertTrue(agent.state["awake"])
+        self.assertNotIn("motion_link_error", agent.state)
+
+    async def test_forced_failure_classification_covers_changed_sdk_wording(self):
+        agent = FakeAgent(mini=_fake_mini())
+        release = asyncio.Event()
+
+        async def blocked_reconnect(_agent, _payload):
+            await release.wait()
+            return {"connected": True}
+
+        with mock.patch.dict(NS, {"_reconnect": blocked_reconnect}):
+            task = NS["_note_motion_link_failure"](
+                agent, RuntimeError("unexpected SDK wake failure"), force=True
+            )
+            self.assertIsNotNone(task)
+            self.assertFalse(agent.state["awake"])
+            self.assertIn("unexpected SDK wake failure", agent.state["motion_link_error"])
+            release.set()
+            await task
+
+    async def test_motion_failure_retries_until_reconnected(self):
+        agent = FakeAgent(mini=_fake_mini())
+        attempts = 0
+
+        async def fake_reconnect(_agent, _payload):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("robot still unavailable")
+            _agent.state.pop("motion_link_error", None)
+            return {"connected": True}
+
+        with mock.patch.dict(
+            NS,
+            {
+                "_reconnect": fake_reconnect,
+                "_MOTION_RECONNECT_INITIAL_S": 0.0,
+                "_MOTION_RECONNECT_MAX_S": 0.0,
+            },
+        ):
+            NS["_note_motion_link_failure"](agent, RuntimeError("Lost connection with the server"))
+            await agent.background[-1]
+
+        self.assertEqual(attempts, 2)
+        self.assertNotIn("motion_link_error", agent.state)
+        self.assertTrue(any("animations resumed" in line for line in agent.logs))
+
+    async def test_repeated_failed_frames_start_one_reconnect_task(self):
+        agent = FakeAgent(mini=_fake_mini())
+        release = asyncio.Event()
+
+        async def blocked_reconnect(_agent, _payload):
+            await release.wait()
+            _agent.state.pop("motion_link_error", None)
+            return {"connected": True}
+
+        with mock.patch.dict(NS, {"_reconnect": blocked_reconnect}):
+            NS["_note_motion_link_failure"](agent, RuntimeError("Lost connection with the server"))
+            first = agent.state["_motion_reconnect_task"]
+            NS["_note_motion_link_failure"](agent, RuntimeError("Task did not complete in time"))
+            self.assertIs(agent.state["_motion_reconnect_task"], first)
+            self.assertEqual(len(agent.background), 1)
+            release.set()
+            await first
+
+
+class PresenterPhraseTest(unittest.IsolatedAsyncioTestCase):
+    async def test_set_volume_presenter_mode_stays_local(self):
+        agent = FakeAgent(mini=_fake_mini())
+        seen = {}
+
+        async def fake_dispatch(_agent, cmd, payload, return_result=False):
+            seen.update({"cmd": cmd, "payload": payload, "return_result": return_result})
+            return {"ok": True, "level": 100, "result": "presenter"}
+
+        async def forbidden_planner(*_args, **_kwargs):
+            raise AssertionError("presenter mode must not require an LLM call")
+
+        with mock.patch.dict(
+            NS,
+            {"_dispatch": fake_dispatch, "_nl_to_commands": forbidden_planner},
+        ):
+            await NS["handle_task"](agent, {"text": "set volume presenter mode"})
+
+        self.assertEqual(seen["cmd"], "volume")
+        self.assertEqual(seen["payload"]["preset"], "presenter")

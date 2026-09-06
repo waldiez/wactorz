@@ -248,6 +248,17 @@ class MotionLinkStatusTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(await NS["_imu_temperature"](agent))
 
+    async def test_health_does_not_call_a_stale_motor_link_connected(self):
+        agent = FakeAgent()
+        agent.state["mini"] = types.SimpleNamespace(connected=True)
+        agent.state["motion_link_error"] = "Lost connection with the server"
+
+        report = await NS["_health"](agent)
+
+        self.assertFalse(report["connected"])
+        self.assertIn("automatic reconnect", report["connection_reason"])
+        self.assertIn("not connected", report["result"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()

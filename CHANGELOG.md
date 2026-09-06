@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+- Fix Reachy Mini presenter deployments getting stuck after a transient motor-link failure: failed animations now trigger continuous automatic reconnection with backoff, use a fast motion-only recovery while preserving live WebRTC media, health no longer reports a stale motor connection as live, and common presenter-volume phrasing is handled locally.
+
 ### Added
 
 - **Reachy now has built-in, topic-aware help.** Typed or spoken requests such as `help`,

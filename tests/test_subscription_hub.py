@@ -134,6 +134,23 @@ class TestOneConnectionPerActor:
 
 
 class TestDispatch:
+    async def test_two_callbacks_on_one_topic_both_run(self, broker: FakeBroker) -> None:
+        # Bindings are a list, not a dict keyed by topic: keying by topic drops
+        # the first silently, and only the second callback would ever run.
+        seen: list[str] = []
+        hub = SubscriptionHub(FakeActor())
+        hub.bind("shared/topic", lambda _p: seen.append("first"))
+        hub.bind("shared/topic", lambda _p: seen.append("second"))
+        await _settle()
+
+        await broker.deliver("shared/topic")
+        await _settle()
+
+        assert sorted(seen) == ["first", "second"]
+        # ...and the filter is only subscribed once on the wire.
+        assert broker.connections[0].subscribed == ["shared/topic"]
+        hub._task.cancel()
+
     async def test_a_message_reaches_only_matching_bindings(self, broker: FakeBroker) -> None:
         seen: list[str] = []
         hub = SubscriptionHub(FakeActor())
@@ -225,7 +242,7 @@ class TestBackpressure:
 
         hub.bind("busy/topic", slow)
         await _settle()
-        binding = hub._bindings["busy/topic"]
+        binding = hub._bindings[0]
 
         for n in range(6):
             binding.offer({"n": n})
@@ -258,7 +275,7 @@ class TestTheErrorBudget:
         assert actor.published_errors, "no error was escalated"
         assert actor.published_errors[-1]["fatal"] is True
         assert str(actor.state) == "ActorState.FAILED"
-        assert "bad/topic" not in hub._bindings
+        assert not [b for b in hub._bindings if b.topic == "bad/topic"]
         hub._task.cancel()
 
     async def test_a_recovering_callback_clears_its_budget(self, broker: FakeBroker) -> None:

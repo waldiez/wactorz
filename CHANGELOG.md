@@ -7,7 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
-- **An agent running on the server now shares one connection to the broker across all its subscriptions, instead of opening one each.** An agent that watched twenty topics held twenty separate broker connections, each authenticating and each costing the broker a session. Since agent code is written by a model, nothing stopped a generated loop from opening as many as it liked. Such an agent now costs one connection however many topics it watches, and a slow callback on one topic no longer delays the others. Messages on any single topic are still handled one at a time, in the order they arrived, and a topic whose callback cannot keep up now discards its oldest waiting messages rather than growing without limit. **Agents running on remote nodes are unchanged for now** and still open a connection per subscription.
+- **An agent now shares one connection to the broker across all its subscriptions, instead of opening one each.** An agent that watched twenty topics held twenty separate broker connections, each authenticating and each costing the broker a session. Since agent code is written by a model, nothing stopped a generated loop from opening as many as it liked. Such an agent now costs one connection however many topics it watches, and a slow callback on one topic no longer delays the others. Messages on any single topic are still handled one at a time, in the order they arrived, and a topic whose callback cannot keep up now discards its oldest waiting messages rather than growing without limit. Agents running on remote nodes are changed the same way.
 
 ### Fixed
 

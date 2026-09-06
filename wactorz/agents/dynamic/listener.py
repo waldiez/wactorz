@@ -106,7 +106,9 @@ class SubscriptionHub:
 
     def __init__(self, actor: Any) -> None:
         self._actor = actor
-        self._bindings: dict[str, _Binding] = {}
+        #: A list, not keyed by topic: two callbacks may watch the same
+        #: filter, and keying by topic would silently drop the first.
+        self._bindings: list[_Binding] = []
         self._client: Any = None
         self._task: asyncio.Task | None = None
         self._warned = [False]
@@ -120,7 +122,7 @@ class SubscriptionHub:
         of every other binding with it. Repair calls :meth:`clear` instead.
         """
         binding = _Binding(topic, callback, self.QUEUE_MAX)
-        self._bindings[topic] = binding
+        self._bindings.append(binding)
         binding.worker = asyncio.create_task(self._drain(binding))
         if self._client is not None:
             asyncio.create_task(self._subscribe_now(topic))
@@ -138,20 +140,20 @@ class SubscriptionHub:
         explicitly or messages keep being dispatched into a namespace that has
         been replaced.
         """
-        bindings = list(self._bindings.values())
+        bindings = list(self._bindings)
         self._bindings.clear()
         for binding in bindings:
             self._stop_worker(binding)
         client = self._client
         if client is None:
             return
-        for binding in bindings:
+        for topic in dict.fromkeys(b.topic for b in bindings):
             try:
-                await client.unsubscribe(binding.topic)
+                await client.unsubscribe(topic)
             except Exception:
                 # A dropped connection unsubscribes by itself; the binding is
                 # already gone, which is what stops the callback being reached.
-                logger.debug("[%s] Could not unsubscribe %s", self._actor.name, binding.topic)
+                logger.debug("[%s] Could not unsubscribe %s", self._actor.name, topic)
 
     def _stop_worker(self, binding: _Binding) -> None:
         if binding.worker is not None and not binding.worker.done():
@@ -163,6 +165,10 @@ class SubscriptionHub:
                 binding.topic,
                 binding.dropped,
             )
+
+    def _topics(self) -> list[str]:
+        """The distinct filters to subscribe, in bind order."""
+        return list(dict.fromkeys(b.topic for b in self._bindings))
 
     async def _subscribe_now(self, topic: str) -> None:
         """Add a topic to a connection that is already up."""
@@ -191,12 +197,12 @@ class SubscriptionHub:
                     identifier=client_id("agent", str(self._actor.actor_id)),
                 ) as client:
                     self._client = client
-                    for topic in list(self._bindings):
+                    for topic in self._topics():
                         await client.subscribe(topic)
                     logger.info(
                         "[%s] Subscribed to %d topic(s) on one connection",
                         self._actor.name,
-                        len(self._bindings),
+                        len(self._topics()),
                     )
                     async for message in client.messages:
                         self._dispatch(message)
@@ -204,7 +210,7 @@ class SubscriptionHub:
                 self._client = None
                 # The workers belong to this connection: stopping the actor
                 # cancels the hub task, and nothing else would reach them.
-                for binding in list(self._bindings.values()):
+                for binding in list(self._bindings):
                     self._stop_worker(binding)
                 break
             except Exception as e:
@@ -229,7 +235,7 @@ class SubscriptionHub:
             payload = json.loads(message.payload.decode())
         except Exception:
             payload = {"raw": message.payload.decode()}
-        for binding in list(self._bindings.values()):
+        for binding in list(self._bindings):
             if topic_matches(binding.topic, topic):
                 binding.offer(payload)
 
@@ -298,7 +304,7 @@ class SubscriptionHub:
         )
         from ...core.actor import ActorState
 
-        self._bindings.pop(topic, None)
+        self._bindings = [b for b in self._bindings if b is not binding]
         # Cancels the worker this is running in; it takes effect at the next
         # await, which is the queue read `_drain` returns to.
         self._stop_worker(binding)

@@ -110,6 +110,54 @@ class TestTheCap:
         await asyncio.wait_for(publish_many(), timeout=2)
 
 
+class TestPublishQoS:
+    """Telemetry goes out at QoS 0, and it is not only about queue space.
+
+    At QoS 1 the broker holds heartbeats for a subscriber that is away and
+    replays them on reconnect. Main records a heartbeat as "seen just now" on
+    receipt, so a replayed batch marks a node that died hours ago as online --
+    and that is what gates migrating an agent onto it.
+    """
+
+    @pytest.mark.parametrize(
+        ("topic", "expected"),
+        [
+            ("nodes/rpi/heartbeat", 0),
+            ("agents/abc/logs", 0),
+            ("agents/abc/metrics", 0),
+            ("nodes/rpi/status", 0),
+            ("agents/abc/results", 1),
+            ("nodes/rpi/state_return", 1),
+            ("nodes/rpi/spawn_ack", 1),
+            ("agents/abc/manifest", 1),
+        ],
+    )
+    async def test_the_queued_entry_carries_the_right_class(
+        self, runner: Any, topic: str, expected: int
+    ) -> None:
+        await runner.publish(topic, {"x": 1})
+
+        _topic, _payload, _retain, critical = runner._pub_queue.get_nowait()
+        assert (1 if critical else 0) == expected
+
+    async def test_the_publisher_sends_telemetry_at_qos_zero(self, runner: Any) -> None:
+        # The classification has to reach the wire, not only the queue.
+        sent: list[tuple[str, int]] = []
+
+        class _Client:
+            def publish(
+                self, topic: str, _payload: Any, qos: int = 0, retain: bool = False
+            ) -> None:
+                sent.append((topic, qos))
+
+        await runner.publish("nodes/rpi/heartbeat", {"x": 1})
+        await runner.publish("agents/abc/results", {"x": 1})
+        await runner._publish_one_queued(_Client())
+        await runner._publish_one_queued(_Client())
+
+        assert sent == [("nodes/rpi/heartbeat", 0), ("agents/abc/results", 1)]
+
+
 class TestOrdering:
     async def test_the_rebuild_keeps_the_survivors_in_order(self, runner: Any) -> None:
         # _discard_one_telemetry drains the queue and refills it, because

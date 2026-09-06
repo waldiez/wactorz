@@ -185,7 +185,13 @@ class NodeManager:
                     identifier=client_id("srv", install_id(), "nodes"),
                     **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
                 ) as client:
-                    await client.subscribe("nodes/+/heartbeat", qos=1)
+                    # Heartbeats are liveness evidence, and a stale one is
+                    # worse than none: it is recorded as "seen just now", so a
+                    # replayed batch would mark a dead node online. Nodes send
+                    # them at QoS 0 for the same reason; asking for more here
+                    # would only be misleading, since delivery is the lower of
+                    # the two.
+                    await client.subscribe("nodes/+/heartbeat", qos=0)
                     await client.subscribe("nodes/+/migrate_result", qos=1)
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None

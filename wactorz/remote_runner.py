@@ -2196,14 +2196,21 @@ class _RemoteRunner:
         """Hand the next queued message to the client, waiting for one to arrive.
 
         Entries are built by `publish` alone, so the shape is fixed:
-        (topic, payload, retain, critical).
+        (topic, payload, retain, critical) -- and `critical` decides the QoS as
+        well as what the queue evicts first.
         """
         queue = self._pub_queue
         if queue is None:
             return
         item = await queue.get()
-        topic, payload, retain = item[0], item[1], item[2]
-        client.publish(topic, payload, qos=1, retain=retain)
+        topic, payload, retain, critical = item
+        # Telemetry goes out at QoS 0, mirroring MQTTPublisher on the server.
+        # Not only to save queue space: at QoS 1 the broker holds heartbeats for
+        # a subscriber that is away and replays them on reconnect, and main
+        # stamps a node as last seen *now* on receipt -- so a node that died
+        # hours ago would read online for the whole freshness window, which is
+        # exactly what gates migrating an agent onto it.
+        client.publish(topic, payload, qos=1 if critical else 0, retain=retain)
         queue.task_done()
 
     async def _publisher_loop(self) -> None:

@@ -205,19 +205,170 @@ def _tolerant_invoker(
     return _invoke
 
 
-async def _deliver_messages(
-    client: Any, topic: str, invoke: Callable[[Any], Awaitable[None]], agent_name: str
-) -> None:
-    """Hand each message on `client` to `invoke`, surviving one that raises."""
-    async for msg in client.messages:
+def _topic_matches(pattern: str, topic: str) -> bool:
+    """Match a topic against an MQTT filter with `#` and `+` wildcards.
+
+    Mirrors `topic_matches` in wactorz/core/topic_bus.py. Spelled out rather
+    than imported: this file is deployed to a node on its own, with no wactorz
+    package beside it.
+    """
+    if pattern == topic:
+        return True
+    parts, actual = pattern.split("/"), topic.split("/")
+    while True:
+        if not parts and not actual:
+            return True
+        if parts and parts[0] == "#":
+            return True
+        if not parts or not actual:
+            return False
+        if parts[0] != "+" and parts[0] != actual[0]:
+            return False
+        parts, actual = parts[1:], actual[1:]
+
+
+class _NodeBinding:
+    """One topic filter on a node agent, and the queue that serialises it."""
+
+    def __init__(self, topic: str, invoke: Callable[[Any], Awaitable[None]], maxsize: int) -> None:
+        self.topic = topic
+        self.invoke = invoke
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self.worker: asyncio.Task | None = None
+        self.dropped = 0
+
+    def offer(self, payload: Any) -> None:
+        """Queue a payload, discarding the oldest when the callback is behind."""
         try:
-            payload = json.loads(msg.payload.decode())
-        except Exception:
-            payload = {"raw": msg.payload.decode()}
+            self.queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            self.dropped += 1
+            try:
+                self.queue.get_nowait()
+                self.queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+            self.queue.put_nowait(payload)
+
+
+class _NodeSubscriptionHub:
+    """Every subscription one node agent holds, on a single MQTT connection.
+
+    The server-side twin of this is `SubscriptionHub` in
+    wactorz/agents/dynamic/listener.py, and the reasoning is the same: an agent
+    used to open a connection per `subscribe()`, agent code is model-authored,
+    and nothing stopped a generated loop from opening as many as it liked.
+
+    One worker per binding rather than a task per message, because the
+    per-subscription connection this replaces awaited each callback -- a
+    topic's messages were serialised, and generated code is stateful and not
+    written to be re-entrant. The queue is bounded for the same reason the
+    runner's publish queue should be: unbounded, it is just a backlog waiting
+    for a broker outage.
+    """
+
+    RECONNECT_DELAY = 5.0
+    QUEUE_MAX = 100
+
+    def __init__(self, agent_name: str, actor_id: str, broker: str, port: int) -> None:
+        self._agent_name = agent_name
+        self._actor_id = actor_id
+        self._broker = broker
+        self._port = port
+        #: A list, not keyed by topic: two callbacks may watch the same filter,
+        #: and keying by topic would silently drop the first.
+        self._bindings: list[_NodeBinding] = []
+        self._client: Any = None
+        self._task: asyncio.Task | None = None
+
+    def bind(self, topic: str, invoke: Callable[[Any], Awaitable[None]]) -> asyncio.Task | None:
+        """Register a subscription; returns the hub task if this call started it."""
+        binding = _NodeBinding(topic, invoke, self.QUEUE_MAX)
+        self._bindings.append(binding)
+        binding.worker = asyncio.create_task(self._drain(binding))
+        if self._client is not None:
+            asyncio.create_task(self._subscribe_now(topic))
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self.run())
+            return self._task
+        return None
+
+    async def _subscribe_now(self, topic: str) -> None:
+        client = self._client
+        if client is None:
+            return
         try:
-            await invoke(payload)
+            await client.subscribe(topic)
         except Exception:
-            logger.exception("[%s] subscribe callback error (topic=%s)", agent_name, topic)
+            logger.debug("[%s] Deferred subscribe of %s to reconnect", self._agent_name, topic)
+
+    async def run(self) -> None:
+        """Hold one connection open for every subscription, reconnecting for ever."""
+        try:
+            import aiomqtt
+        except ImportError:
+            logger.warning("[%s] aiomqtt not installed", self._agent_name)
+            return
+        while True:
+            try:
+                async with aiomqtt.Client(
+                    self._broker,
+                    self._port,
+                    username=os.environ.get("MQTT_USERNAME") or None,
+                    password=os.environ.get("MQTT_PASSWORD") or None,
+                    # Mirrors core/mqtt.py client_id.
+                    identifier=f"wactorz-agent-{self._actor_id}",
+                ) as client:
+                    self._client = client
+                    topics = list(dict.fromkeys(b.topic for b in self._bindings))
+                    for topic in topics:
+                        await client.subscribe(topic)
+                    logger.info(
+                        "[%s] Subscribed to %d topic(s) on one connection",
+                        self._agent_name,
+                        len(topics),
+                    )
+                    async for message in client.messages:
+                        self._dispatch(message)
+            except asyncio.CancelledError:
+                self._client = None
+                for binding in list(self._bindings):
+                    if binding.worker is not None and not binding.worker.done():
+                        binding.worker.cancel()
+                break
+            except Exception as e:
+                self._client = None
+                logger.warning(
+                    "[%s] MQTT subscribe error: %s — retrying in %ss",
+                    self._agent_name,
+                    e,
+                    self.RECONNECT_DELAY,
+                )
+                await asyncio.sleep(self.RECONNECT_DELAY)
+
+    def _dispatch(self, message: Any) -> None:
+        """Queue one message for every binding whose filter matches it."""
+        topic = str(message.topic)
+        try:
+            payload = json.loads(message.payload.decode())
+        except Exception:
+            payload = {"raw": message.payload.decode()}
+        for binding in list(self._bindings):
+            if _topic_matches(binding.topic, topic):
+                binding.offer(payload)
+
+    async def _drain(self, binding: _NodeBinding) -> None:
+        """Run one binding's callbacks, strictly one message at a time."""
+        while True:
+            payload = await binding.queue.get()
+            try:
+                await binding.invoke(payload)
+            except Exception:
+                logger.exception(
+                    "[%s] subscribe callback error (topic=%s)", self._agent_name, binding.topic
+                )
+            finally:
+                binding.queue.task_done()
 
 
 def _close_mqtt_client(client: Any, what: str) -> None:
@@ -743,15 +894,21 @@ class _RemoteAgentAPI:
             return _AWAITABLE_NONE
         self._subscribed_topics[sub_key] = checked
 
-        task = asyncio.create_task(self._subscription_listener(topic, checked, self.name))
-        self._subscriber_tasks.append(task)
-        # Also let the agent's task list see it so stop() cancels cleanly.
-        try:
-            self._agent._tasks.append(task)
-        except Exception:
-            # Without this the task still runs; it just will not be cancelled by
-            # stop(), which is worth knowing about but not worth failing over.
-            logger.debug("[%s] Could not register listener task", self._agent.name, exc_info=True)
+        # One connection per agent carries every subscription, so only the first
+        # bind starts a task.
+        task = self._hub().bind(topic, _tolerant_invoker(checked, self.name))
+        if task is not None:
+            self._subscriber_tasks.append(task)
+            # Also let the agent's task list see it so stop() cancels cleanly.
+            try:
+                self._agent._tasks.append(task)
+            except Exception:
+                # Without this the task still runs; it just will not be cancelled
+                # by stop(), which is worth knowing about but not worth failing
+                # over.
+                logger.debug(
+                    "[%s] Could not register listener task", self._agent.name, exc_info=True
+                )
 
         # Record the subscription on the contract surface and re-publish the
         # manifest so main learns about it and updates the central TopicBus.
@@ -762,35 +919,14 @@ class _RemoteAgentAPI:
         # Return an awaitable no-op so `await agent.subscribe(...)` doesn't crash.
         return _AWAITABLE_NONE
 
-    async def _subscription_listener(
-        self, topic: str, callback: Callable[..., Awaitable[Any]], agent_name: str
-    ) -> None:
-        """Consume `topic` until cancelled, reconnecting when the broker drops."""
-        try:
-            import aiomqtt
-        except ImportError:
-            logger.warning("[%s] aiomqtt not installed", agent_name)
-            return
-
-        invoke = _tolerant_invoker(callback, agent_name)
-        while True:
-            try:
-                async with aiomqtt.Client(
-                    self._agent._runner.broker,
-                    self._agent._runner.port,
-                    username=os.environ.get("MQTT_USERNAME") or None,
-                    password=os.environ.get("MQTT_PASSWORD") or None,
-                ) as client:
-                    await client.subscribe(topic)
-                    logger.info("[%s] Subscribed to %s", agent_name, topic)
-                    await _deliver_messages(client, topic, invoke, agent_name)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(
-                    "[%s] MQTT subscribe error on %s: %s — retrying in 5s", agent_name, topic, e
-                )
-                await asyncio.sleep(5)
+    def _hub(self) -> _NodeSubscriptionHub:
+        """This agent's subscription hub, created on first subscribe."""
+        hub = getattr(self, "_sub_hub", None)
+        if hub is None:
+            runner = self._agent._runner
+            hub = _NodeSubscriptionHub(self.name, str(self.actor_id), runner.broker, runner.port)
+            self._sub_hub = hub
+        return hub
 
     # ── One-shot reads / time windows / world state ──────────────────────────
     async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any:

@@ -100,21 +100,26 @@ class TestSubscribeDedup:
         api.subscribe("sensors/x", _noop)
         api.subscribe("sensors/x", _noop)
         try:
-            # setup() runs again on reconnect; two listeners would double every
+            # setup() runs again on reconnect; two bindings would double every
             # message the agent sees.
-            assert len(api._subscriber_tasks) == 1
+            assert len(api._hub()._bindings) == 1
         finally:
             await _drain(api)
 
     async def test_the_same_callback_on_another_topic_subscribes_again(self, api: Any) -> None:
+        # Counted as bindings, not as tasks: every subscription an agent holds
+        # now shares one connection, so the task count no longer tracks them.
         api.subscribe("sensors/x", _noop)
         api.subscribe("sensors/y", _noop)
         try:
-            assert len(api._subscriber_tasks) == 2
+            assert [b.topic for b in api._hub()._bindings] == ["sensors/x", "sensors/y"]
+            assert len(api._subscriber_tasks) == 1
         finally:
             await _drain(api)
 
     async def test_two_distinct_callbacks_both_subscribe(self, api: Any) -> None:
+        # Two callbacks may watch one filter. Keying bindings by topic would
+        # silently drop the first, and only the second would ever run.
         async def _first(_payload: dict) -> None:
             return None
 
@@ -124,7 +129,9 @@ class TestSubscribeDedup:
         api.subscribe("sensors/x", _first)
         api.subscribe("sensors/x", _second)
         try:
-            assert len(api._subscriber_tasks) == 2
+            bindings = api._hub()._bindings
+            assert len(bindings) == 2
+            assert {b.topic for b in bindings} == {"sensors/x"}
         finally:
             await _drain(api)
 

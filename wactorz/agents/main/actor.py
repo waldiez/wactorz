@@ -250,6 +250,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self._remote_observed_samples_listener()))
         # Receive state + config from remote nodes during remote→local migration
         self._tasks.append(asyncio.create_task(self._state_return_listener()))
+        # Put back agents whose migration stalled with them running nowhere
+        self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt
         self._inject_user_facts_into_prompt()
 
@@ -1084,6 +1086,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _manifest_listener(self) -> None:
         """Follow agent manifests. Owned by `self.manifests`."""
         await self.manifests.manifest_listener()
+
+    async def _stalled_migration_watcher(self) -> None:
+        await self.migration.stalled_migration_watcher()
 
     async def _state_return_listener(self) -> None:
         """Receive agents returning from a node. Owned by `self.migration`."""

@@ -72,6 +72,7 @@ class _Run:
         self.spawned: list[dict[str, Any]] = []
         self.spawn_kwargs: list[dict[str, Any]] = []
         self.notifications: list[dict[str, Any]] = []
+        self.published: list[tuple[str, Any]] = []
         self.spawn_error: Exception | None = None
 
     @property
@@ -130,6 +131,10 @@ async def run_listener(
         if spawn_error is not None:
             raise spawn_error
 
+    async def _publish(topic: str, payload: Any, retain: bool = False, qos: int = 0) -> None:
+        run.published.append((topic, payload))
+
+    setattr(main, "_mqtt_publish", _publish)
     setattr(main, "_spawn_from_config", _spawn)
     setattr(main, "_queue_notification", run.notifications.append)
     setattr(main, "_restore_earned_trust", lambda name, cfg: False)
@@ -149,6 +154,40 @@ def waiting(token: str = TOKEN, age_s: float = 0.0) -> dict[str, dict[str, Any]]
     return {
         token: {"agent_name": "collector", "from_node": "rpi", "started_at": time.time() - age_s}
     }
+
+
+class TestTheSourcesCopy:
+    """The node keeps the agent until main has it running again.
+
+    The runner stops the agent without deleting it, so a hand-back that fails
+    after the state is sent still has the agent intact where it started. Main
+    tells the source to drop its copy only once the local spawn has happened.
+    """
+
+    async def test_the_source_is_told_to_delete_once_the_agent_is_local(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_listener(monkeypatch, [state_return()], pending=waiting())
+
+        assert ("nodes/rpi/stop", {"name": "collector", "delete": True}) in run.published
+
+    async def test_a_rejected_hand_back_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A forged token spawns nothing, so there is nothing to clean up -- and
+        # telling the node to delete would destroy an agent it is still running.
+        run = await run_listener(monkeypatch, [state_return(token="forged")], pending=waiting())
+
+        assert not run.published
+
+    async def test_a_failed_spawn_deletes_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The agent could not be brought up locally, so the source's copy is the
+        # only one left. Deleting it would lose the agent outright.
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        assert not [t for t, _ in run.published if t.endswith("/stop")]
 
 
 class TestTheToken:

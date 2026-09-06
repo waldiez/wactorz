@@ -1994,6 +1994,23 @@ class _RemoteRunner:
             },
         )
 
+        # A migration is waiting on this. The ack says the *process started*,
+        # nothing more: a heartbeat or a manifest would conflate arrival with
+        # health, and roll back a migration that worked because the agent's own
+        # code crashed a moment later -- which is a supervision matter.
+        token = config.get("_migration_token")
+        if token:
+            await self.publish(
+                f"nodes/{self.node_name}/spawn_ack",
+                {
+                    "agent": name,
+                    "migration_token": token,
+                    "node": self.node_name,
+                    "timestamp": time.time(),
+                },
+                retain=False,
+            )
+
     async def stop_agent(self, name: str, delete: bool = False) -> None:
         """Stop an agent. When `delete=True`, also wipe everything that would
         otherwise survive the stop:
@@ -2639,11 +2656,13 @@ class _RemoteRunner:
             return_config["node"] = self.node_name
             return_config.pop("_initial_state", None)
             return_config.pop("replace", None)
-            # Stop locally AND delete the state file. The agent has just been
-            # migrated away — keeping its state.json behind would resurrect
-            # stale memory if the agent is ever migrated back to this node.
-            # The snapshot we're about to publish is the authoritative copy.
-            await self.stop_agent(name, delete=True)
+            # Stop, but keep the state file. Main deletes it with an explicit
+            # `stop {"delete": true}` once the agent is confirmed running
+            # somewhere else. Deleting here would mean a migration that fails
+            # after this point has nothing to roll back to -- the snapshot in
+            # flight would be the only copy, and a dropped message would lose
+            # the agent outright.
+            await self.stop_agent(name)
             await asyncio.sleep(0.3)
             await self.publish(
                 f"nodes/{self.node_name}/state_return",
@@ -2672,41 +2691,31 @@ class _RemoteRunner:
             logger.info("[runner] Migration of '%s' to local (main) dispatched.", name)
             return
 
-        if safe_state:
-            config["_initial_state"] = safe_state
-            logger.info(
-                "[runner] migrate '%s': carrying %s state key(s) to '%s': %s",
-                name,
-                len(safe_state),
-                target_node,
-                list(safe_state.keys()),
-            )
-
-        logger.info("[runner] Migrating '%s' from %s → %s", name, self.node_name, target_node)
-
-        # Stop locally AND delete the state file. The agent's state is now in
-        # `config["_initial_state"]` and about to be published to the target
-        # node — that snapshot is authoritative. A stale leftover JSON on this
-        # node would otherwise survive and conflict on any future migrate-back.
-        await self.stop_agent(name, delete=True)
-        await asyncio.sleep(0.3)  # let heartbeat "stopped" reach broker
-
-        # Publish spawn to target node via MQTT
-        await self.publish(f"nodes/{target_node}/spawn", config)
-
+        # Node-to-node migration used to happen here: this runner published
+        # `nodes/{target}/spawn` directly. That is the reproduced lateral-RCE
+        # path -- generated code on one node could spawn code on another -- and
+        # the ACL that closes it forbids a node writing another node's
+        # namespace, which would have broken this anyway. Migration is routed
+        # through main instead, which is the only party allowed to address every
+        # node. Main asks for the state with the `@main` sentinel above and does
+        # the placing itself.
+        logger.warning(
+            "[runner] migrate '%s' to '%s': node-to-node migration is not "
+            "supported; main routes migrations. Ignoring.",
+            name,
+            target_node,
+        )
         await self.publish(
             f"nodes/{self.node_name}/migrate_result",
             {
-                "success": True,
+                "success": False,
+                "error": "node-to-node migration is routed through main",
                 "agent": name,
                 "from_node": self.node_name,
                 "to_node": target_node,
-                "state_keys_transferred": list(safe_state.keys()),
-                "state_keys_dropped": dropped,
                 "timestamp": time.time(),
             },
         )
-        logger.info("[runner] Migration of '%s' to '%s' dispatched.", name, target_node)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

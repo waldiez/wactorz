@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from wactorz.core.topic_bus import TopicContract, TopicRegistry, _topic_matches
+from wactorz.core.topic_bus import TopicContract, TopicRegistry, topic_matches
 
 
 class TestTopicMatching:
@@ -19,7 +19,7 @@ class TestTopicMatching:
         ["sensors/kitchen/temp", "sensors/+/temp", "sensors/#", "#", "sensors/kitchen/#"],
     )
     def test_patterns_that_match(self, pattern: str) -> None:
-        assert _topic_matches(pattern, "sensors/kitchen/temp")
+        assert topic_matches(pattern, "sensors/kitchen/temp")
 
     @pytest.mark.parametrize(
         "pattern",
@@ -32,28 +32,28 @@ class TestTopicMatching:
         ],
     )
     def test_patterns_that_do_not(self, pattern: str) -> None:
-        assert not _topic_matches(pattern, "sensors/kitchen/temp")
+        assert not topic_matches(pattern, "sensors/kitchen/temp")
 
     def test_plus_matches_exactly_one_level_not_zero(self) -> None:
-        assert not _topic_matches("sensors/+/temp", "sensors/temp")
+        assert not topic_matches("sensors/+/temp", "sensors/temp")
 
     def test_plus_matches_one_level_not_several(self) -> None:
-        assert not _topic_matches("sensors/+", "sensors/kitchen/temp")
+        assert not topic_matches("sensors/+", "sensors/kitchen/temp")
 
     def test_hash_matches_the_remainder_including_none_of_it(self) -> None:
-        assert _topic_matches("sensors/#", "sensors")
+        assert topic_matches("sensors/#", "sensors")
 
     def test_a_plus_in_the_last_position_still_needs_a_level(self) -> None:
-        assert _topic_matches("sensors/+", "sensors/kitchen")
-        assert not _topic_matches("sensors/+", "sensors")
+        assert topic_matches("sensors/+", "sensors/kitchen")
+        assert not topic_matches("sensors/+", "sensors")
 
     def test_an_exact_string_matches_before_any_splitting(self) -> None:
-        assert _topic_matches("a/b/c", "a/b/c")
+        assert topic_matches("a/b/c", "a/b/c")
 
     def test_matching_is_directional(self) -> None:
         """The pattern holds the wildcards; a wildcard in the topic is literal."""
-        assert _topic_matches("sensors/#", "sensors/kitchen")
-        assert not _topic_matches("sensors/kitchen", "sensors/#")
+        assert topic_matches("sensors/#", "sensors/kitchen")
+        assert not topic_matches("sensors/kitchen", "sensors/#")
 
 
 class TestContractNormalisation:

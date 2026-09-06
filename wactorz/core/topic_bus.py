@@ -140,12 +140,12 @@ class TopicContract:
 
     def matches_topic(self, topic: str) -> bool:
         """Check if this agent subscribes to a given topic (supports # and + wildcards)."""
-        return any(_topic_matches(pattern, topic) for pattern in self.subscribes)
+        return any(topic_matches(pattern, topic) for pattern in self.subscribes)
 
     def produces_topic(self, topic: str) -> bool:
         """Check if this agent publishes to a given topic pattern."""
         for pattern in self.publishes:
-            if _topic_matches(pattern, topic) or _topic_matches(topic, pattern):
+            if topic_matches(pattern, topic) or topic_matches(topic, pattern):
                 return True
         return False
 
@@ -211,7 +211,7 @@ class TopicContract:
 # ── MQTT wildcard matching ──────────────────────────────────────────────────────
 
 
-def _topic_matches(pattern: str, topic: str) -> bool:
+def topic_matches(pattern: str, topic: str) -> bool:
     """Match an MQTT topic against a pattern with # and + wildcards.
     # matches any number of levels. + matches exactly one level.
     """

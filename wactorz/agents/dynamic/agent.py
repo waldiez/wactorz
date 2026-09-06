@@ -209,6 +209,11 @@ class DynamicAgent(Actor):
                 )
         self._program_tasks = [task for task in self._program_tasks if not task.done()]
         self._subscribed_topics.clear()
+        # The subscription connection is shared and outlives any one program, so
+        # cancelling tasks above does not stop its callbacks. Unbind explicitly.
+        hub = getattr(self, "_sub_hub", None)
+        if hub is not None:
+            await hub.clear()
         release_open_resources(self._api, self._ns, self.name)
 
     async def _replace_program(self, fixed: str) -> str | None:

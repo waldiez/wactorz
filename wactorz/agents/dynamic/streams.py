@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     pass
 
 from .awaitable import AWAITABLE_NONE
-from .listener import run_subscription_listener
+from .listener import hub_for
 
 if TYPE_CHECKING:
     from .hosts import ApiHost
@@ -50,6 +50,42 @@ WINDOW_NOT_AWAITABLE = (
     "agent.window() is not a coroutine - do not use 'await'. "
     "Correct: agent.state['w'] = agent.window('topic', seconds=60)  # no await"
 )
+
+
+def _register_with_topic_bus(api: Any, actor: Any, topic: str) -> None:
+    """Tell the TopicBus this agent consumes `topic`, if a bus is running.
+
+    Best effort by design: the subscription is already live by the time this
+    runs, so a bus that is absent or unhappy costs discoverability, not
+    delivery.
+    """
+    try:
+        from ...core.topic_bus import TopicContract, get_topic_bus
+
+        bus = get_topic_bus()
+        if not bus:
+            return
+        existing = bus.registry.get(api.name)
+        if existing is None:
+            bus.register_contract(
+                TopicContract(
+                    name=api.name,
+                    subscribes=[topic],
+                    actor_id=api.actor_id,
+                    node=getattr(actor, "_node", None),
+                )
+            )
+            return
+        if topic not in existing.subscribes:
+            existing.subscribes.append(topic)
+            bus.registry.register(existing)
+    except Exception as exc:
+        logger.debug(
+            "[%s] Could not register the %s subscription with TopicBus: %s",
+            api.name,
+            topic,
+            exc,
+        )
 
 
 class StreamsMixin(_Host):
@@ -114,38 +150,18 @@ class StreamsMixin(_Host):
             return AWAITABLE_NONE
         actor._subscribed_topics[sub_key] = callback
 
-        task = asyncio.create_task(run_subscription_listener(actor, topic, callback))
-        actor._tasks.append(task)
-        # The listener belongs to the generated program: an in-place code
-        # repair cancels it so the old namespace's callback stops being called.
-        getattr(actor, "_program_tasks", []).append(task)
+        # One connection per actor carries every subscription, so this may or may
+        # not start a task: only the first binding does.
+        task = hub_for(actor).bind(topic, callback)
+        if task is not None:
+            actor._tasks.append(task)
+        # Deliberately NOT a program task. A repair cancels those, and this one
+        # carries the subscriptions of every other binding too -- cancelling it
+        # would take them down with the repaired one. `_tear_down_program`
+        # unbinds through the hub instead, which is what stops the old
+        # namespace's callbacks being reached.
 
-        # Auto-register subscription in TopicBus
-        try:
-            from ...core.topic_bus import TopicContract, get_topic_bus
-
-            bus = get_topic_bus()
-            if bus:
-                existing = bus.registry.get(self.name)
-                if existing:
-                    if topic not in existing.subscribes:
-                        existing.subscribes.append(topic)
-                        bus.registry.register(existing)
-                else:
-                    contract = TopicContract(
-                        name=self.name,
-                        subscribes=[topic],
-                        actor_id=self.actor_id,
-                        node=getattr(actor, "_node", None),
-                    )
-                    bus.register_contract(contract)
-        except Exception as exc:
-            logger.debug(
-                "[%s] Could not register the %s subscription with TopicBus: %s",
-                self.name,
-                topic,
-                exc,
-            )
+        _register_with_topic_bus(self, actor, topic)
 
         # Return an awaitable no-op so `await agent.subscribe(...)` doesn't crash.
         # LLMs frequently add `await` because setup() is async — this makes it safe.

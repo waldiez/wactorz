@@ -209,6 +209,37 @@ def _tolerant_invoker(
 #: SERVER_SESSION_EXPIRY_SECONDS in wactorz/core/mqtt.py.
 NODE_SESSION_EXPIRY_SECONDS = 86400
 
+#: How many messages may wait in memory before telemetry starts giving way.
+#: Large enough that an ordinary reconnect queues and drains without losing
+#: anything; small enough that an absent broker costs a Pi megabytes rather than
+#: its memory. Mirrors MQTTPublisher.MAX_QUEUED on the server.
+MAX_QUEUED = 10_000
+
+#: Topics that are purely telemetry: the next one replaces the last, so the
+#: oldest is what gives way when the queue is full. Mirrors
+#: MQTTPublisher._TELEMETRY_TOPIC_SUFFIXES.
+TELEMETRY_TOPIC_SUFFIXES = ("/logs", "/metrics", "/status", "/heartbeat")
+
+
+def _new_pub_queue() -> asyncio.Queue[tuple[str, bytes, bool, bool]]:
+    """The publish queue, bounded.
+
+    Unbounded, a broker outage on a node that keeps publishing grows this until
+    the machine runs out of memory -- and these run on Raspberry Pis. Built here
+    rather than inline so the bound itself can be tested, instead of only the
+    eviction that depends on it.
+    """
+    return asyncio.Queue(maxsize=MAX_QUEUED)
+
+
+def _is_critical(topic: str) -> bool:
+    """Whether losing this message would lose something the system needs.
+
+    Everything that is not plain telemetry: results, errors, manifests, and the
+    migration replies that decide where an agent lives.
+    """
+    return not topic.endswith(TELEMETRY_TOPIC_SUFFIXES)
+
 
 def _session_kwargs(aiomqtt: Any, expiry_seconds: int) -> dict[str, Any]:
     """Connect arguments that hold this session for a bounded time.
@@ -1803,12 +1834,16 @@ class _RemoteRunner:
         self.port = port
         self.node_name = node_name
         self._agents: dict[str, _RemoteAgent] = {}  # name → agent
-        self._pub_queue: asyncio.Queue[tuple[str, bytes, bool]] | None = (
+        #: (topic, payload, retain, critical). The last field is what lets the
+        #: cap below evict telemetry rather than whatever arrived first.
+        self._pub_queue: asyncio.Queue[tuple[str, bytes, bool, bool]] | None = (
             None  # created in run() inside the event loop
         )
         self._running = False
         self._deps_ready: asyncio.Event | None = None  # set once aiomqtt/paho are importable
         self._start_time: float = time.time()  # for uptime reporting in heartbeat
+        #: Messages the cap discarded, for the log.
+        self._dropped = 0
         # Persistent state directory — survives reboots unlike /tmp
         _state_path = Path.home() / "wactorz" / "state"
         _state_path.mkdir(parents=True, exist_ok=True)
@@ -1817,12 +1852,77 @@ class _RemoteRunner:
     # ── MQTT publish (queue-based, reconnect-safe) ────────────────────────────
 
     async def publish(self, topic: str, data: Any, retain: bool = False) -> None:
+        """Queue a message for the publisher loop. Never waits for room.
+
+        Waiting would push a stalled broker back into the agent code that called
+        this -- the same reasoning as `MQTTPublisher._enqueue` on the server.
+        """
         if self._pub_queue is None:
             return
         payload = json.dumps(data) if not isinstance(data, (str, bytes)) else data
         if isinstance(payload, str):
             payload = payload.encode()
-        await self._pub_queue.put((topic, payload, retain))
+        self._enqueue((topic, payload, retain, _is_critical(topic)))
+
+    def _enqueue(self, item: tuple[str, bytes, bool, bool]) -> None:
+        """Add a message, making room by dropping telemetry when the cap is hit.
+
+        Room is made from the front: the oldest telemetry goes, because the next
+        heartbeat replaces it anyway and the freshest sample is the useful one.
+        If nothing droppable is queued, the incoming message gives way.
+
+        ⚠ **Unlike the server, a message dropped here is gone.** `MQTTPublisher`
+        can discard a queued QoS 1 because the SQLite outbox still holds it; a
+        node has no outbox. The cap is therefore sized so that only a long
+        outage on a busy node reaches it, and every drop is counted and logged.
+        """
+        queue = self._pub_queue
+        if queue is None:
+            return
+        while True:
+            try:
+                queue.put_nowait(item)
+            except asyncio.QueueFull:
+                if not self._discard_one_telemetry():
+                    self._note_drop(item)
+                    return
+            else:
+                return
+
+    def _discard_one_telemetry(self) -> bool:
+        """Drop the oldest non-critical message, if there is one. True if it did.
+
+        Rebuilds the queue rather than reaching into it: `asyncio.Queue` offers
+        no supported way to remove from the middle.
+        """
+        queue = self._pub_queue
+        if queue is None:
+            return False
+        held: list[tuple[str, bytes, bool, bool]] = []
+        dropped = False
+        while not queue.empty():
+            entry = queue.get_nowait()
+            queue.task_done()
+            if not dropped and not entry[3]:
+                dropped = True
+                self._note_drop(entry)
+                continue
+            held.append(entry)
+        for entry in held:
+            queue.put_nowait(entry)
+        return dropped
+
+    def _note_drop(self, item: tuple[str, bytes, bool, bool]) -> None:
+        """Count a discarded message, and say so at a rate a log can carry."""
+        self._dropped += 1
+        if self._dropped == 1 or self._dropped % 1000 == 0:
+            logger.warning(
+                "[runner] publish queue full at %d — discarded %s (%d total). The broker "
+                "is not keeping up, or is not there.",
+                MAX_QUEUED,
+                item[0],
+                self._dropped,
+            )
 
     # ── Spawn / stop agents ───────────────────────────────────────────────────
 
@@ -2078,15 +2178,14 @@ class _RemoteRunner:
     async def _publish_one_queued(self, client: Any) -> None:
         """Hand the next queued message to the client, waiting for one to arrive.
 
-        The retain flag is optional in the queued tuple, because most callers
-        have no opinion about it and a two-item entry is the common case.
+        Entries are built by `publish` alone, so the shape is fixed:
+        (topic, payload, retain, critical).
         """
         queue = self._pub_queue
         if queue is None:
             return
         item = await queue.get()
-        topic, payload = item[0], item[1]
-        retain = item[2] if len(item) > 2 else False
+        topic, payload, retain = item[0], item[1], item[2]
         client.publish(topic, payload, qos=1, retain=retain)
         queue.task_done()
 
@@ -2378,7 +2477,8 @@ class _RemoteRunner:
 
     async def run(self) -> None:
         self._running = True
-        self._pub_queue = asyncio.Queue()  # must be created inside the running event loop
+        # Created inside the running event loop.
+        self._pub_queue = _new_pub_queue()
         self._deps_ready = asyncio.Event()
         logger.info(
             "[runner] Starting node '%s' → broker %s:%s", self.node_name, self.broker, self.port

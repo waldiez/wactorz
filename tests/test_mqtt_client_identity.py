@@ -7,12 +7,20 @@ newer -- a kick-loop that never settles. The publisher used to pin the literal
 """
 
 import ast
+import uuid
 from pathlib import Path
 
 import pytest
 
+from wactorz.agents.dynamic.listener import SubscriptionHub
 from wactorz.core import mqtt
-from wactorz.core.mqtt import client_id, install_id
+from wactorz.core.actor import derive_actor_id, has_derived_id
+from wactorz.core.mqtt import (
+    AGENT_SESSION_EXPIRY_SECONDS,
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    install_id,
+)
 from wactorz.core.mqtt_publisher import MQTTPublisher
 
 #: Connections that serve one request and must keep a random id -- see
@@ -28,6 +36,7 @@ EPHEMERAL = [
     "wactorz/agents/dynamic/messaging.py",
     "wactorz/agents/planner/context.py",
     "wactorz/core/topic_bus.py",
+    "wactorz/agents/dynamic/streams.py",
 ]
 
 
@@ -147,6 +156,44 @@ class TestThePublisher:
         MQTTPublisher(db_path=str(tmp_path / "outbox.db"))
 
         assert not unused.exists()
+
+
+class TestAgentScopedSessions:
+    """Every connection an agent owns follows the same rule and the same clock.
+
+    Only a name-derived identity can resume a session, and an agent's
+    connections age out together rather than by two separate numbers.
+    """
+
+    def test_a_named_identity_can_hold_a_session(self) -> None:
+        assert has_derived_id("kitchen-sensor", derive_actor_id("kitchen-sensor"))
+
+    def test_an_anonymous_identity_cannot(self) -> None:
+        anonymous = str(uuid.uuid4())
+
+        assert not has_derived_id(f"actor-{anonymous[:8]}", anonymous)
+
+    def test_the_hub_and_the_command_listener_share_one_expiry(self) -> None:
+        # They belong to the same agent; two numbers would be two things to
+        # forget to keep in step.
+        assert SubscriptionHub.SESSION_EXPIRY_SECONDS == AGENT_SESSION_EXPIRY_SECONDS
+
+    def test_an_agent_session_is_shorter_than_the_servers(self) -> None:
+        # An agent's durability is about surviving a reconnect, not replaying
+        # hours of readings that are stale by the time they arrive.
+        assert AGENT_SESSION_EXPIRY_SECONDS < SERVER_SESSION_EXPIRY_SECONDS
+
+    def test_the_command_listener_gates_on_the_same_rule(self) -> None:
+        source = Path("wactorz/core/actor.py").read_text(encoding="utf-8")
+
+        assert "has_derived_id(self.name, self.actor_id)" in source
+        assert "AGENT_SESSION_EXPIRY_SECONDS" in source
+
+    def test_the_actuator_gates_on_the_same_rule(self) -> None:
+        source = Path("wactorz/agents/home_assistant_actuator_agent.py").read_text(encoding="utf-8")
+
+        assert "has_derived_id(self.name, str(self.actor_id))" in source
+        assert "AGENT_SESSION_EXPIRY_SECONDS" in source
 
 
 class TestTheEphemeralSet:

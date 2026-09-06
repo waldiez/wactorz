@@ -18,7 +18,7 @@ import time
 import traceback
 from typing import Any
 
-from ...core.mqtt import client_id, mqtt_client
+from ...core.mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client
 from ...core.topic_bus import topic_matches
 
 logger = logging.getLogger(__name__)
@@ -103,12 +103,9 @@ class SubscriptionHub:
     RECONNECT_DELAY = 5.0
     #: Messages held per subscription while its callback catches up.
     QUEUE_MAX = 100
-    #: How long the broker keeps a durable actor's session after it disconnects.
-    #: Bounded deliberately: durability here is about surviving a reconnect or a
-    #: reboot, not about replaying hours of stale readings the queue above would
-    #: discard oldest-first anyway. MQTT v3.1.1 offers no expiry at all, which is
-    #: why this role speaks v5.
-    SESSION_EXPIRY_SECONDS = 3600
+    #: Shared with the actor's own command listener, so an agent's connections
+    #: age out together rather than by two separate numbers.
+    SESSION_EXPIRY_SECONDS = AGENT_SESSION_EXPIRY_SECONDS
 
     def __init__(self, actor: Any, durable: bool = False) -> None:
         self._actor = actor
@@ -221,7 +218,7 @@ class SubscriptionHub:
         if client is None:
             return
         try:
-            await client.subscribe(topic)
+            await client.subscribe(topic, qos=self._qos())
         except Exception:
             # The reconnect path resubscribes everything still bound, so a
             # failure here costs a delay rather than the subscription.
@@ -375,10 +372,10 @@ def is_durable_actor(actor: Any) -> bool:
     no broker state -- but it does mean such an actor forgoes durability it
     could in principle have had.
     """
-    from ...core.actor import derive_actor_id
+    from ...core.actor import has_derived_id
 
     name = getattr(actor, "name", "") or ""
-    return derive_actor_id(name) == str(getattr(actor, "actor_id", ""))
+    return has_derived_id(name, str(getattr(actor, "actor_id", "")))
 
 
 def hub_for(actor: Any) -> SubscriptionHub:

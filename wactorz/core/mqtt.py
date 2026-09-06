@@ -127,6 +127,11 @@ def _read_minted(path: Path) -> str:
 #: decommissioned, or a node that never comes back, stops costing broker state.
 SERVER_SESSION_EXPIRY_SECONDS = 86400
 
+#: How long the broker keeps an *agent's* session. Much shorter than the
+#: server's: durability for an agent is about surviving a reconnect or a reboot,
+#: not about replaying hours of readings that are stale by the time they arrive.
+AGENT_SESSION_EXPIRY_SECONDS = 3600
+
 
 def session_kwargs(expiry_seconds: int) -> dict[str, Any]:
     """Connect arguments that make the broker hold this session for a while.

@@ -966,7 +966,9 @@ class DynamicAgent(Actor):
             "degraded": self._consecutive_errors >= self._error_threshold,
             "timestamp": time.time(),
         }
-        await self._mqtt_publish(f"agents/{self.actor_id}/errors", event)
+        # QoS 1, for the same reason as chat: an error frame lost during a
+        # monitor reconnect is the one an operator most wants to have seen.
+        await self._mqtt_publish(f"agents/{self.actor_id}/errors", event, qos=1)
         # Direct actor message to monitor (works without MQTT broker)
         if self._registry:
             monitor = self._registry.find_by_name("monitor")

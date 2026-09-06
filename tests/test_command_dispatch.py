@@ -12,7 +12,7 @@ later — the delete path reached that state by calling ``stop()`` directly.
 """
 
 import json
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from aiohttp import web
@@ -105,9 +105,11 @@ def _attach(actor: Actor, registry: "_Registry") -> "_Registry":
 class _Broker:
     def __init__(self) -> None:
         self.published: list[tuple[str, str]] = []
+        self.qos: list[int] = []
 
-    async def publish(self, topic: str, payload: str) -> None:
+    async def publish(self, topic: str, payload: str, qos: int = 0, **_kwargs: Any) -> None:
         self.published.append((topic, payload))
+        self.qos.append(qos)
 
 
 class _Request:
@@ -190,6 +192,24 @@ class TestApplyCommand:
 
         assert await actor.apply_command("restart") is False
         assert actor.calls == []
+
+
+class TestCommandDelivery:
+    """A command to a remote agent is at-least-once.
+
+    It goes out on the monitor's own client, which applies none of
+    MQTTPublisher's topic classification, so the QoS has to be asked for. At
+    QoS 0 a stop issued while the agent was reconnecting was simply gone -- the
+    dashboard reported it stopped and it kept running.
+    """
+
+    async def test_it_is_published_at_least_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        broker = _Broker()
+        monkeypatch.setattr(lifecycle.runtime, "mqtt_client_ref", broker)
+
+        await lifecycle.dispatch_command("remote-1", "stop", sender="test")
+
+        assert broker.qos == [1]
 
 
 class TestDispatchCommand:

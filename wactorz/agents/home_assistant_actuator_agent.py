@@ -20,10 +20,15 @@ from typing import Any
 
 from wactorz.config import CONFIG
 
-from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.actor import Actor, ActorState, Message, MessageType, has_derived_id
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
-from ..core.mqtt import mqtt_client
+from ..core.mqtt import (
+    AGENT_SESSION_EXPIRY_SECONDS,
+    client_id,
+    mqtt_client,
+    session_kwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -278,11 +283,25 @@ class HomeAssistantActuatorAgent(Actor):
             logger.error("[%s] aiomqtt not installed — MQTT listener disabled", self.name)
             return
 
+        # A stable id and a kept session, like any other long-lived listener.
+        # These topics carry actuation triggers -- another agent asking for a
+        # light or a switch -- so one lost while this agent reconnects is a
+        # device that never moves, with nothing anywhere saying why. The
+        # `actuator` detail keeps this connection distinct from the actor's
+        # command listener and from any subscription hub it may own.
+        identifier = client_id("agent", str(self.actor_id), "actuator")
+        durable = has_derived_id(self.name, str(self.actor_id))
+        session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(
+                    self._mqtt_broker,
+                    self._mqtt_port,
+                    identifier=identifier,
+                    **session,
+                ) as client:
                     for topic in self.config.mqtt_topics:
-                        await client.subscribe(topic)
+                        await client.subscribe(topic, qos=1 if durable else 0)
                     logger.info("[%s] subscribed to %r", self.name, self.config.mqtt_topics)
 
                     async for message in client.messages:

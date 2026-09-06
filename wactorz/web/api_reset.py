@@ -171,7 +171,10 @@ async def reset_handler(request: web.Request) -> Response:
                 )
                 await asyncio.gather(
                     *[
-                        runtime.mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True)
+                        # QoS 1: a lost purge leaves the retained spawn in
+                        # place, and the node re-creates the agent on its next
+                        # reconcile -- undoing the reset.
+                        runtime.mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True, qos=1)
                         for n in node_names
                     ],
                     return_exceptions=True,

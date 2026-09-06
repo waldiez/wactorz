@@ -87,6 +87,17 @@ def derive_actor_id(name: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
 
 
+def has_derived_id(name: str, actor_id: str) -> bool:
+    """Whether this identity comes from the name, and so survives a restart.
+
+    A named actor reconnects as the same client and resumes whatever the broker
+    held for it. An anonymous one is given a fresh id every incarnation, so a
+    session kept under the old id is unreachable -- keeping one is not harmful,
+    it is pointless, and it costs the broker state until it expires.
+    """
+    return derive_actor_id(name) == str(actor_id)
+
+
 class ActorState(str, Enum):
     """Where an actor is in its lifecycle."""
 
@@ -649,13 +660,30 @@ class Actor(ABC):
             import aiomqtt  # noqa: F401  # pylint: disable=unused-import
         except ImportError:
             return
-        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
+        # local: avoids core/__init__ import cycle
+        from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client, session_kwargs
 
         topic = f"agents/{self.actor_id}/commands"
+        # Same rule the subscription hub follows: only an identity that
+        # survives a restart can resume a session, so an anonymous actor
+        # connects clean rather than leaving one behind per incarnation.
+        durable = has_derived_id(self.name, self.actor_id)
+        session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
+        # A `commands` detail, not the bare actor id: SubscriptionHub already
+        # connects as `wactorz-agent-<actor id>`, and two connections sharing an
+        # id kick each other off the broker for ever.
+        identifier = client_id("agent", str(self.actor_id), "commands")
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe(topic)
+                async with mqtt_client(
+                    self._mqtt_broker,
+                    self._mqtt_port,
+                    identifier=identifier,
+                    # Control, not telemetry: a dropped stop leaves an agent
+                    # running while the dashboard reports it stopped.
+                    **session,
+                ) as client:
+                    await client.subscribe(topic, qos=1 if durable else 0)
                     logger.debug("[%s] Subscribed to %s", self.name, topic)
                     async for message in client.messages:
                         try:
@@ -959,7 +987,11 @@ class Actor(ABC):
         }
         if extra:
             payload.update(extra)
-        await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload)
+        # QoS 1: neither critical-prefixed nor telemetry-suffixed, so the
+        # publisher would leave this at 0 -- and a frame emitted while the
+        # monitor is reconnecting would simply be gone. The agent said
+        # something; the user never sees it.
+        await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload, qos=1)
 
     # ─── Status ───────────────────────────────────────────────────────────────
 

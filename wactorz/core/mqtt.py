@@ -16,10 +16,127 @@ re-enters the half-initialised package and causes a circular import.
 
 from __future__ import annotations
 
+import logging
+import os
+import time
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover
     import aiomqtt
+
+logger = logging.getLogger(__name__)
+
+#: Where the install id is kept, under the state directory.
+INSTALL_ID_FILE = "install_id"
+
+#: How hard to try reading an id a racing process is still writing.
+_READ_ATTEMPTS = 5
+_READ_BACKOFF_SECONDS = 0.002
+
+#: Cached for the process. The file is read once; a miss costs a stat per call
+#: otherwise, and this is on the connect path of every long-lived listener.
+_install_id: str | None = None
+
+
+def install_id() -> str:
+    """A stable identifier for this Wactorz install, minted once and kept on disk.
+
+    MQTT client ids must be **unique per connection and stable across
+    reconnects**: two connections sharing an id make the broker drop the older
+    one, and a client that reconnects under a new id abandons its session. So
+    every server-side id needs a component that distinguishes *this install*
+    from another one on the same broker.
+
+    Without it the ids collide. That is not hypothetical — the publisher this
+    replaces pinned the literal ``wactorz-publisher``, so two Wactorz servers
+    against one broker disconnected each other in a loop, for ever. A dev
+    instance pointed at a shared broker was enough to trigger it.
+
+    ⚠ **Hostname is not a substitute.** Containers get a fresh one per start, so
+    it is neither stable across restarts nor meaningful as an identity.
+
+    Created with ``O_CREAT | O_EXCL`` so only one starting process mints a
+    value: the loser of the race reads the winner's rather than writing its own.
+    ⚠ The file exists but is empty between the winner's ``open`` and its
+    ``write``, so a loser landing in that gap would read nothing and fall back
+    to its own id -- the two would then disagree for their lifetimes. The read
+    is retried briefly to cover it. Those flags, and the ``FileExistsError`` the
+    race raises, behave the same on Windows.
+
+    ⚠ Written as bytes rather than text. ``os.open`` opens in text mode on
+    Windows, and an ``os.fdopen(..., "w")`` on top of that translates the
+    newline a second time; the reader's ``strip()`` would hide it, so the write
+    is kept binary rather than left to be discovered. The ``0o600`` is a POSIX
+    tidiness that Windows ignores — this is an identifier that travels in every
+    client id, not a secret.
+    """
+    global _install_id
+    if _install_id is not None:
+        return _install_id
+
+    from .paths import ensure_state_dir
+
+    path = Path(ensure_state_dir()) / INSTALL_ID_FILE
+    minted = uuid.uuid4().hex[:12]
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        minted = _read_minted(path) or minted
+    except OSError:
+        # An unwritable state directory leaves us with a per-process id, which
+        # means durable sessions are abandoned on every restart. Say so rather
+        # than degrade silently.
+        logger.warning(
+            "[MQTT] Could not persist an install id under %s; using a per-process "
+            "one, so broker sessions will not be reused across restarts",
+            path.parent,
+        )
+    else:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(minted.encode("utf-8"))
+
+    _install_id = minted
+    return minted
+
+
+def _read_minted(path: Path) -> str:
+    """Read an id another process is creating, tolerating its empty window.
+
+    ``O_CREAT | O_EXCL`` makes the file appear before its contents do, so a
+    racing reader can arrive between the two. The wait is bounded and only ever
+    happens on the first run of the first two processes, so a few milliseconds
+    here costs nothing measurable and buys agreement on the identity.
+    """
+    for attempt in range(_READ_ATTEMPTS):
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        if value:
+            return value
+        if attempt + 1 < _READ_ATTEMPTS:
+            time.sleep(_READ_BACKOFF_SECONDS)
+    return ""
+
+
+def client_id(role: str, scope: str, detail: str | None = None) -> str:
+    """Build an MQTT client id: ``wactorz-<role>-<scope>[-<detail>]``.
+
+    ``role`` says what the connection is for (``pub``, ``srv``, ``mon``,
+    ``node``, ``nodepub``), ``scope`` is what it belongs to — :func:`install_id`
+    for server-side connections, the node name on a node — and ``detail``
+    separates connections that share a role and scope.
+
+    ⚠ **``detail`` is not optional for a role that opens more than one
+    connection.** Main runs six long-lived listeners; giving any two of them the
+    same id makes the broker kick them in a loop, inside a single process.
+    """
+    parts = ["wactorz", role, scope]
+    if detail:
+        parts.append(detail)
+    return "-".join(parts)
 
 
 def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:

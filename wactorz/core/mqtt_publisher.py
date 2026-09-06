@@ -75,8 +75,27 @@ class MQTTPublisher:
         self._task: asyncio.Task | None = None
         self._available = False
         self._db_path = db_path
-        self._client_id = "wactorz-publisher"
+        #: Minted on first use, not here -- see :attr:`client_id`.
+        self._client_id = ""
         self._connected = False
+
+    @property
+    def client_id(self) -> str:
+        """This publisher's MQTT client id, minted on first use.
+
+        Deliberately not computed in ``__init__``: :func:`install_id` creates
+        the state directory and writes a file, and a constructor must not touch
+        the disk -- an object has to be constructible in a test without any of
+        that happening.
+
+        The import is local for the same reason as the one in the connect path
+        below: this module is reached through ``core/__init__``.
+        """
+        if not self._client_id:
+            from .mqtt import client_id, install_id
+
+            self._client_id = client_id("pub", install_id())
+        return self._client_id
 
     @classmethod
     async def create(
@@ -95,7 +114,7 @@ class MQTTPublisher:
                 "[MQTT] Publisher started → %s:%s | client_id=%s | outbox_db=%s",
                 broker,
                 port,
-                pub._client_id,
+                pub.client_id,
                 db_path,
             )
         except ImportError:
@@ -297,12 +316,12 @@ class MQTTPublisher:
                 async with mqtt_client(
                     broker,
                     port,
-                    identifier=self._client_id,
+                    identifier=self.client_id,
                     clean_session=False,
                     keepalive=30,
                 ) as client:
                     self._connected = True
-                    logger.info("[MQTT] Publisher connected | client_id=%s", self._client_id)
+                    logger.info("[MQTT] Publisher connected | client_id=%s", self.client_id)
 
                     while True:
                         # A message whose publish failed is retried before

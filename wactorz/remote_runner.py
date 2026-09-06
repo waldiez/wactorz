@@ -1843,7 +1843,10 @@ class _RemoteRunner:
         """
         import paho.mqtt.client as paho_mqtt
 
-        client = paho_mqtt.Client(client_id=f"runner-pub-{self.node_name}-{uuid.uuid4().hex[:6]}")
+        # Mirrors core/mqtt.py `client_id`. Spelled out rather than imported:
+        # this file is deployed to a node on its own, with no wactorz package
+        # beside it, so the shape has to be kept in step by hand.
+        client = paho_mqtt.Client(client_id=f"wactorz-nodepub-{self.node_name}")
         user = os.environ.get("MQTT_USERNAME") or None
         if user:
             client.username_pw_set(user, os.environ.get("MQTT_PASSWORD") or None)
@@ -2121,6 +2124,7 @@ class _RemoteRunner:
                     self.port,
                     username=os.environ.get("MQTT_USERNAME") or None,
                     password=os.environ.get("MQTT_PASSWORD") or None,
+                    identifier=f"wactorz-node-{self.node_name}",  # mirrors core/mqtt.py client_id
                 ) as client:
                     for topic in topics:
                         await client.subscribe(topic)

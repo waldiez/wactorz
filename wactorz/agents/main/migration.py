@@ -18,7 +18,7 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any
 
-from ...core.mqtt import mqtt_client
+from ...core.mqtt import client_id, install_id, mqtt_client
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -60,7 +60,11 @@ class Migration:
         last_error: str | None = None
         while host.state.value not in ("stopped", "failed"):
             try:
-                async with mqtt_client(host._mqtt_broker, host._mqtt_port) as client:
+                async with mqtt_client(
+                    host._mqtt_broker,
+                    host._mqtt_port,
+                    identifier=client_id("srv", install_id(), "migration"),
+                ) as client:
                     await client.subscribe("nodes/+/state_return")
                     logger.info("[main] Subscribed to state_return topics.")
                     last_error = None

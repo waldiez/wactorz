@@ -22,7 +22,7 @@ import time
 import uuid
 from typing import Any
 
-from ...core.mqtt import mqtt_client
+from ...core.mqtt import client_id, install_id, mqtt_client
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
 
@@ -173,7 +173,11 @@ class NodeManager:
         last_error: str | None = None
         while host.state.value not in ("stopped", "failed"):
             try:
-                async with mqtt_client(host._mqtt_broker, host._mqtt_port) as client:
+                async with mqtt_client(
+                    host._mqtt_broker,
+                    host._mqtt_port,
+                    identifier=client_id("srv", install_id(), "nodes"),
+                ) as client:
                     await client.subscribe("nodes/+/heartbeat")
                     await client.subscribe("nodes/+/migrate_result")
                     logger.info("[main] Subscribed to node heartbeats.")

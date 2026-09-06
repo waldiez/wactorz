@@ -22,7 +22,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ...core.mqtt import mqtt_client
+from ...core.mqtt import client_id, install_id, mqtt_client
 
 if TYPE_CHECKING:
     from ...core.actor import ActorState
@@ -76,7 +76,11 @@ class LLMBridge:
         last_error: str | None = None
         while host.state.value not in ("stopped", "failed"):
             try:
-                async with mqtt_client(host._mqtt_broker, host._mqtt_port) as client:
+                async with mqtt_client(
+                    host._mqtt_broker,
+                    host._mqtt_port,
+                    identifier=client_id("srv", install_id(), "llm"),
+                ) as client:
                     await client.subscribe(REQUEST_TOPIC)
                     logger.info("[main] LLM bridge listening on %s", REQUEST_TOPIC)
                     last_error = None

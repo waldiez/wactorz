@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Any
 
-from ..core.mqtt import mqtt_client
+from ..core.mqtt import client_id, install_id, mqtt_client
 from ..monitoring.log_redaction import redact
 from . import events, relay, runtime, ws
 
@@ -104,7 +104,11 @@ async def mqtt_listener() -> None:
     try:
         while True:
             try:
-                async with mqtt_client(runtime.MQTT_BROKER, runtime.MQTT_PORT) as client:
+                async with mqtt_client(
+                    runtime.MQTT_BROKER,
+                    runtime.MQTT_PORT,
+                    identifier=client_id("mon", install_id()),
+                ) as client:
                     runtime.mqtt_client_ref = client
                     logger.info("MQTT connected.")
 

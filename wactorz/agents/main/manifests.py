@@ -18,7 +18,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ...core.mqtt import mqtt_client
+from ...core.mqtt import client_id, install_id, mqtt_client
 
 if TYPE_CHECKING:
     from .hosts import ManifestHost
@@ -80,7 +80,11 @@ class ManifestRegistry:
         last_error: str | None = None
         while host.state.value not in ("stopped", "failed"):
             try:
-                async with mqtt_client(host._mqtt_broker, host._mqtt_port) as client:
+                async with mqtt_client(
+                    host._mqtt_broker,
+                    host._mqtt_port,
+                    identifier=client_id("srv", install_id(), "manifests"),
+                ) as client:
                     await client.subscribe("agents/+/manifest")
                     logger.info("[main] Subscribed to agent manifests.")
                     last_error = None
@@ -291,7 +295,11 @@ class ManifestRegistry:
 
         while host.state.value not in ("stopped", "failed"):
             try:
-                async with mqtt_client(host._mqtt_broker, host._mqtt_port) as client:
+                async with mqtt_client(
+                    host._mqtt_broker,
+                    host._mqtt_port,
+                    identifier=client_id("srv", install_id(), "samples"),
+                ) as client:
                     for pattern in OBSERVED_TOPIC_PATTERNS:
                         await client.subscribe(pattern)
                     async for message in client.messages:

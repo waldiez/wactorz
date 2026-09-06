@@ -108,18 +108,18 @@ def _load_recipe(filename: str) -> str | None:
 
     path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
     if not path.exists():
-        logger.warning(f"[catalog] Recipe file not found: {path}")
+        logger.warning("[catalog] Recipe file not found: %s", path)
         return None
     try:
         spec = importlib.util.spec_from_file_location("_recipe", path)
         if spec is None or spec.loader is None:
-            logger.warning(f"[catalog] Could not build import spec for recipe: {path}")
+            logger.warning("[catalog] Could not build import spec for recipe: %s", path)
             return None
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return getattr(mod, "AGENT_CODE", None)
     except Exception as e:
-        logger.warning(f"[catalog] Could not load recipe from {filename}: {e}")
+        logger.warning("[catalog] Could not load recipe from %s: %s", filename, e)
         return None
 
 
@@ -158,7 +158,7 @@ def _build_native_catalog() -> dict:
         }
         logger.info("[catalog] Loaded weather-agent recipe")
     except ImportError as e:
-        logger.warning(f"[catalog] weather-agent unavailable: {e}")
+        logger.warning("[catalog] weather-agent unavailable: %s", e)
 
     try:
         from .google_calendar_agent import GoogleCalendarAgent
@@ -192,7 +192,7 @@ def _build_native_catalog() -> dict:
         }
         logger.info("[catalog] Loaded google-calendar-agent recipe")
     except ImportError as e:
-        logger.warning(f"[catalog] google-calendar-agent unavailable: {e}")
+        logger.warning("[catalog] google-calendar-agent unavailable: %s", e)
 
     try:
         from .gmail_agent import GmailAgent
@@ -228,7 +228,7 @@ def _build_native_catalog() -> dict:
         }
         logger.info("[catalog] Loaded gmail-agent recipe")
     except ImportError as e:
-        logger.warning(f"[catalog] gmail-agent unavailable: {e}")
+        logger.warning("[catalog] gmail-agent unavailable: %s", e)
 
     return native
 
@@ -591,7 +591,7 @@ class CatalogAgent(Actor):
 
     async def on_start(self):
         names = list(self._catalog.keys())
-        logger.info(f"[{self.name}] Catalog ready — {len(names)} recipe(s): {names}")
+        logger.info("[%s] Catalog ready — %s recipe(s): %s", self.name, len(names), names)
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {
@@ -642,10 +642,10 @@ class CatalogAgent(Actor):
 
             if main:
                 main._agent_manifests[name] = manifest
-                logger.info(f"[{self.name}] Injected manifest for '{name}' into main")
+                logger.info("[%s] Injected manifest for '%s' into main", self.name, name)
             else:
                 logger.warning(
-                    f"[{self.name}] main not ready — could not inject manifest for '{name}'"
+                    "[%s] main not ready — could not inject manifest for '%s'", self.name, name
                 )
 
     def _current_task_description(self) -> str:
@@ -823,7 +823,7 @@ class CatalogAgent(Actor):
                 },
             )
 
-        logger.info(f"[{self.name}] Spawning '{resolved}'...")
+        logger.info("[%s] Spawning '%s'...", self.name, resolved)
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": f"Spawning '{resolved}'...", "timestamp": time.time()},
@@ -858,7 +858,7 @@ class CatalogAgent(Actor):
                     msg = _chat_message_with_beta_warning(
                         f"'{resolved}' spawned and running", beta_warning
                     )
-                    logger.info(f"[{self.name}] {msg}")
+                    logger.info("[%s] %s", self.name, msg)
                     await self._mqtt_publish(
                         f"agents/{self.actor_id}/logs",
                         {"type": "log", "message": msg, "timestamp": time.time()},
@@ -878,7 +878,9 @@ class CatalogAgent(Actor):
                 if needed:
                     installer = self._registry.find_by_name("installer") if self._registry else None
                     if installer:
-                        logger.info(f"[{self.name}] Installing missing deps for '{name}': {needed}")
+                        logger.info(
+                            "[%s] Installing missing deps for '%s': %s", self.name, name, needed
+                        )
                         import uuid as _uuid
 
                         task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
@@ -904,15 +906,19 @@ class CatalogAgent(Actor):
                             await asyncio.wait_for(future, timeout=120.0)
                         except asyncio.TimeoutError:
                             logger.warning(
-                                f"[{self.name}] Install timeout for '{name}' — proceeding anyway"
+                                "[%s] Install timeout for '%s' — proceeding anyway", self.name, name
                             )
                     else:
                         logger.warning(
-                            f"[{self.name}] installer not found — skipping dep install for '{name}'"
+                            "[%s] installer not found — skipping dep install for '%s'",
+                            self.name,
+                            name,
                         )
                 else:
                     logger.info(
-                        f"[{self.name}] All deps for '{resolved}' already installed — skipping installer"
+                        "[%s] All deps for '%s' already installed — skipping installer",
+                        self.name,
+                        resolved,
                     )
 
             actor = await self.spawn(
@@ -938,7 +944,7 @@ class CatalogAgent(Actor):
                 msg = _chat_message_with_beta_warning(
                     f"'{resolved}' spawned and running", beta_warning
                 )
-                logger.info(f"[{self.name}] {msg}")
+                logger.info("[%s] %s", self.name, msg)
                 await self._mqtt_publish(
                     f"agents/{self.actor_id}/logs",
                     {"type": "log", "message": msg, "timestamp": time.time()},
@@ -948,7 +954,7 @@ class CatalogAgent(Actor):
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
-            logger.error(f"[{self.name}] {msg}")
+            logger.error("[%s] %s", self.name, msg)
             return {"ok": False, "message": msg}
 
     # Public API ─────────────────────────────────────────────────────────────

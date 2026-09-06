@@ -136,7 +136,7 @@ class ActorRegistry:
             try:
                 await superseded.stop()
             except Exception as exc:
-                logger.error(
+                logger.exception(
                     "[Registry] Stopping the superseded '%s' failed — its listeners may still be live: %s",
                     superseded.name,
                     exc,
@@ -322,7 +322,7 @@ class Supervisor:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error("[Supervisor] watch_loop error: %s", exc, exc_info=True)
+                logger.error("[Supervisor] watch_loop error: %s", exc)
 
     def _failure_reason(self, spec: SupervisedSpec) -> str | None:
         """Why this spec needs supervision, or None if there is nothing to do.
@@ -488,7 +488,7 @@ class Supervisor:
             new_actor = await self._spawn_actor(name, spec)
         except Exception as exc:
             spec.actor = None
-            logger.error("[Supervisor] Respawn of '%s' failed: %s", name, exc, exc_info=True)
+            logger.exception("[Supervisor] Respawn of '%s' failed: %s", name, exc)
             if spec.exhausted:
                 await self._retire(name, spec, "every restart attempt failed to start it")
             # Otherwise the spec keeps its actor at None, which the watch loop

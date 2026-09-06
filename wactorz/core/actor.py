@@ -431,7 +431,7 @@ class Actor(ABC):
                 break
             except Exception as e:
                 self.metrics.errors += 1
-                logger.error("[%s] Error in message loop: %s", self.name, e, exc_info=True)
+                logger.exception("[%s] Error in message loop: %s", self.name, e)
 
     def _resolve_pending_result(self, msg: Message) -> bool:
         """Settle a waiting future from a RESULT's correlation id.

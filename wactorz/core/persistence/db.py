@@ -101,7 +101,7 @@ class WactorzDB:
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA cache_size=-8000")  # 8MB cache
         self._conn.row_factory = sqlite3.Row
-        logger.info(f"[Persistence] SQLite opened: {self._path}")
+        logger.info("[Persistence] SQLite opened: %s", self._path)
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
@@ -112,7 +112,7 @@ class WactorzDB:
         # Direct, not via transaction(): this runs from __init__, before the
         # instance is reachable by anything that could contend for the lock.
         self.conn.commit()
-        logger.info(f"[Persistence] Schema v{SCHEMA_VERSION} ready")
+        logger.info("[Persistence] Schema v%s ready", SCHEMA_VERSION)
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -537,7 +537,7 @@ class WactorzDB:
                 cur = conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
                 total += cur.rowcount
         if total:
-            logger.info(f"[Persistence] Pruned {total} rows older than {days}d")
+            logger.info("[Persistence] Pruned %s rows older than %sd", total, days)
         return total
 
     @_serialised

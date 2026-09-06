@@ -211,10 +211,14 @@ class LLMAgent(Actor):
             self.persist("history_summary", self._history_summary)
             self.persist("conversation_history", self._conversation_history)
             logger.info(
-                f"[{self.name}] History summarized: {len(to_compress)} messages → summary ({len(summary)} chars), keeping {len(to_keep)}"
+                "[%s] History summarized: %s messages → summary (%s chars), keeping %s",
+                self.name,
+                len(to_compress),
+                len(summary),
+                len(to_keep),
             )
         except Exception as e:
-            logger.warning(f"[{self.name}] Summarization failed: {e} — truncating instead")
+            logger.warning("[%s] Summarization failed: %s — truncating instead", self.name, e)
             self._conversation_history = self._conversation_history[-self.max_history :]
 
     def _build_messages_with_summary(self, n: int) -> list[dict]:
@@ -316,7 +320,7 @@ class LLMAgent(Actor):
         self._current_task = task_text[:60]
 
         if self.llm is None:
-            logger.warning(f"[{self.name}] No LLM provider configured.")
+            logger.warning("[%s] No LLM provider configured.", self.name)
             await self._reply_to_task(msg, {"text": "[No LLM configured]", "task": task_text})
             return
 
@@ -371,7 +375,7 @@ class LLMAgent(Actor):
         except Exception as e:
             self.metrics.tasks_failed += 1
             self.state_value = "failed_task"
-            logger.error(f"[{self.name}] LLM task failed: {e}", exc_info=True)
+            logger.exception("[%s] LLM task failed: %s", self.name, e)
             # The caller is waiting on a future; tell it the turn is over rather
             # than leaving it to time out with no idea what happened.
             await self._reply_to_task(msg, {"text": f"[error] {e}", "task": task_text})

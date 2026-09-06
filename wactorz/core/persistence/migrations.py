@@ -167,12 +167,14 @@ def _upgrade_baselines(db, pickle_store):
                         "UPDATE kv_store SET value=?, updated=? WHERE agent=? AND key='baselines'",
                         (json.dumps(baselines), time.time(), agent_name),
                     )
-                    logger.info(f"[Migration] Upgraded baselines for '{agent_name}'")
+                    logger.info("[Migration] Upgraded baselines for '%s'", agent_name)
             except (json.JSONDecodeError, TypeError) as e:
-                logger.warning(f"[Migration] Could not upgrade baselines for '{agent_name}': {e}")
+                logger.warning(
+                    "[Migration] Could not upgrade baselines for '%s': %s", agent_name, e
+                )
         db.conn.commit()
     except Exception as e:
-        logger.warning(f"[Migration] Baseline upgrade failed: {e}")
+        logger.warning("[Migration] Baseline upgrade failed: %s", e)
 
     # Also check pickle files
     base = Path(pickle_store._base)
@@ -201,12 +203,12 @@ def _upgrade_baselines(db, pickle_store):
             if upgraded:
                 with open(pkl_path, "wb") as f:
                     pickle.dump(state, f)
-                logger.info(f"[Migration] Upgraded pickle baselines for '{agent_dir.name}'")
+                logger.info("[Migration] Upgraded pickle baselines for '%s'", agent_dir.name)
         except Exception as exc:
             # One agent's unreadable pickle must not abort the whole migration —
             # but it is logged rather than dropped. A silent pass here is how a
             # migration appears to succeed while having done nothing.
-            logger.warning(f"[Migration] Skipped pickle baselines for '{agent_dir.name}': {exc}")
+            logger.warning("[Migration] Skipped pickle baselines for '%s': %s", agent_dir.name, exc)
 
 
 def _upgrade_conversation_history(db, pickle_store):
@@ -243,14 +245,15 @@ def _upgrade_conversation_history(db, pickle_store):
                     )
                     removed = len(history) - len(clean)
                     logger.info(
-                        f"[Migration] Sanitized conversation history for '{agent_name}': "
-                        f"removed {removed} corrupted entries"
+                        "[Migration] Sanitized conversation history for '%s': removed %s corrupted entries",
+                        agent_name,
+                        removed,
                     )
             except (json.JSONDecodeError, TypeError):
                 pass
         db.conn.commit()
     except Exception as e:
-        logger.warning(f"[Migration] Conversation history upgrade failed: {e}")
+        logger.warning("[Migration] Conversation history upgrade failed: %s", e)
 
 
 def _upgrade_topic_contracts(db):
@@ -568,19 +571,21 @@ def run_migrations(db, pickle_store=None) -> dict:
     pending_state = _pending_state_versions(db)
 
     if current >= FRAMEWORK_VERSION and not pending_state:
-        logger.info(f"[Migration] Framework v{FRAMEWORK_VERSION} — no migrations needed")
+        logger.info("[Migration] Framework v%s — no migrations needed", FRAMEWORK_VERSION)
         # Still validate spawn registry even if no version change
         result["spawn_issues"] = validate_spawn_registry(db)
         return result
 
     if current < FRAMEWORK_VERSION:
         logger.info(
-            f"[Migration] Upgrading framework v{current} → v{FRAMEWORK_VERSION} "
-            f"({FRAMEWORK_VERSION - current} migration(s) to apply)"
+            "[Migration] Upgrading framework v%s → v%s (%s migration(s) to apply)",
+            current,
+            FRAMEWORK_VERSION,
+            FRAMEWORK_VERSION - current,
         )
     else:
         logger.info(
-            f"[Migration] Framework v{current} — retrying state migration(s) {pending_state}"
+            "[Migration] Framework v%s — retrying state migration(s) %s", current, pending_state
         )
 
     # ── SQL schema migrations ──────────────────────────────────────────────
@@ -609,11 +614,11 @@ def run_migrations(db, pickle_store=None) -> dict:
 
             result["sql_migrations"] += 1
             schema_ok_through = version
-            logger.info(f"[Migration] SQL v{version} applied ({(time.time() - t0) * 1000:.0f}ms)")
+            logger.info("[Migration] SQL v%s applied (%.0fms)", version, (time.time() - t0) * 1000)
 
         except Exception as e:
             error_msg = f"SQL migration v{version} failed: {e}"
-            logger.error(f"[Migration] {error_msg}")
+            logger.error("[Migration] %s", error_msg)
             result["errors"].append(error_msg)
             # Stop — don't apply later migrations if an earlier one failed
             break
@@ -626,7 +631,9 @@ def run_migrations(db, pickle_store=None) -> dict:
         try:
             migrate_fn(db, pickle_store)
             result["state_migrations"] += 1
-            logger.info(f"[Migration] State v{version} applied ({(time.time() - t0) * 1000:.0f}ms)")
+            logger.info(
+                "[Migration] State v%s applied (%.0fms)", version, (time.time() - t0) * 1000
+            )
 
             try:
                 duration_ms = int((time.time() - t0) * 1000)
@@ -641,7 +648,7 @@ def run_migrations(db, pickle_store=None) -> dict:
 
         except Exception as e:
             error_msg = f"State migration v{version} failed: {e}"
-            logger.warning(f"[Migration] {error_msg} — continuing anyway")
+            logger.warning("[Migration] %s — continuing anyway", error_msg)
             result["errors"].append(error_msg)
             # State migrations are best-effort — continue with next version
 
@@ -666,9 +673,9 @@ def run_migrations(db, pickle_store=None) -> dict:
         fixes = auto_fix_spawn_registry(db)
         result["spawn_fixes"] = fixes
         if fixes:
-            logger.info(f"[Migration] Auto-fixed {len(fixes)} spawn config(s): {fixes}")
+            logger.info("[Migration] Auto-fixed %s spawn config(s): %s", len(fixes), fixes)
     except Exception as e:
-        logger.warning(f"[Migration] Spawn auto-fix failed: {e}")
+        logger.warning("[Migration] Spawn auto-fix failed: %s", e)
 
     issues = validate_spawn_registry(db)
     result["spawn_issues"] = issues
@@ -677,20 +684,26 @@ def run_migrations(db, pickle_store=None) -> dict:
     warnings = [i for i in issues if i["severity"] == "warning"]
     if errors:
         logger.warning(
-            f"[Migration] {len(errors)} spawn registry error(s) — "
-            f"these agents may crash: {[i['agent'] for i in errors]}"
+            "[Migration] %s spawn registry error(s) — these agents may crash: %s",
+            len(errors),
+            [i["agent"] for i in errors],
         )
     if warnings:
         logger.info(
-            f"[Migration] {len(warnings)} spawn registry warning(s) — "
-            f"consider respawning: {[i['agent'] for i in warnings]}"
+            "[Migration] %s spawn registry warning(s) — consider respawning: %s",
+            len(warnings),
+            [i["agent"] for i in warnings],
         )
 
     logger.info(
-        f"[Migration] Complete: v{current} → v{FRAMEWORK_VERSION} | "
-        f"SQL={result['sql_migrations']} State={result['state_migrations']} "
-        f"Fixes={len(result['spawn_fixes'])} Issues={len(issues)} "
-        f"Errors={len(result['errors'])}"
+        "[Migration] Complete: v%s → v%s | SQL=%s State=%s Fixes=%s Issues=%s Errors=%s",
+        current,
+        FRAMEWORK_VERSION,
+        result["sql_migrations"],
+        result["state_migrations"],
+        len(result["spawn_fixes"]),
+        len(issues),
+        len(result["errors"]),
     )
 
     return result

@@ -147,8 +147,9 @@ class SpawnMixin(_Host):
             )
         else:
             logger.warning(
-                f"[{self.name}] Spawn config for '{name}' has neither code "
-                f"nor system_prompt — nothing to spawn."
+                "[%s] Spawn config for '%s' has neither code nor system_prompt — nothing to spawn.",
+                self.name,
+                name,
             )
             return None
 
@@ -200,8 +201,9 @@ class SpawnMixin(_Host):
         factory = get_native_factory(name)
         if factory is None:
             logger.warning(
-                f"[{self.name}] Cannot spawn native agent '{name}': "
-                f"no catalog factory found for that name."
+                "[%s] Cannot spawn native agent '%s': no catalog factory found for that name.",
+                self.name,
+                name,
             )
             return None
 
@@ -209,7 +211,7 @@ class SpawnMixin(_Host):
         llm = getattr(self, "llm", None)
         if llm is not None:
             kwargs["llm_provider"] = llm
-        logger.info(f"[{self.name}] Spawning native catalog agent '{name}'")
+        logger.info("[%s] Spawning native catalog agent '%s'", self.name, name)
         return await self.spawn(factory, **kwargs)
 
     async def _spawn_ha_actuator(self, config: dict, name: str) -> Actor | None:
@@ -242,7 +244,7 @@ class SpawnMixin(_Host):
             detection_filter=config.get("detection_filter"),
             cooldown_seconds=float(config.get("cooldown_seconds", 10.0)),
         )
-        logger.info(f"[{self.name}] Spawning HomeAssistantActuatorAgent '{name}'")
+        logger.info("[%s] Spawning HomeAssistantActuatorAgent '%s'", self.name, name)
         return await self.spawn(
             HomeAssistantActuatorAgent,
             config=actuator_cfg,
@@ -261,7 +263,7 @@ class SpawnMixin(_Host):
         schedule_spec = config.get("schedule")
         if not isinstance(schedule_spec, dict):
             logger.warning(
-                f"[{self.name}] Cannot spawn '{name}': missing or invalid 'schedule' dict"
+                "[%s] Cannot spawn '%s': missing or invalid 'schedule' dict", self.name, name
             )
             return None
 
@@ -277,15 +279,18 @@ class SpawnMixin(_Host):
                 persistence_dir=str(self._persistence_dir.parent),
             )
             logger.info(
-                f"[{self.name}] Spawned ScheduledAgent '{name}' "
-                f"({schedule_spec.get('type')} → {publish_topic})"
+                "[%s] Spawned ScheduledAgent '%s' (%s → %s)",
+                self.name,
+                name,
+                schedule_spec.get("type"),
+                publish_topic,
             )
             return actor
         except ValueError as e:
-            logger.error(f"[{self.name}] Invalid schedule for '{name}': {e}")
+            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)
             return None
         except Exception as e:
-            logger.error(f"[{self.name}] Failed to spawn ScheduledAgent '{name}': {e}")
+            logger.error("[%s] Failed to spawn ScheduledAgent '%s': %s", self.name, name, e)
             return None
 
     async def _spawn_llm_agent(self, config: dict, name: str) -> Actor | None:
@@ -296,7 +301,7 @@ class SpawnMixin(_Host):
 
         from ..llm_agent import LLMAgent
 
-        logger.info(f"[{self.name}] Spawning LLM agent '{name}'")
+        logger.info("[%s] Spawning LLM agent '%s'", self.name, name)
         return await self.spawn(
             LLMAgent,
             name=name,
@@ -324,12 +329,14 @@ class SpawnMixin(_Host):
 
         if blocking_install:
             # Pipeline path: the next step may depend on this agent being live.
-            logger.info(f"[{self.name}] Installing {needed} for '{name}' (blocking)…")
+            logger.info("[%s] Installing %s for '%s' (blocking)…", self.name, needed, name)
             await self._install_packages(needed, agent_name=name)
             return await self._do_spawn_dynamic(config, name, code)
 
         # Default path: don't block the response — install + spawn in background.
-        logger.info(f"[{self.name}] Scheduling background install+spawn for '{name}': {needed}")
+        logger.info(
+            "[%s] Scheduling background install+spawn for '%s': %s", self.name, name, needed
+        )
         asyncio.create_task(self._install_then_spawn(config, name, code, needed))
         return SpawnPlaceholder(name)
 
@@ -367,9 +374,9 @@ class SpawnMixin(_Host):
                             "timestamp": time.time(),
                         },
                     )
-                logger.info(f"[{self.name}] Background spawn complete: {name}")
+                logger.info("[%s] Background spawn complete: %s", self.name, name)
         except Exception as e:
-            logger.error(f"[{self.name}] Background install+spawn failed for '{name}': {e}")
+            logger.error("[%s] Background install+spawn failed for '%s': %s", self.name, name, e)
 
     async def _do_spawn_dynamic(self, config: dict, name: str, code: str) -> Actor | None:
         """Construct and start the DynamicAgent. Applies migrated state first,
@@ -403,11 +410,14 @@ class SpawnMixin(_Host):
                 if bus:
                     bus.register_contract(contract)
                     logger.info(
-                        f"[{self.name}] Registered TopicContract for '{name}': "
-                        f"pub={contract.publishes} sub={contract.subscribes}"
+                        "[%s] Registered TopicContract for '%s': pub=%s sub=%s",
+                        self.name,
+                        name,
+                        contract.publishes,
+                        contract.subscribes,
                     )
             except Exception as e:
-                logger.debug(f"[{self.name}] TopicContract registration skipped: {e}")
+                logger.debug("[%s] TopicContract registration skipped: %s", self.name, e)
 
         return actor
 
@@ -441,15 +451,17 @@ class SpawnMixin(_Host):
         needed = self._packages_needing_install(packages)
         if not needed:
             logger.info(
-                f"[{self.name}] All packages for '{agent_name}' already available: {packages}"
+                "[%s] All packages for '%s' already available: %s", self.name, agent_name, packages
             )
             return
 
         installer = self._registry.find_by_name("installer")
         if not installer:
             logger.warning(
-                f"[{self.name}] installer agent not found — cannot install {needed} "
-                f"for '{agent_name}'. Agent may crash on import."
+                "[%s] installer agent not found — cannot install %s for '%s'. Agent may crash on import.",
+                self.name,
+                needed,
+                agent_name,
             )
             return
 
@@ -459,7 +471,7 @@ class SpawnMixin(_Host):
         future = asyncio.get_event_loop().create_future()
         self._result_futures[task_id] = future
         try:
-            logger.info(f"[{self.name}] Installing {needed} for '{agent_name}' via installer…")
+            logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
             await self.send(
                 installer.actor_id,
                 MessageType.TASK,
@@ -474,18 +486,24 @@ class SpawnMixin(_Host):
             try:
                 result = await asyncio.wait_for(future, timeout=120.0)
                 logger.info(
-                    f"[{self.name}] Install result for '{agent_name}': "
-                    f"{result.get('message', result)}"
+                    "[%s] Install result for '%s': %s",
+                    self.name,
+                    agent_name,
+                    result.get("message", result),
                 )
                 if result.get("failed"):
                     logger.warning(
-                        f"[{self.name}] Failed to install: {result['failed']} "
-                        f"— '{agent_name}' may not work correctly"
+                        "[%s] Failed to install: %s — '%s' may not work correctly",
+                        self.name,
+                        result["failed"],
+                        agent_name,
                     )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"[{self.name}] Install timed out for {needed} — proceeding anyway; "
-                    f"'{agent_name}' may crash on import"
+                    "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
+                    self.name,
+                    needed,
+                    agent_name,
                 )
         finally:
             self._result_futures.pop(task_id, None)
@@ -510,8 +528,10 @@ class SpawnMixin(_Host):
             )
         except Exception as e:
             logger.debug(
-                f"[{self.name}] PersistenceAPI not importable — legacy state "
-                f"injection for '{name}': {e}"
+                "[%s] PersistenceAPI not importable — legacy state injection for '%s': %s",
+                self.name,
+                name,
+                e,
             )
             try:
                 import pickle
@@ -521,27 +541,36 @@ class SpawnMixin(_Host):
                 with open(pdir / "state.pkl", "wb") as fh:
                     pickle.dump(snapshot, fh)
                 logger.info(
-                    f"[{self.name}] Wrote {len(snapshot)} migrated key(s) to "
-                    f"{pdir / 'state.pkl'} for '{name}' (legacy path)"
+                    "[%s] Wrote %s migrated key(s) to %s for '%s' (legacy path)",
+                    self.name,
+                    len(snapshot),
+                    pdir / "state.pkl",
+                    name,
                 )
             except Exception as e2:
-                logger.warning(f"[{self.name}] Legacy state injection failed for '{name}': {e2}")
+                logger.warning(
+                    "[%s] Legacy state injection failed for '%s': %s", self.name, name, e2
+                )
             return
 
         db, pkl = get_db(), get_pickle_store()
         if not (db and pkl):
             logger.warning(
-                f"[{self.name}] PersistenceAPI stores not initialised — "
-                f"cannot apply migrated state for '{name}'"
+                "[%s] PersistenceAPI stores not initialised — cannot apply migrated state for '%s'",
+                self.name,
+                name,
             )
             return
 
         api = PersistenceAPI(db, pkl, name)
         applied = api.load_snapshot(snapshot, replace=True)
         logger.info(
-            f"[{self.name}] Applied migrated state for '{name}': "
-            f"{applied['sqlite']} SQLite, {applied['memory']} in-memory, "
-            f"{applied['pickle']} pickle key(s)"
+            "[%s] Applied migrated state for '%s': %s SQLite, %s in-memory, %s pickle key(s)",
+            self.name,
+            name,
+            applied["sqlite"],
+            applied["memory"],
+            applied["pickle"],
         )
 
     # ── Hooks / shared helpers ─────────────────────────────────────────────
@@ -569,7 +598,7 @@ class SpawnMixin(_Host):
         replacement. The new agent reuses the same deterministic actor_id and
         republishes its manifest, so the retained MQTT topic is left intact.
         """
-        logger.info(f"[{self.name}] Replacing '{name}' with updated code…")
+        logger.info("[%s] Replacing '%s' with updated code…", self.name, name)
         try:
             if self._registry:
                 await self._registry.unregister(existing.actor_id)
@@ -582,7 +611,7 @@ class SpawnMixin(_Host):
                 manifests.pop(name, None)
             await asyncio.sleep(0.5)
         except Exception as e:
-            logger.warning(f"[{self.name}] Error stopping old '{name}': {e}")
+            logger.warning("[%s] Error stopping old '%s': %s", self.name, name, e)
 
     def _resolve_user_timezone(self) -> str | None:
         """Resolve the user's preferred timezone. MainActor owns the facts and
@@ -622,5 +651,5 @@ class SpawnMixin(_Host):
         if main is not None:
             main._save_to_spawn_registry(config)  # pyright: ignore[reportAttributeAccessIssue]
             logger.info(
-                f"[{self.name}] Registered '{config.get('name')}' with main's spawn registry"
+                "[%s] Registered '%s' with main's spawn registry", self.name, config.get("name")
             )

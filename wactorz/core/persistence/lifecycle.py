@@ -40,13 +40,15 @@ def init_persistence(
             for issue in migration_result.get("spawn_issues", []):
                 if issue["severity"] == "error":
                     logger.warning(
-                        f"[Persistence] Spawn registry issue: {issue['agent']} — {issue['message']}"
+                        "[Persistence] Spawn registry issue: %s — %s",
+                        issue["agent"],
+                        issue["message"],
                     )
         except Exception as e:
             # A failing migration must not stop startup — but a *missing* one is a
             # wiring bug, so ImportError is deliberately not caught here: swallowing
             # it is what let the wrong-module import go unnoticed.
-            logger.warning(f"[Persistence] Migration runner failed: {e} — continuing anyway")
+            logger.warning("[Persistence] Migration runner failed: %s — continuing anyway", e)
 
     return wactorz_db, pickle_store
 

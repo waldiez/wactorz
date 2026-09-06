@@ -349,7 +349,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                         pass
                                     raise
                                 except Exception as exc:
-                                    logger.error("[ws] chat error: %s", exc, exc_info=True)
+                                    logger.exception("[ws] chat error: %s", exc)
                                     try:
                                         await ws_reply(f"[error] {exc}")
                                         await ws_stream_end()

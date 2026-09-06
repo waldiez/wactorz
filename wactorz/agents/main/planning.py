@@ -103,7 +103,10 @@ class PlanningMixin(_Host):
         rules[rule["rule_id"]] = rule
         self.persist(PIPELINE_RULES_KEY, rules)
         logger.info(
-            f"[{self.name}] Pipeline rule saved: {rule['rule_id']} agents={rule.get('agents', [])}"
+            "[%s] Pipeline rule saved: %s agents=%s",
+            self.name,
+            rule["rule_id"],
+            rule.get("agents", []),
         )
 
     # ── Pending-plan registry (dry-run / approval flow) ────────────────────
@@ -435,7 +438,11 @@ class PlanningMixin(_Host):
             else ("plan-only" if plan_only else "plan-and-execute")
         )
         logger.info(
-            f"[{self.name}] Spawning planner '{planner_name}' (mode={mode}) for: {enriched_task[:60]}"
+            "[%s] Spawning planner '%s' (mode=%s) for: %s",
+            self.name,
+            planner_name,
+            mode,
+            enriched_task[:60],
         )
 
         await self._mqtt_publish(
@@ -484,10 +491,10 @@ class PlanningMixin(_Host):
             return answer
 
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] Planner timed out for: {task[:60]}")
+            logger.warning("[%s] Planner timed out for: %s", self.name, task[:60])
             return "The pipeline is taking longer than expected to set up. Check `/rules` in a moment to see if agents were spawned, or try again."
         except Exception as e:
-            logger.error(f"[{self.name}] Planner error: {e}")
+            logger.error("[%s] Planner error: %s", self.name, e)
             return None
         finally:
             self._result_futures.pop(task_id, None)
@@ -755,7 +762,7 @@ class PlanningMixin(_Host):
         revised_task = (
             f"{original_task}\n\n[User correction to the previous plan: {correction.strip()}]"
         )
-        logger.info(f"[{self.name}] Revising plan {old_id} with correction: {correction[:80]!r}")
+        logger.info("[%s] Revising plan %s with correction: %r", self.name, old_id, correction[:80])
         self.update_plan_status(old_id, "superseded")
 
         # Re-run planner in plan_only mode with the enriched task
@@ -795,7 +802,7 @@ class PlanningMixin(_Host):
         plan_id = proposal["plan_id"]
         envelope = proposal["envelope"]
         original_task = proposal["task"]
-        logger.info(f"[{self.name}] Executing approved plan {plan_id}")
+        logger.info("[%s] Executing approved plan %s", self.name, plan_id)
         self.update_plan_status(plan_id, "approved")
 
         result = await self._run_planner(
@@ -808,7 +815,7 @@ class PlanningMixin(_Host):
     def _reject_pending_plan(self, proposal: dict) -> str:
         plan_id = proposal["plan_id"]
         self.update_plan_status(plan_id, "rejected")
-        logger.info(f"[{self.name}] Rejected plan {plan_id}")
+        logger.info("[%s] Rejected plan %s", self.name, plan_id)
         return (
             f"❌ Discarded plan `{plan_id}`. No agents were spawned.\n"
             f"If you'd like to try again with different wording, just ask."

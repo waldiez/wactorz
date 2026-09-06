@@ -145,7 +145,10 @@ class PersistenceAPI:
                     pickle_blob[key] = value
             except Exception as e:
                 logger.warning(
-                    f"[Persistence] Could not load snapshot key '{key}' for '{self.agent}': {e}"
+                    "[Persistence] Could not load snapshot key '%s' for '%s': %s",
+                    key,
+                    self.agent,
+                    e,
                 )
 
         if pickle_blob:
@@ -153,12 +156,14 @@ class PersistenceAPI:
                 self.pickle.save(self.agent, pickle_blob)
                 applied["pickle"] = len(pickle_blob)
             except Exception as e:
-                logger.warning(f"[Persistence] Pickle bulk-load failed for '{self.agent}': {e}")
+                logger.warning("[Persistence] Pickle bulk-load failed for '%s': %s", self.agent, e)
 
         logger.info(
-            f"[Persistence] Loaded snapshot for '{self.agent}': "
-            f"{applied['sqlite']} SQLite keys, {applied['memory']} in-memory keys, "
-            f"{applied['pickle']} pickle keys"
+            "[Persistence] Loaded snapshot for '%s': %s SQLite keys, %s in-memory keys, %s pickle keys",
+            self.agent,
+            applied["sqlite"],
+            applied["memory"],
+            applied["pickle"],
         )
         return applied
 
@@ -177,7 +182,7 @@ class PersistenceAPI:
         try:
             summary["sqlite_rows"] = self.db.kv_purge_agent(self.agent)
         except Exception as e:
-            logger.warning(f"[Persistence] SQLite purge failed for {self.agent}: {e}")
+            logger.warning("[Persistence] SQLite purge failed for %s: %s", self.agent, e)
 
         # 2. Process memory — only the known ephemeral keys live there.
         for key in EPHEMERAL_KEYS:
@@ -185,19 +190,20 @@ class PersistenceAPI:
                 self.memory.delete(f"{self.agent}:{key}")
                 summary["memory_keys"] += 1
             except Exception as e:
-                logger.debug(f"[Persistence] memory delete {key} failed: {e}")
+                logger.debug("[Persistence] memory delete %s failed: %s", key, e)
 
         # 3. Pickle — remove the agent's state.pkl on disk.
         try:
             self.pickle.delete(self.agent)
             summary["pickle_deleted"] = True
         except Exception as e:
-            logger.warning(f"[Persistence] Pickle delete failed for {self.agent}: {e}")
+            logger.warning("[Persistence] Pickle delete failed for %s: %s", self.agent, e)
 
         logger.info(
-            f"[Persistence] Purged agent '{self.agent}': "
-            f"{summary['sqlite_rows']} SQLite rows, "
-            f"{summary['memory_keys']} in-memory keys, "
-            f"pickle_deleted={summary['pickle_deleted']}"
+            "[Persistence] Purged agent '%s': %s SQLite rows, %s in-memory keys, pickle_deleted=%s",
+            self.agent,
+            summary["sqlite_rows"],
+            summary["memory_keys"],
+            summary["pickle_deleted"],
         )
         return summary

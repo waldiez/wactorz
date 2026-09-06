@@ -144,7 +144,7 @@ class InstallerAgent(Actor):
         return "idle"
 
     async def on_start(self):
-        logger.info(f"[{self.name}] Installer ready — using: {sys.executable}")
+        logger.info("[%s] Installer ready — using: %s", self.name, sys.executable)
         self._scrub_persisted_credentials()
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
@@ -245,11 +245,11 @@ class InstallerAgent(Actor):
             # Check if already importable (invalidate cache so fresh installs show up)
             import_name = PACKAGE_TO_IMPORT.get(pip_name, pip_name)
             if self._is_installed(import_name):
-                logger.info(f"[{self.name}] {pip_name} already installed.")
+                logger.info("[%s] %s already installed.", self.name, pip_name)
                 results[pip_name] = "already_installed"
                 continue
 
-            logger.info(f"[{self.name}] Installing {pip_name} into {sys.executable}...")
+            logger.info("[%s] Installing %s into %s...", self.name, pip_name, sys.executable)
             await self._mqtt_publish(
                 f"agents/{self.actor_id}/logs",
                 {"type": "log", "message": f"Installing {pip_name}...", "timestamp": time.time()},
@@ -260,14 +260,14 @@ class InstallerAgent(Actor):
             # duckduckgo-search was renamed to ddgs in v9 — try the other name as fallback
             if not success and pip_name in ("duckduckgo-search", "ddgs"):
                 alt = "ddgs" if pip_name == "duckduckgo-search" else "duckduckgo-search"
-                logger.info(f"[{self.name}] Trying alternative name: {alt}")
+                logger.info("[%s] Trying alternative name: %s", self.name, alt)
                 success, output = await self._pip_install(alt)
                 if success:
                     pip_name = alt
 
             # pdfplumber sometimes fails on Windows — try pymupdf (fitz) as fallback
             if not success and pip_name == "pdfplumber":
-                logger.info(f"[{self.name}] pdfplumber failed, trying pymupdf as fallback...")
+                logger.info("[%s] pdfplumber failed, trying pymupdf as fallback...", self.name)
                 success, output = await self._pip_install("pymupdf")
                 if success:
                     pip_name = "pymupdf"
@@ -291,7 +291,7 @@ class InstallerAgent(Actor):
                 # Show the actual pip error so failures are diagnosable
                 err_snippet = output[-400:].strip().replace("\n", " | ")
                 status = f"✗ {pip_name} FAILED: {err_snippet}"
-            logger.info(f"[{self.name}] {status}")
+            logger.info("[%s] %s", self.name, status)
             await self._mqtt_publish(
                 f"agents/{self.actor_id}/logs",
                 {"type": "log", "message": status, "timestamp": time.time()},
@@ -597,7 +597,7 @@ class InstallerAgent(Actor):
         # Kept for backward compat with _spawn_remote's lookups.
         self.persist(f"node_host_{node_name}", host)
         self.persist(f"node_user_{node_name}", user)
-        logger.info(f"[{self.name}] Recorded node '{node_name}' at {user}@{host}")
+        logger.info("[%s] Recorded node '%s' at %s@%s", self.name, node_name, user, host)
 
     def _scrub_persisted_credentials(self) -> None:
         """Drop passwords and key paths written by earlier versions.
@@ -615,8 +615,9 @@ class InstallerAgent(Actor):
         if cleaned != nodes:
             self.persist("_node_credentials", cleaned)
             logger.info(
-                f"[{self.name}] Removed stored SSH credentials for "
-                f"{len(cleaned)} node(s) — credentials now come from the environment"
+                "[%s] Removed stored SSH credentials for %s node(s) — credentials now come from the environment",
+                self.name,
+                len(cleaned),
             )
 
     async def _ssh_run(self, conn, command: str) -> tuple[bool, str]:
@@ -626,7 +627,7 @@ class InstallerAgent(Actor):
         return result.exit_status == 0, output.strip()
 
     def _log_remote(self, message: str):
-        logger.info(f"[{self.name}] {message}")
+        logger.info("[%s] %s", self.name, message)
         asyncio.create_task(
             self._mqtt_publish(
                 f"agents/{self.actor_id}/logs",

@@ -277,14 +277,14 @@ class MemoryMixin(_Host):
             )
         )
         if is_voice and not explicit_voice_memory:
-            logger.info(f"[{self.name}] Facts extraction skipped for voice transcript")
+            logger.info("[%s] Facts extraction skipped for voice transcript", self.name)
             return
         if self.llm is None:
-            logger.warning(f"[{self.name}] Facts extraction skipped: no LLM provider")
+            logger.warning("[%s] Facts extraction skipped: no LLM provider", self.name)
             return
         if not user_message or not user_message.strip():
             return
-        logger.info(f"[{self.name}] Facts extraction running on: {user_message[:80]!r}")
+        logger.info("[%s] Facts extraction running on: %r", self.name, user_message[:80])
         exchange = f"USER: {user_message[:600]}\nASSISTANT: {assistant_response[:600]}"
         try:
             raw, _usage = await self.llm.complete(
@@ -301,16 +301,18 @@ class MemoryMixin(_Host):
             clean = raw.strip().removeprefix("```json").removeprefix("```")
             clean = clean.removesuffix("```").strip()
             if not clean:
-                logger.warning(f"[{self.name}] Facts extraction returned empty string")
+                logger.warning("[%s] Facts extraction returned empty string", self.name)
                 return
             new_facts = _json.loads(clean)
             if not isinstance(new_facts, dict):
                 logger.warning(
-                    f"[{self.name}] Facts extraction returned non-dict: {type(new_facts).__name__}"
+                    "[%s] Facts extraction returned non-dict: %s",
+                    self.name,
+                    type(new_facts).__name__,
                 )
                 return
             if not new_facts:
-                logger.info(f"[{self.name}] Facts extraction: nothing durable in this turn")
+                logger.info("[%s] Facts extraction: nothing durable in this turn", self.name)
                 return
 
             # Normalize keys: if the LLM forgot the namespace prefix, infer one
@@ -352,8 +354,10 @@ class MemoryMixin(_Host):
                 logger.info("[%s] User facts updated: %s", self.name, list(normalized.keys()))
         except _json.JSONDecodeError as e:
             logger.warning(
-                f"[{self.name}] Facts extraction JSON parse failed: {e}. "
-                f"Raw response (first 200 chars): {raw[:200]!r}"
+                "[%s] Facts extraction JSON parse failed: %s. Raw response (first 200 chars): %r",
+                self.name,
+                e,
+                raw[:200],
             )
         except Exception as e:
-            logger.warning(f"[{self.name}] Facts extraction failed: {e!r}")
+            logger.warning("[%s] Facts extraction failed: %r", self.name, e)

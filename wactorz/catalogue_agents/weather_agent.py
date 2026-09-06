@@ -678,7 +678,10 @@ class WeatherAgent(Actor):
             },
         )
         logger.info(
-            f"[{self.name}] Ready (LLM={'yes' if self._llm else 'no'}). Default: {self._default_location}"
+            "[%s] Ready (LLM=%s). Default: %s",
+            self.name,
+            "yes" if self._llm else "no",
+            self._default_location,
         )
 
     # ── Entry points ──────────────────────────────────────────────────────
@@ -767,7 +770,7 @@ class WeatherAgent(Actor):
                 return None
             return loc if await self._geocode(loc) else None
         except Exception as e:
-            logger.debug(f"[{self.name}] LLM location recovery failed: {e}")
+            logger.debug("[%s] LLM location recovery failed: %s", self.name, e)
             return None
 
     # ── Command handler ───────────────────────────────────────────────────
@@ -868,11 +871,11 @@ class WeatherAgent(Actor):
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
-                        logger.warning(f"[{self.name}] {url} → HTTP {resp.status}")
+                        logger.warning("[%s] %s → HTTP %s", self.name, url, resp.status)
                         return None
                     return await resp.json()
         except Exception as e:
-            logger.warning(f"[{self.name}] request to {url} failed: {e}")
+            logger.warning("[%s] request to %s failed: %s", self.name, url, e)
             return None
 
     async def _geocode(self, location: str) -> tuple[float, float, str] | None:

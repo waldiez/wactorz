@@ -180,7 +180,11 @@ class HomeAssistantAgent(LLMAgent):
 
         if operation:
             logger.debug(
-                f"[{self.name}] operation={operation} camera_entity_id={camera_entity_id!r} from={msg.sender_id}"
+                "[%s] operation=%s camera_entity_id=%r from=%s",
+                self.name,
+                operation,
+                camera_entity_id,
+                msg.sender_id,
             )
 
         if operation == "list_cameras":
@@ -507,11 +511,17 @@ class HomeAssistantAgent(LLMAgent):
         snapshot = await get_camera_snapshot(rest_base, self.ha_token, camera_entity_id)
         if "error" in snapshot:
             logger.warning(
-                f"[{self.name}] get_camera_snapshot({camera_entity_id}) failed: {snapshot['error']}"
+                "[%s] get_camera_snapshot(%s) failed: %s",
+                self.name,
+                camera_entity_id,
+                snapshot["error"],
             )
             return {"result": f"Snapshot failed: {snapshot['error']}", "error": snapshot["error"]}
         logger.debug(
-            f"[{self.name}] get_camera_snapshot({camera_entity_id}) -> {len(snapshot.get('image_base64', ''))} b64 chars"
+            "[%s] get_camera_snapshot(%s) -> %s b64 chars",
+            self.name,
+            camera_entity_id,
+            len(snapshot.get("image_base64", "")),
         )
         return {
             "result": f"Snapshot captured for {camera_entity_id}.",
@@ -525,7 +535,7 @@ class HomeAssistantAgent(LLMAgent):
             return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
         data = await get_camera_stream_urls(self.ha_url, self.ha_token, camera_entity_id)
         streams = data.get("streams", {})
-        logger.debug(f"[{self.name}] get_camera_stream_url({camera_entity_id}) -> {streams}")
+        logger.debug("[%s] get_camera_stream_url(%s) -> %s", self.name, camera_entity_id, streams)
         lines = [f"Stream URLs for {camera_entity_id}:"]
         for kind, url in streams.items():
             lines.append(f"  {kind}: {url}")
@@ -538,7 +548,7 @@ class HomeAssistantAgent(LLMAgent):
             return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
         rest_base = normalize_ha_base_url(self.ha_url)
         url = get_camera_snapshot_url(rest_base, camera_entity_id)
-        logger.debug(f"[{self.name}] get_camera_snapshot_url({camera_entity_id}) -> {url}")
+        logger.debug("[%s] get_camera_snapshot_url(%s) -> %s", self.name, camera_entity_id, url)
         return {
             "result": (
                 f"Snapshot URL for {camera_entity_id}: {url}\n"
@@ -942,7 +952,7 @@ class HomeAssistantAgent(LLMAgent):
             return self._format_hardware_result(text, devices, selected, can_fulfill, fallback_text)
 
         except Exception as exc:
-            logger.error("[%s] Hardware selection failed: %s", self.name, exc, exc_info=True)
+            logger.exception("[%s] Hardware selection failed: %s", self.name, exc)
             return self._format_hardware_result(
                 text, devices, [], False, f"Hardware selection error: {exc}"
             )
@@ -1053,7 +1063,7 @@ class HomeAssistantAgent(LLMAgent):
             )
 
         except Exception as exc:
-            logger.error("[%s] Hardware recommendation failed: %s", self.name, exc, exc_info=True)
+            logger.exception("[%s] Hardware recommendation failed: %s", self.name, exc)
             return self._format_available_hardware_result(
                 text,
                 devices,
@@ -1207,7 +1217,7 @@ class HomeAssistantAgent(LLMAgent):
             }
 
         except Exception as exc:
-            logger.error("[%s] Automation creation failed: %s", self.name, exc, exc_info=True)
+            logger.exception("[%s] Automation creation failed: %s", self.name, exc)
             return {
                 "can_create": False,
                 "inserted": False,

@@ -289,7 +289,7 @@ class GeminiProvider(LLMProvider):
                 output_tokens = value.candidates_token_count or 0
             elif kind == "error":
                 error = str(value)
-                logger.error(f"[GeminiProvider] Stream error: {value}")
+                logger.error("[GeminiProvider] Stream error: %s", value)
                 break
 
         # Text that arrived is real work and is delivered either way, but the

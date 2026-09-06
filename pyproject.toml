@@ -216,6 +216,8 @@ select = [
     "FURB",    # refurb — modernise stdlib usage
     "RUF",     # ruff-specific — mutable defaults, unused noqa, dead branches
     "D",       # pydocstyle — docstring style (google convention)
+    "G",       # flake8-logging-format — lazy %-args, never f-strings, in logging
+    "LOG",     # flake8-logging — logger misuse
 ]
 ignore = [
     "E501",    # line length is owned by the formatter
@@ -233,8 +235,12 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (logging, exception style, complexity, pathlib, security, datetime)
-# stay advisory via `make lint-py` until each is triaged and gated.
+# Further families (exception style, complexity, pathlib, security, datetime) stay
+# advisory via `make lint-py` until each is triaged and gated. Logging moved out
+# of that set once the tree reached zero: an f-string in a logging call is
+# formatted whether or not the level is enabled, so the cost is paid on every
+# debug line in production, and the message loses the structure that lets a log
+# aggregator group occurrences of the same event.
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]       # re-exports: imported here to expose the package's public API
@@ -278,7 +284,7 @@ exclude_also = [
     "\\.\\.\\.",               # ellipsis / stub bodies
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 64
+fail_under = 65
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

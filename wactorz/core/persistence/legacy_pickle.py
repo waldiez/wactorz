@@ -37,7 +37,7 @@ def migrate_from_pickle(state_dir: str, db: WactorzDB) -> None:
             with open(pkl_path, "rb") as f:
                 state = pickle.load(f)
         except Exception as e:
-            logger.warning(f"[Migration] Failed to read {pkl_path}: {e}")
+            logger.warning("[Migration] Failed to read %s: %s", pkl_path, e)
             continue
 
         if not isinstance(state, dict):
@@ -56,4 +56,4 @@ def migrate_from_pickle(state_dir: str, db: WactorzDB) -> None:
             # Pickle keys stay in .pkl — no migration needed
 
     if migrated:
-        logger.info(f"[Migration] Migrated {migrated} key(s) from pickle")
+        logger.info("[Migration] Migrated %s key(s) from pickle", migrated)

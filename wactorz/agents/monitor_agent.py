@@ -81,7 +81,7 @@ class MonitorActor(Actor):
                 pass
 
         self._tasks.append(asyncio.create_task(self._monitor_loop()))
-        logger.info(f"[{self.name}] Monitor started. check_interval={self.check_interval}s")
+        logger.info("[%s] Monitor started. check_interval=%ss", self.name, self.check_interval)
 
     # ── Message handling ───────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ class MonitorActor(Actor):
         if msg.sender_id and msg.sender_id != self.actor_id:
             self._last_seen[msg.sender_id] = time.time()
             if self._alert_state.get(msg.sender_id):
-                logger.info(f"[{self.name}] Actor {msg.sender_id[:8]} recovered.")
+                logger.info("[%s] Actor %s recovered.", self.name, msg.sender_id[:8])
                 self._alert_state[msg.sender_id] = False
 
         # Structured error event forwarded from agents/{id}/errors
@@ -116,7 +116,7 @@ class MonitorActor(Actor):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"[{self.name}] Monitor loop error: {e}")
+                logger.error("[%s] Monitor loop error: %s", self.name, e)
 
     async def _ping_all_actors(self):
         if not self._registry:
@@ -180,8 +180,12 @@ class MonitorActor(Actor):
         self._error_registry[actor_id] = event
 
         logger.warning(
-            f"[{self.name}] Error event from '{name}': "
-            f"phase={phase} severity={severity} consecutive={consec}"
+            "[%s] Error event from '%s': phase=%s severity=%s consecutive=%s",
+            self.name,
+            name,
+            phase,
+            severity,
+            consec,
         )
 
         # Always fire low-level MQTT alert for dashboards
@@ -284,9 +288,9 @@ class MonitorActor(Actor):
                     "timestamp": now,
                 },
             )
-            logger.info(f"[{self.name}] Notified main about '{agent_name}': {message[:80]}")
+            logger.info("[%s] Notified main about '%s': %s", self.name, agent_name, message[:80])
         except Exception as e:
-            logger.error(f"[{self.name}] Failed to notify main: {e}")
+            logger.error("[%s] Failed to notify main: %s", self.name, e)
 
     # ── Alerting ───────────────────────────────────────────────────────────
 
@@ -299,7 +303,7 @@ class MonitorActor(Actor):
             "timestamp": time.time(),
             "severity": "warning" if gap < 120 else "critical",
         }
-        logger.warning(f"[{self.name}] ALERT: {actor.name} unresponsive for {gap:.0f}s")
+        logger.warning("[%s] ALERT: %s unresponsive for %.0fs", self.name, actor.name, gap)
         await self._mqtt_publish(f"agents/{actor.actor_id}/alert", alert)
 
         _infra = {
@@ -386,4 +390,4 @@ class MonitorActor(Actor):
             }
             await self._mqtt_publish("system/host", stats)
         except Exception as e:
-            logger.debug(f"[{self.name}] host stats error: {e}")
+            logger.debug("[%s] host stats error: %s", self.name, e)

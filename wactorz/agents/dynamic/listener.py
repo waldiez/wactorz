@@ -317,12 +317,17 @@ class SubscriptionHub:
         last = actor._cb_error_last.get(topic, 0)
         escalations = actor._cb_error_count.get(topic, 0)
 
-        logger.exception(
+        # `exc_info=error`, not `.exception()`: this runs from the caller's
+        # except block, so the ambient exception is still set at runtime, but
+        # nothing here says which exception is being reported. Naming it is both
+        # clearer and correct if this is ever called from somewhere else.
+        logger.error(
             "[%s] subscribe callback error (escalation #%s/%s, topic=%s)",
             actor.name,
             escalations + 1,
             CB_MAX_ESCALATIONS,
             topic,
+            exc_info=error,
         )
         if (now - last) < CB_ERROR_REPORT_INTERVAL:
             return

@@ -136,7 +136,7 @@ class ActorRegistry:
             try:
                 await superseded.stop()
             except Exception as exc:
-                logger.exception(
+                logger.error(
                     "[Registry] Stopping the superseded '%s' failed — its listeners may still be live: %s",
                     superseded.name,
                     exc,
@@ -322,7 +322,7 @@ class Supervisor:
             except asyncio.CancelledError:
                 break
             except Exception as exc:
-                logger.error("[Supervisor] watch_loop error: %s", exc)
+                logger.exception("[Supervisor] watch_loop error: %s", exc)
 
     def _failure_reason(self, spec: SupervisedSpec) -> str | None:
         """Why this spec needs supervision, or None if there is nothing to do.

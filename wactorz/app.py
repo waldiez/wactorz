@@ -308,7 +308,7 @@ async def build_system(args: argparse.Namespace):
 
     main_actor = find_main_actor(system.registry)
     if not main_actor:
-        logger.exception("Failed to find the main actor.")
+        logger.error("Failed to find the main actor.")
         sys.exit(1)
 
     logger.info("Wactorz system started. Supervision tree active.")
@@ -452,7 +452,7 @@ async def app(args: argparse.Namespace):
             )
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     except Exception as exc:
-        logger.error("System error: %s", exc)
+        logger.exception("System error: %s", exc)
     finally:
         await system.stop_all()
         # Last: actors write state as they stop, so the connection has to outlive

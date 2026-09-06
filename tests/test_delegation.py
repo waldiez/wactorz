@@ -102,7 +102,7 @@ class _Broker:
         self._delay = subscribe_delay
         self.client: _Client | None = None
 
-    def __call__(self, _host: str, _port: int) -> "_Broker":
+    def __call__(self, _host: str, _port: int, **_kwargs: Any) -> "_Broker":
         return self
 
     async def __aenter__(self) -> _Client:

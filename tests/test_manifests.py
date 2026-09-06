@@ -62,7 +62,7 @@ class _Broker:
         self.client = _Client(messages, on_drained)
         self.connections = 0
 
-    def __call__(self, _host: str, _port: int) -> "_Broker":
+    def __call__(self, _host: str, _port: int, **_kwargs: Any) -> "_Broker":
         self.connections += 1
         return self
 

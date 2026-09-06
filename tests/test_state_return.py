@@ -54,7 +54,7 @@ class _Broker:
     def __init__(self, messages: list[_Message], on_drained: Any) -> None:
         self.client = _Client(messages, on_drained)
 
-    def __call__(self, _host: str, _port: int) -> "_Broker":
+    def __call__(self, _host: str, _port: int, **_kwargs: Any) -> "_Broker":
         return self
 
     async def __aenter__(self) -> _Client:

@@ -378,6 +378,8 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                 "last_seen": time.time(),
                 "online": True,
                 "node_id": data.get("node_id", ""),
+                "version": data.get("version"),
+                "runtime": data.get("runtime") or "runner",
             }
             logger.info("[MQTT] Node heartbeat: %s | agents: %s", node_name, data.get("agents", []))
             return {"type": "node", "node_name": node_name, "data": data}

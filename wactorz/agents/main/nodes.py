@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
 
+#: What a node is running when its heartbeat does not say. The single-file
+#: runner predates the `runtime` field, so silence means that runtime.
+DEFAULT_NODE_RUNTIME = "runner"
+
 #: Consecutive heartbeats an agent must be missing from before it counts as
 #: gone rather than late.
 #:
@@ -107,6 +111,8 @@ class NodeManager:
                 "last_seen": info.get("last_seen", 0),
                 "online": self._is_fresh(info, now),
                 "pid": info.get("pid"),
+                "version": info.get("version"),
+                "runtime": info.get("runtime", DEFAULT_NODE_RUNTIME),
                 "uptime_s": info.get("uptime_s"),
                 "cpu_pct": info.get("cpu_pct"),
                 "mem_used_mb": info.get("mem_used_mb"),
@@ -243,6 +249,11 @@ class NodeManager:
             "last_seen": time.time(),
             "agents": agents,
             "node_id": data.get("node_id", ""),
+            # What is running there. A heartbeat that names neither comes from
+            # a runner older than the fields: the single-file runtime, at a
+            # version it could not say.
+            "version": data.get("version"),
+            "runtime": data.get("runtime") or DEFAULT_NODE_RUNTIME,
             "pid": data.get("pid"),
             "uptime_s": data.get("uptime_s"),
             "cpu_pct": data.get("cpu_pct"),

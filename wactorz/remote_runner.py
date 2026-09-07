@@ -209,6 +209,16 @@ def _tolerant_invoker(
 #: SERVER_SESSION_EXPIRY_SECONDS in wactorz/core/mqtt.py.
 NODE_SESSION_EXPIRY_SECONDS = 86400
 
+#: The version of Wactorz this file was shipped from. Stamped by
+#: scripts/sync_versions.py alongside wactorz/_version.py, and checked equal to
+#: it by the test suite. The file is deployed to a node alone, so it cannot ask
+#: the package; this is how main learns which version a node is running.
+RUNNER_VERSION = "0.6.0"
+
+#: What kind of process is speaking on the node topics. A heartbeat names it so
+#: main can tell this single-file runner from a node running the package.
+NODE_RUNTIME = "runner"
+
 #: How many messages may wait in memory before telemetry starts giving way.
 #: Large enough that an ordinary reconnect queues and drains without losing
 #: anything; small enough that an absent broker costs a Pi megabytes rather than
@@ -2111,6 +2121,15 @@ class _RemoteRunner:
 
     # ── Status heartbeat for the node itself ──────────────────────────────────
 
+    def _node_identity(self) -> dict[str, Any]:
+        """The fields every node heartbeat carries, whatever else it says.
+
+        `version` and `runtime` are how main tells what is running here. A
+        heartbeat without them comes from a runner older than these fields, and
+        main treats it as this runtime at an unknown version.
+        """
+        return {"node": self.node_name, "version": RUNNER_VERSION, "runtime": NODE_RUNTIME}
+
     async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
         """Publish a heartbeat for the runner process itself so it appears in dashboard."""
         node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.node.{self.node_name}"))
@@ -2129,7 +2148,7 @@ class _RemoteRunner:
                 await self.publish(
                     f"nodes/{self.node_name}/heartbeat",
                     {
-                        "node": self.node_name,
+                        **self._node_identity(),
                         "node_id": node_id,
                         "timestamp": time.time(),
                         "agents": agent_names,
@@ -2571,7 +2590,7 @@ class _RemoteRunner:
         await self.stop_all()
         await self.publish(
             f"nodes/{self.node_name}/heartbeat",
-            {"node": self.node_name, "status": "restarting", "timestamp": time.time()},
+            {**self._node_identity(), "status": "restarting", "timestamp": time.time()},
         )
         # Drain the publish queue before we replace the process image
         await asyncio.sleep(0.5)
@@ -2582,7 +2601,7 @@ class _RemoteRunner:
         await self.stop_all()
         await self.publish(
             f"nodes/{self.node_name}/heartbeat",
-            {"node": self.node_name, "status": "offline", "timestamp": time.time()},
+            {**self._node_identity(), "status": "offline", "timestamp": time.time()},
         )
         # Drain before exit so the heartbeat reaches the broker
         await asyncio.sleep(0.3)

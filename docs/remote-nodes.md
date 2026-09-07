@@ -235,7 +235,7 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/stop_all` | → runner | Stop all agents and shut down the runner. |
 | `nodes/{name}/list` | → runner | Request the list of running agents. Response on `nodes/{name}/agents`. |
 | `nodes/{name}/agents` | ← runner | Response to `list`. Contains agent names and actor IDs. |
-| `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, agent count, broker address. |
+| `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address. |
 | `nodes/{name}/migrate` | → runner | Migrate a running agent to another node. Payload: `{"name": "...", "target_node": "..."}`. |
 | `nodes/{name}/migrate_result` | ← runner | Result of a migration request. |
 | `nodes/{name}/reply/{id}` | ← runner | Reply routing for `agent.send_to()` calls originating on this node. |

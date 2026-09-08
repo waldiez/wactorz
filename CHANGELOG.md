@@ -59,6 +59,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Stopping the application while an agent is mid-shutdown no longer hangs on Python 3.10 and 3.11.** A stop cancels the supervisor's watch loop even while it is waiting for an agent's tasks to wind down, and the wait there could answer the cancellation with the result it had just finished collecting — the cancellation vanished, the loop went back to polling, and whatever was stopping it waited for ever. It showed up as an occasional sixty-second test timeout on the older interpreters; on a shutdown unlucky enough to land in the same instant it was the whole process that did not stop. The wait now reports the tasks that refused to stop and lets the cancellation through, on every version.
 
+- **An agent can now be asked to stop when its work is done, and it goes away properly.** There was no way for an agent's program to say it had finished. Asked for something that runs for a while and then stops, the model wrote the only thing available — the Python call that ends a program — which the framework could only read as a crash: it would be rewritten by the model, restarted, and eventually reported as needing someone to look at it, having done exactly what it was asked. A repaired version would then run for ever doing nothing. Agent code can now say `await agent.stop()`. The agent leaves the dashboard, is not brought back on the next restart, and its cleanup runs; anything it was in the middle of answering is still answered first. Agents running on a separate machine end the same way, over the same route the rest of the system already uses to notice an agent is gone.
+
 ## [0.6.0] - 2026-08-31
 
 ### Removed — breaking

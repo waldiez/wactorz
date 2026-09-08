@@ -291,6 +291,19 @@ Inside your code, the `agent` object provides:
   agent.read_world_state(topic)        — read a retained world state topic (one-shot)
                                          Example: state = await agent.read_world_state('home/presence/kitchen')
 
+  agent.stop()                         — END THIS AGENT. Its work is done and it should not come back.
+                                         The ONLY way to finish. NEVER use sys.exit(), exit() or
+                                         raise SystemExit — those are errors, and the agent will be
+                                         repaired and restarted instead of ending.
+                                         Not exit: code after it still runs, so return straight away.
+                                         Example: async def process(agent):
+                                                      if time.time() - agent.state['start'] >= 45:
+                                                          await agent.stop()
+                                                          return
+                                         The agent leaves the dashboard, is not restored on restart,
+                                         and its cleanup() runs. Nothing restarts it — to be retried
+                                         or repaired instead, raise an error.
+
   agent.declare_contract(publishes, subscribes, triggers_when, produces_schema)
                                        — declare this agent's topic contract for auto-wiring
                                          Call from setup() to make agent discoverable by planner

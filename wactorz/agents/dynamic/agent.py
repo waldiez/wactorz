@@ -133,6 +133,9 @@ class DynamicAgent(Actor):
         # ``_tasks``. An in-place code repair tears these down and starts the
         # program again; the actor's message loop and heartbeat keep running.
         self._program_tasks: list[asyncio.Task] = []
+        #: Set once the program has asked to end, so a second ask — or a
+        #: process loop still finishing its tick — does not repeat the work.
+        self._ending = False
 
         # Public API exposed to generated code via `agent` parameter
         # Owned here rather than grafted on by AgentAPI at first use: a
@@ -217,6 +220,43 @@ class DynamicAgent(Actor):
             self._track_program_task(asyncio.create_task(self._run_setup()))
         elif self._fn_process:
             self._track_program_task(asyncio.create_task(self._process_loop()))
+
+    async def end_self(self) -> None:
+        """End this agent for good, at its own request.
+
+        The ending a finished program asks for. It is a removal, not a pause:
+        an agent that has done what it was spawned to do should not come back
+        on the next restart, and nothing it could do afterwards would bring
+        itself back — no more of its code runs.
+
+        Supervision is released first, or the watchdog reads the stop as a
+        crash. The spawn-registry entry goes so a restart does not restore it,
+        and the manifest is withdrawn last, after the final status, so the
+        dashboard reads one unambiguous "gone" rather than a stop it might show
+        as a card. Main reacts to that withdrawal, which is what makes this work
+        identically for an agent running on a node.
+
+        Safe to call twice: every step is a no-op the second time.
+        """
+        if self._ending:
+            return
+        self._ending = True
+        self._release_from_supervision()
+        registry = self._registry
+        if registry is not None:
+            main = find_main_actor(registry)
+            if main is not None:
+                try:
+                    main._remove_from_spawn_registry(self.name)
+                except Exception:
+                    logger.debug("[%s] Could not drop the spawn entry", self.name, exc_info=True)
+            try:
+                await registry.unregister(self.actor_id)
+            except Exception:
+                logger.debug("[%s] Could not unregister", self.name, exc_info=True)
+        await self.stop()
+        await self.withdraw_manifest()
+        logger.info("[%s] Ended itself.", self.name)
 
     async def _tear_down_program(self) -> None:
         """Stop everything the current program left running, before it is replaced.
@@ -442,6 +482,7 @@ class DynamicAgent(Actor):
 
         try:
             # Running model-written agent code is what a DynamicAgent is for.
+            # pylint: disable=exec-used
             exec(compile(clean, f"<{self.name}>", "exec"), self._ns)  # noqa: S102
             self._fn_setup = self._ns.get("setup")
             self._fn_process = self._ns.get("process")
@@ -452,8 +493,7 @@ class DynamicAgent(Actor):
                 logger.warning("[%s] No functions found in compiled code.", self.name)
         except Exception as e:
             return f"{type(e).__name__}: {e}"
-        else:
-            return None  # success
+        return None  # success
 
     async def _fix_syntax_with_llm(self, bad_code: str, error_msg: str) -> str | None:
         """Ask the configured LLM to fix a syntax error in agent code.

@@ -902,6 +902,39 @@ class _RemoteAgentAPI:
         if is_new_topic or schema_changed:
             await self._publish_manifest()
 
+    async def stop(self) -> None:
+        """End this agent. Its work is done and it should not come back.
+
+        The node half of the same verb `DynamicAgent` offers, and deliberately
+        thinner. Stopping and withdrawing the manifest is all this side can do:
+        the spawn registry and the node's desired state live on the host, and
+        main reaches both when it sees the withdrawal. So the ending is one
+        mechanism whichever process the agent runs in, and this side needs no
+        request of its own.
+
+        Call it and then return — this is not `exit`, so anything written after
+        it still runs, against an agent that is already stopping.
+        """
+        agent = self._agent
+        if agent._ending:
+            return
+        agent._ending = True
+        runner = agent._runner
+        try:
+            await agent.stop()
+        finally:
+            # Withdrawn after the stop, so the "stopped" heartbeat it publishes
+            # cannot be mistaken for an agent that is still here — and withdrawn
+            # even if the stop went badly, because this is the only message that
+            # tells the host the agent is gone.
+            runner._agents.pop(agent.name, None)
+            await runner.publish(f"agents/{self.actor_id}/manifest", b"", retain=True)
+            # Logged here, not after: stop() cancels the agent's tasks without
+            # sparing the one calling it, so when a program ends itself the
+            # cancellation unwinds straight through this and nothing below the
+            # `finally` is reached.
+            logger.info("[%s] Ended itself.", agent.name)
+
     async def _publish_manifest(self) -> None:
         """Advertise this agent's full topic contract so main can register it
         with the TopicBus and the planner can auto-wire it correctly.
@@ -1397,6 +1430,9 @@ class _RemoteAgent:
         self._tasks: list[asyncio.Task] = []
         self._running = False
         self._status = ""
+        #: Set once the program has asked to end, so a second ask — or a process
+        #: loop still finishing its tick — does not repeat the work.
+        self._ending = False
 
         self._fn_setup: Callable[..., Awaitable[None]] | None = None
         self._fn_process: Callable[..., Awaitable[None]] | None = None

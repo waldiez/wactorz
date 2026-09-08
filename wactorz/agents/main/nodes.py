@@ -309,6 +309,12 @@ class NodeManager:
                 node_name,
             )
             host._remove_from_spawn_registry(agent_name)
+            # The node's retained desired_state is what it reconciles against on
+            # its next reboot. Dropping the spawn entry without rewriting it
+            # leaves the instruction to start this agent in place, so the node
+            # brings it back to a main that no longer has a registry entry for
+            # it: running and heartbeating, but unsupervised and unmanaged.
+            await host._update_node_desired_state(node_name, remove_name=agent_name)
             await host._clear_agent_manifest(agent_name)
             host._record_agent_deletion(
                 agent_name,
@@ -432,6 +438,10 @@ class NodeManager:
                     lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
                     for agent_name in lost:
                         host._remove_from_spawn_registry(agent_name)
+                        # As in _prune_vanished: the retained desired_state has
+                        # to lose the agent too, or the node resurrects it on
+                        # its next reconcile into a main that has forgotten it.
+                        await host._update_node_desired_state(node_name, remove_name=agent_name)
                         await host._clear_agent_manifest(agent_name)
                         host._record_agent_deletion(
                             agent_name,

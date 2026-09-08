@@ -84,6 +84,8 @@ class _Run:
         self.cleared_manifests: list[str] = []
         self.deletions: list[tuple[str, str]] = []
         self.notifications: list[dict[str, Any]] = []
+        #: (node, agent) the listener asked to drop from a node's desired state.
+        self.desired_state_drops: list[tuple[str, str]] = []
 
     @property
     def nodes(self) -> dict[str, dict[str, Any]]:
@@ -144,6 +146,14 @@ async def run_heartbeats(
         run.cleared_manifests.append(name)
 
     setattr(main, "_clear_agent_manifest", _clear)
+
+    async def _drop_from_desired_state(
+        node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
+    ) -> None:
+        if remove_name:
+            run.desired_state_drops.append((node, remove_name))
+
+    setattr(main, "_update_node_desired_state", _drop_from_desired_state)
 
     def _stop() -> None:
         main.state = ActorState.STOPPED
@@ -280,6 +290,10 @@ class TestPruningAnAgentThatStoppedAppearing:
         assert run.removed_from_registry == ["collector"]
         assert run.cleared_manifests == ["collector"]
         assert [name for name, _ in run.deletions] == ["collector"]
+        # The retained desired_state is the fourth trace, and the one a reboot
+        # reads: leaving it names an agent main has just forgotten, so the node
+        # starts it again into a main with no registry entry for it.
+        assert run.desired_state_drops == [("rpi", "collector")]
 
     async def test_the_deletion_note_says_why(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The note goes into conversation history so the model does not keep

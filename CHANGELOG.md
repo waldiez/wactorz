@@ -55,6 +55,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **The audio device picker is readable when the browser or the system prefers a light theme.** The list a dropdown opens is drawn by the platform rather than by the page, so it took the picker's pale text without the dark background behind it and the entries came out white on white — a menu that looked empty. The entries now carry their own colours, as the dashboard's other dropdowns already did.
 
+- **An agent can no longer take the whole application down with it.** An agent's program is written by a model, and a model asked for an agent that stops after a while reaches for `sys.exit()` — there is nothing else in the agent API to reach for. That ends the process rather than the agent: every other agent stops, the dashboard goes away, and on a machine that restarts the service automatically it happens again on the next run. It needed no mistake beyond taking the request literally. A program that exits this way is now treated as what it is — a bug in that program — and goes through the same counting, reporting and automatic repair as any other error it could raise, leaving every other agent running. This covers all four places a program runs: its main loop, its setup, a task another agent sends it, and a callback for a topic it subscribed to. Shutting the application down, and interrupting it from the keyboard, are unaffected.
+
 ## [0.6.0] - 2026-08-31
 
 ### Removed — breaking

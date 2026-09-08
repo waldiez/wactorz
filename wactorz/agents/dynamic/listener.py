@@ -313,16 +313,18 @@ class SubscriptionHub:
         actor = self._actor
         try:
             await safe_invoke(binding.callback, payload, actor, self._warned)
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, KeyboardInterrupt):
             raise
-        except Exception as e:
+        # BaseException: a `SystemExit` from a callback would end the process
+        # rather than this subscription. See DynamicAgent._run_process_forever.
+        except BaseException as e:
             await self._record_failure(binding, e)
             return
         # Successful invocation — reset this topic's error budget
         actor._cb_error_count.pop(binding.topic, None)
         actor._cb_error_last.pop(binding.topic, None)
 
-    async def _record_failure(self, binding: _Binding, error: Exception) -> None:
+    async def _record_failure(self, binding: _Binding, error: BaseException) -> None:
         """Count a failing callback, report it, and repair or fail the actor.
 
         Every failure counts toward the budget; only the report to supervision

@@ -496,7 +496,11 @@ class DynamicAgent(Actor):
                 break
             except asyncio.CancelledError:
                 return None
-            except Exception as e:
+            except KeyboardInterrupt:
+                raise
+            # BaseException for the same reason as the process loop: a
+            # `SystemExit` out of setup() must fail this agent, not the process.
+            except BaseException as e:
                 last_error = e
                 err = traceback.format_exc()
                 logger.exception("[%s] setup() failed (attempt %s)", self.name, attempt + 1)
@@ -697,14 +701,14 @@ class DynamicAgent(Actor):
             and self._process_fix_rounds < self._MAX_PROCESS_FIX_ROUNDS
         )
 
-    async def _repair_process_in_place(self, error: Exception, tb: str) -> bool:
+    async def _repair_process_in_place(self, error: BaseException, tb: str) -> bool:
         """Repair a crashing process(); see `_repair_program_in_place`."""
         return await self._repair_program_in_place(
             error, tb, phase="process()", failures=self._consecutive_errors
         )
 
     async def _repair_program_in_place(
-        self, error: Exception, tb: str, *, phase: str, failures: int
+        self, error: BaseException, tb: str, *, phase: str, failures: int
     ) -> bool:
         """Ask the model to repair the crashing program and start the repaired one.
 
@@ -796,7 +800,19 @@ class DynamicAgent(Actor):
                 await asyncio.sleep(backoff)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except KeyboardInterrupt:
+                raise
+            # BaseException, not Exception: a program that calls `sys.exit()` or
+            # raises `SystemExit` would otherwise unwind this task, and asyncio
+            # re-raises those into the event loop rather than storing them on the
+            # task — ending the whole process, every other agent with it. Nothing
+            # in this process raises `SystemExit` inside a generated function, so
+            # one arriving here came from that program and is a bug in it, which
+            # is what the counting, reporting and repair below are already for.
+            # The two that mean *stop* rather than *fail* are handled above:
+            # a cancellation (which is how SIGTERM and SIGINT reach us) and a
+            # KeyboardInterrupt, which must never be swallowed.
+            except BaseException as e:
                 self.metrics.errors += 1
                 tb = traceback.format_exc()
                 logger.exception("[%s] process() error", self.name)
@@ -883,7 +899,10 @@ class DynamicAgent(Actor):
                             }
                         ),
                     )
-            except Exception as e:
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                raise
+            # BaseException for the same reason as the process loop.
+            except BaseException as e:
                 tb = traceback.format_exc()
                 logger.exception("[%s] handle_task() error", self.name)
                 await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
@@ -965,7 +984,7 @@ class DynamicAgent(Actor):
     async def _publish_error(
         self,
         phase: str,
-        error: Exception,
+        error: BaseException,
         traceback_str: str = "",
         fatal: bool = False,
     ) -> None:

@@ -288,6 +288,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         await self.lifecycle._clear_agent_manifest(name, actor_id)
 
+    async def agent_withdrew(self, actor_id: str, name: str = "") -> None:
+        """An agent took its manifest back. Owned by `self.lifecycle`."""
+        await self.lifecycle.agent_withdrew(actor_id, name)
+
     def _record_agent_deletion(self, name: str, reason: str = "user request") -> None:
         self.lifecycle._record_agent_deletion(name, reason)
 

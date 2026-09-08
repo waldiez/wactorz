@@ -96,7 +96,7 @@ class ManifestRegistry:
                     logger.info("[main] Subscribed to agent manifests.")
                     last_error = None
                     async for message in client.messages:
-                        self.receive_manifest(str(message.topic), message.payload)
+                        await self.receive_manifest(str(message.topic), message.payload)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -117,7 +117,7 @@ class ManifestRegistry:
                     )
                 await asyncio.sleep(RECONNECT_DELAY_S)
 
-    def receive_manifest(self, topic: str, payload: bytes | None) -> None:
+    async def receive_manifest(self, topic: str, payload: bytes | None) -> None:
         """Take one manifest message, or a tombstone.
 
         An empty retained payload is how a deleted agent announces itself. It
@@ -125,7 +125,7 @@ class ManifestRegistry:
         running, and never going away.
         """
         if not payload:
-            self._forget_agent(self._actor_id_from(topic))
+            await self._forget_agent(self._actor_id_from(topic))
             return
         try:
             data = json.loads(payload)
@@ -141,8 +141,8 @@ class ManifestRegistry:
         parts = topic.split("/")
         return parts[1] if len(parts) > 1 else ""
 
-    def _forget_agent(self, target_id: str) -> None:
-        """Drop an agent from every table it appears in."""
+    async def _forget_agent(self, target_id: str) -> None:
+        """Drop an agent from every table it appears in, and report the loss."""
         if not target_id:
             return
         removed = ""
@@ -152,6 +152,12 @@ class ManifestRegistry:
                 removed = name
                 break
         if not removed:
+            # Nothing in the cache: a withdrawal can arrive before this process
+            # ever saw the manifest it withdraws — after a restart the retained
+            # message is gone, so the tombstone is all there is. The id derives
+            # from the name and nothing else, so the lifecycle can still match
+            # it against the spawn registry.
+            await self._report_withdrawal(target_id)
             return
         for topic, entries in list(self.topic_registry.items()):
             kept = [m for m in entries if m.get("name") != removed]
@@ -161,6 +167,21 @@ class ManifestRegistry:
                 self.topic_registry.pop(topic, None)
         self._drop_contract(removed)
         logger.info("[main] Manifest tombstone — removed %r", removed)
+        await self._report_withdrawal(target_id, removed)
+
+    async def _report_withdrawal(self, actor_id: str, name: str = "") -> None:
+        """Tell the actor an agent withdrew, so the lifecycle can finish the job.
+
+        The name is passed only when this registry happened to hold a manifest
+        for it; after a restart it will not, and the id is enough.
+        """
+        host = self.host
+        if host is None:
+            return
+        try:
+            await host.agent_withdrew(actor_id, name)
+        except Exception as exc:
+            logger.warning("[main] Could not act on the withdrawal of %s: %s", actor_id[:8], exc)
 
     def _accept_manifest(self, data: dict[str, Any]) -> None:
         """Record a manifest, replacing whatever that agent said before.

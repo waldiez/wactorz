@@ -25,6 +25,8 @@ import json
 import logging
 import re
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import derive_actor_id
@@ -76,6 +78,22 @@ class LifecycleService:
 
     def __init__(self, host: LifecycleHost) -> None:
         self.host = host
+        #: Set while a reset is clearing state. A reset withdraws the manifest of
+        #: every agent it wipes, and each of those withdrawals would otherwise be
+        #: read as that agent removing itself — recording a deletion note for a
+        #: removal the reset is already performing. Only the window matters: once
+        #: the reset has emptied the spawn registry, a late tombstone finds
+        #: nothing to remove and stops there by itself.
+        self._withdrawals_suppressed = False
+
+    @contextmanager
+    def withdrawals_suppressed(self) -> Iterator[None]:
+        """Ignore manifest withdrawals for the duration — see the flag above."""
+        self._withdrawals_suppressed = True
+        try:
+            yield
+        finally:
+            self._withdrawals_suppressed = False
 
     def _record_agent_deletion(self, name: str, reason: str = "user request") -> None:
         """Inject a system-style note into conversation history that an agent was
@@ -121,6 +139,43 @@ class LifecycleService:
             logger.info("[%s] Recorded deletion note for %r in history", self.host.name, name)
         except Exception as e:
             logger.warning("[%s] Failed to record deletion note: %s", self.host.name, e)
+
+    async def agent_withdrew(self, actor_id: str, name: str = "") -> None:
+        """Finish removing an agent that took its own manifest back.
+
+        The withdrawal is the one removal signal every ending publishes — an
+        agent that ends itself, a delete, a prune, a node going quiet — and it
+        arrives whether the agent ran here or on a node, which an in-process
+        call could never cover. What is left after the manifest tables are
+        cleared is the spawn registry and, for an agent that lived on a node,
+        the desired state that node reconciles against.
+
+        Idempotent by construction: dropping a name the registry does not hold
+        is a no-op, and the deletion note is recorded once. So the delete path
+        publishing a withdrawal and this reacting to it settle on the same
+        result as either alone.
+        """
+        if self._withdrawals_suppressed:
+            return
+        registry = self.host._get_spawn_registry() or {}
+        if not name:
+            # No manifest cached for it — a withdrawal can arrive before this
+            # process ever saw what it withdraws. The id is derived from the
+            # name, so the registry can be asked which name produces it.
+            name = next((n for n in registry if derive_actor_id(n) == actor_id), "")
+        config = registry.get(name) if name else None
+        if config is None:
+            # Not a spawned agent, or already gone. Either way there is nothing
+            # left to remove, and a withdrawal is not an error.
+            return
+        node = (config.get("node") or "").strip()
+        self.host._remove_from_spawn_registry(name)
+        if node:
+            await self.host._update_node_desired_state(node, remove_name=name)
+        self._record_agent_deletion(name, reason="it withdrew its manifest")
+        logger.info(
+            "[%s] %r withdrew its manifest — removed from the spawn registry.", self.host.name, name
+        )
 
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         """Clear an agent's manifest from main's in-memory caches AND from the

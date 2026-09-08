@@ -39,12 +39,16 @@ class ListenerHost(Protocol):
 
 
 class ManifestHost(ListenerHost, Protocol):
-    """The manifest registry needs only a connection.
+    """The manifest registry needs a connection, and somewhere to report a loss.
 
-    It owns its own tables and answers from them, which is why this adds
-    nothing — worth stating rather than leaving to be inferred from a larger
-    protocol it happens to satisfy.
+    It owns its own tables and answers from them, so this stays at one method.
+    A withdrawn manifest is the wire's way of saying an agent is gone, and the
+    registry is the only thing listening — but removing an agent belongs to the
+    lifecycle, not to a table of capabilities, so it hands the name over rather
+    than growing the reach to act on it.
     """
+
+    async def agent_withdrew(self, actor_id: str, name: str = ...) -> None: ...
 
 
 class SpawnHost(Protocol):
@@ -139,7 +143,7 @@ class DelegationHost(Protocol):
     def _is_interface_source(self, agent_name: str) -> bool: ...
 
 
-class NodeHost(ListenerHost, Protocol):
+class NodeHost(ManifestHost, Protocol):
     """What the node collaborator needs beyond a connection.
 
     All of it serves one job: an agent that stops appearing in a node's

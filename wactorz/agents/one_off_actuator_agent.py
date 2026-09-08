@@ -1033,6 +1033,10 @@ class OneOffActuatorAgent(Actor):
         if self._registry:
             await self._registry.unregister(self.actor_id)
         await self.stop()
+        # After stop(), so the final status it publishes cannot be mistaken for
+        # an actuator that is still here. This is what tells the dashboard the
+        # card is gone; without it the entry outlives the agent.
+        await self.withdraw_manifest()
         self._delete_persistence_dir()
 
     async def _log(self, msg: str) -> None:

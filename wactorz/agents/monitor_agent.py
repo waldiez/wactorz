@@ -378,7 +378,12 @@ class MonitorActor(Actor):
             # reporting is unaffected, so this is a skip rather than a failure.
             return
         try:
-            cpu_pct = proc.cpu_percent(interval=None)
+            # psutil reports process CPU per core, the way `top` does, so a
+            # process using two cores reads 200%. The dashboard draws this as a
+            # share of the machine, so divide by the core count and publish a
+            # figure that fits the meter it is drawn in. cpu_count returns None
+            # when it cannot tell, which leaves the reading as psutil gave it.
+            cpu_pct = proc.cpu_percent(interval=None) / (psutil.cpu_count() or 1)
             mem_info = proc.memory_info()
             mem_used_mb = mem_info.rss / 1024 / 1024
             mem_total_mb = psutil.virtual_memory().total / 1024 / 1024

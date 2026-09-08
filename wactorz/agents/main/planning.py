@@ -92,6 +92,68 @@ else:
     _Host = object
 
 
+def _describe_ha_actions(actions: object) -> list[str]:
+    """Plain-English lines for an ha_actuator's ``actions`` list.
+
+    Each action is ``{"domain", "service", "entity_id", "service_data"}`` (see
+    ``ActuatorAction``). A malformed or missing list still yields one line, so
+    the user is told the plan will touch Home Assistant rather than shown "?".
+    """
+    if not isinstance(actions, list) or not actions:
+        return ["calls a Home Assistant service (no action listed — check the full plan)"]
+    out: list[str] = []
+    for action in actions:
+        if not isinstance(action, dict):
+            out.append("calls a Home Assistant service (malformed action — check the full plan)")
+            continue
+        domain = action.get("domain") or ""
+        service = action.get("service") or ""
+        entity = action.get("entity_id") or ""
+        call = f"{domain}.{service}" if domain and service else (service or domain or "a service")
+        line = f"calls Home Assistant {call}"
+        if entity:
+            line += f" on {entity}"
+        data = action.get("service_data")
+        if isinstance(data, dict) and data:
+            args = ", ".join(f"{k}={v}" for k, v in data.items())
+            line += f" with {args}"
+        out.append(line)
+    return out
+
+
+def _describe_ha_guards(spawn_cfg: dict) -> str:
+    """One line for the filters that gate an ha_actuator, or "" if it has none.
+
+    Covers the payload ``detection_filter`` and the live-entity ``conditions``;
+    both decide whether a trigger actually reaches the service call, so the
+    user should see them next to the side effect they guard.
+    """
+    parts: list[str] = []
+    detection = spawn_cfg.get("detection_filter")
+    if isinstance(detection, dict) and detection:
+        parts.append("the trigger has " + ", ".join(f"{k}={v}" for k, v in detection.items()))
+    conditions = spawn_cfg.get("conditions")
+    if isinstance(conditions, list):
+        for cond in conditions:
+            if not isinstance(cond, dict):
+                continue
+            entity = cond.get("entity_id") or "?"
+            attr = cond.get("attribute") or "state"
+            op = _CONDITION_WORDS.get(str(cond.get("operator")), cond.get("operator") or "?")
+            parts.append(f"{entity} {attr} {op} {cond.get('value')!r}")
+    return " and ".join(parts)
+
+
+_CONDITION_WORDS = {
+    "eq": "is",
+    "ne": "is not",
+    "gt": "is above",
+    "lt": "is below",
+    "gte": "is at least",
+    "lte": "is at most",
+}
+
+
 class PlanningMixin(_Host):
     """Plans, dry-run flow, and pipeline execution. Mix into an LLMAgent host."""
 
@@ -191,7 +253,10 @@ class PlanningMixin(_Host):
             agent_type = spawn_cfg.get("type", "dynamic")
             install = spawn_cfg.get("install", []) or []
 
-            lines.append(f"\n  {i}. **{name}** ({agent_type})")
+            # The number lives inside the bold span on purpose: a bare "1."
+            # is Markdown list syntax, and the "purpose:" line that follows
+            # ends the list, so every renderer restarted the count at 1.
+            lines.append(f"\n  **{i}. {name}** ({agent_type})")
             if desc:
                 lines.append(f"     purpose: {desc}")
 
@@ -214,7 +279,12 @@ class PlanningMixin(_Host):
                 lines.append(f"     publishes: {topic}")
 
             # Inputs — what it listens to
-            subs = step.get("subscribes", []) or spawn_cfg.get("subscribe", []) or []
+            subs = (
+                step.get("subscribes", [])
+                or spawn_cfg.get("subscribe", [])
+                or spawn_cfg.get("mqtt_topics", [])  # ha_actuator's name for it
+                or []
+            )
             if subs:
                 lines.append(f"     listens on: {', '.join(subs)}")
 
@@ -238,11 +308,13 @@ class PlanningMixin(_Host):
             ):
                 side_effects.append("controls Home Assistant device")
             if agent_type == "ha_actuator":
-                target = spawn_cfg.get("entity_id") or spawn_cfg.get("target", "?")
-                action = spawn_cfg.get("service") or spawn_cfg.get("action", "?")
-                side_effects.append(f"calls HA: {action} on {target}")
+                side_effects.extend(_describe_ha_actions(spawn_cfg.get("actions")))
             if side_effects:
                 lines.append(f"     side effects: {'; '.join(side_effects)}")
+            if agent_type == "ha_actuator":
+                guard = _describe_ha_guards(spawn_cfg)
+                if guard:
+                    lines.append(f"     only when: {guard}")
 
             # Install requirements — surfaced because user pays the cost
             if install:

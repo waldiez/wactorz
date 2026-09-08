@@ -12,6 +12,7 @@ Run with ``pytest``. Async methods are driven through ``asyncio.run``.
 """
 
 import asyncio
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -229,6 +230,96 @@ def test_format_plan_proposal():
     assert "monitor cpu and alert" in out
     assert "cpu-mon" in out
     assert "1 agent" in out
+
+
+def test_format_plan_proposal_numbers_every_agent_without_list_syntax():
+    """Each agent keeps its own number, and the number is never bare "N." at
+    the start of a line — that is Markdown list syntax, and the purpose line
+    that follows ends the list, so renderers restarted every agent at 1."""
+    plan = {
+        "plan_id": "p2",
+        "task": "lights off on high power",
+        "envelope": {
+            "plan": [
+                {
+                    "name": "power-monitor",
+                    "description": "watch",
+                    "spawn_config": {"type": "dynamic"},
+                },
+                {
+                    "name": "power-actuator",
+                    "description": "act",
+                    "spawn_config": {"type": "ha_actuator"},
+                },
+            ]
+        },
+    }
+    out = host()._format_plan_proposal(plan)
+    assert "**1. power-monitor**" in out
+    assert "**2. power-actuator**" in out
+    assert not re.search(r"^\s*\d+\.\s", out, re.MULTILINE)
+
+
+def test_format_plan_proposal_explains_ha_actuator_side_effects():
+    """An ha_actuator's actions, topics, and guards are spelled out from the
+    spawn_config the actuator actually reads (actions / mqtt_topics /
+    detection_filter / conditions) — never "calls HA: ? on ?"."""
+    plan = {
+        "plan_id": "p3",
+        "task": "lights off on high power",
+        "envelope": {
+            "plan": [
+                {
+                    "name": "power-actuator",
+                    "spawn_config": {
+                        "type": "ha_actuator",
+                        "mqtt_topics": ["custom/triggers/power-high"],
+                        "detection_filter": {"triggered": True},
+                        "conditions": [
+                            {
+                                "entity_id": "sun.sun",
+                                "attribute": "state",
+                                "operator": "eq",
+                                "value": "below_horizon",
+                            }
+                        ],
+                        "actions": [
+                            {
+                                "domain": "switch",
+                                "service": "turn_off",
+                                "entity_id": "switch.sonoff_s60zbtpf",
+                            },
+                            {
+                                "domain": "light",
+                                "service": "turn_on",
+                                "entity_id": "light.hall",
+                                "service_data": {"brightness": 50},
+                            },
+                        ],
+                    },
+                },
+            ]
+        },
+    }
+    out = host()._format_plan_proposal(plan)
+    assert "listens on: custom/triggers/power-high" in out
+    assert (
+        "side effects: calls Home Assistant switch.turn_off on switch.sonoff_s60zbtpf; "
+        "calls Home Assistant light.turn_on on light.hall with brightness=50"
+    ) in out
+    assert "only when: the trigger has triggered=True and sun.sun state is 'below_horizon'" in out
+    assert "?" not in out.split("**To proceed:**")[0]
+
+
+def test_format_plan_proposal_ha_actuator_without_actions_still_warns():
+    plan = {
+        "plan_id": "p4",
+        "task": "t",
+        "envelope": {"plan": [{"name": "a", "spawn_config": {"type": "ha_actuator"}}]},
+    }
+    out = host()._format_plan_proposal(plan)
+    assert "side effects: calls a Home Assistant service (no action listed" in out
+    assert "only when:" not in out
 
 
 class TestParsePlanEnvelope:

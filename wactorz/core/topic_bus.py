@@ -593,7 +593,9 @@ class StreamWindow:
         try:
             import aiomqtt  # noqa: F401
         except ImportError:
-            logger.error("[StreamWindow] aiomqtt not installed")
+            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+                "[StreamWindow] aiomqtt not installed"
+            )  # the ImportError is the whole diagnosis
             return
         from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
 

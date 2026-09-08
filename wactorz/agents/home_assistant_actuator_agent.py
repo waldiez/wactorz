@@ -280,7 +280,9 @@ class HomeAssistantActuatorAgent(Actor):
         try:
             import aiomqtt  # noqa: F401
         except ImportError:
-            logger.error("[%s] aiomqtt not installed — MQTT listener disabled", self.name)
+            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+                "[%s] aiomqtt not installed — MQTT listener disabled", self.name
+            )
             return
 
         # A stable id and a kept session, like any other long-lived listener.
@@ -312,8 +314,8 @@ class HomeAssistantActuatorAgent(Actor):
 
                             payload = json.loads(message.payload.decode())
                             await self._on_detection(payload)
-                        except Exception as exc:
-                            logger.error("[%s] Failed to process message: %s", self.name, exc)
+                        except Exception:
+                            logger.exception("[%s] Failed to process message", self.name)
 
             except asyncio.CancelledError:
                 break
@@ -420,9 +422,9 @@ class HomeAssistantActuatorAgent(Actor):
                     return False
                 if not condition.evaluate(entity_state):
                     return False
-            except Exception as exc:
-                logger.error(
-                    "[%s] Condition check error for %r: %s", self.name, condition.entity_id, exc
+            except Exception:
+                logger.exception(
+                    "[%s] Condition check error for %r", self.name, condition.entity_id
                 )
                 return False
 
@@ -436,7 +438,8 @@ class HomeAssistantActuatorAgent(Actor):
             try:
                 await asyncio.wait_for(self._ws_ready.wait(), timeout=10.0)
             except asyncio.TimeoutError:
-                logger.error(
+                # A TimeoutError traceback is the wait_for frame and nothing else.
+                logger.error(  # noqa: TRY400, RUF100  # a TimeoutError traceback is the wait_for frame and nothing else
                     "[%s] No HA connection after 10s — cannot call service %s.%s",
                     self.name,
                     action.domain,
@@ -471,8 +474,8 @@ class HomeAssistantActuatorAgent(Actor):
                 action.entity_id,
                 action.service_data,
             )
-        except Exception as exc:
-            logger.error("[%s] Service call failed: %s", self.name, exc)
+        except Exception:
+            logger.exception("[%s] Service call failed", self.name)
             self.metrics.tasks_failed += 1
 
     # ── Actor overrides ────────────────────────────────────────────────────────

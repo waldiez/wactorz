@@ -493,8 +493,8 @@ class PlanningMixin(_Host):
         except asyncio.TimeoutError:
             logger.warning("[%s] Planner timed out for: %s", self.name, task[:60])
             return "The pipeline is taking longer than expected to set up. Check `/rules` in a moment to see if agents were spawned, or try again."
-        except Exception as e:
-            logger.error("[%s] Planner error: %s", self.name, e)
+        except Exception:
+            logger.exception("[%s] Planner error", self.name)
             return None
         finally:
             self._result_futures.pop(task_id, None)

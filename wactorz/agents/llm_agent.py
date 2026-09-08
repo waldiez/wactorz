@@ -375,7 +375,7 @@ class LLMAgent(Actor):
         except Exception as e:
             self.metrics.tasks_failed += 1
             self.state_value = "failed_task"
-            logger.exception("[%s] LLM task failed: %s", self.name, e)
+            logger.exception("[%s] LLM task failed", self.name)
             # The caller is waiting on a future; tell it the turn is over rather
             # than leaving it to time out with no idea what happened.
             await self._reply_to_task(msg, {"text": f"[error] {e}", "task": task_text})

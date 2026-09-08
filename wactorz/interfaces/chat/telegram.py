@@ -49,7 +49,9 @@ class TelegramInterface:
                 filters,
             )
         except ImportError:
-            logger.error("python-telegram-bot not installed. Run: pip install python-telegram-bot")
+            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+                "python-telegram-bot not installed. Run: pip install python-telegram-bot"
+            )
             return
 
         setup_mode = not self.allowed_user_ids

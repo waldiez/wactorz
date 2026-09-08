@@ -33,7 +33,9 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, MessageType
@@ -229,10 +231,9 @@ class SpawnMixin(_Host):
         )
 
         if self._registry and self._registry.find_by_name(name):
-            import hashlib
-            import time
-
-            suffix = hashlib.md5(f"{name}{time.time()}".encode()).hexdigest()[:4]
+            suffix = hashlib.md5(
+                f"{name}{time.time()}".encode(), usedforsecurity=False
+            ).hexdigest()[:4]
             name = f"{name}-{suffix}"
 
         actuator_cfg = ActuatorConfig(
@@ -287,10 +288,11 @@ class SpawnMixin(_Host):
             )
             return actor
         except ValueError as e:
-            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)
+            # An expected rejection of user input, reported in full by the message.
+            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400, RUF100  # an expected rejection of user input, reported in full
             return None
-        except Exception as e:
-            logger.error("[%s] Failed to spawn ScheduledAgent '%s': %s", self.name, name, e)
+        except Exception:
+            logger.exception("[%s] Failed to spawn ScheduledAgent '%s'", self.name, name)
             return None
 
     async def _spawn_llm_agent(self, config: dict, name: str) -> Actor | None:
@@ -375,8 +377,8 @@ class SpawnMixin(_Host):
                         },
                     )
                 logger.info("[%s] Background spawn complete: %s", self.name, name)
-        except Exception as e:
-            logger.error("[%s] Background install+spawn failed for '%s': %s", self.name, name, e)
+        except Exception:
+            logger.exception("[%s] Background install+spawn failed for '%s'", self.name, name)
 
     async def _do_spawn_dynamic(self, config: dict, name: str, code: str) -> Actor | None:
         """Construct and start the DynamicAgent. Applies migrated state first,

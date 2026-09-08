@@ -954,7 +954,7 @@ class CatalogAgent(Actor):
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
-            logger.error("[%s] %s", self.name, msg)
+            logger.exception("[%s] %s", self.name, msg)
             return {"ok": False, "message": msg}
 
     # Public API ─────────────────────────────────────────────────────────────

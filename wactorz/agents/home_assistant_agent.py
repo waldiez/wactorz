@@ -952,7 +952,7 @@ class HomeAssistantAgent(LLMAgent):
             return self._format_hardware_result(text, devices, selected, can_fulfill, fallback_text)
 
         except Exception as exc:
-            logger.exception("[%s] Hardware selection failed: %s", self.name, exc)
+            logger.exception("[%s] Hardware selection failed", self.name)
             return self._format_hardware_result(
                 text, devices, [], False, f"Hardware selection error: {exc}"
             )
@@ -1063,7 +1063,7 @@ class HomeAssistantAgent(LLMAgent):
             )
 
         except Exception as exc:
-            logger.exception("[%s] Hardware recommendation failed: %s", self.name, exc)
+            logger.exception("[%s] Hardware recommendation failed", self.name)
             return self._format_available_hardware_result(
                 text,
                 devices,
@@ -1217,7 +1217,7 @@ class HomeAssistantAgent(LLMAgent):
             }
 
         except Exception as exc:
-            logger.exception("[%s] Automation creation failed: %s", self.name, exc)
+            logger.exception("[%s] Automation creation failed", self.name)
             return {
                 "can_create": False,
                 "inserted": False,

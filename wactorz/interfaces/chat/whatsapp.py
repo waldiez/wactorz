@@ -139,7 +139,9 @@ class WhatsAppInterface:
         try:
             app = self.build_app()
         except ImportError:
-            logger.error("Missing deps. Run: pip install twilio")
+            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+                "Missing deps. Run: pip install twilio"
+            )  # the ImportError is the whole diagnosis
             return
 
         runner = web.AppRunner(app)

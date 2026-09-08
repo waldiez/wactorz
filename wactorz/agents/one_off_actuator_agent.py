@@ -447,7 +447,7 @@ class OneOffActuatorAgent(Actor):
                 f"agents/{self.actor_id}/metrics",
                 self._build_metrics(),
             )
-            logger.exception("[%s] One-shot actuation failed: %s", self.name, exc)
+            logger.exception("[%s] One-shot actuation failed", self.name)
             await self._send_result(f"Actuation failed: {exc}")
         finally:
             asyncio.create_task(self._deferred_stop())

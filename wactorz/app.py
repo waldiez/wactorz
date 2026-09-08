@@ -451,8 +451,8 @@ async def app(args: argparse.Namespace):
                 allowed_user_ids=CONFIG.telegram_allowed_user_ids,
             )
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-    except Exception as exc:
-        logger.exception("System error: %s", exc)
+    except Exception:
+        logger.exception("System error")
     finally:
         await system.stop_all()
         # Last: actors write state as they stop, so the connection has to outlive

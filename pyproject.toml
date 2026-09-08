@@ -250,6 +250,22 @@ ignore = [
 # `exec` and the pip subprocess are the feature rather than an oversight; how far
 # either should be trusted is a design question, not one a lint rule settles.
 "wactorz/remote_runner.py" = ["T201", "S102", "S603", "S606"]
+# Console entry points: what they write to the terminal is the thing the user
+# asked for, not incidental output, so a logger is the wrong sink for it.
+# `log_setup` is the strongest case — it reports to stderr that file logging
+# could not be opened, which is the one message a logger cannot carry.
+"wactorz/app.py" = ["T201"]                          # the startup banner
+"wactorz/cli.py" = ["T201"]                          # warns a secret is in argv, before logging exists
+"wactorz/evalharness.py" = ["T201"]                  # prints the results table
+"wactorz/interfaces/chat/cli.py" = ["T201"]          # a terminal chat UI
+"wactorz/interfaces/google_login.py" = ["T201"]      # interactive consent flow
+"wactorz/core/integrations/google_mcp.py" = ["T201"] # the OAuth URL the user must open
+"wactorz/monitoring/log_setup.py" = ["T201"]         # stderr, because file logging just failed
+# Atomic writes, written at the os level deliberately: the replace is ordered
+# against an `os.fsync` here, and against a 0600 `os.open` there, so the whole
+# sequence reads in one vocabulary. `Path.replace` is the same syscall.
+"wactorz/core/atomic_io.py" = ["PTH105"]
+"wactorz/web/sessions.py" = ["PTH105"]
 
 [tool.ruff.lint.pydocstyle]
 # options: google, numpy, pep257

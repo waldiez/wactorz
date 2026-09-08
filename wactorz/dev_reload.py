@@ -10,7 +10,7 @@ from pathlib import Path
 _RELOAD_PATTERNS = {".py", ".json", ".yaml", ".yml"}
 _RELOAD_IGNORE = {"__pycache__", ".git", ".mypy_cache", ".ruff_cache", ".pytest_cache"}
 _PKG_DIR = Path(__file__).resolve().parent  # wactorz/
-_RELOAD_CWD = os.getcwd()
+_RELOAD_CWD = Path.cwd()
 
 
 def start_reloader(logger: logging.Logger) -> None:

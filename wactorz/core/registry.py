@@ -9,11 +9,11 @@ import asyncio
 import gc
 import inspect
 import logging
-import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .actor import Actor, ActorState, Message, MessageType, SupervisorStrategy
@@ -692,8 +692,10 @@ class ActorSystem:
         """Bring the system up: MQTT, topic bus, the given actors, supervision."""
         self._running = True
 
-        os.makedirs(self._state_dir, exist_ok=True)
-        db_path = os.path.join(self._state_dir, "mqtt_outbox.db")
+        state_dir = Path(self._state_dir)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        # str, because MQTTPublisher takes the path as one.
+        db_path = str(state_dir / "mqtt_outbox.db")
         self._mqtt_client = await MQTTPublisher.create(
             self._mqtt_broker, self._mqtt_port, db_path=db_path
         )

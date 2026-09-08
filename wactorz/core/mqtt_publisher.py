@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import sqlite3
 import time
 from contextlib import closing
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ class MQTTPublisher:
         descriptor per publish and relies on the garbage collector to reclaim
         it. `closing(...)` closes it; the inner `db` keeps the commit.
         """
-        os.makedirs(os.path.dirname(self._db_path) or ".", exist_ok=True)
+        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self._db_path)) as db, db:
             db.execute("""
                 CREATE TABLE IF NOT EXISTS outbox (

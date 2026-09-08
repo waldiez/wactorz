@@ -220,6 +220,6 @@ myenv/
 coverage/
 
 
-yolov8n.pt
+/*.pt
 
 eval_results/

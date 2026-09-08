@@ -236,7 +236,13 @@ ignore = [
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
 # Further families (exception style, complexity, pathlib, security, datetime) stay
-# advisory via `make lint-py` until each is triaged and gated. Logging moved out
+# advisory via `make lint-py` until each is triaged and gated. One member of the
+# pathlib family is settled rather than pending: PTH123 flags `open(p)` where `p`
+# is already a Path, and the convention here is that a path is a Path — which
+# those call sites satisfy — not that every read goes through `Path.open`. It is
+# declined on the `make lint-py` line itself rather than in the `ignore` above,
+# which a CLI `--extend-select` outranks; the per-file entries below still apply,
+# which is why the exemptions there work. Logging moved out
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
 # debug line in production, and the message loses the structure that lets a log

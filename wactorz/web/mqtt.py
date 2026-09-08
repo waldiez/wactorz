@@ -60,6 +60,19 @@ async def handle_message(topic: str, payload: str) -> None:
     if not event or runtime.hard_resetting:
         return
 
+    if event.get("type") == events.DELETE_AGENT_FRAME:
+        # A patch only adds and updates, so a snapshot that no longer names the
+        # agent still leaves its card on screen. This is the frame that removes
+        # it, and the same one the REST and WebSocket delete paths send.
+        await ws.broadcast(
+            {
+                "type": events.DELETE_AGENT_FRAME,
+                "agent_id": event.get("agent_id", ""),
+                "state": events.snapshot(),
+            }
+        )
+        return
+
     metric = event.get("metric", "")
     log_event = None if metric == "heartbeat" else event
     # Totals are the only part of a snapshot that queries the database, so they

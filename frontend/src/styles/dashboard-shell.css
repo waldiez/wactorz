@@ -211,6 +211,12 @@
   cursor: pointer;
   appearance: auto;
 }
+/* The dropdown list is drawn by the platform rather than by the page, so it
+   inherits the text colour above but not the background. */
+.af-audio-select option {
+  background: #0a0e1e;
+  color: #e0e8ff;
+}
 .af-audio-select:focus {
   outline: none;
   border-color: rgba(37, 99, 235, 0.5);
@@ -342,4 +348,50 @@
   flex-direction: column;
   overflow: hidden;
   min-height: 0;
+}
+
+/* ── Confirmation dialog (see ui/dashboard/confirmDialog.ts) ────────── */
+.af-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.7);
+}
+.af-confirm {
+  width: 100%;
+  max-width: 380px;
+  padding: 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  background: #0f172a;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.55);
+}
+.af-confirm-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+.af-confirm-message {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.65);
+  /* An agent is named by whoever spawned it, so the name can be long and
+     unbroken; without this it would push the box past its own width. */
+  overflow-wrap: anywhere;
+}
+.af-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+/* The dialog traps focus, so this outline is the only cue a keyboard user has. */
+.af-confirm-actions .af-mini-btn:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
 }

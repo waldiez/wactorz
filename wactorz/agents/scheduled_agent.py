@@ -526,6 +526,10 @@ class ScheduledAgent(Actor):
                 except Exception:
                     pass
         await self.stop()
+        # After stop(), so the final status it publishes cannot be mistaken for
+        # a schedule that is still here. This is what tells the dashboard the
+        # card is gone; without it the entry outlives the agent.
+        await self.withdraw_manifest()
 
     # ── Message handling ───────────────────────────────────────────────────
 

@@ -1040,6 +1040,22 @@ class Actor(ABC):
         }
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
 
+    async def withdraw_manifest(self) -> None:
+        """Withdraw the retained manifest, announcing that this actor is gone.
+
+        An empty retained payload is the MQTT idiom for taking a retained message
+        back. The manifest topic is keyed on the actor id whoever published it —
+        the actor itself or the API of a generated agent — so one call withdraws
+        it either way, and the dashboard reads the withdrawal as the actor
+        ceasing to exist.
+
+        Call it from an ending the actor decides on for itself; a stop is not
+        one, because a stopped actor still exists and can be started again. At
+        QoS 1 because a lost withdrawal leaves the broker replaying the manifest
+        to every subscriber that connects later.
+        """
+        await self._mqtt_publish(f"agents/{self.actor_id}/manifest", b"", retain=True, qos=1)
+
     async def on_stop(self):
         """Called when actor stops. Override for cleanup."""
 

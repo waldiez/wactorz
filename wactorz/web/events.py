@@ -173,6 +173,24 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
         agent_id = parts[1]
         metric = parts[2]
 
+        # A withdrawn manifest is an agent saying it no longer exists. It is the
+        # one removal signal every ending publishes — an actor that ends itself,
+        # main deleting one on the user's behalf, and a node's runner, which
+        # runs where none of this module is reachable — so the dashboard listens
+        # for it rather than each of those paths reaching in here.
+        #
+        # Dropping the entry is what clears the card. The REST actor list comes
+        # from the registry and a state patch from this map, so an entry left
+        # here outlives the agent and every patch re-adds the card that each
+        # reconcile removes. The tombstone keeps a trailing frame from the same
+        # stop window putting it back; a respawn re-admits itself on its first
+        # status.
+        if metric == "manifest" and not payload_str.strip():
+            runtime.state["agents"].pop(agent_id, None)
+            runtime.mark_deleted(agent_id)
+            logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
+            return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
+
         # Re-admit a deleted agent on a FRESH status event. Every actor
         # publishes its first status from on_start(), with uptime ≈ 0; that's
         # the unambiguous "I just started" signal. A stale retained status

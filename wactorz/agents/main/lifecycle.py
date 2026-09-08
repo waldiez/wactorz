@@ -34,6 +34,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: How far back `_record_agent_deletion` looks for a note it would repeat. Wide
+#: enough to cover the pair a first path appended, narrow enough that a later
+#: removal of the same name is still recorded.
+_DEDUP_TAIL = 6
+
 #: Agents main never deletes, whoever asks.
 #:
 #: Housekeeping the system needs to keep working: without the catalogue or the
@@ -82,9 +87,25 @@ class LifecycleService:
         evidence inside the message stream — which models weight more heavily
         than system-prompt assertions.
         """
+        marker = f"[SYSTEM] Agent '{name}' was deleted"
+        # One note per removal, not per path that notices it. Several paths
+        # remove the same agent — the delete route, the vanished-from-node
+        # prune, the offline sweep, and main reacting to the manifest
+        # withdrawal any of them publishes — and each appends its own pair into
+        # history that is persisted and prompted with, so duplicates last.
+        #
+        # The tail, not the whole history: an agent deleted, spawned again and
+        # deleted again must be recorded both times, and the second removal is
+        # the one the model most needs told. A duplicate arrives in the same
+        # breath as the original, with nothing else appended in between.
+        if any(
+            isinstance(entry.get("content"), str) and entry["content"].startswith(marker)
+            for entry in self.host._conversation_history[-_DEDUP_TAIL:]
+        ):
+            return
         try:
             note = (
-                f"[SYSTEM] Agent '{name}' was deleted ({reason}). "
+                f"{marker} ({reason}). "
                 f"It is no longer running. If the user asks to spawn an agent "
                 f"with this name again, treat it as a fresh spawn — do NOT claim "
                 f"it already exists."

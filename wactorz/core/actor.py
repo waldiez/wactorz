@@ -386,17 +386,25 @@ class Actor(ABC):
         try:
             if others:
                 # Bounded: a task that will not unwind must not hold up shutdown.
-                await asyncio.wait_for(
-                    asyncio.shield(asyncio.gather(*others, return_exceptions=True)),
-                    timeout=self.TASK_SHUTDOWN_TIMEOUT,
-                )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "[%s] %d task(s) did not stop within %gs.",
-                self.name,
-                sum(1 for task in others if not task.done()),
-                self.TASK_SHUTDOWN_TIMEOUT,
-            )
+                # asyncio.wait, not wait_for: on Python 3.10 a wait_for whose
+                # guarded future completes in the same instant the caller is
+                # cancelled returns the result from inside its CancelledError
+                # handler, and the caller never learns it was cancelled — the
+                # supervisor's watch loop resumed polling while Supervisor.stop()
+                # awaited it for ever. The tasks are already cancelled above, so
+                # there is nothing for wait_for's cancel-on-timeout to do that
+                # asyncio.wait does not.
+                _done, pending = await asyncio.wait(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
+                if pending:
+                    logger.warning(
+                        "[%s] %d task(s) did not stop within %gs.",
+                        self.name,
+                        len(pending),
+                        self.TASK_SHUTDOWN_TIMEOUT,
+                    )
+                for task in _done:
+                    if not task.cancelled():
+                        task.exception()  # retrieved, so the loop does not warn at GC
         # CancelledError is deliberately not caught. Swallowing it consumes the
         # caller's own cancellation: the supervisor's watch loop was cancelled
         # here while stopping an actor, never saw the error, resumed its poll

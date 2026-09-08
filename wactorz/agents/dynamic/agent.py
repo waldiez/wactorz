@@ -41,6 +41,42 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class _ProgramHalted(Exception):
+    """A `BaseException` out of generated code, boxed as a plain `Exception`.
+
+    On Python < 3.12 `asyncio.wait_for` runs the guarded coroutine in its own
+    task, and a `SystemExit` or `KeyboardInterrupt` leaving that task is
+    re-raised into the event loop whatever the awaiting frame goes on to catch —
+    the loop ends and the process follows. Boxing it this side of the task
+    boundary is the only way it reaches the handler that owns it; a plain
+    `Exception` crosses the boundary quietly on every version, and the caller
+    unwraps and decides.
+    """
+
+    def __init__(self, original: BaseException) -> None:
+        super().__init__(repr(original))
+        self.original = original
+
+
+async def _bounded_call(call: Any, timeout: float) -> Any:
+    """`wait_for` over a generated call, with anything it raises boxed.
+
+    `KeyboardInterrupt` is boxed as well and re-raised by the caller, which
+    sends it through coroutine awaits rather than across a task boundary —
+    the same meaning, without the detour through the event loop.
+    """
+
+    async def invoke() -> Any:
+        try:
+            return await call
+        except (asyncio.CancelledError, GeneratorExit):
+            raise
+        except BaseException as e:
+            raise _ProgramHalted(e) from e
+
+    return await asyncio.wait_for(invoke(), timeout=timeout)
+
+
 class DynamicAgent(Actor):
     """Generic actor shell. Core behavior is provided as Python source code strings.
     The LLM writes setup/process/handle_task functions; this class runs them.
@@ -196,17 +232,20 @@ class DynamicAgent(Actor):
         for task in others:
             task.cancel()
         if others:
-            try:
-                await asyncio.wait_for(
-                    asyncio.shield(asyncio.gather(*others, return_exceptions=True)),
-                    timeout=self.TASK_SHUTDOWN_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
+            # asyncio.wait, not wait_for, for the reason given in
+            # Actor._wind_down_tasks: a repair is started from inside the process
+            # loop it replaces, so a cancellation arriving here is one this agent
+            # still has to act on.
+            _done, pending = await asyncio.wait(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
+            if pending:
                 logger.warning(
                     "[%s] %d task(s) of the old program did not stop in time.",
                     self.name,
-                    sum(1 for task in others if not task.done()),
+                    len(pending),
                 )
+            for task in _done:
+                if not task.cancelled():
+                    task.exception()  # retrieved, so the loop does not warn at GC
         self._program_tasks = [task for task in self._program_tasks if not task.done()]
         self._subscribed_topics.clear()
         # The subscription connection is shared and outlives any one program, so
@@ -287,9 +326,13 @@ class DynamicAgent(Actor):
         cleanup = self._ns.get("cleanup")
         if cleanup:
             try:
-                await asyncio.wait_for(cleanup(self._api), timeout=10.0)
+                await _bounded_call(cleanup(self._api), 10.0)
             except asyncio.TimeoutError:
                 logger.warning("[%s] cleanup() timed out after 10s", self.name)
+            except _ProgramHalted as halted:
+                if isinstance(halted.original, KeyboardInterrupt):
+                    raise halted.original from None
+                logger.warning("[%s] cleanup() error: %s", self.name, halted.original)
             except Exception as e:
                 logger.warning("[%s] cleanup() error: %s", self.name, e)
 
@@ -759,6 +802,39 @@ class DynamicAgent(Actor):
         )
         return True
 
+    async def _process_failed(self, e: BaseException) -> bool:
+        """Count, report and maybe repair one process() failure.
+
+        Returns True when the loop should end — a repair restarted the
+        program, or the error budget ran out and the Supervisor takes over.
+        """
+        self.metrics.errors += 1
+        tb = traceback.format_exc()
+        logger.error("[%s] process() error", self.name, exc_info=e)
+        await self._publish_error(phase="process", error=e, traceback_str=tb)
+
+        # ── LLM self-healing: repair the code and restart the program ──
+        if (
+            self._consecutive_errors >= self._PROCESS_LLM_FIX_THRESHOLD
+            and await self._repair_process_in_place(e, tb)
+        ):
+            return True
+
+        # ── Erlang: too many errors → FAILED → Supervisor restarts us ──
+        if self._consecutive_errors >= self._PROCESS_FAIL_THRESHOLD:
+            logger.critical(
+                "[%s] %s consecutive process() errors — setting FAILED so Supervisor can restart cleanly.",
+                self.name,
+                self._consecutive_errors,
+            )
+            self.state = ActorState.FAILED
+            await self._publish_error(phase="process", error=e, traceback_str=tb, fatal=True)
+            return True
+
+        backoff = min(2**self._consecutive_errors, 30)
+        await asyncio.sleep(backoff)
+        return False
+
     async def _run_process_forever(self, process: Any) -> None:
         """Call process() on each tick until the agent stops or fails.
 
@@ -768,10 +844,7 @@ class DynamicAgent(Actor):
         """
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                await asyncio.wait_for(
-                    process(self._api),
-                    timeout=self._PROCESS_TIMEOUT,
-                )
+                await _bounded_call(process(self._api), self._PROCESS_TIMEOUT)
                 self._reset_error_count()
             except asyncio.TimeoutError:
                 self.metrics.errors += 1
@@ -800,6 +873,14 @@ class DynamicAgent(Actor):
                 await asyncio.sleep(backoff)
             except asyncio.CancelledError:
                 break
+            except _ProgramHalted as halted:
+                # Boxed because it crossed a task boundary to get here; see
+                # _ProgramHalted. An interrupt is unboxed and passed on, an
+                # exit is a bug in the program that raised it.
+                if isinstance(halted.original, KeyboardInterrupt):
+                    raise halted.original from None
+                if await self._process_failed(halted.original):
+                    return
             except KeyboardInterrupt:
                 raise
             # BaseException, not Exception: a program that calls `sys.exit()` or
@@ -813,33 +894,8 @@ class DynamicAgent(Actor):
             # a cancellation (which is how SIGTERM and SIGINT reach us) and a
             # KeyboardInterrupt, which must never be swallowed.
             except BaseException as e:
-                self.metrics.errors += 1
-                tb = traceback.format_exc()
-                logger.exception("[%s] process() error", self.name)
-                await self._publish_error(phase="process", error=e, traceback_str=tb)
-
-                # ── LLM self-healing: repair the code and restart the program ──
-                if (
-                    self._consecutive_errors >= self._PROCESS_LLM_FIX_THRESHOLD
-                    and await self._repair_process_in_place(e, tb)
-                ):
+                if await self._process_failed(e):
                     return
-
-                # ── Erlang: too many errors → FAILED → Supervisor restarts us ──
-                if self._consecutive_errors >= self._PROCESS_FAIL_THRESHOLD:
-                    logger.critical(
-                        "[%s] %s consecutive process() errors — setting FAILED so Supervisor can restart cleanly.",
-                        self.name,
-                        self._consecutive_errors,
-                    )
-                    self.state = ActorState.FAILED
-                    await self._publish_error(
-                        phase="process", error=e, traceback_str=tb, fatal=True
-                    )
-                    return
-
-                backoff = min(2**self._consecutive_errors, 30)
-                await asyncio.sleep(backoff)
 
             await asyncio.sleep(self.poll_interval)
 
@@ -862,15 +918,37 @@ class DynamicAgent(Actor):
 
     # ── Message handling ───────────────────────────────────────────────────
 
+    async def _handle_task_failed(self, msg: Message, e: BaseException, _with_corr: Any) -> None:
+        """Report a handle_task() failure and answer the caller with it."""
+        tb = traceback.format_exc()
+        logger.error("[%s] handle_task() error", self.name, exc_info=e)
+        await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
+        if msg.sender_id:
+            await self.send(
+                msg.sender_id,
+                MessageType.RESULT,
+                _with_corr(
+                    {
+                        # `result` so this reaches a person as a sentence:
+                        # a reply carrying none of the keys the chat reads
+                        # is printed as a Python repr.
+                        "result": f"That went wrong while I was handling it: {e}",
+                        "error": str(e),
+                        "error_phase": "handle_task",
+                        "agent": self.name,
+                    }
+                ),
+            )
+
     async def _invoke_handle_task(
         self, msg: Message, _incoming: Any, _corr: Any, _with_corr: Any
     ) -> Any:
         """Call the generated handle_task(), tagging the reply with its id."""
         if self._fn_handle_task:
             try:
-                result = await asyncio.wait_for(
+                result = await _bounded_call(
                     self._fn_handle_task(self._api, msg.payload or {}),
-                    timeout=self._HANDLE_TASK_TIMEOUT,
+                    self._HANDLE_TASK_TIMEOUT,
                 )
                 if msg.sender_id and result is not None:
                     await self.send(msg.sender_id, MessageType.RESULT, _with_corr(result))
@@ -899,29 +977,15 @@ class DynamicAgent(Actor):
                             }
                         ),
                     )
+            except _ProgramHalted as halted:
+                if isinstance(halted.original, KeyboardInterrupt):
+                    raise halted.original from None
+                await self._handle_task_failed(msg, halted.original, _with_corr)
             except (asyncio.CancelledError, KeyboardInterrupt):
                 raise
             # BaseException for the same reason as the process loop.
             except BaseException as e:
-                tb = traceback.format_exc()
-                logger.exception("[%s] handle_task() error", self.name)
-                await self._publish_error(phase="handle_task", error=e, traceback_str=tb)
-                if msg.sender_id:
-                    await self.send(
-                        msg.sender_id,
-                        MessageType.RESULT,
-                        _with_corr(
-                            {
-                                # `result` so this reaches a person as a sentence:
-                                # a reply carrying none of the keys the chat reads
-                                # is printed as a Python repr.
-                                "result": f"That went wrong while I was handling it: {e}",
-                                "error": str(e),
-                                "error_phase": "handle_task",
-                                "agent": self.name,
-                            }
-                        ),
-                    )
+                await self._handle_task_failed(msg, e, _with_corr)
         else:
             if msg.sender_id:
                 await self.send(

@@ -1536,8 +1536,7 @@ class _RemoteAgent:
             self._fn_handle_task = self._ns.get("handle_task")
         except Exception as e:
             return f"Compile error: {e}\n{traceback.format_exc()}"
-        else:
-            return None
+        return None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -1559,7 +1558,12 @@ class _RemoteAgent:
                 await self._run_lifecycle()
             except asyncio.CancelledError:
                 break  # deliberate stop() — do not restart
-            except Exception as e:
+            except KeyboardInterrupt:
+                raise
+            # BaseException: a program exit that escaped the lifecycle's own
+            # guards (setup, cleanup) still means this agent crashed, not the
+            # node — it goes through the same restart budget as any other crash.
+            except BaseException as e:
                 if not self._running:
                     break  # stop() was called mid-crash, don't restart
 
@@ -1737,7 +1741,12 @@ class _RemoteAgent:
                         self._restart_count -= 1
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except KeyboardInterrupt:
+                raise
+            # BaseException, not Exception: a node runs the same model-written
+            # programs the host does, and a `sys.exit()` here ends the node —
+            # see DynamicAgent._run_process_forever, which guards the host side.
+            except BaseException as e:
                 consecutive_errors += 1
                 successful_runs = 0
                 err_str = traceback.format_exc()
@@ -1802,7 +1811,9 @@ class _RemoteAgent:
             return {"error": f"Agent '{self.name}' has no handle_task function."}
         try:
             result = await self._fn_handle_task(self._api, payload)
-        except Exception as e:
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            raise
+        except BaseException as e:
             err_str = traceback.format_exc()
             logger.exception("[%s] handle_task() error", self.name)
             await self._publish(

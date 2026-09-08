@@ -10,7 +10,8 @@ taking every other agent with it.
 The four places a program runs are covered here: `process()`, `setup()`,
 `handle_task()`, and a subscribe callback. Each treats a `SystemExit` as what it
 is — a bug in that program — and routes it into the counting, reporting and
-repair that any other error from the same place already gets.
+repair that any other error from the same place already gets. A node runs the
+same programs in its own loop, which gets the same treatment.
 
 The two that mean *stop* rather than *fail* still pass through: a cancellation,
 which is how SIGTERM and SIGINT reach an agent here (`app.py` cancels the task
@@ -25,6 +26,7 @@ import pytest
 
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.core.actor import ActorState
+from wactorz.remote_runner import ProcessEscalated, _RemoteAgent
 
 EXITING_PROCESS = """
 async def process(agent):
@@ -235,3 +237,83 @@ class TestStoppingStillStops:
             await agent._run_process_forever(interrupting)
 
         assert agent.metrics.errors == 0, "an interrupt was counted as a program error"
+
+
+# ── The node runner ───────────────────────────────────────────────────────────
+
+
+class _StubRunner:
+    """Stands in for the node's runner, recording what was published."""
+
+    node_name = "test-node"
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, Any]] = []
+
+    async def publish(self, topic: str, data: Any, retain: bool = False) -> None:
+        self.events.append((topic, data))
+
+
+def make_remote_agent(tmp_path: Path, code: str) -> Any:
+    """A node-side agent around the given program, no broker involved."""
+    agent = _RemoteAgent({"name": "exiter", "code": code}, _StubRunner(), state_dir=str(tmp_path))
+    assert agent._compile() is None
+    return agent
+
+
+class TestANodeIsCoveredToo:
+    """A node runs the same model-written programs; an exit ends the agent
+    there too, not the node. These paths await the program directly, so no
+    boxing is needed — but the catch has to be there."""
+
+    async def test_a_process_that_exits_is_counted_and_the_node_lives(self, tmp_path: Path) -> None:
+        agent = make_remote_agent(tmp_path, EXITING_PROCESS)
+        agent._running = True
+        task = asyncio.create_task(agent._process_loop())
+
+        alive = {"ticks": 0}
+
+        async def bystander() -> None:
+            while True:
+                alive["ticks"] += 1
+                await asyncio.sleep(0)
+
+        other = asyncio.create_task(bystander())
+        try:
+            await until(lambda: any(topic.endswith("/errors") for topic, _ in agent._runner.events))
+            before = alive["ticks"]
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert alive["ticks"] > before, "the loop stopped running other work"
+        finally:
+            other.cancel()
+            agent._running = False
+            task.cancel()
+            await asyncio.gather(other, task, return_exceptions=True)
+
+    async def test_repeated_exits_escalate_as_an_error_not_an_exit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The escalation the supervisor reads is a plain exception; a
+        SystemExit reaching it would end the node instead."""
+        real_sleep = asyncio.sleep
+
+        async def instant(_seconds: float) -> None:
+            await real_sleep(0)
+
+        monkeypatch.setattr("wactorz.remote_runner.asyncio.sleep", instant)
+
+        agent = make_remote_agent(tmp_path, EXITING_PROCESS)
+        agent._running = True
+        task = asyncio.create_task(agent._process_loop())
+
+        await asyncio.gather(task, return_exceptions=True)
+
+        assert isinstance(task.exception(), ProcessEscalated)
+
+    async def test_a_handle_task_that_exits_answers_the_caller(self, tmp_path: Path) -> None:
+        agent = make_remote_agent(tmp_path, EXITING_HANDLE_TASK)
+
+        result = await agent.handle_task({"do": "something"})
+
+        assert "error" in result

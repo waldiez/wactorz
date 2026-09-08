@@ -135,7 +135,7 @@ def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
         local = datetime.now().astimezone().tzinfo
         if local is not None:
             return local
-    except Exception:
+    except Exception:  # noqa: S110  # falls through to the next timezone source
         pass
     return timezone.utc
 
@@ -334,8 +334,8 @@ class ScheduledAgent(Actor):
                     # Either way, a once-schedule that's past is done
                     asyncio.create_task(self._self_delete())
                     return
-            except Exception as e:
-                logger.error("[%s] Once-schedule on_start error: %s", self.name, e)
+            except Exception:
+                logger.exception("[%s] Once-schedule on_start error", self.name)
 
         await self._log(
             f"Scheduled agent ready. type={self._schedule.get('type')} "
@@ -421,8 +421,8 @@ class ScheduledAgent(Actor):
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error("[%s] Loop error: %r — backing off 30s", self.name, e)
+            except Exception:
+                logger.exception("[%s] Loop error — backing off 30s", self.name)
                 await asyncio.sleep(30)
 
     def _last_fire_local(self, tzinfo: Any) -> datetime | None:
@@ -506,8 +506,8 @@ class ScheduledAgent(Actor):
                 f"Fired{' (manual)' if manual else ''} → {self._publish_topic} "
                 f"[count={self._state.fire_count}]"
             )
-        except Exception as e:
-            logger.error("[%s] Fire failed: %r", self.name, e)
+        except Exception:
+            logger.exception("[%s] Fire failed", self.name)
 
     async def _self_delete(self):
         """Remove from registry and stop. Used for completed once-schedules."""
@@ -515,7 +515,7 @@ class ScheduledAgent(Actor):
         if self._registry:
             try:
                 await self._registry.unregister(self.actor_id)
-            except Exception:
+            except Exception:  # noqa: S110  # teardown; the agent is going away regardless
                 pass
         # Best-effort: ask main to drop us from the spawn registry too
         if self._registry:
@@ -523,7 +523,7 @@ class ScheduledAgent(Actor):
             if main:
                 try:
                     main._remove_from_spawn_registry(self.name)
-                except Exception:
+                except Exception:  # noqa: S110  # teardown; the agent is going away regardless
                     pass
         await self.stop()
         # After stop(), so the final status it publishes cannot be mistaken for

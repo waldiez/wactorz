@@ -45,9 +45,9 @@ def start_reloader(logger: logging.Logger) -> None:
                 try:
                     os.chdir(_RELOAD_CWD)
                     time.sleep(0.1)
-                    os.execv(sys.executable, [sys.executable, *sys.argv])  # nosec
-                except Exception as exc:
-                    logger.error("[reload] restart failed: %s", exc)
+                    os.execv(sys.executable, [sys.executable, *sys.argv])  # nosec  # noqa: S606  # dev reloader
+                except Exception:
+                    logger.exception("[reload] restart failed")
                     os._exit(1)  # nosec
 
             def on_modified(self, event: FileSystemEvent) -> None:

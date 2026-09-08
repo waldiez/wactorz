@@ -56,7 +56,8 @@ async def check_ws_port() -> bool:
         await server.wait_closed()
         return True
     except OSError as exc:
-        logger.error("[startup] Port %d already in use — %s", runtime.WS_PORT, exc)
+        # The message is the whole story; a bind traceback adds nothing actionable.
+        logger.error("[startup] Port %d already in use — %s", runtime.WS_PORT, exc)  # noqa: TRY400, RUF100  # the message is the whole story; a bind traceback adds nothing
         return False
 
 
@@ -86,7 +87,7 @@ def build_app() -> web.Application:
         try:
             response.headers.update(origins.cors_headers(origin))
         except Exception:
-            pass
+            logger.debug("[cors] Could not set headers for %s", origin, exc_info=True)
         return response
 
     app = web.Application(
@@ -300,13 +301,13 @@ def cli_main() -> None:
                 pending = asyncio.all_tasks(loop)
                 if pending:
                     loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
+            except Exception:  # noqa: S110  # sealing the loop; nothing left to report to
                 pass
             # Brief sleep lets paho's internal socket-close callback fire
             # before we seal the loop for good.
             try:
                 loop.run_until_complete(asyncio.sleep(0.25))
-            except Exception:
+            except Exception:  # noqa: S110  # sealing the loop; nothing left to report to
                 pass
             loop.close()
             if exit_exc is not None:

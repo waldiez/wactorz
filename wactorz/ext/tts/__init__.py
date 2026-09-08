@@ -40,7 +40,7 @@ try:
     _tts_state.available = True
     try:
         _tts_state.default_voice = constants.DEFAULT_VOICE
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # an optional attribute of an optional dependency
         pass
 except ImportError:
     pass

@@ -186,7 +186,8 @@ def _upgrade_baselines(db, pickle_store):
             continue
         try:
             with open(pkl_path, "rb") as f:
-                state = pickle.load(f)
+                # Our own state file, written by this app under the state dir.
+                state = pickle.load(f)  # noqa: S301
             if not isinstance(state, dict):
                 continue
             baselines = state.get("baselines")
@@ -618,7 +619,7 @@ def run_migrations(db, pickle_store=None) -> dict:
 
         except Exception as e:
             error_msg = f"SQL migration v{version} failed: {e}"
-            logger.error("[Migration] %s", error_msg)
+            logger.exception("[Migration] %s", error_msg)
             result["errors"].append(error_msg)
             # Stop — don't apply later migrations if an earlier one failed
             break

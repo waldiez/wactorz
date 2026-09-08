@@ -35,7 +35,8 @@ def migrate_from_pickle(state_dir: str, db: WactorzDB) -> None:
         agent_name = agent_dir.name
         try:
             with open(pkl_path, "rb") as f:
-                state = pickle.load(f)
+                # Our own state file, written by this app under the state dir.
+                state = pickle.load(f)  # noqa: S301
         except Exception as e:
             logger.warning("[Migration] Failed to read %s: %s", pkl_path, e)
             continue

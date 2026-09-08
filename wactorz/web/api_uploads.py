@@ -102,7 +102,7 @@ async def download_handler(request: web.Request) -> web.StreamResponse:
     meta: dict[str, Any] = {}
     try:
         meta = json.loads(_meta_path(directory, file_id).read_text(encoding="utf-8"))
-    except Exception:
+    except Exception:  # noqa: S110  # served as an opaque download, the safe default
         pass  # served as an opaque download, which is the safe default anyway
 
     content_type, inline = uploads.serve_type(str(meta.get("mime", "")))

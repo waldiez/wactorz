@@ -194,7 +194,7 @@ async def static_handler(request: web.Request) -> Response:
 
                 return _with_no_cache(web.FileResponse(candidate))
         except Exception:
-            pass
+            logger.debug("[static] Could not serve %s", request.path, exc_info=True)
     raise web.HTTPNotFound()
 
 
@@ -235,5 +235,5 @@ async def docs_handler(request: web.Request) -> web.FileResponse:
     except web.HTTPFound:
         raise
     except Exception:
-        pass
+        logger.debug("[static] Could not resolve %s", request.path, exc_info=True)
     raise web.HTTPNotFound()

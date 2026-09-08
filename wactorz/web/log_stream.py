@@ -78,7 +78,7 @@ async def log_push_loop(interval: float = POLL_SECONDS) -> None:
                 await ws.broadcast({"type": "app_log", "entries": pushable})
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception:  # noqa: S112  # logging the failure is what causes the next one
             # Never logged: this is the one place where reporting the failure is
             # what causes the next one. The pump keeps running, because a
             # dashboard that silently stops following is the failure this whole

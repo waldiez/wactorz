@@ -246,7 +246,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             # messages) — persist immediately.
             _persist_chat("assistant", text, _reply_from["name"])
         except Exception:
-            pass
+            logger.debug("[ws] Could not deliver or persist a reply", exc_info=True)
 
     async def ws_stream_chunk(chunk: str):
         try:
@@ -264,7 +264,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             if chunk:
                 _stream_buffer.append(chunk)
         except Exception:
-            pass
+            logger.debug("[ws] Could not deliver a stream chunk", exc_info=True)
 
     async def ws_stream_end():
         try:
@@ -345,15 +345,17 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                     try:
                                         await ws_stream_end()
                                         await ws_reply("⏹ Stopped.")
-                                    except Exception:
+                                    # The socket is already gone; that is why we are here.
+                                    except Exception:  # noqa: S110
                                         pass
                                     raise
                                 except Exception as exc:
-                                    logger.exception("[ws] chat error: %s", exc)
+                                    logger.exception("[ws] chat error")
                                     try:
                                         await ws_reply(f"[error] {exc}")
                                         await ws_stream_end()
-                                    except Exception:
+                                    # The socket is already gone; that is why we are here.
+                                    except Exception:  # noqa: S110
                                         pass
 
                             chat.track_chat_task(asyncio.create_task(_safe_route()))
@@ -413,5 +415,5 @@ async def handle_command(cmd: dict[str, Any]) -> None:
         # Dispatch, feed entry, reported state and the patch to every open
         # dashboard all happen in `run_command`, which REST goes through too.
         await lifecycle.run_command(agent_id, command, "monitor-dashboard")
-    except Exception as exc:
-        logger.error("[cmd] %s failed: %s", command, exc)
+    except Exception:
+        logger.exception("[cmd] %s failed", command)

@@ -135,11 +135,10 @@ class ActorRegistry:
             # every published event is delivered twice.
             try:
                 await superseded.stop()
-            except Exception as exc:
-                logger.error(
-                    "[Registry] Stopping the superseded '%s' failed — its listeners may still be live: %s",
+            except Exception:
+                logger.exception(
+                    "[Registry] Stopping the superseded '%s' failed — its listeners may still be live",
                     superseded.name,
-                    exc,
                 )
 
     async def unregister(self, actor_id: str) -> None:
@@ -321,8 +320,8 @@ class Supervisor:
                     await self._supervise_one(name, spec)
             except asyncio.CancelledError:
                 break
-            except Exception as exc:
-                logger.exception("[Supervisor] watch_loop error: %s", exc)
+            except Exception:
+                logger.exception("[Supervisor] watch_loop error")
 
     def _failure_reason(self, spec: SupervisedSpec) -> str | None:
         """Why this spec needs supervision, or None if there is nothing to do.
@@ -486,9 +485,9 @@ class Supervisor:
         # agent was gone for the life of the process, with a single log line.
         try:
             new_actor = await self._spawn_actor(name, spec)
-        except Exception as exc:
+        except Exception:
             spec.actor = None
-            logger.exception("[Supervisor] Respawn of '%s' failed: %s", name, exc)
+            logger.exception("[Supervisor] Respawn of '%s' failed", name)
             if spec.exhausted:
                 await self._retire(name, spec, "every restart attempt failed to start it")
             # Otherwise the spec keeps its actor at None, which the watch loop
@@ -538,7 +537,7 @@ class Supervisor:
             logger.warning("[Supervisor] Error stopping '%s': %s", name, exc)
         try:
             await self._registry.unregister(actor.actor_id)
-        except Exception:
+        except Exception:  # noqa: S110  # the stop failure above is already logged
             pass
         spec.actor = None
 

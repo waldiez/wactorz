@@ -40,7 +40,7 @@ GMAIL_CONFIG = GoogleMcpConfig(
     default_mcp_url=GOOGLE_GMAIL_MCP_URL,
     api_base=GOOGLE_GMAIL_API_URL,
     default_scopes=DEFAULT_GMAIL_MCP_SCOPES,
-    token_filename="gmail_mcp_token.json",
+    token_filename="gmail_mcp_token.json",  # noqa: S106  # a filename, not a token
     login_tool="list_labels",
     client_name="Wactorz Gmail MCP",
 )
@@ -113,7 +113,16 @@ def _strip_html(raw: str) -> str:
     return html.unescape(raw)
 
 
-_ZERO_WIDTH = ("‌", "​", "­", "﻿", "‍")
+#: Invisible characters that marketing email uses for tracking or layout.
+#: Escapes rather than literals: the source has to show what it strips, and
+#: an editor or a copy-paste cannot silently drop what it cannot display.
+_ZERO_WIDTH = (
+    "\u200c",  # zero-width non-joiner
+    "\u200b",  # zero-width space
+    "\u00ad",  # soft hyphen
+    "\ufeff",  # zero-width no-break space (BOM)
+    "\u200d",  # zero-width joiner
+)
 
 
 def _clean_text(text: str) -> str:

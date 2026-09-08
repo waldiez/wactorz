@@ -398,7 +398,8 @@ class DynamicAgent(Actor):
                 self._ns["cv2"] = shim
 
         try:
-            exec(compile(clean, f"<{self.name}>", "exec"), self._ns)
+            # Running model-written agent code is what a DynamicAgent is for.
+            exec(compile(clean, f"<{self.name}>", "exec"), self._ns)  # noqa: S102
             self._fn_setup = self._ns.get("setup")
             self._fn_process = self._ns.get("process")
             self._fn_handle_task = self._ns.get("handle_task")

@@ -30,7 +30,7 @@ async def broadcast_mqtt_msg(topic: str, payload: str) -> None:
     parsed: Any = payload
     try:
         parsed = json.loads(payload)
-    except Exception:
+    except Exception:  # noqa: S110  # non-JSON payloads are passed through as text
         # non-JSON: pass the string through
         pass
     await ws.broadcast({"type": "server_event", "topic": topic, "payload": parsed})
@@ -188,7 +188,7 @@ async def check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
             writer.close()
             try:
                 await writer.wait_closed()
-            except Exception:
+            except Exception:  # noqa: S110  # closing a probe socket already being discarded
                 pass
             return True
         except Exception as exc:

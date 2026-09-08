@@ -437,7 +437,8 @@ class WactorzDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"SELECT ts, topic, entity_id, field, value, value_str, unit, agent, node "
+            # `where` is joined from literal fragments; every value is a bound `?`.
+            f"SELECT ts, topic, entity_id, field, value, value_str, unit, agent, node "  # noqa: S608  # the fragment is literal; every value is bound
             f"FROM sensor_readings WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -466,7 +467,8 @@ class WactorzDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"SELECT ts, agent, class_name, confidence, bbox, metadata, node "
+            # `where` is joined from literal fragments; every value is a bound `?`.
+            f"SELECT ts, agent, class_name, confidence, bbox, metadata, node "  # noqa: S608  # the fragment is literal; every value is bound
             f"FROM detections WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -494,7 +496,8 @@ class WactorzDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"SELECT ts, entity_id, old_state, new_state, domain, attributes "
+            # `where` is joined from literal fragments; every value is a bound `?`.
+            f"SELECT ts, entity_id, old_state, new_state, domain, attributes "  # noqa: S608  # the fragment is literal; every value is bound
             f"FROM ha_state_changes WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -518,7 +521,8 @@ class WactorzDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"SELECT ts, agent, domain, service, entity_id, payload, trigger, rule_id "
+            # `where` is joined from literal fragments; every value is a bound `?`.
+            f"SELECT ts, agent, domain, service, entity_id, payload, trigger, rule_id "  # noqa: S608  # the fragment is literal; every value is bound
             f"FROM actuations WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -534,7 +538,11 @@ class WactorzDB:
         total = 0
         with self.transaction() as conn:
             for table in tables:
-                cur = conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
+                # `table` is one of the literals in `tables` above, never input.
+                cur = conn.execute(
+                    f"DELETE FROM {table} WHERE ts < ?",  # noqa: S608  # the fragment is literal; every value is bound
+                    (cutoff,),
+                )
                 total += cur.rowcount
         if total:
             logger.info("[Persistence] Pruned %s rows older than %sd", total, days)
@@ -546,6 +554,7 @@ class WactorzDB:
         tables = ["sensor_readings", "detections", "ha_state_changes", "actuations"]
         result = {}
         for table in tables:
-            row = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            # `table` is one of the literals in `tables` above, never input.
+            row = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # noqa: S608  # the fragment is literal; every value is bound
             result[table] = row[0] if row else 0
         return result

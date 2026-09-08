@@ -77,7 +77,7 @@ class MonitorActor(Actor):
             # inside a try — it can fail, and this agent reads it every cycle.
             try:
                 self._proc.cpu_percent(interval=None)
-            except Exception:
+            except Exception:  # noqa: S110  # priming a CPU baseline; telemetry only
                 pass
 
         self._tasks.append(asyncio.create_task(self._monitor_loop()))
@@ -115,8 +115,8 @@ class MonitorActor(Actor):
                 await self._publish_host_stats()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error("[%s] Monitor loop error: %s", self.name, e)
+            except Exception:
+                logger.exception("[%s] Monitor loop error", self.name)
 
     async def _ping_all_actors(self):
         if not self._registry:
@@ -126,7 +126,7 @@ class MonitorActor(Actor):
                 try:
                     await self.send(actor.actor_id, MessageType.STATUS_REQUEST, None)
                 except Exception:
-                    pass
+                    logger.debug("[%s] Could not reach %s", self.name, actor.name)
 
     async def _check_all_actors(self):
         if not self._registry:
@@ -289,8 +289,8 @@ class MonitorActor(Actor):
                 },
             )
             logger.info("[%s] Notified main about '%s': %s", self.name, agent_name, message[:80])
-        except Exception as e:
-            logger.error("[%s] Failed to notify main: %s", self.name, e)
+        except Exception:
+            logger.exception("[%s] Failed to notify main", self.name)
 
     # ── Alerting ───────────────────────────────────────────────────────────
 

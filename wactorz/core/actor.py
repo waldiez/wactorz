@@ -254,7 +254,7 @@ class Actor(ABC):
         try:
             self._proc = psutil.Process()
             self._proc.cpu_percent(interval=None)  # prime the baseline
-        except Exception:
+        except Exception:  # noqa: S110  # psutil is optional; the actor runs without it
             pass
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
@@ -302,13 +302,13 @@ class Actor(ABC):
             await asyncio.shield(self.on_stop())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:
+        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
             pass
         try:
             await asyncio.shield(self._save_persistent_state())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:
+        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
             pass
 
         # ── Persist message count so overview survives restarts ──────────
@@ -340,7 +340,7 @@ class Actor(ABC):
                 f"agents/{self.actor_id}/metrics",
                 final_metrics,
             )
-        except Exception:
+        except Exception:  # noqa: S110  # a last telemetry frame, sent on the way out
             pass
 
         await self._publish_status()
@@ -353,7 +353,7 @@ class Actor(ABC):
             bus = get_topic_bus()
             if bus:
                 bus.unregister(self.name)
-        except Exception:
+        except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
         logger.info("[%s] Actor stopped.", self.name)
         # Deferred to here rather than raised where it arrived: the shield exists
@@ -429,9 +429,9 @@ class Actor(ABC):
                 continue
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception:
                 self.metrics.errors += 1
-                logger.exception("[%s] Error in message loop: %s", self.name, e)
+                logger.exception("[%s] Error in message loop", self.name)
 
     def _resolve_pending_result(self, msg: Message) -> bool:
         """Settle a waiting future from a RESULT's correlation id.
@@ -557,7 +557,7 @@ class Actor(ABC):
         try:
             if self._proc is not None:
                 cpu = self._proc.cpu_percent(interval=None)
-        except Exception:
+        except Exception:  # noqa: S110  # a heartbeat reports 0.0 rather than not arriving
             pass
         return {
             "actor_id": self.actor_id,
@@ -657,7 +657,7 @@ class Actor(ABC):
         after the direct-dispatch change that means agents on remote nodes.
         """
         try:
-            import aiomqtt  # noqa: F401  # pylint: disable=unused-import
+            import aiomqtt  # pylint: disable=unused-import  # noqa: F401
         except ImportError:
             return
         # local: avoids core/__init__ import cycle
@@ -696,8 +696,8 @@ class Actor(ABC):
                             # receiving commands afterwards.
                             if applied and command in ("stop", "delete"):
                                 return
-                        except Exception as exc:
-                            logger.error("[%s] Command parse error: %s", self.name, exc)
+                        except Exception:
+                            logger.exception("[%s] Command parse error", self.name)
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -861,8 +861,8 @@ class Actor(ABC):
         # Legacy pickle path
         try:
             write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
-        except Exception as e:
-            logger.error("[%s] Failed to save state: %s", self.name, e)
+        except Exception:
+            logger.exception("[%s] Failed to save state", self.name)
 
     async def _load_persistent_state(self):
         """Load state from disk. Called on start() before on_start()."""
@@ -873,7 +873,9 @@ class Actor(ABC):
             if path.exists():
                 try:
                     with open(path, "rb") as f:
-                        self._persistent_state = pickle.load(f)
+                        self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
+                            f
+                        )  # our own state file, under the state dir
                     logger.info(
                         "[%s] Loaded legacy persistent state (will migrate on first persist).",
                         self.name,
@@ -886,7 +888,9 @@ class Actor(ABC):
         if path.exists():
             try:
                 with open(path, "rb") as f:
-                    self._persistent_state = pickle.load(f)
+                    self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
+                        f
+                    )  # our own state file, under the state dir
                 logger.info("[%s] Loaded persistent state.", self.name)
             except Exception as e:
                 self._keep_unreadable_state(path, e)

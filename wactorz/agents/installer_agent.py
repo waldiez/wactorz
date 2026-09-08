@@ -323,7 +323,7 @@ class InstallerAgent(Actor):
 
         def _run_pip() -> tuple[bool, str]:
             try:
-                result = subprocess.run(
+                result = subprocess.run(  # noqa: S603  # argv, no shell; name pre-screened
                     cmd,
                     capture_output=True,
                     timeout=180,

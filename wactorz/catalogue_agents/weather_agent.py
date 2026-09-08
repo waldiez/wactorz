@@ -815,7 +815,7 @@ class WeatherAgent(Actor):
                 self.persist("default_location", loc)
                 self.persist("last_location", loc)
             except Exception:
-                pass
+                logger.debug("[%s] Could not persist the default location", self.name)
             return {"status": "ok", "default_location": loc}
 
         if action == "current":
@@ -848,7 +848,7 @@ class WeatherAgent(Actor):
                 try:
                     self.persist("default_location", explicit_location)
                 except Exception:
-                    pass
+                    logger.debug("[%s] Could not persist the default location", self.name)
             res["concern"] = concern
             res["units"] = units
             res["used_default"] = used_default
@@ -860,7 +860,7 @@ class WeatherAgent(Actor):
                 try:
                     self.persist("last_location", resolved_location)
                 except Exception:
-                    pass
+                    logger.debug("[%s] Could not persist the last location", self.name)
         return res
 
     # ── Open-Meteo calls ──────────────────────────────────────────────────

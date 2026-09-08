@@ -41,14 +41,16 @@ class HAWebSocketClient:
 
     async def _recv(self, timeout: float | None) -> Any:
         """Receive one frame, optionally bounded. `None` waits indefinitely."""
-        assert self._ws is not None
+        if self._ws is None:
+            raise RuntimeError("No WS client")
         raw = self._ws.recv()
         if timeout is not None:
             raw = asyncio.wait_for(raw, timeout=timeout)
         return json.loads(await raw)
 
     async def _authenticate(self):
-        assert self._ws is not None
+        if self._ws is None:
+            raise RuntimeError("No WS client")
         hello = await self._recv(_RESPONSE_TIMEOUT)
         if hello.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected hello: {hello}")
@@ -60,7 +62,8 @@ class HAWebSocketClient:
 
     async def call(self, ws_type: str, **kwargs) -> Any:
         """Call a Home Assistant WebSocket command and return result payload."""
-        assert self._ws is not None
+        if self._ws is None:
+            raise RuntimeError("No WS client")
         self._msg_id += 1
         msg_id = self._msg_id
 
@@ -98,7 +101,8 @@ class HAWebSocketClient:
 
     async def subscribe_events(self, event_type: str | None = None) -> int:
         """Subscribe to Home Assistant events and return the subscription id."""
-        assert self._ws is not None
+        if self._ws is None:
+            raise RuntimeError("No WS client")
         self._msg_id += 1
         msg_id = self._msg_id
 

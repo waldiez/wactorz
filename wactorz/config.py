@@ -324,6 +324,8 @@ class AppConfig:
     llm_api_key: str
     llm_overrides: str
     llm_temperature: float | None
+    llm_max_retries: int
+    llm_timeout_s: float
     ollama_url: str
     mqtt_host: str
     mqtt_port: int
@@ -378,6 +380,11 @@ CONFIG = AppConfig(
     # Sampling temperature for every LLM call (0.0 = deterministic). Unset or
     # empty keeps each provider's own default (the previous behavior).
     llm_temperature=_env_opt_float("LLM_TEMPERATURE"),
+    # Retries after a failed LLM attempt, and the seconds one attempt may take.
+    # 0 retries makes the first failure the answer; a 0 timeout waits on the
+    # provider SDK's own default instead. See wactorz/agents/llm/retry.py.
+    llm_max_retries=_env_int("LLM_MAX_RETRIES", 2),
+    llm_timeout_s=_env_float("LLM_TIMEOUT_S", 300.0),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     bind_host=_bind_host(),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),

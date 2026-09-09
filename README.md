@@ -187,6 +187,14 @@ LLM_API_KEY=your-key-here
 # leave unset/empty to keep each provider's own default.
 # Ignored on Claude models from Opus 4.7 onward, which no longer accept it.
 LLM_TEMPERATURE=0
+
+# Optional — transient failures (429, 5xx, timeouts) are retried with backoff,
+# and an attempt that exceeds LLM_TIMEOUT_S seconds is abandoned and retried.
+# For a streamed reply that bounds the wait for the first chunk, so a long
+# answer is never cut off. Defaults shown; 0 retries means the first failure is
+# the answer, and a 0 timeout waits on the provider SDK's own default.
+LLM_MAX_RETRIES=2
+LLM_TIMEOUT_S=300
 ```
 
 At startup Wactorz logs the configuration it resolved, so you can confirm it at a glance:

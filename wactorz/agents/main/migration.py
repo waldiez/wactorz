@@ -834,23 +834,6 @@ class Migration:
         logger.info("[%s] %s", self.host.name, msg)
         return {"success": True, "message": msg}
 
-        # NOTE: with the @main sentinel now handling all remote→local cases
-        # and the inline remote→remote registry update above, this trailing
-        # block is no longer reached in normal flow. Kept as a defensive
-        # net for any future path that finishes without updating the
-        # spawn registry — the write is idempotent.
-        if config:
-            updated = dict(config)
-            updated["node"] = target_node
-            self.host._save_to_spawn_registry(updated)
-
-        msg = (
-            f"Migrating '{agent_name}' from '{current_node or 'local'}' "
-            f"→ '{target_node or 'local'}'. It will appear in the dashboard shortly."
-        )
-        logger.info("[%s] %s", self.host.name, msg)
-        return {"success": True, "message": msg}
-
     async def update_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
     ) -> None:

@@ -8,6 +8,7 @@ from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissi
 
 ensure_importable("openai")
 
+from wactorz.agents.llm.retry import ProviderUnavailable
 from wactorz.agents.llm_agent import OllamaProvider
 
 
@@ -189,22 +190,29 @@ class OllamaTimeoutTest(unittest.IsolatedAsyncioTestCase):
 
 
 class OllamaErrorTest(unittest.IsolatedAsyncioTestCase):
-    """HTTP failures must surface, not be read as an empty reply."""
+    """HTTP failures must surface, not be read as an empty reply.
+
+    A 5xx is transient, so it is retried and then reported as
+    `ProviderUnavailable`, with the `ClientResponseError` kept as the cause.
+    What these assert is unchanged: the failure reaches the caller.
+    """
 
     async def test_complete_raises_on_http_error(self):
         calls = []
         session = _FakeSession(_FakeResponse(json_data={}, status=500), calls)
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
         with patch.object(aiohttp, "ClientSession", lambda *a, **k: session):
-            with self.assertRaises(aiohttp.ClientResponseError):
+            with self.assertRaises(ProviderUnavailable) as caught:
                 await provider.complete(messages=[{"role": "user", "content": "ping"}])
+        self.assertIsInstance(caught.exception.__cause__, aiohttp.ClientResponseError)
 
     async def test_complete_with_tools_raises_on_http_error(self):
         calls = []
         session = _FakeSession(_FakeResponse(json_data={}, status=503), calls)
         provider = OllamaProvider(model="llama3", base_url="http://ollama.local")
         with patch.object(aiohttp, "ClientSession", lambda *a, **k: session):
-            with self.assertRaises(aiohttp.ClientResponseError):
+            with self.assertRaises(ProviderUnavailable) as caught:
                 await provider.complete_with_tools(
                     messages=[{"role": "user", "content": "ping"}], tools=[]
                 )
+        self.assertIsInstance(caught.exception.__cause__, aiohttp.ClientResponseError)

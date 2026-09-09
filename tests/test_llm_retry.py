@@ -3,18 +3,32 @@
 import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import _patch, patch
 
 import pytest
 
+from tests.optional_deps import ensure_importable
+
+ensure_importable("anthropic")
+
 from wactorz.agents.llm.base import LLMProvider, ToolCompletion
+from wactorz.agents.llm.providers import anthropic as anthropic_provider
+from wactorz.agents.llm.providers.anthropic import AnthropicProvider
 from wactorz.agents.llm.retry import (
+    BACKOFF_BASE_S,
+    RETRY_AFTER_CAP_S,
     RETRYABLE_STATUS,
+    ProviderUnavailable,
     attempt_timeout,
     backoff_delay,
     call_with_retry,
     is_retryable,
+    retry_after_seconds,
+    retry_delay,
     status_of,
     stream_with_retry,
 )
@@ -41,8 +55,10 @@ class Boom(Exception):
 class Response:
     """Stands in for the `.response` an httpx-backed SDK hangs off its errors."""
 
-    def __init__(self, status_code: int) -> None:
+    def __init__(self, status_code: int, headers: "Headers | None" = None) -> None:
         self.status_code = status_code
+        if headers is not None:
+            self.headers = headers
 
 
 @pytest.fixture(name="no_sleep")
@@ -122,9 +138,10 @@ async def test_gives_up_after_the_configured_retries(no_sleep: None) -> None:
         calls += 1
         raise Boom(status_code=503)
 
-    with _with_policy(retries=2), pytest.raises(Boom):
+    with _with_policy(retries=2), pytest.raises(ProviderUnavailable) as caught:
         await call_with_retry(operation, "test")
     assert calls == 3
+    assert isinstance(caught.value.__cause__, Boom)
 
 
 async def test_a_final_error_is_not_retried(no_sleep: None) -> None:
@@ -148,9 +165,12 @@ async def test_zero_retries_makes_the_first_failure_the_answer(no_sleep: None) -
         calls += 1
         raise Boom(status_code=429)
 
-    with _with_policy(retries=0), pytest.raises(Boom):
+    # Still wrapped: one attempt that failed transiently is still exhaustion,
+    # and the original failure is kept as the cause.
+    with _with_policy(retries=0), pytest.raises(ProviderUnavailable) as caught:
         await call_with_retry(operation, "test")
     assert calls == 1
+    assert isinstance(caught.value.__cause__, Boom)
 
 
 async def test_a_hung_call_times_out_and_is_retried(no_sleep: None) -> None:
@@ -166,6 +186,228 @@ async def test_a_hung_call_times_out_and_is_retried(no_sleep: None) -> None:
     with _with_policy(retries=1, timeout=0.01):
         assert await call_with_retry(operation, "test") == "ok"
     assert calls == 2
+
+
+# ── Retry-After: the provider knows when its limit resets, we are guessing ───
+
+
+class Headers:
+    """A case-insensitive header mapping, as both SDK shapes provide."""
+
+    def __init__(self, **items: str) -> None:
+        self._items = {k.lower().replace("_", "-"): v for k, v in items.items()}
+
+    def get(self, key: str) -> str | None:
+        return self._items.get(key.lower())
+
+
+def test_retry_after_read_from_both_sdk_shapes() -> None:
+    assert retry_after_seconds(Boom(headers=Headers(retry_after="3"))) == 3.0  # aiohttp
+    assert retry_after_seconds(Boom(response=Response(429, Headers(retry_after="7")))) == 7.0
+    assert retry_after_seconds(Boom(status_code=429)) is None  # no header at all
+
+
+def test_retry_after_accepts_an_http_date() -> None:
+    """RFC 9110 allows a date as well as a delta, and both appear in the wild."""
+    soon = datetime.now(timezone.utc) + timedelta(seconds=30)
+    stamp = format_datetime(soon)
+    seconds = retry_after_seconds(Boom(headers=Headers(retry_after=stamp)))
+    assert seconds is not None
+    assert 25 <= seconds <= 31
+
+
+def test_retry_after_wins_over_our_backoff() -> None:
+    """The point of honouring it: we do not override the provider's own number."""
+    delay = retry_delay(Boom(status_code=429, headers=Headers(retry_after="4")), attempt=0)
+    assert delay == 4.0  # not the <=0.5s backoff attempt 0 would have produced
+
+
+def test_backoff_is_used_when_no_retry_after_is_sent() -> None:
+    delay = retry_delay(Boom(status_code=429), attempt=0)
+    assert delay is not None
+    assert 0 <= delay <= BACKOFF_BASE_S
+
+
+def test_an_unreasonable_retry_after_stops_rather_than_holding_the_agent() -> None:
+    long_wait = str(int(RETRY_AFTER_CAP_S) + 1)
+    assert retry_delay(Boom(status_code=429, headers=Headers(retry_after=long_wait)), 0) is None
+
+
+async def test_a_long_retry_after_fails_fast_instead_of_sleeping(no_sleep: None) -> None:
+    calls = 0
+
+    async def rate_limited() -> str:
+        nonlocal calls
+        calls += 1
+        raise Boom(status_code=429, headers=Headers(retry_after="86400"))
+
+    with _with_policy(retries=5), pytest.raises(ProviderUnavailable):
+        await call_with_retry(rate_limited, "test")
+    assert calls == 1, "waited on, or retried past, an hours-long Retry-After"
+
+
+# ── exhaustion reads differently from a bad request ──────────────────────────
+
+
+async def test_exhaustion_is_a_distinct_error_naming_the_provider(no_sleep: None) -> None:
+    async def rate_limited() -> str:
+        raise Boom(status_code=429)
+
+    with _with_policy(retries=2), pytest.raises(ProviderUnavailable) as caught:
+        await call_with_retry(rate_limited, "AnthropicProvider.complete")
+
+    message = str(caught.value)
+    assert "rate-limiting" in message
+    assert "not a problem with the request" in message
+    assert caught.value.attempts == 3
+    assert isinstance(caught.value.__cause__, Boom), "the underlying failure was lost"
+
+
+async def test_a_bad_request_is_not_dressed_up_as_unavailability(no_sleep: None) -> None:
+    """A 400 must reach the caller as itself, not as ProviderUnavailable."""
+
+    async def malformed() -> str:
+        raise Boom(status_code=400)
+
+    with _with_policy(retries=2), pytest.raises(Boom):
+        await call_with_retry(malformed, "test")
+
+
+async def test_a_stream_that_never_starts_reports_unavailability(no_sleep: None) -> None:
+    async def rate_limited() -> AsyncIterator[str]:
+        raise Boom(status_code=429)
+        yield  # pragma: no cover - makes this an async generator
+
+    with _with_policy(retries=1), pytest.raises(ProviderUnavailable):
+        _ = [c async for c in stream_with_retry(rate_limited, "test")]
+
+
+# ── transient retry must not fold into parameter negotiation ─────────────────
+#
+# AnthropicProvider._create already retries a 400 once, having dropped whatever
+# the model refused (`_degrade`). That lives below `_complete`, so it is inside
+# this module's wrapper. The two must stay separate: a genuine 400 turned into
+# three identical calls is the failure its own comments warn about.
+
+
+class FakeMessages:
+    """Records requests, and fails the first N with a given error."""
+
+    def __init__(self, fail_first: int = 0, error: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.fail_first = fail_first
+        self.error = error
+
+    async def create(self, **kwargs: Any) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        if len(self.calls) <= self.fail_first and self.error is not None:
+            raise self.error
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="ok")],
+            usage=SimpleNamespace(input_tokens=1, output_tokens=1),
+        )
+
+
+def anthropic_with(messages: FakeMessages) -> AnthropicProvider:
+    """A provider wired to a fake client, without touching the anthropic SDK."""
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+    provider.model = "claude-sonnet-4-6"
+    provider.client = SimpleNamespace(messages=messages)  # pyright: ignore[reportAttributeAccessIssue]
+    return provider
+
+
+class BadRequest(Exception):
+    """Stands in for anthropic.BadRequestError, which needs an httpx response."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.status_code = 400
+
+
+TEMPERATURE_REFUSED = (
+    "Error code: 400 - {'error': {'message': '`temperature` is deprecated for this model.'}}"
+)
+
+
+@pytest.fixture(name="forget_learned_models", autouse=True)
+def forget_learned_models_fixture() -> None:
+    """What one test teaches the provider must not leak into the next."""
+    anthropic_provider._learned_no_sampling.clear()
+    anthropic_provider._learned_no_thinking_param.clear()
+    anthropic_provider._learned_no_effort.clear()
+
+
+async def test_parameter_negotiation_still_works_under_the_retry_wrapper(
+    no_sleep: None,
+) -> None:
+    """The 400-and-drop-the-parameter path is untouched: two calls, one answer."""
+    messages = FakeMessages(fail_first=1, error=BadRequest(TEMPERATURE_REFUSED))
+    provider = anthropic_with(messages)
+
+    with (
+        _with_policy(retries=2),
+        patch("wactorz.config.CONFIG", replace(CONFIG, llm_temperature=0.0)),
+    ):
+        text, _usage = await provider.complete([{"role": "user", "content": "hi"}])
+
+    assert text == "ok"
+    assert len(messages.calls) == 2, "negotiation no longer retries, or it retried too often"
+    assert "temperature" in messages.calls[0]
+    assert "temperature" not in messages.calls[1], "the refused parameter was not dropped"
+
+
+async def test_an_unfixable_400_is_not_tripled(no_sleep: None) -> None:
+    """The trap: transient retry stacking on negotiation would make one bad
+    request three identical calls."""
+    messages = FakeMessages(fail_first=99, error=BadRequest("Error code: 400 - malformed"))
+    provider = anthropic_with(messages)
+
+    with _with_policy(retries=2), pytest.raises(BadRequest):
+        await provider.complete([{"role": "user", "content": "hi"}])
+
+    assert len(messages.calls) == 1, f"a 400 was retried: {len(messages.calls)} calls"
+
+
+async def test_a_429_from_anthropic_is_retried_not_degraded(no_sleep: None) -> None:
+    """The other half: a rate limit is ours to retry, and must not be mistaken
+    for a parameter the model refused."""
+    messages = FakeMessages(fail_first=1, error=Boom(status_code=429))
+    provider = anthropic_with(messages)
+
+    with _with_policy(retries=2):
+        text, _usage = await provider.complete([{"role": "user", "content": "hi"}])
+
+    assert text == "ok"
+    assert len(messages.calls) == 2
+    # Degradation drops a parameter; a retry must send the same request again.
+    assert messages.calls[0].keys() == messages.calls[1].keys()
+
+
+# ── the spend cap is not tripped by attempts that were never billed ──────────
+
+
+async def test_a_retry_storm_checks_the_spend_cap_once(no_sleep: None) -> None:
+    """The cap is a spend guard, not a call counter.
+
+    Checking it per attempt would make a rate-limit storm look like a spend
+    event and could trip the cap on traffic that produced no answer and no bill.
+    """
+    checks = 0
+
+    def counting_check() -> None:
+        nonlocal checks
+        checks += 1
+
+    provider = FlakyProvider(failures=3)
+    with (
+        patch("wactorz.agents.llm.base.check_cost_limit", counting_check),
+        _with_policy(retries=3),
+    ):
+        text, _usage = await provider.complete([{"role": "user", "content": "hi"}])
+
+    assert text == "ok"
+    assert provider.attempts == 4, "the retries did not happen"
+    assert checks == 1, "the spend cap was checked per attempt rather than per call"
 
 
 # ── stopping an agent mid-call ───────────────────────────────────────────────
@@ -216,10 +458,11 @@ async def test_an_abandoned_attempt_does_not_keep_running() -> None:
             raise
         return "never"
 
-    with _with_policy(retries=0, timeout=0.01), pytest.raises(asyncio.TimeoutError):
+    with _with_policy(retries=0, timeout=0.01), pytest.raises(ProviderUnavailable) as caught:
         await call_with_retry(hangs, "test")
     assert started.is_set()
     assert cancelled, "the abandoned request was left running"
+    assert isinstance(caught.value.__cause__, asyncio.TimeoutError)
 
 
 async def test_a_stream_that_never_starts_is_abandoned() -> None:
@@ -229,8 +472,9 @@ async def test_a_stream_that_never_starts_is_abandoned() -> None:
         await asyncio.sleep(60)
         yield "never"
 
-    with _with_policy(retries=0, timeout=0.01), pytest.raises(asyncio.TimeoutError):
+    with _with_policy(retries=0, timeout=0.01), pytest.raises(ProviderUnavailable) as caught:
         _ = [c async for c in stream_with_retry(never_starts, "test")]
+    assert isinstance(caught.value.__cause__, asyncio.TimeoutError)
 
 
 async def test_a_slow_stream_is_not_cut_off_once_it_has_started() -> None:

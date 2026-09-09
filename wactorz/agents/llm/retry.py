@@ -16,6 +16,8 @@ import asyncio
 import logging
 import random
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, TypeVar
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,33 @@ RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
 
 BACKOFF_BASE_S = 0.5
 BACKOFF_CAP_S = 30.0
+
+#: Longest ``Retry-After`` worth waiting out. A provider asking for more than
+#: this is not offering a pause, it is asking us to hold an actor hostage —
+#: which is the failure this module exists to prevent — so we stop instead.
+RETRY_AFTER_CAP_S = 60.0
+
+
+class ProviderUnavailable(Exception):
+    """Every attempt failed on something transient.
+
+    Distinct from the provider's own error so a caller — and the person reading
+    the message — can tell "the provider is busy, this may work later" from
+    "the request was wrong and will fail again". The failure that caused it is
+    kept as the exception's cause.
+    """
+
+    def __init__(self, label: str, attempts: int, last: BaseException) -> None:
+        status = status_of(last)
+        detail = f"HTTP {status}" if status is not None else type(last).__name__
+        super().__init__(
+            f"{label} gave up after {attempts} attempt(s): the provider kept "
+            f"failing with {detail}. This is the provider being unavailable or "
+            f"rate-limiting us, not a problem with the request."
+        )
+        self.label = label
+        self.attempts = attempts
+        self.last = last
 
 
 def status_of(exc: BaseException) -> int | None:
@@ -79,6 +108,56 @@ def attempt_timeout() -> float | None:
     return timeout if timeout > 0 else None
 
 
+def retry_after_seconds(exc: BaseException) -> float | None:
+    """The provider's own ``Retry-After``, in seconds, if it sent one.
+
+    Read by attribute like the status is: ``headers`` on aiohttp's error,
+    ``response.headers`` on the httpx-backed SDKs. RFC 9110 allows either a
+    delta in seconds or an HTTP-date, and both appear in the wild.
+    """
+    headers = getattr(exc, "headers", None)
+    if headers is None:
+        headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        return None
+    try:
+        # Both spellings, because a plain dict is not case-insensitive the way
+        # aiohttp's and httpx's header mappings are.
+        raw = headers.get("Retry-After") or headers.get("retry-after")
+    except Exception:
+        return None
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+
+
+def retry_delay(exc: BaseException, attempt: int) -> float | None:
+    """Seconds to wait before the next attempt, or None to stop retrying.
+
+    The provider's own ``Retry-After`` wins over our backoff when it sends one:
+    it knows when its limit resets and we are guessing. Beyond
+    ``RETRY_AFTER_CAP_S`` we stop rather than wait, because the caller gets a
+    usable answer sooner from an error than from an actor held that long.
+    """
+    after = retry_after_seconds(exc)
+    if after is None:
+        return backoff_delay(attempt)
+    return None if after > RETRY_AFTER_CAP_S else after
+
+
 def backoff_delay(attempt: int) -> float:
     """Exponential backoff with full jitter.
 
@@ -90,9 +169,8 @@ def backoff_delay(attempt: int) -> float:
     return random.uniform(0, ceiling)  # noqa: S311  # backoff jitter, not a secret
 
 
-async def _pause(exc: BaseException, attempt: int, attempts: int, label: str) -> None:
-    """Log the failed attempt and wait out its backoff."""
-    delay = backoff_delay(attempt)
+async def _pause(exc: BaseException, attempt: int, attempts: int, label: str, delay: float) -> None:
+    """Log the failed attempt and wait out its delay."""
     # %r, not %s: an SDK's __str__ can reach for a field its own error object
     # never got (aiohttp's dereferences request_info), and a log line must not
     # be the thing that turns a retryable failure into a crash. repr names the
@@ -150,8 +228,18 @@ async def call_with_retry(operation: Callable[[], Awaitable[T]], label: str) -> 
         except Exception as exc:
             if not is_retryable(exc):
                 raise
-            await _pause(exc, attempt, attempts, label)
-    return await _bounded(operation, timeout)
+            delay = retry_delay(exc, attempt)
+            if delay is None:
+                raise ProviderUnavailable(label, attempt + 1, exc) from exc
+            await _pause(exc, attempt, attempts, label, delay)
+    # The last attempt has nothing left to wait for, so a transient failure here
+    # is exhaustion rather than something to sleep on.
+    try:
+        return await _bounded(operation, timeout)
+    except Exception as exc:
+        if is_retryable(exc):
+            raise ProviderUnavailable(label, attempts, exc) from exc
+        raise
 
 
 async def _timed_to_first_chunk(
@@ -194,8 +282,18 @@ async def stream_with_retry(
         except Exception as exc:
             if started or not is_retryable(exc):
                 raise
-            await _pause(exc, attempt, attempts, label)
+            delay = retry_delay(exc, attempt)
+            if delay is None:
+                raise ProviderUnavailable(label, attempt + 1, exc) from exc
+            await _pause(exc, attempt, attempts, label, delay)
         else:
             return
-    async for chunk in _timed_to_first_chunk(operation(), timeout):
-        yield chunk
+    started = False
+    try:
+        async for chunk in _timed_to_first_chunk(operation(), timeout):
+            started = True
+            yield chunk
+    except Exception as exc:
+        if not started and is_retryable(exc):
+            raise ProviderUnavailable(label, attempts, exc) from exc
+        raise

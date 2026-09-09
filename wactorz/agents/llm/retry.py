@@ -15,7 +15,7 @@ request retried three times is three times the latency for the same error.
 import asyncio
 import logging
 import random
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, TypeVar
@@ -70,6 +70,24 @@ def status_of(exc: BaseException) -> int | None:
     return status if isinstance(status, int) else None
 
 
+def _chain(exc: BaseException) -> Iterator[BaseException]:
+    """``exc`` and everything it was raised from, outermost first.
+
+    Both links are followed because they are not interchangeable: ``raise X from
+    Y`` records Y as the cause, while an exception raised while another is being
+    handled records that one as the context. The HTTP stack under the SDKs
+    re-raises its own error type with ``from None``, which clears the cause and
+    leaves the socket error reachable only as the context -- so following causes
+    alone stops one hop short of the only part that says what went wrong.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
 def is_retryable(exc: BaseException) -> bool:
     """Whether another attempt could plausibly succeed.
 
@@ -77,11 +95,21 @@ def is_retryable(exc: BaseException) -> bool:
     answer says whether the request itself was the problem. Without one the
     failure never reached the service, so a timeout or any transport error is
     worth repeating.
+
+    That transport failure is looked for down the whole chain rather than on the
+    exception itself, because every SDK here wraps it in a class of its own that
+    is neither a timeout nor an ``OSError``: a refused connection arrives as the
+    client's own connection error and admits to being a socket failure only
+    through what it was raised from. Matching on the builtins at the bottom
+    rather than on the wrapper also keeps this honest about which HTTP library
+    is underneath, which is not something a caller can count on -- an SDK may
+    vendor its own copy, and then the library's name is not even the one this
+    process imports.
     """
     status = status_of(exc)
     if status is not None:
         return status in RETRYABLE_STATUS
-    return isinstance(exc, (asyncio.TimeoutError, TimeoutError, OSError))
+    return any(isinstance(e, (asyncio.TimeoutError, TimeoutError, OSError)) for e in _chain(exc))
 
 
 def max_attempts() -> int:

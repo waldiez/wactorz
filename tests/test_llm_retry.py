@@ -1,6 +1,7 @@
 """Retry, backoff and per-attempt timeout around every LLM provider call."""
 
 import asyncio
+import socket
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -103,6 +104,85 @@ def test_transport_failures_retry_without_a_status() -> None:
 
 def test_a_failure_with_no_status_and_no_transport_cause_is_final() -> None:
     assert not is_retryable(ValueError("bad request shape"))
+
+
+def _closed_port() -> int:
+    """A port nothing is listening on: bound to learn its number, then released."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _real_openai() -> Any:
+    """The installed OpenAI SDK, or skip the test.
+
+    Not `importorskip`, because importability is not the question here. Other
+    modules in this suite call `ensure_importable("openai")`, which puts an
+    empty placeholder in `sys.modules` when the extra is missing -- and that
+    placeholder is process-wide and never taken back out. Asking for the client
+    class is what distinguishes the real SDK from a stand-in for its name.
+    """
+    import openai  # optional dependency: absent unless the `openai` extra is installed
+
+    if not hasattr(openai, "AsyncOpenAI"):
+        pytest.skip("a placeholder is standing in for the OpenAI extra")
+    return openai
+
+
+async def _sdk_error_for_a_refused_connection() -> BaseException:
+    """What the OpenAI client really raises when nothing is listening.
+
+    Built by connecting rather than by hand: the point of these tests is that a
+    real SDK failure is classified correctly, and the wrapper classes involved
+    are the SDK's own -- it vendors its HTTP library, so the exception types in
+    the chain are not the ones this process imports as `httpx`.
+    """
+    openai = _real_openai()
+
+    client = openai.AsyncOpenAI(
+        api_key="x", base_url=f"http://127.0.0.1:{_closed_port()}/v1", max_retries=0
+    )
+    try:
+        await client.chat.completions.create(
+            model="m", messages=[{"role": "user", "content": "hi"}]
+        )
+    except Exception as exc:  # the exception is what this builds
+        return exc
+    raise AssertionError("connecting to a closed port was expected to fail")
+
+
+async def test_a_real_sdk_connection_failure_is_retryable() -> None:
+    # The regression this guards: the SDK reports a refused connection as its
+    # own class, which is neither a TimeoutError nor an OSError and carries no
+    # status, so testing the predicate against a hand-made OSError said it was
+    # covered while every real one was being treated as final.
+    exc = await _sdk_error_for_a_refused_connection()
+
+    assert not isinstance(exc, (TimeoutError, OSError))
+    assert status_of(exc) is None
+    assert is_retryable(exc)
+
+
+def test_a_transport_failure_reachable_only_as_context_is_found() -> None:
+    # The HTTP stack re-raises with `from None`, so the socket error is not the
+    # cause of anything -- following causes alone stops at the wrapper.
+    try:
+        try:
+            raise ConnectionRefusedError(111, "Connection refused")
+        except OSError:
+            raise RuntimeError("connection failed") from None
+    except RuntimeError as exc:
+        assert exc.__cause__ is None
+        assert is_retryable(exc)
+
+
+def test_the_walk_survives_a_chain_that_loops() -> None:
+    first = RuntimeError("first")
+    second = RuntimeError("second")
+    first.__cause__ = second
+    second.__cause__ = first
+
+    assert not is_retryable(first)
 
 
 def test_backoff_grows_and_is_capped() -> None:

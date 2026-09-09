@@ -260,13 +260,23 @@ class GeminiProvider(LLMProvider):
                     if usage_metadata:
                         q.put(("usage", usage_metadata))
             except Exception as e:
-                q.put(("error", str(e)))
+                # The exception itself, not its text. What decides whether this
+                # is worth another attempt -- the HTTP status, and the transport
+                # failure it was raised from -- exists only on the object, and
+                # `str()` keeps the part a human reads while dropping all of it.
+                q.put(("error", e))
             finally:
                 q.put(("done", None))
 
         loop = asyncio.get_running_loop()
         loop.run_in_executor(None, _stream_thread)
 
+        # Whether any of the answer has reached the reader, which decides how a
+        # failure is reported. Nothing delivered yet means the attempt can be
+        # made again from the start, so it is raised and the retry policy sees
+        # it. Once a chunk is out, a second attempt would repeat text already
+        # read, so the failure is described in the final item instead.
+        delivered = False
         error: str | None = None
         while True:
             try:
@@ -279,17 +289,24 @@ class GeminiProvider(LLMProvider):
                 # had simply finished.
                 error = f"stream stalled: nothing received for {_GEMINI_STREAM_STALL_TIMEOUT}s"
                 logger.warning("[GeminiProvider] %s", error)
+                if not delivered:
+                    # `from None`: the queue going empty is this bridge's own
+                    # way of noticing, not the reason the model went quiet.
+                    raise TimeoutError(error) from None
                 break
             if kind == "done":
                 break
             elif kind == "text":
+                delivered = True
                 yield value
             elif kind == "usage":
                 input_tokens = value.prompt_token_count or 0
                 output_tokens = value.candidates_token_count or 0
             elif kind == "error":
-                error = str(value)
                 logger.error("[GeminiProvider] Stream error: %s", value)
+                if not delivered:
+                    raise value
+                error = str(value)
                 break
 
         # Text that arrived is real work and is delivered either way, but the

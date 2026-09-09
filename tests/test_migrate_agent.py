@@ -15,6 +15,7 @@ The refusals matter as much as the moves: migrating to a node that is not
 listening loses the agent, so the checks that come first are pinned first.
 """
 
+import json
 import time
 from typing import Any
 
@@ -34,12 +35,21 @@ class _Registry:
     def find_by_name(self, name: str) -> "_LocalAgent | None":
         return self._by.get(name)
 
+    async def unregister(self, actor_id: str) -> None:
+        for name, agent in list(self._by.items()):
+            if agent.actor_id == actor_id:
+                del self._by[name]
+
 
 class _LocalAgent:
     def __init__(self, name: str) -> None:
         self.name = name
         self.actor_id = f"{name}-id"
         self._persistence_api = None
+        self.stopped = False
+
+    async def stop(self) -> None:
+        self.stopped = True
 
 
 class _Main:
@@ -67,6 +77,9 @@ class _Main:
         self.publish_options: list[dict[str, Any]] = []
         self.saved: list[dict[str, Any]] = []
         self.desired_state: list[tuple[str, Any, Any]] = []
+        self.spawned_remote: list[tuple[dict[str, Any], str, bool]] = []
+        self.spawned_local: list[dict[str, Any]] = []
+        self.purged: list[tuple[Any, str]] = []
         self._spawn_registry = dict(spawn_registry or {})
 
         async def _publish(topic: str, payload: Any, **kw: Any) -> None:
@@ -76,10 +89,23 @@ class _Main:
         async def _desired(node: str, cfg: Any = None, remove_name: Any = None) -> None:
             self.desired_state.append((node, cfg, remove_name))
 
+        async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+            self.spawned_remote.append((cfg, node, save))
+
+        async def _spawn_from_config(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:
+            self.spawned_local.append(cfg)
+
+        async def _purge(actor: Any, name: str) -> None:
+            self.purged.append((actor, name))
+
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_update_node_desired_state", _desired)
         setattr(main, "_get_spawn_registry", lambda: dict(self._spawn_registry))
         setattr(main, "_save_to_spawn_registry", self.saved.append)
+        setattr(main, "_spawn_remote", _spawn_remote)
+        setattr(main, "_spawn_from_config", _spawn_from_config)
+        setattr(main, "_purge_local_agent_persistence", _purge)
+        setattr(main, "_queue_notification", lambda _n: None)
         self.actor = main
 
     async def migrate(self, agent: str, target: str) -> dict[str, Any]:
@@ -344,3 +370,112 @@ class TestComingHome:
 
         assert result["success"] is True
         assert "waiting" in result["message"]
+
+
+class TestGoingOut:
+    """Local → remote, which has the same two copies to reconcile as the rest.
+
+    The local state is this leg's equivalent of the source node's copy: it is
+    the only intact one until the target says the agent started, so nothing may
+    delete it before then.
+    """
+
+    @staticmethod
+    def _main() -> _Main:
+        return _Main(
+            spawn_registry={"collector": with_code()},
+            nodes={"nuc": online()},
+            local=("collector",),
+        )
+
+    async def _migrated(self) -> tuple[_Main, str, dict[str, Any]]:
+        main = self._main()
+        await main.migrate("collector", "nuc")
+        token, pending = next(iter(main.actor.migration.pending_spawns.items()))
+        return main, token, pending
+
+    async def test_the_agent_is_handed_over_with_a_token(self) -> None:
+        main, token, _pending = await self._migrated()
+
+        config, node, save = main.spawned_remote[0]
+        assert node == "nuc"
+        assert config["_migration_token"] == token
+        assert save is False, "the registry must not move before the agent does"
+
+    async def test_the_local_state_is_kept_until_the_target_confirms(self) -> None:
+        main, _token, _pending = await self._migrated()
+
+        assert main.purged == [], "purging here loses the agent if the spawn fails"
+
+    async def test_the_local_instance_is_stopped_all_the_same(self) -> None:
+        # Stopped, not deleted: two copies running would both answer.
+        main = self._main()
+        agent = main.actor._registry.find_by_name("collector")
+
+        await main.migrate("collector", "nuc")
+
+        assert agent is not None and agent.stopped
+
+    async def test_the_migration_is_recorded_so_it_can_be_rolled_back(self) -> None:
+        _main, _token, pending = await self._migrated()
+
+        assert pending["from_node"] == "local"
+        assert pending["target_node"] == "nuc"
+        assert pending["local_actor"] is not None
+
+    async def test_the_ack_purges_the_local_copy(self) -> None:
+        main, token, _pending = await self._migrated()
+
+        await main.actor.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack",
+            json.dumps({"agent": "collector", "migration_token": token}).encode(),
+        )
+
+        assert [name for _actor, name in main.purged] == ["collector"]
+
+    async def test_the_ack_does_not_publish_a_desired_state_for_local(self) -> None:
+        # There is no node called "local" to reconcile.
+        main, token, _pending = await self._migrated()
+
+        await main.actor.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack",
+            json.dumps({"agent": "collector", "migration_token": token}).encode(),
+        )
+
+        assert [t for t, _p in main.published_to("/desired_state")] == ["nodes/nuc/desired_state"]
+
+    async def test_a_target_that_never_confirms_brings_the_agent_home(self) -> None:
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        assert main.spawned_local, "the agent must be started here again"
+        assert main.purged == [], "the copy it comes back to must still be there"
+
+    async def test_a_rollback_withdraws_the_agent_from_the_target(self) -> None:
+        # The stop is transient; the desired state is retained. Leaving the
+        # agent in it means the target's next reboot spawns a second copy
+        # beside the one that was just restored here.
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        published = main.published_to("/desired_state")
+        assert published, "the target was never told to forget the agent"
+        _topic, payload = published[-1]
+        assert [a["name"] for a in payload["agents"]] == []
+
+    async def test_what_comes_home_carries_no_stale_snapshot(self) -> None:
+        # Local state was never purged, so it is both intact and newer than the
+        # snapshot that was shipped out.
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        restored = main.spawned_local[0]
+        assert "_initial_state" not in restored
+        assert "node" not in restored
+        assert restored["replace"] is True

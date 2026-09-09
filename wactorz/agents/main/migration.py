@@ -51,6 +51,12 @@ SWEEP_INTERVAL_S = TOKEN_TTL_S / 2
 #: can be dropped when the agent comes back. Hand-written code never has it.
 BRIDGE_CODE_MARKER = "Auto-generated LLM bridge"
 
+#: `from_node` for an agent that was running here rather than on a node. The
+#: source of a migration is a node name everywhere else, so the sentinel is what
+#: tells the completion and rollback paths to act on this process instead of
+#: publishing to a node topic that does not exist.
+LOCAL_SOURCE = "local"
+
 
 class Migration:
     """Agents in flight between main and a node."""
@@ -228,17 +234,60 @@ class Migration:
 
         committed = {k: v for k, v in config.items() if not k.startswith("_migration")}
         self.host._save_to_spawn_registry(committed)
-        await self.update_desired_state(from_node, remove_name=agent_name)
+        if from_node != LOCAL_SOURCE:
+            # There is no `nodes/local/desired_state`: a local source is this
+            # process, and dropping the agent from it is the purge below.
+            await self.update_desired_state(from_node, remove_name=agent_name)
         await self.update_desired_state(target_node, committed)
-        await self._tell_source_to_delete(agent_name, from_node)
+        await self._release_source(pending)
         self._announce(
             f"Migration of '{agent_name}' from '{from_node}' → '{target_node}' complete.",
             "info",
         )
 
+    async def _release_source(self, pending: dict[str, Any]) -> None:
+        """Drop the source's copy, now that the agent is confirmed elsewhere.
+
+        Where that copy lives is the only difference between the legs: a node
+        is told to delete, and a local source is purged here.
+        """
+        from_node = pending.get("from_node", "")
+        if from_node == LOCAL_SOURCE:
+            await self._purge_local_source(pending)
+            return
+        await self._tell_source_to_delete(pending["agent_name"], from_node)
+
+    async def _purge_local_source(self, pending: dict[str, Any]) -> None:
+        """Wipe what the local instance persisted, once the target has it.
+
+        Held until the ack for the reason a node's copy is: until the target
+        says it started, this is the only intact copy of the agent. Purged at
+        all because the snapshot has moved on — left behind, it would merge
+        with the state that comes home on a migrate-back and duplicate
+        everything in it.
+
+        The stopped actor is carried in the pending entry rather than looked up
+        again: it is unregistered by now, and its own persistence API is what
+        knows which backends to clear.
+        """
+        actor = pending.get("local_actor")
+        if self.host is None or actor is None:
+            return
+        agent_name = pending["agent_name"]
+        try:
+            await self.host._purge_local_agent_persistence(actor, agent_name)
+        except Exception as exc:
+            logger.warning(
+                "[%s] Could not purge local persistence for %r after it moved to %r: %s",
+                self.host.name,
+                agent_name,
+                pending.get("target_node", "?"),
+                exc,
+            )
+
     async def _tell_source_to_delete(self, agent_name: str, from_node: str) -> None:
         """Drop the source's copy, now that the agent is confirmed elsewhere."""
-        if self.host is None or not from_node or from_node == "local":
+        if self.host is None or not from_node or from_node == LOCAL_SOURCE:
             return
         await self.host._mqtt_publish(
             f"nodes/{from_node}/stop",
@@ -281,14 +330,40 @@ class Migration:
                 {"name": agent_name, "delete": True},
                 qos=1,
             )
-            restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
-            restored["node"] = from_node
-            await self.host._spawn_remote(restored, from_node, save=True)
+            # The stop is a one-off, but placing the agent added it to the
+            # target's desired state, and that message is retained. Left there,
+            # the next time the node reboots it reconciles the agent back into
+            # existence beside the copy this rollback is restoring, and the two
+            # of them carry the same name and diverge from the same state.
+            await self.update_desired_state(target_node, remove_name=agent_name)
+            if from_node == LOCAL_SOURCE:
+                await self._restore_local(pending)
+            else:
+                restored = {k: v for k, v in pending["config"].items() if k != "_migration_token"}
+                restored["node"] = from_node
+                await self.host._spawn_remote(restored, from_node, save=True)
             self._announce(
                 f"Migration of '{agent_name}' to '{target_node}' failed — "
                 f"it is back on '{from_node}'.",
                 "warning",
             )
+
+    async def _restore_local(self, pending: dict[str, Any]) -> None:
+        """Start the agent here again after its target never confirmed.
+
+        No snapshot is carried back in. The local state was never purged --
+        that is what the ack was holding up -- so what is on disk is both
+        intact and newer than the copy that was shipped out.
+        """
+        if self.host is None:
+            return
+        restored = {
+            k: v
+            for k, v in pending["config"].items()
+            if k not in ("_migration_token", "_initial_state", "node")
+        }
+        restored["replace"] = True
+        await self.host._spawn_from_config(restored, save=True)
 
     def _expire_tokens(self) -> None:
         """Forget return tokens whose migration never completed.
@@ -700,14 +775,14 @@ class Migration:
         except Exception as _e:
             logger.debug("[%s] Could not capture live contract: %s", self.host.name, _e)
 
-        # Stop the local instance, then purge its persistence.
+        # Stop the local instance, and keep everything it persisted.
         #
-        # We've already snapshotted `initial_state` above — that's the
-        # authoritative copy now being shipped to the remote node. The
-        # local SQLite rows / pickle / in-memory values are about to become
-        # stale ghosts. If the user later migrates the agent back here
-        # without those being cleared, they'd merge with the freshly
-        # arrived state and produce duplicate conversation entries.
+        # `initial_state` above is the copy being shipped out; this one is what
+        # the migration comes back to if the target never confirms. Purging it
+        # here would put the agent nowhere the moment a spawn failed on the
+        # node -- the same window the other legs close by deleting only on the
+        # ack -- so it is purged there instead, in `_purge_local_source`.
+        stopped: Any | None = None
         if self.host._registry:
             local = self.host._registry.find_by_name(agent_name)
             if local:
@@ -715,20 +790,7 @@ class Migration:
                     await self.host._registry.unregister(local.actor_id)
                     await local.stop()
                     self.host._agent_manifests.pop(agent_name, None)
-                    # Wipe SQLite / memory / pickle for this agent. Uses
-                    # the same purge primitive as permanent delete — the
-                    # difference is the agent is being re-created on the
-                    # target node with the snapshot we already have.
-                    try:
-                        await self.host._purge_local_agent_persistence(local, agent_name)
-                    except Exception as e:
-                        logger.warning(
-                            "[%s] Could not purge local persistence for %r "
-                            "after local→remote migration: %s",
-                            self.host.name,
-                            agent_name,
-                            e,
-                        )
+                    stopped = local
                     await asyncio.sleep(0.3)
                 except Exception as e:
                     logger.warning(
@@ -752,13 +814,22 @@ class Migration:
             if v:  # don't overwrite with empty values
                 new_config[k] = v
 
-        await self.host._spawn_remote(new_config, target_node, save=True)
-        # _spawn_remote already saved the full new_config (including state +
-        # live contract). The subsequent _save_to_spawn_registry below would
-        # OVERWRITE it with the stale `config`, so skip it for this branch.
+        token = secrets.token_hex(8)
+        new_config["_migration_token"] = token
+        self.pending_spawns[token] = {
+            "agent_name": agent_name,
+            "from_node": LOCAL_SOURCE,
+            "target_node": target_node,
+            "config": new_config,
+            "local_actor": stopped,
+            "started_at": time.time(),
+        }
+        # Nothing is committed yet: the registry still places this agent here,
+        # so a restart before the ack brings it back rather than losing it.
+        await self.host._spawn_remote(new_config, target_node, save=False)
         msg = (
-            f"Migrating '{agent_name}' from 'local' "
-            f"→ '{target_node}'. It will appear in the dashboard shortly."
+            f"Migrating '{agent_name}' from 'local' → '{target_node}' "
+            f"(waiting for it to confirm it started)."
         )
         logger.info("[%s] %s", self.host.name, msg)
         return {"success": True, "message": msg}

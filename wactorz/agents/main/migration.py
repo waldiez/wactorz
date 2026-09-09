@@ -25,6 +25,7 @@ from ...core.mqtt import (
     mqtt_client,
     session_kwargs,
 )
+from .spawns import without_transient_keys
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -792,9 +793,11 @@ class Migration:
         reg = self.host._get_spawn_registry()
         agents = {name: cfg for name, cfg in reg.items() if cfg.get("node", "").strip() == node}
 
-        # Apply pending change before publishing
+        # Apply pending change before publishing. Stripped, because this message
+        # is retained: the runner reconciles from it on every reboot, and a
+        # migration snapshot left in it would be re-applied each time.
         if new_config:
-            agents[new_config["name"]] = new_config
+            agents[new_config["name"]] = without_transient_keys(new_config)
         if remove_name:
             agents.pop(remove_name, None)
 

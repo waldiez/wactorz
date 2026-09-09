@@ -37,6 +37,27 @@ logger = logging.getLogger(__name__)
 #: dashboard, migration and `/agents restart` all read the same store.
 SPAWN_REGISTRY_KEY = "_spawned_agents"
 
+#: Config keys that instruct the one spawn carrying them, rather than describing
+#: what the agent is.
+#:
+#: `_initial_state` is a state snapshot handed over at migration time. The runner
+#: treats it as ground truth and deletes the agent's state file to apply it, which
+#: is right once — the source was authoritative at that moment — and wrong every
+#: time after, because the agent has been living on the target since. Kept in a
+#: standing record it is re-applied on every reconcile, so a node reboot would
+#: roll the agent back to the moment it arrived.
+TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state"})
+
+
+def without_transient_keys(config: dict[str, Any]) -> dict[str, Any]:
+    """`config` without the keys that must not outlive the spawn they were sent with.
+
+    Applied where a config is *recorded* — the spawn registry and a node's
+    desired state — never to the spawn message itself, which is the hand-off
+    those keys exist for and is retain-cleared by the runner once consumed.
+    """
+    return {k: v for k, v in config.items() if k not in TRANSIENT_CONFIG_KEYS}
+
 
 def _parse_spawn_config(raw: str) -> dict:
     """Robustly parse a spawn config that may contain raw multiline code strings.
@@ -231,11 +252,21 @@ class SpawnService:
         self.host = host
 
     def _get_spawn_registry(self) -> dict[str, Any]:
-        return self.host.recall(SPAWN_REGISTRY_KEY) or {}
+        """What main remembers about the agents it spawned.
+
+        Cleaned on the way out as well as on the way in. An entry recorded
+        before the arrival snapshot was recognised as a one-time instruction
+        still carries one, and every reader here hands it back to a runner that
+        treats it as ground truth — the desired state a node reconciles from, a
+        recovery re-spawn. Cleaning on read heals those entries wherever they
+        are read, and the next write stores the cleaned form.
+        """
+        reg = self.host.recall(SPAWN_REGISTRY_KEY) or {}
+        return {name: without_transient_keys(cfg) for name, cfg in reg.items()}
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         reg = self._get_spawn_registry()
-        reg[config["name"]] = config
+        reg[config["name"]] = without_transient_keys(config)
         self.host.persist(SPAWN_REGISTRY_KEY, reg)
         logger.info("[%s] Spawn registry: %s", self.host.name, list(reg.keys()))
 

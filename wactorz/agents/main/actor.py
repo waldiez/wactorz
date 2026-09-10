@@ -248,6 +248,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self._llm_bridge_listener()))
         # Observe real MQTT payloads from remote agents to populate observed_samples
         self._tasks.append(asyncio.create_task(self._remote_observed_samples_listener()))
+        # Before either migration task: a migration that was in flight when this
+        # process stopped is still in flight on the node, and its ack may already
+        # be queued for us.
+        self.migration.restore()
         # Receive state + config from remote nodes during remote→local migration
         self._tasks.append(asyncio.create_task(self._state_return_listener()))
         # Put back agents whose migration stalled with them running nowhere

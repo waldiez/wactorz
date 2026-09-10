@@ -57,6 +57,20 @@ BRIDGE_CODE_MARKER = "Auto-generated LLM bridge"
 #: publishing to a node topic that does not exist.
 LOCAL_SOURCE = "local"
 
+#: Where the migrations in flight are recorded, so a restart does not drop them.
+PENDING_MIGRATIONS_KEY = "_pending_migrations"
+
+#: Entry fields that cannot outlive the process, and so are never written.
+#:
+#: `local_actor` is the stopped local instance, carried so the ack can purge its
+#: persistence through the actor's own API. A restart loses it, and there is
+#: nothing to fall back to: `_purge_local_agent_persistence` takes the agent name
+#: for its log lines only, and every deletion goes through the actor. So a
+#: restored local→remote migration purges through whatever copy startup brought
+#: back instead, and leaves the state behind only when there is none — see
+#: `_purge_local_source`.
+_TRANSIENT_ENTRY_FIELDS = ("local_actor",)
+
 
 class Migration:
     """Agents in flight between main and a node."""
@@ -70,6 +84,71 @@ class Migration:
         self.pending_returns: dict[str, dict[str, Any]] = {}
         #: Migrations waiting for a target node to confirm the spawn started.
         self.pending_spawns: dict[str, dict[str, Any]] = {}
+
+    def _save_pending(self) -> None:
+        """Record both maps. Called after every change to either.
+
+        A failure here is logged and swallowed: losing the record degrades a
+        restart back to the behaviour that existed before this, and that is not
+        a reason to fail the migration currently in flight.
+        """
+        if self.host is None:
+            return
+        try:
+            self.host.persist(
+                PENDING_MIGRATIONS_KEY,
+                {
+                    "returns": self.pending_returns,
+                    "spawns": {
+                        token: {
+                            key: value
+                            for key, value in entry.items()
+                            if key not in _TRANSIENT_ENTRY_FIELDS
+                        }
+                        for token, entry in self.pending_spawns.items()
+                    },
+                },
+            )
+        except Exception:
+            logger.exception("[main] Could not record the migrations in flight")
+
+    def restore(self) -> None:
+        """Take back the migrations that were in flight when the process stopped.
+
+        Without this a restart drops the token, and the two halves of the
+        choreography both go quiet: an ack arriving afterwards finds nothing
+        waiting and is ignored, and no rollback ever fires. The agent comes back
+        locally from the spawn registry while the target may also be running it —
+        the duplicate the confirmation work exists to prevent, reached through
+        the one door it left open.
+
+        Nothing is resolved here. The sweep already runs on a timer and already
+        knows the rules, so an entry that is past its TTL is handled on its first
+        pass rather than needing a second implementation at startup.
+        """
+        if self.host is None:
+            return
+        try:
+            stored = self.host.recall(PENDING_MIGRATIONS_KEY) or {}
+        except Exception:
+            logger.exception("[main] Could not read back the migrations in flight")
+            return
+        if not isinstance(stored, dict):
+            return
+        returns = stored.get("returns") or {}
+        spawns = stored.get("spawns") or {}
+        if isinstance(returns, dict):
+            self.pending_returns.update(returns)
+        if isinstance(spawns, dict):
+            self.pending_spawns.update(spawns)
+        if self.pending_returns or self.pending_spawns:
+            logger.info(
+                "[main] Took back %s migration(s) in flight: %s waiting to come back, "
+                "%s waiting to be confirmed",
+                len(self.pending_returns) + len(self.pending_spawns),
+                len(self.pending_returns),
+                len(self.pending_spawns),
+            )
 
     async def state_return_listener(self) -> None:
         """Follow `nodes/+/state_return` until the actor stops."""
@@ -144,6 +223,7 @@ class Migration:
             return
 
         started = self.pending_returns.pop(token)
+        self._save_pending()
         agent_name = data.get("agent") or started.get("agent_name", "?")
         from_node = started.get("from_node", "?")
         cfg = data.get("config") or {}
@@ -197,6 +277,7 @@ class Migration:
             "config": config,
             "started_at": time.time(),
         }
+        self._save_pending()
         await self.host._spawn_remote(config, target_node, save=False)
         logger.info(
             "[%s] Placed %r on %r; waiting for it to confirm it started",
@@ -223,6 +304,7 @@ class Migration:
         self._expire_tokens()
         token = data.get("migration_token", "")
         pending = self.pending_spawns.pop(token, None) if token else None
+        self._save_pending()
         if pending is None:
             logger.debug("[main] spawn_ack with unknown/expired token from %s — ignoring", topic)
             return
@@ -271,9 +353,51 @@ class Migration:
         knows which backends to clear.
         """
         actor = pending.get("local_actor")
-        if self.host is None or actor is None:
+        if self.host is None:
             return
-        agent_name = pending["agent_name"]
+        agent_name = pending.get("agent_name", "?")
+        if actor is None:
+            # The migration outlived the process that started it, so the
+            # instance it stopped is gone — but startup may have brought the
+            # agent back. The registry was never moved to the target (that waits
+            # for this ack), so restoring spawned agents saw a local agent and
+            # restarted it. Left alone, the agent then runs here *and* on the
+            # target, for good. Stopped the way `migrate_agent` stopped the
+            # original, and then purged through: a stopped actor is exactly what
+            # the purge needs, so this also settles the purge instead of skipping.
+            registry = self.host._registry
+            revived = registry.find_by_name(agent_name) if registry else None
+            if revived is None:
+                logger.info(
+                    "[%s] %r moved to %r across a restart — its local state is left "
+                    "in place, and will merge if it ever migrates back",
+                    self.host.name,
+                    agent_name,
+                    pending.get("target_node", "?"),
+                )
+                return
+            try:
+                await registry.unregister(revived.actor_id)
+                await revived.stop()
+            except Exception as exc:
+                # Not purged: an instance that failed to stop may still be
+                # running, and wiping its state underneath it is worse.
+                logger.warning(
+                    "[%s] %r is confirmed on %r but the copy restarted here would not stop: %s",
+                    self.host.name,
+                    agent_name,
+                    pending.get("target_node", "?"),
+                    exc,
+                )
+                return
+            self.host._agent_manifests.pop(agent_name, None)
+            logger.info(
+                "[%s] Stopped the copy of %r restarted here — it is confirmed on %r",
+                self.host.name,
+                agent_name,
+                pending.get("target_node", "?"),
+            )
+            actor = revived
         try:
             await self.host._purge_local_agent_persistence(actor, agent_name)
         except Exception as exc:
@@ -310,6 +434,7 @@ class Migration:
             if now - pending.get("started_at", 0) <= TOKEN_TTL_S:
                 continue
             self.pending_spawns.pop(token, None)
+            self._save_pending()
             agent_name = pending["agent_name"]
             from_node = pending["from_node"]
             target_node = pending["target_node"]
@@ -376,6 +501,7 @@ class Migration:
         for token, started in list(self.pending_returns.items()):
             if now - started.get("started_at", 0) > TOKEN_TTL_S:
                 self.pending_returns.pop(token, None)
+                self._save_pending()
 
     async def expire_pending_returns(self) -> None:
         """Restart an agent whose node was asked to hand it back and never did.
@@ -392,6 +518,7 @@ class Migration:
             if now - started.get("started_at", 0) <= TOKEN_TTL_S:
                 continue
             self.pending_returns.pop(token, None)
+            self._save_pending()
             agent_name = started.get("agent_name", "")
             from_node = started.get("from_node", "")
             if not agent_name or not from_node:
@@ -422,15 +549,20 @@ class Migration:
             )
 
     async def stalled_migration_watcher(self) -> None:
-        """Sweep for stalled migrations on a timer, until the actor stops."""
+        """Sweep for stalled migrations on a timer, until the actor stops.
+
+        Sweeps before the first wait, not after it: a migration taken back by
+        `restore` may have run out its time while the process was down, and
+        waiting a full interval would leave its rollback pending for no reason.
+        """
         while self.host is not None and self.host.state.value not in ("stopped", "failed"):
-            await asyncio.sleep(SWEEP_INTERVAL_S)
             try:
                 await self.sweep_stalled_migrations()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("[main] Migration sweep failed")
+            await asyncio.sleep(SWEEP_INTERVAL_S)
 
     async def sweep_stalled_migrations(self) -> None:
         """Recover from either leg going quiet.
@@ -624,6 +756,7 @@ class Migration:
                 "target_node": target_node,
                 "started_at": time.time(),
             }
+            self._save_pending()
             await self.host._mqtt_publish(
                 f"nodes/{current_node}/migrate",
                 {"name": agent_name, "target_node": "@main", "return_token": return_token},
@@ -672,6 +805,7 @@ class Migration:
                 "from_node": current_node,
                 "started_at": time.time(),
             }
+            self._save_pending()
             await self.host._mqtt_publish(
                 f"nodes/{current_node}/migrate",
                 {"name": agent_name, "target_node": "@main", "return_token": return_token},
@@ -824,6 +958,7 @@ class Migration:
             "local_actor": stopped,
             "started_at": time.time(),
         }
+        self._save_pending()
         # Nothing is committed yet: the registry still places this agent here,
         # so a restart before the ack brings it back rather than losing it.
         await self.host._spawn_remote(new_config, target_node, save=False)

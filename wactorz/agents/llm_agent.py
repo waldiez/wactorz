@@ -457,7 +457,8 @@ class LLMAgent(Actor):
             return
 
         self.metrics.messages_processed += 1
-        self._record_user_turn(user_message, attachments, time.time())
+        ts_user = time.time()
+        self._record_user_turn(user_message, attachments, ts_user)
 
         full_text = []
         usage = {}
@@ -493,11 +494,17 @@ class LLMAgent(Actor):
                 len(response),
                 usage.get("error", ""),
             )
+        ts_reply = time.time()
         self._conversation_history.append(
-            {"role": "assistant", "content": response, "ts": time.time()}
+            {"role": "assistant", "content": response, "ts": ts_reply}
         )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
+        # Recorded as chat() records, and only for a turn that finished: an
+        # interrupted stream raises out of the loop above before reaching here.
+        # Without this, whether an agent's turns reach chat_log at all would
+        # depend on whether its provider streams.
+        self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=ts_reply)
 
         self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)

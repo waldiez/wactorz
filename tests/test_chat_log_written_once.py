@@ -20,7 +20,7 @@ from typing import Any
 
 import pytest
 
-from wactorz.agents.llm_agent import LLMAgent
+from wactorz.agents.llm_agent import LLMAgent, LLMProvider
 from wactorz.core.persistence import WactorzDB, chat_turn_recorded
 
 
@@ -102,3 +102,80 @@ class TestATurnFromAnywhereElse:
         rows = db.query_chat_log()
         assert len(rows) == 2
         assert all("hunter2" not in row["content"] for row in rows)
+
+
+class _Streams(LLMProvider):  # pylint: disable=abstract-method
+    """A provider that really streams."""
+
+    async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
+        yield "a"
+        yield "b"
+
+
+class _AnswersWhole(LLMProvider):  # pylint: disable=abstract-method
+    """A provider that only answers in one piece, so chat_stream falls back to chat()."""
+
+    async def _complete(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
+        return "whole", {"input_tokens": 1, "output_tokens": 1, "cost_usd": 0.0}
+
+
+class _BreaksMidStream(LLMProvider):  # pylint: disable=abstract-method
+    """Streams one chunk, then fails — an answer interrupted part-way."""
+
+    async def _stream(self, messages: list[dict], system: str = "", **kwargs: Any) -> Any:
+        yield "half"
+        raise ValueError("connection dropped")
+
+
+def _agent(provider: LLMProvider, tmp_path: Path) -> LLMAgent:
+    return LLMAgent(llm_provider=provider, name="plain-agent", persistence_dir=str(tmp_path))
+
+
+async def _stream_turn(agent: LLMAgent, text: str) -> None:
+    async for _chunk in agent.chat_stream(text):
+        pass
+
+
+class TestAStreamedTurn:
+    """Recorded whether or not the provider streams — the record used to depend on it."""
+
+    async def test_is_recorded_like_a_whole_one(self, db: WactorzDB, tmp_path: Path) -> None:
+        await _stream_turn(_agent(_Streams(), tmp_path), "hello")
+
+        rows = sorted(db.query_chat_log(), key=lambda row: row["ts"])
+        assert [(row["role"], row["content"]) for row in rows] == [
+            ("user", "hello"),
+            ("assistant", "ab"),
+        ]
+
+    async def test_a_whole_answer_is_still_recorded_once(
+        self, db: WactorzDB, tmp_path: Path
+    ) -> None:
+        # The fallback goes through chat(), which records; the streaming path
+        # must not add a second pair on top of it.
+        await _stream_turn(_agent(_AnswersWhole(), tmp_path), "hello")
+
+        assert len(db.query_chat_log()) == 2
+
+    async def test_is_not_recorded_again_on_the_dashboard(
+        self, db: WactorzDB, tmp_path: Path
+    ) -> None:
+        agent = _agent(_Streams(), tmp_path)
+
+        async def turn() -> None:
+            chat_turn_recorded.set(True)
+            await _stream_turn(agent, "hello")
+
+        await asyncio.create_task(turn())
+
+        assert db.query_chat_log() == []
+
+    async def test_an_interrupted_answer_is_not_recorded(
+        self, db: WactorzDB, tmp_path: Path
+    ) -> None:
+        # As chat(): only a turn that finished is written, even though the
+        # agent's own memory keeps the partial reply.
+        with pytest.raises(ValueError, match="connection dropped"):
+            await _stream_turn(_agent(_BreaksMidStream(), tmp_path), "hello")
+
+        assert db.query_chat_log() == []

@@ -9,7 +9,8 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from ..core.actor import Actor, Message, MessageType
-from ..core.persistence import get_db
+from ..core.persistence import chat_turn_recorded, get_db
+from ..monitoring.log_redaction import redact
 from .llm.attachments import HISTORY_TEXT_LIMIT, flatten
 from .llm.base import LLMProvider, ToolCall, ToolCompletion
 from .llm.cost import (
@@ -512,7 +513,18 @@ class LLMAgent(Actor):
         yield usage
 
     def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
-        """Write both halves of a turn to the SQLite chat_log."""
+        """Write both halves of a turn to the SQLite chat_log.
+
+        Unless the transport that carried the turn has already written it. The
+        dashboard's WebSocket stores both halves itself — redacted, with any
+        attachments, attributed from the user's @mention — so a second pair from
+        here would put every dashboard turn in the chat and the feed twice, the
+        second copy unredacted. REST, and anything else that reaches an agent
+        without going through the WebSocket, stores nothing of its own, so for
+        those this is the only record and has to stay.
+        """
+        if chat_turn_recorded.get():
+            return
         db = get_db()
         if db is not None:
             try:
@@ -520,14 +532,17 @@ class LLMAgent(Actor):
                     ts=ts_user,
                     agent_name=self.name,
                     role="user",
-                    content=user_msg,
+                    # Redacted like the WebSocket's copy: this table outlives the
+                    # conversation and is readable through the API, and a person
+                    # can type a credential where no command asks for one.
+                    content=redact(user_msg),
                     session_id=self.actor_id,
                 )
                 db.write_chat_log(
                     ts=ts_reply,
                     agent_name=self.name,
                     role="assistant",
-                    content=reply,
+                    content=redact(reply),
                     session_id=self.actor_id,
                 )
             except Exception as exc:

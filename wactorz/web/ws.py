@@ -14,6 +14,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from ..core.persistence import chat_turn_recorded
 from ..monitoring.log_redaction import redact
 from . import chat, events, lifecycle, origins, runtime, uploads
 
@@ -329,6 +330,13 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                             _persist_chat("user", content, _reply_from["name"], files)
 
                             async def _safe_route(c=content, files=files):
+                                # Both halves of this turn are stored here — the
+                                # user's above, the reply once it has finished —
+                                # so an agent that also stores its own turns must
+                                # not write them again. Set inside this task, the
+                                # mark follows the call into the agent and no other
+                                # turn sees it.
+                                chat_turn_recorded.set(True)
                                 try:
                                     await chat.route_chat(
                                         c,

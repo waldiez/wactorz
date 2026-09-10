@@ -7,6 +7,7 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from types import TracebackType
@@ -15,6 +16,19 @@ from typing import Any
 from .schema import SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
+
+#: Set for the duration of a chat turn whose ``chat_log`` rows the transport
+#: that carried it has already written.
+#:
+#: The dashboard's WebSocket stores both halves of every turn it routes, and
+#: some agents also store their own turns — the only record when they are
+#: reached any other way. This is how the second writer learns the first has
+#: already run. A context variable rather than a parameter, because the turn
+#: reaches the agent through whatever generator the agent exposes, and a new
+#: keyword would break every agent that does not accept one; and because it is
+#: scoped to the task that sets it, one turn marking itself never affects
+#: another running alongside.
+chat_turn_recorded: ContextVar[bool] = ContextVar("chat_turn_recorded", default=False)
 
 # ── SQLite Connection Manager ──────────────────────────────────────────────
 

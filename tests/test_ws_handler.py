@@ -182,6 +182,26 @@ class TestChatTurnAttribution:
 
         assert "hunter2" not in db.rows[0]["content"]
 
+    async def test_the_turn_reaches_the_agent_marked_as_already_stored(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        # This handler stores both halves of the turn, so an agent that also
+        # stores its own has to be able to tell — or the dashboard shows it twice.
+        seen: list[bool] = []
+
+        async def route(*_args: Any, **_kwargs: Any) -> None:
+            seen.append(ws.chat_turn_recorded.get())
+
+        with patch.object(ws.chat, "route_chat", new=route):
+            await self._send(client, db, "@home-assistant-agent take a snapshot")
+            for _ in range(50):
+                if seen:
+                    break
+                await asyncio.sleep(0.01)
+
+        assert seen == [True]
+        assert ws.chat_turn_recorded.get() is False, "the mark must not leak out of the turn"
+
     async def test_an_empty_message_does_nothing_at_all(
         self, client: TestClient[Any, Any], db: _Db
     ) -> None:

@@ -20,7 +20,7 @@ resolves without knowing the internal layout.
 
 from . import maintenance
 from .api import EPHEMERAL_KEYS, SQLITE_KEYS, PersistenceAPI
-from .db import WactorzDB
+from .db import WactorzDB, chat_turn_recorded
 from .legacy_pickle import migrate_from_pickle
 from .lifecycle import close_persistence, init_persistence
 from .memory_store import MemoryStore
@@ -39,6 +39,7 @@ __all__ = [
     "PickleStore",
     "Stores",
     "WactorzDB",
+    "chat_turn_recorded",
     "close_persistence",
     "get_db",
     "get_memory_store",

@@ -658,7 +658,8 @@ class SpawnService:
         accumulating there and riding home on a migrate-back.
 
         The node's desired state is retained, so a node that reboots reconciles
-        itself back to running this agent without being told again.
+        itself back to running this agent without being told again. The spawn
+        message deliberately is not: see the note on the publish itself.
         """
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
@@ -671,7 +672,22 @@ class SpawnService:
         if packages:
             await self._install_packages(node, name, packages)
 
-        await self.host._mqtt_publish(f"nodes/{node}/spawn", wire_config, retain=True, qos=1)
+        # Not retained, and that is the whole point. A retained spawn is handed
+        # to the node again on every reconnect, so an agent withdrawn after this
+        # was published -- a migration rolled back, an agent deleted -- comes
+        # back at the node's next reboot with nothing following it to say
+        # otherwise. Withdrawing the message instead is not open to us: the
+        # topic is per node rather than per agent, so clearing it would discard
+        # whatever spawn is sitting in that slot, which may be someone else's.
+        #
+        # Reaching a node that was away is the desired state's job, and it is
+        # retained. QoS 1 covers the shorter absence: the runner's session
+        # outlives a reconnect, so the broker holds this until it returns, and
+        # a stop published afterwards is delivered behind it and undoes it. That
+        # last part is Mosquitto queueing per client in order and the runner
+        # draining one message at a time -- MQTT only promises ordering within a
+        # single topic, so it is the deployment that makes it true, not the spec.
+        await self.host._mqtt_publish(f"nodes/{node}/spawn", wire_config, retain=False, qos=1)
         await self.host._update_node_desired_state(node, wire_config)
         await self.host._mqtt_publish(
             f"agents/{self.host.actor_id}/logs",

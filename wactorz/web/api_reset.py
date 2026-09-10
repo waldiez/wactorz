@@ -191,16 +191,6 @@ async def reset_handler(request: web.Request) -> Response:
                     ],
                     return_exceptions=True,
                 )
-                await asyncio.gather(
-                    *[
-                        # QoS 1: a lost purge leaves the retained spawn in
-                        # place, and the node re-creates the agent on its next
-                        # reconcile -- undoing the reset.
-                        runtime.mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True, qos=1)
-                        for n in node_names
-                    ],
-                    return_exceptions=True,
-                )
 
             # Purge retained MQTT for EVERY non-protected agent, tombstone each so a
             # late/in-flight frame can't re-admit it once _hard_resetting clears, and

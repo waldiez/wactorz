@@ -467,6 +467,23 @@ class TestGoingOut:
         _topic, payload = published[-1]
         assert [a["name"] for a in payload["agents"]] == []
 
+    async def test_the_stop_that_undoes_the_spawn_is_durable(self) -> None:
+        # The spawn is no longer retained, so this is what corrects a node that
+        # was away while the migration was rolled back: it has to be queued
+        # behind that spawn, which means surviving the same absence.
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        stops = [
+            options
+            for (topic, _payload), options in zip(main.published, main.publish_options, strict=True)
+            if topic == "nodes/nuc/stop"
+        ]
+        assert stops, "the target was never told to drop the agent"
+        assert all(o.get("qos") == 1 for o in stops)
+
     async def test_what_comes_home_carries_no_stale_snapshot(self) -> None:
         # Local state was never purged, so it is both intact and newer than the
         # snapshot that was shipped out.

@@ -13,8 +13,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import threading
 import time
-from contextlib import closing
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,23 @@ class MQTTPublisher:
     #: rather than the process.
     MAX_QUEUED = 10_000
 
+    #: How often the WAL is folded back into the database, off the event loop.
+    #: Frequent enough that it almost always runs while nothing is being
+    #: published, which is the point — a checkpoint that coincides with a write
+    #: makes the writer wait for it.
+    CHECKPOINT_INTERVAL_S = 60.0
+
+    #: How large the WAL may get before SQLite checkpoints it *inline*, on
+    #: whichever commit trips the threshold. Raised well above the 1000-page
+    #: default so the scheduled checkpoint normally gets there first.
+    #:
+    #: Deliberately not 0. Disabling the inline checkpoint entirely would make
+    #: the background thread the only one, and a thread that dies or wedges then
+    #: means the WAL grows without bound on an SD card — trading a latency spike
+    #: for a full disk. A high threshold degrades to rare-and-spiky instead,
+    #: which is what the default already was.
+    WAL_AUTOCHECKPOINT_PAGES = 4000
+
     def __init__(self, db_path: str = "./state/mqtt_outbox.db") -> None:
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.MAX_QUEUED)
         #: How many messages the cap has discarded, for the log and for tests.
@@ -75,6 +92,16 @@ class MQTTPublisher:
         self._task: asyncio.Task | None = None
         self._available = False
         self._db_path = db_path
+        #: The outbox handle, opened on first use and kept -- see :meth:`_connect`.
+        #: Not opened here: a constructor must not touch the disk.
+        self._db: sqlite3.Connection | None = None
+        #: Guards the handle. The checkpoint runs on a worker thread, so the
+        #: loop's writes and that thread must not reach SQLite at once. Mirrors
+        #: how `WactorzDB` serialises its own shared connection — reentrant for
+        #: the same reason: a failed statement drops the handle from inside the
+        #: `except` of a method already holding this.
+        self._db_lock = threading.RLock()
+        self._checkpoint_task: asyncio.Task | None = None
         #: Minted on first use, not here -- see :attr:`client_id`.
         self._client_id = ""
         self._connected = False
@@ -109,6 +136,7 @@ class MQTTPublisher:
             pub._init_db()
             pub._load_pending_from_db()
             pub._task = asyncio.create_task(pub._run(broker, port))
+            pub._checkpoint_task = asyncio.create_task(pub._checkpoint_loop())
             pub._available = True
             logger.info(
                 "[MQTT] Publisher started → %s:%s | client_id=%s | outbox_db=%s",
@@ -125,17 +153,98 @@ class MQTTPublisher:
 
     # ── SQLite outbox ──────────────────────────────────────────────────────
 
-    def _init_db(self) -> None:
-        """Create outbox table if it doesn't exist.
+    def _connect(self) -> sqlite3.Connection:
+        """The outbox handle, opened once and kept for the life of the publisher.
 
-        Every connection here is wrapped in `closing`. A `sqlite3` connection
-        used as a context manager commits the transaction and leaves the handle
-        open, so `with connect(...) as db` alone hands the outbox a new
-        descriptor per publish and relies on the garbage collector to reclaim
-        it. `closing(...)` closes it; the inner `db` keeps the commit.
+        A QoS-1 message costs two statements — one to enqueue, one when delivery
+        succeeds — and each used to open, write, commit and close its own
+        connection. On the SD card a Raspberry Pi runs from, that cycle measures
+        ~16ms, and it is paid on the control plane rather than on telemetry:
+        `nodes/` and `agents/by-name/` are forced up to QoS 1 in `publish`, so
+        every spawn, stop and migration ack stops every actor in the process for
+        that long, MQTT keepalive included.
+
+        Keeping the handle is half the fix and the pragmas are the other half,
+        and **neither works alone**. `synchronous=NORMAL` stops the fsync on
+        every commit, but a connection that does not outlive the statement
+        cannot amortise anything; and WAL set per-connection is *slower* than
+        the rollback journal it replaces, because it pays `-wal`/`-shm` setup on
+        every connect and a checkpoint when the last connection closes. Measured
+        on the same SD card: reconnecting at WAL/NORMAL is 0.8x — a regression —
+        a kept handle at the defaults is 1.2x, and the two together are 316x.
+
+        Opened lazily rather than in `_init_db`, because the outbox is also read
+        and written by callers that never ran it — a publisher rebuilt after a
+        restart replays through `_load_pending_from_db` alone.
+
+        Dropped again by `_close_db` whenever a statement fails: **a connection
+        per statement healed itself, and a kept one has to be told to.** A handle
+        that has gone bad — the file replaced underneath it, a disk error — would
+        otherwise fail every write for the life of the process, turning a
+        transient fault into a permanent one.
         """
+        if self._db is None:
+            db = sqlite3.connect(self._db_path, check_same_thread=False)
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=NORMAL")
+            # Only bites when a second process has the same file open, which is
+            # also the case WAL makes survivable rather than an instant "database
+            # is locked".
+            db.execute("PRAGMA busy_timeout=5000")
+            db.execute(f"PRAGMA wal_autocheckpoint={self.WAL_AUTOCHECKPOINT_PAGES}")
+            self._db = db
+        return self._db
+
+    def _checkpoint(self) -> None:
+        """Fold the WAL back into the database. **Runs on a worker thread.**
+
+        SQLite-specific, and worth deleting rather than porting if the outbox
+        ever moves to a pooled engine or a server-based store: nothing else here
+        needs a client-side checkpointer.
+
+        This is the part that must not happen on the event loop. Left to SQLite,
+        a checkpoint fires inline on whichever commit crosses the threshold, and
+        on an SD card that measures ~62ms with everything else in the process
+        stopped for it — worse than the per-statement fsync this class stopped
+        paying, just rarer. Measured on a Pi: with the inline checkpoint the
+        worst write is 61.7ms against a 0.032ms median; with it deferred the
+        worst is 0.074ms.
+
+        TRUNCATE rather than PASSIVE: it resets the WAL to nothing, which is what
+        keeps the file bounded. It needs the writers out of the way, which is
+        what the lock is for, and it is why this runs on a timer while the
+        publisher is usually idle rather than after a write.
+        """
+        with self._db_lock:
+            if self._db is None:
+                return
+            try:
+                self._db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception as e:
+                logger.debug("[MQTT] Outbox checkpoint failed: %s", e)
+
+    async def _checkpoint_loop(self) -> None:
+        """Checkpoint on a timer, off the loop, until cancelled."""
+        while True:
+            await asyncio.sleep(self.CHECKPOINT_INTERVAL_S)
+            await asyncio.to_thread(self._checkpoint)
+
+    def _close_db(self) -> None:
+        """Drop the outbox handle, so the next use opens a fresh one."""
+        with self._db_lock:
+            if self._db is None:
+                return
+            try:
+                self._db.close()
+            except Exception as e:
+                logger.debug("[MQTT] Outbox close failed: %s", e)
+            self._db = None
+
+    def _init_db(self) -> None:
+        """Create the outbox table if it doesn't exist."""
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self._db_path)) as db, db:
+        with self._db_lock:
+            db = self._connect()
             db.execute("""
                 CREATE TABLE IF NOT EXISTS outbox (
                     id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,7 +260,8 @@ class MQTTPublisher:
     def _save_to_db(self, topic: str, payload: str, retain: bool, qos: int) -> int:
         """Persist a message to SQLite. Returns row id."""
         try:
-            with closing(sqlite3.connect(self._db_path)) as db, db:
+            with self._db_lock:
+                db = self._connect()
                 cur = db.execute(
                     "INSERT INTO outbox (topic, payload, retain, qos, ts) VALUES (?,?,?,?,?)",
                     (
@@ -165,19 +275,23 @@ class MQTTPublisher:
                     ),
                 )
                 db.commit()
-                return cur.lastrowid or 0
         except Exception as e:
             logger.debug("[MQTT] Outbox write failed: %s", e)
+            self._close_db()
             return -1
+        else:
+            return cur.lastrowid or 0
 
     def _delete_from_db(self, row_id: int) -> None:
         """Remove a delivered message from the outbox."""
         try:
-            with closing(sqlite3.connect(self._db_path)) as db, db:
+            with self._db_lock:
+                db = self._connect()
                 db.execute("DELETE FROM outbox WHERE id = ?", (row_id,))
                 db.commit()
         except Exception as e:
             logger.debug("[MQTT] Outbox delete failed: %s", e)
+            self._close_db()
 
     def _enqueue(self, item: tuple) -> None:
         """Queue `item`, making room by discarding telemetry if the cap is reached.
@@ -238,16 +352,19 @@ class MQTTPublisher:
     def _load_pending_from_db(self) -> None:
         """On startup, reload undelivered QoS 1 messages into the in-memory queue."""
         try:
-            with closing(sqlite3.connect(self._db_path)) as db, db:
-                rows = db.execute(
-                    "SELECT id, topic, payload, retain, qos FROM outbox ORDER BY id"
-                ).fetchall()
+            with self._db_lock:
+                rows = (
+                    self._connect()
+                    .execute("SELECT id, topic, payload, retain, qos FROM outbox ORDER BY id")
+                    .fetchall()
+                )
             if rows:
                 logger.info("[MQTT] Replaying %s undelivered message(s) from outbox", len(rows))
             for row_id, topic, payload, retain, qos in rows:
                 self._enqueue((topic, payload, bool(retain), qos, row_id))
         except Exception as e:
             logger.debug("[MQTT] Outbox load failed: %s", e)
+            self._close_db()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -274,6 +391,10 @@ class MQTTPublisher:
 
     async def disconnect(self) -> None:
         """Stop the drain loop and close the connection."""
+        if self._checkpoint_task:
+            self._checkpoint_task.cancel()
+            await asyncio.gather(self._checkpoint_task, return_exceptions=True)
+            self._checkpoint_task = None
         if self._task:
             self._task.cancel()
             # gather rather than a bare await: the drain loop's own
@@ -287,6 +408,9 @@ class MQTTPublisher:
             # CancelledError is a BaseException, so this is a real crash only.
             if isinstance(outcome, Exception):
                 logger.warning("[MQTT] Publisher drain loop ended in error: %s", outcome)
+        # Closing checkpoints the WAL back into the database, so a shutdown does
+        # not leave a `-wal` beside it for the next start to recover from.
+        self._close_db()
 
     @property
     def connected(self) -> bool:

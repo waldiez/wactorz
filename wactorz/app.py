@@ -304,6 +304,13 @@ async def build_system(args: argparse.Namespace):
             persistence_db=_db,
         )
 
+    # After the stores exist and before the agents that write to them: the
+    # checkpoint it schedules is the one SQLite would otherwise take inline, on
+    # whichever `persist()` crossed its threshold.
+    from wactorz.core.persistence import maintenance
+
+    maintenance.start()
+
     await system.supervisor.start()
 
     main_actor = find_main_actor(system.registry)
@@ -454,6 +461,11 @@ async def app(args: argparse.Namespace):
     except Exception:
         logger.exception("System error")
     finally:
+        # First: a scheduled job holds the connection lock while it runs, and
+        # the actors below are about to want it to write their state out.
+        from wactorz.core.persistence import maintenance
+
+        await maintenance.stop()
         await system.stop_all()
         # Last: actors write state as they stop, so the connection has to outlive
         # them. Closing checkpoints the WAL rather than leaving -wal/-shm behind

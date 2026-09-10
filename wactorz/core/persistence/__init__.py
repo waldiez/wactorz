@@ -18,6 +18,7 @@ public is re-exported here, so ``from wactorz.core.persistence import WactorzDB`
 resolves without knowing the internal layout.
 """
 
+from . import maintenance
 from .api import EPHEMERAL_KEYS, SQLITE_KEYS, PersistenceAPI
 from .db import WactorzDB
 from .legacy_pickle import migrate_from_pickle
@@ -43,6 +44,7 @@ __all__ = [
     "get_memory_store",
     "get_pickle_store",
     "init_persistence",
+    "maintenance",
     "migrate_from_pickle",
     "run_migrations",
 ]

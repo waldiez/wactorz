@@ -81,6 +81,9 @@ class WactorzDB:
     code least able to be reviewed.
     """
 
+    #: See the pragma of the same name in :meth:`_connect`.
+    WAL_AUTOCHECKPOINT_PAGES = 4000
+
     def __init__(self, db_path: str = "./state/wactorz.db") -> None:
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,6 +103,18 @@ class WactorzDB:
         self._conn.execute("PRAGMA synchronous=NORMAL")  # fast + safe enough
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA cache_size=-8000")  # 8MB cache
+        # How large the WAL may get before SQLite folds it back *inline*, on
+        # whichever commit crosses the threshold — on the calling thread, which
+        # for `persist()` and the chat log is the event loop. On an SD card that
+        # fold measures ~69ms with every actor in the process stopped for it.
+        # Raised well above the 1000-page default so the scheduled checkpoint in
+        # `maintenance` normally gets there first.
+        #
+        # Deliberately not 0: with the inline checkpoint disabled entirely, a
+        # maintenance task that dies leaves the WAL growing until the disk fills,
+        # which is a worse failure than the pause it avoids. A high threshold
+        # degrades to rare-and-spiky, which is what the default already was.
+        self._conn.execute(f"PRAGMA wal_autocheckpoint={self.WAL_AUTOCHECKPOINT_PAGES}")
         self._conn.row_factory = sqlite3.Row
         logger.info("[Persistence] SQLite opened: %s", self._path)
 
@@ -530,6 +545,30 @@ class WactorzDB:
         return [dict(r) for r in rows]
 
     # ── Retention / cleanup ────────────────────────────────────────────────
+
+    @_serialised
+    def checkpoint(self) -> int:
+        """Fold the WAL back into the database. Returns the WAL size before, in bytes.
+
+        **Call this from a worker thread, never from the event loop.** It is the
+        expensive half of running in WAL mode: writes stop paying an fsync each,
+        and the cost collects here instead — ~69ms on a Raspberry Pi's SD card,
+        with everything in the process stopped for however long it takes. Left to
+        SQLite it happens inline on whichever `persist()` crosses the page
+        threshold, which is exactly the stall this is moved off the loop to avoid.
+
+        TRUNCATE rather than PASSIVE: it resets the WAL file to nothing, which is
+        what keeps it bounded. PASSIVE recycles the pages in place and leaves the
+        file at its high-water mark, so a run of writes would hold that space for
+        the life of the process.
+
+        Serialised like every other method here, so it cannot land in the middle
+        of another caller's transaction.
+        """
+        wal = self._path.with_name(f"{self._path.name}-wal")
+        before = wal.stat().st_size if wal.exists() else 0
+        self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return before
 
     def prune_old_data(self, days: int = 30) -> int:
         """Delete time-series data older than N days. Run periodically."""

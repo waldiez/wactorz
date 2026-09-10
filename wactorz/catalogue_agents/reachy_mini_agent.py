@@ -2357,6 +2357,7 @@ async def _bridge_to_main(
     barge_in_session=None,
     conversation_history=None,
     voice_input=False,
+    recorded_by_caller=False,
 ) -> dict[str, Any] | None:
     """Reachy-as-interface bridge.
 
@@ -2365,7 +2366,15 @@ async def _bridge_to_main(
     sub-agents) and the answer is spoken back through the robot. Returns a task
     result dict, or None when main is unreachable or answers with nothing, so
     the caller can fall back to the local parse-error hint.
+
+    `recorded_by_caller` says the caller shows both halves of this turn in the
+    chat itself, so main must not store it a second time under its own name.
     """
+    try:
+        from wactorz.core.persistence import chat_turn_recorded
+    except ImportError:  # optional dependency: a node runs this without the wactorz package
+        chat_turn_recorded = None
+
     try:
         interface_name = getattr(agent, "name", "reachy-mini")
         bridge_payload = {
@@ -2389,6 +2398,12 @@ async def _bridge_to_main(
         }
         if voice_input:
             bridge_payload["_interface_voice"] = True
+        # Already in the chat, so main leaves it out: stored by the caller, or by
+        # the dashboard when it routed the turn here in-line. On a node there is
+        # no dashboard in this process, so no mark to read.
+        dashboard_stored = chat_turn_recorded is not None and chat_turn_recorded.get()
+        if recorded_by_caller or dashboard_stored:
+            bridge_payload["_chat_recorded"] = True
         if conversation_history:
             bridge_payload["_interface_history"] = list(conversation_history)[-4:]
         if session_id:
@@ -5947,6 +5962,9 @@ async def _conversation_loop(agent, session):
                         task_id,
                         await_playback=True,
                         before_speak=_before_speak,
+                        # The transcript went to the chat above, and
+                        # _before_speak sends the reply.
+                        recorded_by_caller=True,
                         session_id=session["session_id"],
                         voice_friendly=payload.get("voice_friendly", True),
                         barge_in_session=session,

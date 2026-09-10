@@ -43,7 +43,7 @@ def make_main(*, intent="OTHER", chat_response="ok", agents=()):
     m._prefix_with_live_context = lambda t: t
     m.persist = lambda k, v: None
 
-    async def _record(_t, _r):
+    async def _record(_t, _r, *, ts_user):
         return None
 
     m._record_external_exchange = _record

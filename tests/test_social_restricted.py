@@ -10,6 +10,7 @@ spawn/delete executors are wired to explode if ever called.
 
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -20,6 +21,12 @@ from wactorz.agents.main.planning import BYPASS_MARKERS, starts_with_bypass
 
 def run(coro):
     return asyncio.run(coro)
+
+
+class _StubbedMain(MainActor):
+    """A MainActor, plus a record of which stubbed paths a turn reached."""
+
+    calls: dict[str, Any]
 
 
 class _Registry:
@@ -33,52 +40,52 @@ class _Registry:
 def make_main(*, intent="OTHER", chat_response="hello", agents=()):
     """A MainActor with only the surface process_user_input_restricted touches,
     stubbed. Spawn/delete executors raise if reached."""
-    m = MainActor.__new__(MainActor)
+    m = _StubbedMain.__new__(_StubbedMain)
     m.name = "main"
     m._conversation_history = []
-    m._registry = _Registry(agents)
+    m._registry = _Registry(agents)  # pyright: ignore[reportAttributeAccessIssue]
     m.delegation = DelegationManager(m)
     m.calls = {"actuate": 0, "chat": 0, "delegated": [], "classified": 0}
 
     m._drain_notifications = lambda: ""
     m._rebuild_system_prompt = lambda: None
-    m._prefix_with_live_context = lambda t: t
-    m.persist = lambda k, v: None
+    m._prefix_with_live_context = lambda t: t  # pyright: ignore[reportAttributeAccessIssue]
+    m.persist = lambda k, v: None  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _record(_t, _r, *, ts_user):
         return None
 
-    m._record_external_exchange = _record
+    m._record_external_exchange = _record  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _classify(_t):
         m.calls["classified"] += 1
         return intent
 
-    m._classify_intent = _classify
+    m._classify_intent = _classify  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _actuate(_t, allowed_domains=None):
         m.calls["actuate"] += 1
         m.calls["actuate_domains"] = allowed_domains
         return "actuated the device"
 
-    m._handle_actuate_intent = _actuate
+    m._handle_actuate_intent = _actuate  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _delegate_task(_name, _text, timeout=0):
         return {"result": "home-assistant says ok"}
 
-    m.delegation.delegate_task = _delegate_task
+    m.delegation.delegate_task = _delegate_task  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _chat(_t):
         m.calls["chat"] += 1
         return chat_response
 
-    m.chat = _chat
+    m.chat = _chat  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _run_delegation(name, _payload):
         m.calls["delegated"].append(name)
         return f"[{name} handled it]"
 
-    m.delegation._run_delegation = _run_delegation
+    m.delegation._run_delegation = _run_delegation  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _boom_spawn(_resp):
         raise AssertionError("spawn executor reached on a restricted channel!")
@@ -86,8 +93,8 @@ def make_main(*, intent="OTHER", chat_response="hello", agents=()):
     async def _boom_delete(_resp):
         raise AssertionError("delete executor reached on a restricted channel!")
 
-    m._process_spawn_commands = _boom_spawn
-    m._process_delete_commands = _boom_delete
+    m._process_spawn_commands = _boom_spawn  # pyright: ignore[reportAttributeAccessIssue]
+    m._process_delete_commands = _boom_delete  # pyright: ignore[reportAttributeAccessIssue]
     return m
 
 

@@ -65,19 +65,19 @@ def _main(
     m.name = "main"
     m.actor_id = "main-0001"
     m._conversation_history = []
-    m.metrics = SimpleNamespace(messages_processed=0)
+    m.metrics = SimpleNamespace(messages_processed=0)  # pyright: ignore[reportAttributeAccessIssue]
     m.delegation = DelegationManager(m)
 
     m._drain_notifications = lambda: ""
     m._rebuild_system_prompt = lambda: None
-    m._prefix_with_live_context = lambda t: PREFIX + t
-    m._warn_if_pending_plan_collision = lambda _t: None
-    m.persist = lambda _k, _v: None
+    m._prefix_with_live_context = lambda t: PREFIX + t  # pyright: ignore[reportAttributeAccessIssue]
+    m._warn_if_pending_plan_collision = lambda _t: None  # pyright: ignore[reportAttributeAccessIssue]
+    m.persist = lambda _k, _v: None  # pyright: ignore[reportAttributeAccessIssue]
     m._maybe_summarize = _nothing
     m._extract_and_save_facts = _nothing
     m._handle_pending_plan_response = _nothing
     m._mqtt_publish = _nothing
-    m.send = _nothing
+    m.send = _nothing  # pyright: ignore[reportAttributeAccessIssue]
 
     async def _classify(_t: str) -> str:
         return intent
@@ -110,10 +110,10 @@ def _main(
     async def _mentions(response: str) -> str:
         return response
 
-    m._classify_intent = _classify
-    m._handle_actuate_intent = _actuate
-    m.chat = _chat
-    m.chat_stream = _chat_stream
+    m._classify_intent = _classify  # pyright: ignore[reportAttributeAccessIssue]
+    m._handle_actuate_intent = _actuate  # pyright: ignore[reportAttributeAccessIssue]
+    m.chat = _chat  # pyright: ignore[reportAttributeAccessIssue]
+    m.chat_stream = _chat_stream  # pyright: ignore[reportAttributeAccessIssue]
     m._process_spawn_commands = _spawn_blocks
     m._process_delete_commands = _delete_blocks
     m._process_delegate_commands = _delegate_blocks

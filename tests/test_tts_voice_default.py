@@ -18,6 +18,7 @@ import os
 from typing import Any
 
 import pytest
+from aiohttp import web
 
 from wactorz.ext.tts import public_config
 
@@ -41,7 +42,7 @@ class TestTheVoiceOfferedToTheBrowser:
         # What following `.env.template` actually produces.
         monkeypatch.setenv("TTS_VOICE", "")
 
-        assert public_config(None)["voice"] == DEFAULT, (
+        assert public_config(web.Application())["voice"] == DEFAULT, (
             "an empty TTS_VOICE reached the synthesiser, which refuses it -- the "
             "template documents empty as meaning the default"
         )
@@ -51,12 +52,12 @@ class TestTheVoiceOfferedToTheBrowser:
     ) -> None:
         monkeypatch.delenv("TTS_VOICE", raising=False)
 
-        assert public_config(None)["voice"] == DEFAULT
+        assert public_config(web.Application())["voice"] == DEFAULT
 
     def test_a_chosen_voice_is_used(self, monkeypatch: pytest.MonkeyPatch, tts_state: Any) -> None:
         monkeypatch.setenv("TTS_VOICE", "en-GB-SoniaNeural")
 
-        assert public_config(None)["voice"] == "en-GB-SoniaNeural"
+        assert public_config(web.Application())["voice"] == "en-GB-SoniaNeural"
 
     def test_whitespace_is_not_mistaken_for_a_voice(
         self, monkeypatch: pytest.MonkeyPatch, tts_state: Any
@@ -65,7 +66,7 @@ class TestTheVoiceOfferedToTheBrowser:
         # a space is no more a voice name than an empty string is.
         monkeypatch.setenv("TTS_VOICE", "   ")
 
-        assert public_config(None)["voice"] == DEFAULT
+        assert public_config(web.Application())["voice"] == DEFAULT
 
 
 class TestTheTemplateAndTheCodeAgree:

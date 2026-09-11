@@ -256,7 +256,7 @@ class _StubRunner:
 
 def make_remote_agent(tmp_path: Path, code: str) -> Any:
     """A node-side agent around the given program, no broker involved."""
-    agent = _RemoteAgent({"name": "exiter", "code": code}, _StubRunner(), state_dir=str(tmp_path))
+    agent = _RemoteAgent({"name": "exiter", "code": code}, _StubRunner(), state_dir=str(tmp_path))  # pyright: ignore[reportArgumentType]
     assert agent._compile() is None
     return agent
 

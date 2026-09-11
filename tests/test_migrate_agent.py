@@ -71,7 +71,8 @@ class _Main:
         main.migration = Migration(main, main.nodes)
         main.nodes.known = dict(nodes or {})
         main._agent_manifests = dict(manifests or {})
-        setattr(main, "_registry", _Registry(local))
+        self.registry = _Registry(local)
+        setattr(main, "_registry", self.registry)
 
         self.published: list[tuple[str, Any]] = []
         self.publish_options: list[dict[str, Any]] = []
@@ -410,7 +411,7 @@ class TestGoingOut:
     async def test_the_local_instance_is_stopped_all_the_same(self) -> None:
         # Stopped, not deleted: two copies running would both answer.
         main = self._main()
-        agent = main.actor._registry.find_by_name("collector")
+        agent = main.registry.find_by_name("collector")
 
         await main.migrate("collector", "nuc")
 

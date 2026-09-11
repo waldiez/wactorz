@@ -10,12 +10,18 @@ Run with ``pytest`` (or ``make test-py``). Async mixin methods are driven throug
 """
 
 import asyncio
+import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+from wactorz.agents.catalog_agent import _build_native_catalog, get_native_factory
+from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.spawns import SpawnService
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
 
 
@@ -60,8 +66,10 @@ class _BaseHost(SpawnMixin):
     def __init__(self, registry, name):
         self.name = name
         self.actor_id = f"id-{name}"
-        self.llm = object()
+        # What the mixin hands the agents it creates; never called here.
+        self.llm = cast(LLMProvider, object())
         self._registry = registry
+        self.registry: FakeRegistry = registry
         self._result_futures = {}
         self._persistence_dir = Path(tempfile.mkdtemp()) / name  # .parent is the base
         self.spawn_calls = []  # (cls, kwargs)
@@ -71,7 +79,7 @@ class _BaseHost(SpawnMixin):
     async def spawn(self, actor_class, **kwargs):
         self.spawn_calls.append((actor_class, kwargs))
         actor = FakeActor(kwargs.get("name", "anon"))
-        self._registry.add(actor)
+        self.registry.add(actor)
         return actor
 
     async def send(self, target_id, msg_type, payload):
@@ -83,6 +91,12 @@ class _BaseHost(SpawnMixin):
 
     async def _mqtt_publish(self, topic, payload, **_kw):
         self.published.append((topic, payload))
+
+    def persist(self, key, value):
+        pass
+
+    def recall(self, key, default=None):
+        return default
 
 
 class MainHost(_BaseHost):
@@ -390,9 +404,9 @@ def test_peer_resolves_timezone_from_main(peer_setup):
 
 
 def test_get_native_factory_resolves_and_misses():
-    from wactorz.agents.catalog_agent import get_native_factory
-
-    assert get_native_factory("weather-agent").__name__ == "WeatherAgent"
+    factory = get_native_factory("weather-agent")
+    assert factory is not None
+    assert factory.__name__ == "WeatherAgent"
     assert get_native_factory("not-a-catalog-name") is None
 
 
@@ -400,10 +414,6 @@ def test_native_recipes_are_json_safe_without_factory():
     # CatalogAgent persists each native recipe minus its 'factory' class object;
     # that descriptor must be JSON-serializable for every native recipe so the
     # spawn registry (SQLite/JSON) can store and later restore it.
-    import json
-
-    from wactorz.agents.catalog_agent import _build_native_catalog
-
     native = _build_native_catalog()
     assert native, "expected at least one native catalog recipe (weather-agent)"
     for recipe in native.values():
@@ -521,16 +531,12 @@ def test_a_name_that_cannot_be_a_topic_level_is_refused_locally(main_host):
 
 
 def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
-    from types import SimpleNamespace
-
-    from wactorz.agents.main.spawns import SpawnService
-
     published: list[str] = []
 
     async def _publish(topic, payload, **_kw):
         published.append(topic)
 
     host = SimpleNamespace(name="main", _mqtt_publish=_publish)
-    run(SpawnService(host)._spawn_remote({"name": "all#"}, "rpi", save=True))
+    run(SpawnService(host)._spawn_remote({"name": "all#"}, "rpi", save=True))  # pyright: ignore[reportArgumentType]
 
     assert published == []

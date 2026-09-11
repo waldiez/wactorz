@@ -120,7 +120,7 @@ class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
             _mqtt_publish=AsyncMock(),
         )
         dispatcher = MapUpdateDispatcher(
-            agent=fake_agent,
+            agent=fake_agent,  # pyright: ignore[reportArgumentType]
             mqtt_topic="homeassistant/map/entities_with_location",
             max_payload_bytes=450,
         )
@@ -176,7 +176,7 @@ class HomeAssistantMapAgentTest(unittest.IsolatedAsyncioTestCase):
             _mqtt_publish=AsyncMock(),
         )
         dispatcher = MapUpdateDispatcher(
-            agent=fake_agent,
+            agent=fake_agent,  # pyright: ignore[reportArgumentType]
             mqtt_topic="homeassistant/map/entities_with_location",
             max_payload_bytes=4096,
         )

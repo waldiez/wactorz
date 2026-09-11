@@ -21,7 +21,10 @@ class _FakeResponse:
     def raise_for_status(self):
         if self.status >= 400:
             raise aiohttp.ClientResponseError(
-                request_info=None, history=(), status=self.status, message="boom"
+                request_info=None,  # pyright: ignore[reportArgumentType]
+                history=(),
+                status=self.status,
+                message="boom",
             )
 
     async def __aenter__(self):

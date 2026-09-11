@@ -65,7 +65,8 @@ class PlanningHost(PlanningMixin):
 
 
 def host(**kw):
-    return PlanningHost(**kw)
+    # Partial on purpose: the members these tests reach, not the whole host.
+    return PlanningHost(**kw)  # pyright: ignore[reportAbstractUsage]
 
 
 # ── Pipeline-rule + pending-plan persistence ─────────────────────────────────
@@ -94,7 +95,9 @@ def test_most_recent_pending_picks_latest():
         {"plan_id": "old", "task": "a", "status": "pending", "created_at": now - 50}
     )
     h.save_pending_plan({"plan_id": "new", "task": "b", "status": "pending", "created_at": now})
-    assert h._most_recent_pending_plan()["plan_id"] == "new"
+    plan = h._most_recent_pending_plan()
+    assert plan is not None
+    assert plan["plan_id"] == "new"
 
 
 def test_most_recent_ignores_non_pending():

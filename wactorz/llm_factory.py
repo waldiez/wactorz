@@ -57,7 +57,7 @@ _provider_cache: dict[str, LLMProvider] = {}
 KNOWN_SITES: frozenset[str] = frozenset({"main", "intent", "planner", "actuator", "ha", "dynamic"})
 
 
-def parse_overrides(raw: str) -> dict[str, str]:
+def parse_overrides(raw: str | None) -> dict[str, str]:
     """Parse ``site=provider[:model],...`` into {site: spec}. Malformed entries
     are skipped with a warning rather than raising — a typo in one entry must
     not disable the others.

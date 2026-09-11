@@ -31,6 +31,9 @@ class _Metrics:
 
 
 class _Actor:
+    # Set by the tests about essential actors; the API reads it when present.
+    essential: bool
+
     def __init__(self, name: str = "worker", protected: bool = False) -> None:
         self.actor_id = "a1"
         self.name = name

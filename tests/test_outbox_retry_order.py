@@ -9,6 +9,7 @@ the opposite of what the line did.
 
 import asyncio
 import contextlib
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest import mock
 
@@ -34,7 +35,7 @@ class _Client:
 
 
 @contextlib.asynccontextmanager
-async def _fake_broker(client: "_Client", **_kwargs: Any) -> Any:
+async def _fake_broker(client: "_Client", **_kwargs: Any) -> AsyncIterator["_Client"]:
     """Stands in for `mqtt_client`, so the *real* `_run` loop is what runs."""
     yield client
 

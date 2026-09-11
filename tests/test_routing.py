@@ -56,13 +56,19 @@ class RoutingHost(RoutingMixin):
     def _persist_cost(self):
         self.persisted += 1
 
+    def persist(self, key, value):
+        pass
+
+    def recall(self, key, default=None):
+        return default
+
     async def send(self, *_a, **_k):
         pass
 
     async def spawn(self, actor_class, **kwargs):
         self.spawn_calls.append((actor_class, kwargs))
         # Resolve the actuation future as the real OneOffActuatorAgent would.
-        tid = kwargs.get("task_id")
+        tid = kwargs.get("task_id", "")
         fut = self._result_futures.get(tid)
         if fut is not None and not fut.done():
             fut.set_result({"result": "turned on"})

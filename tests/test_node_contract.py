@@ -291,7 +291,9 @@ class TestPayloadShapes:
 class TestStateFile:
     def test_the_file_lives_under_the_agent_name_as_json(self, tmp_path: Path) -> None:
         agent = remote_runner._RemoteAgent(
-            {"name": "temp-sensor", "code": ""}, _Runner(), state_dir=str(tmp_path)
+            {"name": "temp-sensor", "code": ""},
+            _Runner(),  # pyright: ignore[reportArgumentType]
+            state_dir=str(tmp_path),
         )
 
         agent._persistent_state = {"readings": [1, 2], "note": "δοκιμή"}
@@ -303,7 +305,9 @@ class TestStateFile:
 
     def test_a_name_with_path_separators_stays_in_the_directory(self, tmp_path: Path) -> None:
         agent = remote_runner._RemoteAgent(
-            {"name": "a/b\\c", "code": ""}, _Runner(), state_dir=str(tmp_path)
+            {"name": "a/b\\c", "code": ""},
+            _Runner(),  # pyright: ignore[reportArgumentType]
+            state_dir=str(tmp_path),
         )
 
         assert agent._state_path.parent == tmp_path
@@ -313,13 +317,17 @@ class TestStateFile:
         # The upgrade path in one test: whatever runtime wrote the file, the
         # next one to start on this node finds the agent's memory intact.
         first = remote_runner._RemoteAgent(
-            {"name": "temp-sensor", "code": ""}, _Runner(), state_dir=str(tmp_path)
+            {"name": "temp-sensor", "code": ""},
+            _Runner(),  # pyright: ignore[reportArgumentType]
+            state_dir=str(tmp_path),
         )
         first._persistent_state = {"count": 3}
         first._save_state()
 
         second = remote_runner._RemoteAgent(
-            {"name": "temp-sensor", "code": ""}, _Runner(), state_dir=str(tmp_path)
+            {"name": "temp-sensor", "code": ""},
+            _Runner(),  # pyright: ignore[reportArgumentType]
+            state_dir=str(tmp_path),
         )
 
         assert second._persistent_state == {"count": 3}

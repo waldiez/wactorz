@@ -15,6 +15,7 @@ be told to.
 """
 
 import asyncio
+import os
 import sqlite3
 import threading
 from pathlib import Path
@@ -32,7 +33,7 @@ def _ready(tmp_path: Path) -> MQTTPublisher:
     return pub
 
 
-def _rows(db_path: str | Path) -> int:
+def _rows(db_path: str | os.PathLike[str]) -> int:
     with sqlite3.connect(str(db_path)) as db:
         return int(db.execute("SELECT COUNT(*) FROM outbox").fetchone()[0])
 

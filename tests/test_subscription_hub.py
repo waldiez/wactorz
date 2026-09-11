@@ -104,6 +104,12 @@ async def _settle() -> None:
         await asyncio.sleep(0)
 
 
+def _stop(hub: SubscriptionHub) -> None:
+    """Cancel the connection task the first bind started."""
+    assert hub._task is not None
+    hub._task.cancel()
+
+
 class TestOneConnectionPerActor:
     async def test_many_subscriptions_open_one_connection(self, broker: FakeBroker) -> None:
         actor = FakeActor()
@@ -115,7 +121,7 @@ class TestOneConnectionPerActor:
 
         assert len(broker.connections) == 1
         assert set(broker.connections[0].subscribed) == {"a/one", "a/two", "a/three", "b/+/four"}
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_only_the_first_bind_starts_a_task(self, broker: FakeBroker) -> None:
         # The caller tracks the returned task on the actor; a second track would
@@ -137,7 +143,7 @@ class TestOneConnectionPerActor:
         await _settle()
 
         assert broker.identifiers == [f"wactorz-agent-{actor.actor_id}"]
-        hub._task.cancel()
+        _stop(hub)
 
 
 class TestDurability:
@@ -179,7 +185,7 @@ class TestDurability:
         assert kwargs["clean_start"] is False
         assert kwargs["properties"].SessionExpiryInterval == hub.SESSION_EXPIRY_SECONDS
         assert broker.connections[0].subscribed_qos == [1]
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_a_non_durable_hub_keeps_a_clean_session(self, broker: FakeBroker) -> None:
         # QoS 1 on a clean session buys nothing -- there is no session for the
@@ -192,7 +198,7 @@ class TestDurability:
         assert "clean_start" not in broker.kwargs[0]
         assert "properties" not in broker.kwargs[0]
         assert broker.connections[0].subscribed_qos == [0]
-        hub._task.cancel()
+        _stop(hub)
 
 
 class TestDispatch:
@@ -211,7 +217,7 @@ class TestDispatch:
         assert sorted(seen) == ["first", "second"]
         # ...and the filter is only subscribed once on the wire.
         assert broker.connections[0].subscribed == ["shared/topic"]
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_a_message_reaches_only_matching_bindings(self, broker: FakeBroker) -> None:
         seen: list[str] = []
@@ -225,7 +231,7 @@ class TestDispatch:
         await _settle()
 
         assert sorted(seen) == ["exact", "wildcard"]
-        hub._task.cancel()
+        _stop(hub)
 
 
 class TestPerTopicOrdering:
@@ -262,7 +268,7 @@ class TestPerTopicOrdering:
 
         assert max(overlaps) == 1, "two callbacks on one topic ran concurrently"
         assert order == [1, 2, 3], "messages were reordered"
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_a_slow_topic_does_not_hold_up_a_different_one(self, broker: FakeBroker) -> None:
         # Serial per topic, concurrent across topics -- the point of sharing one
@@ -286,16 +292,18 @@ class TestPerTopicOrdering:
         await _settle()
 
         assert fast_ran.is_set()
-        hub._task.cancel()
+        _stop(hub)
 
 
 class TestBackpressure:
-    async def test_a_callback_that_falls_behind_drops_the_oldest(self, broker: FakeBroker) -> None:
+    async def test_a_callback_that_falls_behind_drops_the_oldest(
+        self, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # The serialising queue is otherwise the unbounded backlog the old
         # design avoided by blocking. Bounded, oldest-first: for the sensor
         # streams these carry, the freshest reading is the useful one.
         hub = SubscriptionHub(FakeActor())
-        hub.QUEUE_MAX = 2
+        monkeypatch.setattr(hub, "QUEUE_MAX", 2)
         seen: list[int] = []
 
         async def slow(payload: Any) -> None:
@@ -311,7 +319,7 @@ class TestBackpressure:
 
         assert binding.dropped > 0
         assert binding.queue.qsize() <= 2
-        hub._task.cancel()
+        _stop(hub)
 
 
 class TestTheErrorBudget:
@@ -338,7 +346,7 @@ class TestTheErrorBudget:
         assert actor.published_errors[-1]["fatal"] is True
         assert str(actor.state) == "ActorState.FAILED"
         assert not [b for b in hub._bindings if b.topic == "bad/topic"]
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_a_recovering_callback_clears_its_budget(self, broker: FakeBroker) -> None:
         actor = FakeActor()
@@ -360,7 +368,7 @@ class TestTheErrorBudget:
         await _settle()
 
         assert "flaky/topic" not in actor._cb_error_count
-        hub._task.cancel()
+        _stop(hub)
 
 
 class TestEveryFailureCounts:
@@ -390,7 +398,7 @@ class TestEveryFailureCounts:
 
         assert actor._cb_error_count["bad/topic"] == listener_module.CB_MAX_CONSECUTIVE_FAILURES
         assert str(actor.state) == "ActorState.FAILED"
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_reports_are_rate_limited_but_the_fatal_one_always_goes_out(
         self, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
@@ -410,7 +418,7 @@ class TestEveryFailureCounts:
 
         # First failure reported at once, the fatal fifth always; 2-4 only counted.
         assert [e["fatal"] for e in actor.published_errors] == [False, True]
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_the_program_is_repaired_at_the_third_failure(
         self, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
@@ -450,7 +458,7 @@ class TestEveryFailureCounts:
         # The worker the repair ran in ended with its binding.
         await _settle()
         assert not [w for w in [b.worker for b in hub._bindings] if w]
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_a_repair_that_is_refused_leaves_the_budget_running(
         self, broker: FakeBroker, monkeypatch: pytest.MonkeyPatch
@@ -480,7 +488,7 @@ class TestEveryFailureCounts:
         # Asked at 3 and again at 4; the fifth failure is fatal, not a repair.
         assert asked["n"] == 2
         assert str(actor.state) == "ActorState.FAILED"
-        hub._task.cancel()
+        _stop(hub)
 
 
 class TestRestart:
@@ -494,7 +502,7 @@ class TestRestart:
         hub.bind("topic/x", lambda _p: seen.append("got"))
         await _settle()
 
-        hub._task.cancel()
+        _stop(hub)
         await _settle()
         hub._task = asyncio.create_task(hub.run())
         await _settle()
@@ -503,7 +511,7 @@ class TestRestart:
         await _settle()
 
         assert seen == ["got"], "a restarted hub stopped delivering"
-        hub._task.cancel()
+        _stop(hub)
 
 
 class TestRepairUnbinds:
@@ -522,7 +530,7 @@ class TestRepairUnbinds:
 
         assert not seen, "a repaired-away callback still received a message"
         assert broker.connections[0].unsubscribed == ["old/topic"]
-        hub._task.cancel()
+        _stop(hub)
 
     async def test_rebinding_after_a_repair_works_on_the_same_connection(
         self, broker: FakeBroker
@@ -540,4 +548,4 @@ class TestRepairUnbinds:
 
         assert seen == ["after"]
         assert len(broker.connections) == 1, "a repair should not rebuild the connection"
-        hub._task.cancel()
+        _stop(hub)

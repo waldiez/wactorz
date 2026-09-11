@@ -24,6 +24,8 @@ import sys
 import types
 import unittest
 import wave
+from collections.abc import Awaitable, Callable
+from typing import Any
 from unittest import mock
 
 import numpy as np
@@ -68,6 +70,9 @@ def tearDownModule():
 class FakeMedia:
     """Minimal stand-in for the SDK MediaManager (mini.media)."""
 
+    # Playback, which the SDK exposes and some backends leave None; unset here.
+    audio: Any
+
     def __init__(self, frame=None, samplerate=16000, channels=1, doa=(42.0, True)):
         self._frame = frame
         self._samplerate = samplerate
@@ -103,13 +108,20 @@ class FakeMedia:
 class FakeAgent:
     """Just enough of the actor surface for the perception commands + dispatcher."""
 
+    # Set by the tests that need them.
+    name: str
+    llm: Any
+    calls: list[str]
+    sent: list[tuple[Any, ...]]
+    send_to: Callable[..., Awaitable[Any]]
+
     def __init__(self, media):
         self.state = {
             "mini": types.SimpleNamespace(media=media),
             "media_backend": "",
             "last_cmd": None,
         }
-        self.published: list[tuple[str, object]] = []
+        self.published: list[tuple[str, Any]] = []
         self.logs: list[str] = []
 
     async def publish(self, topic, payload):
@@ -476,7 +488,7 @@ class LookBehindTest(unittest.TestCase):
             result = _run(NS["_look_behind"](agent, {}))
 
         face.assert_awaited_once_with(agent, 155.0, {})
-        describe_payload = describe.await_args.args[1]
+        describe_payload = describe.await_args_list[-1].args[1]
         self.assertFalse(describe_payload["orient"])
         self.assertEqual(describe_payload["question"], "Describe what is behind you.")
         self.assertEqual(result["facing"], "rear")
@@ -767,7 +779,7 @@ class DiagCommandTest(unittest.TestCase):
         return agent
 
     def test_flags_version_mismatch(self):
-        import reachy_mini as rm
+        import reachy_mini as rm  # pyright: ignore[reportMissingImports]  # optional dependency; setUpModule stubs it
 
         other = "9.9.9" if rm.__version__ != "9.9.9" else "0.0.0"
         agent = self._agent(other, [0.0] * 7, [0.0] * 7)
@@ -777,7 +789,7 @@ class DiagCommandTest(unittest.TestCase):
         self.assertIn("does not match", res["result"])
 
     def test_reports_no_movement_when_angles_unchanged(self):
-        import reachy_mini as rm
+        import reachy_mini as rm  # pyright: ignore[reportMissingImports]  # optional dependency; setUpModule stubs it
 
         agent = self._agent(rm.__version__, [0.0] * 7, [0.0] * 7)  # matched version
         res = _run(NS["_dispatch"](agent, "diag", {}, return_result=True))
@@ -786,7 +798,7 @@ class DiagCommandTest(unittest.TestCase):
         self.assertIn("did not change", res["result"])
 
     def test_reports_movement_when_angles_change(self):
-        import reachy_mini as rm
+        import reachy_mini as rm  # pyright: ignore[reportMissingImports]  # optional dependency; setUpModule stubs it
 
         agent = self._agent(rm.__version__, [0.0] * 7, [0.0, 0.3, 0.0, 0, 0, 0, 0])
         res = _run(NS["_dispatch"](agent, "diag", {}, return_result=True))
@@ -835,7 +847,7 @@ class CommandEventPayloadTest(unittest.TestCase):
         self.assertNotIn("audio_b64", event)
 
     def test_diag_event_preserves_handler_result(self):
-        import reachy_mini as rm
+        import reachy_mini as rm  # pyright: ignore[reportMissingImports]  # optional dependency; setUpModule stubs it
 
         agent = DiagCommandTest()._agent(
             rm.__version__, [0.0] * 7, [0.0, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -1021,7 +1033,7 @@ class ListenNoSamplesTest(unittest.TestCase):
 
     def test_no_samples_is_clear_failure(self):
         media = FakeMedia(samplerate=16000, channels=1)
-        media.get_audio_sample = lambda: None  # never produces a sample
+        media.get_audio_sample = lambda: None  # pyright: ignore[reportAttributeAccessIssue]  # never produces a sample
         agent = FakeAgent(media)
         res = _run(NS["_dispatch"](agent, "listen", {"duration": 0.1}, return_result=True))
         self.assertFalse(res["ok"])
@@ -1200,7 +1212,7 @@ class AskVoiceCommandTest(unittest.TestCase):
         self.assertTrue(agent.sent[0][1]["_via_interface"])
         self.assertTrue(agent.sent[0][1]["_interface_voice"])
         spoken.assert_awaited_once()
-        self.assertEqual(spoken.await_args.args[1]["text"], "The living-room light is on.")
+        self.assertEqual(spoken.await_args_list[-1].args[1]["text"], "The living-room light is on.")
         event = self._event(agent)
         for field in (
             "transcript",

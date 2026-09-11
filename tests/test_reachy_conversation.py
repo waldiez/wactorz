@@ -35,6 +35,8 @@ class FakeMedia:
 
 class FakeAgent:
     name = "reachy-mini"
+    # Set by the tests that hand a turn to another agent.
+    send_to: mock.AsyncMock
 
     def __init__(self):
         self.state = {
@@ -822,7 +824,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         dispatch.assert_awaited_once_with(agent, "volume", command, return_result=True)
         self.assertIn("85 percent", result["result"])
-        self.assertEqual(speak.await_args.args[1], "Εντάξει, πιο σιγά.")
+        self.assertEqual(speak.await_args_list[-1].args[1], "Εντάξει, πιο σιγά.")
         self.assertFalse(result["physical"])
 
     def test_vision_questions_are_embodied_commands(self):
@@ -1021,10 +1023,10 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
                 {},
             )
 
-        dispatched = dispatch.await_args.args[2]
+        dispatched = dispatch.await_args_list[-1].args[2]
         self.assertFalse(dispatched["say"])
         before_speak.assert_awaited_once_with("There are books behind me.")
-        self.assertEqual(speak.await_args.args[1], "There are books behind me.")
+        self.assertEqual(speak.await_args_list[-1].args[1], "There are books behind me.")
         self.assertTrue(result["physical"])
         self.assertEqual(result["result"], "There are books behind me.")
 
@@ -1060,7 +1062,7 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
                 agent, "Could you face the other way?", "task-1", voice_input=True
             )
 
-        payload = agent.send_to.await_args.args[1]
+        payload = agent.send_to.await_args_list[-1].args[1]
         self.assertEqual(payload["_interface_context"]["display_name"], "Reachy")
         self.assertIn("turn_around", payload["_interface_context"]["capabilities"]["gesture"])
         dispatch.assert_awaited_once_with(

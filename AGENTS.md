@@ -89,6 +89,10 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 - Ruff is the gated linter and formatter (`pyproject.toml` `[tool.ruff]`). `make lint-py` runs it,
   plus an advisory pass that reports but never blocks. Pre-commit and CI both enforce the gated
   rules, so a push that skips them fails rather than merging.
+- basedpyright (basic mode) is gated too, over `wactorz`, `tests` and `scripts` alike. In a test,
+  a fake declares the attributes tests set on it, and where one stands in for a real object it
+  says so on that line: `cast()`, or `# pyright: ignore[rule]` naming the rule — never a bare
+  ignore.
 
 ## Catalogue agents
 

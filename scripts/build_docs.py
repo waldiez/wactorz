@@ -568,7 +568,7 @@ def build_pydocs(site_dir: Path = SITE) -> None:
     out_dir = site_dir / "api" / "python"
     print("  building pydoc …")
     try:
-        import pdoc
+        import pdoc.render  # optional dependency: the docs extra
     except ImportError:
         print("  [skip] pdoc not installed (pip install 'wactorz[docs]')")
         return

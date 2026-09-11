@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import logging
 import sqlite3
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -53,7 +54,7 @@ class _Client:
 
 
 @contextlib.asynccontextmanager
-async def _fake_broker(client: _Client) -> Any:
+async def _fake_broker(client: _Client) -> AsyncIterator[_Client]:
     """Stands in for `mqtt_client`, so the *real* `_run` loop is what runs."""
     client.connections += 1
     yield client

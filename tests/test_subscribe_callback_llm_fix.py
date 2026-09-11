@@ -197,7 +197,7 @@ class TestRepairingASubscribeCallback:
         await shut_down(agent)
 
         assert agent.metrics.errors == errors_after_repair
-        hub = agent._sub_hub
+        hub = agent._sub_hub  # pyright: ignore[reportAttributeAccessIssue]
         assert [b.topic for b in hub._bindings] == [TOPIC]
         assert len(hub._bindings) == 1, "the broken binding survived the repair"
         assert broker.connections[0].unsubscribed == [TOPIC]

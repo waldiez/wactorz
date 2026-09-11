@@ -312,12 +312,15 @@ convention = "google"          # docstring style for the advisory `D` checks (mo
 [tool.ruff.format]
 # Black-compatible defaults; owns line width so the linter need not nag E501.
 
-# ── basedpyright: type checking in BASIC mode (ADVISORY, not gated) ────────────
+# ── basedpyright: type checking in BASIC mode (gated) ─────────────────────────
 # Basic, not strict: catches real errors (undefined attrs, bad calls, None misuse)
-# without demanding annotations on the ~half of functions that lack them today.
+# without demanding annotations on the many functions that lack them. Tests and
+# scripts are checked with the same rules as the package, so a changed signature
+# shows up where it is called from a test too. A test double standing in for a
+# real object says so on the line: `cast()`, or an ignore naming the rule.
 # Run via `make lint-py`; ratchet toward strict as the codebase gets typed up.
 [tool.basedpyright]
-include = ["wactorz"]
+include = ["wactorz", "tests", "scripts"]
 exclude = ["**/node_modules", "static", "frontend", "build", "dist", ".local", "**/__pycache__"]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"

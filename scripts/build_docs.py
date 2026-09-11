@@ -62,6 +62,7 @@ NAV = [
             ("Security", "security.md"),
             ("Prometheus", "prometheus.md"),
             ("Extensions", "extensions.md"),
+            ("Deployment", "deployment.md"),
         ],
     ),
     (
@@ -266,6 +267,35 @@ def _md_to_html_path(md_file: str) -> str:
     return re.sub(r"\.md$", ".html", md_file)
 
 
+#: Where a page the site does not build is read instead: its Markdown, rendered
+#: on GitHub, which is also where the README sends readers for those pages.
+GITHUB_DOCS = "https://github.com/waldiez/wactorz/blob/main/docs/"
+
+#: A link from one docs page to another as the sources write it: a bare
+#: `name.md`, perhaps with a `#fragment`. A link with a scheme or a path is left
+#: alone, and one inside a code block cannot match, its quotes being escaped.
+_DOC_LINK = re.compile(r'href="([A-Za-z0-9_-]+\.md)(#[^"]*)?"')
+
+
+def _doc_link_target(match: re.Match[str], root: str, built: dict[str, str]) -> str:
+    """The href for one link to a sibling page: its built page, or its source."""
+    name, fragment = match.group(1), match.group(2) or ""
+    subdir = built.get(name)
+    if subdir is None:
+        return f'href="{GITHUB_DOCS}{name}{fragment}"'
+    return f'href="{root}{subdir}/{_md_to_html_path(name)}{fragment}"'
+
+
+def link_docs_pages(html: str, root: str, built: dict[str, str]) -> str:
+    """Point links to sibling `.md` pages at what the site actually serves.
+
+    The sources link to each other as `.md`, so the links work where GitHub
+    renders them. The site serves `.html`, so left as written they 404 there.
+    `built` maps each page the site builds to its section.
+    """
+    return _DOC_LINK.sub(lambda m: _doc_link_target(m, root, built), html)
+
+
 def build_sidebar(active_md: str, active_subdir: str, root: str = "../") -> str:
     lines: list[str] = []
     for item in NAV:
@@ -444,6 +474,7 @@ def build(site_dir: Path = SITE) -> None:
 
     # Render each markdown page into its subdir
     first_per_subdir: dict[str, str] = {}
+    built = {md_name: subdir for subdir, md_name, _path in collect_pages()}
     for subdir, md_name, md_path in collect_pages():
         out_dir = site_dir / subdir
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -455,8 +486,8 @@ def build(site_dir: Path = SITE) -> None:
 
         text = md_path.read_text(encoding="utf-8")
         title = extract_title(text, md_name.replace(".md", "").replace("-", " ").title())
-        body = render_md(text)
         root = "../"  # all content pages are exactly one level deep
+        body = link_docs_pages(render_md(text), root, built)
         sidebar = build_sidebar(md_name, subdir, root)
 
         html = TEMPLATE.format(title=title, sidebar=sidebar, body=body, root=root)

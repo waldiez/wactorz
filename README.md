@@ -54,6 +54,8 @@ Discord and Telegram do — one channel among several, alongside a REST API and 
 MCP server. The LLM provider is configurable (Anthropic, OpenAI, Gemini, NIM) or
 fully local via Ollama, so the system keeps running with no cloud at all.
 
+https://github.com/user-attachments/assets/e832eed9-ba61-4872-8c20-5d0e8cfe14d5
+
 ---
 
 ## How Wactorz is different

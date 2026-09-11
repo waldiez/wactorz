@@ -508,3 +508,29 @@ def test_an_agent_main_never_registered_earns_nothing(tmp_path: Path) -> None:
     main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
 
     assert main._restore_earned_trust("never-seen", {"name": "never-seen"}) is False
+
+
+# ── A name every topic of the agent would carry ──────────────────────────────
+
+
+def test_a_name_that_cannot_be_a_topic_level_is_refused_locally(main_host):
+    # "c++ monitor" is an ordinary thing to ask for; its topics would all carry
+    # a wildcard, and a message to it once stalled every message behind it.
+    assert run(main_host._spawn_local_from_config({"name": "c++ monitor"})) is None
+    assert main_host.spawn_calls == []
+
+
+def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
+    from types import SimpleNamespace
+
+    from wactorz.agents.main.spawns import SpawnService
+
+    published: list[str] = []
+
+    async def _publish(topic, payload, **_kw):
+        published.append(topic)
+
+    host = SimpleNamespace(name="main", _mqtt_publish=_publish)
+    run(SpawnService(host)._spawn_remote({"name": "all#"}, "rpi", save=True))
+
+    assert published == []

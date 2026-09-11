@@ -18,6 +18,8 @@ import threading
 import time
 from pathlib import Path
 
+from .topics import publish_topic_error
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,6 +80,13 @@ class MQTTPublisher:
     #: this is the same default, for a publisher built without one.
     DEAD_LETTER_DAYS = 7.0
 
+    #: How many times in a row one message may fail to publish on a live
+    #: connection before it is dropped as one the broker will never take — too
+    #: large, malformed. A flaky link can also fail just after connecting, so
+    #: this is generous: with the 10s publish timeout and the reconnect backoff,
+    #: five attempts hold the queue for about a minute.
+    POISON_AFTER = 5
+
     #: How large the WAL may get before SQLite checkpoints it *inline*, on
     #: whichever commit trips the threshold. Raised well above the 1000-page
     #: default so the scheduled checkpoint normally gets there first.
@@ -99,6 +108,13 @@ class MQTTPublisher:
         self._dropped = 0
         #: A message whose publish failed, retried before the queue is read again.
         self._retry: tuple | None = None
+        #: How many times in a row `_retry` has failed. It counts that one
+        #: message: a fresh one starts again, so failures never add up across
+        #: messages and turn a flaky link into a false verdict.
+        self._retry_failures = 0
+        #: Topics already warned about as unsendable, so a caller in a loop
+        #: warns once rather than on every call.
+        self._refused_topics: set[str] = set()
         self._task: asyncio.Task | None = None
         self._available = False
         self._db_path = db_path
@@ -408,6 +424,37 @@ class MQTTPublisher:
                 self._dropped,
             )
 
+    def _discard(self, item: tuple, from_queue: bool, reason: str) -> None:
+        """Give up on a message that can never be sent, so the ones behind it can be.
+
+        Its stored row goes too; left in the outbox it would be replayed after a
+        restart and stall the queue again.
+        """
+        topic, _payload, _retain, _qos, row_id = item
+        if from_queue:
+            self._queue.task_done()
+        if row_id >= 0:
+            self._delete_from_db(row_id)
+        logger.warning("[MQTT] outbox: dropped a message for %r — %s", topic, reason)
+
+    def _hold_for_retry(self, item: tuple, from_queue: bool, error: Exception) -> None:
+        """Keep a failed message to send first after reconnecting, unless it keeps failing.
+
+        A publish that fails on a live connection is usually the link, and the
+        message deserves another try ahead of the rest. One that fails
+        `POISON_AFTER` times in a row is the message — a broker that drops the
+        connection every time it arrives — and holding it would hold everything.
+        """
+        if from_queue:
+            self._queue.task_done()
+        failures = 1 if from_queue else self._retry_failures + 1
+        if failures >= self.POISON_AFTER:
+            self._discard(item, False, f"its publish failed {failures} times in a row: {error}")
+            self._retry, self._retry_failures = None, 0
+            return
+        logger.warning("[MQTT] Publish failed: %s — retrying it first", error)
+        self._retry, self._retry_failures = item, failures
+
     def _load_pending_from_db(self) -> None:
         """On startup, reload undelivered QoS 1 messages into the in-memory queue."""
         try:
@@ -430,6 +477,19 @@ class MQTTPublisher:
     async def publish(self, topic: str, payload, retain: bool = False, qos: int = 0) -> None:
         """Queue a message for delivery. Returns without waiting for the broker."""
         if not self._available:
+            return
+
+        problem = publish_topic_error(topic)
+        if problem:
+            # Refused here rather than queued: the queue sends in order and
+            # retries a failure first, so a topic that can never be sent would
+            # hold up every message behind it, and a stored one would do so
+            # again after a restart.
+            if topic not in self._refused_topics and len(self._refused_topics) < 256:
+                self._refused_topics.add(topic)
+                logger.warning("[MQTT] refused to publish to %r: %s", topic, problem)
+            else:
+                logger.debug("[MQTT] refused to publish to %r: %s", topic, problem)
             return
 
         # Auto-upgrade critical topics to QoS 1
@@ -527,23 +587,28 @@ class MQTTPublisher:
 
                         try:
                             await client.publish(topic, payload, retain=retain, qos=qos)
-                            # Only remove from queue AFTER successful publish.
-                            # `task_done` belongs to a `get`, so it is skipped
-                            # for a retry that never went back on the queue.
-                            if from_queue:
-                                self._queue.task_done()
-                            # Remove from SQLite outbox if it was persisted
-                            if row_id >= 0:
-                                self._delete_from_db(row_id)
-                            # Reset backoff and error dedup only after a successful publish
-                            backoff = 1.0
-                            _last_exc_str = None
+                        except (ValueError, TypeError) as refused:
+                            # paho refuses the message itself before sending it — a
+                            # wildcard or empty topic, one over 65535 bytes, a payload
+                            # it cannot encode — and would refuse it again on every
+                            # retry. It goes now; the connection, which is fine, stays.
+                            self._discard(item, from_queue, f"refused before sending: {refused}")
+                            continue
                         except Exception as pub_err:
-                            logger.warning("[MQTT] Publish failed: %s — retrying it first", pub_err)
-                            self._retry = item
-                            if from_queue:
-                                self._queue.task_done()
+                            self._hold_for_retry(item, from_queue, pub_err)
                             raise  # trigger reconnect
+                        # Only remove from queue AFTER successful publish.
+                        # `task_done` belongs to a `get`, so it is skipped
+                        # for a retry that never went back on the queue.
+                        if from_queue:
+                            self._queue.task_done()
+                        # Remove from SQLite outbox if it was persisted
+                        if row_id >= 0:
+                            self._delete_from_db(row_id)
+                        self._retry_failures = 0
+                        # Reset backoff and error dedup only after a successful publish
+                        backoff = 1.0
+                        _last_exc_str = None
 
             except asyncio.CancelledError:
                 self._connected = False

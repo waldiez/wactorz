@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, MessageType
 from ...core.paths import agent_state_dir
+from ...core.topics import topic_name_error
 from ..lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,31 @@ class SpawnMixin(_Host):
         ``SpawnPlaceholder`` (background install), or ``None`` on failure.
         """
         name = config.get("name", "spawned-agent")
+        problem = topic_name_error(str(name))
+        if problem:
+            # The name becomes a level of every topic the agent uses, so an agent
+            # built with it could never be reached — and a message to it that the
+            # outbox cannot send used to stall every message behind it.
+            logger.error("[%s] Cannot spawn %r: %s", self.name, name, problem)
+            return None
+        return await self._spawn_local_named(
+            config,
+            name,
+            register=register,
+            blocking_install=blocking_install,
+            from_registry=from_registry,
+        )
+
+    async def _spawn_local_named(
+        self,
+        config: dict,
+        name: str,
+        *,
+        register: bool,
+        blocking_install: bool,
+        from_registry: bool,
+    ) -> Actor | SpawnPlaceholder | None:
+        """`_spawn_local_from_config` for a name already known to be usable."""
         config = self._without_unearned_trust(config, name, from_registry)
 
         # ── Idempotency / replace ──────────────────────────────────────────

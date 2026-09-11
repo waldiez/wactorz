@@ -23,6 +23,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import MessageType
+from ...core.topics import topic_name_error
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -661,6 +662,17 @@ class SpawnService:
         itself back to running this agent without being told again. The spawn
         message deliberately is not: see the note on the publish itself.
         """
+        problem = topic_name_error(str(config.get("name", "remote-agent")))
+        if problem:
+            # As for a local spawn: the name is a level of the agent's topics.
+            logger.error(
+                "[%s] Cannot spawn %r on %s: %s",
+                self.host.name,
+                config.get("name"),
+                node,
+                problem,
+            )
+            return
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 

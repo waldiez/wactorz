@@ -19,7 +19,7 @@
     "markdownlint": "markdownlint-cli2 --fix \"*.md\"",
     "fmt": "bun run prettier",
     "format": "bun run fmt",
-    "docs": "typedoc --out ../site/api/js --entryPointStrategy expand src --name \"Wactorz JS\" --readme none --hideGenerator",
+    "docs": "typedoc",
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage"

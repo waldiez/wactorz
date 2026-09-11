@@ -35,6 +35,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
 SITE = ROOT / "static" / "docs"
 STATIC = ROOT / "static"
+#: The pdoc template and the typedoc stylesheet that give the API reference the
+#: docs site's look.
+API_THEME = DOCS / "api-theme"
 
 
 def _get_version() -> str:
@@ -502,17 +505,31 @@ def build(site_dir: Path = SITE) -> None:
         idx.write_text(_redirect(f"./{first_html}"))
         print(f"  index    → static/docs/{subdir}/index.html → {first_html}")
 
-    # Compat redirect: landing page links to ./api/python/
-    py_api_compat = site_dir / "api" / "python"
-    py_api_compat.mkdir(parents=True, exist_ok=True)
-    compat_idx = py_api_compat / "index.html"
-    compat_idx.write_text(_redirect("../../reference/python-api.html"))
-    print("  compat   → static/docs/api/python/ → ../../reference/python-api.html")
-
     print(f"\n✓  site built → {site_dir}")
 
 
 # ── JS/TS docs ─────────────────────────────────────────────────────────────────
+
+
+#: What the API reference writes where a link needs the docs site's root. Its
+#: pages sit at different depths, and neither pdoc nor typedoc makes a link it
+#: was configured with relative to the page it lands on.
+DOCS_ROOT_MARK = "@docs/"
+
+
+def resolve_docs_root(html: str, depth: int) -> str:
+    """Point `html`'s links to the docs root at it, from a page `depth` folders down."""
+    return html.replace(f'href="{DOCS_ROOT_MARK}', f'href="{"../" * depth}')
+
+
+def _resolve_docs_root_in(out_dir: Path, site_dir: Path) -> None:
+    """Resolve the root mark in every page under `out_dir`."""
+    for html_file in out_dir.rglob("*.html"):
+        text = html_file.read_text(encoding="utf-8")
+        if DOCS_ROOT_MARK not in text:
+            continue
+        depth = len(html_file.parent.relative_to(site_dir).parts)
+        html_file.write_text(resolve_docs_root(text, depth), encoding="utf-8")
 
 
 def build_jsdocs(site_dir: Path = SITE) -> None:
@@ -541,6 +558,7 @@ def build_jsdocs(site_dir: Path = SITE) -> None:
     js_src = ROOT / "site" / "api" / "js"
     if js_src.is_dir():
         shutil.copytree(js_src, out_dir, dirs_exist_ok=True)
+        _resolve_docs_root_in(out_dir, site_dir)
         print("  typedoc  → static/docs/api/js/")
     else:
         print(f"  [warn] typedoc output not found at {js_src.relative_to(ROOT)}")
@@ -556,23 +574,17 @@ def build_pydocs(site_dir: Path = SITE) -> None:
         return
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
+        # The docs site's look: its colours, fonts and top bar (docs/api-theme).
+        pdoc.render.configure(
+            template_directory=API_THEME / "pdoc",
+            favicon="https://waldiez.github.io/media/images/wactorz/icon.ico",
+            footer_text="Wactorz",
+        )
         pdoc.pdoc("wactorz", output_directory=out_dir)
     except Exception as exc:
         print(f"  [warn] pdoc failed: {exc}")
         return
-    # Force dark mode: pdoc uses Bootstrap 5.3 data-bs-theme; also inject a
-    # fallback CSS rule for older Bootstrap versions that use prefers-color-scheme.
-    _dark_inject = (
-        "<style>:root{color-scheme:dark!important}"
-        "body,[data-bs-theme]{--bs-body-bg:#0d1117;--bs-body-color:#e6edf3}</style>"
-    )
-    for html_file in out_dir.rglob("*.html"):
-        text = html_file.read_text(encoding="utf-8")
-        # Set data-bs-theme="dark" on <html> and inject CSS
-        patched = text.replace("<html", '<html data-bs-theme="dark"', 1)
-        patched = patched.replace("</head>", f"{_dark_inject}</head>", 1)
-        if patched != text:
-            html_file.write_text(patched, encoding="utf-8")
+    _resolve_docs_root_in(out_dir, site_dir)
     print("  pydoc    → static/docs/api/python/")
 
 

@@ -693,10 +693,8 @@ class ActorSystem:
 
         state_dir = Path(self._state_dir)
         state_dir.mkdir(parents=True, exist_ok=True)
-        # str, because MQTTPublisher takes the path as one.
-        db_path = str(state_dir / "mqtt_outbox.db")
         self._mqtt_client = await MQTTPublisher.create(
-            self._mqtt_broker, self._mqtt_port, db_path=db_path
+            self._mqtt_broker, self._mqtt_port, db_path=state_dir / "mqtt_outbox.db"
         )
 
         # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────

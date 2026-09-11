@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
+from wactorz import retention
 from wactorz.agents.lookup import find_main_actor
-from wactorz.config import CONFIG
+from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
@@ -152,6 +153,7 @@ async def build_system(args: argparse.Namespace):
         args.mqtt_broker or CONFIG.mqtt_host,
         args.mqtt_port or CONFIG.mqtt_port,
         db_path=Path(_sd) / "mqtt_outbox.db",
+        dead_letter_days=RETENTION_OUTBOX_DAYS,
     )
 
     # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────────────
@@ -309,6 +311,9 @@ async def build_system(args: argparse.Namespace):
     # whichever `persist()` crossed its threshold.
     from wactorz.core.persistence import maintenance
 
+    # Before the rotation starts, so it runs ahead of the checkpoint that folds
+    # its deletes back into the database.
+    maintenance.register("retention", retention.prune)
     maintenance.start()
 
     await system.supervisor.start()

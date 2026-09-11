@@ -10,9 +10,9 @@ So the shape matters more than the schedule: each job runs through
 Nothing here may block the loop, because avoiding exactly that is the reason it
 exists.
 
-A job is registered rather than hard-coded so the next one — the retention
-pruner, which already exists and nothing calls — is a line rather than a
-redesign.
+A job is registered rather than hard-coded, so another is a line rather than a
+redesign: the retention job (:mod:`wactorz.retention`) is registered by the app,
+ahead of the checkpoint.
 """
 
 from __future__ import annotations

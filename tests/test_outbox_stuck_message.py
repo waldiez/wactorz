@@ -97,8 +97,12 @@ def _queue_stored(pub: MQTTPublisher, topic: str) -> None:
 
 
 class TestTheTopicRules:
+    # Named: pytest puts the test id in an environment variable, and Windows
+    # refuses one longer than 32767 characters, which the long topic would be.
     @pytest.mark.parametrize(
-        "topic", ["", "sensors/+/temp", "sensors/#", "a\x00b", "x" * (MAX_TOPIC_BYTES + 1)]
+        "topic",
+        ["", "sensors/+/temp", "sensors/#", "a\x00b", "x" * (MAX_TOPIC_BYTES + 1)],
+        ids=["empty", "plus", "hash", "nul", "too-long"],
     )
     def test_an_unsendable_topic_says_why(self, topic: str) -> None:
         assert publish_topic_error(topic)

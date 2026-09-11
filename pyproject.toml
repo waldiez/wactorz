@@ -218,6 +218,7 @@ select = [
     "D",       # pydocstyle — docstring style (google convention)
     "G",       # flake8-logging-format — lazy %-args, never f-strings, in logging
     "LOG",     # flake8-logging — logger misuse
+    "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
 ]
 ignore = [
@@ -236,7 +237,7 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (exception style, complexity, pathlib, security, datetime) stay
+# Further families (exception style, complexity, pathlib, security) stay
 # advisory via `make lint-py` until each is triaged and gated. One member of the
 # pathlib family is settled rather than pending: PTH123 flags `open(p)` where `p`
 # is already a Path, and the convention here is that a path is a Path — which
@@ -247,7 +248,10 @@ ignore = [
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
 # debug line in production, and the message loses the structure that lets a log
-# aggregator group occurrences of the same event.
+# aggregator group occurrences of the same event. Datetime followed once all that
+# was left were deliberate, each marked where it stands: a naive datetime shifts
+# with the server's clock and cannot be compared with an aware one, and gating the
+# family is what keeps a new one from arriving unremarked.
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]       # re-exports: imported here to expose the package's public API
@@ -290,6 +294,16 @@ ignore = [
 # swallow is the design of these two modules rather than an oversight in them.
 "wactorz/web/cost.py" = ["S110"]
 "wactorz/agents/llm/cost.py" = ["S110"]
+# The weather agent's "today" is the server's local date on purpose: it is what
+# "tomorrow" means to the person asking. A timezone argument would not make it
+# more correct — UTC is simply wrong for most users. The known limit it leaves:
+# forecast rows are dated in the location's own timezone, so for a place far
+# enough east or west the today/tomorrow labels can be a day off.
+"wactorz/catalogue_agents/weather_agent.py" = ["DTZ011"]
+# A schedule that is not a dict is rejected user input from a spawn, and the
+# spawner catches ValueError to report it as such; a TypeError would surface as
+# a spawn-failure traceback instead.
+"wactorz/agents/scheduled_agent.py" = ["TRY004"]
 
 [tool.ruff.lint.pydocstyle]
 # options: google, numpy, pep257

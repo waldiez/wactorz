@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 
 from ..paths import resolve_state_dir
 from .db import WactorzDB
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def init_persistence(
-    db_path: str | None = None,
+    db_path: str | os.PathLike[str] | None = None,
     state_dir: str | None = None,
     run_migration: bool = True,
 ) -> tuple[WactorzDB, PickleStore]:
@@ -23,7 +24,7 @@ def init_persistence(
     Returns (db, pickle_store) for passing to ActorSystem.
     """
     _state_dir = resolve_state_dir(state_dir)
-    _db_path = db_path or os.path.join(_state_dir, "wactorz.db")
+    _db_path = db_path or Path(_state_dir) / "wactorz.db"
     wactorz_db = WactorzDB(_db_path)
     pickle_store = PickleStore(_state_dir)
     install_stores(wactorz_db, pickle_store)

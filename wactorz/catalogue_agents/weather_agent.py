@@ -462,7 +462,7 @@ def _resolve_when(low: str, today: date) -> dict[str, Any]:
     # ── History (past) ──────────────────────────────────────────────
     iso = _ISO_DATE.search(low)
     if iso:
-        d = datetime.strptime(iso.group(1), "%Y-%m-%d").date()
+        d = datetime.strptime(iso.group(1), "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
         if d < today:
             return {**out, "action": "history", "date_from": d, "date_to": d}
     if re.search(r"\byesterday\b", low):
@@ -976,7 +976,7 @@ class WeatherAgent(Actor):
 
         today = date.today()
         if date_to:
-            horizon = (datetime.strptime(date_to, "%Y-%m-%d").date() - today).days + 1
+            horizon = (datetime.strptime(date_to, "%Y-%m-%d").date() - today).days + 1  # noqa: DTZ007  # a bare date, and .date() is taken at once
             fdays = max(1, min(_MAX_FORECAST_DAYS, horizon))
         else:
             fdays = max(1, min(_MAX_FORECAST_DAYS, days or 3))
@@ -1014,7 +1014,7 @@ class WeatherAgent(Actor):
         if date_str.lower() == "yesterday":
             date_str = (date.today() - timedelta(days=1)).isoformat()
 
-        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+        target = datetime.strptime(date_str, "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
         delta = (date.today() - target).days
         daily = "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum"
         # The archive API lags ~5 days; for recent days the forecast API's
@@ -1114,7 +1114,7 @@ class WeatherAgent(Actor):
             today = date.today()
             if len(rows) == 1:
                 r = rows[0]
-                d = datetime.strptime(r["date"], "%Y-%m-%d").date()
+                d = datetime.strptime(r["date"], "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
                 lbl = _label_for(d, today)
                 lead = self._verdict_day(r, concern, result["location"], lbl)
                 body = (
@@ -1125,7 +1125,7 @@ class WeatherAgent(Actor):
                 return f"{lead} {body}".strip()
             lines = [f"Forecast for {result['location']}:"]
             for r in rows:
-                d = datetime.strptime(r["date"], "%Y-%m-%d").date()
+                d = datetime.strptime(r["date"], "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
                 lbl = _label_for(d, today)
                 lines.append(
                     f"  {lbl:<9} {r['condition']:<22} "
@@ -1242,6 +1242,6 @@ def _r(v: Any) -> float | Any:
 
 def _short(iso: str) -> str:
     try:
-        return datetime.strptime(iso, "%Y-%m-%d").strftime("%a")
+        return datetime.strptime(iso, "%Y-%m-%d").strftime("%a")  # noqa: DTZ007  # a bare date, only named as a weekday
     except ValueError:
         return iso

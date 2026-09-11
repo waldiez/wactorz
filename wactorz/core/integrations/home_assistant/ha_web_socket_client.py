@@ -96,7 +96,7 @@ class HAWebSocketClient:
         """
         payload = await self._recv(timeout)
         if not isinstance(payload, dict):
-            raise RuntimeError(f"Unexpected websocket payload: {payload!r}")
+            raise TypeError(f"Unexpected websocket payload: {payload!r}")
         return payload
 
     async def subscribe_events(self, event_type: str | None = None) -> int:

@@ -219,7 +219,7 @@ def _build_baseline_from_data(
     # Hourly profiles
     hourly_buckets = [[] for _ in range(24)]
     for ts, v in zip(timestamps, values, strict=False):
-        hour = datetime.fromtimestamp(ts).hour
+        hour = datetime.fromtimestamp(ts).hour  # noqa: DTZ006  # the local hour: daily patterns follow the clock people live by
         hourly_buckets[hour].append(v)
 
     for h in range(24):
@@ -280,7 +280,7 @@ def _score_reading(
         return []
 
     anomalies = []
-    hour = datetime.fromtimestamp(ts).hour
+    hour = datetime.fromtimestamp(ts).hour  # noqa: DTZ006  # the local hour: daily patterns follow the clock people live by
 
     # 1. Statistical: value outside hourly_mean ± k*hourly_std
     hourly_m = baseline.hourly_mean[hour]

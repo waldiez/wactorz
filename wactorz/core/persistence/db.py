@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -98,7 +99,7 @@ class WactorzDB:
     #: See the pragma of the same name in :meth:`_connect`.
     WAL_AUTOCHECKPOINT_PAGES = 4000
 
-    def __init__(self, db_path: str = "./state/wactorz.db") -> None:
+    def __init__(self, db_path: str | os.PathLike[str] = "./state/wactorz.db") -> None:
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None

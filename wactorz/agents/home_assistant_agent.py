@@ -912,9 +912,7 @@ class HomeAssistantAgent(LLMAgent):
                 messages=[user_msg], system=HARDWARE_SELECTION_PROMPT
             )
             self._accumulate_usage(usage)
-            data = json.loads(self._strip_fences(response))
-            if not isinstance(data, dict):
-                raise ValueError("LLM response is not a JSON object")
+            data = self._json_object(response)
 
             selected: list[dict[str, Any]] = data.get("hardware") or []
             if not isinstance(selected, list):
@@ -1003,9 +1001,7 @@ class HomeAssistantAgent(LLMAgent):
             )
             logger.info("[%s] Received hardware recommendation response from LLM.", self.name)
             self._accumulate_usage(usage)
-            data = json.loads(self._strip_fences(response))
-            if not isinstance(data, dict):
-                raise ValueError("LLM response is not a JSON object")
+            data = self._json_object(response)
 
             primary = self._normalize_available_hardware_items(
                 data.get("primary_hardware") or [],
@@ -1244,9 +1240,7 @@ class HomeAssistantAgent(LLMAgent):
             system=AUTOMATION_CREATION_PROMPT,
         )
         self._accumulate_usage(usage)
-        data = json.loads(self._strip_fences(response))
-        if not isinstance(data, dict):
-            raise ValueError("LLM response is not a JSON object")
+        data = self._json_object(response)
 
         can_create = bool(data.get("can_create"))
         automation = data.get("automation") or {}
@@ -1260,7 +1254,7 @@ class HomeAssistantAgent(LLMAgent):
             }
 
         if not isinstance(automation, dict):
-            raise ValueError("automation must be a JSON object")
+            raise TypeError("automation must be a JSON object")
 
         error = self._validate_automation(automation)
         if error:
@@ -1578,6 +1572,17 @@ class HomeAssistantAgent(LLMAgent):
         if isinstance(payload, dict) and isinstance(payload.get("task"), str):
             return payload["task"]
         return fallback
+
+    def _json_object(self, response: str) -> dict[str, Any]:
+        """The model's reply as the JSON object every prompt here asks it for.
+
+        TypeError when it parses to anything else. Each caller catches Exception
+        and reports its step as failed, so the type only names what went wrong.
+        """
+        data = json.loads(self._strip_fences(response))
+        if not isinstance(data, dict):
+            raise TypeError("LLM response is not a JSON object")
+        return data
 
     @staticmethod
     def _strip_fences(text: str) -> str:

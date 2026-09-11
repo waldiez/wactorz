@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 import threading
 import time
@@ -83,7 +84,7 @@ class MQTTPublisher:
     #: which is what the default already was.
     WAL_AUTOCHECKPOINT_PAGES = 4000
 
-    def __init__(self, db_path: str = "./state/mqtt_outbox.db") -> None:
+    def __init__(self, db_path: str | os.PathLike[str] = "./state/mqtt_outbox.db") -> None:
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.MAX_QUEUED)
         #: How many messages the cap has discarded, for the log and for tests.
         self._dropped = 0
@@ -126,7 +127,7 @@ class MQTTPublisher:
 
     @classmethod
     async def create(
-        cls, broker: str, port: int, db_path: str = "./state/mqtt_outbox.db"
+        cls, broker: str, port: int, db_path: str | os.PathLike[str] = "./state/mqtt_outbox.db"
     ) -> MQTTPublisher:
         """Build a publisher and connect it, or return one that quietly no-ops."""
         pub = cls(db_path=db_path)

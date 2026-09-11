@@ -51,6 +51,7 @@ async def upload_handler(request: web.Request) -> web.Response:
 
     size = 0
     head = b""
+    too_large = False
     try:
         with open(staging, "wb") as handle:
             while True:
@@ -59,19 +60,24 @@ async def upload_handler(request: web.Request) -> web.Response:
                     break
                 size += len(chunk)
                 if size > config.UPLOAD_MAX_BYTES:
-                    raise ValueError("too large")
+                    # A flag, not a raise: raised, it would share an except with
+                    # every ValueError from the read or the write, and each of
+                    # those would be reported as too large.
+                    too_large = True
+                    break
                 if len(head) < uploads.SNIFF_BYTES:
                     head += chunk[: uploads.SNIFF_BYTES - len(head)]
                 handle.write(chunk)
-    except ValueError:
-        staging.unlink(missing_ok=True)
-        return web.json_response(
-            {"error": f"larger than {config.UPLOAD_MAX_BYTES} bytes"}, status=413
-        )
     except Exception as exc:
         staging.unlink(missing_ok=True)
         logger.warning("[upload] failed: %s", exc)
         return web.json_response({"error": "upload failed"}, status=400)
+
+    if too_large:
+        staging.unlink(missing_ok=True)
+        return web.json_response(
+            {"error": f"larger than {config.UPLOAD_MAX_BYTES} bytes"}, status=413
+        )
 
     if not size:
         staging.unlink(missing_ok=True)

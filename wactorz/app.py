@@ -7,9 +7,9 @@ runs the selected interface. Parsed arguments are supplied by :mod:`wactorz.cli`
 import argparse
 import asyncio
 import logging
-import os
 import signal
 import sys
+from pathlib import Path
 from typing import cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
@@ -151,7 +151,7 @@ async def build_system(args: argparse.Namespace):
     system._mqtt_client = await MQTTPublisher.create(
         args.mqtt_broker or CONFIG.mqtt_host,
         args.mqtt_port or CONFIG.mqtt_port,
-        db_path=os.path.join(_sd, "mqtt_outbox.db"),
+        db_path=Path(_sd) / "mqtt_outbox.db",
     )
 
     # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────────────
@@ -170,7 +170,7 @@ async def build_system(args: argparse.Namespace):
     from wactorz.core.persistence import PersistenceAPI, init_persistence
 
     _db, _pickle_store = init_persistence(
-        db_path=os.path.join(_sd, "wactorz.db"),
+        db_path=Path(_sd) / "wactorz.db",
         state_dir=_sd,
         run_migration=True,
     )

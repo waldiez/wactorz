@@ -73,6 +73,11 @@ class MQTTPublisher:
     #: makes the writer wait for it.
     CHECKPOINT_INTERVAL_S = 60.0
 
+    #: Days an undelivered message is stored before it expires; 0 keeps it until
+    #: delivered. The server passes its `WACTORZ_RETENTION_OUTBOX_DAYS` setting;
+    #: this is the same default, for a publisher built without one.
+    DEAD_LETTER_DAYS = 7.0
+
     #: How large the WAL may get before SQLite checkpoints it *inline*, on
     #: whichever commit trips the threshold. Raised well above the 1000-page
     #: default so the scheduled checkpoint normally gets there first.
@@ -84,7 +89,11 @@ class MQTTPublisher:
     #: which is what the default already was.
     WAL_AUTOCHECKPOINT_PAGES = 4000
 
-    def __init__(self, db_path: str | os.PathLike[str] = "./state/mqtt_outbox.db") -> None:
+    def __init__(
+        self,
+        db_path: str | os.PathLike[str] = "./state/mqtt_outbox.db",
+        dead_letter_days: float = DEAD_LETTER_DAYS,
+    ) -> None:
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.MAX_QUEUED)
         #: How many messages the cap has discarded, for the log and for tests.
         self._dropped = 0
@@ -93,6 +102,7 @@ class MQTTPublisher:
         self._task: asyncio.Task | None = None
         self._available = False
         self._db_path = db_path
+        self._dead_letter_days = dead_letter_days
         #: The outbox handle, opened on first use and kept -- see :meth:`_connect`.
         #: Not opened here: a constructor must not touch the disk.
         self._db: sqlite3.Connection | None = None
@@ -127,14 +137,20 @@ class MQTTPublisher:
 
     @classmethod
     async def create(
-        cls, broker: str, port: int, db_path: str | os.PathLike[str] = "./state/mqtt_outbox.db"
+        cls,
+        broker: str,
+        port: int,
+        db_path: str | os.PathLike[str] = "./state/mqtt_outbox.db",
+        dead_letter_days: float = DEAD_LETTER_DAYS,
     ) -> MQTTPublisher:
         """Build a publisher and connect it, or return one that quietly no-ops."""
-        pub = cls(db_path=db_path)
+        pub = cls(db_path=db_path, dead_letter_days=dead_letter_days)
         try:
             import aiomqtt  # noqa: F401  # pylint: disable=unused-import
 
             pub._init_db()
+            # Before the replay: an expired message is dropped, not retried once more.
+            pub._expire()
             pub._load_pending_from_db()
             pub._task = asyncio.create_task(pub._run(broker, port))
             pub._checkpoint_task = asyncio.create_task(pub._checkpoint_loop())
@@ -224,10 +240,52 @@ class MQTTPublisher:
             except Exception as e:
                 logger.debug("[MQTT] Outbox checkpoint failed: %s", e)
 
+    def _expire(self) -> None:
+        """Remove stored messages still undelivered after `dead_letter_days`, by topic.
+
+        Without this a message the broker never accepts is kept for ever and
+        replayed on every start. Expiring one can lose it, so the age is long and
+        each expiry is a warning. Runs on a worker thread, and once before the
+        replay at startup.
+
+        Only the stored copy goes. A copy already in memory is still retried while
+        this process runs, and delivered if the broker comes back; what expiry ends
+        is the retry after a restart. So the warning can come before a delivery.
+        """
+        if self._dead_letter_days <= 0:
+            return
+        cutoff = time.time() - self._dead_letter_days * 86400
+        expired: list[tuple[str, int]] = []
+        try:
+            with self._db_lock:
+                db = self._connect()
+                expired = db.execute(
+                    "SELECT topic, COUNT(*) FROM outbox WHERE ts < ? GROUP BY topic", (cutoff,)
+                ).fetchall()
+                if expired:
+                    db.execute("DELETE FROM outbox WHERE ts < ?", (cutoff,))
+                    db.commit()
+        except Exception as e:
+            logger.debug("[MQTT] Outbox expiry failed: %s", e)
+            self._close_db()
+            return
+        for topic, count in expired:
+            logger.warning(
+                "[MQTT] outbox: expired %d message(s) for %s, undelivered after %g days;"
+                " not retried after a restart",
+                count,
+                topic,
+                self._dead_letter_days,
+            )
+
     async def _checkpoint_loop(self) -> None:
-        """Checkpoint on a timer, off the loop, until cancelled."""
+        """Expire dead letters, then checkpoint, on a timer and off the loop, until cancelled.
+
+        Expiry first, so the checkpoint folds its deletes in the same pass.
+        """
         while True:
             await asyncio.sleep(self.CHECKPOINT_INTERVAL_S)
+            await asyncio.to_thread(self._expire)
             await asyncio.to_thread(self._checkpoint)
 
     def _close_db(self) -> None:

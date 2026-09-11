@@ -167,15 +167,32 @@ def _bind_host() -> str:
 
 #: Whether chat file attachments may be uploaded. On by default now that the
 #: feature is complete, and still a flag: the endpoint writes caller-supplied
-#: bytes to disk with nothing pruning them, and a deployment that does not want
-#: attachment storage growing there turns it off.  Like every other route it is
-#: unauthenticated, so an install exposed beyond its own network has an open
-#: 25 MB write endpoint until authentication lands.
+#: bytes to disk, kept for as long as a chat message refers to them, and a
+#: deployment that does not want attachment storage there turns it off.  Like
+#: every other route it is unauthenticated, so an install exposed beyond its own
+#: network has an open 25 MB write endpoint until authentication lands.
 UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", "0", "false", "no")
 
 #: Largest single upload. Matches the limit the browser enforces before sending,
 #: so a file the UI accepts is not refused by the server.
 UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
+
+#: How many days each store is kept before its old rows are deleted; 0 keeps it
+#: for ever. The job that applies them is `wactorz/retention.py`.
+#:
+#: The chat history the dashboard shows. A year: long enough that nobody loses a
+#: conversation they still remember, short enough that a chatty install does not
+#: fill a Raspberry Pi's card over its life. An attached file goes with the last
+#: message that refers to it.
+RETENTION_CHAT_DAYS = _env_int("WACTORZ_RETENTION_CHAT_DAYS", 365)
+#: Sensor readings, detections, Home Assistant state changes and actuations. The
+#: time-series collector agent prunes the same tables by its own
+#: `retention_days`, so with both running the shorter window is the one that holds.
+RETENTION_TIMESERIES_DAYS = _env_int("WACTORZ_RETENTION_TIMESERIES_DAYS", 365)
+#: Messages the broker never accepted. Until delivered they are kept, and
+#: replayed on every start — for ever, for one that never can be. A week outlasts
+#: any outage worth waiting for, and each one expired is logged with its topic.
+RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
 
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a

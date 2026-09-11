@@ -99,6 +99,12 @@ class WactorzDB:
     #: See the pragma of the same name in :meth:`_connect`.
     WAL_AUTOCHECKPOINT_PAGES = 4000
 
+    #: Rows deleted per transaction when pruning. Each batch releases the lock,
+    #: and every writer on the event loop waits on that lock — so the first
+    #: prune after an upgrade, which may be years of rows, is many short holds
+    #: rather than one long stall.
+    PRUNE_BATCH_ROWS = 1000
+
     def __init__(self, db_path: str | os.PathLike[str] = "./state/wactorz.db") -> None:
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -397,6 +403,23 @@ class WactorzDB:
                 cur = conn.execute("DELETE FROM chat_log")
         return cur.rowcount
 
+    @_serialised
+    def chat_attachment_ids(self) -> set[str]:
+        """Every upload id a kept chat turn refers to: what the upload sweep must keep.
+
+        A row whose attachments cannot be read counts as naming none, as it does
+        everywhere else a row is read.
+        """
+        ids: set[str] = set()
+        rows = self.conn.execute(
+            "SELECT attachments FROM chat_log WHERE attachments IS NOT NULL AND attachments != ''"
+        )
+        for (raw,) in rows:
+            for item in _with_attachments({"attachments": raw})["attachments"]:
+                if isinstance(item, dict) and item.get("id"):
+                    ids.add(str(item["id"]))
+        return ids
+
     def clear_spawn_registry(self, agent_name: str | None = None) -> int:
         """Delete spawn_registry rows. Pass agent_name to limit to one agent."""
         with self.transaction() as conn:
@@ -585,22 +608,42 @@ class WactorzDB:
         self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         return before
 
-    def prune_old_data(self, days: int = 30) -> int:
-        """Delete time-series data older than N days. Run periodically."""
+    def prune_old_data(self, days: float = 30) -> int:
+        """Delete time-series rows older than N days, in batches. Returns rows removed.
+
+        Called by the retention job and, with its own window, by the time-series
+        collector agent.
+        """
         cutoff = time.time() - (days * 86400)
-        tables = ["sensor_readings", "detections", "ha_state_changes", "actuations"]
         total = 0
-        with self.transaction() as conn:
-            for table in tables:
-                # `table` is one of the literals in `tables` above, never input.
-                cur = conn.execute(
-                    f"DELETE FROM {table} WHERE ts < ?",  # noqa: S608  # the fragment is literal; every value is bound
-                    (cutoff,),
-                )
-                total += cur.rowcount
+        for table in ("sensor_readings", "detections", "ha_state_changes", "actuations"):
+            total += self._delete_before(table, cutoff)
         if total:
             logger.info("[Persistence] Pruned %s rows older than %sd", total, days)
         return total
+
+    def prune_chat_log(self, days: float) -> int:
+        """Delete chat turns older than N days, in batches. Returns rows removed."""
+        removed = self._delete_before("chat_log", time.time() - (days * 86400))
+        if removed:
+            logger.info("[Persistence] Pruned %s chat turns older than %sd", removed, days)
+        return removed
+
+    def _delete_before(self, table: str, cutoff: float) -> int:
+        """Delete `table`'s rows stamped before `cutoff`, one batch per transaction.
+
+        `table` is always a literal from this class, never input.
+        """
+        total = 0
+        while True:
+            with self.transaction() as conn:
+                cur = conn.execute(
+                    f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE ts < ? LIMIT ?)",  # noqa: S608  # the fragment is literal; every value is bound
+                    (cutoff, self.PRUNE_BATCH_ROWS),
+                )
+            total += cur.rowcount
+            if cur.rowcount < self.PRUNE_BATCH_ROWS:
+                return total
 
     @_serialised
     def stats(self) -> dict[str, Any]:

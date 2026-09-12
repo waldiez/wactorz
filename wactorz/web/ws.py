@@ -315,15 +315,16 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                         # a file as something else in every thread that shows it.
                         files = uploads.resolve(data.get("attachments"))
                         if content and runtime.registry is not None:
-                            # Attribute the whole turn to the agent it addresses
-                            # (slash commands and un-mentioned text default to
-                            # "main", matching chat.route_chat's own resolution) so the
-                            # reply frames and chat_log group under that agent
-                            # instead of the io-gateway transport id.
-                            _reply_from["name"] = (
-                                "main"
-                                if content.startswith("/")
-                                else chat.parse_mention(content)[0]
+                            # Attribute the whole turn — reply frames and
+                            # chat_log alike — to the agent it addresses, rather
+                            # than to the io-gateway transport id. A mention that
+                            # names nothing this process can reach falls back to
+                            # the thread the sender says it is in, so the answer
+                            # ("not found") arrives where the user is looking and
+                            # ends the turn there; attributed to the mention, it
+                            # would name an agent no view has a thread for.
+                            _reply_from["name"] = chat.turn_attribution(
+                                content, str(data.get("agent_name") or "")
                             )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.

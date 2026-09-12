@@ -13,6 +13,7 @@ breakage before, so nothing here stubs it.
 import asyncio
 import json
 from collections.abc import AsyncIterator, Iterator
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -24,10 +25,20 @@ from wactorz.web import events, runtime, ws
 
 
 class _Registry:
-    """Present but empty — chat is offered, and the snapshot has no actors."""
+    """Present, and answering for the agents a test says are running.
+
+    The snapshot stays empty; `find_by_name` is what decides whether a mention
+    has anything behind it, and so which agent a turn is attributed to.
+    """
+
+    def __init__(self, *running: str) -> None:
+        self._running = running
 
     def all_actors(self) -> list[Any]:
         return []
+
+    def find_by_name(self, name: str) -> Any | None:
+        return SimpleNamespace(name=name) if name in self._running else None
 
 
 class _Db:
@@ -51,7 +62,7 @@ def db_fixture() -> Iterator[_Db]:
     recorder = _Db()
     runtime.ws_clients.clear()
     runtime.db = recorder  # pyright: ignore[reportAttributeAccessIssue]
-    runtime.registry = _Registry()  # present, so chat is not refused
+    runtime.registry = _Registry("main", "catalog")  # present, so chat is not refused
     runtime.mqtt_connected = True
     yield recorder
     runtime.db, runtime.registry, runtime.mqtt_connected = saved[0], saved[1], saved[2]
@@ -135,10 +146,15 @@ class TestTheClientRegister:
 class TestChatTurnAttribution:
     """A turn is attributed to the agent it addresses, not to the gateway."""
 
-    async def _send(self, client: TestClient[Any, Any], db: _Db, content: str) -> None:
+    async def _send(
+        self, client: TestClient[Any, Any], db: _Db, content: str, thread: str | None = None
+    ) -> None:
+        frame: dict[str, Any] = {"type": "chat", "content": content}
+        if thread is not None:
+            frame["agent_name"] = thread
         async with client.ws_connect("/ws") as socket:
             await _opening(socket)
-            await socket.send_str(json.dumps({"type": "chat", "content": content}))
+            await socket.send_str(json.dumps(frame))
             for _ in range(50):
                 if db.rows:
                     break
@@ -152,6 +168,24 @@ class TestChatTurnAttribution:
 
         assert db.rows[0]["agent_name"] == "catalog"
         assert db.rows[0]["role"] == "user"
+
+    async def test_a_mention_of_nothing_is_attributed_to_the_senders_own_thread(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        # Otherwise the row is filed under an agent that does not exist, and no
+        # thread ever shows it again.
+        with patch.object(ws.chat, "route_chat", new=AsyncMock()):
+            await self._send(client, db, "@weather Athens", thread="catalog")
+
+        assert db.rows[0]["agent_name"] == "catalog"
+
+    async def test_a_mention_of_nothing_from_a_client_that_names_no_thread_falls_back_to_main(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        with patch.object(ws.chat, "route_chat", new=AsyncMock()):
+            await self._send(client, db, "@weather Athens")
+
+        assert db.rows[0]["agent_name"] == "main"
 
     async def test_a_slash_command_is_attributed_to_main(
         self, client: TestClient[Any, Any], db: _Db
@@ -226,6 +260,30 @@ class TestChatTurnAttribution:
             await asyncio.sleep(0.05)
 
             assert not socket.closed
+
+
+class TestAnAnswerTheBrowserCanAttribute:
+    """The whole point of the attribution: it is what ends a turn on screen.
+
+    The browser ends a turn only on a frame from the agent it is waiting on, and
+    it waits on the thread it sent from — so a refusal labelled with the name
+    that was not found ends nothing, and its thinking dots stay up.
+    """
+
+    async def test_a_refusal_is_labelled_with_the_thread_that_sent_it(
+        self, client: TestClient[Any, Any], db: _Db
+    ) -> None:
+        # The real router, so this is the refusal itself and not a stand-in.
+        async with client.ws_connect("/ws") as socket:
+            await _opening(socket)
+            await socket.send_str(
+                json.dumps({"type": "chat", "content": "@weather Athens", "agent_name": "catalog"})
+            )
+            frames = await _frames(socket, 2)
+
+        assert [f["type"] for f in frames] == ["chat", "stream_end"]
+        assert "not found" in frames[0]["content"]
+        assert {f["from"] for f in frames} == {"catalog"}
 
 
 class TestChatWithoutARegistry:

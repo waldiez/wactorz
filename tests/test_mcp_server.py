@@ -4,16 +4,14 @@ import sys
 import unittest
 from unittest import mock
 
-if importlib.util.find_spec("mcp") is None:
-    mcp_server = None
-    MCP_IMPORT_ERROR = "mcp optional dependency is not installed"
-else:
+# Imported only when installed, rather than bound to None when not: the tests
+# below are skipped without it, and never see the module as possibly missing.
+HAVE_MCP = importlib.util.find_spec("mcp") is not None
+if HAVE_MCP:
     aiohttp_module = sys.modules.get("aiohttp")
     if aiohttp_module is not None and not hasattr(aiohttp_module, "__path__"):
         sys.modules.pop("aiohttp", None)
     from wactorz.interfaces import mcp_server
-
-    MCP_IMPORT_ERROR = ""
 
 
 EXPECTED_TOOLS = {
@@ -30,8 +28,6 @@ EXPECTED_TOOLS = {
     "list_agents",
     "list_capabilities",
     "stop_agent",
-    "pause_agent",
-    "resume_agent",
     "ha_list_entities",
     "ha_get_state",
     "ha_call_service",
@@ -45,7 +41,7 @@ EXPECTED_RESOURCES = {
 }
 
 
-@unittest.skipUnless(mcp_server, MCP_IMPORT_ERROR or "mcp optional dependency is not installed")
+@unittest.skipUnless(HAVE_MCP, "mcp optional dependency is not installed")
 class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
     async def test_expected_tools_are_registered(self):
         tools = await mcp_server.mcp.list_tools()
@@ -95,7 +91,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             {
                 "id": "actor-456",
                 "name": "worker",
-                "state": "paused",
+                "state": "stopped",
                 "protected": False,
             },
         ]
@@ -103,7 +99,7 @@ class McpServerContractTest(unittest.IsolatedAsyncioTestCase):
             result = await mcp_server.list_agents()
 
         self.assertIn("[running   ] @main [protected]  (id: actor-123)", result)
-        self.assertIn("[paused    ] @worker  (id: actor-456)", result)
+        self.assertIn("[stopped   ] @worker  (id: actor-456)", result)
 
     async def test_list_agents_surfaces_backend_error(self):
         error = {"error": "Cannot connect to wactorz at http://localhost:8000. Is it running?"}

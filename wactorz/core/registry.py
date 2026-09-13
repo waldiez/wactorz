@@ -9,11 +9,11 @@ import asyncio
 import gc
 import inspect
 import logging
-import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .actor import Actor, ActorState, Message, MessageType, SupervisorStrategy
@@ -135,11 +135,10 @@ class ActorRegistry:
             # every published event is delivered twice.
             try:
                 await superseded.stop()
-            except Exception as exc:
-                logger.error(
-                    "[Registry] Stopping the superseded '%s' failed — its listeners may still be live: %s",
+            except Exception:
+                logger.exception(
+                    "[Registry] Stopping the superseded '%s' failed — its listeners may still be live",
                     superseded.name,
-                    exc,
                 )
 
     async def unregister(self, actor_id: str) -> None:
@@ -321,8 +320,8 @@ class Supervisor:
                     await self._supervise_one(name, spec)
             except asyncio.CancelledError:
                 break
-            except Exception as exc:
-                logger.error("[Supervisor] watch_loop error: %s", exc, exc_info=True)
+            except Exception:
+                logger.exception("[Supervisor] watch_loop error")
 
     def _failure_reason(self, spec: SupervisedSpec) -> str | None:
         """Why this spec needs supervision, or None if there is nothing to do.
@@ -339,9 +338,8 @@ class Supervisor:
             # Should be running and is not: a respawn failed, or never ran.
             return "no running actor"
 
-        # STOPPED means a deliberate stop or delete; PAUSED means the user
-        # paused it. Neither is a crash.
-        if actor.state in (ActorState.STOPPED, ActorState.PAUSED):
+        # A deliberate stop or delete, which is not a crash.
+        if actor.state == ActorState.STOPPED:
             return None
 
         if actor.state == ActorState.FAILED:
@@ -442,7 +440,9 @@ class Supervisor:
         # The watch loop skips retired specs, so this also stops the same
         # critical message repeating on every poll.
         spec.retired = True
-        spec.actor = None
+        # _stop_actor clears spec.actor; dropping the reference without stopping
+        # the actor first leaves its tasks running with nothing left to stop them.
+        await self._stop_actor(name, spec)
         logger.critical("[Supervisor] Retiring '%s': %s. Manual intervention required.", name, why)
         await self._notify_main(
             f"🚨 **{name}** has crashed {spec.max_restarts} times and the Supervisor has given up. "
@@ -485,9 +485,9 @@ class Supervisor:
         # agent was gone for the life of the process, with a single log line.
         try:
             new_actor = await self._spawn_actor(name, spec)
-        except Exception as exc:
+        except Exception:
             spec.actor = None
-            logger.error("[Supervisor] Respawn of '%s' failed: %s", name, exc, exc_info=True)
+            logger.exception("[Supervisor] Respawn of '%s' failed", name)
             if spec.exhausted:
                 await self._retire(name, spec, "every restart attempt failed to start it")
             # Otherwise the spec keeps its actor at None, which the watch loop
@@ -537,7 +537,7 @@ class Supervisor:
             logger.warning("[Supervisor] Error stopping '%s': %s", name, exc)
         try:
             await self._registry.unregister(actor.actor_id)
-        except Exception:
+        except Exception:  # noqa: S110  # the stop failure above is already logged
             pass
         spec.actor = None
 
@@ -691,10 +691,10 @@ class ActorSystem:
         """Bring the system up: MQTT, topic bus, the given actors, supervision."""
         self._running = True
 
-        os.makedirs(self._state_dir, exist_ok=True)
-        db_path = os.path.join(self._state_dir, "mqtt_outbox.db")
+        state_dir = Path(self._state_dir)
+        state_dir.mkdir(parents=True, exist_ok=True)
         self._mqtt_client = await MQTTPublisher.create(
-            self._mqtt_broker, self._mqtt_port, db_path=db_path
+            self._mqtt_broker, self._mqtt_port, db_path=state_dir / "mqtt_outbox.db"
         )
 
         # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────

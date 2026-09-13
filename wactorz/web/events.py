@@ -93,6 +93,11 @@ def record_heartbeat(agent_id: str, data: Any) -> None:
     # api_reset's own comment warns about when it distrusts this field.
     if "protected" in data:
         ag["protected"] = bool(data["protected"])
+    # Carried the same way and for the same reason: the dashboard decides from
+    # this whether to offer Stop, and an absent flag offers it for an agent that
+    # refuses it.
+    if "essential" in data:
+        ag["essential"] = bool(data["essential"])
     # Remote agents' heartbeats include "node" — capture it so the dashboard
     # delete path can route the stop to the right runner. Local agents don't set
     # this field; absence means "local".
@@ -168,6 +173,24 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
         agent_id = parts[1]
         metric = parts[2]
 
+        # A withdrawn manifest is an agent saying it no longer exists. It is the
+        # one removal signal every ending publishes — an actor that ends itself,
+        # main deleting one on the user's behalf, and a node's runner, which
+        # runs where none of this module is reachable — so the dashboard listens
+        # for it rather than each of those paths reaching in here.
+        #
+        # Dropping the entry is what clears the card. The REST actor list comes
+        # from the registry and a state patch from this map, so an entry left
+        # here outlives the agent and every patch re-adds the card that each
+        # reconcile removes. The tombstone keeps a trailing frame from the same
+        # stop window putting it back; a respawn re-admits itself on its first
+        # status.
+        if metric == "manifest" and not payload_str.strip():
+            runtime.state["agents"].pop(agent_id, None)
+            runtime.mark_deleted(agent_id)
+            logger.info("[MQTT] Agent %s withdrew its manifest — removing.", agent_id[:8])
+            return {"type": DELETE_AGENT_FRAME, "agent_id": agent_id}
+
         # Re-admit a deleted agent on a FRESH status event. Every actor
         # publishes its first status from on_start(), with uptime ≈ 0; that's
         # the unambiguous "I just started" signal. A stale retained status
@@ -211,6 +234,8 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                     runtime.state["agents"][agent_id]["state"] = data["state"]
                 if "protected" in data:
                     runtime.state["agents"][agent_id]["protected"] = data["protected"]
+                if "essential" in data:
+                    runtime.state["agents"][agent_id]["essential"] = data["essential"]
             name = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
             add_log(
                 {
@@ -272,15 +297,30 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                 }
             )
         elif metric == "chat":
-            # User-facing message pushed by an agent via Actor.notify_user().
-            # Forward it to the chat panel as a live chat frame (in addition to
-            # the dashboard feed). The frame is carried under "_push_chat";
-            # mqtt_listener does the broadcast since parse_topic is synchronous.
+            # Usually an agent notification; voice agents may also publish the
+            # recognized user turn so it appears in the same dashboard thread.
             sender = runtime.state["agents"].get(agent_id, {}).get("name", agent_id[:8])
+            recipient = "user"
             content = ""
+            timestamp = time.time()
+            source = ""
+            surface = ""
+            surface_label = ""
+            brain = ""
             if isinstance(data, dict):
                 content = (data.get("content") or data.get("text") or "").strip()
                 sender = data.get("from") or sender
+                recipient = data.get("to") or recipient
+                source = data.get("source") if isinstance(data.get("source"), str) else ""
+                surface = data.get("surface") if isinstance(data.get("surface"), str) else ""
+                surface_label = (
+                    data.get("surface_label") if isinstance(data.get("surface_label"), str) else ""
+                )
+                brain = data.get("brain") if isinstance(data.get("brain"), str) else ""
+                try:
+                    timestamp = float(data.get("timestamp") or timestamp)
+                except (TypeError, ValueError):
+                    timestamp = time.time()
             elif isinstance(data, str):
                 content = data.strip()
             if content:
@@ -289,8 +329,13 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                         "type": "chat",
                         "agent_id": agent_id,
                         "from": sender,
+                        "to": recipient,
                         "content": content,
-                        "timestamp": time.time(),
+                        "timestamp": timestamp,
+                        "source": source,
+                        "surface": surface,
+                        "surface_label": surface_label,
+                        "brain": brain,
                     }
                 )
                 return {
@@ -301,8 +346,13 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                     "_push_chat": {
                         "type": "chat",
                         "from": sender,
+                        "to": recipient,
                         "content": content,
-                        "timestamp": time.time(),
+                        "timestamp": timestamp,
+                        "source": source,
+                        "surface": surface,
+                        "surface_label": surface_label,
+                        "brain": brain,
                     },
                 }
             return {"type": "agent", "agent_id": agent_id, "metric": "chat", "data": data}
@@ -346,6 +396,8 @@ def parse_topic(topic: str, payload_str: str) -> dict[str, Any] | None:
                 "last_seen": time.time(),
                 "online": True,
                 "node_id": data.get("node_id", ""),
+                "version": data.get("version"),
+                "runtime": data.get("runtime") or "runner",
             }
             logger.info("[MQTT] Node heartbeat: %s | agents: %s", node_name, data.get("agents", []))
             return {"type": "node", "node_name": node_name, "data": data}

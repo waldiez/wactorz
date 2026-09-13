@@ -66,9 +66,10 @@ def set_enabled(enabled: bool) -> bool:
             _set_windows(enabled)
         else:
             _set_linux(enabled)
-        return True
     except Exception:
         return False
+    else:
+        return True
 
 
 def _set_macos(enabled: bool) -> None:

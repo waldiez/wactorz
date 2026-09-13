@@ -29,6 +29,7 @@ function makeHost(thread: HTMLElement): StreamHost {
         isChatView: () => true,
         lastSentTarget: () => "camera",
         belongsHere: () => true,
+        isOpenThread: () => true,
         thread: () => thread,
         scrollThread: () => {},
         commit: () => {},

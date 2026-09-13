@@ -75,7 +75,7 @@ def _defer_nav(action) -> None:
         time.sleep(0.05)
         try:
             action()
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # runs on a worker thread; nothing is left to report to
             pass
 
     threading.Thread(target=_run, daemon=True).start()

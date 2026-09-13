@@ -37,17 +37,18 @@ maps to the same ID across restarts.
 | `name` | `str` | Human-readable name — also used as persistence folder |
 | `state` | `ActorState` | Current lifecycle state |
 | `metrics` | `ActorMetrics` | `messages_processed`, `errors`, `uptime`, etc. |
-| `protected` | `bool` | If `True`, ignores `stop`, `pause`, and `delete` commands |
+| `protected` | `bool` | If `True`, ignores `delete` — the agent is defined in code and cannot be recreated |
+| `essential` | `bool` | If `True`, ignores `stop` as well — stopping it would remove the way to start it again |
 
 **Enums:**
 
 ```python
 class ActorState(str, Enum):
-    IDLE = "idle"; RUNNING = "running"; PAUSED = "paused"
+    IDLE = "idle"; RUNNING = "running"
     STOPPED = "stopped"; FAILED = "failed"
 
 class MessageType(str, Enum):
-    START = "start"; STOP = "stop"; PAUSE = "pause"; RESUME = "resume"
+    START = "start"; STOP = "stop"
     DELETE = "delete"; TASK = "task"; RESULT = "result"
     HEARTBEAT = "heartbeat"; SPAWN = "spawn"; TICK = "tick"
     STATUS_REQUEST = "status_request"; STATUS_RESPONSE = "status_response"
@@ -194,11 +195,6 @@ async sandboxed loop. See [Agents reference](agents.md#dynamicagent) for the ful
 Tracks heartbeat timestamps for every registered actor. Publishes an alert and
 notifies main when an actor's last heartbeat is older than `heartbeat_timeout` (default
 60 s). Does **not** auto-restart actors — that is the Supervisor's job.
-
-### `wactorz.agents.io_agent.IOAgent`
-
-MQTT ↔ UI gateway. Bridges `io/chat` MQTT messages from the web dashboard to
-MainActor and relays responses back to the browser over WebSocket.
 
 ### `wactorz.agents.planner.PlannerAgent`
 

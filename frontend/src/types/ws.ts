@@ -16,6 +16,7 @@ export type StatePatchAgent = {
     state?: string;
     status?: string;
     protected?: boolean;
+    essential?: boolean;
     messages_processed?: number;
     cost_usd?: number;
     uptime?: number;

@@ -46,10 +46,22 @@ def sent_fixture(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return frames
 
 
+def _interval() -> float:
+    """A tick short enough to keep the suite quick, long enough to happen.
+
+    asyncio schedules on the monotonic clock, which Windows resolves to ~15.6ms
+    against Linux's ~1ms — and a sleep shorter than that resolution comes back
+    almost immediately, so a 10ms interval ran *zero* ticks inside the window
+    below rather than a few. Scaling off the clock keeps the Linux timing
+    exactly as it was and only stretches it where it has to stretch.
+    """
+    return max(0.01, time.get_clock_info("monotonic").resolution * 3)
+
+
 async def _until(
     frames: list[dict[str, Any]],
     count: int,
-    interval: float = 0.01,
+    interval: float | None = None,
     timeout: float = 5.0,
 ) -> None:
     """Run the broadcaster until it has sent `count` frames, then stop it.
@@ -59,6 +71,7 @@ async def _until(
     hanging. The ceiling is well under the suite's own timeout, so a real hang
     is still reported as one.
     """
+    interval = _interval() if interval is None else interval
     task = asyncio.create_task(ws.totals_broadcaster(interval))
     deadline = time.monotonic() + timeout
     try:
@@ -70,13 +83,14 @@ async def _until(
             await task
 
 
-async def _tick(interval: float = 0.01, times: float = 3.5) -> None:
+async def _tick(interval: float | None = None, times: float = 3.5) -> None:
     """Run the broadcaster for roughly `times` intervals, then stop it.
 
     For the cases that assert nothing was sent: there is no arrival to wait for,
     so the only option is to run it a while and look. A slow machine makes these
     wait longer than needed, never fail.
     """
+    interval = _interval() if interval is None else interval
     task = asyncio.create_task(ws.totals_broadcaster(interval))
     await asyncio.sleep(interval * times)
     task.cancel()

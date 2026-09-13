@@ -65,9 +65,10 @@ def _macos_un_center():
             center.requestAuthorizationWithOptions_completionHandler_(
                 _UN_AUTH, lambda granted, error: None
             )
-        return center
     except Exception:
         return None
+    else:
+        return center
 
 
 def _deliver_macos_un(title: str, body: str) -> bool:
@@ -89,9 +90,10 @@ def _deliver_macos_un(title: str, body: str) -> bool:
             str(uuid.uuid4()), content, None
         )
         center.addNotificationRequest_withCompletionHandler_(request, None)
-        return True
     except Exception:
         return False
+    else:
+        return True
 
 
 # ── macOS: legacy NSUserNotification fallback ───────────────────────────────
@@ -127,7 +129,7 @@ def _deliver_macos_legacy(title: str, body: str) -> None:
         note.setInformativeText_(body)
         note.setHasActionButton_(False)
         center.deliverNotification_(note)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; a notification must never break the caller
         pass
 
 
@@ -146,7 +148,7 @@ def _notify_macos_native(title: str, body: str) -> None:
         from PyObjCTools import AppHelper  # pyright: ignore[reportMissingImports]
 
         AppHelper.callAfter(_deliver_macos, title, body)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; a notification must never break the caller
         pass
 
 
@@ -161,7 +163,7 @@ def request_authorization() -> None:
         from PyObjCTools import AppHelper  # pyright: ignore[reportMissingImports]
 
         AppHelper.callAfter(_macos_un_center)
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; without permission, notifications are not shown
         pass
 
 
@@ -193,12 +195,13 @@ def _notify_linux(title: str, body: str) -> bool:
         cmd += [title, body]
         # Run with the host's library path (see _host_env) and silence output:
         # with no notification daemon, notify-send spews a GDBus ServiceUnknown.
-        subprocess.run(
+        subprocess.run(  # noqa: S603  # argv, no shell; title and body are arguments
             cmd, check=False, env=_host_env(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        return True
     except Exception:
         return False
+    else:
+        return True
 
 
 def notify(title: str, body: str) -> None:
@@ -224,5 +227,5 @@ def notify(title: str, body: str) -> None:
             app_name=APP_NAME,
             app_icon=icon,
         )
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; a notification must never break the caller
         pass

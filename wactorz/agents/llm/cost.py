@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 def _period_key(period: str) -> str:
-    now = datetime.now()
+    # Local time, stated rather than inherited: a daily budget rolls over at
+    # the operator's midnight, not UTC's.
+    now = datetime.now().astimezone()
     if period == "daily":
         return now.strftime("%Y-%m-%d")
     if period == "weekly":

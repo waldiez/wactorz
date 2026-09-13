@@ -1,8 +1,9 @@
 """What every provider implements, and the shapes they exchange.
 
-The three public methods check the spend cap and delegate to the ``_``-prefixed
-implementation a provider supplies, so no provider can be reached without the
-check and a new one inherits it.
+The three public methods check the spend cap, apply the retry and timeout policy
+in ``retry.py``, and delegate to the ``_``-prefixed implementation a provider
+supplies -- so no provider can be reached without either, and a new one inherits
+both.
 """
 
 import logging
@@ -11,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .cost import check_cost_limit
+from .retry import call_with_retry, stream_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +54,16 @@ class LLMProvider:
 
     # ── Public surface: guarded, and not meant to be overridden ─────────────
 
+    def _label(self, call: str) -> str:
+        """How this provider names itself in a retry log line."""
+        return f"{type(self).__name__}.{call}"
+
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         """Returns (text, usage) where usage = {input_tokens, output_tokens, cost_usd}"""
         check_cost_limit()
-        return await self._complete(messages, system, **kwargs)
+        return await call_with_retry(
+            lambda: self._complete(messages, system, **kwargs), self._label("complete")
+        )
 
     async def complete_with_tools(
         self,
@@ -65,7 +73,10 @@ class LLMProvider:
         **kwargs: Any,
     ) -> "ToolCompletion":
         check_cost_limit()
-        return await self._complete_with_tools(messages, tools, system, **kwargs)
+        return await call_with_retry(
+            lambda: self._complete_with_tools(messages, tools, system, **kwargs),
+            self._label("complete_with_tools"),
+        )
 
     async def stream(
         self, messages: list[dict], system: str = "", **kwargs: Any
@@ -74,10 +85,14 @@ class LLMProvider:
 
         The check runs on first iteration rather than at call time, because
         that is when the request is actually made — and it is where a caller
-        that builds the generator early still gets an honest answer.
+        that builds the generator early still gets an honest answer. The same
+        goes for a retry: it can only cover the part of the stream nobody has
+        read yet.
         """
         check_cost_limit()
-        async for chunk in self._stream(messages, system, **kwargs):
+        async for chunk in stream_with_retry(
+            lambda: self._stream(messages, system, **kwargs), self._label("stream")
+        ):
             yield chunk
 
     @classmethod

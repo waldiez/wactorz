@@ -26,7 +26,7 @@ describe("canDirectMessage", () => {
         expect(canDirectMessage({ name: "catalog", protected: true })).toBe(true);
     });
     it("never allows the non-chat system agents", () => {
-        expect(canDirectMessage({ name: "io-agent" })).toBe(false);
+        expect(canDirectMessage({ name: "monitor-agent" })).toBe(false);
         expect(canDirectMessage({ name: "monitor-agent" })).toBe(false);
     });
     it("allows normal agents unless they are protected", () => {
@@ -40,7 +40,7 @@ describe("messageableNames", () => {
         expect(
             messageableNames([
                 { name: "main", protected: true }, // pinned → kept
-                { name: "io-agent" }, // system → dropped
+                { name: "monitor-agent" }, // system → dropped
                 { name: "worker" }, // normal → kept
                 { name: "locked", protected: true }, // protected → dropped
                 { name: "" }, // empty → dropped
@@ -57,7 +57,7 @@ describe("stateColor / stateLabel", () => {
     });
     it("maps known string states to colours", () => {
         expect(stateColor("running" as AgentState)).toBe("#34d399");
-        expect(stateColor("paused" as AgentState)).toBe("#fbbf24");
+        expect(stateColor("initializing" as AgentState)).toBe("#60a5fa");
         expect(stateColor("initializing" as AgentState)).toBe("#60a5fa");
         expect(stateColor("stopped" as AgentState)).toBe("#4b5563");
         expect(stateColor("???" as AgentState)).toBe("#34d399"); // default

@@ -1,8 +1,10 @@
 import types
 import unittest
+from typing import Any, cast
 
 from prometheus_client import CONTENT_TYPE_LATEST
 
+from wactorz.agents.main.actor import MainActor
 from wactorz.interfaces.chat_interfaces import RESTInterface
 
 
@@ -20,6 +22,10 @@ class _FakeActor:
     name = "main"
     protected = True
     metrics = _FakeMetrics()
+    # Only an actor that calls an LLM has these; the payload reports zero without them.
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cost_usd: float
 
     def get_status(self):
         return {"state": "idle"}
@@ -43,10 +49,15 @@ class _FakeRegistry:
         return None
 
 
+def _iface(**main_actor: Any) -> RESTInterface:
+    """A REST interface over a main actor that has only the given attributes."""
+    return RESTInterface(main_actor=cast(MainActor, types.SimpleNamespace(**main_actor)), port=8080)
+
+
 class RestContractTest(unittest.TestCase):
     def test_actor_payload_matches_frontend_contract(self):
-        iface = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)
-        payload = iface._actor_payload(_FakeActor())
+        iface = _iface()
+        payload = iface._actor_payload(_FakeActor())  # pyright: ignore[reportArgumentType]
         self.assertEqual(
             payload,
             {
@@ -58,16 +69,16 @@ class RestContractTest(unittest.TestCase):
         )
 
     def test_metrics_payload_uses_rust_style_keys(self):
-        iface = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)
-        payload = iface._metrics_payload(_FakeActor())
+        iface = _iface()
+        payload = iface._metrics_payload(_FakeActor())  # pyright: ignore[reportArgumentType]
         self.assertEqual(payload["messages_processed"], 7)
         self.assertEqual(payload["messages_failed"], 2)
         self.assertEqual(payload["restart_count"], 1)
         self.assertIn("llm_cost_usd", payload)
 
     def test_metrics_payload_reports_the_actors_counters(self):
-        iface = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)
-        payload = iface._metrics_payload(_FakeActor())
+        iface = _iface()
+        payload = iface._metrics_payload(_FakeActor())  # pyright: ignore[reportArgumentType]
         self.assertEqual(payload["messages_received"], 9)
         self.assertEqual(payload["heartbeats"], 4)
 
@@ -76,27 +87,23 @@ class RestContractTest(unittest.TestCase):
         actor.total_input_tokens = 11
         actor.total_output_tokens = 22
         actor.total_cost_usd = 0.5
-        payload = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)._metrics_payload(
-            actor
-        )
+        payload = _iface()._metrics_payload(actor)  # pyright: ignore[reportArgumentType]
         self.assertEqual(payload["llm_input_tokens"], 11)
         self.assertEqual(payload["llm_output_tokens"], 22)
         self.assertEqual(payload["llm_cost_usd"], 0.5)
 
     def test_metrics_payload_reports_zero_spend_for_a_non_llm_actor(self):
-        payload = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)._metrics_payload(
-            _FakeActor()
-        )
+        payload = _iface()._metrics_payload(_FakeActor())  # pyright: ignore[reportArgumentType]
         self.assertEqual(payload["llm_input_tokens"], 0)
         self.assertEqual(payload["llm_cost_usd"], 0.0)
 
     def test_latest_ha_map_payload_reads_from_running_map_agent(self):
         expected = {"type": "home_assistant_map_update", "devices": [{"device_id": "one"}]}
         registry = _FakeRegistry(map_actor=_FakeMapActor(expected))
-        iface = RESTInterface(main_actor=types.SimpleNamespace(_registry=registry), port=8080)
+        iface = _iface(_registry=registry)
         self.assertEqual(iface._latest_ha_map_payload(), expected)
 
     def test_prometheus_monitor_returns_prometheus_content_type(self):
-        iface = RESTInterface(main_actor=types.SimpleNamespace(), port=8080)
+        iface = _iface()
         response = iface._monitor.metrics_response()
         self.assertEqual(response.headers["Content-Type"], CONTENT_TYPE_LATEST)

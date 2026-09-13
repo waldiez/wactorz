@@ -44,7 +44,7 @@ function asNum(v: unknown): number | undefined {
 
 /** Coerce the backend's free-form state/status string into an {@link AgentState}. */
 function toAgentState(raw: string): AgentState {
-    if (raw === "paused" || raw === "stopped" || raw === "initializing") {
+    if (raw === "stopped" || raw === "initializing") {
         return raw;
     }
     return "running";
@@ -57,6 +57,7 @@ export function toAgentInfo(a: StatePatchAgent): AgentInfo {
         name: resolveAgentName(a.name, a.agent_id),
         state: toAgentState(a.state ?? a.status ?? "running"),
         protected: a.protected ?? false,
+        essential: a.essential ?? false,
     };
     if (a.messages_processed != null) {
         update.messagesProcessed = a.messages_processed;
@@ -107,6 +108,9 @@ export function buildMetricsUpdate(p: MetricsPayload, existing: AgentInfo): Agen
         state: existing.state,
         protected: existing.protected,
     };
+    if (existing.essential !== undefined) {
+        update.essential = existing.essential;
+    }
     if (p.messagesProcessed !== undefined) {
         update.messagesProcessed = p.messagesProcessed;
     }

@@ -1,10 +1,8 @@
-"""`/agents stop|pause|restart` must mean what they say.
+"""`/agents stop|restart` must mean what they say.
 
-The local branch of `/agents stop|pause` ran `stop()` for *both* verbs, so
-`/agents pause x` stopped the agent, unregistered it, and answered "Agent 'x'
-paused." The past-tense table it used for that message was the only thing that
-distinguished the two. Meanwhile `/pause x` — the other shortcut for the same
-thing — paused correctly, so the two disagreed on what the word meant.
+Each verb routes through `apply_command`, which is where the rules live: a stop
+releases supervision before it stops, so the watchdog does not read the silence
+as a crash, and a protected agent refuses rather than being reported as done.
 
 Both paths now go through ``Actor.apply_command``, which is also what releases a
 deliberately stopped actor from supervision.
@@ -28,13 +26,6 @@ class _Recorder(Actor):
 
     async def start(self) -> None:
         self.calls.append("start")
-
-    async def pause(self) -> None:
-        self.calls.append("pause")
-        self.state = ActorState.PAUSED
-
-    async def resume(self) -> None:
-        self.calls.append("resume")
 
     async def stop(self) -> None:
         self.calls.append("stop")
@@ -84,29 +75,6 @@ def _registry_of(agent: _Recorder) -> Any:
     return agent._registry
 
 
-class TestPauseMeansPause:
-    async def test_pausing_does_not_stop(self, agent: _Recorder) -> None:
-        await agent.apply_command("pause")
-
-        # The whole bug: this path called stop() for the pause verb too, then
-        # reported the agent paused.
-        assert agent.calls == ["pause"]
-        assert agent.state == ActorState.PAUSED
-
-    async def test_pausing_does_not_unregister(self, agent: _Recorder) -> None:
-        await agent.apply_command("pause")
-
-        # A paused agent stays addressable — resuming it later has to find it.
-        assert _registry_of(agent).unregistered == []
-
-    async def test_pausing_does_not_release_supervision(self, agent: _Recorder) -> None:
-        await agent.apply_command("pause")
-
-        # Pausing is not leaving: the supervisor should still be watching, so a
-        # crash while paused is still a crash.
-        assert _registry_of(agent).supervisor.released == []
-
-
 class TestStopReleasesFirst:
     async def test_stopping_releases_from_supervision(self, agent: _Recorder) -> None:
         await agent.apply_command("stop")
@@ -116,11 +84,12 @@ class TestStopReleasesFirst:
         assert _registry_of(agent).supervisor.released == ["worker"]
         assert agent.calls == ["stop"]
 
-    async def test_a_protected_agent_refuses(self, agent: _Recorder) -> None:
-        agent.protected = True
+    async def test_an_essential_agent_refuses_a_stop(self, agent: _Recorder) -> None:
+        agent.essential = True
 
-        for verb in ("stop", "pause"):
-            assert await agent.apply_command(verb) is False
+        # Protection covers delete; refusing a stop is a separate question and
+        # only the agent that carries the way back answers yes to it.
+        assert await agent.apply_command("stop") is False
 
         assert agent.calls == []
         assert _registry_of(agent).supervisor.released == []

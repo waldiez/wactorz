@@ -78,7 +78,7 @@ def _update_check_task(interactive: bool) -> None:
             ctx = ssl.create_default_context(cafile=certifi.where())
         except Exception:
             ctx = None
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:  # noqa: S310  # a constant https:// URL
             data = json.loads(resp.read().decode())
         latest = (data.get("tag_name") or "").lstrip("v")
         url = data.get("html_url") or _RELEASES_PAGE

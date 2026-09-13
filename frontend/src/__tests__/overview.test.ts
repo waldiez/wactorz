@@ -93,10 +93,10 @@ describe("OverviewView.patchCard", () => {
     it("updates an existing card's state in place", () => {
         const host = makeHost([agent("worker", { state: "running" })]);
         const view = mount(host);
-        host.agents.set("worker", agent("worker", { state: "paused" }));
+        host.agents.set("worker", agent("worker", { state: "stopped" }));
         view.patchCard(host.agents.get("worker")!);
         const card = host.root.querySelector<HTMLElement>('[data-id="worker"]')!;
-        expect(card.querySelector(".af-card-state-label")!.textContent).toBe("paused");
+        expect(card.querySelector(".af-card-state-label")!.textContent).toBe("stopped");
     });
 
     it("skips agents currently being removed", () => {

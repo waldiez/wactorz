@@ -18,7 +18,7 @@ def _load() -> dict:
     try:
         if _SETTINGS_FILE.exists():
             return {**_DEFAULTS, **json.loads(_SETTINGS_FILE.read_text())}
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # an unreadable file falls back to the defaults
         pass
     return dict(_DEFAULTS)
 
@@ -27,7 +27,7 @@ def _save(data: dict) -> None:
     try:
         _SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         _SETTINGS_FILE.write_text(json.dumps(data))
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; the preference is not remembered
         pass
 
 

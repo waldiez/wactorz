@@ -61,5 +61,5 @@ def install() -> None:
             "Categories=Utility;\n"
             "Terminal=false\n"
         )
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; the app runs without a menu entry
         pass

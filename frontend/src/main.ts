@@ -192,14 +192,20 @@ function refreshLiveActors(): void {
 // ═══ 4 · Wiring — WebSocket transport (chat replies · state patches · log feed)
 
 // Non-streaming replies (slash commands, errors, one-shot agent replies)
-ws.onChat((content, from, timestampMs) => {
-    toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
+ws.onChat((content, from, timestampMs, to, source, surface, surfaceLabel, brain) => {
+    if (from !== "user") {
+        toast.show({ type: "chat", title: from, message: content.slice(0, 120) });
+    }
     const msg = {
         id: uid("ws"), // WID, not `ws-${ms}`: same-ms ids collide and dedupe-drop
         from,
-        to: "user",
+        to,
         content,
         timestampMs,
+        ...(source ? { source } : {}),
+        ...(surface ? { surface } : {}),
+        ...(surfaceLabel ? { surfaceLabel } : {}),
+        ...(brain ? { brain } : {}),
     };
     ioManager.receiveAgentMessage(msg);
     agentStore.onChat(from, "user");
@@ -217,7 +223,7 @@ ws.onChat((content, from, timestampMs) => {
 ioManager.setWSClient(ws);
 
 // State patches broadcast by the server over the same /ws connection.
-// This is how pause/stop/resume state changes reach the UI without polling.
+// This is how start/stop state changes reach the UI without polling.
 ws.onStatePatch((agents, deletedId, stats) => {
     if (deletedId) {
         markDeleted(deletedId);
@@ -466,7 +472,12 @@ const _liveActorsTimer = window.setInterval(() => {
 // that ended while the tab was closed refuses that one too, and installing after
 // it would leave the very first 401 unhandled and the page waiting on a poll
 // half a minute away.
-installSessionExpiry();
+installSessionExpiry(window, () => {
+    // The socket is the one thing that would keep trying: it reconnects on a
+    // timer, and every attempt goes to the same revoked prefix.
+    ws.disconnect();
+    window.clearInterval(_liveActorsTimer);
+});
 
 // Seed the activity feed from SQLite chat_log so the feed view isn't empty
 // after a server restart (the server returns Unix seconds; feedSeedItem → ms).

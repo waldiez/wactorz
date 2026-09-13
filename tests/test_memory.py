@@ -9,6 +9,7 @@ Run with ``pytest`` (or ``make test-py``). Async methods are driven through
 """
 
 import asyncio
+from collections.abc import Callable
 
 from wactorz.agents.main.memory import MemoryMixin
 
@@ -47,6 +48,9 @@ class FakeLLM:
 
 
 class MemoryHost(MemoryMixin):
+    # An interface-aware host has this; memory treats a host without it as text.
+    _current_interface_is_voice: Callable[[], bool]
+
     def __init__(self, registry=None, llm=None):
         self.name = "main"
         self._store = {}
@@ -72,7 +76,8 @@ class MemoryHost(MemoryMixin):
 
 def host(registry_actors=None, llm=None):
     reg = FakeRegistry(registry_actors) if registry_actors is not None else None
-    return MemoryHost(registry=reg, llm=llm)
+    # Partial on purpose: the members these tests reach, not the whole host.
+    return MemoryHost(registry=reg, llm=llm)  # pyright: ignore[reportAbstractUsage]
 
 
 # ── User facts ───────────────────────────────────────────────────────────────
@@ -176,6 +181,28 @@ def test_extract_facts_saves_and_normalizes():
     assert facts.get("device_ha_url") == "http://ha"
     assert h.total_input_tokens == 10 and h.total_output_tokens == 5
     assert h.persisted_cost == 1
+
+
+def test_extract_facts_skips_voice_transcripts():
+    llm = FakeLLM('{"pref_user_name": "Adé"}')
+    h = host([], llm=llm)
+    h._current_interface_is_voice = lambda: True
+
+    run(h._extract_and_save_facts("Adé, Amishu", "Hello"))
+
+    assert h.get_user_facts() == {}
+    assert llm.calls == []
+
+
+def test_explicit_voice_memory_request_is_allowed():
+    llm = FakeLLM('{"pref_user_name": "Amalia"}')
+    h = host([], llm=llm)
+    h._current_interface_is_voice = lambda: True
+
+    run(h._extract_and_save_facts("Remember that my name is Amalia", "Okay"))
+
+    assert h.get_user_facts()["pref_user_name"] == "Amalia"
+    assert len(llm.calls) == 1
 
 
 def test_extract_facts_no_llm():

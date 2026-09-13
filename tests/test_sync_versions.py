@@ -90,3 +90,34 @@ class TestTheArgumentIsChecked:
 
     def test_no_argument_is_refused(self) -> None:
         assert self._run().returncode == 1
+
+
+class TestTheRunnerCarriesTheVersion:
+    """The node runner ships alone, so it holds a copy of the version.
+
+    Main learns a node's version from that copy, in the heartbeat. A copy that
+    sync_versions did not stamp would report the previous release from every
+    node, so the stamp is checked here rather than trusted.
+    """
+
+    def test_sync_stamps_the_runner(self, tmp_path) -> None:
+        runner = tmp_path / "remote_runner.py"
+        runner.write_text(
+            'X = 1\nRUNNER_VERSION = "0.1.0"\nNODE_RUNTIME = "runner"\n', encoding="utf-8"
+        )
+
+        sync_versions.update_remote_runner_version("0.2.0", path=runner)
+
+        assert 'RUNNER_VERSION = "0.2.0"' in runner.read_text(encoding="utf-8")
+        assert 'NODE_RUNTIME = "runner"' in runner.read_text(encoding="utf-8")
+
+    def test_the_stamp_touches_nothing_else(self, tmp_path) -> None:
+        runner = tmp_path / "remote_runner.py"
+        before = 'A = "0.1.0"\nRUNNER_VERSION = "0.1.0"\nB = "0.1.0"\n'
+        runner.write_text(before, encoding="utf-8")
+
+        sync_versions.update_remote_runner_version("0.2.0", path=runner)
+
+        assert runner.read_text(encoding="utf-8") == before.replace(
+            'RUNNER_VERSION = "0.1.0"', 'RUNNER_VERSION = "0.2.0"'
+        )

@@ -2,11 +2,13 @@
 
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
 from types import TracebackType
@@ -15,6 +17,19 @@ from typing import Any
 from .schema import SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
+
+#: Set for the duration of a chat turn whose ``chat_log`` rows the transport
+#: that carried it has already written.
+#:
+#: The dashboard's WebSocket stores both halves of every turn it routes, and
+#: some agents also store their own turns — the only record when they are
+#: reached any other way. This is how the second writer learns the first has
+#: already run. A context variable rather than a parameter, because the turn
+#: reaches the agent through whatever generator the agent exposes, and a new
+#: keyword would break every agent that does not accept one; and because it is
+#: scoped to the task that sets it, one turn marking itself never affects
+#: another running alongside.
+chat_turn_recorded: ContextVar[bool] = ContextVar("chat_turn_recorded", default=False)
 
 # ── SQLite Connection Manager ──────────────────────────────────────────────
 
@@ -81,7 +96,16 @@ class WactorzDB:
     code least able to be reviewed.
     """
 
-    def __init__(self, db_path: str = "./state/wactorz.db") -> None:
+    #: See the pragma of the same name in :meth:`_connect`.
+    WAL_AUTOCHECKPOINT_PAGES = 4000
+
+    #: Rows deleted per transaction when pruning. Each batch releases the lock,
+    #: and every writer on the event loop waits on that lock — so the first
+    #: prune after an upgrade, which may be years of rows, is many short holds
+    #: rather than one long stall.
+    PRUNE_BATCH_ROWS = 1000
+
+    def __init__(self, db_path: str | os.PathLike[str] = "./state/wactorz.db") -> None:
         self._path = Path(db_path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
@@ -100,8 +124,20 @@ class WactorzDB:
         self._conn.execute("PRAGMA synchronous=NORMAL")  # fast + safe enough
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.execute("PRAGMA cache_size=-8000")  # 8MB cache
+        # How large the WAL may get before SQLite folds it back *inline*, on
+        # whichever commit crosses the threshold — on the calling thread, which
+        # for `persist()` and the chat log is the event loop. On an SD card that
+        # fold measures ~69ms with every actor in the process stopped for it.
+        # Raised well above the 1000-page default so the scheduled checkpoint in
+        # `maintenance` normally gets there first.
+        #
+        # Deliberately not 0: with the inline checkpoint disabled entirely, a
+        # maintenance task that dies leaves the WAL growing until the disk fills,
+        # which is a worse failure than the pause it avoids. A high threshold
+        # degrades to rare-and-spiky, which is what the default already was.
+        self._conn.execute(f"PRAGMA wal_autocheckpoint={self.WAL_AUTOCHECKPOINT_PAGES}")
         self._conn.row_factory = sqlite3.Row
-        logger.info(f"[Persistence] SQLite opened: {self._path}")
+        logger.info("[Persistence] SQLite opened: %s", self._path)
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA_SQL)
@@ -112,7 +148,7 @@ class WactorzDB:
         # Direct, not via transaction(): this runs from __init__, before the
         # instance is reachable by anything that could contend for the lock.
         self.conn.commit()
-        logger.info(f"[Persistence] Schema v{SCHEMA_VERSION} ready")
+        logger.info("[Persistence] Schema v%s ready", SCHEMA_VERSION)
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -367,6 +403,23 @@ class WactorzDB:
                 cur = conn.execute("DELETE FROM chat_log")
         return cur.rowcount
 
+    @_serialised
+    def chat_attachment_ids(self) -> set[str]:
+        """Every upload id a kept chat turn refers to: what the upload sweep must keep.
+
+        A row whose attachments cannot be read counts as naming none, as it does
+        everywhere else a row is read.
+        """
+        ids: set[str] = set()
+        rows = self.conn.execute(
+            "SELECT attachments FROM chat_log WHERE attachments IS NOT NULL AND attachments != ''"
+        )
+        for (raw,) in rows:
+            for item in _with_attachments({"attachments": raw})["attachments"]:
+                if isinstance(item, dict) and item.get("id"):
+                    ids.add(str(item["id"]))
+        return ids
+
     def clear_spawn_registry(self, agent_name: str | None = None) -> int:
         """Delete spawn_registry rows. Pass agent_name to limit to one agent."""
         with self.transaction() as conn:
@@ -437,7 +490,8 @@ class WactorzDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"SELECT ts, topic, entity_id, field, value, value_str, unit, agent, node "
+            # `where` is joined from literal fragments; every value is a bound `?`.
+            f"SELECT ts, topic, entity_id, field, value, value_str, unit, agent, node "  # noqa: S608  # the fragment is literal; every value is bound
             f"FROM sensor_readings WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -466,7 +520,8 @@ class WactorzDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"SELECT ts, agent, class_name, confidence, bbox, metadata, node "
+            # `where` is joined from literal fragments; every value is a bound `?`.
+            f"SELECT ts, agent, class_name, confidence, bbox, metadata, node "  # noqa: S608  # the fragment is literal; every value is bound
             f"FROM detections WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -494,7 +549,8 @@ class WactorzDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"SELECT ts, entity_id, old_state, new_state, domain, attributes "
+            # `where` is joined from literal fragments; every value is a bound `?`.
+            f"SELECT ts, entity_id, old_state, new_state, domain, attributes "  # noqa: S608  # the fragment is literal; every value is bound
             f"FROM ha_state_changes WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -518,7 +574,8 @@ class WactorzDB:
 
         where = " AND ".join(conditions)
         rows = self.conn.execute(
-            f"SELECT ts, agent, domain, service, entity_id, payload, trigger, rule_id "
+            # `where` is joined from literal fragments; every value is a bound `?`.
+            f"SELECT ts, agent, domain, service, entity_id, payload, trigger, rule_id "  # noqa: S608  # the fragment is literal; every value is bound
             f"FROM actuations WHERE {where} ORDER BY ts ASC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -527,18 +584,66 @@ class WactorzDB:
 
     # ── Retention / cleanup ────────────────────────────────────────────────
 
-    def prune_old_data(self, days: int = 30) -> int:
-        """Delete time-series data older than N days. Run periodically."""
+    @_serialised
+    def checkpoint(self) -> int:
+        """Fold the WAL back into the database. Returns the WAL size before, in bytes.
+
+        **Call this from a worker thread, never from the event loop.** It is the
+        expensive half of running in WAL mode: writes stop paying an fsync each,
+        and the cost collects here instead — ~69ms on a Raspberry Pi's SD card,
+        with everything in the process stopped for however long it takes. Left to
+        SQLite it happens inline on whichever `persist()` crosses the page
+        threshold, which is exactly the stall this is moved off the loop to avoid.
+
+        TRUNCATE rather than PASSIVE: it resets the WAL file to nothing, which is
+        what keeps it bounded. PASSIVE recycles the pages in place and leaves the
+        file at its high-water mark, so a run of writes would hold that space for
+        the life of the process.
+
+        Serialised like every other method here, so it cannot land in the middle
+        of another caller's transaction.
+        """
+        wal = self._path.with_name(f"{self._path.name}-wal")
+        before = wal.stat().st_size if wal.exists() else 0
+        self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return before
+
+    def prune_old_data(self, days: float = 30) -> int:
+        """Delete time-series rows older than N days, in batches. Returns rows removed.
+
+        Called by the retention job and, with its own window, by the time-series
+        collector agent.
+        """
         cutoff = time.time() - (days * 86400)
-        tables = ["sensor_readings", "detections", "ha_state_changes", "actuations"]
         total = 0
-        with self.transaction() as conn:
-            for table in tables:
-                cur = conn.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
-                total += cur.rowcount
+        for table in ("sensor_readings", "detections", "ha_state_changes", "actuations"):
+            total += self._delete_before(table, cutoff)
         if total:
-            logger.info(f"[Persistence] Pruned {total} rows older than {days}d")
+            logger.info("[Persistence] Pruned %s rows older than %sd", total, days)
         return total
+
+    def prune_chat_log(self, days: float) -> int:
+        """Delete chat turns older than N days, in batches. Returns rows removed."""
+        removed = self._delete_before("chat_log", time.time() - (days * 86400))
+        if removed:
+            logger.info("[Persistence] Pruned %s chat turns older than %sd", removed, days)
+        return removed
+
+    def _delete_before(self, table: str, cutoff: float) -> int:
+        """Delete `table`'s rows stamped before `cutoff`, one batch per transaction.
+
+        `table` is always a literal from this class, never input.
+        """
+        total = 0
+        while True:
+            with self.transaction() as conn:
+                cur = conn.execute(
+                    f"DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} WHERE ts < ? LIMIT ?)",  # noqa: S608  # the fragment is literal; every value is bound
+                    (cutoff, self.PRUNE_BATCH_ROWS),
+                )
+            total += cur.rowcount
+            if cur.rowcount < self.PRUNE_BATCH_ROWS:
+                return total
 
     @_serialised
     def stats(self) -> dict[str, Any]:
@@ -546,6 +651,7 @@ class WactorzDB:
         tables = ["sensor_readings", "detections", "ha_state_changes", "actuations"]
         result = {}
         for table in tables:
-            row = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            # `table` is one of the literals in `tables` above, never input.
+            row = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # noqa: S608  # the fragment is literal; every value is bound
             result[table] = row[0] if row else 0
         return result

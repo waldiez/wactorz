@@ -8,7 +8,6 @@ sidesteps a stale shell var shadowing the real value). Keys mirror .env.template
 
 from __future__ import annotations
 
-import os
 import stat
 
 from wactorz.desktop.config import DATA_DIR
@@ -42,7 +41,7 @@ def _read() -> dict[str, str]:
             out[key.strip()] = value.strip()
     except FileNotFoundError:
         pass
-    except Exception:
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # an unreadable user.env means no overrides
         pass
     return out
 
@@ -53,8 +52,8 @@ def _write(values: dict[str, str]) -> None:
         _USER_ENV.parent.mkdir(parents=True, exist_ok=True)
         _USER_ENV.write_text("\n".join(lines) + ("\n" if lines else ""))
         # Owner-only: it holds secrets (API key, HA token, MQTT password).
-        os.chmod(_USER_ENV, stat.S_IRUSR | stat.S_IWUSR)
-    except Exception:
+        _USER_ENV.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; the backend falls back to the inherited environment
         pass
 
 

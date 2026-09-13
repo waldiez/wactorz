@@ -31,8 +31,6 @@ GUARDED_POST_PATHS = [
     "/agents/command",
     "/actors/abc/message",
     "/actors/abc/start",
-    "/actors/abc/pause",
-    "/actors/abc/resume",
 ]
 
 

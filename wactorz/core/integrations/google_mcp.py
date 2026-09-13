@@ -21,35 +21,73 @@ import json
 import logging
 import os
 import secrets
-import stat
 import sys
 import webbrowser
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
 
-try:
+# mcp is optional, so every name it provides has a stand-in for the case where
+# it is absent. Those stand-ins describe nothing, and several of these names are
+# used as base classes and annotations, so the real ones are declared separately
+# for type checking and the fallbacks are confined to the runtime branch.
+if TYPE_CHECKING:
     from mcp import ClientSession
     from mcp.client.auth import OAuthClientProvider, TokenStorage
     from mcp.client.streamable_http import streamablehttp_client
     from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
-except ImportError:  # pragma: no cover - optional dependency guard
-    ClientSession = None
-    OAuthClientProvider = None
-    TokenStorage = object
-    streamablehttp_client = None
-    OAuthClientInformationFull = None
-    OAuthClientMetadata = None
-    OAuthToken = None
+    from pydantic import AnyUrl
+else:
+    try:
+        from mcp import ClientSession
+        from mcp.client.auth import OAuthClientProvider, TokenStorage
+        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.shared.auth import (
+            OAuthClientInformationFull,
+            OAuthClientMetadata,
+            OAuthToken,
+        )
+    except ImportError:  # pragma: no cover - optional dependency guard
+        ClientSession = None
+        OAuthClientProvider = None
+        TokenStorage = object
+        streamablehttp_client = None
+        OAuthClientInformationFull = None
+        OAuthClientMetadata = None
+        OAuthToken = None
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105  # an endpoint URL, not a credential
+
+
+def _write_private_json(path: Path, data: dict[str, Any]) -> None:
+    """Write JSON to `path` so only this user can read it back.
+
+    Created at 0600 rather than chmod-ed afterwards: creating it at the umask's
+    permissions and narrowing them after leaves a window in which the tokens are
+    readable by anyone on the machine, and leaves them that way for good if the
+    chmod fails. Replaced rather than written in place, so a crash mid-write
+    leaves the previous file whole instead of a truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Named for this process and created exclusively: two writers cannot land on
+    # the same temp file, and O_EXCL refuses a path that already exists — so a
+    # symlink planted there is an error rather than somewhere the tokens go.
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 @dataclass(frozen=True)
@@ -137,6 +175,11 @@ def format_mcp_content(result: Any) -> str:
     return "\n".join(parts)
 
 
+#: Query parameters as the HTTP layer takes them. A mapping covers most calls;
+#: pairs are needed where a key repeats, as Gmail's `metadataHeaders` does.
+RestParams = Mapping[str, str] | Sequence[tuple[str, str]] | None
+
+
 def rest_error_message(data: Any) -> str:
     if isinstance(data, dict):
         err = data.get("error")
@@ -172,12 +215,7 @@ class _GoogleTokenStorage(TokenStorage):
             return {}
 
     def _write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        try:
-            self.path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        except Exception:
-            pass
+        _write_private_json(self.path, data)
 
     async def get_tokens(self) -> OAuthToken | None:
         raw = self._read().get("tokens")
@@ -204,8 +242,8 @@ class _GoogleTokenStorage(TokenStorage):
             return OAuthClientInformationFull(
                 client_id=client_id,
                 client_secret=client_secret,
-                token_endpoint_auth_method="client_secret_post",
-                redirect_uris=[self.config.redirect_uri()],
+                token_endpoint_auth_method="client_secret_post",  # noqa: S106  # an RFC 7591 method name
+                redirect_uris=cast("list[AnyUrl]", [self.config.redirect_uri()]),
             )
         raw = self._read().get("client_info")
         if OAuthClientInformationFull is None:
@@ -226,7 +264,7 @@ def _make_redirect_handler(config: GoogleMcpConfig):
         )
         try:
             webbrowser.open(url)
-        except Exception:
+        except Exception:  # noqa: S110  # the URL was printed first; opening it is a courtesy
             pass
 
     return _open_oauth_browser
@@ -290,8 +328,8 @@ def build_auth(config: GoogleMcpConfig, interactive: bool = False):
     if not (client_id and client_secret):
         return None
     metadata = OAuthClientMetadata(
-        redirect_uris=[config.redirect_uri()],
-        token_endpoint_auth_method="client_secret_post",
+        redirect_uris=cast("list[AnyUrl]", [config.redirect_uri()]),
+        token_endpoint_auth_method="client_secret_post",  # noqa: S106  # an RFC 7591 method name
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
         scope=config.scopes(),
@@ -405,9 +443,7 @@ class GoogleMcpClient:
         tokens["token_type"] = td.get("token_type", "Bearer")
         data["tokens"] = tokens
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            _write_private_json(path, data)
         except Exception:
             logger.debug("Could not store %s token", self.config.label)
 
@@ -560,7 +596,14 @@ class GoogleMcpClient:
             self._save_access_token(access_token)
         return access_token
 
-    async def _http(self, method: str, url: str, token: str, params, json_body):
+    async def _http(
+        self,
+        method: str,
+        url: str,
+        token: str,
+        params: RestParams,
+        json_body: dict[str, Any] | None,
+    ) -> tuple[int, dict[str, Any]]:
         headers = {"Authorization": f"Bearer {token}"}
         async with aiohttp.ClientSession() as sess:
             async with sess.request(
@@ -572,9 +615,17 @@ class GoogleMcpClient:
                     data = await resp.json()
                 except Exception:
                     data = {"raw": await resp.text()}
-                return resp.status, data
+                # Callers read the body with `.get`, so anything that is not a
+                # JSON object is wrapped rather than handed on as one.
+                return resp.status, data if isinstance(data, dict) else {"raw": data}
 
-    async def _rest_request(self, method: str, path: str, params=None, json_body=None):
+    async def _rest_request(
+        self,
+        method: str,
+        path: str,
+        params: RestParams = None,
+        json_body: dict[str, Any] | None = None,
+    ) -> tuple[int, dict[str, Any]]:
         token = self._access_token()
         if not token:
             raise GoogleRestError(f"Not authenticated for Google {self.config.label}")

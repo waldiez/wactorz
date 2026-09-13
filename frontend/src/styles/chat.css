@@ -115,9 +115,6 @@
 .af-chat-pane-state.running {
   color: #34d399;
 }
-.af-chat-pane-state.paused {
-  color: #fbbf24;
-}
 .af-chat-pane-state.failed {
   color: #f87171;
 }
@@ -284,6 +281,48 @@
   background: rgba(255, 255, 255, 0.07);
   border-bottom-left-radius: 4px;
   color: rgba(255, 255, 255, 0.88);
+}
+/* Waiting for the first token: the agent's own bubble, with three dots rising
+   in turn. Same background and radius as a real reply, so the answer appears to
+   arrive in place rather than replacing something. */
+.af-chat-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 21px;
+}
+.af-chat-waiting-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  animation: af-chat-waiting-bounce 1.25s ease-in-out infinite;
+}
+.af-chat-waiting-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.af-chat-waiting-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+@keyframes af-chat-waiting-bounce {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  35% {
+    transform: translateY(-4px);
+    opacity: 0.95;
+  }
+}
+/* A moving dot is decoration, not information: the row carries an aria-label,
+   so nothing is lost by holding still for anyone who asked for that. */
+@media (prefers-reduced-motion: reduce) {
+  .af-chat-waiting-dot {
+    animation: none;
+    opacity: 0.6;
+  }
 }
 .af-chat-msg-time {
   font-size: 10px;

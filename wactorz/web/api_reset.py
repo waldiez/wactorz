@@ -7,8 +7,10 @@ the Home Assistant system agents in ``HA_SYSTEM_AGENTS``.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 from aiohttp import web
@@ -18,6 +20,26 @@ from ..agents.lookup import find_main_actor
 from . import cost, events, lifecycle, runtime, ws
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _withdrawals_suppressed(main_actor: Any) -> Iterator[None]:
+    """Stop main acting on the manifest withdrawals a reset itself publishes.
+
+    A no-op when main is not in this process. That is not the same as safe: a
+    main running elsewhere would see these purges over the broker with nothing
+    suppressing them. The registry drops would settle correctly — they are
+    idempotent, against entries the reset is clearing anyway — but it would
+    record a deletion note per wiped agent. No topology splits them today; if
+    one ever does, the suppression has to travel with the purge.
+    """
+    lifecycle_service = getattr(main_actor, "lifecycle", None)
+    if lifecycle_service is None:
+        yield
+        return
+    with lifecycle_service.withdrawals_suppressed():
+        yield
+
 
 # Home-Assistant system agents: supervised on a fresh boot like the protected
 # actors, but intentionally left NON-protected so a user can still delete one
@@ -66,7 +88,7 @@ def forget_legacy_state(actor: Any, keys: tuple[str, ...] | None = None) -> None
 def survives_factory_reset(name: str, protected: bool) -> bool:
     """Whether an agent is kept by ``reset all`` (factory reset).
 
-    Kept if it is a system-protected actor (main / monitor / io-agent / installer
+    Kept if it is a system-protected actor (main / monitor / installer
     / catalog) OR one of the HA system agents — i.e. exactly the set a fresh,
     empty boot brings up. Everything else (user- and catalog-spawned agents) is
     wiped. Note this is independent of manual delete, which keys off ``protected``
@@ -169,24 +191,24 @@ async def reset_handler(request: web.Request) -> Response:
                     ],
                     return_exceptions=True,
                 )
-                await asyncio.gather(
-                    *[
-                        runtime.mqtt_client_ref.publish(f"nodes/{n}/spawn", b"", retain=True)
-                        for n in node_names
-                    ],
-                    return_exceptions=True,
-                )
 
             # Purge retained MQTT for EVERY non-protected agent, tombstone each so a
             # late/in-flight frame can't re-admit it once _hard_resetting clears, and
             # drop it from the dashboard now.
-            await asyncio.gather(
-                *[lifecycle.purge_agent_retained(aid) for aid in agent_ids],
-                return_exceptions=True,
-            )
-            for aid in agent_ids:
-                runtime.mark_deleted(aid)
-                runtime.state["agents"].pop(aid, None)
+            #
+            # Suppressed on main's side for the duration: each purge withdraws a
+            # manifest, and main reads a withdrawal as that agent removing
+            # itself — which would record a deletion note per wiped agent for a
+            # removal this reset is already performing. A tombstone arriving
+            # after the window finds an emptied spawn registry and stops there.
+            with _withdrawals_suppressed(main_actor):
+                await asyncio.gather(
+                    *[lifecycle.purge_agent_retained(aid) for aid in agent_ids],
+                    return_exceptions=True,
+                )
+                for aid in agent_ids:
+                    runtime.mark_deleted(aid)
+                    runtime.state["agents"].pop(aid, None)
 
             # Clear the live spawn registry + retained desired_state so neither a
             # restart nor a runner reconnect can resurrect the wiped agents. Runs

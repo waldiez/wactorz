@@ -180,7 +180,11 @@ class HomeAssistantAgent(LLMAgent):
 
         if operation:
             logger.debug(
-                f"[{self.name}] operation={operation} camera_entity_id={camera_entity_id!r} from={msg.sender_id}"
+                "[%s] operation=%s camera_entity_id=%r from=%s",
+                self.name,
+                operation,
+                camera_entity_id,
+                msg.sender_id,
             )
 
         if operation == "list_cameras":
@@ -261,7 +265,14 @@ class HomeAssistantAgent(LLMAgent):
                 self.name,
                 text[:80],
             )
-            return await self._recommend_hardware(text, devices)
+            recommendation = await self._recommend_hardware(text, devices)
+            details = str(recommendation.get("result") or "").strip()
+            notice = (
+                "I did not create the automation because automation creation is currently disabled."
+            )
+            recommendation["created"] = False
+            recommendation["result"] = f"{notice}\n{details}".strip()
+            return recommendation
 
         if action == "other":
             return await self._handle_other_request(text)
@@ -500,11 +511,17 @@ class HomeAssistantAgent(LLMAgent):
         snapshot = await get_camera_snapshot(rest_base, self.ha_token, camera_entity_id)
         if "error" in snapshot:
             logger.warning(
-                f"[{self.name}] get_camera_snapshot({camera_entity_id}) failed: {snapshot['error']}"
+                "[%s] get_camera_snapshot(%s) failed: %s",
+                self.name,
+                camera_entity_id,
+                snapshot["error"],
             )
             return {"result": f"Snapshot failed: {snapshot['error']}", "error": snapshot["error"]}
         logger.debug(
-            f"[{self.name}] get_camera_snapshot({camera_entity_id}) -> {len(snapshot.get('image_base64', ''))} b64 chars"
+            "[%s] get_camera_snapshot(%s) -> %s b64 chars",
+            self.name,
+            camera_entity_id,
+            len(snapshot.get("image_base64", "")),
         )
         return {
             "result": f"Snapshot captured for {camera_entity_id}.",
@@ -518,7 +535,7 @@ class HomeAssistantAgent(LLMAgent):
             return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
         data = await get_camera_stream_urls(self.ha_url, self.ha_token, camera_entity_id)
         streams = data.get("streams", {})
-        logger.debug(f"[{self.name}] get_camera_stream_url({camera_entity_id}) -> {streams}")
+        logger.debug("[%s] get_camera_stream_url(%s) -> %s", self.name, camera_entity_id, streams)
         lines = [f"Stream URLs for {camera_entity_id}:"]
         for kind, url in streams.items():
             lines.append(f"  {kind}: {url}")
@@ -531,7 +548,7 @@ class HomeAssistantAgent(LLMAgent):
             return {"result": "camera_entity_id is required.", "error": "missing_entity_id"}
         rest_base = normalize_ha_base_url(self.ha_url)
         url = get_camera_snapshot_url(rest_base, camera_entity_id)
-        logger.debug(f"[{self.name}] get_camera_snapshot_url({camera_entity_id}) -> {url}")
+        logger.debug("[%s] get_camera_snapshot_url(%s) -> %s", self.name, camera_entity_id, url)
         return {
             "result": (
                 f"Snapshot URL for {camera_entity_id}: {url}\n"
@@ -895,9 +912,7 @@ class HomeAssistantAgent(LLMAgent):
                 messages=[user_msg], system=HARDWARE_SELECTION_PROMPT
             )
             self._accumulate_usage(usage)
-            data = json.loads(self._strip_fences(response))
-            if not isinstance(data, dict):
-                raise ValueError("LLM response is not a JSON object")
+            data = self._json_object(response)
 
             selected: list[dict[str, Any]] = data.get("hardware") or []
             if not isinstance(selected, list):
@@ -935,7 +950,7 @@ class HomeAssistantAgent(LLMAgent):
             return self._format_hardware_result(text, devices, selected, can_fulfill, fallback_text)
 
         except Exception as exc:
-            logger.error("[%s] Hardware selection failed: %s", self.name, exc, exc_info=True)
+            logger.exception("[%s] Hardware selection failed", self.name)
             return self._format_hardware_result(
                 text, devices, [], False, f"Hardware selection error: {exc}"
             )
@@ -986,9 +1001,7 @@ class HomeAssistantAgent(LLMAgent):
             )
             logger.info("[%s] Received hardware recommendation response from LLM.", self.name)
             self._accumulate_usage(usage)
-            data = json.loads(self._strip_fences(response))
-            if not isinstance(data, dict):
-                raise ValueError("LLM response is not a JSON object")
+            data = self._json_object(response)
 
             primary = self._normalize_available_hardware_items(
                 data.get("primary_hardware") or [],
@@ -1046,7 +1059,7 @@ class HomeAssistantAgent(LLMAgent):
             )
 
         except Exception as exc:
-            logger.error("[%s] Hardware recommendation failed: %s", self.name, exc, exc_info=True)
+            logger.exception("[%s] Hardware recommendation failed", self.name)
             return self._format_available_hardware_result(
                 text,
                 devices,
@@ -1200,7 +1213,7 @@ class HomeAssistantAgent(LLMAgent):
             }
 
         except Exception as exc:
-            logger.error("[%s] Automation creation failed: %s", self.name, exc, exc_info=True)
+            logger.exception("[%s] Automation creation failed", self.name)
             return {
                 "can_create": False,
                 "inserted": False,
@@ -1227,9 +1240,7 @@ class HomeAssistantAgent(LLMAgent):
             system=AUTOMATION_CREATION_PROMPT,
         )
         self._accumulate_usage(usage)
-        data = json.loads(self._strip_fences(response))
-        if not isinstance(data, dict):
-            raise ValueError("LLM response is not a JSON object")
+        data = self._json_object(response)
 
         can_create = bool(data.get("can_create"))
         automation = data.get("automation") or {}
@@ -1243,7 +1254,7 @@ class HomeAssistantAgent(LLMAgent):
             }
 
         if not isinstance(automation, dict):
-            raise ValueError("automation must be a JSON object")
+            raise TypeError("automation must be a JSON object")
 
         error = self._validate_automation(automation)
         if error:
@@ -1561,6 +1572,17 @@ class HomeAssistantAgent(LLMAgent):
         if isinstance(payload, dict) and isinstance(payload.get("task"), str):
             return payload["task"]
         return fallback
+
+    def _json_object(self, response: str) -> dict[str, Any]:
+        """The model's reply as the JSON object every prompt here asks it for.
+
+        TypeError when it parses to anything else. Each caller catches Exception
+        and reports its step as failed, so the type only names what went wrong.
+        """
+        data = json.loads(self._strip_fences(response))
+        if not isinstance(data, dict):
+            raise TypeError("LLM response is not a JSON object")
+        return data
 
     @staticmethod
     def _strip_fences(text: str) -> str:

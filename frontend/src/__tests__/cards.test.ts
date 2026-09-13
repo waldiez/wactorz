@@ -133,16 +133,10 @@ describe("buildStatCards", () => {
 });
 
 describe("appendActionBtns", () => {
-    it("running → Pause + Stop + Delete", () => {
+    it("running → Stop + Delete", () => {
         const c = document.createElement("div");
         appendActionBtns(c, agent("worker", { state: "running" }));
-        expect(actions(c)).toEqual(["pause", "stop", "delete"]);
-    });
-
-    it("paused → Resume + Stop + Delete", () => {
-        const c = document.createElement("div");
-        appendActionBtns(c, agent("worker", { state: "paused" }));
-        expect(actions(c)).toEqual(["resume", "stop", "delete"]);
+        expect(actions(c)).toEqual(["stop", "delete"]);
     });
 
     it("stopped → Start and Delete (no Stop)", () => {
@@ -158,15 +152,27 @@ describe("appendActionBtns", () => {
         expect(actions(c)).not.toContain("start");
     });
 
-    it("protected (but messageable) → Pause only, no Stop/Delete", () => {
+    it("protected → Stop but no Delete", () => {
         const c = document.createElement("div");
-        appendActionBtns(c, agent("main", { protected: true }));
-        expect(actions(c)).toEqual(["pause"]);
+        appendActionBtns(c, agent("catalog", { protected: true }));
+
+        // Protection is about not losing an agent defined in code; stopping one
+        // is reversible from its own card.
+        expect(actions(c)).toEqual(["stop"]);
+    });
+
+    it("essential → neither Stop nor Delete", () => {
+        const c = document.createElement("div");
+        appendActionBtns(c, agent("main", { protected: true, essential: true }));
+
+        // Stopping this one removes the way a user would undo it, so nothing is
+        // offered rather than something that would be refused.
+        expect(actions(c)).toEqual([]);
     });
 
     it("non-messageable system agent → no buttons", () => {
         const c = document.createElement("div");
-        appendActionBtns(c, agent("io-agent"));
+        appendActionBtns(c, agent("monitor-agent"));
         expect(actions(c)).toEqual([]);
     });
 });
@@ -184,9 +190,9 @@ describe("buildWactorCard", () => {
     });
 
     it("gives a system agent no Chat button", () => {
-        // io-agent is plumbing, not a correspondent — offering Chat would send
+        // monitor-agent is plumbing, not a correspondent — offering Chat would send
         // messages nothing answers.
-        const card = buildWactorCard(agent("io-agent"), 0, cb());
+        const card = buildWactorCard(agent("monitor-agent"), 0, cb());
 
         expect(card.querySelector(".af-chat-btn")).toBeNull();
     });
@@ -223,8 +229,8 @@ describe("buildWactorCard", () => {
     it("routes action-button clicks through onCommand", () => {
         const cbs = cb();
         const card = buildWactorCard(agent("worker", { state: "running" }), 0, cbs);
-        card.querySelector<HTMLButtonElement>('[data-action="pause"]')!.click();
-        expect(cbs.onCommand).toHaveBeenCalledWith("worker", "pause", expect.anything());
+        card.querySelector<HTMLButtonElement>('[data-action="stop"]')!.click();
+        expect(cbs.onCommand).toHaveBeenCalledWith("worker", "stop", expect.anything());
     });
 
     it("shows the protected shield and hides destructive actions for protected agents", () => {

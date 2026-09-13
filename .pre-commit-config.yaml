@@ -9,8 +9,9 @@ repos:
 
   - repo: local
     hooks:
-      # Gated Python lint + format (Ruff). Advisory rules (docstrings, typing) are
-      # intentionally NOT here — run `make lint-py` for those; they never block a commit.
+      # Gated Python lint + format (Ruff) and type checking (basedpyright). The
+      # advisory Ruff families are intentionally NOT here — `make lint-py` reports
+      # them; they never block a commit.
       - id: ruff-format
         name: ruff format
         entry: ruff format
@@ -21,6 +22,14 @@ repos:
         entry: ruff check --fix
         language: system
         types: [python]
+      # The whole configured tree, not the staged files: a changed signature in
+      # the package breaks the tests and scripts that call it, unstaged or not.
+      - id: basedpyright
+        name: basedpyright
+        entry: python3 -m basedpyright
+        language: system
+        pass_filenames: false
+        files: \.py$
       - id: python-tests
         name: python tests
         entry: python3 -m pytest tests -n auto

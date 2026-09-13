@@ -177,8 +177,8 @@ describe("AgentStore — reconcileAgents", () => {
 describe("AgentStore — heartbeat", () => {
     it("updates an existing agent's live fields and forwards onHeartbeat", () => {
         store.addOrUpdateAgent(agent());
-        store.onHeartbeat(hb({ state: "paused", cpu: 12, memory_mb: 256, task: "busy" }));
-        expect(store.getAgents()[0]).toMatchObject({ state: "paused", cpu: 12, mem: 256, task: "busy" });
+        store.onHeartbeat(hb({ state: "stopped", cpu: 12, memory_mb: 256, task: "busy" }));
+        expect(store.getAgents()[0]).toMatchObject({ state: "stopped", cpu: 12, mem: 256, task: "busy" });
         expect(dash.onHeartbeat).toHaveBeenCalledWith("id-1", 1_000, 12, 256);
     });
 

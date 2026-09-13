@@ -81,7 +81,7 @@ class _Client:
         self.messages = _Replies(replies)
         self._delay = subscribe_delay
 
-    async def subscribe(self, topic: str) -> None:
+    async def subscribe(self, topic: str, qos: int = 0, **_kwargs: Any) -> None:
         if self._delay:
             await asyncio.sleep(self._delay)
         self.subscribed.append(topic)
@@ -102,7 +102,7 @@ class _Broker:
         self._delay = subscribe_delay
         self.client: _Client | None = None
 
-    def __call__(self, _host: str, _port: int) -> "_Broker":
+    def __call__(self, _host: str, _port: int, **_kwargs: Any) -> "_Broker":
         return self
 
     async def __aenter__(self) -> _Client:

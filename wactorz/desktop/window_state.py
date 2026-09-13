@@ -65,7 +65,7 @@ def load() -> dict[str, Any]:
     try:
         if WINDOW_STATE_FILE.exists():
             return sanitize(json.loads(WINDOW_STATE_FILE.read_text()))
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # an unreadable file falls back to the defaults
         pass
     return dict(DEFAULTS)
 
@@ -75,7 +75,7 @@ def save() -> None:
     try:
         WINDOW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         WINDOW_STATE_FILE.write_text(json.dumps(_geometry))
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; geometry is a convenience
         pass
 
 
@@ -168,5 +168,5 @@ def place(window, screens) -> None:
         if (nx, ny) != (x, y):
             window.move(nx, ny)
         _geometry.update(width=nw, height=nh, x=nx, y=ny)
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110  # best-effort; the window stays where it was created
         pass

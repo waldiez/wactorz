@@ -106,6 +106,16 @@ class TestServingDocs:
 
         assert resp.status == 200
 
+    async def test_a_directory_redirects_to_its_first_page(self, tree: Path) -> None:
+        request = make_mocked_request("GET", "/docs/", match_info={"path": ""})
+        with (
+            patch.object(static_site, "DOCS_SITE", tree / "docs"),
+            pytest.raises(web.HTTPFound) as redirect,
+        ):
+            await static_site.docs_handler(request)
+
+        assert redirect.value.location == "/docs/guide/index.html"
+
     async def test_a_prefix_sibling_is_refused(self, tree: Path) -> None:
         with (
             patch.object(static_site, "DOCS_SITE", tree / "docs"),

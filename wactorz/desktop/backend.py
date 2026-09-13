@@ -55,12 +55,12 @@ def start() -> None:
         # would close the pipe and terminate the backend on return.
         # pylint: disable=consider-using-with
         log = open(BACKEND_LOG, "w", encoding="utf-8")  # noqa: SIM115
-        _process = subprocess.Popen(
+        _process = subprocess.Popen(  # noqa: S603  # argv is this interpreter; no shell
             cmd, env=env, cwd=str(DATA_DIR), stdout=log, stderr=subprocess.STDOUT
         )
     except Exception:  # pylint: disable=broad-exception-caught
         # Could not open the log file — still run, just without captured output.
-        _process = subprocess.Popen(cmd, env=env, cwd=str(DATA_DIR))
+        _process = subprocess.Popen(cmd, env=env, cwd=str(DATA_DIR))  # noqa: S603  # same argv; no shell
 
 
 def stop() -> None:
@@ -88,7 +88,7 @@ def wait_until_serving(timeout: float = 30.0) -> bool:
         if _process is not None and _process.poll() is not None:
             return False
         try:
-            with urllib.request.urlopen(health, timeout=1):
+            with urllib.request.urlopen(health, timeout=1):  # noqa: S310  # http:// loopback URL from config
                 return True
         except Exception:  # pylint: disable=broad-exception-caught
             time.sleep(0.15)

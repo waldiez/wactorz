@@ -20,7 +20,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Full history: the tag list below decides whether this build may move
+      # :latest, and a shallow clone carries no tags to compare against.
       - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
 
       # Pinned from package.json's "packageManager": this build's output is
       # published, so it must match the assets CI verified against the tree.
@@ -63,7 +67,16 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
             tag="${{ github.ref_name }}"
-            latest="true"
+            # Only the newest version may be :latest. Releasing a fix on an
+            # older line publishes that line as current otherwise, moving the
+            # tag backwards for everyone who pulls without naming a version.
+            newest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+            if [[ "$tag" == "$newest" ]]; then
+              latest="true"
+            else
+              latest="false"
+              echo "::notice::$tag is not the newest ($newest) - leaving :latest alone"
+            fi
           else
             tag="${{ github.event.inputs.version_tag }}"
             latest="false"

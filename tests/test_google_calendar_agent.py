@@ -22,7 +22,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         result = await agent._process({"operation": "today", "count": 5})
 
         self.assertIn("Standup", result["result"])
-        tool_name, arguments = agent.client.call_tool.await_args.args
+        tool_name, arguments = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool_name, "list_events")
         self.assertEqual(arguments["pageSize"], 5)
         self.assertEqual(arguments["orderBy"], "startTime")
@@ -49,7 +49,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("Standup", result["result"])
         self.assertNotIn("error", result)
-        tool_name, arguments = agent.client.call_tool.await_args.args
+        tool_name, arguments = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool_name, "list_events")
         self.assertIn("startTime", arguments)
         self.assertIn("endTime", arguments)
@@ -113,7 +113,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         result = await agent._process({"text": "make an event now for 2 hours"})
 
         self.assertEqual(result["result"], "created")
-        tool_name, arguments = agent.client.call_tool.await_args.args
+        tool_name, arguments = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool_name, "create_event")
         self.assertEqual(arguments["summary"], "New event")
         self.assertIn("startTime", arguments)
@@ -131,7 +131,7 @@ class GoogleCalendarAgentTest(unittest.IsolatedAsyncioTestCase):
         second = await agent._process({"text": "8am to 7pm"})
 
         self.assertEqual(second["result"], "created")
-        tool_name, arguments = agent.client.call_tool.await_args.args
+        tool_name, arguments = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool_name, "create_event")
         self.assertEqual(arguments["summary"], "New event")
         self.assertIn("T08:00:00", arguments["startTime"])

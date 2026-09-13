@@ -70,7 +70,7 @@ class _Client:
         self._messages = messages
         self._on_drained = on_drained
 
-    async def subscribe(self, pattern: str) -> None:
+    async def subscribe(self, pattern: str, qos: int = 0, **_kwargs: Any) -> None:
         self.subscribed.append(pattern)
 
     def __aiter__(self) -> "_Client":
@@ -94,7 +94,7 @@ class _Broker:
         self.client = _Client(messages, on_drained)
         self.connections = 0
 
-    def __call__(self, _host: str, _port: int) -> "_Broker":
+    def __call__(self, _host: str, _port: int, **_kwargs: Any) -> "_Broker":
         self.connections += 1
         return self
 

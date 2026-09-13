@@ -11,7 +11,7 @@ def _make_agent(state_path):
     # Bypass __init__ (needs a live runner); exercise only the persistence methods.
     agent = _RemoteAgent.__new__(_RemoteAgent)
     agent.name = "state-test"
-    agent._state_path = str(state_path)
+    agent._state_path = state_path
     agent._persistent_state = {}
     return agent
 

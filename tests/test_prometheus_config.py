@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "infra" / "prometheus" / "render-config.sh"
 
 
+# The subject is a POSIX shell script that runs inside the Prometheus image, so
+# there is no Windows behaviour to cover: `sh` is absent and the script never
+# executes there.
+@unittest.skipIf(sys.platform == "win32", "renders through sh, which Windows lacks")
 class PrometheusConfigTest(unittest.TestCase):
     def _render(self, **env_overrides) -> str:
         env = os.environ.copy()

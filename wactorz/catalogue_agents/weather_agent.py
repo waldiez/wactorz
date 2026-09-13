@@ -30,9 +30,11 @@ import json
 import logging
 import re
 from datetime import date, datetime, timedelta
+from typing import Any
 
 import aiohttp
 
+from ..agents.llm.base import LLMProvider
 from ..config import CONFIG
 from ..core.actor import Actor, Message, MessageType
 
@@ -441,7 +443,7 @@ _FULL_WEEKDAYS = {
 }
 
 
-def _resolve_when(low: str, today: date) -> dict:
+def _resolve_when(low: str, today: date) -> dict[str, Any]:
     """Decide action + date window + concern from temporal/topic keywords."""
     concern = None
     if re.search(r"\brain|umbrella|drizzl|shower|wet\b", low):
@@ -460,7 +462,7 @@ def _resolve_when(low: str, today: date) -> dict:
     # ── History (past) ──────────────────────────────────────────────
     iso = _ISO_DATE.search(low)
     if iso:
-        d = datetime.strptime(iso.group(1), "%Y-%m-%d").date()
+        d = datetime.strptime(iso.group(1), "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
         if d < today:
             return {**out, "action": "history", "date_from": d, "date_to": d}
     if re.search(r"\byesterday\b", low):
@@ -562,7 +564,7 @@ def _is_weather_query(text: str) -> bool:
     return bool(_WEATHER_VOCAB.search(text) or _TEMPORAL_VOCAB.search(text))
 
 
-def parse_query(raw: str, today: date | None = None) -> dict:
+def parse_query(raw: str, today: date | None = None) -> dict[str, Any]:
     """Deterministic natural-language → intent payload. Pure / testable."""
     today = today or date.today()
     text = (raw or "").strip()
@@ -642,7 +644,7 @@ def parse_query(raw: str, today: date | None = None) -> dict:
 class WeatherAgent(Actor):
     """Open-Meteo weather lookup with robust natural-language parsing."""
 
-    def __init__(self, llm_provider=None, **kwargs):
+    def __init__(self, llm_provider: LLMProvider | None = None, **kwargs: Any) -> None:
         kwargs.setdefault("name", "weather-agent")
         super().__init__(**kwargs)
         self._llm = llm_provider
@@ -650,7 +652,7 @@ class WeatherAgent(Actor):
         self._last_location: str | None = None
         self._geo_cache: dict[str, tuple[float, float, str]] = {}
 
-    async def on_start(self):
+    async def on_start(self) -> None:
         stored = self.recall("default_location") if hasattr(self, "recall") else None
         if stored:
             self._default_location = stored
@@ -676,7 +678,10 @@ class WeatherAgent(Actor):
             },
         )
         logger.info(
-            f"[{self.name}] Ready (LLM={'yes' if self._llm else 'no'}). Default: {self._default_location}"
+            "[%s] Ready (LLM=%s). Default: %s",
+            self.name,
+            "yes" if self._llm else "no",
+            self._default_location,
         )
 
     # ── Entry points ──────────────────────────────────────────────────────
@@ -686,7 +691,7 @@ class WeatherAgent(Actor):
         result = await self._handle_cmd(payload)
         return self._format(result)
 
-    async def handle_message(self, msg: Message):
+    async def handle_message(self, msg: Message) -> None:
         if msg.type != MessageType.TASK:
             return
         raw = msg.payload
@@ -721,7 +726,7 @@ class WeatherAgent(Actor):
 
     # ── Parsing ───────────────────────────────────────────────────────────
 
-    async def _parse_smart(self, message: str) -> dict:
+    async def _parse_smart(self, message: str) -> dict[str, Any]:
         """Deterministic parse first; LLM only to recover a missing location."""
         payload = parse_query(message)
 
@@ -765,12 +770,12 @@ class WeatherAgent(Actor):
                 return None
             return loc if await self._geocode(loc) else None
         except Exception as e:
-            logger.debug(f"[{self.name}] LLM location recovery failed: {e}")
+            logger.debug("[%s] LLM location recovery failed: %s", self.name, e)
             return None
 
     # ── Command handler ───────────────────────────────────────────────────
 
-    async def _handle_cmd(self, payload: dict) -> dict:
+    async def _handle_cmd(self, payload: dict[str, Any]) -> dict[str, Any]:
         action = (payload.get("action") or "current").lower()
         concern = payload.get("concern")
         units = payload.get("units", "celsius")
@@ -810,7 +815,7 @@ class WeatherAgent(Actor):
                 self.persist("default_location", loc)
                 self.persist("last_location", loc)
             except Exception:
-                pass
+                logger.debug("[%s] Could not persist the default location", self.name)
             return {"status": "ok", "default_location": loc}
 
         if action == "current":
@@ -843,7 +848,7 @@ class WeatherAgent(Actor):
                 try:
                     self.persist("default_location", explicit_location)
                 except Exception:
-                    pass
+                    logger.debug("[%s] Could not persist the default location", self.name)
             res["concern"] = concern
             res["units"] = units
             res["used_default"] = used_default
@@ -855,22 +860,22 @@ class WeatherAgent(Actor):
                 try:
                     self.persist("last_location", resolved_location)
                 except Exception:
-                    pass
+                    logger.debug("[%s] Could not persist the last location", self.name)
         return res
 
     # ── Open-Meteo calls ──────────────────────────────────────────────────
 
-    async def _get_json(self, url: str, params: dict) -> dict | None:
+    async def _get_json(self, url: str, params: dict[str, Any]) -> dict[str, Any] | None:
         timeout = aiohttp.ClientTimeout(total=_TIMEOUT)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url, params=params) as resp:
                     if resp.status != 200:
-                        logger.warning(f"[{self.name}] {url} → HTTP {resp.status}")
+                        logger.warning("[%s] %s → HTTP %s", self.name, url, resp.status)
                         return None
                     return await resp.json()
         except Exception as e:
-            logger.warning(f"[{self.name}] request to {url} failed: {e}")
+            logger.warning("[%s] request to %s failed: %s", self.name, url, e)
             return None
 
     async def _geocode(self, location: str) -> tuple[float, float, str] | None:
@@ -915,12 +920,12 @@ class WeatherAgent(Actor):
         return None
 
     @staticmethod
-    def _units_params(units: str) -> dict:
+    def _units_params(units: str) -> dict[str, Any]:
         if units == "fahrenheit":
             return {"temperature_unit": "fahrenheit", "wind_speed_unit": "mph"}
         return {"wind_speed_unit": "kmh"}
 
-    async def _current(self, location: str, units: str = "celsius") -> dict:
+    async def _current(self, location: str, units: str = "celsius") -> dict[str, Any]:
         geo = await self._geocode(location)
         if not geo:
             return {
@@ -961,7 +966,7 @@ class WeatherAgent(Actor):
         days: int | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         geo = await self._geocode(location)
         if not geo:
             return {
@@ -971,7 +976,7 @@ class WeatherAgent(Actor):
 
         today = date.today()
         if date_to:
-            horizon = (datetime.strptime(date_to, "%Y-%m-%d").date() - today).days + 1
+            horizon = (datetime.strptime(date_to, "%Y-%m-%d").date() - today).days + 1  # noqa: DTZ007  # a bare date, and .date() is taken at once
             fdays = max(1, min(_MAX_FORECAST_DAYS, horizon))
         else:
             fdays = max(1, min(_MAX_FORECAST_DAYS, days or 3))
@@ -997,7 +1002,9 @@ class WeatherAgent(Actor):
                 }
         return {"kind": "forecast", "location": label, "forecast": rows}
 
-    async def _history(self, location: str, date_str: str, units: str = "celsius") -> dict:
+    async def _history(
+        self, location: str, date_str: str, units: str = "celsius"
+    ) -> dict[str, Any]:
         geo = await self._geocode(location)
         if not geo:
             return {
@@ -1007,7 +1014,7 @@ class WeatherAgent(Actor):
         if date_str.lower() == "yesterday":
             date_str = (date.today() - timedelta(days=1)).isoformat()
 
-        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+        target = datetime.strptime(date_str, "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
         delta = (date.today() - target).days
         daily = "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum"
         # The archive API lags ~5 days; for recent days the forecast API's
@@ -1044,18 +1051,18 @@ class WeatherAgent(Actor):
         return {"kind": "history", "location": label, **r}
 
     @staticmethod
-    def _daily_rows(daily: dict) -> list[dict]:
+    def _daily_rows(daily: dict[str, Any]) -> list[dict[str, Any]]:
         dates = daily.get("time") or []
-        rows = []
+        rows: list[dict[str, Any]] = []
         for i, d in enumerate(dates):
             code = int((daily.get("weather_code") or [-1])[i] or -1)
             rows.append(
                 {
                     "date": d,
-                    "temp_max": _idx(daily.get("temperature_2m_max"), i),
-                    "temp_min": _idx(daily.get("temperature_2m_min"), i),
-                    "precip_mm": _idx(daily.get("precipitation_sum"), i),
-                    "precip_prob": _idx(daily.get("precipitation_probability_max"), i),
+                    "temp_max": _idx(daily.get("temperature_2m_max", []), i),
+                    "temp_min": _idx(daily.get("temperature_2m_min", []), i),
+                    "precip_mm": _idx(daily.get("precipitation_sum", []), i),
+                    "precip_prob": _idx(daily.get("precipitation_probability_max", []), i),
                     "code": code,
                     "condition": _WMO.get(code, f"wmo:{code}"),
                 }
@@ -1064,7 +1071,7 @@ class WeatherAgent(Actor):
 
     # ── Formatting ────────────────────────────────────────────────────────
 
-    def _format(self, result: dict) -> str:
+    def _format(self, result: dict[str, Any]) -> str:
         if "error" in result:
             return f"{result['error']}"
 
@@ -1107,7 +1114,7 @@ class WeatherAgent(Actor):
             today = date.today()
             if len(rows) == 1:
                 r = rows[0]
-                d = datetime.strptime(r["date"], "%Y-%m-%d").date()
+                d = datetime.strptime(r["date"], "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
                 lbl = _label_for(d, today)
                 lead = self._verdict_day(r, concern, result["location"], lbl)
                 body = (
@@ -1118,7 +1125,7 @@ class WeatherAgent(Actor):
                 return f"{lead} {body}".strip()
             lines = [f"Forecast for {result['location']}:"]
             for r in rows:
-                d = datetime.strptime(r["date"], "%Y-%m-%d").date()
+                d = datetime.strptime(r["date"], "%Y-%m-%d").date()  # noqa: DTZ007  # a bare date, and .date() is taken at once
                 lbl = _label_for(d, today)
                 lines.append(
                     f"  {lbl:<9} {r['condition']:<22} "
@@ -1169,7 +1176,7 @@ class WeatherAgent(Actor):
         return ""
 
     @staticmethod
-    def _verdict_day(r: dict, concern: str | None, location: str, lbl: str) -> str:
+    def _verdict_day(r: dict[str, Any], concern: str | None, location: str, lbl: str) -> str:
         if concern == "rain":
             prob, mm, code = r.get("precip_prob"), r.get("precip_mm") or 0, r.get("code")
             likely = code in _RAINY or (prob is not None and prob >= 50) or mm >= 1.0
@@ -1200,7 +1207,7 @@ class WeatherAgent(Actor):
         return ""
 
     @staticmethod
-    def _verdict_range(rows: list[dict], concern: str | None) -> str:
+    def _verdict_range(rows: list[dict[str, Any]], concern: str | None) -> str:
         if concern == "snow":
             days = [r for r in rows if r.get("code") in _SNOWY]
             if not days:
@@ -1219,14 +1226,14 @@ class WeatherAgent(Actor):
         return "Rain likely on: " + ", ".join(_short(r["date"]) for r in wet) + "."
 
 
-def _idx(arr, i):
+def _idx(arr: list[Any], i: int) -> Any | None:
     try:
         return arr[i]
     except (TypeError, IndexError):
         return None
 
 
-def _r(v):
+def _r(v: Any) -> float | Any:
     """Round floats for display; pass through ints/None."""
     if isinstance(v, float):
         return round(v, 1)
@@ -1235,6 +1242,6 @@ def _r(v):
 
 def _short(iso: str) -> str:
     try:
-        return datetime.strptime(iso, "%Y-%m-%d").strftime("%a")
+        return datetime.strptime(iso, "%Y-%m-%d").strftime("%a")  # noqa: DTZ007  # a bare date, only named as a weekday
     except ValueError:
         return iso

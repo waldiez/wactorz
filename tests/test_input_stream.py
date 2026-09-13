@@ -100,7 +100,7 @@ class _Main:
         async def _plan(_text: str) -> str | None:
             return plan_reply
 
-        async def _record(text: str, reply: str) -> None:
+        async def _record(text: str, reply: str, *, ts_user: float) -> None:
             self.log["recorded"].append((text, reply))
 
         async def _classify(_text: str) -> str:

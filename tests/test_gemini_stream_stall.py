@@ -117,6 +117,82 @@ async def test_a_provider_error_is_reported(monkeypatch: pytest.MonkeyPatch) -> 
     assert "upstream refused" in final["error"]
 
 
+class _Busy(Exception):
+    """A rate limit, shaped the way the SDKs report one."""
+
+    status_code = 429
+
+
+async def _drain_raw(provider: GeminiProvider) -> tuple[list[str], dict]:
+    """Read `_stream` itself, with no retry wrapper in the way."""
+    text: list[str] = []
+    final: dict = {}
+    async for chunk in provider._stream(messages=[{"role": "user", "content": "hi"}]):  # pylint: disable=protected-access
+        if isinstance(chunk, dict):
+            final = chunk
+        else:
+            text.append(chunk)
+    return text, final
+
+
+@pytest.mark.asyncio
+async def test_a_failure_before_any_text_is_raised(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Described in the final item, the failure was a finished stream.
+
+    Nothing has been read yet, so the attempt can be made again from the start —
+    but only if it is raised, because a stream that ends normally carrying an
+    error message is not something the retry policy is ever asked about.
+    """
+    monkeypatch.setattr(gemini, "_GEMINI_STREAM_STALL_TIMEOUT", 5)
+    busy = _Busy("rate limited")
+
+    class _Exploding(_StreamModels):
+        def generate_content_stream(self, **_kwargs: Any):
+            raise busy
+            yield  # pragma: no cover  # makes this a generator
+
+    with pytest.raises(_Busy) as caught:
+        await _drain_raw(_provider(_Exploding([])))
+
+    assert caught.value is busy, "the status has to survive, not just the message"
+
+
+@pytest.mark.asyncio
+async def test_a_stall_before_any_text_is_raised(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(gemini, "_GEMINI_STREAM_STALL_TIMEOUT", 0.1)
+    models = _StreamModels([], then_hang=True)
+    try:
+        with pytest.raises(TimeoutError):
+            await _drain_raw(_provider(models))
+    finally:
+        models.released.set()
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_fails_before_it_starts_is_tried_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The point of raising: the public stream now gets a second attempt."""
+    monkeypatch.setattr(gemini, "_GEMINI_STREAM_STALL_TIMEOUT", 5)
+    monkeypatch.setattr("wactorz.agents.llm.retry.BACKOFF_BASE_S", 0.0)
+    monkeypatch.setattr("wactorz.agents.llm.retry.BACKOFF_CAP_S", 0.0)
+
+    class _FailsOnce(_StreamModels):
+        attempts = 0
+
+        def generate_content_stream(self, **_kwargs: Any):
+            _FailsOnce.attempts += 1
+            if _FailsOnce.attempts == 1:
+                raise _Busy("rate limited")
+            yield _chunk("second time lucky")
+
+    text, final = await _drain(_provider(_FailsOnce([])))
+
+    assert _FailsOnce.attempts == 2
+    assert text == ["second time lucky"]
+    assert "error" not in final
+
+
 @pytest.mark.asyncio
 async def test_usage_survives_a_stall(monkeypatch: pytest.MonkeyPatch) -> None:
     """Tokens already spent must still be billed, stall or not."""

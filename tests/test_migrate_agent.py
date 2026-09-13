@@ -15,6 +15,7 @@ The refusals matter as much as the moves: migrating to a node that is not
 listening loses the agent, so the checks that come first are pinned first.
 """
 
+import json
 import time
 from typing import Any
 
@@ -34,12 +35,21 @@ class _Registry:
     def find_by_name(self, name: str) -> "_LocalAgent | None":
         return self._by.get(name)
 
+    async def unregister(self, actor_id: str) -> None:
+        for name, agent in list(self._by.items()):
+            if agent.actor_id == actor_id:
+                del self._by[name]
+
 
 class _LocalAgent:
     def __init__(self, name: str) -> None:
         self.name = name
         self.actor_id = f"{name}-id"
         self._persistence_api = None
+        self.stopped = False
+
+    async def stop(self) -> None:
+        self.stopped = True
 
 
 class _Main:
@@ -61,12 +71,16 @@ class _Main:
         main.migration = Migration(main, main.nodes)
         main.nodes.known = dict(nodes or {})
         main._agent_manifests = dict(manifests or {})
-        setattr(main, "_registry", _Registry(local))
+        self.registry = _Registry(local)
+        setattr(main, "_registry", self.registry)
 
         self.published: list[tuple[str, Any]] = []
         self.publish_options: list[dict[str, Any]] = []
         self.saved: list[dict[str, Any]] = []
         self.desired_state: list[tuple[str, Any, Any]] = []
+        self.spawned_remote: list[tuple[dict[str, Any], str, bool]] = []
+        self.spawned_local: list[dict[str, Any]] = []
+        self.purged: list[tuple[Any, str]] = []
         self._spawn_registry = dict(spawn_registry or {})
 
         async def _publish(topic: str, payload: Any, **kw: Any) -> None:
@@ -76,10 +90,23 @@ class _Main:
         async def _desired(node: str, cfg: Any = None, remove_name: Any = None) -> None:
             self.desired_state.append((node, cfg, remove_name))
 
+        async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+            self.spawned_remote.append((cfg, node, save))
+
+        async def _spawn_from_config(cfg: dict[str, Any], save: bool = False, **_kw: Any) -> None:
+            self.spawned_local.append(cfg)
+
+        async def _purge(actor: Any, name: str) -> None:
+            self.purged.append((actor, name))
+
         setattr(main, "_mqtt_publish", _publish)
         setattr(main, "_update_node_desired_state", _desired)
         setattr(main, "_get_spawn_registry", lambda: dict(self._spawn_registry))
         setattr(main, "_save_to_spawn_registry", self.saved.append)
+        setattr(main, "_spawn_remote", _spawn_remote)
+        setattr(main, "_spawn_from_config", _spawn_from_config)
+        setattr(main, "_purge_local_agent_persistence", _purge)
+        setattr(main, "_queue_notification", lambda _n: None)
         self.actor = main
 
     async def migrate(self, agent: str, target: str) -> dict[str, Any]:
@@ -203,55 +230,68 @@ class TestFindingWhereTheAgentIs:
 
 
 class TestBetweenTwoNodes:
+    """Node-to-node migration is routed through main, in two legs.
+
+    The source used to publish `nodes/{target}/spawn` itself. That is lateral
+    remote code execution -- generated code on one node placing code on another
+    -- and the ACL that closes it forbids the write anyway. So main asks the
+    source to hand the agent back, then places it on the target itself.
+    """
+
     def _main(self) -> _Main:
         return _Main(
             spawn_registry={"collector": with_code(node="rpi")},
             nodes={"rpi": online(), "nuc": online()},
         )
 
-    async def test_the_source_node_is_told_to_hand_it_over(self) -> None:
+    async def test_the_source_hands_the_agent_back_to_main(self) -> None:
         main = self._main()
 
         await main.migrate("collector", "nuc")
 
         topic, payload = main.published_to("/migrate")[0]
         assert topic == "nodes/rpi/migrate"
-        assert payload["target_node"] == "nuc"
+        assert payload["target_node"] == "@main", "the source should not address the target"
+        assert payload["return_token"]
 
-    async def test_the_registry_is_moved_to_the_target(self) -> None:
-        # Written before the move completes, so a restart in between does not
-        # bring the agent back up on the machine it is leaving.
+    async def test_the_source_is_never_asked_to_write_the_targets_topics(self) -> None:
+        # The whole point of the routing change: nothing tells one node to
+        # publish into another node's namespace.
         main = self._main()
 
         await main.migrate("collector", "nuc")
 
-        assert main.saved[0]["node"] == "nuc"
+        assert not [t for t, _ in main.published if t.startswith("nodes/nuc/")]
 
-    async def test_both_nodes_desired_state_are_republished(self) -> None:
-        # The source must forget it and the target must expect it, or one of
-        # them re-spawns it after a restart. Asserted on what goes on the wire:
-        # each node reads its own retained desired_state and reconciles.
+    async def test_the_hand_over_is_durable(self) -> None:
+        # Sent while the source may be reconnecting; at QoS 0 it would be lost
+        # and the migration would hang with the agent still on the source.
         main = self._main()
 
         await main.migrate("collector", "nuc")
 
-        published = {t.split("/")[1]: p for t, p in main.published_to("/desired_state")}
-        assert set(published) == {"rpi", "nuc"}
-        assert not [a for a in published["rpi"]["agents"] if a["name"] == "collector"]
-        assert [a["name"] for a in published["nuc"]["agents"]] == ["collector"]
+        assert main.publish_options[0].get("qos") == 1
 
-    async def test_the_desired_state_is_retained(self) -> None:
-        # A node reads it on startup, so it has to be there before the node is.
+    async def test_nothing_is_committed_before_the_agent_has_moved(self) -> None:
+        # The registry and both nodes' desired state used to be written the
+        # moment the command went out, so a migration that never completed left
+        # them claiming the agent had moved. Now they move on the ack.
         main = self._main()
 
         await main.migrate("collector", "nuc")
 
-        options = [
-            o
-            for (t, _p), o in zip(main.published, main.publish_options, strict=True)
-            if t.endswith("/desired_state")
-        ]
-        assert all(o.get("retain") for o in options)
+        assert not main.saved, "the registry moved before the agent did"
+        assert not main.published_to("/desired_state")
+
+    async def test_the_migration_is_recorded_as_pending(self) -> None:
+        main = self._main()
+
+        await main.migrate("collector", "nuc")
+
+        pending = list(main.actor.migration.pending_returns.values())
+        assert len(pending) == 1
+        assert pending[0]["target_node"] == "nuc"
+        assert pending[0]["from_node"] == "rpi"
 
 
 class TestComingHome:
@@ -309,9 +349,12 @@ class TestComingHome:
 
         assert main.publish_options[0].get("qos") == 1
 
-    async def test_the_node_to_node_command_is_not(self) -> None:
-        # Stated beside the one above so the difference is deliberate rather
-        # than something to tidy into consistency.
+    async def test_the_node_to_node_command_is_durable_too(self) -> None:
+        # This used to assert the opposite, and said the difference was
+        # deliberate: coming home went out at QoS 1, node-to-node at QoS 0.
+        # It was a defect either way -- a dropped migrate leaves the agent on
+        # the source while main waits -- and both paths are the same command
+        # now, so the asymmetry is gone rather than tidied away.
         main = _Main(
             spawn_registry={"collector": with_code(node="rpi")},
             nodes={"rpi": online(), "nuc": online()},
@@ -319,7 +362,7 @@ class TestComingHome:
 
         await main.migrate("collector", "nuc")
 
-        assert main.publish_options[0].get("qos") is None
+        assert main.publish_options[0].get("qos") == 1
 
     async def test_it_reports_that_it_is_waiting(self) -> None:
         main = self._main()
@@ -328,3 +371,129 @@ class TestComingHome:
 
         assert result["success"] is True
         assert "waiting" in result["message"]
+
+
+class TestGoingOut:
+    """Local → remote, which has the same two copies to reconcile as the rest.
+
+    The local state is this leg's equivalent of the source node's copy: it is
+    the only intact one until the target says the agent started, so nothing may
+    delete it before then.
+    """
+
+    @staticmethod
+    def _main() -> _Main:
+        return _Main(
+            spawn_registry={"collector": with_code()},
+            nodes={"nuc": online()},
+            local=("collector",),
+        )
+
+    async def _migrated(self) -> tuple[_Main, str, dict[str, Any]]:
+        main = self._main()
+        await main.migrate("collector", "nuc")
+        token, pending = next(iter(main.actor.migration.pending_spawns.items()))
+        return main, token, pending
+
+    async def test_the_agent_is_handed_over_with_a_token(self) -> None:
+        main, token, _pending = await self._migrated()
+
+        config, node, save = main.spawned_remote[0]
+        assert node == "nuc"
+        assert config["_migration_token"] == token
+        assert save is False, "the registry must not move before the agent does"
+
+    async def test_the_local_state_is_kept_until_the_target_confirms(self) -> None:
+        main, _token, _pending = await self._migrated()
+
+        assert main.purged == [], "purging here loses the agent if the spawn fails"
+
+    async def test_the_local_instance_is_stopped_all_the_same(self) -> None:
+        # Stopped, not deleted: two copies running would both answer.
+        main = self._main()
+        agent = main.registry.find_by_name("collector")
+
+        await main.migrate("collector", "nuc")
+
+        assert agent is not None and agent.stopped
+
+    async def test_the_migration_is_recorded_so_it_can_be_rolled_back(self) -> None:
+        _main, _token, pending = await self._migrated()
+
+        assert pending["from_node"] == "local"
+        assert pending["target_node"] == "nuc"
+        assert pending["local_actor"] is not None
+
+    async def test_the_ack_purges_the_local_copy(self) -> None:
+        main, token, _pending = await self._migrated()
+
+        await main.actor.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack",
+            json.dumps({"agent": "collector", "migration_token": token}).encode(),
+        )
+
+        assert [name for _actor, name in main.purged] == ["collector"]
+
+    async def test_the_ack_does_not_publish_a_desired_state_for_local(self) -> None:
+        # There is no node called "local" to reconcile.
+        main, token, _pending = await self._migrated()
+
+        await main.actor.migration.receive_spawn_ack(
+            "nodes/nuc/spawn_ack",
+            json.dumps({"agent": "collector", "migration_token": token}).encode(),
+        )
+
+        assert [t for t, _p in main.published_to("/desired_state")] == ["nodes/nuc/desired_state"]
+
+    async def test_a_target_that_never_confirms_brings_the_agent_home(self) -> None:
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        assert main.spawned_local, "the agent must be started here again"
+        assert main.purged == [], "the copy it comes back to must still be there"
+
+    async def test_a_rollback_withdraws_the_agent_from_the_target(self) -> None:
+        # The stop is transient; the desired state is retained. Leaving the
+        # agent in it means the target's next reboot spawns a second copy
+        # beside the one that was just restored here.
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        published = main.published_to("/desired_state")
+        assert published, "the target was never told to forget the agent"
+        _topic, payload = published[-1]
+        assert [a["name"] for a in payload["agents"]] == []
+
+    async def test_the_stop_that_undoes_the_spawn_is_durable(self) -> None:
+        # The spawn is no longer retained, so this is what corrects a node that
+        # was away while the migration was rolled back: it has to be queued
+        # behind that spawn, which means surviving the same absence.
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        stops = [
+            options
+            for (topic, _payload), options in zip(main.published, main.publish_options, strict=True)
+            if topic == "nodes/nuc/stop"
+        ]
+        assert stops, "the target was never told to drop the agent"
+        assert all(o.get("qos") == 1 for o in stops)
+
+    async def test_what_comes_home_carries_no_stale_snapshot(self) -> None:
+        # Local state was never purged, so it is both intact and newer than the
+        # snapshot that was shipped out.
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        restored = main.spawned_local[0]
+        assert "_initial_state" not in restored
+        assert "node" not in restored
+        assert restored["replace"] is True

@@ -22,6 +22,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wactorz.agents.main.actor import MainActor
@@ -569,6 +570,111 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 5b. reset_all forgets the durable memory main keeps in kv_store
+#     (regression: "wipe everything" left every pipeline rule and user fact)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ResetAllMemoryKvTest(unittest.TestCase):
+    """Rules, facts, webhook URLs, topic contracts and manifests are SQLite
+    kv keys read through recall() on every call. None of the chat / metrics /
+    spawns scopes deletes them, and main is a kept actor so it is never purged
+    wholesale — a full wipe has to delete the rows itself.
+    """
+
+    MEMORY: ClassVar[dict[str, dict]] = {
+        "_pipeline_rules": {"r1": {"rule_id": "r1", "task": "door counter", "agents": ["a"]}},
+        "_user_facts": {"pref_user_name": "Yannis"},
+        "_notification_urls": {"discord": "https://discord.com/api/webhooks/1/x"},
+        "_topic_contracts": {"a": {"publishes": ["custom/x"]}},
+        "_agent_manifests": {"a": {"name": "a"}},
+    }
+
+    def _db(self, tmp: str):
+        from wactorz.core.persistence import WactorzDB
+
+        return WactorzDB(str(Path(tmp) / "wactorz.db"))
+
+    def _seed(self, db, owner: str = "main") -> None:
+        for key, value in self.MEMORY.items():
+            db.kv_set(owner, key, value)
+
+    def test_reset_memory_deletes_every_key(self):
+        from wactorz.reset import reset_memory
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                self._seed(db)
+                reset_memory(db_path=db_path)
+                for key in self.MEMORY:
+                    self.assertIsNone(db.kv_get("main", key, None), key)
+
+    def test_full_wipe_forgets_rules_and_facts(self):
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                self._seed(db)
+                reset_all(db_path=db_path, state_dir=tmp)
+                for key in self.MEMORY:
+                    self.assertIsNone(db.kv_get("main", key, None), key)
+
+    def test_restart_read_sees_no_rules_after_wipe(self):
+        """The symptom end-to-end: /rules after a wipe reads
+        recall("_pipeline_rules") through a fresh PersistenceAPI on the same
+        db file and must find nothing."""
+        from wactorz.core.persistence import PersistenceAPI, PickleStore
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                api = PersistenceAPI(db, PickleStore(tmp), "main")
+                for key, value in self.MEMORY.items():
+                    api.set(key, value)
+                self.assertTrue(api.get("_pipeline_rules"))  # sanity
+
+                reset_all(db_path=db_path, state_dir=tmp)
+
+            # Closed and reopened: Windows refuses to remove the temp directory
+            # while any handle on the database is open.
+            with self._db(tmp) as reopened:
+                fresh = PersistenceAPI(reopened, PickleStore(tmp), "main")
+                self.assertFalse(fresh.get("_pipeline_rules") or {})
+                self.assertFalse(fresh.get("_user_facts") or {})
+
+    def test_single_agent_wipe_leaves_other_owners_alone(self):
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                self._seed(db, owner="main")
+                self._seed(db, owner="other")
+                reset_all(agent_name="other", db_path=db_path, state_dir=tmp)
+                for key, value in self.MEMORY.items():
+                    self.assertEqual(db.kv_get("main", key, None), value, key)
+                    self.assertIsNone(db.kv_get("other", key, None), key)
+
+    def test_other_scopes_do_not_touch_memory(self):
+        """Chat, metrics and spawns each own their keys and nothing else — the
+        memory keys are a full wipe's job, so a partial reset keeps them."""
+        from wactorz.reset import reset_chat, reset_metrics, reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                self._seed(db)
+                reset_chat(db_path=db_path, state_dir=tmp)
+                reset_metrics(db_path=db_path)
+                reset_spawns(db_path=db_path)
+                for key, value in self.MEMORY.items():
+                    self.assertEqual(db.kv_get("main", key, None), value, key)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 6. reset_handler "all" purges retained nodes/{node}/desired_state
 #    (regression: a reconnecting runner reconciles deleted agents back)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -636,14 +742,14 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         main = MainActor(llm_provider=None, name="main", persistence_dir=tempfile.mkdtemp())
         main.protected = True
         main.actor_id = "main-id"
-        io = MagicMock()
-        io.protected = False
-        io.name = "io-agent"
-        io.actor_id = "io-id"
-        io.stop = AsyncMock()
+        spawned = MagicMock()
+        spawned.protected = False
+        spawned.name = "weather-agent"
+        spawned.actor_id = "weather-id"
+        spawned.stop = AsyncMock()
 
         fake_registry = MagicMock()
-        fake_registry.all_actors.return_value = [main, io]
+        fake_registry.all_actors.return_value = [main, spawned]
         fake_registry.find_by_name.return_value = main
         fake_registry.unregister = AsyncMock()
         fake_registry._supervisor_ref = None
@@ -655,7 +761,10 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
         runtime.mqtt_client_ref = AsyncMock()
         runtime.state["nodes"] = {}
         # Dashboard entries WITHOUT the protected flag — the exact bug condition.
-        runtime.state["agents"] = {"main-id": {"name": "main"}, "io-id": {"name": "io-agent"}}
+        runtime.state["agents"] = {
+            "main-id": {"name": "main"},
+            "weather-id": {"name": "weather-agent"},
+        }
         runtime.deleted_agent_ids = []
         try:
             with (
@@ -667,10 +776,10 @@ class ResetHandlerDesiredStatePurgeTest(unittest.IsolatedAsyncioTestCase):
                 resp = await api_reset.reset_handler(_make_request({"scope": "all"}))
             self.assertEqual(resp.status, 200)
             purged = {c.args[0] for c in purge.call_args_list}
-            self.assertIn("io-id", purged)
+            self.assertIn("weather-id", purged)
             self.assertNotIn("main-id", purged)  # protected: never purged
             tombstoned = {aid for aid, _ in runtime.deleted_agent_ids}
-            self.assertIn("io-id", tombstoned)
+            self.assertIn("weather-id", tombstoned)
             self.assertNotIn("main-id", tombstoned)  # protected: never tombstoned
         finally:
             runtime.registry = orig_registry
@@ -686,7 +795,7 @@ class FactoryResetKeepSetTest(unittest.TestCase):
 
     def test_protected_system_actors_are_kept(self):
 
-        for name in ("main", "monitor", "io-agent", "installer", "catalog"):
+        for name in ("main", "monitor", "installer", "catalog"):
             self.assertTrue(api_reset.survives_factory_reset(name, True), name)
 
     def test_ha_system_agents_kept_despite_being_unprotected(self):
@@ -709,10 +818,10 @@ class FactoryResetKeepSetTest(unittest.TestCase):
         app_src = Path(__file__).resolve().parents[1] / "wactorz" / "app.py"
         src_txt = app_src.read_text(encoding="utf-8", errors="ignore")
         supervised = re.findall(r'supervise\(\s*"([^"]+)"', src_txt)
-        self.assertGreaterEqual(len(supervised), 8, "app.py supervise chain not found")
+        self.assertGreaterEqual(len(supervised), 7, "app.py supervise chain not found")
         # Protection lives on the actor class; treat the known protected names as
         # protected here so the guard checks name-coverage, not the flag itself.
-        protected = {"main", "monitor", "io-agent", "installer", "catalog"}
+        protected = {"main", "monitor", "installer", "catalog"}
         missing = [n for n in supervised if not api_reset.survives_factory_reset(n, n in protected)]
         self.assertEqual(missing, [], f"fresh-boot agents not kept by reset: {missing}")
 

@@ -3,9 +3,12 @@ Spawns DynamicAgents whose core logic is written by the LLM on the fly.
 """
 
 import asyncio
+import contextvars
+import json
 import logging
 import re
 import socket
+import time
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
 
@@ -16,6 +19,7 @@ from ...config import (
     deploy_target_names,
 )
 from ...core.actor import Actor, Message, MessageType
+from ...core.persistence import chat_turn_recorded
 from ..llm_agent import LLMAgent, LLMProvider
 from ..mixins import SpawnMixin, SpawnPlaceholder
 from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
@@ -37,6 +41,24 @@ from .spawns import SpawnService
 from .turn_actions import TurnActions
 
 logger = logging.getLogger(__name__)
+
+
+_INTERFACE_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "wactorz_interface_source", default=""
+)
+_INTERFACE_HISTORY: contextvars.ContextVar[tuple[dict[str, Any], ...]] = contextvars.ContextVar(
+    "wactorz_interface_history", default=()
+)
+_INTERFACE_VOICE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "wactorz_interface_voice", default=False
+)
+_INTERFACE_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "wactorz_interface_context", default=None
+)
+_INTERFACE_ACTION_RE = re.compile(
+    r"<interface_action>\s*(\{.*?\})\s*</interface_action>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _normalize_agent_name(name: str) -> str:
@@ -117,6 +139,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # chats, so on an idle system with a failing agent nothing empties them.
         self._pending_notifications: list[dict] = []
         self.protected = True
+        # Stopping main leaves chat unanswered, which is the surface a user
+        # would reach for to start it again.
+        self.essential = True
         # Remote node tracking: node_name → {"last_seen": float, "agents": [...]}
         self.manifests = ManifestRegistry(self)
         self.nodes = NodeManager(self, self.manifests)
@@ -125,6 +150,90 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.spawns = SpawnService(self)
         self.delegation = DelegationManager(self)
         self.lifecycle = LifecycleService(self)
+
+    def _current_interface_source(self) -> str:
+        """Return the task-local interface excluded from delegation this turn."""
+        return _INTERFACE_SOURCE.get()
+
+    def _current_interface_history(self) -> tuple[dict, ...]:
+        """Return recent structured turns supplied by the active interface."""
+        return _INTERFACE_HISTORY.get()
+
+    def _current_interface_is_voice(self) -> bool:
+        """Return whether the active interface used speech recognition."""
+        return bool(_INTERFACE_VOICE.get())
+
+    def _current_interface_context(self) -> dict:
+        """Return the sanitized capabilities of the active interface."""
+        return dict(_INTERFACE_CONTEXT.get() or {})
+
+    def _is_interface_source(self, agent_name: str) -> bool:
+        """Return whether an agent name resolves to the active interface."""
+        source = self._current_interface_source()
+        return bool(source) and _normalize_agent_name(agent_name) == _normalize_agent_name(source)
+
+    @staticmethod
+    def _sanitize_interface_context(raw_context: Any, source: str) -> dict[str, Any]:
+        """Keep bounded display metadata and explicit action allow-lists."""
+        if not isinstance(raw_context, dict):
+            return {}
+        display_name = str(raw_context.get("display_name") or source or "interface")[:80]
+        kind = str(raw_context.get("kind") or "interface")[:80]
+        capabilities: dict[str, tuple[str, ...]] = {}
+        raw_capabilities = raw_context.get("capabilities")
+        if isinstance(raw_capabilities, dict):
+            for raw_command, raw_options in list(raw_capabilities.items())[:12]:
+                command = str(raw_command).strip().lower()
+                if not re.fullmatch(r"[a-z][a-z0-9_]{0,39}", command):
+                    continue
+                if not isinstance(raw_options, (list, tuple)):
+                    continue
+                options = []
+                for raw_option in list(raw_options)[:20]:
+                    option = str(raw_option).strip().lower()
+                    if re.fullmatch(r"[a-z][a-z0-9_]{0,39}", option):
+                        options.append(option)
+                if options:
+                    capabilities[command] = tuple(dict.fromkeys(options))
+        prompt_note = " ".join(str(raw_context.get("prompt_note") or "").split())[:400]
+        if prompt_note and not prompt_note.endswith(" "):
+            prompt_note += " "
+        return {
+            "display_name": display_name,
+            "kind": kind,
+            "capabilities": capabilities,
+            "prompt_note": prompt_note,
+        }
+
+    def _extract_interface_actions(self, response: str) -> tuple[str, list[dict[str, str]]]:
+        """Remove action blocks and validate them against the interface allow-list."""
+        capabilities = self._current_interface_context().get("capabilities") or {}
+        actions: list[dict[str, str]] = []
+        for match in _INTERFACE_ACTION_RE.finditer(str(response or "")):
+            if len(actions) >= 3:
+                break
+            try:
+                candidate = json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(candidate, dict):
+                continue
+            command = str(candidate.get("cmd") or candidate.get("action") or "").lower()
+            name = str(candidate.get("name") or "").lower()
+            if command and name and name in capabilities.get(command, ()):
+                actions.append({"cmd": command, "name": name})
+        clean = _INTERFACE_ACTION_RE.sub("", str(response or ""))
+        return re.sub(r"\n{3,}", "\n\n", clean).strip(), actions
+
+    def _replace_latest_interface_reply(self, raw_reply: str, clean_reply: str) -> None:
+        """Keep interface protocol blocks out of durable conversation history."""
+        if raw_reply == clean_reply:
+            return
+        for item in reversed(self._conversation_history):
+            if item.get("role") == "assistant" and item.get("content") == raw_reply:
+                item["content"] = clean_reply
+                self.persist("conversation_history", self._conversation_history)
+                return
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -141,8 +250,14 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._tasks.append(asyncio.create_task(self._llm_bridge_listener()))
         # Observe real MQTT payloads from remote agents to populate observed_samples
         self._tasks.append(asyncio.create_task(self._remote_observed_samples_listener()))
+        # Before either migration task: a migration that was in flight when this
+        # process stopped is still in flight on the node, and its ack may already
+        # be queued for us.
+        self.migration.restore()
         # Receive state + config from remote nodes during remote→local migration
         self._tasks.append(asyncio.create_task(self._state_return_listener()))
+        # Put back agents whose migration stalled with them running nowhere
+        self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt
         self._inject_user_facts_into_prompt()
 
@@ -179,6 +294,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = None) -> None:
         await self.lifecycle._clear_agent_manifest(name, actor_id)
 
+    async def agent_withdrew(self, actor_id: str, name: str = "") -> None:
+        """An agent took its manifest back. Owned by `self.lifecycle`."""
+        await self.lifecycle.agent_withdrew(actor_id, name)
+
     def _record_agent_deletion(self, name: str, reason: str = "user request") -> None:
         self.lifecycle._record_agent_deletion(name, reason)
 
@@ -207,6 +326,85 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 return
             await self._handle_task(msg)
 
+    async def _handle_task(self, msg: Message) -> None:
+        """Route interface tasks through the full orchestrator without blocking replies."""
+        payload = msg.payload if isinstance(msg.payload, dict) else {}
+        if payload.get("_via_interface"):
+            task = asyncio.create_task(self._handle_interface_request(payload, msg))
+            self._tasks.append(task)
+            task.add_done_callback(
+                lambda done: self._tasks.remove(done) if done in self._tasks else None
+            )
+            return
+        await super()._handle_task(msg)
+
+    async def _handle_interface_request(self, payload: dict[str, Any], msg: Message) -> None:
+        """Process one interface turn and reply on its correlation address."""
+        text = str(
+            payload.get("text")
+            or payload.get("message")
+            or payload.get("query")
+            or payload.get("task")
+            or ""
+        ).strip()
+        task_id = payload.get("_task_id")
+        reply_to = payload.get("_reply_to") or msg.reply_to or msg.sender_id
+        history = []
+        raw_history = payload.get("_interface_history")
+        if isinstance(raw_history, list):
+            for item in raw_history[-4:]:
+                if not isinstance(item, dict):
+                    continue
+                transcript = str(item.get("transcript") or "").strip()
+                response = str(item.get("response") or "").strip()
+                if transcript or response:
+                    history.append({"transcript": transcript[:1000], "response": response[:2000]})
+        source_value = str(payload.get("_interface_source") or "")
+        interface_context = self._sanitize_interface_context(
+            payload.get("_interface_context"), source_value
+        )
+        source_token = _INTERFACE_SOURCE.set(source_value)
+        history_token = _INTERFACE_HISTORY.set(tuple(history))
+        voice_token = _INTERFACE_VOICE.set(bool(payload.get("_interface_voice")))
+        context_token = _INTERFACE_CONTEXT.set(interface_context)
+        # The interface may already show both halves in the chat — Reachy's
+        # conversation mode does — and then main must not store them again. The
+        # mark rides in the payload because, set on the sender's side, it would
+        # stay in the sender's task.
+        recorded_token = chat_turn_recorded.set(bool(payload.get("_chat_recorded")))
+        source = self._current_interface_source()
+        logger.info("[%s] interface request from %s: %r", self.name, source or "unknown", text[:80])
+        try:
+            try:
+                reply = await self.process_user_input(text) if text else ""
+                clean_reply, interface_actions = self._extract_interface_actions(reply)
+                if interface_actions and not clean_reply:
+                    clean_reply = "Okay."
+                self._replace_latest_interface_reply(reply, clean_reply)
+                reply = clean_reply
+            except Exception as exc:
+                logger.warning("[%s] interface request failed: %s", self.name, exc)
+                reply = f"[error] {exc}"
+                interface_actions = []
+        finally:
+            chat_turn_recorded.reset(recorded_token)
+            _INTERFACE_CONTEXT.reset(context_token)
+            _INTERFACE_VOICE.reset(voice_token)
+            _INTERFACE_HISTORY.reset(history_token)
+            _INTERFACE_SOURCE.reset(source_token)
+        if reply_to:
+            result: dict[str, Any] = {
+                "text": reply,
+                "result": reply,
+                "task": text,
+                "agent": "main",
+                "interface_actions": interface_actions,
+                "interface_display_name": interface_context.get("display_name", source),
+            }
+            if task_id:
+                result["_task_id"] = task_id
+            await self.send(reply_to, MessageType.RESULT, result)
+
     # ── User input ─────────────────────────────────────────────────────────
 
     async def chat(self, user_message: str, attachments: list[dict] | None = None) -> str:
@@ -234,7 +432,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             clean_msg = _strip_live_context(user_message)
             asyncio.create_task(self._extract_and_save_facts(clean_msg, "".join(full_response)))
 
-    async def _record_external_exchange(self, user_message: str, assistant_response: str) -> None:
+    async def _record_external_exchange(
+        self, user_message: str, assistant_response: str, *, ts_user: float
+    ) -> None:
         """Record a turn that was handled OUTSIDE self.chat() / self.chat_stream() —
         i.e. by the HA, ACTUATE, or PIPELINE branches that return before the LLM
         is called on main. Without this, those exchanges vanish from history and
@@ -244,7 +444,12 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
           - append user + assistant to _conversation_history
           - run rolling summarization if needed
           - persist history to disk
+          - store the turn in chat_log
           - trigger fact extraction
+
+        `ts_user` is when the turn arrived, taken on entry: chat_log orders by
+        time alone, so a question stamped as late as its answer can come back
+        after it.
         """
         if not user_message or assistant_response is None:
             return
@@ -259,8 +464,25 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             self.persist("conversation_history", self._conversation_history)
         except Exception as e:
             logger.warning("[%s] Failed to record external exchange: %s", self.name, e)
+        self._log_delivered_turn(user_message, str(assistant_response), ts_user=ts_user)
         # Fire-and-forget fact extraction — same as chat()
         asyncio.create_task(self._extract_and_save_facts(user_message, str(assistant_response)))
+
+    def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
+        """Store nothing: main stores a turn at the exit it leaves by.
+
+        What chat() and chat_stream() hand this is the message with the live
+        system state in front of it, and the model's raw reply — which on a
+        social channel may be withheld and replaced before it is sent. The words
+        typed and the reply sent are known only where process_user_input and its
+        two siblings return, and those store them through _log_delivered_turn.
+        Every call to chat() or chat_stream() on main comes from one of them —
+        the CLI's @main included, which it sends through process_user_input_stream.
+        """
+
+    def _log_delivered_turn(self, text: str, reply: str, *, ts_user: float) -> None:
+        """Store what the user typed and what they were sent, unless already stored."""
+        super()._log_chat_turn(text, reply, ts_user=ts_user, ts_reply=time.time())
 
     def _queue_notification(self, notice: dict[str, Any]) -> None:
         """Queue a system notice for the next chat reply, keeping the newest.
@@ -306,6 +528,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.persist("conversation_history", self._conversation_history)
 
     async def process_user_input(self, text: str) -> str:
+        ts_user = time.time()
         note_prefix = self._drain_notifications()
 
         # ── Pending-plan response detection ─────────────────────────────────
@@ -319,7 +542,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             plan_response = await self._handle_pending_plan_response(text)
             if plan_response is not None:
                 # Record the exchange so history reflects the approval/rejection
-                await self._record_external_exchange(text, plan_response)
+                await self._record_external_exchange(text, plan_response, ts_user=ts_user)
                 return note_prefix + plan_response
 
             # Pending-plan ambiguity guard: if the user has a plan pending
@@ -329,7 +552,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             # the user and ask them to resolve the pending plan first.
             warn = self._warn_if_pending_plan_collision(text)
             if warn:
-                await self._record_external_exchange(text, warn)
+                await self._record_external_exchange(text, warn, ts_user=ts_user)
                 return note_prefix + warn
 
         # ── Direct API intercepts — handle without LLM round-trip ──────────
@@ -370,7 +593,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if any(lowered.startswith(p) for p in PLANNER_PREFIXES):
             result = await self._run_planner(text)
             response = result or "Planner did not return a result. Please retry."
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             return note_prefix + response
 
         # Single LLM call classifies intent: ACTUATE, HA, PIPELINE (reactive rule), OTHER
@@ -379,17 +602,17 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         if intent == "PIPELINE":
             response = await self._propose_or_execute_pipeline(text)
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             return note_prefix + response
 
         if intent == "ACTUATE":
             response = await self._handle_actuate_intent(text)
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             return note_prefix + response
 
         if intent == "HA":
             response = await self.delegation.ask_home_assistant(text)
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             return note_prefix + response
 
         # Refresh the system prompt with live registry + facts before any LLM call.
@@ -446,6 +669,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if summary:
             clean += f"\n\n[System: {summary}]"
 
+        self._log_delivered_turn(text, clean, ts_user=ts_user)
         return note_prefix + clean
 
     # Delegation allow-list for social channels. A deny-list won't hold: any
@@ -469,6 +693,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         non-allowlisted agents are blocked — at the action, not by classifying
         the text, so it can't be talked around.
         """
+        ts_user = time.time()
         note_prefix = self._drain_notifications()
         stripped = text.strip()
 
@@ -483,7 +708,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 "control your devices. (Spawning, deleting, and running code stay "
                 "on the dashboard.)"
             )
-            await self._record_external_exchange(text, reply)
+            await self._record_external_exchange(text, reply, ts_user=ts_user)
             return note_prefix + reply
 
         # Reuse the main intent classifier; PIPELINE (creates rules/agents) is refused.
@@ -496,7 +721,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 "set those up on the dashboard. I can still answer questions and "
                 "control your devices from here."
             )
-            await self._record_external_exchange(text, reply)
+            await self._record_external_exchange(text, reply, ts_user=ts_user)
             return note_prefix + reply
 
         if intent == "ACTUATE":
@@ -506,12 +731,12 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             response = await self._handle_actuate_intent(
                 text, allowed_domains=SOCIAL_ACTUATE_DOMAINS
             )
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             return note_prefix + response
 
         if intent == "HA":
             response = await self.delegation.ask_home_assistant(text)
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             return note_prefix + response
 
         # OTHER: converse, but run no action executors.
@@ -529,12 +754,14 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
                 "dashboard-only action. I'm happy to chat, answer questions, or "
                 "control your devices instead."
             )
-            await self._record_external_exchange(text, reply)
+            await self._record_external_exchange(text, reply, ts_user=ts_user)
             return note_prefix + reply
 
         # Structured delegation only (allow-listed, no spawn); skip loose @mentions.
         clean, _ = await self._process_delegate_commands(clean, restricted=True)
-        return note_prefix + clean.strip()
+        clean = clean.strip()
+        self._log_delivered_turn(text, clean, ts_user=ts_user)
+        return note_prefix + clean
 
     async def process_user_input_stream(
         self, text: str, attachments: list[dict[str, Any]] | None = None
@@ -551,6 +778,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         command, an actuation, a pipeline plan, a delegation to the Home
         Assistant agent — does not read them.
         """
+        ts_user = time.time()
         # Drain monitor notifications first
         note_prefix = self._drain_notifications()
         if note_prefix:
@@ -560,7 +788,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if not text.strip().startswith("/") and not text.strip().startswith("@"):
             plan_response = await self._handle_pending_plan_response(text)
             if plan_response is not None:
-                await self._record_external_exchange(text, plan_response)
+                await self._record_external_exchange(text, plan_response, ts_user=ts_user)
                 yield plan_response
                 yield {"done": True, "spawned": [], "system_msg": ""}
                 return
@@ -568,7 +796,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             # Collision guard — see process_user_input for rationale
             warn = self._warn_if_pending_plan_collision(text)
             if warn:
-                await self._record_external_exchange(text, warn)
+                await self._record_external_exchange(text, warn, ts_user=ts_user)
                 yield warn
                 yield {"done": True, "spawned": [], "system_msg": ""}
                 return
@@ -600,7 +828,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         if any(_lowered.startswith(p) for p in PLANNER_PREFIXES):
             result = await self._run_planner(text)
             response = result or "Planner did not return a result. Please retry."
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             yield response
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
@@ -611,21 +839,21 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         if intent == "PIPELINE":
             response = await self._propose_or_execute_pipeline(text)
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             yield response
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
 
         if intent == "ACTUATE":
             response = await self._handle_actuate_intent(text)
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             yield response
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
 
         if intent == "HA":
             response = await self.delegation.ask_home_assistant(text)
-            await self._record_external_exchange(text, response)
+            await self._record_external_exchange(text, response, ts_user=ts_user)
             yield response
             yield {"done": True, "spawned": [], "system_msg": ""}
             return
@@ -651,6 +879,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self._restore_unprefixed_turn(prefixed_text, text)
 
         full_response = "".join(full_chunks)
+        # Everything the user is sent, for the chat log: the stream above, then
+        # whatever is appended to it below.
+        sent = [full_response]
 
         # Process any <spawn> blocks in the completed response
         _, spawned = await self._process_spawn_commands(full_response)
@@ -663,7 +894,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # each result as an additional chunk — same approach as @mention results.
         full_response, _delegate_results = await self._process_delegate_commands(full_response)
         for _r in _delegate_results:
-            yield "\n" + _r
+            extra = "\n" + _r
+            sent.append(extra)
+            yield extra
 
         # Execute any looser @agent-name delegation patterns the LLM produced.
         # If delegations ran, yield the results as an additional chunk.
@@ -672,7 +905,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             # Find what changed and yield just the new parts
             results = re.findall(r"[✅❌]\s+\S+.*", delegated)
             if results:
-                yield "\n" + "\n".join(results)
+                extra = "\n" + "\n".join(results)
+                sent.append(extra)
+                yield extra
         full_response = delegated
 
         system_msg = TurnActions(tuple(spawned), tuple(deleted), tuple(missing)).summary(
@@ -682,12 +917,16 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Also surface the concrete spawn/delete outcome for stream consumers
         # that ignore the final done dict.
         if system_msg:
-            yield f"\n\n_ℹ️ {system_msg}_"
+            extra = f"\n\n_ℹ️ {system_msg}_"
+            sent.append(extra)
+            yield extra
 
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {"type": "user_interaction", "input": text[:100], "response": full_response[:200]},
         )
+        # Before the dict: a consumer may stop reading at it.
+        self._log_delivered_turn(text, "".join(sent), ts_user=ts_user)
 
         yield {"done": True, "spawned": spawned, "system_msg": system_msg}
 
@@ -904,6 +1143,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _manifest_listener(self) -> None:
         """Follow agent manifests. Owned by `self.manifests`."""
         await self.manifests.manifest_listener()
+
+    async def _stalled_migration_watcher(self) -> None:
+        await self.migration.stalled_migration_watcher()
 
     async def _state_return_listener(self) -> None:
         """Receive agents returning from a node. Owned by `self.migration`."""

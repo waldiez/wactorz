@@ -151,9 +151,9 @@ describe("CardDashboard behaviour", () => {
             const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
             document.addEventListener("af-agent-command", onCmd);
             const btn = document.createElement("button");
-            cd._sendCommand("main", "pause", btn);
+            cd._sendCommand("main", "stop", btn);
             document.removeEventListener("af-agent-command", onCmd);
-            expect(seen).toEqual([{ command: "pause", agentId: "main" }]);
+            expect(seen).toEqual([{ command: "stop", agentId: "main" }]);
             expect(btn.disabled).toBe(true);
             expect(btn.classList.contains("sending")).toBe(true);
         });
@@ -165,6 +165,71 @@ describe("CardDashboard behaviour", () => {
             cd._sendCommand("x", "stop");
             document.removeEventListener("af-agent-command", onCmd);
             expect(seen).toEqual([{ command: "stop", agentId: "x" }]);
+        });
+
+        // Delete is the one card action with no way back, so it asks first —
+        // in an overlay of our own, never the platform's blocking confirm().
+        it("asks before deleting, naming the agent", () => {
+            const seen: any[] = [];
+            const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
+            document.addEventListener("af-agent-command", onCmd);
+            cd.show([agent("weather-watcher")]);
+
+            cd._sendCommand("weather-watcher", "delete");
+
+            expect(document.querySelector(".af-confirm-backdrop")).not.toBeNull();
+            expect(document.querySelector(".af-confirm-message")!.textContent).toContain("weather-watcher");
+            expect(seen).toEqual([]);
+            document.querySelector<HTMLButtonElement>(".af-confirm-cancel")!.click();
+            document.removeEventListener("af-agent-command", onCmd);
+        });
+
+        it("sends nothing when the question is declined", async () => {
+            const seen: any[] = [];
+            const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
+            document.addEventListener("af-agent-command", onCmd);
+            cd.show([agent("weather-watcher")]);
+
+            cd._sendCommand("weather-watcher", "delete");
+            document.querySelector<HTMLButtonElement>(".af-confirm-cancel")!.click();
+            await Promise.resolve();
+
+            document.removeEventListener("af-agent-command", onCmd);
+            expect(seen).toEqual([]);
+        });
+
+        it("sends the delete once the question is answered", async () => {
+            const seen: any[] = [];
+            const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
+            document.addEventListener("af-agent-command", onCmd);
+            cd.show([agent("weather-watcher")]);
+
+            cd._sendCommand("weather-watcher", "delete");
+            document.querySelector<HTMLButtonElement>(".af-confirm-ok")!.click();
+            await Promise.resolve();
+
+            document.removeEventListener("af-agent-command", onCmd);
+            expect(seen).toEqual([{ command: "delete", agentId: "weather-watcher" }]);
+        });
+
+        it("falls back to the id when the agent is not on the grid", () => {
+            cd._sendCommand("unknown-id", "delete");
+            expect(document.querySelector(".af-confirm-message")!.textContent).toContain("unknown-id");
+            document.querySelector<HTMLButtonElement>(".af-confirm-cancel")!.click();
+        });
+
+        it("start and stop are their own way back, so they do not ask", () => {
+            const seen: any[] = [];
+            const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
+            document.addEventListener("af-agent-command", onCmd);
+            cd._sendCommand("main", "stop");
+            cd._sendCommand("main", "start");
+            document.removeEventListener("af-agent-command", onCmd);
+            expect(document.querySelector(".af-confirm-backdrop")).toBeNull();
+            expect(seen).toEqual([
+                { command: "stop", agentId: "main" },
+                { command: "start", agentId: "main" },
+            ]);
         });
     });
 
@@ -224,9 +289,9 @@ describe("CardDashboard behaviour", () => {
             const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
             document.addEventListener("af-agent-command", onCmd);
             cd.show([agent("main")]);
-            (cd.root.querySelector('[data-action="pause"]') as HTMLButtonElement).click();
+            (cd.root.querySelector('[data-action="stop"]') as HTMLButtonElement).click();
             document.removeEventListener("af-agent-command", onCmd);
-            expect(seen).toEqual([{ command: "pause", agentId: "main" }]);
+            expect(seen).toEqual([{ command: "stop", agentId: "main" }]);
         });
 
         it("a header view button switches the active view", () => {
@@ -261,7 +326,7 @@ describe("CardDashboard behaviour", () => {
         it("_sendCommand re-enables its button after the timeout", () => {
             vi.useFakeTimers();
             const btn = document.createElement("button");
-            cd._sendCommand("main", "pause", btn);
+            cd._sendCommand("main", "stop", btn);
             expect(btn.disabled).toBe(true);
             vi.advanceTimersByTime(600);
             expect(btn.disabled).toBe(false);
@@ -297,7 +362,7 @@ describe("CardDashboard behaviour", () => {
             cd._setView("chat");
             expect(() => {
                 cd.addAgent(agent("catalog"));
-                cd.updateAgent(agent("catalog", { state: "paused" }));
+                cd.updateAgent(agent("catalog", { state: "stopped" }));
                 cd.removeAgent("catalog");
             }).not.toThrow();
         });
@@ -306,7 +371,7 @@ describe("CardDashboard behaviour", () => {
             cd.show([agent("main")]);
             cd.hide();
             expect(() => {
-                cd.updateAgent(agent("main", { state: "paused" }));
+                cd.updateAgent(agent("main", { state: "stopped" }));
                 cd.removeAgent("main");
             }).not.toThrow();
         });

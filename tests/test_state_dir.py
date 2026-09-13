@@ -7,7 +7,6 @@ resolve the state directory independently, so a configured
 """
 
 import importlib
-import os
 from pathlib import Path
 
 import pytest
@@ -91,7 +90,7 @@ class TestResetTargetsTheSameDir:
         importlib.reload(reset_mod)
         try:
             assert state == reset_mod._DEFAULT_STATE
-            assert os.path.join(state, "wactorz.db") == reset_mod._DEFAULT_DB
+            assert Path(state) / "wactorz.db" == reset_mod._DEFAULT_DB
         finally:
             monkeypatch.delenv("WACTORZ_STATE_DIR", raising=False)
             importlib.reload(reset_mod)

@@ -20,10 +20,15 @@ from typing import Any
 
 from wactorz.config import CONFIG
 
-from ..core.actor import Actor, ActorState, Message, MessageType
+from ..core.actor import Actor, ActorState, Message, MessageType, has_derived_id
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
-from ..core.mqtt import mqtt_client
+from ..core.mqtt import (
+    AGENT_SESSION_EXPIRY_SECONDS,
+    client_id,
+    mqtt_client,
+    session_kwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +66,42 @@ class ActuatorAction:
             entity_id=d["entity_id"],
             service_data=d.get("service_data", {}),
         )
+
+
+_PAYLOAD_REF_PREFIX = "$payload"
+
+
+def _lookup_payload_path(payload: dict, path: str) -> Any:
+    """Resolve "$payload.a.b" against the trigger payload. Returns None if missing."""
+    value: Any = payload
+    for part in path.split(".")[1:]:  # skip the leading "$payload"
+        if isinstance(value, dict):
+            value = value.get(part)
+        elif isinstance(value, list) and part.isdigit():
+            idx = int(part)
+            value = value[idx] if idx < len(value) else None
+        else:
+            return None
+        if value is None:
+            return None
+    return value
+
+
+def resolve_payload_refs(data: Any, payload: dict) -> Any:
+    """Recursively replace "$payload.x.y" strings in service_data with values
+    from the trigger payload. Non-reference values are returned unchanged.
+    """
+    if isinstance(data, str):
+        if data == _PAYLOAD_REF_PREFIX:
+            return payload
+        if data.startswith(_PAYLOAD_REF_PREFIX + "."):
+            return _lookup_payload_path(payload, data)
+        return data
+    if isinstance(data, dict):
+        return {k: resolve_payload_refs(v, payload) for k, v in data.items()}
+    if isinstance(data, list):
+        return [resolve_payload_refs(v, payload) for v in data]
+    return data
 
 
 @dataclass
@@ -239,28 +280,42 @@ class HomeAssistantActuatorAgent(Actor):
         try:
             import aiomqtt  # noqa: F401
         except ImportError:
-            logger.error("[%s] aiomqtt not installed — MQTT listener disabled", self.name)
+            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+                "[%s] aiomqtt not installed — MQTT listener disabled", self.name
+            )
             return
 
+        # A stable id and a kept session, like any other long-lived listener.
+        # These topics carry actuation triggers -- another agent asking for a
+        # light or a switch -- so one lost while this agent reconnects is a
+        # device that never moves, with nothing anywhere saying why. The
+        # `actuator` detail keeps this connection distinct from the actor's
+        # command listener and from any subscription hub it may own.
+        identifier = client_id("agent", str(self.actor_id), "actuator")
+        durable = has_derived_id(self.name, str(self.actor_id))
+        session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
+                async with mqtt_client(
+                    self._mqtt_broker,
+                    self._mqtt_port,
+                    identifier=identifier,
+                    **session,
+                ) as client:
                     for topic in self.config.mqtt_topics:
-                        await client.subscribe(topic)
+                        await client.subscribe(topic, qos=1 if durable else 0)
                     logger.info("[%s] subscribed to %r", self.name, self.config.mqtt_topics)
 
                     async for message in client.messages:
                         if self.state in (ActorState.STOPPED, ActorState.FAILED):
                             break
-                        if self.state == ActorState.PAUSED:
-                            continue
                         try:
                             import json
 
                             payload = json.loads(message.payload.decode())
                             await self._on_detection(payload)
-                        except Exception as exc:
-                            logger.error("[%s] Failed to process message: %s", self.name, exc)
+                        except Exception:
+                            logger.exception("[%s] Failed to process message", self.name)
 
             except asyncio.CancelledError:
                 break
@@ -288,7 +343,25 @@ class HomeAssistantActuatorAgent(Actor):
             return
 
         for action in self.config.actions:
-            await self._call_service(action)
+            resolved = ActuatorAction(
+                domain=action.domain,
+                service=action.service,
+                entity_id=resolve_payload_refs(action.entity_id, payload),
+                service_data=resolve_payload_refs(action.service_data, payload),
+            )
+            missing = [k for k, v in resolved.service_data.items() if v is None]
+            if missing:
+                logger.warning(
+                    "[%s] Skipping %s.%s — payload refs unresolved for %s (payload keys: %s)",
+                    self.name,
+                    action.domain,
+                    action.service,
+                    missing,
+                    sorted(payload.keys()),
+                )
+                self.metrics.tasks_failed += 1
+                continue
+            await self._call_service(resolved)
 
         self._last_actuation_time = now
         self._actuations_count += 1
@@ -349,9 +422,9 @@ class HomeAssistantActuatorAgent(Actor):
                     return False
                 if not condition.evaluate(entity_state):
                     return False
-            except Exception as exc:
-                logger.error(
-                    "[%s] Condition check error for %r: %s", self.name, condition.entity_id, exc
+            except Exception:
+                logger.exception(
+                    "[%s] Condition check error for %r", self.name, condition.entity_id
                 )
                 return False
 
@@ -365,7 +438,8 @@ class HomeAssistantActuatorAgent(Actor):
             try:
                 await asyncio.wait_for(self._ws_ready.wait(), timeout=10.0)
             except asyncio.TimeoutError:
-                logger.error(
+                # A TimeoutError traceback is the wait_for frame and nothing else.
+                logger.error(  # noqa: TRY400, RUF100  # a TimeoutError traceback is the wait_for frame and nothing else
                     "[%s] No HA connection after 10s — cannot call service %s.%s",
                     self.name,
                     action.domain,
@@ -400,16 +474,47 @@ class HomeAssistantActuatorAgent(Actor):
                 action.entity_id,
                 action.service_data,
             )
-        except Exception as exc:
-            logger.error("[%s] Service call failed: %s", self.name, exc)
+        except Exception:
+            logger.exception("[%s] Service call failed", self.name)
             self.metrics.tasks_failed += 1
 
     # ── Actor overrides ────────────────────────────────────────────────────────
 
+    def _spoken_status(self) -> str:
+        """What this agent is, said to whoever just asked it something.
+
+        There is no conversation here: it waits on a topic and calls a service.
+        Saying so is more use than answering with the state of the automation,
+        which is what a question used to get -- the same state whatever was
+        asked, because the question was never read.
+        """
+        topics = ", ".join(self.config.mqtt_topics) or "no topic"
+        if self._actuations_count:
+            when = time.strftime("%H:%M", time.localtime(self._last_actuation_time))
+            how_often = "once" if self._actuations_count == 1 else f"{self._actuations_count} times"
+            fired = f"It has fired {how_often}, most recently at {when}."
+        else:
+            fired = "It has not fired yet."
+        reachable = (
+            "Home Assistant is reachable."
+            if self._ha is not None
+            else "Home Assistant is not connected, so it cannot act right now."
+        )
+        return (
+            f"I cannot answer questions. I act when a topic fires: "
+            f"{self.config.description} I am watching {topics}. {fired} {reachable}"
+        )
+
     async def handle_message(self, msg: Message) -> None:
         if msg.type != MessageType.TASK:
             return
+        # `result` first, and it is not decoration: the chat surface reads a
+        # reply by looking for reply/message/text/content/result and printing
+        # `str(payload)` when it finds none. Without it this dict reached people
+        # as a Python repr. The structured fields stay for callers that delegate
+        # here and read them.
         status = {
+            "result": self._spoken_status(),
             "automation_id": self.config.automation_id,
             "description": self.config.description,
             "mqtt_topics": self.config.mqtt_topics,

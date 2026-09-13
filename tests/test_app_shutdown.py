@@ -21,6 +21,11 @@ class TestSignalHandlers:
         installed: list[int] = []
         loop = asyncio.get_running_loop()
         original = loop.add_signal_handler
+        # Registration takes one of two routes, so undoing it has to take the
+        # matching one: a loop handler where the loop offers them, and a plain
+        # `signal.signal` where it does not. Restoring the wrong one leaves a
+        # handler installed process-wide for whatever runs next.
+        before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
 
         def record(sig: int, cb: Any, *args: Any) -> None:
             installed.append(sig)
@@ -31,8 +36,11 @@ class TestSignalHandlers:
             _install_signal_handlers()
         finally:
             loop.add_signal_handler = original  # type: ignore[method-assign]
-            for sig in (signal.SIGTERM, signal.SIGINT):
-                loop.remove_signal_handler(sig)
+            for sig, handler in before.items():
+                try:
+                    loop.remove_signal_handler(sig)
+                except NotImplementedError:
+                    signal.signal(sig, handler)
 
         assert set(installed) == {signal.SIGTERM, signal.SIGINT}
 

@@ -1,0 +1,42 @@
+/* pdoc colour scheme for the Python API reference — the docs site's.
+ *
+ * The --wz-* values are the guide pages' own (the :root block in
+ * scripts/build_docs.py TEMPLATE), and tests/test_docs_api_theme.py keeps them
+ * equal. pdoc's own variables are mapped onto them below; this file replaces
+ * pdoc's theme.css, which it includes by name.
+ */
+:root {
+    --wz-bg: #05080e;
+    --wz-bg2: #080d1a;
+    --wz-bg3: #0d1426;
+    --wz-border: #1a2140;
+    --wz-border-hi: #2a3560;
+    --wz-blue: #4f8ef7;
+    --wz-cyan: #00d4ff;
+    --wz-text: #dde3f0;
+    --wz-muted: #5a6890;
+    --wz-muted-hi: #8899bb;
+    --wz-mono: 'JetBrains Mono', monospace;
+    --wz-display: 'Chakra Petch', sans-serif;
+    --wz-topbar: 52px;
+
+    --pdoc-background: var(--wz-bg);
+    color-scheme: dark;
+}
+
+.pdoc {
+    --text: var(--wz-text);
+    --muted: var(--wz-muted-hi);
+    --link: var(--wz-blue);
+    --link-hover: var(--wz-cyan);
+    --code: var(--wz-bg3);
+    --active: rgba(79, 142, 247, 0.18);
+
+    --accent: var(--wz-bg2);
+    --accent2: var(--wz-border-hi);
+
+    --nav-hover: rgba(79, 142, 247, 0.06);
+    --name: #82aaff;
+    --def: #c792ea;
+    --annotation: #c3e88d;
+}

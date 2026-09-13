@@ -217,14 +217,16 @@ class TestDetectionIsUnchanged:
 
         assert supervisor._failure_reason(spec) is not None
 
-    async def test_a_stopped_or_paused_actor_is_not_a_failure(self, supervisor: Supervisor) -> None:
+    async def test_a_stopped_actor_is_not_a_failure(self, supervisor: Supervisor) -> None:
         supervisor.supervise("w", lambda: _Worker(name="w"), restart_delay=0)
         spec = supervisor._specs["w"]
         spec.actor = _Worker(name="w")
+        spec.actor.state = ActorState.STOPPED
 
-        for state in (ActorState.STOPPED, ActorState.PAUSED):
-            spec.actor.state = state
-            assert supervisor._failure_reason(spec) is None
+        # A deliberate stop looks the same as a crash from the outside; only the
+        # state tells them apart, and restarting one the user stopped is worse
+        # than leaving a crashed one down a little longer.
+        assert supervisor._failure_reason(spec) is None
 
     async def test_a_silent_actor_is_detected_once_it_is_past_warm_up(
         self, supervisor: Supervisor

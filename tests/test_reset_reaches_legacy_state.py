@@ -47,7 +47,7 @@ def _actor_with_legacy_state(tmp_path: Path, **state: Any) -> Actor:
     actor.name = "main"
     actor._persistence_dir = tmp_path
     actor._persistent_state = dict(state)
-    actor._persistence_api = _StoreThatKnowsNothing()
+    actor._persistence_api = _StoreThatKnowsNothing()  # pyright: ignore[reportAttributeAccessIssue]
     return actor
 
 

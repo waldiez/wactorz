@@ -102,7 +102,7 @@ class WhatsAppInterface:
                 return web.Response(status=403, text="Forbidden")
             user_msg = data.get("Body", "")
             from_number = data.get("From", "")
-            logger.info(f"[WhatsApp] Message from {from_number}: {user_msg[:60]}")
+            logger.info("[WhatsApp] Message from %s: %s", from_number, user_msg[:60])
 
             sender = self._normalize_number(from_number)
             if sender not in self.allowed_numbers:
@@ -139,12 +139,14 @@ class WhatsAppInterface:
         try:
             app = self.build_app()
         except ImportError:
-            logger.error("Missing deps. Run: pip install twilio")
+            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+                "Missing deps. Run: pip install twilio"
+            )  # the ImportError is the whole diagnosis
             return
 
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, CONFIG.bind_host, self.port)
         await site.start()
-        logger.info(f"[WhatsApp] Webhook server running on {CONFIG.bind_host}:{self.port}")
+        logger.info("[WhatsApp] Webhook server running on %s:%s", CONFIG.bind_host, self.port)
         await asyncio.Event().wait()  # Run forever

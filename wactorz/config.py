@@ -1,3 +1,17 @@
+"""Runtime settings, read from the environment once at import.
+
+Two shapes, for one reason: an ``AppConfig`` instance carries the settings a
+caller wants as a group, and bare module constants carry the ones the web layer
+and extensions reach for individually. Both are values rather than lookups, so a
+setting takes effect when the process starts and not before.
+
+The ``.env`` file is loaded above all of them, and that position is load-bearing.
+Anything read further up the module sees only real environment variables, which
+leaves a file that is plainly obeyed elsewhere doing nothing for that one
+setting -- indistinguishable, from the outside, from a misspelled name. New
+settings go below the load. Real environment variables win over the file.
+"""
+
 import os
 import re
 import warnings
@@ -5,6 +19,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
+
+# Loaded before anything below reads the environment. Settings further down are
+# read at import, so a file loaded after them would reach only the ones built
+# later -- the dataclass would see it and the bare constants would not, which is
+# the sort of split nobody can guess at from a .env that looks obeyed.
+# Real environment variables still win: load_dotenv does not override them.
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    load_dotenv(_env_file)
+else:
+    load_dotenv(find_dotenv())
 
 
 def _env_truthy(name: str) -> bool:
@@ -142,15 +167,32 @@ def _bind_host() -> str:
 
 #: Whether chat file attachments may be uploaded. On by default now that the
 #: feature is complete, and still a flag: the endpoint writes caller-supplied
-#: bytes to disk with nothing pruning them, and a deployment that does not want
-#: attachment storage growing there turns it off.  Like every other route it is
-#: unauthenticated, so an install exposed beyond its own network has an open
-#: 25 MB write endpoint until authentication lands.
+#: bytes to disk, kept for as long as a chat message refers to them, and a
+#: deployment that does not want attachment storage there turns it off.  Like
+#: every other route it is unauthenticated, so an install exposed beyond its own
+#: network has an open 25 MB write endpoint until authentication lands.
 UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", "0", "false", "no")
 
 #: Largest single upload. Matches the limit the browser enforces before sending,
 #: so a file the UI accepts is not refused by the server.
 UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
+
+#: How many days each store is kept before its old rows are deleted; 0 keeps it
+#: for ever. The job that applies them is `wactorz/retention.py`.
+#:
+#: The chat history the dashboard shows. A year: long enough that nobody loses a
+#: conversation they still remember, short enough that a chatty install does not
+#: fill a Raspberry Pi's card over its life. An attached file goes with the last
+#: message that refers to it.
+RETENTION_CHAT_DAYS = _env_int("WACTORZ_RETENTION_CHAT_DAYS", 365)
+#: Sensor readings, detections, Home Assistant state changes and actuations. The
+#: time-series collector agent prunes the same tables by its own
+#: `retention_days`, so with both running the shorter window is the one that holds.
+RETENTION_TIMESERIES_DAYS = _env_int("WACTORZ_RETENTION_TIMESERIES_DAYS", 365)
+#: Messages the broker never accepted. Until delivered they are kept, and
+#: replayed on every start — for ever, for one that never can be. A week outlasts
+#: any outage worth waiting for, and each one expired is logged with its topic.
+RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
 
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
@@ -278,15 +320,20 @@ def _deploy_targets() -> tuple[DeployTarget, ...]:
     return tuple(targets)
 
 
-_env_file = Path(__file__).parent / ".env"
-if _env_file.exists():
-    load_dotenv(_env_file)
-else:
-    load_dotenv(find_dotenv())
-
-
 @dataclass(frozen=True)
 class AppConfig:
+    """The settings a caller wants as a group, resolved once into `CONFIG`.
+
+    Frozen because these describe the process rather than the moment: a caller
+    that reads `CONFIG.port` halfway through a run gets what the process started
+    with, and nothing can hand it something else. Anything that genuinely varies
+    at runtime belongs in state, not here.
+
+    Fields carry secrets -- API keys, broker and Home Assistant credentials -- so
+    an instance is never serialised whole to a caller. `/api/config` names the
+    handful of fields the browser needs and sends only those.
+    """
+
     interface: str
     port: int
     llm_provider: str
@@ -294,6 +341,8 @@ class AppConfig:
     llm_api_key: str
     llm_overrides: str
     llm_temperature: float | None
+    llm_max_retries: int
+    llm_timeout_s: float
     ollama_url: str
     mqtt_host: str
     mqtt_port: int
@@ -305,6 +354,7 @@ class AppConfig:
     ha_state_bridge_domains: str
     ha_state_bridge_per_entity: bool
     discord_token: str
+    discord_webhook_url: str
     telegram_token: str
     telegram_allowed_user_id: int
     ws_port: int
@@ -347,6 +397,11 @@ CONFIG = AppConfig(
     # Sampling temperature for every LLM call (0.0 = deterministic). Unset or
     # empty keeps each provider's own default (the previous behavior).
     llm_temperature=_env_opt_float("LLM_TEMPERATURE"),
+    # Retries after a failed LLM attempt, and the seconds one attempt may take.
+    # 0 retries makes the first failure the answer; a 0 timeout waits on the
+    # provider SDK's own default instead. See wactorz/agents/llm/retry.py.
+    llm_max_retries=_env_int("LLM_MAX_RETRIES", 2),
+    llm_timeout_s=_env_float("LLM_TIMEOUT_S", 300.0),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     bind_host=_bind_host(),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
@@ -362,6 +417,7 @@ CONFIG = AppConfig(
     ha_state_bridge_per_entity=_env_truthy("HA_STATE_BRIDGE_PER_ENTITY"),
     # Also accept the shorter DISCORD_TOKEN / TELEGRAM_TOKEN names.
     discord_token=os.getenv("DISCORD_BOT_TOKEN", "") or os.getenv("DISCORD_TOKEN", ""),
+    discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
     ws_port=_env_int("WS_PORT", 8888),

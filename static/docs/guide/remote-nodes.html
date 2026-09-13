@@ -127,6 +127,7 @@
       <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
     </details>
     <details class="sidebar-group">
       <summary class="sidebar-label">Catalogue agents</summary>
@@ -205,20 +206,64 @@
 </tbody>
 </table>
 <h4 id="run-as-a-service-systemd">Run as a service (systemd)</h4>
+<p><strong>A deploy from the dashboard installs this for you.</strong> It picks the least
+privilege the node supports — root, then a user unit with lingering enabled,
+then passwordless sudo — and falls back to <code>nohup</code> only when the node offers
+none of them. The deploy result says which it got, so a node reported as
+<code>nohup — unsupervised</code> is one that will not come back after a reboot.</p>
+<p>The unit it writes, for a node deployed as user <code>pi</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="k">[Unit]</span>
 <span class="na">Description</span><span class="o">=</span><span class="s">Wactorz remote node</span>
-<span class="na">After</span><span class="o">=</span><span class="s">network.target</span>
+<span class="na">After</span><span class="o">=</span><span class="s">network-online.target</span>
+<span class="na">Wants</span><span class="o">=</span><span class="s">network-online.target</span>
+<span class="na">StartLimitIntervalSec</span><span class="o">=</span><span class="s">120</span>
+<span class="na">StartLimitBurst</span><span class="o">=</span><span class="s">5</span>
 
 <span class="k">[Service]</span>
-<span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/bin/python3 /home/pi/remote_runner.py --broker 192.168.1.10 --name rpi-livingroom</span>
-<span class="na">Restart</span><span class="o">=</span><span class="s">always</span>
+<span class="na">Type</span><span class="o">=</span><span class="s">simple</span>
+<span class="na">User</span><span class="o">=</span><span class="s">pi</span>
+<span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/home/pi/wactorz</span>
+<span class="na">EnvironmentFile</span><span class="o">=</span><span class="s">/home/pi/wactorz/.env</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">/home/pi/wactorz/venv/bin/python /home/pi/wactorz/remote_runner.py --broker ${WACTORZ_BROKER} --port ${WACTORZ_PORT} --name ${WACTORZ_NODE}</span>
+<span class="na">Restart</span><span class="o">=</span><span class="s">on-failure</span>
 <span class="na">RestartSec</span><span class="o">=</span><span class="s">5</span>
-<span class="na">Environment</span><span class="o">=</span><span class="s">WACTORZ_BROKER=192.168.1.10</span>
+<span class="na">RestartPreventExitStatus</span><span class="o">=</span><span class="s">2</span>
 
 <span class="k">[Install]</span>
 <span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target</span>
 </code></pre></div>
 
+<p>A user unit is the same minus <code>User=</code>, with <code>WantedBy=default.target</code>, and lives
+at <code>~/.config/systemd/user/wactorz-node.service</code>.</p>
+<p>Three details worth knowing if you write one by hand:</p>
+<ul>
+<li><strong><code>Restart=on-failure</code>, not <code>always</code>.</strong> <code>/nodes shutdown</code> exits cleanly on
+  purpose. Under <code>Restart=always</code> that command restarts the node instead of
+  stopping it.</li>
+<li><strong><code>RestartPreventExitStatus=2</code>.</strong> Exit 2 means a node name that can never
+  work — it contains an MQTT wildcard — or a malformed <code>ExecStart</code>. Neither
+  succeeds on retry, so restarting is just noise.</li>
+<li><strong>Every argument comes from <code>~/wactorz/.env</code></strong>, which the deploy writes at
+  mode 0600 with <code>WACTORZ_NODE</code>, <code>WACTORZ_BROKER</code>, <code>WACTORZ_PORT</code> and, when the
+  broker needs them, <code>MQTT_USERNAME</code>/<code>MQTT_PASSWORD</code>. Values are quoted so the
+  same file is safe both sourced by a shell and read by systemd — but note that
+  a <code>VAR=$(cmd)</code> you add by hand is executed by the shell and taken literally by
+  systemd, so avoid them.</li>
+</ul>
+<h4 id="logs">Logs</h4>
+<p>Under a unit, the runner logs to the journal rather than to
+<code>~/wactorz/&lt;node&gt;.log</code>:</p>
+<div class="highlight"><pre><span></span><code>journalctl<span class="w"> </span>-u<span class="w"> </span>wactorz-node<span class="w"> </span>-f<span class="w">              </span><span class="c1"># system unit</span>
+journalctl<span class="w"> </span>--user-unit<span class="o">=</span>wactorz-node<span class="w"> </span>-f<span class="w">     </span><span class="c1"># user unit</span>
+</code></pre></div>
+
+<p>Note the second form: <code>--user-unit=</code> queries the system journal for a <em>user</em>
+unit. <code>journalctl --user -u wactorz-node</code> looks like the same thing and is not —
+<code>--user</code> reads the invoking user's own journal, which on a default Debian or
+Raspberry Pi OS install does not exist (no per-user journal files are split out,
+and the account is not in the <code>systemd-journal</code> group), so it reports
+"No journal files were found" while the logs sit in the system journal.</p>
+<p>The <code>~/wactorz/&lt;node&gt;.log</code> file is only written on the <code>nohup</code> fallback.</p>
 <blockquote>
 <p><strong>💡 Self-test</strong> — Run <code>python3 remote_runner.py --test</code> to execute the built-in supervisor test suite without needing a broker. Useful to verify the script works on a new device before connecting it.</p>
 </blockquote>
@@ -340,7 +385,7 @@ to it whatever credentials a node holds.</p>
 <tr>
 <td><code>nodes/{name}/heartbeat</code></td>
 <td>← runner</td>
-<td>Runner heartbeat every 10 s. Contains node name, agent count, broker address.</td>
+<td>Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/migrate</code></td>

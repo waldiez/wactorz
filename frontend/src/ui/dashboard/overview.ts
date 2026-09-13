@@ -30,7 +30,7 @@ export interface OverviewHost {
     statData(): StatCardData;
     /** Open chat targeting the named agent. */
     onChat(name: string): void;
-    /** Run a control command (pause/resume/stop/delete) on an agent. */
+    /** Run a control command (start/stop/delete) on an agent. */
     onCommand(id: string, action: AgentAction, btn: HTMLButtonElement): void;
 }
 

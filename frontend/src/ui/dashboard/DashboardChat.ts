@@ -24,6 +24,7 @@ import {
     resolveSendTarget,
     sendBlockedReason,
     stripLeadingMention,
+    voiceThreadTarget,
 } from "./chatRouting";
 import { SpeechToText } from "../../io/SpeechToText";
 import { safeStorage } from "../../safeStorage";
@@ -68,6 +69,7 @@ export class DashboardChat {
         isChatView: () => this.host.getView() === "chat",
         lastSentTarget: () => this._lastSentTarget,
         belongsHere: (from, to) => this._msgBelongsHere({ id: "", from, to, content: "", timestampMs: 0 }),
+        isOpenThread: name => name === this.chatTarget,
         thread: () => this.root.querySelector<HTMLElement>(".af-chat-thread"),
         scrollThread: () => this._scrollThread(),
         commit: msg => {
@@ -101,6 +103,7 @@ export class DashboardChat {
     private _evSendMessage: EventListener | null = null;
     private _evSendFailed: EventListener | null = null;
     private _evAttach: EventListener | null = null;
+    private _evConnection: EventListener | null = null;
 
     /** Files attached but not yet sent (rendered as chips in the iobar tray). */
     private _pendingAttachments: Attachment[] = [];
@@ -307,7 +310,7 @@ export class DashboardChat {
 
         const streamText = this._streamUI.streamHereText();
         const msgs = this.chatMessages.filter(m => this._msgBelongsHere(m));
-        if (msgs.length === 0 && !streamText) {
+        if (msgs.length === 0 && !streamText && !this._streamUI.awaitingHere()) {
             thread.appendChild(buildChatEmptyState(this.chatTarget));
         } else {
             msgs.forEach(m => this._appendChatMsgEl(m, thread));
@@ -315,6 +318,7 @@ export class DashboardChat {
         if (streamText) {
             this._streamUI.reattachRow(thread);
         }
+        this._streamUI.reattachWaiting();
         this._scrollThread();
     }
 
@@ -441,7 +445,8 @@ export class DashboardChat {
     }
 
     /**
-     * Fill an empty choice, and let a remembered one win the race it would lose.
+     * Fill an empty choice, and let the agent that should have had it win the
+     * race it would otherwise lose.
      *
      * Never overwrites a *settled* target: one the user picked, or one they were
      * moved to because theirs went away. Moving those under them is the whole
@@ -449,11 +454,14 @@ export class DashboardChat {
      *
      * The one exception is the load window, and it exists because agents arrive
      * one frame at a time. Resolving against the first of them picks whatever
-     * that partial list defaults to — usually `main` — and "first resolution
-     * sticks" would then hold that against the remembered agent arriving a
-     * moment later. So an unsettled default steps aside when the remembered
-     * agent turns up. It is not a move under the user: it happens before they
-     * have chosen anything, and only ever towards the agent they last chose.
+     * that partial list defaults to, and "first resolution sticks" would then
+     * hold that against the agent a complete list would have chosen. So an
+     * unsettled default steps aside for that agent: the remembered one, or
+     * `main` when nothing is remembered — a fallback is never stored, so an
+     * absent preference means the user has not chosen yet rather than that they
+     * chose what they were given. It is not a move under the user: mounting the
+     * chat view settles the target, so this can only fire while they have been
+     * shown nothing.
      */
     resolveDefaultTarget(): void {
         const agents = [...this.host.agents.values()];
@@ -462,11 +470,19 @@ export class DashboardChat {
             this.chatTarget = preferredChatTarget(agents, remembered);
             return;
         }
-        if (this._targetSettled || !remembered || remembered === this.chatTarget) {
+        const wanted = remembered ?? MAIN_AGENT;
+        if (this._targetSettled || wanted === this.chatTarget) {
             return;
         }
-        if (agents.some(a => a.name === remembered && canDirectMessage(a))) {
-            this.chatTarget = remembered;
+        // Only ever an upgrade of a fallback that still stands. A target that
+        // has gone belongs to dropTargetIfGone, which moves the user and says
+        // so; stepping aside here would move them off it in silence.
+        const current = agents.find(a => a.name === this.chatTarget);
+        if (!current || !canDirectMessage(current)) {
+            return;
+        }
+        if (agents.some(a => a.name === wanted && canDirectMessage(a))) {
+            this.chatTarget = wanted;
         }
     }
 
@@ -526,6 +542,12 @@ export class DashboardChat {
         this._showSentMessage(msg, prevTarget !== target);
         input.value = "";
         input.style.height = "auto";
+        // Not for a command: it is handled before any agent sees it and answered
+        // by main, so claiming the target is working would name the wrong agent
+        // and wait for a reply that is never attributed to it.
+        if (!body.startsWith("/")) {
+            this._streamUI.awaiting(target);
+        }
         this._emitSend(body, target, msg.attachments?.map(a => a.id) ?? []);
     }
 
@@ -590,6 +612,7 @@ export class DashboardChat {
             ["af-reset-chat", this._evResetChat],
             ["af-send-message", this._evSendMessage],
             ["af-send-failed", this._evSendFailed],
+            ["af-connection-status", this._evConnection],
             ["af-attachment-added", this._evAttach],
         ];
         pairs.forEach(([name, fn]) => {
@@ -598,7 +621,7 @@ export class DashboardChat {
             }
         });
         this._evChat = this._evChunk = this._evEnd = this._evResetChat = this._evSendMessage = null;
-        this._evSendFailed = this._evAttach = null;
+        this._evSendFailed = this._evAttach = this._evConnection = null;
     }
 
     private _wireChatEvents(): void {
@@ -608,13 +631,17 @@ export class DashboardChat {
                 msg.from === "io-gateway" || msg.from === "system"
                     ? { ...msg, to: this._lastSentTarget }
                     : msg;
-            this.chatMessages.push(stored);
-            if (this.chatMessages.length > 500) {
-                this.chatMessages.shift();
-            }
+            this.chatMessages = [...this.chatMessages, stored].slice(-500);
+            // Some agents answer with a single chat frame and no stream at all,
+            // so for those turns this is the only ending there is. Attributed
+            // like any other, so a bystander's message does not end a turn it has
+            // nothing to do with.
+            this._streamUI.endWait(stored.from);
+            const voiceTarget = voiceThreadTarget(stored, this.chatTarget, [...this.host.agents.values()]);
+            this.chatTarget = voiceTarget ?? this.chatTarget;
+            this._lastSentTarget = voiceTarget ?? this._lastSentTarget;
             if (this.host.getView() === "chat" && this._msgBelongsHere(stored)) {
-                this._appendChatMsgEl(stored);
-                this._scrollThread();
+                this._showSentMessage(stored, Boolean(voiceTarget));
             }
         });
 
@@ -632,6 +659,8 @@ export class DashboardChat {
         });
 
         this._evSendFailed = listen("af-send-failed", detail => {
+            // Nothing went on the wire, so no reply is coming for anyone.
+            this._streamUI.endWait();
             // The optimistic bubble was rendered before the transport attempt;
             // a failed send must not stay on screen looking delivered.
             let idx = -1;
@@ -668,10 +697,20 @@ export class DashboardChat {
             };
             this.chatMessages.push(msg);
             this._showSentMessage(msg, switched);
+            if (!content.startsWith("/")) {
+                this._streamUI.awaiting(target);
+            }
         });
     }
 
     private _wireStreamEvents(): void {
+        // The transport dropping out of `live` means no reply is arriving for
+        // anything outstanding, whichever agent it was sent to.
+        this._evConnection = listen("af-connection-status", detail => {
+            if (detail?.status !== "live") {
+                this._streamUI.endWait();
+            }
+        });
         this._evChunk = listen("af-stream-chunk", detail => this._streamUI.onChunk(detail));
         this._evEnd = listen("af-stream-end", detail => this._streamUI.onEnd(detail));
     }

@@ -47,6 +47,9 @@ class MemoryMixin(_Host):
         if not self._registry:
             return ""
         skip = {"main", "monitor", "installer"}
+        source = getattr(self, "_current_interface_source", lambda: "")()
+        if source:
+            skip.add(source)
         lines = []
         for actor in self._registry.all_actors():
             if actor.name in skip:
@@ -81,9 +84,12 @@ class MemoryMixin(_Host):
         The prefix is wrapped in clear delimiters so it's visually obvious to the
         model that it's context, not the user's actual question.
         """
+        source = getattr(self, "_current_interface_source", lambda: "")()
         live_names = []
         if self._registry:
             skip = {"main", "monitor", "installer"}
+            if source:
+                skip.add(source)
             for actor in self._registry.all_actors():
                 if actor.name in skip:
                     continue
@@ -91,6 +97,44 @@ class MemoryMixin(_Host):
                     continue
                 live_names.append(actor.name)
         live_names.sort()
+        interface_note = ""
+        if source:
+            context = getattr(self, "_current_interface_context", dict)()
+            capabilities = context.get("capabilities") or {}
+            display_name = context.get("display_name") or source
+            if context.get("kind") == "embodied_robot" and capabilities:
+                rendered = ", ".join(
+                    f"{command}({', '.join(options)})" for command, options in capabilities.items()
+                )
+                example_command, example_options = next(iter(capabilities.items()))
+                example = (
+                    f'<interface_action>{{"cmd":"{example_command}",'
+                    f'"name":"{example_options[0]}"}}</interface_action>'
+                )
+                # Anything specific to one robot — its name, how speech
+                # recognition tends to mangle it — belongs to that agent, not
+                # here. It travels as `prompt_note` on the interface context and
+                # is sanitized before it reaches this string.
+                note = context.get("prompt_note") or ""
+                interface_note = (
+                    f"[EMBODIED INTERFACE: the user is speaking to the physical robot "
+                    f"{display_name} through {source}. You are its conversational brain: "
+                    "speak naturally in first person and never claim that you have no body. "
+                    f"Supported interface actions: {rendered}. For a requested supported "
+                    "action, include one exact block such as "
+                    f"{example}. "
+                    "The interface executes validated blocks and removes them from speech/chat. "
+                    "Address the user by name only when a clear current naming statement or "
+                    "durable USER FACTS provides it. Keep ordinary voice replies to one or two "
+                    "short, natural sentences; do not recite capability menus unless the user "
+                    f"asks for one. {note}"
+                    f"Do not delegate back to {source}; return interface actions instead.]\n"
+                )
+            else:
+                interface_note = (
+                    f"[INTERFACE ROUTING: request arrived through {source}. "
+                    f"Treat {source} only as the response transport; never delegate back to it.]\n"
+                )
 
         if live_names:
             ctx = (
@@ -98,6 +142,7 @@ class MemoryMixin(_Host):
                 f"Currently running agents (live, just queried): {', '.join(live_names)}\n"
                 "If the user asks what agents exist or are running, answer using EXACTLY\n"
                 "this list. Do not add agents from your memory of earlier turns.\n"
+                f"{interface_note}"
                 "[END SYSTEM STATE]\n\n"
             )
         else:
@@ -106,6 +151,7 @@ class MemoryMixin(_Host):
                 "Currently running agents (live, just queried): NONE\n"
                 "No user-spawned agents exist right now. If the user asks what's running,\n"
                 "say so plainly. Do not invent agents from earlier in the conversation.\n"
+                f"{interface_note}"
                 "[END SYSTEM STATE]\n\n"
             )
         return ctx + user_text
@@ -217,12 +263,28 @@ class MemoryMixin(_Host):
         instead of 'pref_user_name'). We normalize on save so a stray unprefixed
         key still ends up in a sensible bucket rather than the OTHER catch-all.
         """
+        is_voice = getattr(self, "_current_interface_is_voice", lambda: False)()
+        lowered = user_message.lower()
+        explicit_voice_memory = any(
+            phrase in lowered
+            for phrase in (
+                "remember ",
+                "save this",
+                "save that",
+                "θυμήσου",
+                "να θυμάσαι",
+                "αποθήκευσε",
+            )
+        )
+        if is_voice and not explicit_voice_memory:
+            logger.info("[%s] Facts extraction skipped for voice transcript", self.name)
+            return
         if self.llm is None:
-            logger.warning(f"[{self.name}] Facts extraction skipped: no LLM provider")
+            logger.warning("[%s] Facts extraction skipped: no LLM provider", self.name)
             return
         if not user_message or not user_message.strip():
             return
-        logger.info(f"[{self.name}] Facts extraction running on: {user_message[:80]!r}")
+        logger.info("[%s] Facts extraction running on: %r", self.name, user_message[:80])
         exchange = f"USER: {user_message[:600]}\nASSISTANT: {assistant_response[:600]}"
         try:
             raw, _usage = await self.llm.complete(
@@ -239,16 +301,18 @@ class MemoryMixin(_Host):
             clean = raw.strip().removeprefix("```json").removeprefix("```")
             clean = clean.removesuffix("```").strip()
             if not clean:
-                logger.warning(f"[{self.name}] Facts extraction returned empty string")
+                logger.warning("[%s] Facts extraction returned empty string", self.name)
                 return
             new_facts = _json.loads(clean)
             if not isinstance(new_facts, dict):
                 logger.warning(
-                    f"[{self.name}] Facts extraction returned non-dict: {type(new_facts).__name__}"
+                    "[%s] Facts extraction returned non-dict: %s",
+                    self.name,
+                    type(new_facts).__name__,
                 )
                 return
             if not new_facts:
-                logger.info(f"[{self.name}] Facts extraction: nothing durable in this turn")
+                logger.info("[%s] Facts extraction: nothing durable in this turn", self.name)
                 return
 
             # Normalize keys: if the LLM forgot the namespace prefix, infer one
@@ -290,8 +354,10 @@ class MemoryMixin(_Host):
                 logger.info("[%s] User facts updated: %s", self.name, list(normalized.keys()))
         except _json.JSONDecodeError as e:
             logger.warning(
-                f"[{self.name}] Facts extraction JSON parse failed: {e}. "
-                f"Raw response (first 200 chars): {raw[:200]!r}"
+                "[%s] Facts extraction JSON parse failed: %s. Raw response (first 200 chars): %r",
+                self.name,
+                e,
+                raw[:200],
             )
         except Exception as e:
-            logger.warning(f"[{self.name}] Facts extraction failed: {e!r}")
+            logger.warning("[%s] Facts extraction failed: %r", self.name, e)

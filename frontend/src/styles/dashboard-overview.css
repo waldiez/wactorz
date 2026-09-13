@@ -169,6 +169,13 @@
   background: rgba(255, 255, 255, 0.08);
   color: white;
 }
+.af-mini-btn.caution {
+  border-color: rgba(251, 191, 36, 0.32);
+  color: #fde68a;
+}
+.af-mini-btn.caution:hover {
+  background: rgba(251, 191, 36, 0.12);
+}
 .af-mini-btn.danger {
   border-color: rgba(248, 113, 113, 0.32);
   color: #fecaca;

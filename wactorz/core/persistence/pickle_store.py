@@ -63,7 +63,8 @@ class PickleStore:
         if path.exists():
             try:
                 with open(path, "rb") as f:
-                    return pickle.load(f)
+                    # Our own state file, written by this app under the state dir.
+                    return pickle.load(f)  # noqa: S301
             except Exception as e:
                 kept = quarantine_unreadable(path)
                 logger.warning(

@@ -25,8 +25,6 @@ HELP_LINES: tuple[str, ...] = (
     "  /delete <agent>         — stop an agent and remove it from the spawn registry",
     "  /stop <agent>           — stop an agent, keeping its state (reversible)",
     "  /start <agent>          — start a stopped agent back up",
-    "  /pause <agent>          — pause a local agent (remote not supported)",
-    "  /resume <agent>         — resume a paused local agent",
     "  @agent-name <msg>       — send a message directly to a named agent",
     "  @catalog list           — list available catalog recipes",
     "  @catalog spawn <n>      — spawn a catalog agent",
@@ -92,7 +90,7 @@ async def show_help(_ctx: CommandContext, _argument: str) -> str:
 async def show_nodes(ctx: CommandContext, _argument: str) -> str:
     """List local + remote nodes and their agents."""
     nodes = ctx.actor.list_nodes()
-    # Local row first — matches the format users got from io_agent
+    # Local row first, then remote — one format whatever the source
     local_agents = []
     if ctx.actor._registry:
         local_agents = sorted(a.name for a in ctx.actor._registry.all_actors())

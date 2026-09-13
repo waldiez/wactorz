@@ -63,6 +63,53 @@ def parse_mention(content: str) -> tuple[str, str]:
     return MAIN_ACTOR_NAME, content
 
 
+#: How long since a node last reported before its agents stop counting as
+#: reachable. Heartbeats arrive far more often than this.
+NODE_FRESH_SECONDS = 30
+
+
+def remote_node_for(name: str) -> str | None:
+    """The node running ``name``, or None if no node recently said it has it."""
+    main_actor = find_main_actor(runtime.registry)
+    if not main_actor:
+        return None
+    for node_name, nd in main_actor._known_nodes.items():
+        if time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS and name in nd.get(
+            "agents", []
+        ):
+            return node_name
+    return None
+
+
+def routable(name: str) -> bool:
+    """Whether a message addressed to ``name`` has somewhere to go."""
+    if not name:
+        return False
+    if runtime.registry is not None and runtime.registry.find_by_name(name):
+        return True
+    return remote_node_for(name) is not None
+
+
+def turn_attribution(content: str, declared: str = "") -> str:
+    """Which agent a turn belongs to — its reply frames and its ``chat_log`` rows.
+
+    The mention when it can be routed to, so a reply is filed with the agent that
+    answers it. Otherwise the thread the sender says it is in: a mention that
+    resolves to nothing is answered by the transport, and that answer belongs
+    where the user is looking rather than in a thread for an agent that does not
+    exist, which no view would ever show. ``declared`` is not checked against the
+    running agents on purpose — a node that has gone quiet leaves the dashboard
+    offering a thread this process will not route to, and that thread is still
+    where the exchange belongs.
+    """
+    if content.startswith("/"):
+        return MAIN_ACTOR_NAME
+    mentioned, _ = parse_mention(content)
+    if routable(mentioned):
+        return mentioned
+    return declared or MAIN_ACTOR_NAME
+
+
 # ── Catalog / experimental-agent presentation ──────────────────────────────
 
 
@@ -334,6 +381,34 @@ def _install_reply_capture(target: Any) -> None:
     target._io_gateway_capture_installed = True
 
 
+#: Where a reply keeps its words, most likely first. `result` leads because that
+#: is the field the prompts tell a generated agent to fill -- "for agents that
+#: return plain text, use {"result": ...}" -- and what every other reader in the
+#: tree looks for before anything else.
+_REPLY_FIELDS = ("result", "reply", "text", "message", "content")
+
+
+def reply_text(payload: Any) -> str:
+    """The words in an agent's reply, whatever shape the agent chose.
+
+    One function for both ways a reply arrives, because they had drifted apart:
+    an in-process agent was read `reply` first and one answering from a node was
+    read `result` first. Nothing carried two of these fields, so nothing was
+    visibly wrong -- but the same agent moved onto a node would have started
+    rendering differently, with no way to see why.
+
+    A payload with none of them is returned as it is, which reaches a person as
+    a repr. That is deliberate: it is ugly enough to get reported, where a
+    prettier rendering would hide an agent that never learned to answer.
+    """
+    if isinstance(payload, dict):
+        for field in _REPLY_FIELDS:
+            value = payload.get(field)
+            if value:
+                return str(value)
+    return str(payload)
+
+
 def _takes_attachments(fn: Callable[..., Any]) -> bool:
     """Whether `fn` accepts an `attachments` argument.
 
@@ -407,13 +482,7 @@ async def route_chat(
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
         if main_actor:
-            remote_node = None
-            for node_name, nd in main_actor._known_nodes.items():
-                if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
-                    "agents", []
-                ):
-                    remote_node = node_name
-                    break
+            remote_node = remote_node_for(target_name)
 
             if remote_node:
                 if blocks:
@@ -448,14 +517,7 @@ async def route_chat(
                                 async for msg in client.messages:
                                     try:
                                         data = json.loads(msg.payload.decode())
-                                        text_out = (
-                                            data.get("result")
-                                            or data.get("reply")
-                                            or data.get("text")
-                                            or data.get("message")
-                                            or data.get("content")
-                                            or str(data)
-                                        )
+                                        text_out = reply_text(data)
                                     except Exception:
                                         text_out = msg.payload.decode()
                                     return str(text_out)
@@ -479,20 +541,22 @@ async def route_chat(
                     await _end_fn()
                     return
 
+        # A turn nothing answered still ends: the caller waits on the ending
+        # rather than on the reply, and holds its composer until one arrives.
         await reply_fn(f"Agent @{target_name} not found.")
+        await _end_fn()
         return
 
     # Every path below reaches into the agent directly rather than through its
-    # mailbox, so none of the states that suspend the mailbox stop it answering
-    # on their own: a paused agent replied as though nothing had happened, and a
-    # stopped one kept answering after its message loop had been cancelled.
+    # mailbox, so a state that ends the mailbox does not stop it answering on its
+    # own: a stopped agent keeps replying after its message loop is cancelled
+    # unless the state is checked here.
     #
     # ``==`` not ``is``: ActorState is a str-enum compared by value everywhere
     # else in the codebase, and identity is not safe here — the test suite has
     # wactorz.core.actor loaded under two module identities, so the enum members
     # are distinct objects with equal values.
     _unavailable = {
-        ActorState.PAUSED.value: "is paused. Resume it to send messages.",
         ActorState.STOPPED.value: "is stopped. Start it to send messages.",
         ActorState.FAILED.value: "has failed. It should restart shortly.",
     }
@@ -574,19 +638,13 @@ async def route_chat(
 
             payload = await asyncio.wait_for(reply_queue.get(), timeout=150.0)
 
-            if isinstance(payload, dict):
-                text_out = (
-                    payload.get("reply")
-                    or payload.get("message")
-                    or payload.get("text")
-                    or payload.get("content")
-                    or payload.get("result")
-                    or str(payload)
-                )
-                if "agents" in payload and isinstance(payload["agents"], list):
-                    text_out = format_catalog_agents_response(payload)
-            else:
-                text_out = str(payload)
+            text_out = reply_text(payload)
+            if (
+                isinstance(payload, dict)
+                and "agents" in payload
+                and isinstance(payload["agents"], list)
+            ):
+                text_out = format_catalog_agents_response(payload)
 
             await reply_fn(text_out)
 

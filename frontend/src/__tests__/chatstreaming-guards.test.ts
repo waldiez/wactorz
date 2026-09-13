@@ -25,6 +25,7 @@ function makeHost(over: Partial<Host> = {}): Host {
         isChatView: () => true,
         lastSentTarget: () => "main",
         belongsHere: () => true,
+        isOpenThread: () => true,
         thread: () => document.createElement("div"),
         scrollThread: vi.fn(),
         commit: vi.fn(),

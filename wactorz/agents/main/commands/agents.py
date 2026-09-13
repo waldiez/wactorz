@@ -83,21 +83,21 @@ async def restart_agent(ctx: CommandContext, argument: str) -> str:
     return f"Agent '{agent_name}' restarted locally."
 
 
-async def _apply_lifecycle(ctx: CommandContext, verb: str, agent_name: str) -> str:
-    """Run one lifecycle verb against a local agent."""
+async def _start_agent(ctx: CommandContext, agent_name: str) -> str:
+    """Start a stopped local agent."""
     if not agent_name:
-        return f"Usage: /{verb} <agent-name>"
+        return "Usage: /start <agent-name>"
 
-    # Checked before anything else: the runner on a node implements no
-    # pause or resume topic, so there is nothing to send and the agent would
-    # be reported as paused while it kept running.
+    # Checked before anything else: a node runner accepts stop and restart and
+    # nothing else, so there is no start to send and the agent would be reported
+    # as started while it stayed down.
     reg = ctx.actor._get_spawn_registry()
     node = reg.get(agent_name, {}).get("node", "").strip()
     if node:
         return (
             f"'{agent_name}' is running on remote node '{node}'. "
-            f"Pause/resume is only supported for local agents. "
-            f"Use /stop {agent_name} to stop it instead."
+            f"Starting is only supported for local agents. "
+            f"Use /agents restart {agent_name} to bring it back there."
         )
 
     if not ctx.actor._registry:
@@ -107,32 +107,26 @@ async def _apply_lifecycle(ctx: CommandContext, verb: str, agent_name: str) -> s
     if target is None:
         return f"Agent '{agent_name}' not found locally."
 
-    # Idempotent guards — be explicit so the user knows nothing changed
-    if verb == "pause" and target.state == ActorState.PAUSED:
-        return f"Agent '{agent_name}' is already paused."
-    if verb == "resume" and target.state != ActorState.PAUSED:
-        return f"Agent '{agent_name}' is not paused (state: {target.state.name})."
-    if verb == "start" and target.state != ActorState.STOPPED:
+    # Explicit, so a caller is told nothing changed rather than left to assume.
+    if target.state != ActorState.STOPPED:
         return f"Agent '{agent_name}' is not stopped (state: {target.state.name})."
 
     try:
-        # apply_command rather than target.pause()/resume(): it is the
-        # one place the lifecycle rules live, including refusing to
-        # pause a protected agent — which this path did not check —
-        # and putting a started agent back under supervision.
-        applied = await target.apply_command(verb)
+        # apply_command rather than target.start(): it is the one place the
+        # lifecycle rules live, and it puts a started agent back under
+        # supervision.
+        applied = await target.apply_command("start")
     except Exception as exc:
-        logger.exception("[main] /%s failed for %r", verb, agent_name)
-        return f"Failed to {verb} '{agent_name}': {exc}"
+        logger.exception("[main] /start failed for %r", agent_name)
+        return f"Failed to start '{agent_name}': {exc}"
 
     if not applied:
-        return f"'{agent_name}' refused {verb} (it may be protected)."
-    _past = {"start": "started", "pause": "paused", "resume": "resumed"}[verb]
-    return f"Agent '{agent_name}' {_past}."
+        return f"'{agent_name}' refused start."
+    return f"Agent '{agent_name}' started."
 
 
 async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
-    """Stop, pause or permanently delete an agent, local or remote."""
+    """Stop or permanently delete an agent, local or remote."""
     if not agent_name:
         return f"Usage: /agents {verb} <agent-name>"
     is_delete = verb in ("delete", "remove")
@@ -150,13 +144,10 @@ async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
             f"(state file removed, retained MQTT topics cleared)."
         )
 
-    # stop / pause — reversible. Keep state and spawn-registry entry.
+    # A stop is reversible: keep the state and the spawn-registry entry.
     reg = ctx.actor._get_spawn_registry()
     node = reg.get(agent_name, {}).get("node", "").strip()
-    # Past-tense rendering: stop → stopped, pause → paused.
-    # Both are double-the-consonant + ed (English regular doubling
-    # for monosyllabic CVC verbs); just hard-code the table.
-    past = {"stop": "stopped", "pause": "paused"}.get(verb, f"{verb}ped")
+    past = "stopped"
 
     if node:
         # Remote agent — plain stop (no delete flag), keep registry
@@ -173,15 +164,12 @@ async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
     if ctx.actor._registry:
         target = ctx.actor._registry.find_by_name(agent_name)
         if target:
-            # apply_command, not stop(): this ran stop() for *both*
-            # verbs, so `/agents pause` stopped the agent and then
-            # reported it paused. It also skipped the supervision
-            # release, which makes a deliberate stop look like a
-            # crash to the watchdog, and unregistered before
-            # stopping, leaving the actor unreachable while it was
-            # still shutting down.
+            # apply_command, not stop(): a bare stop() skips the supervision
+            # release, which makes a deliberate stop look like a crash to the
+            # watchdog, and unregisters before stopping, leaving the actor
+            # unreachable while it is still shutting down.
             if not await target.apply_command(verb):
-                return f"'{agent_name}' refused {verb} (it may be protected)."
+                return f"'{agent_name}' refused {verb} (it may be protected or essential)."
             ctx.actor._record_agent_deletion(agent_name, reason=f"manually {past} via /agents")
             return (
                 f"Agent '{agent_name}' {past}. "
@@ -193,36 +181,13 @@ async def _act_on_agent(ctx: CommandContext, verb: str, agent_name: str) -> str:
 @command("/start", prefixes=("/start ",), bare_ok=True, summary="start a stopped agent back up")
 async def start_agent(ctx: CommandContext, argument: str) -> str:
     """Start a stopped agent back up."""
-    return await _apply_lifecycle(ctx, "start", argument)
-
-
-@command(
-    "/pause",
-    prefixes=("/pause ",),
-    bare_ok=True,
-    summary="pause a local agent (remote not supported)",
-)
-async def pause_agent(ctx: CommandContext, argument: str) -> str:
-    """Pause a local agent."""
-    return await _apply_lifecycle(ctx, "pause", argument)
-
-
-@command("/resume", prefixes=("/resume ",), bare_ok=True, summary="resume a paused local agent")
-async def resume_agent(ctx: CommandContext, argument: str) -> str:
-    """Resume a paused local agent."""
-    return await _apply_lifecycle(ctx, "resume", argument)
+    return await _start_agent(ctx, argument)
 
 
 @command("/agents stop", prefixes=("/agents stop ",), summary="stop an agent, keeping its state")
 async def stop_agent(ctx: CommandContext, argument: str) -> str:
     """Stop an agent, keeping its state."""
     return await _act_on_agent(ctx, "stop", argument)
-
-
-@command("/agents pause", prefixes=("/agents pause ",), summary="pause an agent")
-async def agents_pause(ctx: CommandContext, argument: str) -> str:
-    """Pause an agent."""
-    return await _act_on_agent(ctx, "pause", argument)
 
 
 @command("/agents delete", prefixes=("/agents delete ",), summary="delete an agent permanently")

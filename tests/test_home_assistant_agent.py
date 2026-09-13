@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wactorz.agents.home_assistant_agent import HomeAssistantAgent
@@ -442,7 +443,7 @@ class HomeAssistantAgentOtherFeatureTest(unittest.IsolatedAsyncioTestCase):
             )
 
         get_history.assert_awaited_once()
-        _, call_kwargs = get_history.await_args
+        _, call_kwargs = get_history.await_args_list[-1]
         # Times must have been converted to UTC (offset-aware, ending "+00:00")
         self.assertIn("+00:00", call_kwargs["start_time"])
         self.assertIn("+00:00", call_kwargs["end_time"])
@@ -771,8 +772,21 @@ class HomeAssistantAgentEntrypointDispatchTest(unittest.IsolatedAsyncioTestCase)
             with self.subTest(action=action):
                 agent._classify_action = AsyncMock(return_value=action)
                 agent._get_devices = AsyncMock(return_value=_devices())
-                agent._recommend_hardware = AsyncMock(return_value={"can_fulfill": True})
-                self.assertEqual(await agent._process("make automation"), {"can_fulfill": True})
+                agent._recommend_hardware = AsyncMock(
+                    return_value={"can_fulfill": True, "result": "Use the main light."}
+                )
+
+                result = await agent._process("make automation")
+
+                if action == "create_automation":
+                    self.assertFalse(result["created"])
+                    self.assertIn("did not create the automation", result["result"])
+                    self.assertIn("Use the main light.", result["result"])
+                else:
+                    self.assertEqual(
+                        result,
+                        {"can_fulfill": True, "result": "Use the main light."},
+                    )
                 agent._recommend_hardware.assert_awaited_once_with("make automation", _devices())
 
         agent._classify_action = AsyncMock(return_value="edit_automation")
@@ -821,7 +835,7 @@ class HomeAssistantAgentEntrypointDispatchTest(unittest.IsolatedAsyncioTestCase)
             Message(MessageType.TASK, "sender", {"text": "list", "_task_id": "t-1"})
         )
         agent._process.assert_awaited_once_with("list")
-        sent_payload = agent.send.await_args.args[2]
+        sent_payload = agent.send.await_args_list[-1].args[2]
         self.assertEqual(sent_payload["task"], "list")
         self.assertEqual(sent_payload["_task_id"], "t-1")
         self.assertEqual(agent.metrics.tasks_completed, 1)
@@ -845,7 +859,7 @@ class HomeAssistantAgentEntrypointDispatchTest(unittest.IsolatedAsyncioTestCase)
             ["light.porch"],
             [{"hardware": "light"}],
         )
-        self.assertEqual(agent.send.await_args.args[1], MessageType.RESULT)
+        self.assertEqual(agent.send.await_args_list[-1].args[1], MessageType.RESULT)
 
 
 class HomeAssistantAgentRegistryAndCacheTest(unittest.IsolatedAsyncioTestCase):
@@ -864,6 +878,7 @@ class HomeAssistantAgentRegistryAndCacheTest(unittest.IsolatedAsyncioTestCase):
         fetcher = AsyncMock(side_effect=RuntimeError("offline"))
         items, error = await agent._fetch_registry_items(fetcher)
         self.assertEqual(items, [])
+        assert error is not None
         self.assertIn("offline", error)
 
         agent.ha_url = ""
@@ -1044,7 +1059,7 @@ class HomeAssistantAgentHardwareTest(unittest.IsolatedAsyncioTestCase):
         )
         result = await agent._recommend_hardware("porch lights", _devices())
         self.assertTrue(result["can_fulfill"])
-        self.assertEqual(len(agent.llm.calls), 2)
+        self.assertEqual(len(cast(_SequencedLLM, agent.llm).calls), 2)
 
         result = await self._agent(_SequencedLLM(["not-json"]))._recommend_hardware(
             "porch lights", _devices()
@@ -1078,7 +1093,7 @@ class HomeAssistantAgentHardwareTest(unittest.IsolatedAsyncioTestCase):
         result = await agent._select_hardware("make automation", _devices())
         self.assertFalse(result["can_fulfill"])
         self.assertIn("nothing suitable", result["result"])
-        self.assertEqual(len(agent.llm.calls), 2)
+        self.assertEqual(len(cast(_SequencedLLM, agent.llm).calls), 2)
 
         result = await self._agent(_SequencedLLM(["[]"]))._select_hardware(
             "make automation", _devices()
@@ -1331,7 +1346,7 @@ class HomeAssistantAgentStaticHelperTest(unittest.TestCase):
         self.assertEqual(agent.total_input_tokens, 2)
         self.assertEqual(agent.total_output_tokens, 3)
         self.assertEqual(agent.total_cost_usd, 0.5)
-        agent._accumulate_usage("bad")
+        agent._accumulate_usage("bad")  # pyright: ignore[reportArgumentType]  # a malformed report
         self.assertEqual(agent.total_input_tokens, 2)
 
         self.assertEqual(
@@ -1392,7 +1407,9 @@ class HomeAssistantAgentStaticHelperTest(unittest.TestCase):
         ):
             automation = dict(valid)
             automation.update(mutation)
-            self.assertIn(expected, HomeAssistantAgent._validate_automation(automation))
+            problem = HomeAssistantAgent._validate_automation(automation)
+            assert problem is not None
+            self.assertIn(expected, problem)
 
         devices = {"data": {"entities": [{"entity_id": "light.a"}, {}, {"entity_id": "sensor.b"}]}}
         self.assertEqual(
@@ -1596,7 +1613,7 @@ class HomeAssistantAgentCameraTest(unittest.IsolatedAsyncioTestCase):
         )
         agent._list_cameras.assert_awaited_once()
         agent._process.assert_not_awaited()
-        sent = agent.send.await_args.args[2]
+        sent = agent.send.await_args_list[-1].args[2]
         self.assertIn("2 cameras", sent["result"])
 
     async def test_handle_message_dispatches_camera_snapshot(self):
@@ -1951,7 +1968,7 @@ class HomeAssistantAgentHistoryTest(unittest.IsolatedAsyncioTestCase):
 
         agent._get_history.assert_awaited_once_with(payload)
         agent._process.assert_not_awaited()
-        sent = agent.send.await_args.args[2]
+        sent = agent.send.await_args_list[-1].args[2]
         self.assertIn("Fetched history", sent["result"])
         self.assertEqual(sent["csv"], "...")
 

@@ -11,7 +11,7 @@ describe("initials", () => {
     });
 
     it("handles hyphen-separated name", () => {
-        expect(initials("io-agent")).toBe("IA");
+        expect(initials("picam-agent")).toBe("PA");
     });
 
     it("handles underscore-separated name", () => {

@@ -67,12 +67,12 @@ async def cost_reset_handler(_request: web.Request) -> Response:
             try:
                 runtime.db.kv_delete("_system", cost.LIFETIME_LEDGER_KEY)
             except Exception:
-                pass
+                logger.debug("[api] Could not clear the lifetime ledger", exc_info=True)
         return web.json_response({"ok": True, **info})
-    except Exception as exc:
+    except Exception:
         # A failure here is the database's, not the caller's, and a sqlite
         # error carries the file path it was opening.
-        logger.exception("[api] cost reset failed: %s", exc)
+        logger.exception("[api] cost reset failed")
         return web.json_response({"error": "Could not reset the cost ledger"}, status=500)
 
 
@@ -94,14 +94,14 @@ async def chat_log_handler(request: web.Request) -> Response:
         limit = min(int(request.rel_url.query.get("limit", 200)), 1000)
         rows = runtime.db.query_chat_log(agent_name=agent, role=role, since=since, limit=limit)
         return web.json_response(rows)
-    except Exception as exc:
-        logger.exception("[api] chat log query failed: %s", exc)
+    except Exception:
+        logger.exception("[api] chat log query failed")
         return web.json_response({"error": "Could not read the chat log"}, status=500)
 
 
 async def config_handler(request: web.Request) -> Response:
     """Expose non-secret runtime config so the frontend can seed its defaults."""
-    from .. import config
+    from .. import __version__, config
     from ..config import CONFIG
     from ..ext import collect_public_config
 
@@ -114,6 +114,10 @@ async def config_handler(request: web.Request) -> Response:
     ws_url = f"{protocol}://{ws_host}/ws"
 
     payload: dict = {
+        # Which Wactorz this is. The dashboard is served from the same wheel, but
+        # a browser can hold an old page for a long time, so the version it shows
+        # is the running one rather than the one it was built from.
+        "version": __version__,
         "ha": {
             # URL only — the dashboard links out to the HA UI and never talks to
             # HA directly, so the long-lived token must NOT reach the browser.
@@ -220,7 +224,7 @@ async def feed_handler(_request: web.Request) -> Response:
                             "_agent": agent_name,
                         }
                     )
-            except Exception:
+            except Exception:  # noqa: S110  # synthesised sample rows; a gap is not worth a log
                 pass
         return web.json_response(items[-50:])
     except Exception as exc:

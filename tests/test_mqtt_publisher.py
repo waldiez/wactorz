@@ -254,10 +254,13 @@ class TestDelivery:
             await pub.publish("nodes/alpha/spawn", "payload", qos=1)
             await _settle(pub, broker._client)
 
-            # A fixed identifier and clean_session=False are what let the broker
-            # hold QoS 1 messages for us across a disconnect.
-            assert broker.kwargs["clean_session"] is False
-            assert broker.kwargs["identifier"] == pub._client_id
+            # A fixed identifier and a session the broker is asked to keep are
+            # what let it hold QoS 1 messages for us across a disconnect. The
+            # session names a lifetime: v3.1.1 offers none, so an install that
+            # goes away would cost broker state for ever.
+            assert broker.kwargs["clean_start"] is False
+            assert broker.kwargs["properties"].SessionExpiryInterval > 0
+            assert broker.kwargs["identifier"] == pub.client_id
         finally:
             await pub.disconnect()
 

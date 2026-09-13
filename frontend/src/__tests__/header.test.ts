@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  * Copyright 2025 - 2026 Waldiez & contributors
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Isolate the header from the audio/reset popovers (and their singletons).
 vi.mock("../ui/dashboard/popovers", () => ({
@@ -18,6 +18,7 @@ import {
     releaseHeaderPopovers,
     releaseBottomNav,
 } from "../ui/dashboard/header";
+import { safeStorage } from "../safeStorage";
 
 describe("buildHeader", () => {
     beforeEach(() => {
@@ -339,5 +340,55 @@ describe("bottom nav outside-click listener", () => {
         expect(() => releaseBottomNav()).not.toThrow();
         added.mockRestore();
         removed.mockRestore();
+    });
+});
+
+describe("the version beside the name", () => {
+    afterEach(() => {
+        safeStorage.remove("wactorz-version");
+        document.body.innerHTML = "";
+    });
+
+    it("shows what the server said it is running", () => {
+        safeStorage.set("wactorz-version", "0.6.0");
+
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+
+        const shown = header.querySelector(".af-version");
+        expect(shown?.textContent).toBe("0.6.0");
+    });
+
+    it("shows nothing until the server has said", () => {
+        // An empty label rather than a guess: a version the browser invented is
+        // worse than none, because it is read as the answer.
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+
+        expect(header.querySelector(".af-version")?.textContent).toBe("");
+    });
+
+    it("names the product in full for anyone hovering it", () => {
+        safeStorage.set("wactorz-version", "0.7.1");
+
+        const header = buildHeader({
+            view: "overview",
+            connState: "live",
+            onSetView: vi.fn(),
+            haUrl: null,
+            extraViews: [],
+        });
+
+        expect(header.querySelector(".af-version")?.getAttribute("title")).toBe("Wactorz 0.7.1");
     });
 });

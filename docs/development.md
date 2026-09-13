@@ -202,7 +202,7 @@ The registered tools are:
 
 ```text
 ask_wactorz, ask_agent, list_agents, list_capabilities,
-stop_agent, pause_agent, resume_agent,
+stop_agent,
 ha_list_entities, ha_get_state, ha_call_service
 ```
 

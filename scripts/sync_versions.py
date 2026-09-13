@@ -16,6 +16,23 @@ def update_python_version(new_version: str) -> None:
         print(f"Updated {version_file}")
 
 
+_RUNNER_VERSION = re.compile(r'^RUNNER_VERSION = ".*"$', re.MULTILINE)
+
+
+def update_remote_runner_version(new_version: str, path: Path | None = None) -> None:
+    """Stamp the version into the single-file node runner.
+
+    The runner is deployed to a node on its own, so it cannot read the package
+    version; it carries a copy, which is what a node reports in its heartbeat.
+    """
+    runner_file = path if path is not None else ROOT_DIR / "wactorz" / "remote_runner.py"
+    if runner_file.exists():
+        content = runner_file.read_text(encoding="utf-8")
+        new_content = _RUNNER_VERSION.sub(f'RUNNER_VERSION = "{new_version}"', content, count=1)
+        runner_file.write_text(new_content, encoding="utf-8")
+        print(f"Updated {runner_file}")
+
+
 def update_package_json(new_version: str) -> None:
     files = [ROOT_DIR / "frontend" / "package.json"]
     for package_file in files:
@@ -75,9 +92,12 @@ def update_docs_landing(new_version: str) -> None:
     landing_file = ROOT_DIR / "docs" / "_landing.html"
     if landing_file.exists():
         content = landing_file.read_text(encoding="utf-8")
+        # The stage word is captured and put back rather than written in:
+        # hardcoding "Alpha" meant this quietly stopped matching the moment the
+        # badge became Beta, so the version stayed at whatever it last said.
         new_content = re.sub(
-            r'<div class="hero-badge">v.* · Alpha</div>',
-            f'<div class="hero-badge">v{new_version} · Alpha</div>',
+            r'<div class="hero-badge">v\S* · (\w+)</div>',
+            lambda m: f'<div class="hero-badge">v{new_version} · {m.group(1)}</div>',
             content,
         )
         landing_file.write_text(new_content, encoding="utf-8")
@@ -120,6 +140,7 @@ def main() -> None:
         sys.exit(1)
 
     update_python_version(new_version)
+    update_remote_runner_version(new_version)
     update_package_json(new_version)
     update_ha_addon_config(new_version)
     update_docs_landing(new_version)

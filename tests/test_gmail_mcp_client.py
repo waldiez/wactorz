@@ -108,10 +108,10 @@ class GmailRestFallbackTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("Draft to sam@x.com created", result)
-        method, path = client._rest_request.await_args.args
+        method, path = client._rest_request.await_args_list[-1].args
         self.assertEqual(method, "POST")
         self.assertEqual(path, "/users/me/drafts")
-        raw = client._rest_request.await_args.kwargs["json_body"]["message"]["raw"]
+        raw = client._rest_request.await_args_list[-1].kwargs["json_body"]["message"]["raw"]
         import base64
 
         decoded = base64.urlsafe_b64decode(raw).decode()

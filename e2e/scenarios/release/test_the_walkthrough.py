@@ -16,6 +16,8 @@ core is for, and duplicating it here would just make this slow and this is the
 part that has to stay readable.
 """
 
+from __future__ import annotations
+
 import subprocess
 import sys
 from collections.abc import Callable, Iterator

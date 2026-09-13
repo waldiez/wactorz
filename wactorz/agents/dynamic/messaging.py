@@ -121,12 +121,12 @@ class MessagingMixin(_Host):
             },
         )
 
-    async def notify_user(self, text: str) -> None:
+    async def notify_user(self, text: str, **extra: Any) -> None:
         """Push a user-facing chat message to the chat panel (see Actor.notify_user).
         Use this — not log() or alert() — when the user should see the message in
         chat, e.g. when a long task finishes or an autonomous agent has news.
         """
-        await self._actor.notify_user(text)
+        await self._actor.notify_user(text, **extra)
 
     async def _send_to_remote(
         self, agent_name: str, payload: Any, timeout: float

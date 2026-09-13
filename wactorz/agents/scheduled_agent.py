@@ -129,13 +129,13 @@ def _resolve_timezone(spec_tz: str | None, user_tz: str | None) -> Any:
             try:
                 return ZoneInfo(cand)
             except Exception:
-                logger.warning(f"[scheduled] Unknown timezone '{cand}' — trying next fallback")
+                logger.warning("[scheduled] Unknown timezone '%s' — trying next fallback", cand)
     # System local — datetime.astimezone() with no arg returns local time
     try:
         local = datetime.now().astimezone().tzinfo
         if local is not None:
             return local
-    except Exception:
+    except Exception:  # noqa: S110  # falls through to the next timezone source
         pass
     return timezone.utc
 
@@ -312,27 +312,30 @@ class ScheduledAgent(Actor):
                 now = datetime.now(self._tz)
                 if self._state.fire_count > 0:
                     # Already fired in a previous run — nothing to do
-                    logger.info(f"[{self.name}] One-shot already fired previously, exiting")
+                    logger.info("[%s] One-shot already fired previously, exiting", self.name)
                     asyncio.create_task(self._self_delete())
                     return
                 if fire_at < now:
                     delta = (now - fire_at).total_seconds()
                     if delta <= _ONESHOT_CATCHUP_S:
                         logger.info(
-                            f"[{self.name}] One-shot fire missed by {delta:.0f}s "
-                            f"(within catchup window) — firing now"
+                            "[%s] One-shot fire missed by %.0fs (within catchup window) — firing now",
+                            self.name,
+                            delta,
                         )
                         await self._fire(now_utc=datetime.now(timezone.utc))
                     else:
                         logger.info(
-                            f"[{self.name}] One-shot fire missed by {delta:.0f}s "
-                            f"(beyond {_ONESHOT_CATCHUP_S:.0f}s catchup) — exiting"
+                            "[%s] One-shot fire missed by %.0fs (beyond %.0fs catchup) — exiting",
+                            self.name,
+                            delta,
+                            _ONESHOT_CATCHUP_S,
                         )
                     # Either way, a once-schedule that's past is done
                     asyncio.create_task(self._self_delete())
                     return
-            except Exception as e:
-                logger.error(f"[{self.name}] Once-schedule on_start error: {e}")
+            except Exception:
+                logger.exception("[%s] Once-schedule on_start error", self.name)
 
         await self._log(
             f"Scheduled agent ready. type={self._schedule.get('type')} "
@@ -377,8 +380,11 @@ class ScheduledAgent(Actor):
                 # Bound the sleep so we re-evaluate periodically
                 sleep_for = min(wait_s, _MAX_SLEEP_S)
                 logger.debug(
-                    f"[{self.name}] next fire at {next_fire.isoformat()} "
-                    f"(sleeping {sleep_for:.1f}s of {wait_s:.1f}s remaining)"
+                    "[%s] next fire at %s (sleeping %.1fs of %.1fs remaining)",
+                    self.name,
+                    next_fire.isoformat(),
+                    sleep_for,
+                    wait_s,
                 )
 
                 # Wait either for the deadline OR a manual-trigger signal,
@@ -409,14 +415,14 @@ class ScheduledAgent(Actor):
 
                 # If this was a "once" schedule, we're done
                 if self._schedule.get("type") == "once":
-                    logger.info(f"[{self.name}] One-shot fired — self-deleting")
+                    logger.info("[%s] One-shot fired — self-deleting", self.name)
                     asyncio.create_task(self._self_delete())
                     return
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"[{self.name}] Loop error: {e!r} — backing off 30s")
+            except Exception:
+                logger.exception("[%s] Loop error — backing off 30s", self.name)
                 await asyncio.sleep(30)
 
     def _last_fire_local(self, tzinfo: Any) -> datetime | None:
@@ -500,8 +506,8 @@ class ScheduledAgent(Actor):
                 f"Fired{' (manual)' if manual else ''} → {self._publish_topic} "
                 f"[count={self._state.fire_count}]"
             )
-        except Exception as e:
-            logger.error(f"[{self.name}] Fire failed: {e!r}")
+        except Exception:
+            logger.exception("[%s] Fire failed", self.name)
 
     async def _self_delete(self):
         """Remove from registry and stop. Used for completed once-schedules."""
@@ -509,7 +515,7 @@ class ScheduledAgent(Actor):
         if self._registry:
             try:
                 await self._registry.unregister(self.actor_id)
-            except Exception:
+            except Exception:  # noqa: S110  # teardown; the agent is going away regardless
                 pass
         # Best-effort: ask main to drop us from the spawn registry too
         if self._registry:
@@ -517,9 +523,13 @@ class ScheduledAgent(Actor):
             if main:
                 try:
                     main._remove_from_spawn_registry(self.name)
-                except Exception:
+                except Exception:  # noqa: S110  # teardown; the agent is going away regardless
                     pass
         await self.stop()
+        # After stop(), so the final status it publishes cannot be mistaken for
+        # a schedule that is still here. This is what tells the dashboard the
+        # card is gone; without it the entry outlives the agent.
+        await self.withdraw_manifest()
 
     # ── Message handling ───────────────────────────────────────────────────
 
@@ -573,7 +583,7 @@ class ScheduledAgent(Actor):
     # ── Helpers ────────────────────────────────────────────────────────────
 
     async def _log(self, msg: str):
-        logger.info(f"[{self.name}] {msg}")
+        logger.info("[%s] %s", self.name, msg)
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": msg, "timestamp": time.time()},

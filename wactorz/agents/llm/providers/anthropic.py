@@ -1,5 +1,6 @@
 """AnthropicProvider — Claude, via the anthropic SDK."""
 
+import inspect
 import logging
 from typing import Any
 
@@ -26,6 +27,30 @@ _NO_SAMPLING_PARAMS: tuple[str, ...] = (
 # pays a 400 and lands here; every later request in the process skips the
 # parameter instead of paying that 400 again.
 _learned_no_sampling: set[str] = set()
+
+
+def _carries_temperature(method: Any) -> bool:
+    """Whether `method` will carry `temperature` as far as the API.
+
+    The SDK dropped the sampling parameters from `messages.create()` and
+    `messages.stream()` once every current model rejected them, so passing one
+    raises a `TypeError` inside the client: no request, no status code, and
+    nothing the 400-shaped retry below can recognise. Asking the signature is
+    the only way to tell that apart from a model that would have answered.
+
+    Unintrospectable callables answer yes. A fake in a test and a future client
+    that hides its arguments behind `**kwargs` look identical from here, and
+    the 400 retry still covers the case where the answer was wrong — whereas
+    guessing no would silently drop a temperature the caller did set.
+    """
+    try:
+        params = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return True
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return True
+    return "temperature" in params
+
 
 # Models where OMITTING `thinking` means adaptive thinking, not thinking-off.
 # Claude Sonnet 4.6 and Opus 4.8 and earlier run thinking-off when the parameter
@@ -163,9 +188,13 @@ def _is_temperature_rejection(exc: Exception) -> bool:
     accept in a different range is a real configuration error and must surface,
     not be papered over by a retry that quietly drops the setting.
     """
+    message = str(exc).lower()
+    # Raised in the client, before any request: a TypeError naming the argument,
+    # with none of the status code the check below needs.
+    if isinstance(exc, TypeError) and "temperature" in message:
+        return True
     if getattr(exc, "status_code", None) != 400:
         return False
-    message = str(exc).lower()
     if "temperature" not in message:
         return False
     return any(
@@ -223,6 +252,21 @@ class AnthropicProvider(LLMProvider):
 
     # ── Request shaping ─────────────────────────────────────────────────────
 
+    def _client_carries_temperature(self) -> bool:
+        """Whether this client would carry `temperature`, resolved once.
+
+        Asked of the client in hand rather than the installed SDK: the two are
+        the same object in production and deliberately are not in a test.
+        """
+        cached = getattr(self, "_temp_ok", None)
+        if cached is None:
+            messages = getattr(self.client, "messages", None)
+            cached = all(
+                _carries_temperature(getattr(messages, name, None)) for name in ("create", "stream")
+            )
+            self._temp_ok = cached
+        return cached
+
     def _request_params(self, messages: list[dict], system: str, kwargs: dict) -> dict[str, Any]:
         """The common request body, with each optional knob only where it is legal."""
         params: dict[str, Any] = {
@@ -231,7 +275,7 @@ class AnthropicProvider(LLMProvider):
             "system": system,
             "messages": messages,
         }
-        if not _rejects_temperature(self.model):
+        if self._client_carries_temperature() and not _rejects_temperature(self.model):
             params.update(_temp_params(kwargs))
         reasoning_effort = kwargs.get("reasoning_effort")
         thinking = self._thinking_param(reasoning_effort)

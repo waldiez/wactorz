@@ -9,6 +9,7 @@ import {
     dedupeAndSortFeed,
     buildFeedView,
     appendFeedItemToView,
+    applyFilters,
     DEFAULT_FILTERS,
     type FeedFilters,
 } from "../ui/dashboard/feedView";
@@ -94,6 +95,57 @@ describe("buildFeedView", () => {
         const feed = view([]).querySelector("#af-feed-view")!;
         expect(feed.getAttribute("role")).toBe("log");
         expect(feed.getAttribute("aria-live")).toBe("polite");
+    });
+
+    it("keeps what the house did when heartbeats are hidden", () => {
+        // Every Home Assistant state change arrives as `health`, and hiding
+        // heartbeats was hiding those too: the filter matched the row's class,
+        // and `health` was painted with the heartbeat's. Turning a light on
+        // reached the browser and was then dropped one step before the screen.
+        const wrap = view(
+            [
+                item({ type: "health", agentName: "ha", label: "Kitchen → on" }),
+                item({ type: "heartbeat", agentName: "worker" }),
+            ],
+            { hideHeartbeats: true },
+        );
+
+        const shownRows = [...wrap.querySelectorAll<HTMLElement>(".af-feed-item")].filter(row => !row.hidden);
+        expect(shownRows).toHaveLength(1);
+        expect(shownRows[0]!.textContent).toContain("Kitchen → on");
+    });
+
+    it("does not paint what the house did as a heartbeat", () => {
+        const wrap = view([item({ type: "health", agentName: "ha", label: "Kitchen → on" })]);
+
+        const row = wrap.querySelector<HTMLElement>(".af-feed-item")!;
+        expect(row.classList.contains("af-feed-heartbeat")).toBe(false);
+        expect(row.classList.contains("af-feed-health")).toBe(true);
+    });
+
+    it("still keeps heartbeats themselves out", () => {
+        const wrap = view([item({ type: "heartbeat", agentName: "worker" })], {
+            hideHeartbeats: true,
+        });
+
+        // Never rendered rather than rendered and hidden: `isHidden` drops these
+        // before the row is built, which is the check that always read the type.
+        expect(wrap.querySelectorAll(".af-feed-item")).toHaveLength(0);
+    });
+
+    it("hides a heartbeat when the toggle is flipped after the rows are drawn", () => {
+        const wrap = view([
+            item({ type: "heartbeat", agentName: "worker" }),
+            item({ type: "health", agentName: "ha", label: "Kitchen → on" }),
+        ]);
+
+        applyFilters(wrap.querySelector("#af-feed-view")!, shown({ hideHeartbeats: true }));
+
+        const rows = [...wrap.querySelectorAll<HTMLElement>(".af-feed-item")];
+        const visible = rows.filter(row => !row.hidden);
+        // This is the path that was hiding the house along with the heartbeats.
+        expect(visible).toHaveLength(1);
+        expect(visible[0]!.textContent).toContain("Kitchen → on");
     });
 
     it("filters out system-agent rows", () => {

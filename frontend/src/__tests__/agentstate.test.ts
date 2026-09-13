@@ -57,7 +57,7 @@ describe("stateColor / stateLabel", () => {
     });
     it("maps known string states to colours", () => {
         expect(stateColor("running" as AgentState)).toBe("#34d399");
-        expect(stateColor("paused" as AgentState)).toBe("#fbbf24");
+        expect(stateColor("initializing" as AgentState)).toBe("#60a5fa");
         expect(stateColor("initializing" as AgentState)).toBe("#60a5fa");
         expect(stateColor("stopped" as AgentState)).toBe("#4b5563");
         expect(stateColor("???" as AgentState)).toBe("#34d399"); // default

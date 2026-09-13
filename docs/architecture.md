@@ -90,7 +90,7 @@ class MyAgent(Actor):
 
     async def handle_message(self, msg: Message):
         # Called for every message in the inbox.
-        # msg.type is one of: START, STOP, PAUSE, RESUME, DELETE,
+        # msg.type is one of: START, STOP, DELETE,
         # TASK, RESULT, HEARTBEAT, SPAWN, TICK, STATUS_REQUEST, STATUS_RESPONSE.
         if msg.type == MessageType.TASK:
             result = await self._do_work(msg.payload)

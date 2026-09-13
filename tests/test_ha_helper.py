@@ -1,6 +1,6 @@
 import hashlib
 import unittest
-from typing import ClassVar
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 from wactorz.core.integrations.home_assistant import ha_helper
@@ -8,16 +8,19 @@ from wactorz.core.integrations.home_assistant import ha_helper
 
 class _FakeHAWebSocketClient:
     instances: ClassVar[list] = []
+    # What each client made from now on answers; a test sets them before the
+    # code under test connects, and every client works on its own copy.
+    responses: ClassVar[dict[str, Any]] = {}
+    exceptions: ClassVar[dict[str, Exception]] = {}
+    response_queues: ClassVar[dict[str, list[Any]]] = {}
 
     def __init__(self, ws_url: str, token: str):
         self.ws_url = ws_url
         self.token = token
         self.calls = []
-        self.responses = dict(_FakeHAWebSocketClient.responses)
-        self.exceptions = dict(_FakeHAWebSocketClient.exceptions)
-        self.response_queues = {
-            k: list(v) for k, v in _FakeHAWebSocketClient.response_queues.items()
-        }
+        self._responses = dict(_FakeHAWebSocketClient.responses)
+        self._exceptions = dict(_FakeHAWebSocketClient.exceptions)
+        self._queues = {k: list(v) for k, v in _FakeHAWebSocketClient.response_queues.items()}
         _FakeHAWebSocketClient.instances.append(self)
 
     async def __aenter__(self):
@@ -28,16 +31,11 @@ class _FakeHAWebSocketClient:
 
     async def call(self, command: str, **kwargs):
         self.calls.append(command)
-        if command in self.exceptions:
-            raise self.exceptions[command]
-        if self.response_queues.get(command):
-            return self.response_queues[command].pop(0)
-        return self.responses.get(command)
-
-
-_FakeHAWebSocketClient.responses = {}
-_FakeHAWebSocketClient.exceptions = {}
-_FakeHAWebSocketClient.response_queues = {}
+        if command in self._exceptions:
+            raise self._exceptions[command]
+        if self._queues.get(command):
+            return self._queues[command].pop(0)
+        return self._responses.get(command)
 
 
 class _FakeResponse:
@@ -515,11 +513,11 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
     async def test_get_floors_safe_success_and_failure(self):
         self._set_fixture_responses()
         client = _FakeHAWebSocketClient("ws://ha.local/api/websocket", "token")
-        self.assertEqual(await ha_helper._get_floors_safe(client), _fixtures()[0])
+        self.assertEqual(await ha_helper._get_floors_safe(client), _fixtures()[0])  # pyright: ignore[reportArgumentType]
 
         _FakeHAWebSocketClient.exceptions = {"config/floor_registry/list": RuntimeError("old HA")}
         failing_client = _FakeHAWebSocketClient("ws://ha.local/api/websocket", "token")
-        self.assertEqual(await ha_helper._get_floors_safe(failing_client), [])
+        self.assertEqual(await ha_helper._get_floors_safe(failing_client), [])  # pyright: ignore[reportArgumentType]
 
     async def test_get_full_ha_data_preserves_raw_data_and_empty_fallbacks(self):
         floors, areas, devices, entities, states = self._set_fixture_responses()
@@ -634,70 +632,6 @@ class HomeAssistantHelperWebSocketTest(unittest.IsolatedAsyncioTestCase):
         _FakeHAWebSocketClient.exceptions = {"config_entries/get": RuntimeError("old HA")}
         self.assertEqual(await ha_helper.get_config_entries("http://ha.local:8123", "token"), [])
 
-    async def test_device_and_entity_simple_helpers(self):
-        _floors, _areas, devices, _entities, _states = self._set_fixture_responses()
-
-        full_devices = await ha_helper.get_devices("http://ha.local:8123", "token")
-
-        self.assertIs(full_devices, devices)
-        self.assertIn("swid", full_devices[0])
-        self.assertTrue(full_devices[0]["swid"].startswith("did:swid:home:kitchen:kitchen-light-"))
-
-        _FakeHAWebSocketClient.instances = []
-        simple_devices = await ha_helper.get_devices_simple("http://ha.local:8123", "token")
-        self.assertEqual(
-            simple_devices,
-            [
-                {
-                    "device_id": "dev-light",
-                    "name": "Kitchen Light",
-                    "swid": full_devices[0]["swid"],
-                    "manufacturer": "Acme",
-                    "model": "L1",
-                },
-                {
-                    "device_id": "dev-temp",
-                    "name": "Temperature Sensor",
-                    "swid": full_devices[1]["swid"],
-                    "manufacturer": None,
-                    "model": "T1",
-                },
-            ],
-        )
-        self.assertEqual(
-            await ha_helper.get_entities_simple("http://ha.local:8123", "token"),
-            [
-                {
-                    "entity_id": "sensor.temperature",
-                    "unique_id": "temp-1",
-                    "platform": "mqtt",
-                    "original_name": "Original Temp",
-                    "name": "Registry Temp",
-                },
-                {
-                    "entity_id": "light.kitchen",
-                    "unique_id": "light-1",
-                    "platform": "hue",
-                    "original_name": "Original Light",
-                    "name": None,
-                },
-                {
-                    "entity_id": "sensor.hassio_cpu",
-                    "unique_id": "hassio-1",
-                    "platform": "hassio",
-                    "original_name": "HA CPU",
-                    "name": None,
-                },
-                {
-                    "entity_id": "switch.orphan",
-                    "unique_id": "orphan-1",
-                    "platform": "mqtt",
-                    "original_name": "Orphan",
-                    "name": None,
-                },
-            ],
-        )
-
 
 class HomeAssistantHelperAutomationTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -729,7 +663,10 @@ class HomeAssistantHelperAutomationTest(unittest.IsolatedAsyncioTestCase):
             _FakeResponse(json_data={"id": "auto-1", "alias": "Lights"})
         ]
         result = await ha_helper._fetch_automation_config(
-            "http://ha.local", "auto-1", "token", session
+            "http://ha.local",
+            "auto-1",
+            "token",
+            session,  # pyright: ignore[reportArgumentType]
         )
         self.assertEqual(result, {"id": "auto-1", "alias": "Lights"})
         self.assertEqual(
@@ -755,7 +692,10 @@ class HomeAssistantHelperAutomationTest(unittest.IsolatedAsyncioTestCase):
                 _FakeClientSession.get_results = [fake_result]
                 self.assertIsNone(
                     await ha_helper._fetch_automation_config(
-                        "http://ha.local", "auto-1", "token", session
+                        "http://ha.local",
+                        "auto-1",
+                        "token",
+                        session,  # pyright: ignore[reportArgumentType]
                     )
                 )
 

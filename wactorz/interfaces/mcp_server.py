@@ -304,7 +304,7 @@ async def list_agents() -> str:
         protected = " [protected]" if a.get("protected") else ""
         state = a.get("state", "unknown")
         name = a.get("name", "?")
-        aid = a.get("id", "?")  # full ID required for stop/pause/resume
+        aid = a.get("id", "?")  # full ID required for stop
         lines.append(f"[{state:10s}] @{name}{protected}  (id: {aid})")
     return "\n".join(lines)
 
@@ -329,20 +329,6 @@ async def stop_agent(agent_id: str) -> str:
     if result.get("status") == 200:
         return f"Agent {agent_id} stopped."
     return f"Error {result.get('status')}: {result.get('text')}"
-
-
-@mcp.tool()
-async def pause_agent(agent_id: str) -> str:
-    """Pause a running agent. It stops processing messages until resumed."""
-    data = await _wactorz_post(f"/actors/{agent_id}/pause", {})
-    return str(data)
-
-
-@mcp.tool()
-async def resume_agent(agent_id: str) -> str:
-    """Resume a paused agent."""
-    data = await _wactorz_post(f"/actors/{agent_id}/resume", {})
-    return str(data)
 
 
 # ─── Home Assistant direct tools ────────────────────────────────────────────

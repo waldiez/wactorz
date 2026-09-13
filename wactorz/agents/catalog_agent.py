@@ -44,6 +44,9 @@ BETA_WARNING = (
     "Use it for trials, not unattended production workflows."
 )
 
+_REACHY_MINI_SDK_VERSION = "1.8.4"
+_REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
+
 _IMPORT_NAME_MAP = {
     "scikit-learn": "sklearn",
     "stable-baselines3": "stable_baselines3",
@@ -105,18 +108,18 @@ def _load_recipe(filename: str) -> str | None:
 
     path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
     if not path.exists():
-        logger.warning(f"[catalog] Recipe file not found: {path}")
+        logger.warning("[catalog] Recipe file not found: %s", path)
         return None
     try:
         spec = importlib.util.spec_from_file_location("_recipe", path)
         if spec is None or spec.loader is None:
-            logger.warning(f"[catalog] Could not build import spec for recipe: {path}")
+            logger.warning("[catalog] Could not build import spec for recipe: %s", path)
             return None
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         return getattr(mod, "AGENT_CODE", None)
     except Exception as e:
-        logger.warning(f"[catalog] Could not load recipe from {filename}: {e}")
+        logger.warning("[catalog] Could not load recipe from %s: %s", filename, e)
         return None
 
 
@@ -155,7 +158,7 @@ def _build_native_catalog() -> dict:
         }
         logger.info("[catalog] Loaded weather-agent recipe")
     except ImportError as e:
-        logger.warning(f"[catalog] weather-agent unavailable: {e}")
+        logger.warning("[catalog] weather-agent unavailable: %s", e)
 
     try:
         from .google_calendar_agent import GoogleCalendarAgent
@@ -189,7 +192,7 @@ def _build_native_catalog() -> dict:
         }
         logger.info("[catalog] Loaded google-calendar-agent recipe")
     except ImportError as e:
-        logger.warning(f"[catalog] google-calendar-agent unavailable: {e}")
+        logger.warning("[catalog] google-calendar-agent unavailable: %s", e)
 
     try:
         from .gmail_agent import GmailAgent
@@ -225,7 +228,7 @@ def _build_native_catalog() -> dict:
         }
         logger.info("[catalog] Loaded gmail-agent recipe")
     except ImportError as e:
-        logger.warning(f"[catalog] gmail-agent unavailable: {e}")
+        logger.warning("[catalog] gmail-agent unavailable: %s", e)
 
     return native
 
@@ -404,12 +407,14 @@ def _build_catalog() -> dict:
             "warning": BETA_WARNING,
             "description": (
                 "Controls a Reachy Mini: wake/sleep, head pose, antennas, gaze, "
-                "speech, gestures, and optional Home Assistant actions."
+                "speech, opt-in voice conversation, gestures, and optional "
+                "Home Assistant actions."
             ),
             "docs": (
                 "Setup:\n"
                 "1. Install the recipe dependencies when prompted, or preinstall: "
-                "pip install reachy-mini numpy edge-tts.\n"
+                f"pip install {_REACHY_MINI_REQUIREMENT} numpy edge-tts pillow "
+                "webrtcvad-wheels faster-whisper.\n"
                 "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
                 "3. For Reachy Mini Lite, start the local daemon first: "
@@ -425,10 +430,16 @@ def _build_catalog() -> dict:
                 "- wiggle your antennas\n"
                 "- look left\n"
                 "- say hello\n"
+                "- take a photo\n"
+                "- listen\n"
+                "- listen and ask Wactorz\n"
+                "- start conversation\n"
                 "- turn on the light and nod\n"
                 "\n"
                 "For structured control, send a dict with cmd wake, sleep, pose, "
-                "antennas, look_at, emotion, say, volume, ha, bind, unbind, or stop."
+                "antennas, look_at, camera, listen, ask_voice, conversation_start, "
+                "conversation_stop, doa, emotion, say, volume, health, ha, "
+                "bind, unbind, or stop."
             ),
             "capabilities": [
                 "robot",
@@ -443,10 +454,27 @@ def _build_catalog() -> dict:
                 "actuator",
                 "expressive",
                 "human_robot_interaction",
+                "camera",
+                "vision",
+                "microphone",
+                "audio",
+                "perception",
+                "sensors",
             ],
-            "install": ["reachy-mini", "numpy", "edge-tts"],
+            "install": [
+                _REACHY_MINI_REQUIREMENT,
+                "numpy",
+                "edge-tts",
+                "pillow",
+                "webrtcvad-wheels",
+                # Speech recognition for `ask_voice` and `conversation_start`,
+                # and the default STT backend. Listed because leaving it out
+                # meant every voice feature failed on a robot installed exactly
+                # as instructed, with nothing said until the first attempt.
+                "faster-whisper",
+            ],
             "input_schema": {
-                "cmd": "str  — wake|sleep|pose|antennas|look_at|look_pixel|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|ha",
+                "cmd": "str  — wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
                 "voice": "str   — edge-tts voice (cmd=say); auto-picks by script, e.g. el-GR for Greek",
                 "gain_db": "float — per-say file trim in dB (cmd=say), <=0 to make one line quieter",
@@ -459,6 +487,7 @@ def _build_catalog() -> dict:
                 "duration": "float — motion duration in seconds (pose/antennas/look_at)",
                 "method": "str  — interpolation: linear|minjerk|ease_in_out|cartoon (default minjerk)",
                 "yaw": "float — head yaw, degrees by default",
+                "angle": "float — cmd=turn relative body angle; left positive, right negative",
                 "pitch": "float — head pitch, degrees by default",
                 "roll": "float — head roll, degrees by default",
                 "x": "float — head x (mm) or look_at world x (m)",
@@ -469,6 +498,23 @@ def _build_catalog() -> dict:
                 "right": "float — antenna right (cmd=antennas convenience)",
                 "u": "int   — pixel u for look_pixel",
                 "v": "int   — pixel v for look_pixel",
+                "format": "str   — camera image format (cmd=camera): jpeg (default) or png",
+                "quality": "int   — camera JPEG quality 1-100 (cmd=camera), default 85",
+                "path": "str   — save the frame/clip to this file (cmd=camera|listen)",
+                "publish": "bool  — also emit on custom/reachy/camera|audio (cmd=camera|listen)",
+                "include_b64": "bool  — include the base64 blob in the result (cmd=camera|listen), default true",
+                "stt_backend": "str — ask_voice/conversation backend: faster-whisper (default)|whisper|openai",
+                "stt_model": "str — optional voice transcription model override",
+                "stt_language": "str — optional language lock; unset auto-detects",
+                "stt_hotwords": "str — optional comma-separated recognition hints",
+                "stt_fallback_language": "str — retry language for uncertain short speech",
+                "stt_min_language_probability": "float - reject/retry auto-language guesses below this (default 0.60)",
+                "barge_in": "bool - experimental speech interruption (default false)",
+                "inactivity_timeout": "float - optional conversation idle timeout; 0 keeps listening (default 0)",
+                "max_turns": "int - optional conversation turn limit; 0 is unbounded (default 0)",
+                "silence_s": "float - post-speech VAD silence (default 1.0s)",
+                "cooldown_s": "float - post-TTS mic drain time (default 0s)",
+                "vad_min_rms": "float - minimum speech-frame RMS (default 0.01)",
                 "name": "str   — emotion clip name (e.g. curious1, success1)",
                 "topic": "str   — MQTT topic to bind/unbind",
                 "when": "dict  — dotted-path equality matcher for bindings",
@@ -545,7 +591,7 @@ class CatalogAgent(Actor):
 
     async def on_start(self):
         names = list(self._catalog.keys())
-        logger.info(f"[{self.name}] Catalog ready — {len(names)} recipe(s): {names}")
+        logger.info("[%s] Catalog ready — %s recipe(s): %s", self.name, len(names), names)
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {
@@ -596,10 +642,10 @@ class CatalogAgent(Actor):
 
             if main:
                 main._agent_manifests[name] = manifest
-                logger.info(f"[{self.name}] Injected manifest for '{name}' into main")
+                logger.info("[%s] Injected manifest for '%s' into main", self.name, name)
             else:
                 logger.warning(
-                    f"[{self.name}] main not ready — could not inject manifest for '{name}'"
+                    "[%s] main not ready — could not inject manifest for '%s'", self.name, name
                 )
 
     def _current_task_description(self) -> str:
@@ -777,7 +823,7 @@ class CatalogAgent(Actor):
                 },
             )
 
-        logger.info(f"[{self.name}] Spawning '{resolved}'...")
+        logger.info("[%s] Spawning '%s'...", self.name, resolved)
         await self._mqtt_publish(
             f"agents/{self.actor_id}/logs",
             {"type": "log", "message": f"Spawning '{resolved}'...", "timestamp": time.time()},
@@ -812,7 +858,7 @@ class CatalogAgent(Actor):
                     msg = _chat_message_with_beta_warning(
                         f"'{resolved}' spawned and running", beta_warning
                     )
-                    logger.info(f"[{self.name}] {msg}")
+                    logger.info("[%s] %s", self.name, msg)
                     await self._mqtt_publish(
                         f"agents/{self.actor_id}/logs",
                         {"type": "log", "message": msg, "timestamp": time.time()},
@@ -832,7 +878,9 @@ class CatalogAgent(Actor):
                 if needed:
                     installer = self._registry.find_by_name("installer") if self._registry else None
                     if installer:
-                        logger.info(f"[{self.name}] Installing missing deps for '{name}': {needed}")
+                        logger.info(
+                            "[%s] Installing missing deps for '%s': %s", self.name, name, needed
+                        )
                         import uuid as _uuid
 
                         task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
@@ -858,15 +906,19 @@ class CatalogAgent(Actor):
                             await asyncio.wait_for(future, timeout=120.0)
                         except asyncio.TimeoutError:
                             logger.warning(
-                                f"[{self.name}] Install timeout for '{name}' — proceeding anyway"
+                                "[%s] Install timeout for '%s' — proceeding anyway", self.name, name
                             )
                     else:
                         logger.warning(
-                            f"[{self.name}] installer not found — skipping dep install for '{name}'"
+                            "[%s] installer not found — skipping dep install for '%s'",
+                            self.name,
+                            name,
                         )
                 else:
                     logger.info(
-                        f"[{self.name}] All deps for '{resolved}' already installed — skipping installer"
+                        "[%s] All deps for '%s' already installed — skipping installer",
+                        self.name,
+                        resolved,
                     )
 
             actor = await self.spawn(
@@ -892,7 +944,7 @@ class CatalogAgent(Actor):
                 msg = _chat_message_with_beta_warning(
                     f"'{resolved}' spawned and running", beta_warning
                 )
-                logger.info(f"[{self.name}] {msg}")
+                logger.info("[%s] %s", self.name, msg)
                 await self._mqtt_publish(
                     f"agents/{self.actor_id}/logs",
                     {"type": "log", "message": msg, "timestamp": time.time()},
@@ -902,7 +954,7 @@ class CatalogAgent(Actor):
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
-            logger.error(f"[{self.name}] {msg}")
+            logger.exception("[%s] %s", self.name, msg)
             return {"ok": False, "message": msg}
 
     # Public API ─────────────────────────────────────────────────────────────

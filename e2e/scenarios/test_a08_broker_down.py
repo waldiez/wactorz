@@ -42,18 +42,18 @@ def test_a_local_command_lands_with_the_broker_stopped(
     broker.stop()
 
     # The REST route, which is what a script or an integration reaches for. It
-    # used to be the wrong instrument here: it paused the actor and left the
+    # used to be the wrong instrument here: it stopped the actor and left the
     # reported state to arrive by MQTT, so with the broker down the command
     # worked and nothing ever said so. Both paths now do that bookkeeping in one
     # place, which is exactly what this asserts.
-    response = app.rest.command(spare_agent, "pause")
+    response = app.rest.command(spare_agent, "stop")
     assert response.ok, (
-        f"pausing with the broker down was refused: {response.status} {response.body[:200]}"
+        f"stopping with the broker down was refused: {response.status} {response.body[:200]}"
     )
 
     waiting.until(
-        lambda: app.rest.state_of(spare_agent) == "paused",
-        what=f"{spare_agent!r} to actually pause with the broker down",
+        lambda: app.rest.state_of(spare_agent) == "stopped",
+        what=f"{spare_agent!r} to actually stop with the broker down",
         timeout=60.0,
         interval=0.25,
     )
@@ -69,7 +69,7 @@ def test_the_dashboard_path_lands_with_the_broker_stopped_too(
     paper over a path that forgot to report what it did. Asserting only one of
     them would leave the other free to drift back.
     """
-    assert app.rest.command(spare_agent, "resume").ok, "resume before the socket check was refused"
+    assert app.rest.command(spare_agent, "start").ok, "start before the socket check was refused"
     waiting.until(
         lambda: app.rest.state_of(spare_agent) == "running",
         what=f"{spare_agent!r} to be running again",
@@ -80,20 +80,20 @@ def test_the_dashboard_path_lands_with_the_broker_stopped_too(
     # Stopped here rather than at the top: the previous scenario's broker is
     # restarted by the autouse fixture before this one begins, so without this
     # the socket command below travelled with the broker up and the assertion
-    # held for a system that had never been tested. Resuming first with the
-    # broker up is deliberate - it leaves the socket pause as the only thing
+    # held for a system that had never been tested. Starting first with the
+    # broker up is deliberate - it leaves the socket stop as the only thing
     # that happens while the broker is refusing connections.
     broker.stop()
     assert not broker.reachable(), (
-        "the broker is still reachable, so pausing over the socket proves nothing "
+        "the broker is still reachable, so stopping over the socket proves nothing "
         "about the path this scenario exists to check"
     )
 
-    app.rest.socket_command(spare_agent, "pause")
+    app.rest.socket_command(spare_agent, "stop")
 
     waiting.until(
-        lambda: app.rest.state_of(spare_agent) == "paused",
-        what=f"{spare_agent!r} to pause over the socket with the broker down",
+        lambda: app.rest.state_of(spare_agent) == "stopped",
+        what=f"{spare_agent!r} to stop over the socket with the broker down",
         timeout=60.0,
         interval=0.25,
     )
@@ -102,7 +102,7 @@ def test_the_dashboard_path_lands_with_the_broker_stopped_too(
 def test_the_system_recovers_when_the_broker_returns(
     app: backend.Backend, spare_agent: str
 ) -> None:
-    """It reconnects on its own, and the agent it paused is still paused.
+    """It reconnects on its own, and the agent it stopped is still stopped.
 
     The second half matters as much as the first: a reconnect that resynchronises
     from a retained message can quietly undo a command that was given while the
@@ -116,10 +116,10 @@ def test_the_system_recovers_when_the_broker_returns(
         timeout=60.0,
         interval=0.5,
     )
-    assert app.rest.state_of(spare_agent) == "paused", (
-        f"{spare_agent!r} was paused while the broker was down and is now "
+    assert app.rest.state_of(spare_agent) == "stopped", (
+        f"{spare_agent!r} was stopped while the broker was down and is now "
         f"{app.rest.state_of(spare_agent)!r} - the reconnect undid it"
     )
-    assert app.rest.command(spare_agent, "resume").ok, (
-        "resuming after the broker returned was refused"
+    assert app.rest.command(spare_agent, "start").ok, (
+        "starting after the broker returned was refused"
     )

@@ -190,7 +190,7 @@ def test_an_automation_can_be_set_up_for_it(
             for name in {a["name"] for a in story.rest.agents()} - before_agents
             if not name.startswith(MACHINERY_PREFIX)
         }
-        return sorted(new)[0] if new else ""
+        return min(new) if new else ""
 
     created = waiting.until(
         appeared,

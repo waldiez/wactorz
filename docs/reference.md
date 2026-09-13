@@ -54,7 +54,7 @@ Wactorz was born out of the need for a framework that could operate on real-worl
 
 ### The Actor Model
 
-Each agent is an Actor: an independent unit with its own async message loop, mailbox (`asyncio.Queue`), and lifecycle (`IDLE → RUNNING → PAUSED → STOPPED / FAILED`). Actors never share memory. They communicate by sending typed `Message` objects to each other via the `ActorRegistry`, which maps actor IDs to actor instances.
+Each agent is an Actor: an independent unit with its own async message loop, mailbox (`asyncio.Queue`), and lifecycle (`IDLE → RUNNING → STOPPED / FAILED`). Actors never share memory. They communicate by sending typed `Message` objects to each other via the `ActorRegistry`, which maps actor IDs to actor instances.
 
 ```
 Message flow:
@@ -743,7 +743,7 @@ wactorz-mcp
 python -m wactorz.interfaces.mcp_server
 ```
 
-MCP tools include `ask_wactorz`, `ask_agent`, `list_agents`, `list_capabilities`, `stop_agent`, `pause_agent`, `resume_agent`, `ha_list_entities`, `ha_get_state`, and `ha_call_service`. Resources include `wactorz://agents`, `wactorz://capabilities`, `wactorz://ha-map`, and `wactorz://config`.
+MCP tools include `ask_wactorz`, `ask_agent`, `list_agents`, `list_capabilities`, `stop_agent`, `ha_list_entities`, `ha_get_state`, and `ha_call_service`. Resources include `wactorz://agents`, `wactorz://capabilities`, `wactorz://ha-map`, and `wactorz://config`.
 
 Configure it with `WACTORZ_URL` and optional `WACTORZ_API_KEY`. Direct Home Assistant tools are enabled by `HA_URL` and `HA_TOKEN`.
 

@@ -36,7 +36,7 @@ def spare_agent_fixture(app: backend.Backend) -> str:
 
     def appeared() -> str:
         new = {a["name"] for a in app.rest.agents()} - before
-        return sorted(new)[0] if new else ""
+        return min(new) if new else ""
 
     name = waiting.until(
         appeared,

@@ -22,6 +22,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from wactorz.agents.main.actor import MainActor
@@ -566,6 +567,111 @@ class ResetSpawnsKvRegistryTest(unittest.TestCase):
             with self._db(tmp) as reopened:
                 fresh = PersistenceAPI(reopened, PickleStore(tmp), "main")
                 self.assertFalse(fresh.get("_spawned_agents") or {})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5b. reset_all forgets the durable memory main keeps in kv_store
+#     (regression: "wipe everything" left every pipeline rule and user fact)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ResetAllMemoryKvTest(unittest.TestCase):
+    """Rules, facts, webhook URLs, topic contracts and manifests are SQLite
+    kv keys read through recall() on every call. None of the chat / metrics /
+    spawns scopes deletes them, and main is a kept actor so it is never purged
+    wholesale — a full wipe has to delete the rows itself.
+    """
+
+    MEMORY: ClassVar[dict[str, dict]] = {
+        "_pipeline_rules": {"r1": {"rule_id": "r1", "task": "door counter", "agents": ["a"]}},
+        "_user_facts": {"pref_user_name": "Yannis"},
+        "_notification_urls": {"discord": "https://discord.com/api/webhooks/1/x"},
+        "_topic_contracts": {"a": {"publishes": ["custom/x"]}},
+        "_agent_manifests": {"a": {"name": "a"}},
+    }
+
+    def _db(self, tmp: str):
+        from wactorz.core.persistence import WactorzDB
+
+        return WactorzDB(str(Path(tmp) / "wactorz.db"))
+
+    def _seed(self, db, owner: str = "main") -> None:
+        for key, value in self.MEMORY.items():
+            db.kv_set(owner, key, value)
+
+    def test_reset_memory_deletes_every_key(self):
+        from wactorz.reset import reset_memory
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                self._seed(db)
+                reset_memory(db_path=db_path)
+                for key in self.MEMORY:
+                    self.assertIsNone(db.kv_get("main", key, None), key)
+
+    def test_full_wipe_forgets_rules_and_facts(self):
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                self._seed(db)
+                reset_all(db_path=db_path, state_dir=tmp)
+                for key in self.MEMORY:
+                    self.assertIsNone(db.kv_get("main", key, None), key)
+
+    def test_restart_read_sees_no_rules_after_wipe(self):
+        """The symptom end-to-end: /rules after a wipe reads
+        recall("_pipeline_rules") through a fresh PersistenceAPI on the same
+        db file and must find nothing."""
+        from wactorz.core.persistence import PersistenceAPI, PickleStore
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                api = PersistenceAPI(db, PickleStore(tmp), "main")
+                for key, value in self.MEMORY.items():
+                    api.set(key, value)
+                self.assertTrue(api.get("_pipeline_rules"))  # sanity
+
+                reset_all(db_path=db_path, state_dir=tmp)
+
+            # Closed and reopened: Windows refuses to remove the temp directory
+            # while any handle on the database is open.
+            with self._db(tmp) as reopened:
+                fresh = PersistenceAPI(reopened, PickleStore(tmp), "main")
+                self.assertFalse(fresh.get("_pipeline_rules") or {})
+                self.assertFalse(fresh.get("_user_facts") or {})
+
+    def test_single_agent_wipe_leaves_other_owners_alone(self):
+        from wactorz.reset import reset_all
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                self._seed(db, owner="main")
+                self._seed(db, owner="other")
+                reset_all(agent_name="other", db_path=db_path, state_dir=tmp)
+                for key, value in self.MEMORY.items():
+                    self.assertEqual(db.kv_get("main", key, None), value, key)
+                    self.assertIsNone(db.kv_get("other", key, None), key)
+
+    def test_other_scopes_do_not_touch_memory(self):
+        """Chat, metrics and spawns each own their keys and nothing else — the
+        memory keys are a full wipe's job, so a partial reset keeps them."""
+        from wactorz.reset import reset_chat, reset_metrics, reset_spawns
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "wactorz.db")
+            with self._db(tmp) as db:
+                self._seed(db)
+                reset_chat(db_path=db_path, state_dir=tmp)
+                reset_metrics(db_path=db_path)
+                reset_spawns(db_path=db_path)
+                for key, value in self.MEMORY.items():
+                    self.assertEqual(db.kv_get("main", key, None), value, key)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

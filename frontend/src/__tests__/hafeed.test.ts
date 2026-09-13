@@ -32,9 +32,71 @@ describe("createHaFeedPusher", () => {
         });
     });
 
-    it("ignores domains outside the feed allow-list", () => {
+    it("ignores the domains that are readings rather than events", () => {
         const push = vi.fn<(item: FeedItem) => void>();
-        createHaFeedPusher(push)("sensor.temp", "on", "Temp");
+        for (const eid of ["sensor.temp", "number.target", "update.core", "sun.sun", "zone.home"]) {
+            createHaFeedPusher(push)(eid, "on", "X");
+        }
+        expect(push).not.toHaveBeenCalled();
+    });
+
+    it("ignores a value someone stored, however much it looks like a moment", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+
+        // A date is not an event: nothing happened when this was set, and the
+        // reading filter cannot tell it from one because it is not a number.
+        createHaFeedPusher(push)("input_datetime.wake_up", "2026-08-31 07:00:00", "Wake up");
+        createHaFeedPusher(push)("date.holiday", "2026-12-25", "Holiday");
+        createHaFeedPusher(push)("time.alarm", "07:00:00", "Alarm");
+
+        expect(push).not.toHaveBeenCalled();
+    });
+
+    it("shows a domain nobody thought to name", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+
+        // The point of naming noise instead of naming what to keep: a domain
+        // Home Assistant adds later arrives on its own, rather than being
+        // absent with nothing to show that it is.
+        createHaFeedPusher(push)("lawn_mower.rear", "mowing", "Rear mower");
+
+        expect(push).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the sensors that report a condition", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        createHaFeedPusher(push)("binary_sensor.tapo_t300_moisture", "on", "T300 Moisture");
+        expect(push.mock.calls[0]![0]).toMatchObject({ label: "T300 Moisture → on" });
+    });
+
+    it("says what happened, not when, for a thing that was activated", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+
+        // These carry the moment as their state. "Pan right → 2026-08-31T12:16"
+        // is not a sentence anyone wants in a feed.
+        createHaFeedPusher(push)("button.pan_right", "2026-08-31T12:16:31.563494", "Pan right");
+        createHaFeedPusher(push)("event.doorbell", "2026-08-31T12:16:31+00:00", "Doorbell");
+        createHaFeedPusher(push)("scene.movie_night", "2026-08-31T20:00:00+00:00", "Movie night");
+
+        expect(push.mock.calls.map(c => c[0].label)).toEqual([
+            "Pan right pressed",
+            "Doorbell fired",
+            "Movie night activated",
+        ]);
+    });
+
+    it("keeps a timestamp state out of the reading filter", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+
+        // It starts with a digit, which is all the old check looked at.
+        createHaFeedPusher(push)("button.pan_right", "2026-08-31T12:16:31.563494", "Pan right");
+
+        expect(push).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores a thing whose state nobody knows", () => {
+        const push = vi.fn<(item: FeedItem) => void>();
+        createHaFeedPusher(push)("button.favorite", "unavailable", "Favorite");
         expect(push).not.toHaveBeenCalled();
     });
 
@@ -44,9 +106,11 @@ describe("createHaFeedPusher", () => {
         expect(push).not.toHaveBeenCalled();
     });
 
-    it("skips numeric states (sensors leaking through)", () => {
+    it("skips readings, whatever reports them", () => {
         const push = vi.fn<(item: FeedItem) => void>();
         createHaFeedPusher(push)("climate.living", "23", "Living");
+        createHaFeedPusher(push)("climate.living", "21.5", "Living");
+        createHaFeedPusher(push)("climate.living", "-3,5", "Living");
         expect(push).not.toHaveBeenCalled();
     });
 

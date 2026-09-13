@@ -1,7 +1,7 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt fmt-py lint lint-py format clean \
         up down logs shell \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
-        e2e e2e-setup e2e-release e2e-rehearse e2e-demo e2e-clean \
+        e2e e2e-setup e2e-release e2e-rehearse e2e-demo e2e-demo-all e2e-clean \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
 # ── Windows shell setup ──────────────────────────────────────────────────────
@@ -142,13 +142,9 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 	$(PYTHON) -m ruff check wactorz tests scripts e2e
 	$(PYTHON) -m ruff format --check wactorz tests scripts e2e
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
-	-$(PYTHON) -m ruff check wactorz --extend-select G,LOG,TRY,C90,PTH,S,T20,DTZ --statistics
+	-$(PYTHON) -m ruff check wactorz --extend-select TRY,C90,PTH,T20 --ignore PTH123 --statistics
 	@echo "── gated: basedpyright (basic) ──"
-	@if command -v basedpyright >/dev/null 2>&1; then \
-		basedpyright wactorz; \
-	else \
-		echo "(basedpyright not installed — run 'make install-dev')"; \
-	fi
+	$(PYTHON) -m basedpyright
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 

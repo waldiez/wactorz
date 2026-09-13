@@ -10,14 +10,11 @@ stated here rather than left to emerge from anything.
 """
 
 from .agents import (
-    agents_pause,
     delete_agent,
     list_agents,
     migrate_agent_cmd,
-    pause_agent,
     remove_agent,
     restart_agent,
-    resume_agent,
     start_agent,
     stop_agent,
 )
@@ -59,11 +56,8 @@ registry.add(remove_node)
 registry.add(restart_node)
 registry.add(shutdown_node)
 registry.add(start_agent)
-registry.add(pause_agent)
-registry.add(resume_agent)
 registry.add(stop_agent)
 registry.add(delete_agent)
-registry.add(agents_pause)
 registry.add(remove_agent)
 # Last of the /agents family: it matches any `/agents …`, so ahead of the verbs
 # above it would read `stop` as a capability search term.

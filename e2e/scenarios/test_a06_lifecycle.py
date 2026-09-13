@@ -1,13 +1,13 @@
-"""Pause, resume, stop, start, delete - and `main` refusing to be paused.
+"""Stop, start, delete - and `main` refusing to be stopped.
 
 One test per row. Each of these is a case where the system can report success
 while having done nothing at all: an accepted command that changes no state reads
 exactly like a working one from the caller's side. Split so a failure names the
 claim that broke rather than "lifecycle".
 
-The order matters and is the order a person would use: pause before resume,
-resume before stop, delete last. They share the shared backend, so the agent this
-operates on is the one `a04` spawned.
+The order matters and is the order a person would use: stop before start,
+delete last. They share the shared backend, so the agent this operates on is the
+one `a04` spawned.
 """
 
 from harness import backend, waiting
@@ -22,18 +22,6 @@ def _state_becomes(app: backend.Backend, agent: str, wanted: str, *, timeout: fl
         timeout=timeout,
         interval=0.25,
     )
-
-
-def test_an_agent_can_be_paused(app: backend.Backend) -> None:
-    response = app.rest.command(AGENT, "pause")
-    assert response.ok, f"pausing {AGENT!r} was refused: {response.status} {response.body[:200]}"
-    _state_becomes(app, AGENT, "paused")
-
-
-def test_a_paused_agent_can_be_resumed(app: backend.Backend) -> None:
-    response = app.rest.command(AGENT, "resume")
-    assert response.ok, f"resuming {AGENT!r} was refused: {response.status} {response.body[:200]}"
-    _state_becomes(app, AGENT, "running")
 
 
 def test_an_agent_can_be_stopped(app: backend.Backend) -> None:
@@ -60,19 +48,20 @@ def test_a_stopped_agent_can_be_started_and_stays_supervised(app: backend.Backen
     )
 
 
-def test_main_refuses_to_be_paused(app: backend.Backend) -> None:
+def test_main_refuses_to_be_stopped(app: backend.Backend) -> None:
     """The one agent everything else routes through will not be turned off.
 
     A refusal, and then evidence that the refusal meant it: an endpoint can
-    return an error and pause the agent anyway, and that failure is invisible
-    from the status code alone.
+    return an error and stop the agent anyway, and that failure is invisible
+    from the status code alone. Refused as a rule about the agent, so the status
+    is 403 - a 404 or 405 would also be "not ok" while testing nothing.
     """
-    response = app.rest.command("main", "pause")
-    assert not response.ok, (
-        f"pausing main was accepted ({response.status}); it is protected and must be refused"
+    response = app.rest.command("main", "stop")
+    assert response.status == 403, (
+        f"stopping main answered {response.status}; it is essential and must be refused"
     )
     assert app.rest.state_of("main") == "running", (
-        f"main was refused and paused anyway - it reports {app.rest.state_of('main')!r}"
+        f"main was refused and stopped anyway - it reports {app.rest.state_of('main')!r}"
     )
 
 

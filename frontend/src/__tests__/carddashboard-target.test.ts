@@ -260,12 +260,10 @@ describe("sending to an agent that cannot answer", () => {
         expect(sent).not.toHaveBeenCalled();
     });
 
-    it("lets a paused or initializing agent through", () => {
-        // Both are transient. A false block here would be worse than the bug.
+    it("lets an initializing agent through", () => {
+        // Transient. A false block during normal startup would be worse than
+        // the problem the check solves.
         workerBecomes("initializing");
-        expect(send("hello").sent).toHaveBeenCalledTimes(1);
-
-        workerBecomes("paused");
         expect(send("hello").sent).toHaveBeenCalledTimes(1);
     });
 });
@@ -372,6 +370,21 @@ describe("the target once something has been chosen, by the user or for them", (
         cd._setView("chat");
 
         expect(cd._chat.chatTarget).toBe("catalog");
+    });
+
+    it("takes main back when it arrives before the chat has been opened", () => {
+        // Agents register one at a time, so the first resolution runs against a
+        // partial list and can land on whatever sorts first. Nothing has been
+        // shown yet, so main claiming the target it would have had is not a move
+        // under the user.
+        cd.show([]);
+        cd.addAgent(agent("catalog"));
+        expect(cd._chat.chatTarget).toBe("catalog");
+
+        cd.addAgent(agent("main"));
+        cd._setView("chat");
+
+        expect(cd._chat.chatTarget).toBe("main");
     });
 
     it("does not move you again once a fallback has been chosen for you", () => {

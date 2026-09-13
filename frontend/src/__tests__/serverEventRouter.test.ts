@@ -72,11 +72,19 @@ describe("normaliseChat", () => {
             to: "user",
             content: "Hello",
             timestampMs: 1_700_000_000_000,
+            source: "voice",
+            surface: "reachy-mini",
+            surface_label: "Reachy",
+            brain: "main",
         });
         expect(msg.id).toBe("msg-1");
         expect(msg.from).toBe("main");
         expect(msg.to).toBe("user");
         expect(msg.content).toBe("Hello");
+        expect(msg.source).toBe("voice");
+        expect(msg.surface).toBe("reachy-mini");
+        expect(msg.surfaceLabel).toBe("Reachy");
+        expect(msg.brain).toBe("main");
     });
 
     it("generates id when absent", () => {

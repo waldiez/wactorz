@@ -187,9 +187,9 @@ class Rest:
         return self.call("POST", "/api/chat", body=body, timeout=timeout)
 
     def command(self, agent: str, action: str) -> Response:
-        """Command to call: pause / resume / start / stop, as the dashboard's buttons send them.
+        """Command to call: start / stop, as the dashboard's buttons send them.
 
-        The raw response: refusing to pause `main` is a scenario's assertion, and
+        The raw response: refusing to stop `main` is a scenario's assertion, and
         it is a status code.
         """
         return self.raw("POST", f"/api/actors/{urllib.parse.quote(agent)}/{action}")

@@ -9,11 +9,13 @@ import asyncio
 import os
 import sys
 
-import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
+# pylint: disable=unused-import
+import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding  # pyright: ignore[reportUnusedImport]
 from wactorz.config import CONFIG
 
 
-def get_args():
+def get_args() -> argparse.Namespace:
+    """Parse the cli args."""
     parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
     parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
     parser.add_argument("--port", type=int)
@@ -85,7 +87,8 @@ def _warn_about_tokens_on_the_command_line(args: argparse.Namespace) -> None:
         )
 
 
-def main():
+def main() -> None:
+    """Start the app."""
     from wactorz.app import app
 
     try:

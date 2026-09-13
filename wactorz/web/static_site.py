@@ -194,7 +194,7 @@ async def static_handler(request: web.Request) -> Response:
 
                 return _with_no_cache(web.FileResponse(candidate))
         except Exception:
-            pass
+            logger.debug("[static] Could not serve %s", request.path, exc_info=True)
     raise web.HTTPNotFound()
 
 
@@ -223,6 +223,9 @@ async def docs_handler(request: web.Request) -> web.FileResponse:
         # `candidate.parent`, so a path that escaped would list a directory
         # outside the docs root and name one of its entries in a redirect.
         raise web.HTTPNotFound()
+    # Found inside the try, raised outside it: HTTPFound is an Exception, so
+    # raised in there it would need its own clause to get past the one below.
+    redirect: str | None = None
     try:
         if candidate.is_file():
             return web.FileResponse(candidate)
@@ -231,9 +234,10 @@ async def docs_handler(request: web.Request) -> web.FileResponse:
             if parent.is_dir():
                 for sub in sorted(parent.iterdir()):
                     if sub.is_dir() and (sub / "index.html").exists():
-                        raise web.HTTPFound(request.path.rstrip("/") + f"/{sub.name}/index.html")
-    except web.HTTPFound:
-        raise
+                        redirect = request.path.rstrip("/") + f"/{sub.name}/index.html"
+                        break
     except Exception:
-        pass
+        logger.debug("[static] Could not resolve %s", request.path, exc_info=True)
+    if redirect is not None:
+        raise web.HTTPFound(redirect)
     raise web.HTTPNotFound()

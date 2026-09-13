@@ -114,6 +114,13 @@ select.af-cfg-input option {
 select.af-cfg-input option:checked {
   background: #2a3a5c;
 }
+.af-mini-btn.caution {
+  border-color: rgba(251, 191, 36, 0.32);
+  color: #fde68a;
+}
+.af-mini-btn.caution:hover {
+  background: rgba(251, 191, 36, 0.12);
+}
 .af-mini-btn.danger {
   background: rgba(239, 68, 68, 0.15);
   border-color: rgba(239, 68, 68, 0.4);

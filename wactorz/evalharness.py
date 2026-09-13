@@ -220,7 +220,8 @@ def extract_json(text: str) -> Any:
             continue
         try:
             return json.loads(candidate)
-        except Exception:
+        # Falls through to the next candidate parse.
+        except Exception:  # noqa: S110
             pass
     stripped = _strip_fences(text)
     for opener, closer in (("[", "]"), ("{", "}")):
@@ -228,7 +229,8 @@ def extract_json(text: str) -> Any:
         if start != -1 and end > start:
             try:
                 return json.loads(stripped[start : end + 1])
-            except Exception:
+            # Falls through to the next candidate parse.
+            except Exception:  # noqa: S112
                 continue
     return None
 

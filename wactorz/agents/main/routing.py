@@ -49,10 +49,26 @@ class RoutingMixin(_Host):
         llm = provider_for("intent", self.llm)
         if llm is None:
             return "OTHER"
+        classifier_text = text
+        history = getattr(self, "_current_interface_history", lambda: ())()
+        if history:
+            context_lines = []
+            for item in history[-2:]:
+                transcript = str(item.get("transcript") or "").strip()
+                response = str(item.get("response") or "").strip()
+                if transcript:
+                    context_lines.append(f"Previous user: {transcript}")
+                if response:
+                    context_lines.append(f"Previous assistant: {response}")
+            classifier_text = (
+                "Recent context (classification only; do not execute):\n"
+                + "\n".join(context_lines)
+                + f"\n\nCurrent request (classify this only): {text}"
+            )
         try:
             decision, _usage = await asyncio.wait_for(
                 llm.complete(
-                    messages=[{"role": "user", "content": text}],
+                    messages=[{"role": "user", "content": classifier_text}],
                     system=INTENT_CLASSIFIER_PROMPT,
                     max_tokens=10,
                     reasoning_effort="none",
@@ -68,10 +84,10 @@ class RoutingMixin(_Host):
                 return token
             return "OTHER"
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] Intent classification timed out after 60s")
+            logger.warning("[%s] Intent classification timed out after 60s", self.name)
             return "OTHER"
         except Exception as e:
-            logger.debug(f"[{self.name}] Intent classification failed: {e}")
+            logger.debug("[%s] Intent classification failed: %s", self.name, e)
             return "OTHER"
 
     async def _handle_actuate_intent(
@@ -143,11 +159,12 @@ class RoutingMixin(_Host):
                                 + "\n]"
                             )
                             logger.info(
-                                f"[{self.name}] Enriched actuate request with "
-                                f"{len(entity_lines)} HA entities"
+                                "[%s] Enriched actuate request with %s HA entities",
+                                self.name,
+                                len(entity_lines),
                             )
         except Exception as e:
-            logger.warning(f"[{self.name}] Could not fetch HA entities for actuate: {e}")
+            logger.warning("[%s] Could not fetch HA entities for actuate: %s", self.name, e)
 
         task_id = f"actuate_{uuid.uuid4().hex[:8]}"
         future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -157,6 +174,9 @@ class RoutingMixin(_Host):
             await self.spawn(
                 OneOffActuatorAgent,
                 request=enriched_text,
+                conversation_context=list(
+                    getattr(self, "_current_interface_history", lambda: ())()
+                ),
                 llm_provider=provider_for("actuator", self.llm),
                 task_id=task_id,
                 reply_to_id=self.actor_id,

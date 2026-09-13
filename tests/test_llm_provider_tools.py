@@ -15,6 +15,7 @@ from tests.optional_deps import ensure_importable  # pyright: ignore[reportMissi
 
 ensure_importable("openai", "anthropic")
 
+from wactorz.agents.llm.retry import is_retryable
 from wactorz.agents.llm_agent import (
     AnthropicProvider,
     GeminiProvider,
@@ -28,6 +29,29 @@ TOOL = {
     "description": "Fetch HA data",
     "parameters": {"type": "object", "properties": {}},
 }
+
+
+class _Busy(Exception):
+    """What an SDK raises when the service is rate-limiting, shaped like one."""
+
+    status_code = 429
+
+
+class _Rejected(Exception):
+    """A request the service refuses however many times it is asked."""
+
+    status_code = 400
+
+
+def _raises(exc: Exception) -> types.SimpleNamespace:
+    """A client whose completion call fails with `exc`."""
+
+    async def create(**_kwargs: Any) -> Any:
+        raise exc
+
+    return types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+    )
 
 
 class _FakeOpenAICompletions:  # pylint: disable=too-few-public-methods
@@ -114,6 +138,40 @@ class ProviderToolPlumbingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["tools"][0]["type"], "function")
         self.assertEqual(payload["tools"][0]["function"]["name"], "get_simplified_ha_data")
         self.assertEqual(result.tool_calls[0].id, "call-1")
+
+    async def test_nim_lets_a_busy_service_through_untouched(self) -> None:
+        """A 429 keeps the status the retry policy reads it from.
+
+        Wrapping it put the status in the text of a `RuntimeError`, where
+        nothing looks for it, so a rate limit answered the user instead of
+        being waited out.
+        """
+        provider = NIMProvider.__new__(NIMProvider)
+        provider.model = "meta/llama-3.3-nemotron-super-49b-v1"
+        busy = _Busy()
+        provider.client = _raises(busy)  # pyright: ignore[reportAttributeAccessIssue]
+
+        with self.assertRaises(_Busy) as caught:
+            await provider._complete_with_tools(  # pylint: disable=protected-access
+                messages=[{"role": "user", "content": "check HA"}], tools=[TOOL]
+            )
+
+        self.assertIs(caught.exception, busy)
+        self.assertTrue(is_retryable(caught.exception))
+
+    async def test_nim_still_explains_a_model_that_cannot_take_tools(self) -> None:
+        """The hint is the point of the wrapper, and a 400 is where it belongs."""
+        provider = NIMProvider.__new__(NIMProvider)
+        provider.model = "meta/llama-3.3-nemotron-super-49b-v1"
+        provider.client = _raises(_Rejected())  # pyright: ignore[reportAttributeAccessIssue]
+
+        with self.assertRaises(RuntimeError) as caught:
+            await provider._complete_with_tools(  # pylint: disable=protected-access
+                messages=[{"role": "user", "content": "check HA"}], tools=[TOOL]
+            )
+
+        self.assertIn("supports tools", str(caught.exception))
+        self.assertFalse(is_retryable(caught.exception))
 
     async def test_anthropic_tool_use_and_tool_result_block_shape(self) -> None:
         """Anthropic converts tool results into `tool_result` content blocks."""

@@ -33,7 +33,9 @@ class DiscordInterface:
         try:
             import discord
         except ImportError:
-            logger.error("discord.py not installed. Run: pip install discord.py")
+            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+                "discord.py not installed. Run: pip install discord.py"
+            )  # the ImportError is the whole diagnosis
             return
 
         # Fail closed: a bot that answers anyone can drain the LLM budget and

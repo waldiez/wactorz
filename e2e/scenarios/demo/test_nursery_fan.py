@@ -35,6 +35,8 @@ is asserted only in the one test marked `requires_llm("real")`, which `test`
 skips.
 """
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -172,7 +174,7 @@ def test_the_automation_can_be_set_up_in_conversation(
             for name in {a["name"] for a in story.rest.agents()} - before_agents
             if not name.startswith(MACHINERY_PREFIX)
         }
-        return sorted(new)[0] if new else ""
+        return min(new) if new else ""
 
     created = waiting.until(
         appeared,

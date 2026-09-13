@@ -111,7 +111,7 @@ have been written as a unit test, it should have been.
 | `a03_the_pages` | every page renders and its data arrives |
 | `a04_spawn_an_agent` | a catalogue agent spawns and reaches `running` |
 | `a05_talk_to_it` | a message reaches the agent and its reply reaches the page |
-| `a06_lifecycle` | pause, resume, stop, start, delete, and `main` refusing to be paused |
+| `a06_lifecycle` | stop, start, delete, and `main` refusing to be stopped |
 | `a07_counters` | after two stop/start cycles, message count and cost are unchanged |
 | `a08_broker_down` | a local command takes effect with the broker stopped, over REST and over the socket |
 | `a09_shutdown` | one interrupt, exits in well under a second |
@@ -133,10 +133,10 @@ Two assert a property rather than liveness:
   suite starts runs from a copy outside the repository with `wactorz` made
   unimportable — on a developer machine the package is installed and importable
   from anywhere, so the copy alone would prove nothing.
-- **`a06` is one test per lifecycle row.** Refusing a message to a paused agent,
-  refusing one to a stopped agent, and staying supervised a minute after a
-  restart are each a case where the system can report success while having done
-  nothing, so a failure names which claim broke.
+- **`a06` is one test per lifecycle row.** Refusing a message to a stopped agent
+  and staying supervised a minute after a restart are each a case where the
+  system can report success while having done nothing, so a failure names which
+  claim broke.
 
 (The numbers are zero-padded because pytest collects files in string order:
 `a10` sorts before `a1`, and the reset scenario must not run first.)

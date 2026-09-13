@@ -101,6 +101,27 @@ class HomeAssistantStateBridgeAgent(Actor):
 
     # ── Message handling ───────────────────────────────────────────────────────
 
+    def _spoken_status(self, status: dict[str, Any]) -> str:
+        """The status as a sentence, for a person rather than for a caller.
+
+        The chat surface prints `str(payload)` when a reply carries none of the
+        keys it knows to read, so without this the dict below reached people as
+        a Python repr.
+        """
+        if not status.get("configured"):
+            return (
+                "I forward Home Assistant state changes onto MQTT, but no instance "
+                "is configured, so I am not watching anything."
+            )
+        seen = status.get("events_seen", 0)
+        heard = f"{seen} state change{'' if seen == 1 else 's'} so far"
+        problem = status.get("last_error")
+        trouble = f" The last thing to go wrong: {problem}." if problem else ""
+        return (
+            f"I forward Home Assistant state changes onto {status.get('output_topic')}. "
+            f"I have seen {heard}.{trouble}"
+        )
+
     async def handle_message(self, msg: Message) -> None:
         if msg.type != MessageType.TASK:
             return
@@ -108,8 +129,13 @@ class HomeAssistantStateBridgeAgent(Actor):
         command = self._extract_command(msg.payload)
         if command == "status":
             payload: dict[str, Any] = self._build_status_payload()
+            payload["result"] = self._spoken_status(payload)
         else:
             payload = {
+                "result": (
+                    "I cannot answer questions. I forward Home Assistant state changes "
+                    "onto MQTT, and the only thing I understand is 'status'."
+                ),
                 "error": "Unsupported command. Use 'status'.",
                 "supported_commands": ["status"],
             }

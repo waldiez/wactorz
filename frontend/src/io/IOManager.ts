@@ -42,11 +42,11 @@ export class IOManager {
             emit("af-stream-chunk", { chunk, from });
         });
 
-        ws.onStreamEnd(() => {
-            // The end frame carries no agent — attribute by the most recent
-            // chunk (a protocol limit), but take only that agent's buffer so
-            // concurrent streams never merge.
-            const from = this._lastStreamFrom || MAIN_AGENT;
+        ws.onStreamEnd(frameFrom => {
+            // The frame names its own sender; the last chunk's agent is the
+            // fallback for a frame that arrives without one. Either way only
+            // that agent's buffer is taken, so concurrent streams never merge.
+            const from = frameFrom || this._lastStreamFrom || MAIN_AGENT;
             const text = this._streams.take(from);
             // A stream_end with no streamed text (e.g. agents that reply via a
             // single non-streamed `chat` frame) must NOT create a feed row —

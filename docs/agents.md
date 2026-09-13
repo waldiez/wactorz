@@ -6,7 +6,7 @@ All agents are Python classes that extend `Actor`. They communicate exclusively 
 
 ## Core agents
 
-Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ONE` restart policies. They are **protected** — they cannot be stopped or deleted from the dashboard.
+Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ONE` restart policies. They are **protected** — they cannot be deleted, since nothing could recreate them. They can be stopped and started again, except for `main`, which is also **essential**: stopping it would leave chat unanswered, which is where a user would go to start it again.
 
 ---
 

@@ -216,13 +216,26 @@ describe("DashboardChat — resolveDefaultTarget", () => {
         expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it("keeps a target resolved earlier, even once main turns up", () => {
-        // The behaviour change: first resolution sticks. Main arriving late no
-        // longer takes the conversation over — the user has already seen the
-        // current target named on screen, and moving it silently is the bug.
+    it("hands the target to main when it turns up before anything has been shown", () => {
+        // Agents register one at a time, so the first resolution runs against a
+        // partial list and can land on whatever sorts first. A fallback is never
+        // remembered, so nothing here is the user's choice yet.
         const host = makeHost([agent("catalog")]);
         const dc = new DashboardChat(host);
         dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe("catalog");
+
+        host.agents.set("main", agent("main"));
+        dc.resolveDefaultTarget();
+        expect(dc.chatTarget).toBe("main");
+    });
+
+    it("keeps a target resolved earlier once the chat has been shown", () => {
+        // Mounting is what marks the target as seen, and from there main
+        // arriving late must not take the conversation over.
+        const host = makeHost([agent("catalog")]);
+        const dc = mount(host);
+        dc.afterMount();
         expect(dc.chatTarget).toBe("catalog");
 
         host.agents.set("main", agent("main"));
@@ -368,6 +381,33 @@ describe("DashboardChat — sending & live events", () => {
         };
         document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
         expect(thread(host).textContent).toContain("hi back");
+    });
+
+    it("keeps a voice session in its embodied surface thread", () => {
+        dc.unwire();
+        host = makeHost([agent("main"), agent("reachy-mini")]);
+        dc = mount(host);
+        dc.setTarget("main");
+        dc.renderSidebar();
+        dc.renderChatPaneHeader();
+        dc.renderChatThread();
+        dc.wire();
+
+        const msg: ChatMessage = {
+            id: "voice-1",
+            from: "user",
+            to: "reachy-mini",
+            content: "turn on the light",
+            timestampMs: Date.now(),
+            source: "voice",
+            surface: "reachy-mini",
+            surfaceLabel: "Reachy",
+            brain: "main",
+        };
+        document.dispatchEvent(new CustomEvent("af-chat-message", { detail: { msg } }));
+
+        expect(dc.chatTarget).toBe("reachy-mini");
+        expect(thread(host).textContent).toContain("turn on the light");
     });
 
     it("streams chunks into a live bubble then commits on stream-end", () => {

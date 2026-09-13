@@ -7,11 +7,13 @@
  *
  * Two modes, independently toggled:
  *   beep  — short AudioContext tone on each incoming message
- *   tts   — speech synthesis (server edge-tts when available, Web Speech API fallback)
+ *   tts   — replies read aloud, by the server or by this browser
  *
- * Server TTS: POST /api/tts {text, voice} → audio/mpeg.
- * If the endpoint returns 503 (edge-tts not installed) the manager falls back
- * to window.speechSynthesis for the rest of the session.
+ * Which of those speaks follows the branch the deployment names, and the server
+ * is asked with POST /api/tts {text, voice}. The audio comes back in whatever
+ * form made it, which is decoded by sniffing rather than by its type. A 503 says
+ * this deployment will not speak, and window.speechSynthesis covers the rest of
+ * the session.
  *
  * Persistence: toggle state and selected voice are stored in localStorage.
  */
@@ -30,6 +32,7 @@ export class TTSManager {
     private _audioCtx: AudioContext | null = null;
     /** null = unknown, true = server responded ok, false = unavailable (503/network) */
     private _serverAvailable: boolean | null = null;
+    private _mode: "off" | "browser" | "server" | "host" = "server";
     private _voices: TTSVoice[] = [];
     /** API base — empty for plain web, ingress prefix behind HA.
      *  Must be set (main.ts) before init(); bare "/api/…" escapes the ingress prefix. */
@@ -45,26 +48,56 @@ export class TTSManager {
         this._apiBase = base;
     }
 
+    /** Which branch this deployment speaks through. */
+    setMode(mode: "off" | "browser" | "server" | "host"): void {
+        this._mode = mode;
+    }
+
+    /** Whether the server will make speech for this browser to play. */
+    setServerAvailable(available: boolean): void {
+        this._serverAvailable = available;
+    }
+
     /**
-     * Probe the server for edge-tts availability and load the voice list.
-     * Falls back to browser voices if the server has none.
-     * Call once after the page loads — non-blocking.
+     * Load whatever voices there are to choose between.
+     *
+     * Which list that is follows the branch, not what happens to answer: a
+     * deployment speaking through its own service has voices that are the
+     * service's, and offering this browser's instead would send it a name it
+     * has never heard of.
+     *
+     * Call once after the page loads -- non-blocking.
      */
     async init(): Promise<void> {
-        const serverOk = await this._checkServer();
-        if (!serverOk) {
+        if (this._mode === "off" || this._mode === "host") {
+            return;
+        }
+        // Also when the server cannot speak: this browser covers for it then,
+        // and it needs its own voices to do that with.
+        if (this._mode === "browser" || this._serverAvailable === false) {
+            await this._loadBrowserVoices();
+            return;
+        }
+        if (!(await this._loadServerVoices())) {
             await this._loadBrowserVoices();
         }
     }
 
-    private async _checkServer(): Promise<boolean> {
+    /**
+     * Take the voice list the server offers, which may be empty.
+     *
+     * An empty list means there is no choice to make -- a named synthesiser
+     * speaks in whatever it is configured for -- and is not the same as a server
+     * that cannot speak. Reading it as the latter would hand the words to this
+     * browser while the service sat there working.
+     */
+    private async _loadServerVoices(): Promise<boolean> {
         try {
             const res = await fetch(`${this._apiBase}/api/tts/voices`);
             if (res.ok) {
                 const data: unknown = await res.json();
-                if (Array.isArray(data) && data.length > 0) {
+                if (Array.isArray(data)) {
                     this._voices = data as TTSVoice[];
-                    this._serverAvailable = true;
                     this._emitVoices();
                     return true;
                 }
@@ -91,13 +124,22 @@ export class TTSManager {
                 }
                 this._voices = voices.map(v => ({ name: v.name, locale: v.lang, gender: "" }));
                 this._emitVoices();
-                resolve();
                 return true;
             };
 
-            if (!populate()) {
-                synth.addEventListener("voiceschanged", () => populate(), { once: true });
-                setTimeout(resolve, 2000); // give up gracefully if event never fires
+            // Listened to however many times it fires, and whether or not there
+            // is a list already: the first answer is often just the voices
+            // installed on the machine, with the rest arriving a moment later.
+            // Taking the first answer as the whole list loses everything after it.
+            synth.addEventListener("voiceschanged", () => {
+                if (populate()) {
+                    resolve();
+                }
+            });
+            if (populate()) {
+                resolve();
+            } else {
+                setTimeout(resolve, 2000); // give up gracefully if it never fires
             }
         });
     }
@@ -114,11 +156,11 @@ export class TTSManager {
     get ttsEnabled(): boolean {
         return this._ttsEnabled;
     }
-    /** True once the server edge-tts endpoint has been confirmed available. */
+    /** Whether the server will make speech for this browser to play. */
     get serverAvailable(): boolean {
         return this._serverAvailable === true;
     }
-    /** Available voices (server edge-tts list, or browser voices as a fallback). */
+    /** The voices there are to choose between, which may be none. */
     get voices(): TTSVoice[] {
         return this._voices;
     }
@@ -199,7 +241,18 @@ export class TTSManager {
     }
 
     private _speak(text: string): void {
+        // `off` wants silence and `host` is answered through the server's own
+        // speakers, so in both this browser saying it too is one voice too many.
+        if (this._mode === "off" || this._mode === "host") {
+            return;
+        }
         const excerpt = text.replace(/```[\s\S]*?```/g, "code block").slice(0, 300);
+        // `browser` is a deployment saying the words stay on this machine, so it
+        // is never a fallback here -- it is the whole instruction.
+        if (this._mode === "browser") {
+            this._speakBrowser(excerpt);
+            return;
+        }
         if (this._serverAvailable !== false) {
             this._speakServer(excerpt);
         } else {
@@ -212,7 +265,10 @@ export class TTSManager {
         // audio-end or ambient stays ducked.
         emit("tts-audio-start");
         const unduck = () => emit("tts-audio-end");
-        const voice = this.selectedVoice;
+        // Only when there is a list it came from: with a named synthesiser the
+        // stored name is one this browser was offered by some other deployment,
+        // and sending it asks for a voice the service has never heard of.
+        const voice = this._voices.length ? this.selectedVoice : "";
 
         // POST, not GET: synthesis is work, not a read. A GET can be fired
         // cross-origin with no Origin header at all (`<img src>`), which is the

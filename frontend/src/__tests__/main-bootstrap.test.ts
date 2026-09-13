@@ -63,6 +63,8 @@ vi.mock("../io/WSClient", () => ({
         }
         onStreamChunk = vi.fn();
         onStreamEnd = vi.fn();
+        onTranscript = vi.fn();
+        onTranscriptError = vi.fn();
         connect = vi.fn();
         disconnect = vi.fn();
         sendRaw = vi.fn();

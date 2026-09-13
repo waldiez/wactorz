@@ -1293,6 +1293,10 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `DEPLOY_<NODE>_SSH_PORT` | SSH port (default `22`) |
 | `DEPLOY_KNOWN_HOSTS` | Where learned SSH host keys are stored (default `<WACTORZ_STATE_DIR>/known_hosts`) |
 | `DEPLOY_STRICT_HOST_KEYS` | `1` = never learn a host key on first contact; unknown hosts are refused |
+| `WACTORZ_STT` | Speech recognition branch: `off` (default), `browser`, `server` or `host`. The browser reads it from `/api/config`, so one build serves deployments that differ. `browser` recognises in the browser itself, which sends the audio to the browser vendor rather than keeping it local, and works only on Chromium over localhost or TLS; `server` captures here and sends the clip on; `host` captures from this machine's own microphone instead, has no button (something must `POST /api/stt/listen`), routes what it hears as though typed, records it in the chat log, and needs `wactorz[host]` |
+| `WACTORZ_STT_URI` | Where the recogniser is. A `tcp://` address is a Wyoming service, which transcribes a whole recording at once; a `ws://` or `wss://` address is a sherpa-onnx streaming server, which returns words while you are still speaking. The scheme is what chooses between them |
+| `WACTORZ_TTS` | How this deployment speaks: `off`, `browser` (the browser's own voice, so the text is never sent anywhere), `server` (made here and played in the browser; the default) or `host` (made here and played through this machine's own speakers, for answering into a room; reads only replies to a turn someone started, and needs `wactorz[host]`) |
+| `WACTORZ_TTS_URI` | Where speech is made. Unset, it is made in this process by edge-tts (`pip install 'wactorz[tts]'`); a `tcp://` address is a Wyoming synthesiser such as wyoming-piper, and an `http(s)://` address is an endpoint that takes text and answers with audio (the request carries `input`, `text` and `voice`; a service needing more, such as a model name or a key, wants a proxy in front of it). A named service brings its own voices, so `/api/tts/voices` answers with nothing |
 
 ---
 

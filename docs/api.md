@@ -211,12 +211,31 @@ finalises and posts `⏹ Stopped.` over the WebSocket.
 
 ---
 
-### TTS
+### Speech
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/tts/voices` | List available voices |
-| `GET` | `/api/tts` | Synthesize speech (`?text=...&voice=...`) |
+| `GET` | `/api/tts/voices` | The voices there are to choose between, which may be none |
+| `POST` | `/api/tts` | Turn `{"text": ..., "voice": ...}` into audio |
+| `POST` | `/api/stt` | Transcribe an uploaded clip |
+| `POST` | `/api/stt/listen` | Listen through this machine's microphone (`WACTORZ_STT=host` only) |
+
+`POST /api/stt/listen` is the control the `host` branch has instead of a button:
+nobody is necessarily at a screen, so something has to ask it to listen. It takes
+no body, records until whoever is speaking stops, and answers
+`{"text": ..., "heard": true|false}`. What it heard is routed as though typed, so
+an `@mention` reaches the agent it names and anything else reaches main, and both
+the question and the answer are written to the chat log.
+
+**It holds the request while it listens.** A turn can run to twenty seconds of
+recording and then as long again to transcribe, so a caller wants a client
+timeout of a couple of minutes rather than the usual few seconds. Two callers
+asking at once are served one after another -- one microphone, one turn.
+
+It answers `{"heard": false, "speaking": true}` without recording while the
+machine is talking, so a room where `WACTORZ_TTS=host` as well does not hear its
+own reply and answer it. A caller polling in a loop should treat that as "try
+again shortly" rather than as silence.
 
 ---
 

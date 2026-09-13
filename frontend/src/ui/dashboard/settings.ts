@@ -7,6 +7,8 @@
  * the dashboard via callbacks so it can hit the backend and re-render.
  */
 
+import { buildVoiceSection } from "./voiceSettings";
+
 export interface CostLimitInfo {
     limit_usd?: number;
     period?: string;
@@ -155,8 +157,13 @@ function buildCostLimitSection(info: CostLimitInfo | null, cb: CostLimitCallback
     return section;
 }
 
-/** Assemble the settings view (LLM spend-limit panel). */
-export function buildSettingsView(info: CostLimitInfo | null, cb: CostLimitCallbacks): HTMLElement {
+/** Assemble the settings view. */
+export function buildSettingsView(
+    info: CostLimitInfo | null,
+    cb: CostLimitCallbacks,
+    apiBase = "",
+    onVoiceChanged: () => void = () => {},
+): HTMLElement {
     const el = document.createElement("div");
     el.className = "af-settings";
 
@@ -166,6 +173,11 @@ export function buildSettingsView(info: CostLimitInfo | null, cb: CostLimitCallb
     el.appendChild(title);
 
     el.appendChild(buildCostLimitSection(info, cb));
+    // Absent entirely when this deployment neither listens nor speaks.
+    const voice = buildVoiceSection(apiBase, onVoiceChanged);
+    if (voice) {
+        el.appendChild(voice);
+    }
     // No Home Assistant fields: the HA URL comes from /api/config and the Devices
     // nav button links straight to HA — the browser never holds a token.
     return el;

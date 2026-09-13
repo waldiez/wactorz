@@ -76,7 +76,6 @@ registerConfigEntry(SIGN_OUT_KEY, c =>
 registerConfigEntry(UPLOADS_KEY, c =>
     (c.uploads as Record<string, unknown> | undefined)?.enabled ? "1" : "0",
 );
-
 /** Fetch `/api/config` and seed every registered client-side key from it.
  *  Returns whether the HA URL changed (the caller uses this to refresh the
  *  Devices nav link). */

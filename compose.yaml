@@ -232,10 +232,42 @@ services:
       retries: 5
       start_period: 60s
 
+  voice-stt:
+    profiles: [voice]
+    build:
+      context: ./infra/voice/stt
+    container_name: wactorz-voice-stt
+    restart: unless-stopped
+    networks:
+      - wactorz-net
+    environment:
+      # Any streaming model from the sherpa-onnx release page. The default is the
+      # small English one, which keeps up with a speaker without a GPU.
+      VOICE_MODEL: "${VOICE_MODEL:-sherpa-onnx-streaming-zipformer-en-20M-2023-02-17}"
+      VOICE_PORT: "${VOICE_PORT:-6006}"
+    volumes:
+      - voice-models:/data
+    # Loopback only. The recogniser has no authentication of its own, and the
+    # backend reaches it over the compose network by name -- publishing it wider
+    # would offer anyone on the LAN a transcription service and whatever is said
+    # near the microphone driving it. Set WACTORZ_STT_URI=ws://voice:6006 there;
+    # this mapping is for reaching it from this host.
+    ports:
+      - "127.0.0.1:${VOICE_PORT:-6006}:${VOICE_PORT:-6006}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import os,socket;socket.create_connection(('127.0.0.1',int(os.environ.get('VOICE_PORT','6006'))),2).close()"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+
 networks:
   wactorz-net:
 
 volumes:
+  voice-models:
   mosquitto-data:
   mosquitto-logs:
   prometheus-data:

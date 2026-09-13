@@ -140,12 +140,12 @@ class TopicContract:
 
     def matches_topic(self, topic: str) -> bool:
         """Check if this agent subscribes to a given topic (supports # and + wildcards)."""
-        return any(_topic_matches(pattern, topic) for pattern in self.subscribes)
+        return any(topic_matches(pattern, topic) for pattern in self.subscribes)
 
     def produces_topic(self, topic: str) -> bool:
         """Check if this agent publishes to a given topic pattern."""
         for pattern in self.publishes:
-            if _topic_matches(pattern, topic) or _topic_matches(topic, pattern):
+            if topic_matches(pattern, topic) or topic_matches(topic, pattern):
                 return True
         return False
 
@@ -211,7 +211,7 @@ class TopicContract:
 # ── MQTT wildcard matching ──────────────────────────────────────────────────────
 
 
-def _topic_matches(pattern: str, topic: str) -> bool:
+def topic_matches(pattern: str, topic: str) -> bool:
     """Match an MQTT topic against a pattern with # and + wildcards.
     # matches any number of levels. + matches exactly one level.
     """
@@ -261,16 +261,20 @@ class TopicRegistry:
     def register(self, contract: TopicContract):
         self._contracts[contract.name] = contract
         logger.debug(
-            f"[TopicRegistry] Registered '{contract.name}' | "
-            f"pub={contract.publishes} sub={contract.subscribes}"
+            "[TopicRegistry] Registered '%s' | pub=%s sub=%s",
+            contract.name,
+            contract.publishes,
+            contract.subscribes,
         )
 
     def unregister(self, name: str):
         removed = self._contracts.pop(name, None)
         if removed:
             logger.info(
-                f"[TopicRegistry] Unregistered '{name}' | "
-                f"pub={removed.publishes} sub={removed.subscribes}"
+                "[TopicRegistry] Unregistered '%s' | pub=%s sub=%s",
+                name,
+                removed.publishes,
+                removed.subscribes,
             )
 
     def prune_stale(self, live_agent_names: set[str]) -> list[str]:
@@ -289,7 +293,7 @@ class TopicRegistry:
         for name in stale:
             self.unregister(name)
         if stale:
-            logger.info(f"[TopicRegistry] Pruned {len(stale)} stale contract(s): {stale}")
+            logger.info("[TopicRegistry] Pruned %s stale contract(s): %s", len(stale), stale)
         return stale
 
     def get(self, name: str) -> TopicContract | None:
@@ -589,7 +593,9 @@ class StreamWindow:
         try:
             import aiomqtt  # noqa: F401
         except ImportError:
-            logger.error("[StreamWindow] aiomqtt not installed")
+            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+                "[StreamWindow] aiomqtt not installed"
+            )  # the ImportError is the whole diagnosis
             return
         from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
 
@@ -656,16 +662,20 @@ class TopicBus:
             for consumer in consumers:
                 if consumer.name != new_contract.name:
                     logger.info(
-                        f"[TopicBus] Auto-wiring opportunity: "
-                        f"{new_contract.name} → {consumer.name} via {pub_topic}"
+                        "[TopicBus] Auto-wiring opportunity: %s → %s via %s",
+                        new_contract.name,
+                        consumer.name,
+                        pub_topic,
                     )
         for sub_topic in new_contract.subscribes:
             producers = self.registry.producers_of(sub_topic)
             for producer in producers:
                 if producer.name != new_contract.name:
                     logger.info(
-                        f"[TopicBus] Auto-wiring opportunity: "
-                        f"{producer.name} → {new_contract.name} via {sub_topic}"
+                        "[TopicBus] Auto-wiring opportunity: %s → %s via %s",
+                        producer.name,
+                        new_contract.name,
+                        sub_topic,
                     )
 
     def summary(self) -> dict:

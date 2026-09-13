@@ -84,10 +84,10 @@ class RoutingMixin(_Host):
                 return token
             return "OTHER"
         except asyncio.TimeoutError:
-            logger.warning(f"[{self.name}] Intent classification timed out after 60s")
+            logger.warning("[%s] Intent classification timed out after 60s", self.name)
             return "OTHER"
         except Exception as e:
-            logger.debug(f"[{self.name}] Intent classification failed: {e}")
+            logger.debug("[%s] Intent classification failed: %s", self.name, e)
             return "OTHER"
 
     async def _handle_actuate_intent(
@@ -159,11 +159,12 @@ class RoutingMixin(_Host):
                                 + "\n]"
                             )
                             logger.info(
-                                f"[{self.name}] Enriched actuate request with "
-                                f"{len(entity_lines)} HA entities"
+                                "[%s] Enriched actuate request with %s HA entities",
+                                self.name,
+                                len(entity_lines),
                             )
         except Exception as e:
-            logger.warning(f"[{self.name}] Could not fetch HA entities for actuate: {e}")
+            logger.warning("[%s] Could not fetch HA entities for actuate: %s", self.name, e)
 
         task_id = f"actuate_{uuid.uuid4().hex[:8]}"
         future: asyncio.Future = asyncio.get_running_loop().create_future()

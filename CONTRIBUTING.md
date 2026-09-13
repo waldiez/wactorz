@@ -49,7 +49,7 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 
 ## Code Style
 
-- **Python**: `make lint-py` — ruff format + lint gate (advisory typing via basedpyright)
+- **Python**: `make lint-py` — ruff format + lint gate, and basedpyright over the package, tests and scripts
 - **TypeScript**: `make lint` — Prettier, ESLint and `tsc` typecheck
 
 Install pre-commit hooks to run these on commit: `pre-commit install`

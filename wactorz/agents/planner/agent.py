@@ -600,6 +600,11 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         except Exception as exc:
             logger.debug("[%s] Stop failed: %s", self.name, exc)
 
+        # After stop(), so the final status it publishes cannot be mistaken for
+        # a planner that is still here. This is what tells the dashboard the
+        # card is gone; without it the planner's entry outlives the planner.
+        await self.withdraw_manifest()
+
     async def _deferred_stop(self, delay: float = 2.0) -> None:
         await asyncio.sleep(delay)
         await self._terminate()

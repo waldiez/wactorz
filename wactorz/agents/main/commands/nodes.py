@@ -33,8 +33,9 @@ async def deploy_node(ctx: CommandContext, argument: str) -> str:
 async def remove_node(ctx: CommandContext, argument: str) -> str:
     """Stop all agents on a node and remove it."""
     node_name = argument
-    # Clear retained MQTT messages
-    await ctx.actor._mqtt_publish(f"nodes/{node_name}/spawn", b"", retain=True)
+    # Clear the retained desired state, which is what would otherwise bring the
+    # node's agents back when it next reconciles. The spawn message is not
+    # retained, so there is nothing of it left to clear.
     await ctx.actor._mqtt_publish(f"nodes/{node_name}/desired_state", b"", retain=True)
     await ctx.actor._mqtt_publish(f"nodes/{node_name}/stop_all", {"reason": "removed"}, qos=1)
     # Remove all agents for this node from spawn registry
@@ -84,5 +85,6 @@ async def shutdown_node(ctx: CommandContext, argument: str) -> str:
     return (
         f"Shutdown signal sent to node '{node_name}'. "
         f"All agents will stop. The node will disappear from /nodes within 30s. "
-        f"(If systemd manages the runner, it will restart automatically.)"
+        f"(It stays down until redeployed: the unit restarts on failure, and a "
+        f"shutdown is not one.)"
     )

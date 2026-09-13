@@ -14,6 +14,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 
+from ..core.persistence import chat_turn_recorded
 from ..ext.stt import service_uri, streaming
 from ..monitoring.log_redaction import redact
 from . import chat, events, lifecycle, origins, runtime, uploads
@@ -250,7 +251,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             # messages) — persist immediately.
             _persist_chat("assistant", text, _reply_from["name"])
         except Exception:
-            pass
+            logger.debug("[ws] Could not deliver or persist a reply", exc_info=True)
 
     async def ws_stream_chunk(chunk: str):
         try:
@@ -268,7 +269,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             if chunk:
                 _stream_buffer.append(chunk)
         except Exception:
-            pass
+            logger.debug("[ws] Could not deliver a stream chunk", exc_info=True)
 
     async def ws_stream_end():
         try:
@@ -324,21 +325,29 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                         # a file as something else in every thread that shows it.
                         files = uploads.resolve(data.get("attachments"))
                         if content and runtime.registry is not None:
-                            # Attribute the whole turn to the agent it addresses
-                            # (slash commands and un-mentioned text default to
-                            # "main", matching chat.route_chat's own resolution) so the
-                            # reply frames and chat_log group under that agent
-                            # instead of the io-gateway transport id.
-                            _reply_from["name"] = (
-                                "main"
-                                if content.startswith("/")
-                                else chat.parse_mention(content)[0]
+                            # Attribute the whole turn — reply frames and
+                            # chat_log alike — to the agent it addresses, rather
+                            # than to the io-gateway transport id. A mention that
+                            # names nothing this process can reach falls back to
+                            # the thread the sender says it is in, so the answer
+                            # ("not found") arrives where the user is looking and
+                            # ends the turn there; attributed to the mention, it
+                            # would name an agent no view has a thread for.
+                            _reply_from["name"] = chat.turn_attribution(
+                                content, str(data.get("agent_name") or "")
                             )
                             # Persist the user's turn first so chat_log has the
                             # request even if the assistant reply errors out.
                             _persist_chat("user", content, _reply_from["name"], files)
 
                             async def _safe_route(c=content, files=files):
+                                # Both halves of this turn are stored here — the
+                                # user's above, the reply once it has finished —
+                                # so an agent that also stores its own turns must
+                                # not write them again. Set inside this task, the
+                                # mark follows the call into the agent and no other
+                                # turn sees it.
+                                chat_turn_recorded.set(True)
                                 try:
                                     await chat.route_chat(
                                         c,
@@ -355,15 +364,17 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                                     try:
                                         await ws_stream_end()
                                         await ws_reply("⏹ Stopped.")
-                                    except Exception:
+                                    # The socket is already gone; that is why we are here.
+                                    except Exception:  # noqa: S110
                                         pass
                                     raise
                                 except Exception as exc:
-                                    logger.error("[ws] chat error: %s", exc, exc_info=True)
+                                    logger.exception("[ws] chat error")
                                     try:
                                         await ws_reply(f"[error] {exc}")
                                         await ws_stream_end()
-                                    except Exception:
+                                    # The socket is already gone; that is why we are here.
+                                    except Exception:  # noqa: S110
                                         pass
 
                             chat.track_chat_task(asyncio.create_task(_safe_route()))
@@ -474,7 +485,7 @@ async def _send(ws: web.WebSocketResponse, payload: dict[str, Any]) -> None:
     """Send one frame, tolerating a socket that has already gone."""
     try:
         await ws.send_str(json.dumps(payload))
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception:  # pylint: disable=broad-exception-caught  # noqa: S110
         pass
 
 
@@ -520,5 +531,5 @@ async def handle_command(cmd: dict[str, Any]) -> None:
         # Dispatch, feed entry, reported state and the patch to every open
         # dashboard all happen in `run_command`, which REST goes through too.
         await lifecycle.run_command(agent_id, command, "monitor-dashboard")
-    except Exception as exc:
-        logger.error("[cmd] %s failed: %s", command, exc)
+    except Exception:
+        logger.exception("[cmd] %s failed", command)

@@ -24,6 +24,7 @@ import sys
 import threading
 import types
 import unittest
+from typing import Any
 from unittest import mock
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
@@ -77,7 +78,7 @@ class FakeAgent:
             "awake": False,
             "last_cmd": None,
         }
-        self.published: list[tuple[str, object]] = []
+        self.published: list[tuple[str, Any]] = []
         self.logs: list[str] = []
         self.alerts: list[str] = []
         self.persisted: dict = {}
@@ -322,7 +323,7 @@ class ConfigThenReconnectTest(unittest.TestCase):
 
         mini = _fake_mini()
         fake_sdk = types.ModuleType("reachy_mini")
-        fake_sdk.ReachyMini = mock.Mock(
+        fake_sdk.ReachyMini = mock.Mock(  # pyright: ignore[reportAttributeAccessIssue]
             return_value=types.SimpleNamespace(__enter__=lambda *_: mini)
         )
 

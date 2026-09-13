@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -48,7 +47,7 @@ _MEMORY_KV_KEYS = (
 # Resolved, not ensured: a wipe must target the same durable location the app
 # writes to without creating it as an import side effect.
 _DEFAULT_STATE = resolve_state_dir()
-_DEFAULT_DB = os.path.join(_DEFAULT_STATE, "wactorz.db")
+_DEFAULT_DB = Path(_DEFAULT_STATE) / "wactorz.db"
 
 
 def _db(db_path: str | None = None):

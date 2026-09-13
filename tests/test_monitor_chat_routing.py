@@ -52,6 +52,7 @@ def test_voice_transcript_is_forwarded_as_user_chat():
     finally:
         runtime.state["agents"].pop(agent_id, None)
 
+    assert event is not None
     assert event["_push_chat"] == {
         "type": "chat",
         "from": "user",

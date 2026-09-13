@@ -654,7 +654,7 @@ def _fixed_datetime(y, mo, d):
     class _DT(_dt):
         @classmethod
         def now(cls, tz=None):
-            return _dt(y, mo, d, 12, 0, 0)
+            return _dt(y, mo, d, 12, 0, 0, tzinfo=tz)
 
     return _DT
 

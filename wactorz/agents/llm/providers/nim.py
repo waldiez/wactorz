@@ -19,6 +19,7 @@ from ..openai_shape import (
     openai_messages,
 )
 from ..pricing import calc_cost
+from ..retry import is_retryable
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,13 @@ class NIMProvider(LLMProvider):
                 **_temp_params(kwargs),
             )
         except Exception as exc:
+            if is_retryable(exc):
+                # A rate limit, a busy service or an unreachable one says
+                # nothing about whether the model supports tools. Re-raised as
+                # it came, because the retry policy reads the status off the
+                # exception, and a `RuntimeError` carrying it only in its text
+                # is a failure nothing will try again.
+                raise
             raise RuntimeError(
                 f"NIM tool calling failed; verify the selected model supports tools: {exc}"
             ) from exc

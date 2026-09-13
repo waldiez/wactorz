@@ -244,6 +244,10 @@ select = [
     "FURB",    # refurb — modernise stdlib usage
     "RUF",     # ruff-specific — mutable defaults, unused noqa, dead branches
     "D",       # pydocstyle — docstring style (google convention)
+    "G",       # flake8-logging-format — lazy %-args, never f-strings, in logging
+    "LOG",     # flake8-logging — logger misuse
+    "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
+    "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
 ]
 ignore = [
     "E501",    # line length is owned by the formatter
@@ -261,17 +265,73 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (logging, exception style, complexity, pathlib, security, datetime)
-# stay advisory via `make lint-py` until each is triaged and gated.
+# Further families (exception style, complexity, pathlib, security) stay
+# advisory via `make lint-py` until each is triaged and gated. One member of the
+# pathlib family is settled rather than pending: PTH123 flags `open(p)` where `p`
+# is already a Path, and the convention here is that a path is a Path — which
+# those call sites satisfy — not that every read goes through `Path.open`. It is
+# declined on the `make lint-py` line itself rather than in the `ignore` above,
+# which a CLI `--extend-select` outranks; the per-file entries below still apply,
+# which is why the exemptions there work. Logging moved out
+# of that set once the tree reached zero: an f-string in a logging call is
+# formatted whether or not the level is enabled, so the cost is paid on every
+# debug line in production, and the message loses the structure that lets a log
+# aggregator group occurrences of the same event. Datetime followed once all that
+# was left were deliberate, each marked where it stands: a naive datetime shifts
+# with the server's clock and cannot be compared with an aware one, and gating the
+# family is what keeps a new one from arriving unremarked.
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]       # re-exports: imported here to expose the package's public API
-"tests/*" = ["B", "E402", "D"] # tests do odd things; docstrings not required in test code
+# Tests do odd things, and docstrings are not required in test code. The
+# security family is written for shipped code: in a test `assert` is the
+# mechanism rather than a guard stripped under `-O`, the credentials are fixture
+# strings chosen to be obviously fake, `0.0.0.0` is a bind assertion and `/tmp`
+# a path a test asserts about rather than writes to, and `exec` is how the
+# catalogue programs get parsed. None of it reaches an installed wheel.
+"tests/*" = ["B", "E402", "D", "S"]
+# Build and maintenance tooling, run by a developer on a checkout: every
+# subprocess here is a literal argv naming a tool expected on PATH (`bun`,
+# `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag.
+"scripts/*" = ["S603", "S607", "S110"]
 # The runner carries its own `--test` reporter, whose output is the point of it.
 # It also runs agent code it is sent and installs what that code imports, so
 # `exec` and the pip subprocess are the feature rather than an oversight; how far
 # either should be trusted is a design question, not one a lint rule settles.
 "wactorz/remote_runner.py" = ["T201", "S102", "S603", "S606"]
+# Console entry points: what they write to the terminal is the thing the user
+# asked for, not incidental output, so a logger is the wrong sink for it.
+# `log_setup` is the strongest case — it reports to stderr that file logging
+# could not be opened, which is the one message a logger cannot carry.
+"wactorz/app.py" = ["T201"]                          # the startup banner
+"wactorz/cli.py" = ["T201"]                          # warns a secret is in argv, before logging exists
+"wactorz/evalharness.py" = ["T201"]                  # prints the results table
+"wactorz/interfaces/chat/cli.py" = ["T201"]          # a terminal chat UI
+"wactorz/interfaces/google_login.py" = ["T201"]      # interactive consent flow
+"wactorz/core/integrations/google_mcp.py" = ["T201", "PTH105"] # the OAuth URL the user must open
+"wactorz/monitoring/log_setup.py" = ["T201"]         # stderr, because file logging just failed
+# Atomic writes, written at the os level deliberately: the replace is ordered
+# against an `os.fsync` here, and against a 0600 `os.open` there, so the whole
+# sequence reads in one vocabulary. `Path.replace` is the same syscall.
+"wactorz/core/atomic_io.py" = ["PTH105"]
+"wactorz/web/sessions.py" = ["PTH105"]
+# Cost accounting reads rows this app persisted over its whole history, in
+# whatever shape the version that wrote them used. Every read there skips a row
+# it cannot parse and carries on with the rest, because a headline total that
+# omits one agent is worth more than a dashboard that will not render — so the
+# swallow is the design of these two modules rather than an oversight in them.
+"wactorz/web/cost.py" = ["S110"]
+"wactorz/agents/llm/cost.py" = ["S110"]
+# The weather agent's "today" is the server's local date on purpose: it is what
+# "tomorrow" means to the person asking. A timezone argument would not make it
+# more correct — UTC is simply wrong for most users. The known limit it leaves:
+# forecast rows are dated in the location's own timezone, so for a place far
+# enough east or west the today/tomorrow labels can be a day off.
+"wactorz/catalogue_agents/weather_agent.py" = ["DTZ011"]
+# A schedule that is not a dict is rejected user input from a spawn, and the
+# spawner catches ValueError to report it as such; a TypeError would surface as
+# a spawn-failure traceback instead.
+"wactorz/agents/scheduled_agent.py" = ["TRY004"]
 
 [tool.ruff.lint.pydocstyle]
 # options: google, numpy, pep257
@@ -280,12 +340,15 @@ convention = "google"          # docstring style for the advisory `D` checks (mo
 [tool.ruff.format]
 # Black-compatible defaults; owns line width so the linter need not nag E501.
 
-# ── basedpyright: type checking in BASIC mode (ADVISORY, not gated) ────────────
+# ── basedpyright: type checking in BASIC mode (gated) ─────────────────────────
 # Basic, not strict: catches real errors (undefined attrs, bad calls, None misuse)
-# without demanding annotations on the ~half of functions that lack them today.
+# without demanding annotations on the many functions that lack them. Tests and
+# scripts are checked with the same rules as the package, so a changed signature
+# shows up where it is called from a test too. A test double standing in for a
+# real object says so on the line: `cast()`, or an ignore naming the rule.
 # Run via `make lint-py`; ratchet toward strict as the codebase gets typed up.
 [tool.basedpyright]
-include = ["wactorz"]
+include = ["wactorz", "tests", "scripts"]
 exclude = ["**/node_modules", "static", "frontend", "build", "dist", ".local", "**/__pycache__"]
 pythonVersion = "3.10"
 typeCheckingMode = "basic"
@@ -306,7 +369,7 @@ exclude_also = [
     "\\.\\.\\.",               # ellipsis / stub bodies
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 64
+fail_under = 65
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

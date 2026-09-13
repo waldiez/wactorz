@@ -23,6 +23,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import MessageType
+from ...core.topics import topic_name_error
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -36,6 +37,27 @@ logger = logging.getLogger(__name__)
 #: Public because it is the restart contract: this service writes it and the
 #: dashboard, migration and `/agents restart` all read the same store.
 SPAWN_REGISTRY_KEY = "_spawned_agents"
+
+#: Config keys that instruct the one spawn carrying them, rather than describing
+#: what the agent is.
+#:
+#: `_initial_state` is a state snapshot handed over at migration time. The runner
+#: treats it as ground truth and deletes the agent's state file to apply it, which
+#: is right once — the source was authoritative at that moment — and wrong every
+#: time after, because the agent has been living on the target since. Kept in a
+#: standing record it is re-applied on every reconcile, so a node reboot would
+#: roll the agent back to the moment it arrived.
+TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state"})
+
+
+def without_transient_keys(config: dict[str, Any]) -> dict[str, Any]:
+    """`config` without the keys that must not outlive the spawn they were sent with.
+
+    Applied where a config is *recorded* — the spawn registry and a node's
+    desired state — never to the spawn message itself, which is the hand-off
+    those keys exist for and is retain-cleared by the runner once consumed.
+    """
+    return {k: v for k, v in config.items() if k not in TRANSIENT_CONFIG_KEYS}
 
 
 def _parse_spawn_config(raw: str) -> dict:
@@ -231,11 +253,21 @@ class SpawnService:
         self.host = host
 
     def _get_spawn_registry(self) -> dict[str, Any]:
-        return self.host.recall(SPAWN_REGISTRY_KEY) or {}
+        """What main remembers about the agents it spawned.
+
+        Cleaned on the way out as well as on the way in. An entry recorded
+        before the arrival snapshot was recognised as a one-time instruction
+        still carries one, and every reader here hands it back to a runner that
+        treats it as ground truth — the desired state a node reconciles from, a
+        recovery re-spawn. Cleaning on read heals those entries wherever they
+        are read, and the next write stores the cleaned form.
+        """
+        reg = self.host.recall(SPAWN_REGISTRY_KEY) or {}
+        return {name: without_transient_keys(cfg) for name, cfg in reg.items()}
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None:
         reg = self._get_spawn_registry()
-        reg[config["name"]] = config
+        reg[config["name"]] = without_transient_keys(config)
         self.host.persist(SPAWN_REGISTRY_KEY, reg)
         logger.info("[%s] Spawn registry: %s", self.host.name, list(reg.keys()))
 
@@ -627,8 +659,20 @@ class SpawnService:
         accumulating there and riding home on a migrate-back.
 
         The node's desired state is retained, so a node that reboots reconciles
-        itself back to running this agent without being told again.
+        itself back to running this agent without being told again. The spawn
+        message deliberately is not: see the note on the publish itself.
         """
+        problem = topic_name_error(str(config.get("name", "remote-agent")))
+        if problem:
+            # As for a local spawn: the name is a level of the agent's topics.
+            logger.error(
+                "[%s] Cannot spawn %r on %s: %s",
+                self.host.name,
+                config.get("name"),
+                node,
+                problem,
+            )
+            return
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 
@@ -640,7 +684,22 @@ class SpawnService:
         if packages:
             await self._install_packages(node, name, packages)
 
-        await self.host._mqtt_publish(f"nodes/{node}/spawn", wire_config, retain=True, qos=1)
+        # Not retained, and that is the whole point. A retained spawn is handed
+        # to the node again on every reconnect, so an agent withdrawn after this
+        # was published -- a migration rolled back, an agent deleted -- comes
+        # back at the node's next reboot with nothing following it to say
+        # otherwise. Withdrawing the message instead is not open to us: the
+        # topic is per node rather than per agent, so clearing it would discard
+        # whatever spawn is sitting in that slot, which may be someone else's.
+        #
+        # Reaching a node that was away is the desired state's job, and it is
+        # retained. QoS 1 covers the shorter absence: the runner's session
+        # outlives a reconnect, so the broker holds this until it returns, and
+        # a stop published afterwards is delivered behind it and undoes it. That
+        # last part is Mosquitto queueing per client in order and the runner
+        # draining one message at a time -- MQTT only promises ordering within a
+        # single topic, so it is the deployment that makes it true, not the spec.
+        await self.host._mqtt_publish(f"nodes/{node}/spawn", wire_config, retain=False, qos=1)
         await self.host._update_node_desired_state(node, wire_config)
         await self.host._mqtt_publish(
             f"agents/{self.host.actor_id}/logs",

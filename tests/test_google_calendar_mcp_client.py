@@ -69,10 +69,10 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("Thesis", result)
-        method, path = client._rest_request.await_args.args
+        method, path = client._rest_request.await_args_list[-1].args
         self.assertEqual(method, "GET")
         self.assertIn("/calendars/primary/events", path)
-        params = client._rest_request.await_args.kwargs["params"]
+        params = client._rest_request.await_args_list[-1].kwargs["params"]
         self.assertEqual(params["timeMin"], "2026-07-03T00:00:00+03:00")
         self.assertEqual(params["singleEvents"], "true")
 
@@ -109,9 +109,9 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("Created 'sports'", result)
-        method, _ = client._rest_request.await_args.args
+        method, _ = client._rest_request.await_args_list[-1].args
         self.assertEqual(method, "POST")
-        body = client._rest_request.await_args.kwargs["json_body"]
+        body = client._rest_request.await_args_list[-1].kwargs["json_body"]
         self.assertEqual(body["summary"], "sports")
         self.assertEqual(body["start"]["dateTime"], "2026-07-03T08:00:00+03:00")
 
@@ -123,7 +123,7 @@ class RestFallbackTest(unittest.IsolatedAsyncioTestCase):
         result = await client.call_tool("delete_event", {"eventId": "abc123"})
 
         self.assertEqual(result, "Event deleted.")
-        method, path = client._rest_request.await_args.args
+        method, path = client._rest_request.await_args_list[-1].args
         self.assertEqual(method, "DELETE")
         self.assertIn("abc123", path)
 

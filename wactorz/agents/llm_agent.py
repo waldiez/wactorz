@@ -9,7 +9,8 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from ..core.actor import Actor, Message, MessageType
-from ..core.persistence import get_db
+from ..core.persistence import chat_turn_recorded, get_db
+from ..monitoring.log_redaction import redact
 from .llm.attachments import HISTORY_TEXT_LIMIT, flatten
 from .llm.base import LLMProvider, ToolCall, ToolCompletion
 from .llm.cost import (
@@ -211,10 +212,14 @@ class LLMAgent(Actor):
             self.persist("history_summary", self._history_summary)
             self.persist("conversation_history", self._conversation_history)
             logger.info(
-                f"[{self.name}] History summarized: {len(to_compress)} messages → summary ({len(summary)} chars), keeping {len(to_keep)}"
+                "[%s] History summarized: %s messages → summary (%s chars), keeping %s",
+                self.name,
+                len(to_compress),
+                len(summary),
+                len(to_keep),
             )
         except Exception as e:
-            logger.warning(f"[{self.name}] Summarization failed: {e} — truncating instead")
+            logger.warning("[%s] Summarization failed: %s — truncating instead", self.name, e)
             self._conversation_history = self._conversation_history[-self.max_history :]
 
     def _build_messages_with_summary(self, n: int) -> list[dict]:
@@ -316,7 +321,7 @@ class LLMAgent(Actor):
         self._current_task = task_text[:60]
 
         if self.llm is None:
-            logger.warning(f"[{self.name}] No LLM provider configured.")
+            logger.warning("[%s] No LLM provider configured.", self.name)
             await self._reply_to_task(msg, {"text": "[No LLM configured]", "task": task_text})
             return
 
@@ -371,7 +376,7 @@ class LLMAgent(Actor):
         except Exception as e:
             self.metrics.tasks_failed += 1
             self.state_value = "failed_task"
-            logger.error(f"[{self.name}] LLM task failed: {e}", exc_info=True)
+            logger.exception("[%s] LLM task failed", self.name)
             # The caller is waiting on a future; tell it the turn is over rather
             # than leaving it to time out with no idea what happened.
             await self._reply_to_task(msg, {"text": f"[error] {e}", "task": task_text})
@@ -452,7 +457,8 @@ class LLMAgent(Actor):
             return
 
         self.metrics.messages_processed += 1
-        self._record_user_turn(user_message, attachments, time.time())
+        ts_user = time.time()
+        self._record_user_turn(user_message, attachments, ts_user)
 
         full_text = []
         usage = {}
@@ -488,11 +494,17 @@ class LLMAgent(Actor):
                 len(response),
                 usage.get("error", ""),
             )
+        ts_reply = time.time()
         self._conversation_history.append(
-            {"role": "assistant", "content": response, "ts": time.time()}
+            {"role": "assistant", "content": response, "ts": ts_reply}
         )
         await self._maybe_summarize()
         self.persist("conversation_history", self._conversation_history)
+        # Recorded as chat() records, and only for a turn that finished: an
+        # interrupted stream raises out of the loop above before reaching here.
+        # Without this, whether an agent's turns reach chat_log at all would
+        # depend on whether its provider streams.
+        self._log_chat_turn(user_message, response, ts_user=ts_user, ts_reply=ts_reply)
 
         self.total_input_tokens += usage.get("input_tokens", 0)
         self.total_output_tokens += usage.get("output_tokens", 0)
@@ -508,7 +520,18 @@ class LLMAgent(Actor):
         yield usage
 
     def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
-        """Write both halves of a turn to the SQLite chat_log."""
+        """Write both halves of a turn to the SQLite chat_log.
+
+        Unless the transport that carried the turn has already written it. The
+        dashboard's WebSocket stores both halves itself — redacted, with any
+        attachments, attributed from the user's @mention — so a second pair from
+        here would put every dashboard turn in the chat and the feed twice, the
+        second copy unredacted. REST, and anything else that reaches an agent
+        without going through the WebSocket, stores nothing of its own, so for
+        those this is the only record and has to stay.
+        """
+        if chat_turn_recorded.get():
+            return
         db = get_db()
         if db is not None:
             try:
@@ -516,14 +539,17 @@ class LLMAgent(Actor):
                     ts=ts_user,
                     agent_name=self.name,
                     role="user",
-                    content=user_msg,
+                    # Redacted like the WebSocket's copy: this table outlives the
+                    # conversation and is readable through the API, and a person
+                    # can type a credential where no command asks for one.
+                    content=redact(user_msg),
                     session_id=self.actor_id,
                 )
                 db.write_chat_log(
                     ts=ts_reply,
                     agent_name=self.name,
                     role="assistant",
-                    content=reply,
+                    content=redact(reply),
                     session_id=self.actor_id,
                 )
             except Exception as exc:

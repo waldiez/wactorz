@@ -445,7 +445,8 @@ export class DashboardChat {
     }
 
     /**
-     * Fill an empty choice, and let a remembered one win the race it would lose.
+     * Fill an empty choice, and let the agent that should have had it win the
+     * race it would otherwise lose.
      *
      * Never overwrites a *settled* target: one the user picked, or one they were
      * moved to because theirs went away. Moving those under them is the whole
@@ -453,11 +454,14 @@ export class DashboardChat {
      *
      * The one exception is the load window, and it exists because agents arrive
      * one frame at a time. Resolving against the first of them picks whatever
-     * that partial list defaults to — usually `main` — and "first resolution
-     * sticks" would then hold that against the remembered agent arriving a
-     * moment later. So an unsettled default steps aside when the remembered
-     * agent turns up. It is not a move under the user: it happens before they
-     * have chosen anything, and only ever towards the agent they last chose.
+     * that partial list defaults to, and "first resolution sticks" would then
+     * hold that against the agent a complete list would have chosen. So an
+     * unsettled default steps aside for that agent: the remembered one, or
+     * `main` when nothing is remembered — a fallback is never stored, so an
+     * absent preference means the user has not chosen yet rather than that they
+     * chose what they were given. It is not a move under the user: mounting the
+     * chat view settles the target, so this can only fire while they have been
+     * shown nothing.
      */
     resolveDefaultTarget(): void {
         const agents = [...this.host.agents.values()];
@@ -466,11 +470,19 @@ export class DashboardChat {
             this.chatTarget = preferredChatTarget(agents, remembered);
             return;
         }
-        if (this._targetSettled || !remembered || remembered === this.chatTarget) {
+        const wanted = remembered ?? MAIN_AGENT;
+        if (this._targetSettled || wanted === this.chatTarget) {
             return;
         }
-        if (agents.some(a => a.name === remembered && canDirectMessage(a))) {
-            this.chatTarget = remembered;
+        // Only ever an upgrade of a fallback that still stands. A target that
+        // has gone belongs to dropTargetIfGone, which moves the user and says
+        // so; stepping aside here would move them off it in silence.
+        const current = agents.find(a => a.name === this.chatTarget);
+        if (!current || !canDirectMessage(current)) {
+            return;
+        }
+        if (agents.some(a => a.name === wanted && canDirectMessage(a))) {
+            this.chatTarget = wanted;
         }
     }
 

@@ -167,10 +167,10 @@ def _bind_host() -> str:
 
 #: Whether chat file attachments may be uploaded. On by default now that the
 #: feature is complete, and still a flag: the endpoint writes caller-supplied
-#: bytes to disk with nothing pruning them, and a deployment that does not want
-#: attachment storage growing there turns it off.  Like every other route it is
-#: unauthenticated, so an install exposed beyond its own network has an open
-#: 25 MB write endpoint until authentication lands.
+#: bytes to disk, kept for as long as a chat message refers to them, and a
+#: deployment that does not want attachment storage there turns it off.  Like
+#: every other route it is unauthenticated, so an install exposed beyond its own
+#: network has an open 25 MB write endpoint until authentication lands.
 UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", "0", "false", "no")
 
 #: Largest single upload. Matches the limit the browser enforces before sending,
@@ -290,6 +290,22 @@ def _tts_mode() -> str:
 #: Which branch this deployment speaks through. Read by the browser from
 #: ``/api/config``, the same way the recognition branch is.
 TTS_MODE = _tts_mode()
+#: How many days each store is kept before its old rows are deleted; 0 keeps it
+#: for ever. The job that applies them is `wactorz/retention.py`.
+#:
+#: The chat history the dashboard shows. A year: long enough that nobody loses a
+#: conversation they still remember, short enough that a chatty install does not
+#: fill a Raspberry Pi's card over its life. An attached file goes with the last
+#: message that refers to it.
+RETENTION_CHAT_DAYS = _env_int("WACTORZ_RETENTION_CHAT_DAYS", 365)
+#: Sensor readings, detections, Home Assistant state changes and actuations. The
+#: time-series collector agent prunes the same tables by its own
+#: `retention_days`, so with both running the shorter window is the one that holds.
+RETENTION_TIMESERIES_DAYS = _env_int("WACTORZ_RETENTION_TIMESERIES_DAYS", 365)
+#: Messages the broker never accepted. Until delivered they are kept, and
+#: replayed on every start — for ever, for one that never can be. A week outlasts
+#: any outage worth waiting for, and each one expired is logged with its topic.
+RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
 
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
@@ -438,6 +454,8 @@ class AppConfig:
     llm_api_key: str
     llm_overrides: str
     llm_temperature: float | None
+    llm_max_retries: int
+    llm_timeout_s: float
     ollama_url: str
     mqtt_host: str
     mqtt_port: int
@@ -492,6 +510,11 @@ CONFIG = AppConfig(
     # Sampling temperature for every LLM call (0.0 = deterministic). Unset or
     # empty keeps each provider's own default (the previous behavior).
     llm_temperature=_env_opt_float("LLM_TEMPERATURE"),
+    # Retries after a failed LLM attempt, and the seconds one attempt may take.
+    # 0 retries makes the first failure the answer; a 0 timeout waits on the
+    # provider SDK's own default instead. See wactorz/agents/llm/retry.py.
+    llm_max_retries=_env_int("LLM_MAX_RETRIES", 2),
+    llm_timeout_s=_env_float("LLM_TIMEOUT_S", 300.0),
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     bind_host=_bind_host(),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),

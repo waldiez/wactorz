@@ -372,6 +372,21 @@ describe("the target once something has been chosen, by the user or for them", (
         expect(cd._chat.chatTarget).toBe("catalog");
     });
 
+    it("takes main back when it arrives before the chat has been opened", () => {
+        // Agents register one at a time, so the first resolution runs against a
+        // partial list and can land on whatever sorts first. Nothing has been
+        // shown yet, so main claiming the target it would have had is not a move
+        // under the user.
+        cd.show([]);
+        cd.addAgent(agent("catalog"));
+        expect(cd._chat.chatTarget).toBe("catalog");
+
+        cd.addAgent(agent("main"));
+        cd._setView("chat");
+
+        expect(cd._chat.chatTarget).toBe("main");
+    });
+
     it("does not move you again once a fallback has been chosen for you", () => {
         // No main: pick weather-agent, lose it to a reset, get moved to catalog
         // and told so. Main registering afterwards must not quietly take over —

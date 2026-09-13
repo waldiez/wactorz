@@ -71,6 +71,33 @@ def forbidden(command: str, *, protected: bool, essential: bool) -> bool:
     return (protected and command == "delete") or (essential and command == "stop")
 
 
+def derive_actor_id(name: str) -> str:
+    """The actor id a named actor gets, derived from its name and nothing else.
+
+    Deterministic on purpose: the same agent must come back as the same id
+    across restarts, because the broker keys a held session on it and the
+    registry keys everything else on it.
+
+    Exported because several places need to *recognise* a derived id rather than
+    mint one -- deciding whether an actor can hold a broker session, addressing
+    an agent by name. Spelled once so those cannot drift apart: if the formula
+    changed under a copy, nothing would raise, sessions would simply stop being
+    resumed and durability would quietly become clean.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+
+
+def has_derived_id(name: str, actor_id: str) -> bool:
+    """Whether this identity comes from the name, and so survives a restart.
+
+    A named actor reconnects as the same client and resumes whatever the broker
+    held for it. An anonymous one is given a fresh id every incarnation, so a
+    session kept under the old id is unreachable -- keeping one is not harmful,
+    it is pointless, and it costs the broker state until it expires.
+    """
+    return derive_actor_id(name) == str(actor_id)
+
+
 class ActorState(str, Enum):
     """Where an actor is in its lifecycle."""
 
@@ -161,7 +188,7 @@ class Actor(ABC):
             self.actor_id = actor_id
         elif name:
             # Deterministic UUID from name — same name always gets same ID across restarts
-            self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+            self.actor_id = derive_actor_id(name)
         else:
             self.actor_id = str(uuid.uuid4())
         self.name = name or f"actor-{self.actor_id[:8]}"
@@ -227,7 +254,7 @@ class Actor(ABC):
         try:
             self._proc = psutil.Process()
             self._proc.cpu_percent(interval=None)  # prime the baseline
-        except Exception:
+        except Exception:  # noqa: S110  # psutil is optional; the actor runs without it
             pass
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
@@ -275,13 +302,13 @@ class Actor(ABC):
             await asyncio.shield(self.on_stop())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:
+        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
             pass
         try:
             await asyncio.shield(self._save_persistent_state())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:
+        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
             pass
 
         # ── Persist message count so overview survives restarts ──────────
@@ -313,7 +340,7 @@ class Actor(ABC):
                 f"agents/{self.actor_id}/metrics",
                 final_metrics,
             )
-        except Exception:
+        except Exception:  # noqa: S110  # a last telemetry frame, sent on the way out
             pass
 
         await self._publish_status()
@@ -326,7 +353,7 @@ class Actor(ABC):
             bus = get_topic_bus()
             if bus:
                 bus.unregister(self.name)
-        except Exception:
+        except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
         logger.info("[%s] Actor stopped.", self.name)
         # Deferred to here rather than raised where it arrived: the shield exists
@@ -359,17 +386,25 @@ class Actor(ABC):
         try:
             if others:
                 # Bounded: a task that will not unwind must not hold up shutdown.
-                await asyncio.wait_for(
-                    asyncio.shield(asyncio.gather(*others, return_exceptions=True)),
-                    timeout=self.TASK_SHUTDOWN_TIMEOUT,
-                )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "[%s] %d task(s) did not stop within %gs.",
-                self.name,
-                sum(1 for task in others if not task.done()),
-                self.TASK_SHUTDOWN_TIMEOUT,
-            )
+                # asyncio.wait, not wait_for: on Python 3.10 a wait_for whose
+                # guarded future completes in the same instant the caller is
+                # cancelled returns the result from inside its CancelledError
+                # handler, and the caller never learns it was cancelled — the
+                # supervisor's watch loop resumed polling while Supervisor.stop()
+                # awaited it for ever. The tasks are already cancelled above, so
+                # there is nothing for wait_for's cancel-on-timeout to do that
+                # asyncio.wait does not.
+                _done, pending = await asyncio.wait(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
+                if pending:
+                    logger.warning(
+                        "[%s] %d task(s) did not stop within %gs.",
+                        self.name,
+                        len(pending),
+                        self.TASK_SHUTDOWN_TIMEOUT,
+                    )
+                for task in _done:
+                    if not task.cancelled():
+                        task.exception()  # retrieved, so the loop does not warn at GC
         # CancelledError is deliberately not caught. Swallowing it consumes the
         # caller's own cancellation: the supervisor's watch loop was cancelled
         # here while stopping an actor, never saw the error, resumed its poll
@@ -402,9 +437,9 @@ class Actor(ABC):
                 continue
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception:
                 self.metrics.errors += 1
-                logger.error("[%s] Error in message loop: %s", self.name, e, exc_info=True)
+                logger.exception("[%s] Error in message loop", self.name)
 
     def _resolve_pending_result(self, msg: Message) -> bool:
         """Settle a waiting future from a RESULT's correlation id.
@@ -530,7 +565,7 @@ class Actor(ABC):
         try:
             if self._proc is not None:
                 cpu = self._proc.cpu_percent(interval=None)
-        except Exception:
+        except Exception:  # noqa: S110  # a heartbeat reports 0.0 rather than not arriving
             pass
         return {
             "actor_id": self.actor_id,
@@ -630,16 +665,33 @@ class Actor(ABC):
         after the direct-dispatch change that means agents on remote nodes.
         """
         try:
-            import aiomqtt  # noqa: F401  # pylint: disable=unused-import
+            import aiomqtt  # pylint: disable=unused-import  # noqa: F401
         except ImportError:
             return
-        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
+        # local: avoids core/__init__ import cycle
+        from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client, session_kwargs
 
         topic = f"agents/{self.actor_id}/commands"
+        # Same rule the subscription hub follows: only an identity that
+        # survives a restart can resume a session, so an anonymous actor
+        # connects clean rather than leaving one behind per incarnation.
+        durable = has_derived_id(self.name, self.actor_id)
+        session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
+        # A `commands` detail, not the bare actor id: SubscriptionHub already
+        # connects as `wactorz-agent-<actor id>`, and two connections sharing an
+        # id kick each other off the broker for ever.
+        identifier = client_id("agent", str(self.actor_id), "commands")
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                async with mqtt_client(self._mqtt_broker, self._mqtt_port) as client:
-                    await client.subscribe(topic)
+                async with mqtt_client(
+                    self._mqtt_broker,
+                    self._mqtt_port,
+                    identifier=identifier,
+                    # Control, not telemetry: a dropped stop leaves an agent
+                    # running while the dashboard reports it stopped.
+                    **session,
+                ) as client:
+                    await client.subscribe(topic, qos=1 if durable else 0)
                     logger.debug("[%s] Subscribed to %s", self.name, topic)
                     async for message in client.messages:
                         try:
@@ -652,8 +704,8 @@ class Actor(ABC):
                             # receiving commands afterwards.
                             if applied and command in ("stop", "delete"):
                                 return
-                        except Exception as exc:
-                            logger.error("[%s] Command parse error: %s", self.name, exc)
+                        except Exception:
+                            logger.exception("[%s] Command parse error", self.name)
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -817,8 +869,8 @@ class Actor(ABC):
         # Legacy pickle path
         try:
             write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
-        except Exception as e:
-            logger.error("[%s] Failed to save state: %s", self.name, e)
+        except Exception:
+            logger.exception("[%s] Failed to save state", self.name)
 
     async def _load_persistent_state(self):
         """Load state from disk. Called on start() before on_start()."""
@@ -829,7 +881,9 @@ class Actor(ABC):
             if path.exists():
                 try:
                     with open(path, "rb") as f:
-                        self._persistent_state = pickle.load(f)
+                        self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
+                            f
+                        )  # our own state file, under the state dir
                     logger.info(
                         "[%s] Loaded legacy persistent state (will migrate on first persist).",
                         self.name,
@@ -842,7 +896,9 @@ class Actor(ABC):
         if path.exists():
             try:
                 with open(path, "rb") as f:
-                    self._persistent_state = pickle.load(f)
+                    self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
+                        f
+                    )  # our own state file, under the state dir
                 logger.info("[%s] Loaded persistent state.", self.name)
             except Exception as e:
                 self._keep_unreadable_state(path, e)
@@ -943,7 +999,11 @@ class Actor(ABC):
         }
         if extra:
             payload.update(extra)
-        await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload)
+        # QoS 1: neither critical-prefixed nor telemetry-suffixed, so the
+        # publisher would leave this at 0 -- and a frame emitted while the
+        # monitor is reconnecting would simply be gone. The agent said
+        # something; the user never sees it.
+        await self._mqtt_publish(f"agents/{self.actor_id}/chat", payload, qos=1)
 
     # ─── Status ───────────────────────────────────────────────────────────────
 
@@ -991,6 +1051,22 @@ class Actor(ABC):
             "timestamp": time.time(),
         }
         await self._mqtt_publish(f"agents/{self.actor_id}/manifest", manifest, retain=True)
+
+    async def withdraw_manifest(self) -> None:
+        """Withdraw the retained manifest, announcing that this actor is gone.
+
+        An empty retained payload is the MQTT idiom for taking a retained message
+        back. The manifest topic is keyed on the actor id whoever published it —
+        the actor itself or the API of a generated agent — so one call withdraws
+        it either way, and the dashboard reads the withdrawal as the actor
+        ceasing to exist.
+
+        Call it from an ending the actor decides on for itself; a stop is not
+        one, because a stopped actor still exists and can be started again. At
+        QoS 1 because a lost withdrawal leaves the broker replaying the manifest
+        to every subscriber that connects later.
+        """
+        await self._mqtt_publish(f"agents/{self.actor_id}/manifest", b"", retain=True, qos=1)
 
     async def on_stop(self):
         """Called when actor stops. Override for cleanup."""

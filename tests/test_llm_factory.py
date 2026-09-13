@@ -1,10 +1,11 @@
 """Tests for per-call-site LLM provider overrides (wactorz/llm_factory.py)."""
 
 import sys
+from typing import cast
 
 import pytest
 
-from wactorz.agents.llm_agent import OllamaProvider
+from wactorz.agents.llm_agent import LLMProvider, OllamaProvider
 from wactorz.config import _env_name
 from wactorz.llm_factory import (
     create_provider,
@@ -153,6 +154,7 @@ def test_create_provider_ollama_default_model():
     from wactorz.config import CONFIG
 
     provider = create_provider("ollama")
+    assert isinstance(provider, OllamaProvider)
     assert provider.model == CONFIG.llm_model
 
 
@@ -160,7 +162,7 @@ def test_create_provider_ollama_default_model():
 
 
 def test_no_override_returns_default():
-    default = object()
+    default = cast(LLMProvider, object())  # only its identity matters
     assert provider_for("intent", default, overrides={}) is default
 
 
@@ -172,6 +174,7 @@ def test_override_builds_site_provider():
 
 def test_override_spec_splits_on_first_colon_only():
     provider = provider_for("intent", None, overrides={"intent": "ollama:qwen3:4b"})
+    assert isinstance(provider, OllamaProvider)
     assert provider.model == "qwen3:4b"
 
 
@@ -183,12 +186,12 @@ def test_override_provider_is_cached_across_sites():
 
 
 def test_bad_override_falls_back_to_default():
-    default = object()
+    default = cast(LLMProvider, object())  # only its identity matters
     assert provider_for("intent", default, overrides={"intent": "magicllm:x"}) is default
 
 
 def test_override_none_disables_site_llm():
-    default = object()
+    default = cast(LLMProvider, object())  # only its identity matters
     assert provider_for("intent", default, overrides={"intent": "none"}) is None
 
 

@@ -126,7 +126,7 @@ class TestTheAudioSide:
         use(monkeypatch, live)
         listening = ws.Listening()
         await listening.start(FakeSocket())  # pyright: ignore[reportArgumentType]
-
+        assert listening.session
         await listening.session.feed(b"\x01\x02")
         await listening.session.feed(b"\x03\x04")
         await listening.stop()

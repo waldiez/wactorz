@@ -513,7 +513,7 @@ agent can read current state without a request/response round-trip.
 | `nodes/{node}/restart` | Main actor | `{ "reason": "..." }` |
 | `nodes/{node}/restart_agent` | Main actor | `{ "name": "..." }` |
 | `nodes/{node}/migrate` | Main actor | `{ "name": "...", "target_node": "..." }` |
-| `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000 }` |
+| `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "version": "0.6.0", "runtime": "runner", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000 }` — `version` is the Wactorz release the node runs and `runtime` what kind of process answers; a node deployed before these fields sends neither and is recorded as `runner` at an unknown version |
 | `agents/{node}/logs` | Remote runner | `{ "type": "spawned", "message": "...", "node": "...", "timestamp": ... }` |
 | `nodes/{node}/logs` | Remote runner | `{ "type": "log", "message": "...", "timestamp": ... }` |
 | `nodes/{node}/list` | Main actor | *(request)* published to make the runner emit `nodes/{node}/agents` |

@@ -1,5 +1,5 @@
 name: Wactorz
-version: "0.6.0.1"
+version: "0.6.1"
 slug: wactorz
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime.
 url: https://github.com/waldiez/wactorz
@@ -127,6 +127,15 @@ options:
   # Max messages per minute per sender on social channels (0 disables).
   social_rate_limit_per_min: 12
 
+  # Data retention: days each store is kept before old entries are deleted;
+  # 0 keeps it for ever. Chat defaults to 0 here, unlike Wactorz on its own:
+  # a new option only appears after the update that brings it, so a non-zero
+  # default would delete an existing install's history before anyone could
+  # change it. Pick a number to stop the chat history growing without limit.
+  retention_chat_days: 0
+  retention_timeseries_days: 365
+  retention_outbox_days: 7
+
 
 schema:
   api_key: str?
@@ -151,6 +160,9 @@ schema:
   telegram_allowed_user_ids: str?
   telegram_allowed_user_id: int
   social_rate_limit_per_min: int
+  retention_chat_days: int
+  retention_timeseries_days: int
+  retention_outbox_days: int
   deploy_targets:
     - name: str
       host: str?

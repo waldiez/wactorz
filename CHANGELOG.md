@@ -3,7 +3,25 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — pending
+## [0.6.1] - 2026-09-14
+
+Wactorz 0.6.1 is about staying up: agents and nodes now come through restarts, reconnects and their own bugs, and a long-running install stops filling its disk. A short summary comes first; the full account of each change follows it.
+
+### Before you upgrade
+
+- **Chat history older than a year is now deleted automatically.** Set `WACTORZ_RETENTION_CHAT_DAYS=0` before upgrading to keep all of it. Sensor history, attached files no message refers to and undelivered broker messages are pruned on their own windows too. The Home Assistant add-on offers each window as an option, and keeps chat for ever unless `retention_chat_days` is set, so updating the add-on deletes no conversation.
+- **Redeploy your edge nodes.** Supervision under systemd, version reporting and shared broker connections all ship in the runner, which is copied to each machine, so an existing node keeps the old behaviour until `/deploy` runs again.
+- **Vision agents need an `ultralytics` release that knows YOLO26**, now the default model family. Older releases fail with `FileNotFoundError` on the weights file.
+
+### Highlights
+
+- **Nodes come back after a reboot.** `/deploy` installs a systemd unit, and every heartbeat reports the Wactorz version the node runs.
+- **Nothing is lost while reconnecting.** Commands, chat messages and Home Assistant triggers sent during a restart or a network blip are delivered once the connection returns, and a dashboard that lost the server reconnects on its own.
+- **Moving an agent between machines is safe.** The move goes through the server, and the original is removed only after the new copy confirms it is running, even if the server restarts part-way.
+- **One faulty agent stays contained.** `sys.exit()` in agent code no longer stops the whole application, and an agent that has finished its work can end cleanly with `await agent.stop()`.
+- **Busy model providers are retried.** Rate limits, server errors, timeouts and dropped connections are retried with backoff for every provider, tuned by `LLM_MAX_RETRIES` and `LLM_TIMEOUT_S`.
+- **Fewer stalls.** Database housekeeping runs on a background thread, and an agent shares one broker connection however many topics it watches.
+- **Dashboard polish.** Deleting an agent asks first, the CPU meter no longer reads above 100%, the audio device picker is readable in a light theme, and an `@mention` of an agent that does not exist is answered in the conversation you are in.
 
 ### Added
 
@@ -39,7 +57,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Restarting the server in the middle of moving an agent no longer risks ending up with two of it.** Moving an agent to another machine finishes when that machine confirms it has started, and until then the move is remembered so it can be completed or undone. That memory was held only for as long as the process ran. Restart during the handful of minutes a move is open and it was lost, so the confirmation arriving afterwards matched nothing and was ignored, and the timeout that would have put the agent back never fired — leaving the agent restored here while the other machine may well have been running it too, both under one name and drifting apart from the same starting point. Moves in flight are now written down and picked back up on startup, so whichever way the move was going to end, it still ends that way. An agent moving *away from* this machine had a second trap: because the move was not yet confirmed, startup had already brought the agent back here, and the confirmation arriving afterwards left that copy running beside the one on the other machine. That copy is now stopped when the confirmation arrives, and its old state cleared. A move that ran out its time while the server was down is also undone as soon as the server starts, rather than a couple of minutes later.
 
-- **The pause that used to interrupt everything now happens quietly in the background, for the main database too.** Agent state and the chat log are written to a database that batches its writes and folds them back into the main file later. That fold is the expensive moment — around seventy milliseconds on the memory card a Raspberry Pi runs from — and it was left to the database to decide when, which meant it happened in the middle of whichever agent was unlucky enough to trigger it, with everything else in the process waiting. The server now has a housekeeping task that does it on a schedule, on a background thread, and the point at which the database would do it itself is raised so the scheduled one normally gets there first. Raised rather than switched off: if the housekeeping ever stopped, switching it off would let the file grow until the disk filled. The same task is where other periodic work belongs as it arrives — the retention pruning that exists but nothing calls, first among them.
+- **The pause that used to interrupt everything now happens quietly in the background, for the main database too.** Agent state and the chat log are written to a database that batches its writes and folds them back into the main file later. That fold is the expensive moment — around seventy milliseconds on the memory card a Raspberry Pi runs from — and it was left to the database to decide when, which meant it happened in the middle of whichever agent was unlucky enough to trigger it, with everything else in the process waiting. The server now has a housekeeping task that does it on a schedule, on a background thread, and the point at which the database would do it itself is raised so the scheduled one normally gets there first. Raised rather than switched off: if the housekeeping ever stopped, switching it off would let the file grow until the disk filled.
 
 - **Spawning, stopping and chatting no longer stall every agent in the process for a moment each.** A message that must not be lost is written to a small database before it is sent, and that write opened, committed and closed a connection of its own — twice per message, once to record it and once to tick it off. On the SD card a Raspberry Pi runs from, that pair of writes takes about sixteen milliseconds, and for every one of them the whole system stops: not just the agent that sent the message, but every other agent, and the keepalive that tells the broker this machine is still alive. It is paid on exactly the operations a person is waiting for, because commands to nodes and tasks to agents are the traffic that must not be lost — sensor readings and heartbeats are allowed to be, and never touch it. The connection is now opened once and kept, which is also what makes it possible to tell the database it need not force every write to the card immediately. Both halves are needed: keeping the connection alone saves almost nothing, and the setting alone is *slower* than before. Together they take those sixteen milliseconds to under a tenth of one. A connection that goes bad is dropped and reopened on the next write, so a passing fault stays passing.
 
@@ -907,7 +925,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Docker Compose stacks (dev and production)
 - `pyproject.toml` with optional dependency groups
 
-[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/waldiez/wactorz/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/waldiez/wactorz/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/waldiez/wactorz/compare/v0.5.3...v0.6.0
 [0.5.3]: https://github.com/waldiez/wactorz/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/waldiez/wactorz/compare/v0.5.1...v0.5.2

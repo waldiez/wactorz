@@ -44,6 +44,11 @@ async def dispatch_command(agent_id: str, command: str, sender: str) -> str:
         await runtime.mqtt_client_ref.publish(
             f"agents/{agent_id}/commands",
             json.dumps({"command": command, "sender": sender, "timestamp": time.time()}),
+            # This is the monitor's own client, which applies none of
+            # MQTTPublisher's topic classification, so the QoS has to be said
+            # here. A dropped stop leaves the agent running while the dashboard
+            # reports it stopped.
+            qos=1,
         )
     except Exception as exc:
         logger.warning("[cmd] publish to %s failed: %s", agent_id[:8], exc)
@@ -120,7 +125,10 @@ async def purge_agent_retained(agent_id: str) -> None:
     ):
         topic = f"agents/{agent_id}/{metric}"
         try:
-            await runtime.mqtt_client_ref.publish(topic, b"", retain=True)
+            # QoS 1: a lost purge leaves a stale retained message behind, and a
+            # stale retained spawn brings the agent back on the node's next
+            # reconcile. One-shot, admin-rate, and exactly what QoS 1 is for.
+            await runtime.mqtt_client_ref.publish(topic, b"", retain=True, qos=1)
         except Exception as e:
             logger.debug("[purge] Failed to clear retained %s: %s", topic, e)
 
@@ -136,7 +144,7 @@ async def purge_node_desired_state(node: str) -> None:
         return
     topic = f"nodes/{node}/desired_state"
     try:
-        await runtime.mqtt_client_ref.publish(topic, b"", retain=True)
+        await runtime.mqtt_client_ref.publish(topic, b"", retain=True, qos=1)
     except Exception as e:
         logger.debug("[purge] Failed to clear retained %s: %s", topic, e)
 
@@ -263,6 +271,7 @@ async def delete_agent(agent_id: str) -> str:
                 await runtime.mqtt_client_ref.publish(
                     f"nodes/{node}/stop",
                     json.dumps({"name": name}),
+                    qos=1,
                 )
                 routed = f"via nodes/{node}/stop"
             except Exception as e:
@@ -272,6 +281,7 @@ async def delete_agent(agent_id: str) -> str:
                 await runtime.mqtt_client_ref.publish(
                     f"agents/{agent_id}/commands",
                     json.dumps({"command": "stop", "sender": "monitor", "timestamp": time.time()}),
+                    qos=1,
                 )
                 routed = f"via agents/{agent_id}/commands"
             except Exception as e:

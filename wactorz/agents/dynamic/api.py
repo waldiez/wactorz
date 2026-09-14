@@ -122,6 +122,23 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
     # slash. We compromise by returning "local" so f-strings stay readable
     # and topics stay valid; user code that compares against "" should be
     # updated to also accept "local".
+    async def stop(self) -> None:
+        """End this agent. Its work is done and it should not come back.
+
+        Call it and then return — this is not `exit`, so anything written after
+        it still runs, against an agent that is already stopping.
+
+            async def process(agent):
+                if agent.state.get('done'):
+                    await agent.stop()
+                    return  # nothing below this line should run
+
+        The agent leaves the dashboard, is not restored on the next restart,
+        and its `cleanup()` runs on the way out. Nothing restarts it; ending is
+        final, so raise an error instead if you want to be repaired or retried.
+        """
+        await self._actor.end_self()
+
     @property
     def node(self) -> str:
         node = getattr(self._actor, "_node", None)

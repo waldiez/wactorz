@@ -285,15 +285,23 @@ class TestInstallingPackagesFirst:
 class TestTellingEveryoneItHappened:
     """One spawn produces three writes, and all of them matter."""
 
-    async def test_the_spawn_is_retained_so_a_rebooted_node_still_sees_it(self) -> None:
+    async def test_the_spawn_is_not_retained(self) -> None:
+        """A retained spawn outlives the decision that produced it.
+
+        It is handed to the node again on every reconnect, so an agent
+        withdrawn afterwards -- a rolled-back migration, a delete -- returns at
+        the node's next reboot. Reaching a node that was away belongs to the
+        retained desired state, which the test below covers; QoS 1 carries this
+        one across the shorter absence its session survives.
+        """
         main = _Main()
 
         await main.spawn(llm_agent())
 
         topic, _, options = main.published_to("/spawn")
         assert topic == "nodes/rpi/spawn"
-        assert options["retain"] is True
-        assert options["qos"] == 1
+        assert options["retain"] is False
+        assert options["qos"] == 1, "a node that reconnects must still get it"
 
     async def test_the_nodes_desired_state_is_updated(self) -> None:
         # What the runner reconciles against after a reboot, so it gets the

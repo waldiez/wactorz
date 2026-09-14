@@ -108,3 +108,44 @@
     box-shadow: 0 0 0 0 rgba(248, 113, 113, 0);
   }
 }
+
+/* ── Revoked ingress session ──────────────────────────────────────────────── */
+/* Above everything and swallowing clicks: the page behind it is inert, and a
+   control that looks live but answers nothing is what this exists to stop. */
+.af-dead-session {
+  position: fixed;
+  inset: 0;
+  z-index: 10001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 12, 24, 0.82);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.af-dead-session-card {
+  max-width: 420px;
+  padding: 28px 32px;
+  border-radius: 16px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(20, 26, 44, 0.95);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  color: #e2e8f0;
+}
+.af-dead-session-card h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.af-dead-session-card p {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.7);
+}
+.af-dead-session-how {
+  margin-bottom: 0 !important;
+  font-weight: 500;
+  color: #e2e8f0 !important;
+}

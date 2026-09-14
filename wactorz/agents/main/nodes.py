@@ -19,10 +19,16 @@ import asyncio
 import json
 import logging
 import time
-import uuid
 from typing import Any
 
-from ...core.mqtt import mqtt_client
+from ...core.actor import derive_actor_id
+from ...core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    install_id,
+    mqtt_client,
+    session_kwargs,
+)
 from .hosts import NodeHost
 from .manifests import ManifestRegistry
 
@@ -30,6 +36,10 @@ logger = logging.getLogger(__name__)
 
 #: How long to wait before reconnecting after the broker goes away.
 RECONNECT_DELAY_S = 5.0
+
+#: What a node is running when its heartbeat does not say. The single-file
+#: runner predates the `runtime` field, so silence means that runtime.
+DEFAULT_NODE_RUNTIME = "runner"
 
 #: Consecutive heartbeats an agent must be missing from before it counts as
 #: gone rather than late.
@@ -64,7 +74,7 @@ def remote_actor_id(agent_name: str) -> str:
     Deterministic so main and the node arrive at the same id without either
     telling the other — the node builds it the same way for `_RemoteAgent`.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{agent_name}"))
+    return derive_actor_id(agent_name)
 
 
 class NodeManager:
@@ -101,6 +111,8 @@ class NodeManager:
                 "last_seen": info.get("last_seen", 0),
                 "online": self._is_fresh(info, now),
                 "pid": info.get("pid"),
+                "version": info.get("version"),
+                "runtime": info.get("runtime", DEFAULT_NODE_RUNTIME),
                 "uptime_s": info.get("uptime_s"),
                 "cpu_pct": info.get("cpu_pct"),
                 "mem_used_mb": info.get("mem_used_mb"),
@@ -173,9 +185,20 @@ class NodeManager:
         last_error: str | None = None
         while host.state.value not in ("stopped", "failed"):
             try:
-                async with mqtt_client(host._mqtt_broker, host._mqtt_port) as client:
-                    await client.subscribe("nodes/+/heartbeat")
-                    await client.subscribe("nodes/+/migrate_result")
+                async with mqtt_client(
+                    host._mqtt_broker,
+                    host._mqtt_port,
+                    identifier=client_id("srv", install_id(), "nodes"),
+                    **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
+                ) as client:
+                    # Heartbeats are liveness evidence, and a stale one is
+                    # worse than none: it is recorded as "seen just now", so a
+                    # replayed batch would mark a dead node online. Nodes send
+                    # them at QoS 0 for the same reason; asking for more here
+                    # would only be misleading, since delivery is the lower of
+                    # the two.
+                    await client.subscribe("nodes/+/heartbeat", qos=0)
+                    await client.subscribe("nodes/+/migrate_result", qos=1)
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None
                     async for message in client.messages:
@@ -226,6 +249,11 @@ class NodeManager:
             "last_seen": time.time(),
             "agents": agents,
             "node_id": data.get("node_id", ""),
+            # What is running there. A heartbeat that names neither comes from
+            # a runner older than the fields: the single-file runtime, at a
+            # version it could not say.
+            "version": data.get("version"),
+            "runtime": data.get("runtime") or DEFAULT_NODE_RUNTIME,
             "pid": data.get("pid"),
             "uptime_s": data.get("uptime_s"),
             "cpu_pct": data.get("cpu_pct"),
@@ -281,6 +309,12 @@ class NodeManager:
                 node_name,
             )
             host._remove_from_spawn_registry(agent_name)
+            # The node's retained desired_state is what it reconciles against on
+            # its next reboot. Dropping the spawn entry without rewriting it
+            # leaves the instruction to start this agent in place, so the node
+            # brings it back to a main that no longer has a registry entry for
+            # it: running and heartbeating, but unsupervised and unmanaged.
+            await host._update_node_desired_state(node_name, remove_name=agent_name)
             await host._clear_agent_manifest(agent_name)
             host._record_agent_deletion(
                 agent_name,
@@ -404,6 +438,10 @@ class NodeManager:
                     lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
                     for agent_name in lost:
                         host._remove_from_spawn_registry(agent_name)
+                        # As in _prune_vanished: the retained desired_state has
+                        # to lose the agent too, or the node resurrects it on
+                        # its next reconcile into a main that has forgotten it.
+                        await host._update_node_desired_state(node_name, remove_name=agent_name)
                         await host._clear_agent_manifest(agent_name)
                         host._record_agent_deletion(
                             agent_name,

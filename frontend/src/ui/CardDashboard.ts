@@ -33,6 +33,7 @@ import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import type { AgentAction } from "./dashboard/cards";
 import { MetricsController } from "./dashboard/metrics";
+import { confirmDialog } from "./dashboard/confirmDialog";
 import { seedServerConfig } from "../config/serverConfig";
 import { emit, listen } from "../events";
 
@@ -465,7 +466,29 @@ export class CardDashboard {
         el.textContent = `${healthy}/${agents.length} wactorz healthy`;
     }
 
+    /**
+     * Run a card's action, asking first when it cannot be undone. Start and stop
+     * are each their own way back; delete is not, so it names the agent and waits
+     * for an answer before anything is sent.
+     */
     private _sendCommand(id: string, action: AgentAction, btn?: HTMLButtonElement): void {
+        if (action !== "delete") {
+            this._dispatchCommand(id, action, btn);
+            return;
+        }
+        const name = this.agents.get(id)?.name ?? id;
+        void confirmDialog({
+            title: "Delete agent?",
+            message: `Are you sure you want to delete ${name}? This cannot be undone.`,
+            confirmLabel: "Delete",
+        }).then(confirmed => {
+            if (confirmed) {
+                this._dispatchCommand(id, action, btn);
+            }
+        });
+    }
+
+    private _dispatchCommand(id: string, action: AgentAction, btn?: HTMLButtonElement): void {
         if (btn) {
             btn.disabled = true;
             btn.classList.add("sending");

@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Deployment — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Guide</summary>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+      <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="active">Deployment</a>
+    </details>
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
+  </aside>
+  <main class="content">
+<h1 id="deployment">Deployment</h1>
+<p>Wactorz supports three deployment modes:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>When to use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Docker Hub</strong></td>
+<td>New users; no repo clone needed — just Docker Desktop</td>
+</tr>
+<tr>
+<td><strong>Full Docker</strong></td>
+<td>Full stack via <code>git clone</code>; everything in containers</td>
+</tr>
+<tr>
+<td><strong>Home Assistant add-on</strong></td>
+<td>Home Assistant OS or Supervised installs</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="docker-hub">Docker Hub</h2>
+<p>The fastest way to get started — no repo clone or Python needed. See the dedicated guide:</p>
+<p>→ <strong><a href="../guide/dockerhub.html">Quickstart: Docker Hub</a></strong></p>
+<hr />
+<h2 id="full-docker-composeyaml">Full Docker  (<code>compose.yaml</code>)</h2>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li>Docker + Compose plugin</li>
+<li><code>LLM_API_KEY</code> (Anthropic / OpenAI) or a local Ollama instance</li>
+</ul>
+<h3 id="steps">Steps</h3>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/waldiez/wactorz
+<span class="nb">cd</span><span class="w"> </span>wactorz
+cp<span class="w"> </span>.env.template<span class="w"> </span>.env
+nano<span class="w"> </span>.env<span class="w">           </span><span class="c1"># set LLM_API_KEY at minimum</span>
+
+<span class="c1"># Python stack (recommended starting point)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>Open <code>http://localhost:8888</code> (monitor UI) or <code>http://localhost:8000</code> (REST API).</p>
+<h3 id="services">Services</h3>
+<p>Default profile (no flag) starts Mosquitto only. Add <code>--profile</code> flags to bring up more services.</p>
+<table>
+<thead>
+<tr>
+<th>Profile</th>
+<th>Service</th>
+<th>Internal address</th>
+<th>External port</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>(all)</em></td>
+<td>mosquitto</td>
+<td><code>mosquitto:1883</code></td>
+<td><code>:1883</code></td>
+</tr>
+<tr>
+<td><code>python</code></td>
+<td>wactorz-python</td>
+<td><code>wactorz-python:8000</code></td>
+<td><code>:8000</code> (REST API)</td>
+</tr>
+<tr>
+<td><code>python</code></td>
+<td>monitor UI</td>
+<td><code>wactorz-python:8888</code></td>
+<td><code>:8888</code></td>
+</tr>
+<tr>
+<td><code>python</code></td>
+<td>prometheus</td>
+<td><code>wactorz-prometheus:9090</code></td>
+<td><code>:9090</code></td>
+</tr>
+<tr>
+<td><code>full</code></td>
+<td>home-assistant</td>
+<td><code>homeassistant:8123</code></td>
+<td><code>:8123</code></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><span class="c1"># Python stack (most common)</span>
+docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
+<span class="c1"># Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)</span>
+</code></pre></div>
+
+<hr />
+<h2 id="home-assistant-add-on">Home Assistant add-on</h2>
+<p>Use the add-on when Wactorz should run inside Home Assistant OS or a Supervised
+Home Assistant install. The add-on uses prebuilt multi-arch images from GHCR, so
+Supervisor updates pull an image instead of building Wactorz on the device.</p>
+<p>See <code>ha-addon/wactorz/README.md</code> (or <code>ha-addon/wactorz-ultra/README.md</code> for the ML variant) for install and local testing details.</p>
+<hr />
+<h2 id="environment-variables">Environment variables</h2>
+<p>See <code>.env.template</code> for the full annotated list.  The most important ones:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LLM_PROVIDER</code></td>
+<td><code>anthropic</code></td>
+<td><code>anthropic</code> / <code>openai</code> / <code>ollama</code> / <code>gemini</code> / <code>nim</code></td>
+</tr>
+<tr>
+<td><code>LLM_MODEL</code></td>
+<td><code>claude-sonnet-4-6</code></td>
+<td>Any model ID</td>
+</tr>
+<tr>
+<td><code>LLM_API_KEY</code></td>
+<td><em>(required for cloud providers)</em></td>
+<td>API key — not needed for Ollama only</td>
+</tr>
+<tr>
+<td><code>OPENAI_URL</code></td>
+<td><em>(unset)</em></td>
+<td>Redirect <code>openai</code> provider to a compatible endpoint (Groq, Together, vLLM, etc.)</td>
+</tr>
+<tr>
+<td><code>LLM_COST_LIMIT_USD</code></td>
+<td><code>0</code> (disabled)</td>
+<td>Hard spend cap per period — set <code>0</code> to disable</td>
+</tr>
+<tr>
+<td><code>LLM_COST_LIMIT_PERIOD</code></td>
+<td><code>monthly</code></td>
+<td>Reset period: <code>daily</code>, <code>weekly</code>, or <code>monthly</code></td>
+</tr>
+<tr>
+<td><code>MQTT_HOST</code></td>
+<td><code>localhost</code></td>
+<td>Use <code>mosquitto</code> inside Docker</td>
+</tr>
+<tr>
+<td><code>MQTT_PORT</code></td>
+<td><code>1883</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>MQTT_USERNAME</code></td>
+<td><code>wactorz</code></td>
+<td>Broker username. Blank only for a broker of your own that takes anonymous connections</td>
+</tr>
+<tr>
+<td><code>MQTT_PASSWORD</code></td>
+<td><em>(none)</em></td>
+<td>Broker password. <strong>Required by docker compose</strong> — the bundled broker refuses anonymous connections and compose refuses to start without it, rather than coming up open. Its password file is generated from these at container start, so there is no <code>mosquitto_passwd</code> step</td>
+</tr>
+<tr>
+<td><code>PORT</code></td>
+<td><code>8000</code></td>
+<td>Python REST API listen port</td>
+</tr>
+<tr>
+<td><code>WS_PORT</code> / <code>MONITOR_PORT</code></td>
+<td><code>8888</code></td>
+<td>Web UI / monitor server port</td>
+</tr>
+<tr>
+<td><code>WACTORZ_STATE_DIR</code></td>
+<td><code>./state</code></td>
+<td>Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins <code>/data/state</code>. <code>wactorz-reset</code> reads the same variable, so a wipe targets whatever the app is using</td>
+</tr>
+<tr>
+<td><code>WACTORZ_TZ</code></td>
+<td><em>(unset)</em></td>
+<td>Override the timezone used in agents' date/time context (e.g. <code>Europe/Athens</code>). Precedence: a user's <code>pref_timezone</code> fact &gt; <code>WACTORZ_TZ</code> &gt; standard <code>TZ</code> &gt; host local zone. Blank or unknown values fall through to the next candidate</td>
+</tr>
+<tr>
+<td><code>WACTORZ_RETENTION_CHAT_DAYS</code></td>
+<td><code>365</code></td>
+<td>Days chat history is kept; <code>0</code> keeps it for ever. An attached file goes with the last message that refers to it, or a day after upload if it was never sent</td>
+</tr>
+<tr>
+<td><code>WACTORZ_RETENTION_TIMESERIES_DAYS</code></td>
+<td><code>365</code></td>
+<td>Days sensor readings, detections, Home Assistant state changes and actuations are kept; <code>0</code> keeps them for ever. The time-series collector agent's own <code>retention_days</code> applies too, and the shorter window holds</td>
+</tr>
+<tr>
+<td><code>WACTORZ_RETENTION_OUTBOX_DAYS</code></td>
+<td><code>7</code></td>
+<td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic</td>
+</tr>
+<tr>
+<td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
+<td><code>9090</code></td>
+<td>Prometheus host port</td>
+</tr>
+<tr>
+<td><code>PROMETHEUS_SCRAPE_INTERVAL</code></td>
+<td><code>15s</code></td>
+<td>Global Prometheus scrape interval</td>
+</tr>
+<tr>
+<td><code>PROMETHEUS_MONITOR_MOSQUITTO</code></td>
+<td><code>1</code></td>
+<td>Enable Mosquitto TCP availability probe</td>
+</tr>
+<tr>
+<td><code>DEPLOY_TARGETS</code></td>
+<td><em>(unset)</em></td>
+<td>Comma-separated remote node names <code>/deploy</code> may bootstrap; each needs a <code>DEPLOY_&lt;NODE&gt;_*</code> block — see <a href="../guide/remote-nodes.html">Remote nodes</a></td>
+</tr>
+<tr>
+<td><code>DEPLOY_KNOWN_HOSTS</code></td>
+<td><code>&lt;WACTORZ_STATE_DIR&gt;/known_hosts</code></td>
+<td>Where learned SSH host keys are stored</td>
+</tr>
+<tr>
+<td><code>DEPLOY_STRICT_HOST_KEYS</code></td>
+<td><code>0</code></td>
+<td><code>1</code> = never learn a host key on first contact; unknown hosts are refused</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="ssh-key-management">SSH key management</h2>
+<p>Wactorz reaches remote machines over SSH when bootstrapping an edge node with
+<code>/deploy</code>. Key auth is preferred over a password — generate a dedicated deploy
+key:</p>
+<div class="highlight"><pre><span></span><code>ssh-keygen<span class="w"> </span>-t<span class="w"> </span>ed25519<span class="w"> </span>-C<span class="w"> </span><span class="s2">&quot;wactorz-deploy&quot;</span><span class="w"> </span>-f<span class="w"> </span>~/.ssh/wactorz_deploy<span class="w"> </span>-N<span class="w"> </span><span class="s2">&quot;&quot;</span>
+
+<span class="c1"># Authorise on the target host</span>
+ssh-copy-id<span class="w"> </span>-i<span class="w"> </span>~/.ssh/wactorz_deploy.pub<span class="w"> </span>-p<span class="w"> </span><span class="m">22</span><span class="w"> </span>pi@192.168.1.50
+</code></pre></div>
+
+<p>Then point the node's deploy target at it in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>DEPLOY_TARGETS=rpi-kitchen
+DEPLOY_RPI_KITCHEN_HOST=192.168.1.50
+DEPLOY_RPI_KITCHEN_USER=pi
+DEPLOY_RPI_KITCHEN_KEY=~/.ssh/wactorz_deploy
+DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
+</code></pre></div>
+
+<p>Credentials are read from here and never from chat — <code>/deploy</code> takes a node name
+and nothing else. Host keys are verified on every connection, learned on first
+contact unless <code>DEPLOY_STRICT_HOST_KEYS=1</code>. Full details in
+<a href="../guide/remote-nodes.html">Remote nodes</a>.</p>
+<hr />
+<h2 id="updating-home-assistant-integration">Updating Home Assistant integration</h2>
+<p>Wactorz can send REST commands to Home Assistant and receive automations.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># infra/homeassistant/configuration.yaml</span>
+<span class="nt">rest_command</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">wactorz_chat</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://wactorz-python:8000/api/chat&quot;</span>
+<span class="w">    </span><span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">POST</span>
+<span class="w">    </span><span class="nt">content_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;application/json&quot;</span>
+<span class="w">    </span><span class="c1"># The endpoint reads `message`, plus an optional `agent_name` that defaults</span>
+<span class="w">    </span><span class="c1"># to the orchestrator. Add `&quot;agent_name&quot;: &quot;&lt;name&gt;&quot;` to address one agent.</span>
+<span class="w">    </span><span class="nt">payload</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;{&quot;message&quot;:&quot;{{</span><span class="nv"> </span><span class="s">message</span><span class="nv"> </span><span class="s">}}&quot;}&#39;</span>
+</code></pre></div>
+
+<p>Set <code>HA_URL</code> and <code>HA_TOKEN</code> in <code>.env</code>.</p>
+<hr />
+<h2 id="connecting-to-an-existing-home-assistant-instance">Connecting to an existing Home Assistant instance</h2>
+<p>If you already have Home Assistant running (in Docker or elsewhere), point Wactorz at it via <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># .env</span>
+<span class="nv">HA_URL</span><span class="o">=</span>http://192.168.1.x:8123<span class="w">   </span><span class="c1"># or http://homeassistant.local:8123</span>
+<span class="nv">HA_TOKEN</span><span class="o">=</span>eyJ...<span class="w">                  </span><span class="c1"># Long-lived access token from HA → Profile → Security</span>
+</code></pre></div>
+
+<p>Then start only the Wactorz stack (no embedded HA):</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>The <code>full</code> profile (<code>docker compose --profile full up -d</code>) starts a fresh Home Assistant container alongside Wactorz on the same Docker network — useful for a clean dev environment, not for connecting to an existing production HA.</p>
+<blockquote>
+<p><strong>Home Assistant OS / Supervised users</strong> — use the <a href="https://github.com/waldiez/wactorz/tree/main/ha-addon">Wactorz HA addon</a> instead. It runs inside the Supervisor and connects to your existing HA instance automatically.</p>
+</blockquote>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

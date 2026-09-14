@@ -40,6 +40,9 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `telegram_allowed_user_ids` | *(blank)* | **Required with the token** — comma-separated Telegram user IDs. Without it the bot only answers `/start` with your user ID, so you can fill this in and restart. |
 | `telegram_allowed_user_id` | `0` | Older single-ID form of the above; still honoured. `0` means unset. |
 | `social_rate_limit_per_min` | `12` | Max messages per minute per sender on the bots. `0` disables the limit. |
+| `retention_chat_days` | `0` | Days chat history is kept; `0` keeps it for ever. An attached file is deleted with the last message that refers to it. Off by default in the add-on so updating never deletes a conversation; set a number such as `365` to stop the history growing without limit. |
+| `retention_timeseries_days` | `365` | Days sensor readings, detections and Home Assistant state history are kept; `0` keeps them for ever. |
+| `retention_outbox_days` | `7` | Days a message the MQTT broker never accepted is kept and retried before it is dropped; `0` keeps retrying for ever. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by

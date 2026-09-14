@@ -81,6 +81,7 @@ class ProviderAbstractionTest(unittest.TestCase):
             result = asyncio.run(reachy_stt.FasterWhisperBackend().transcribe(b"RIFFmock", config))
 
         self.assertEqual(result.text, "local words")
+        assert result.confidence is not None
         self.assertAlmostEqual(result.confidence, 0.9048, places=3)
         self.assertEqual(result.no_speech_probability, 0.05)
         self.assertEqual(result.language, "el")
@@ -129,7 +130,7 @@ class ProviderAbstractionTest(unittest.TestCase):
 
         self.assertEqual(text, "hosted words")
         module.AsyncOpenAI.assert_called_once_with(api_key="test-only")
-        kwargs = create.await_args.kwargs
+        kwargs = create.await_args_list[-1].kwargs
         self.assertEqual(kwargs["file"], ("reachy.wav", b"RIFFmock", "audio/wav"))
         self.assertEqual(kwargs["model"], "whisper-1")
         self.assertEqual(kwargs["language"], "en")

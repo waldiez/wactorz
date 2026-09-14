@@ -7,14 +7,15 @@ runs the selected interface. Parsed arguments are supplied by :mod:`wactorz.cli`
 import argparse
 import asyncio
 import logging
-import os
 import signal
 import sys
+from pathlib import Path
 from typing import cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
+from wactorz import retention
 from wactorz.agents.lookup import find_main_actor
-from wactorz.config import CONFIG
+from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
@@ -151,7 +152,8 @@ async def build_system(args: argparse.Namespace):
     system._mqtt_client = await MQTTPublisher.create(
         args.mqtt_broker or CONFIG.mqtt_host,
         args.mqtt_port or CONFIG.mqtt_port,
-        db_path=os.path.join(_sd, "mqtt_outbox.db"),
+        db_path=Path(_sd) / "mqtt_outbox.db",
+        dead_letter_days=RETENTION_OUTBOX_DAYS,
     )
 
     # ── Initialise TopicBus (reactive pub/sub coordination layer) ─────────────
@@ -170,7 +172,7 @@ async def build_system(args: argparse.Namespace):
     from wactorz.core.persistence import PersistenceAPI, init_persistence
 
     _db, _pickle_store = init_persistence(
-        db_path=os.path.join(_sd, "wactorz.db"),
+        db_path=Path(_sd) / "wactorz.db",
         state_dir=_sd,
         run_migration=True,
     )
@@ -303,6 +305,16 @@ async def build_system(args: argparse.Namespace):
             actor_registry=system.registry,
             persistence_db=_db,
         )
+
+    # After the stores exist and before the agents that write to them: the
+    # checkpoint it schedules is the one SQLite would otherwise take inline, on
+    # whichever `persist()` crossed its threshold.
+    from wactorz.core.persistence import maintenance
+
+    # Before the rotation starts, so it runs ahead of the checkpoint that folds
+    # its deletes back into the database.
+    maintenance.register("retention", retention.prune)
+    maintenance.start()
 
     await system.supervisor.start()
 
@@ -451,9 +463,14 @@ async def app(args: argparse.Namespace):
                 allowed_user_ids=CONFIG.telegram_allowed_user_ids,
             )
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-    except Exception as exc:
-        logger.error(f"System error: {exc}", exc_info=True)
+    except Exception:
+        logger.exception("System error")
     finally:
+        # First: a scheduled job holds the connection lock while it runs, and
+        # the actors below are about to want it to write their state out.
+        from wactorz.core.persistence import maintenance
+
+        await maintenance.stop()
         await system.stop_all()
         # Last: actors write state as they stop, so the connection has to outlive
         # them. Closing checkpoints the WAL rather than leaving -wal/-shm behind

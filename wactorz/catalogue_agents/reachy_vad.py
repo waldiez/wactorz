@@ -198,7 +198,7 @@ def capture_utterance(
     finally:
         try:
             media.stop_recording()
-        except Exception:
+        except Exception:  # noqa: S110  # release in a finally; the error is the caller's
             pass
 
     if _cancelled(cancel_event):

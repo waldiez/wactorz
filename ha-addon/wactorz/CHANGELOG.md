@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1
+
+- Added: `retention_chat_days`, `retention_timeseries_days` and `retention_outbox_days` options. Old data is now deleted on a schedule, so a long-running install stops filling its disk: sensor and Home Assistant history after 365 days, broker messages still undelivered after 7 days, and attached files no message refers to any more. **Chat history is kept for ever unless you set `retention_chat_days`**, so updating deletes no conversation; set it to a number such as `365` to stop the history growing. `0` keeps any store for ever.
+- Changed: **edge nodes should be redeployed.** A node deployed with `/deploy` now runs under systemd and comes back after a reboot, reports its Wactorz version in its heartbeat, and shares one broker connection per agent. All of this ships in the runner, which is copied to each machine, so an existing node keeps the old behaviour until `/deploy` runs again.
+- Changed: deleting an agent asks for confirmation first, naming the agent.
+- Changed: vision agents default to Ultralytics YOLO26 models.
+- Fixed: when the dashboard can no longer reach Home Assistant through ingress, it says so and asks you to reopen Wactorz from the sidebar, instead of failing silently.
+- Fixed: a dashboard left open while the add-on restarts reconnects on its own, instead of looking connected while nothing answers.
+- Fixed: commands, chat messages and Home Assistant triggers sent while a connection is re-establishing are delivered when it comes back, instead of being lost.
+- Fixed: a rate-limited or briefly unreachable model provider is retried, instead of failing the request outright.
+- Fixed: an agent removed from a node no longer comes back when that node reboots, and a failed migration leaves the agent in exactly one place.
+- Fixed: typing `@name` for an agent that does not exist answers in the conversation you are in, instead of leaving the chat waiting.
+- Fixed: an agent whose code calls `sys.exit()` no longer stops the whole add-on; it is treated as that agent's error and repaired like any other, and an agent that has finished its work can end cleanly with `await agent.stop()`.
+- Fixed: the application CPU meter no longer reads above 100%, and the audio device picker is readable in a light theme.
+
 ## 0.6.0.1
 
 An add-on rebuild of 0.6.0 — the library is unchanged; these are dashboard fixes

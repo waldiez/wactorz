@@ -166,6 +166,71 @@ describe("CardDashboard behaviour", () => {
             document.removeEventListener("af-agent-command", onCmd);
             expect(seen).toEqual([{ command: "stop", agentId: "x" }]);
         });
+
+        // Delete is the one card action with no way back, so it asks first —
+        // in an overlay of our own, never the platform's blocking confirm().
+        it("asks before deleting, naming the agent", () => {
+            const seen: any[] = [];
+            const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
+            document.addEventListener("af-agent-command", onCmd);
+            cd.show([agent("weather-watcher")]);
+
+            cd._sendCommand("weather-watcher", "delete");
+
+            expect(document.querySelector(".af-confirm-backdrop")).not.toBeNull();
+            expect(document.querySelector(".af-confirm-message")!.textContent).toContain("weather-watcher");
+            expect(seen).toEqual([]);
+            document.querySelector<HTMLButtonElement>(".af-confirm-cancel")!.click();
+            document.removeEventListener("af-agent-command", onCmd);
+        });
+
+        it("sends nothing when the question is declined", async () => {
+            const seen: any[] = [];
+            const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
+            document.addEventListener("af-agent-command", onCmd);
+            cd.show([agent("weather-watcher")]);
+
+            cd._sendCommand("weather-watcher", "delete");
+            document.querySelector<HTMLButtonElement>(".af-confirm-cancel")!.click();
+            await Promise.resolve();
+
+            document.removeEventListener("af-agent-command", onCmd);
+            expect(seen).toEqual([]);
+        });
+
+        it("sends the delete once the question is answered", async () => {
+            const seen: any[] = [];
+            const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
+            document.addEventListener("af-agent-command", onCmd);
+            cd.show([agent("weather-watcher")]);
+
+            cd._sendCommand("weather-watcher", "delete");
+            document.querySelector<HTMLButtonElement>(".af-confirm-ok")!.click();
+            await Promise.resolve();
+
+            document.removeEventListener("af-agent-command", onCmd);
+            expect(seen).toEqual([{ command: "delete", agentId: "weather-watcher" }]);
+        });
+
+        it("falls back to the id when the agent is not on the grid", () => {
+            cd._sendCommand("unknown-id", "delete");
+            expect(document.querySelector(".af-confirm-message")!.textContent).toContain("unknown-id");
+            document.querySelector<HTMLButtonElement>(".af-confirm-cancel")!.click();
+        });
+
+        it("start and stop are their own way back, so they do not ask", () => {
+            const seen: any[] = [];
+            const onCmd = (e: Event) => seen.push((e as CustomEvent).detail);
+            document.addEventListener("af-agent-command", onCmd);
+            cd._sendCommand("main", "stop");
+            cd._sendCommand("main", "start");
+            document.removeEventListener("af-agent-command", onCmd);
+            expect(document.querySelector(".af-confirm-backdrop")).toBeNull();
+            expect(seen).toEqual([
+                { command: "stop", agentId: "main" },
+                { command: "start", agentId: "main" },
+            ]);
+        });
     });
 
     describe("per-card effects", () => {

@@ -447,7 +447,7 @@ class OneOffActuatorAgent(Actor):
                 f"agents/{self.actor_id}/metrics",
                 self._build_metrics(),
             )
-            logger.error("[%s] One-shot actuation failed: %s", self.name, exc, exc_info=True)
+            logger.exception("[%s] One-shot actuation failed", self.name)
             await self._send_result(f"Actuation failed: {exc}")
         finally:
             asyncio.create_task(self._deferred_stop())
@@ -1033,6 +1033,10 @@ class OneOffActuatorAgent(Actor):
         if self._registry:
             await self._registry.unregister(self.actor_id)
         await self.stop()
+        # After stop(), so the final status it publishes cannot be mistaken for
+        # an actuator that is still here. This is what tells the dashboard the
+        # card is gone; without it the entry outlives the agent.
+        await self.withdraw_manifest()
         self._delete_persistence_dir()
 
     async def _log(self, msg: str) -> None:

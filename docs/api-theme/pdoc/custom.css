@@ -1,0 +1,173 @@
+/* Typography, the top bar and code colours, to match the guide pages.
+ * Applied after pdoc's own layout and content styles.
+ */
+body {
+    font-family: var(--wz-mono);
+    font-size: 0.9rem;
+    line-height: 1.75;
+    color: var(--wz-text);
+}
+
+.pdoc h1,
+.pdoc h2,
+.pdoc h3,
+.pdoc h4,
+.pdoc .modulename {
+    font-family: var(--wz-display);
+    letter-spacing: 0.02em;
+    color: #fff;
+}
+
+.pdoc code,
+.pdoc pre,
+.pdoc .signature {
+    font-family: var(--wz-mono);
+}
+
+.pdoc pre {
+    border: 1px solid var(--wz-border);
+    border-radius: 4px;
+}
+
+nav.pdoc h2 {
+    font-weight: 600;
+}
+
+/* The top bar, as the guide pages draw theirs. */
+.wz-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 1.5rem;
+    height: var(--wz-topbar);
+    border-bottom: 1px solid var(--wz-border);
+    background: rgba(5, 8, 14, 0.88);
+    backdrop-filter: blur(10px);
+}
+
+.wz-topbar-logo {
+    font-family: var(--wz-display);
+    font-weight: 600;
+    font-size: 0.95rem;
+    letter-spacing: 0.06em;
+    color: #fff;
+    text-decoration: none;
+}
+
+.wz-topbar-links {
+    display: flex;
+    gap: 0.1rem;
+}
+
+.wz-topbar-links a {
+    font-size: 0.75rem;
+    color: var(--wz-muted-hi);
+    text-decoration: none;
+    padding: 0.3rem 0.65rem;
+    border-radius: 3px;
+    border: 1px solid transparent;
+}
+
+.wz-topbar-links a:hover {
+    color: var(--wz-text);
+    border-color: var(--wz-border-hi);
+    background: rgba(79, 142, 247, 0.07);
+}
+
+/* pdoc fixes its sidebar to the top of the window; start it below the bar. */
+@media (min-width: 770px) {
+    nav.pdoc {
+        top: var(--wz-topbar);
+        height: calc(100vh - var(--wz-topbar));
+        background: var(--wz-bg2);
+        border-right: 1px solid var(--wz-border);
+    }
+}
+
+@media (max-width: 769px) {
+    #navtoggle {
+        top: calc(var(--wz-topbar) + 1rem);
+    }
+}
+
+/* Syntax colours: the guide pages' palette. */
+.pdoc-code {
+    background: var(--wz-bg3);
+    color: var(--wz-text);
+}
+
+.pdoc-code .hll {
+    background: var(--wz-border);
+}
+
+.pdoc-code .c,
+.pdoc-code .ch,
+.pdoc-code .cm,
+.pdoc-code .cp,
+.pdoc-code .cpf,
+.pdoc-code .c1,
+.pdoc-code .cs {
+    color: #546e7a;
+    font-style: italic;
+}
+
+.pdoc-code .k,
+.pdoc-code .kc,
+.pdoc-code .kd,
+.pdoc-code .kn,
+.pdoc-code .kp,
+.pdoc-code .kr,
+.pdoc-code .kt {
+    color: #c792ea;
+}
+
+.pdoc-code .s,
+.pdoc-code .s1,
+.pdoc-code .s2,
+.pdoc-code .sa,
+.pdoc-code .sb,
+.pdoc-code .sc,
+.pdoc-code .dl,
+.pdoc-code .sd,
+.pdoc-code .se,
+.pdoc-code .sh,
+.pdoc-code .si,
+.pdoc-code .sx,
+.pdoc-code .sr,
+.pdoc-code .ss {
+    color: #c3e88d;
+}
+
+.pdoc-code .n,
+.pdoc-code .p {
+    color: var(--wz-text);
+}
+
+.pdoc-code .na,
+.pdoc-code .nb,
+.pdoc-code .bp,
+.pdoc-code .nc,
+.pdoc-code .nd,
+.pdoc-code .ne,
+.pdoc-code .nf,
+.pdoc-code .fm,
+.pdoc-code .nl,
+.pdoc-code .nn {
+    color: #82aaff;
+}
+
+.pdoc-code .m,
+.pdoc-code .mi,
+.pdoc-code .mf,
+.pdoc-code .mh,
+.pdoc-code .mo {
+    color: #f78c6c;
+}
+
+.pdoc-code .o,
+.pdoc-code .ow {
+    color: #89ddff;
+}

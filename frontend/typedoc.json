@@ -1,0 +1,17 @@
+{
+    "$schema": "https://typedoc.org/schema.json",
+    "entryPoints": ["src"],
+    "entryPointStrategy": "expand",
+    "out": "../site/api/js",
+    "name": "Wactorz JS",
+    "readme": "none",
+    "hideGenerator": true,
+    "customCss": "../docs/api-theme/typedoc.css",
+    "lightHighlightTheme": "material-theme-palenight",
+    "darkHighlightTheme": "material-theme-palenight",
+    "navigationLinks": {
+        "Docs": "@docs/index.html",
+        "Python API": "@docs/api/python/index.html",
+        "GitHub": "https://github.com/waldiez/wactorz"
+    }
+}

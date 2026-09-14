@@ -205,19 +205,263 @@ def _tolerant_invoker(
     return _invoke
 
 
-async def _deliver_messages(
-    client: Any, topic: str, invoke: Callable[[Any], Awaitable[None]], agent_name: str
-) -> None:
-    """Hand each message on `client` to `invoke`, surviving one that raises."""
-    async for msg in client.messages:
+#: How long the broker keeps a node's session. Mirrors
+#: SERVER_SESSION_EXPIRY_SECONDS in wactorz/core/mqtt.py.
+NODE_SESSION_EXPIRY_SECONDS = 86400
+
+#: The version of Wactorz this file was shipped from. Stamped by
+#: scripts/sync_versions.py alongside wactorz/_version.py, and checked equal to
+#: it by the test suite. The file is deployed to a node alone, so it cannot ask
+#: the package; this is how main learns which version a node is running.
+RUNNER_VERSION = "0.6.1"
+
+#: What kind of process is speaking on the node topics. A heartbeat names it so
+#: main can tell this single-file runner from a node running the package.
+NODE_RUNTIME = "runner"
+
+#: How many messages may wait in memory before telemetry starts giving way.
+#: Large enough that an ordinary reconnect queues and drains without losing
+#: anything; small enough that an absent broker costs a Pi megabytes rather than
+#: its memory. Mirrors MQTTPublisher.MAX_QUEUED on the server.
+MAX_QUEUED = 10_000
+
+#: Topics that are purely telemetry: the next one replaces the last, so the
+#: oldest is what gives way when the queue is full. Mirrors
+#: MQTTPublisher._TELEMETRY_TOPIC_SUFFIXES.
+TELEMETRY_TOPIC_SUFFIXES = ("/logs", "/metrics", "/status", "/heartbeat")
+
+
+def _new_pub_queue() -> asyncio.Queue[tuple[str, bytes, bool, bool]]:
+    """The publish queue, bounded.
+
+    Unbounded, a broker outage on a node that keeps publishing grows this until
+    the machine runs out of memory -- and these run on Raspberry Pis. Built here
+    rather than inline so the bound itself can be tested, instead of only the
+    eviction that depends on it.
+    """
+    return asyncio.Queue(maxsize=MAX_QUEUED)
+
+
+def _is_critical(topic: str) -> bool:
+    """Whether losing this message would lose something the system needs.
+
+    Everything that is not plain telemetry: results, errors, manifests, and the
+    migration replies that decide where an agent lives.
+    """
+    return not topic.endswith(TELEMETRY_TOPIC_SUFFIXES)
+
+
+def _session_kwargs(aiomqtt: Any, expiry_seconds: int) -> dict[str, Any]:
+    """Connect arguments that hold this session for a bounded time.
+
+    Mirrors `session_kwargs` in wactorz/core/mqtt.py; spelled out because this
+    file is deployed to a node with no wactorz package beside it.
+    """
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.properties import Properties
+
+    properties = Properties(PacketTypes.CONNECT)
+    properties.SessionExpiryInterval = expiry_seconds
+    return {
+        "protocol": aiomqtt.ProtocolVersion.V5,
+        "clean_start": False,
+        "properties": properties,
+    }
+
+
+def _topic_matches(pattern: str, topic: str) -> bool:
+    """Match a topic against an MQTT filter with `#` and `+` wildcards.
+
+    Mirrors `topic_matches` in wactorz/core/topic_bus.py. Spelled out rather
+    than imported: this file is deployed to a node on its own, with no wactorz
+    package beside it.
+    """
+    if pattern == topic:
+        return True
+    parts, actual = pattern.split("/"), topic.split("/")
+    while True:
+        if not parts and not actual:
+            return True
+        if parts and parts[0] == "#":
+            return True
+        if not parts or not actual:
+            return False
+        if parts[0] != "+" and parts[0] != actual[0]:
+            return False
+        parts, actual = parts[1:], actual[1:]
+
+
+class _NodeBinding:
+    """One topic filter on a node agent, and the queue that serialises it."""
+
+    def __init__(self, topic: str, invoke: Callable[[Any], Awaitable[None]], maxsize: int) -> None:
+        self.topic = topic
+        self.invoke = invoke
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        self.worker: asyncio.Task | None = None
+        self.dropped = 0
+
+    def offer(self, payload: Any) -> None:
+        """Queue a payload, discarding the oldest when the callback is behind."""
         try:
-            payload = json.loads(msg.payload.decode())
-        except Exception:
-            payload = {"raw": msg.payload.decode()}
+            self.queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            self.dropped += 1
+            try:
+                self.queue.get_nowait()
+                self.queue.task_done()
+            except asyncio.QueueEmpty:
+                pass
+            self.queue.put_nowait(payload)
+
+
+class _NodeSubscriptionHub:
+    """Every subscription one node agent holds, on a single MQTT connection.
+
+    The server-side twin of this is `SubscriptionHub` in
+    wactorz/agents/dynamic/listener.py, and the reasoning is the same: an agent
+    used to open a connection per `subscribe()`, agent code is model-authored,
+    and nothing stopped a generated loop from opening as many as it liked.
+
+    One worker per binding rather than a task per message, because the
+    per-subscription connection this replaces awaited each callback -- a
+    topic's messages were serialised, and generated code is stateful and not
+    written to be re-entrant. The queue is bounded for the same reason the
+    runner's publish queue should be: unbounded, it is just a backlog waiting
+    for a broker outage.
+    """
+
+    RECONNECT_DELAY = 5.0
+    QUEUE_MAX = 100
+    #: How long the broker keeps a durable agent's session. Mirrors
+    #: SubscriptionHub.SESSION_EXPIRY_SECONDS in the server-side twin.
+    SESSION_EXPIRY_SECONDS = 3600
+
+    def __init__(
+        self, agent_name: str, actor_id: str, broker: str, port: int, durable: bool = False
+    ) -> None:
+        self._agent_name = agent_name
+        #: Only an agent whose name was chosen can hold a session: an unnamed
+        #: one is given a random name per spawn, so its id changes with it and a
+        #: session kept for the old one could never be resumed.
+        self._durable = durable
+        self._actor_id = actor_id
+        self._broker = broker
+        self._port = port
+        #: A list, not keyed by topic: two callbacks may watch the same filter,
+        #: and keying by topic would silently drop the first.
+        self._bindings: list[_NodeBinding] = []
+        self._client: Any = None
+        self._task: asyncio.Task | None = None
+
+    def bind(self, topic: str, invoke: Callable[[Any], Awaitable[None]]) -> asyncio.Task | None:
+        """Register a subscription; returns the hub task if this call started it."""
+        binding = _NodeBinding(topic, invoke, self.QUEUE_MAX)
+        self._bindings.append(binding)
+        binding.worker = asyncio.create_task(self._drain(binding))
+        if self._client is not None:
+            asyncio.create_task(self._subscribe_now(topic))
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self.run())
+            return self._task
+        return None
+
+    def _ensure_workers(self) -> None:
+        """Give every binding a live worker, reviving any that were cancelled.
+
+        Mirrors SubscriptionHub._ensure_workers: cancelling this task cancels
+        the workers with it, and `bind` revives the task once it has ended, so
+        a revived hub would otherwise re-subscribe and queue into queues nobody
+        drains.
+        """
+        for binding in self._bindings:
+            if binding.worker is None or binding.worker.done():
+                binding.worker = asyncio.create_task(self._drain(binding))
+
+    def _session_kwargs(self, aiomqtt: Any) -> dict[str, Any]:
+        """Connect arguments that make the broker keep this session, or not."""
+        if not self._durable:
+            return {}
+        return _session_kwargs(aiomqtt, self.SESSION_EXPIRY_SECONDS)
+
+    async def _subscribe_now(self, topic: str) -> None:
+        client = self._client
+        if client is None:
+            return
         try:
-            await invoke(payload)
+            await client.subscribe(topic, qos=1 if self._durable else 0)
         except Exception:
-            logger.exception("[%s] subscribe callback error (topic=%s)", agent_name, topic)
+            logger.debug("[%s] Deferred subscribe of %s to reconnect", self._agent_name, topic)
+
+    async def run(self) -> None:
+        """Hold one connection open for every subscription, reconnecting for ever."""
+        try:
+            import aiomqtt
+        except ImportError:
+            logger.warning("[%s] aiomqtt not installed", self._agent_name)
+            return
+        while True:
+            try:
+                self._ensure_workers()
+                async with aiomqtt.Client(
+                    self._broker,
+                    self._port,
+                    username=os.environ.get("MQTT_USERNAME") or None,
+                    password=os.environ.get("MQTT_PASSWORD") or None,
+                    # Mirrors core/mqtt.py client_id.
+                    identifier=f"wactorz-agent-{self._actor_id}",
+                    **self._session_kwargs(aiomqtt),
+                ) as client:
+                    self._client = client
+                    topics = list(dict.fromkeys(b.topic for b in self._bindings))
+                    for topic in topics:
+                        await client.subscribe(topic, qos=1 if self._durable else 0)
+                    logger.info(
+                        "[%s] Subscribed to %d topic(s) on one connection",
+                        self._agent_name,
+                        len(topics),
+                    )
+                    async for message in client.messages:
+                        self._dispatch(message)
+            except asyncio.CancelledError:
+                self._client = None
+                for binding in list(self._bindings):
+                    if binding.worker is not None and not binding.worker.done():
+                        binding.worker.cancel()
+                break
+            except Exception as e:
+                self._client = None
+                logger.warning(
+                    "[%s] MQTT subscribe error: %s — retrying in %ss",
+                    self._agent_name,
+                    e,
+                    self.RECONNECT_DELAY,
+                )
+                await asyncio.sleep(self.RECONNECT_DELAY)
+
+    def _dispatch(self, message: Any) -> None:
+        """Queue one message for every binding whose filter matches it."""
+        topic = str(message.topic)
+        try:
+            payload = json.loads(message.payload.decode())
+        except Exception:
+            payload = {"raw": message.payload.decode()}
+        for binding in list(self._bindings):
+            if _topic_matches(binding.topic, topic):
+                binding.offer(payload)
+
+    async def _drain(self, binding: _NodeBinding) -> None:
+        """Run one binding's callbacks, strictly one message at a time."""
+        while True:
+            payload = await binding.queue.get()
+            try:
+                await binding.invoke(payload)
+            except Exception:
+                logger.exception(
+                    "[%s] subscribe callback error (topic=%s)", self._agent_name, binding.topic
+                )
+            finally:
+                binding.queue.task_done()
 
 
 def _close_mqtt_client(client: Any, what: str) -> None:
@@ -658,6 +902,39 @@ class _RemoteAgentAPI:
         if is_new_topic or schema_changed:
             await self._publish_manifest()
 
+    async def stop(self) -> None:
+        """End this agent. Its work is done and it should not come back.
+
+        The node half of the same verb `DynamicAgent` offers, and deliberately
+        thinner. Stopping and withdrawing the manifest is all this side can do:
+        the spawn registry and the node's desired state live on the host, and
+        main reaches both when it sees the withdrawal. So the ending is one
+        mechanism whichever process the agent runs in, and this side needs no
+        request of its own.
+
+        Call it and then return — this is not `exit`, so anything written after
+        it still runs, against an agent that is already stopping.
+        """
+        agent = self._agent
+        if agent._ending:
+            return
+        agent._ending = True
+        runner = agent._runner
+        try:
+            await agent.stop()
+        finally:
+            # Withdrawn after the stop, so the "stopped" heartbeat it publishes
+            # cannot be mistaken for an agent that is still here — and withdrawn
+            # even if the stop went badly, because this is the only message that
+            # tells the host the agent is gone.
+            runner._agents.pop(agent.name, None)
+            await runner.publish(f"agents/{self.actor_id}/manifest", b"", retain=True)
+            # Logged here, not after: stop() cancels the agent's tasks without
+            # sparing the one calling it, so when a program ends itself the
+            # cancellation unwinds straight through this and nothing below the
+            # `finally` is reached.
+            logger.info("[%s] Ended itself.", agent.name)
+
     async def _publish_manifest(self) -> None:
         """Advertise this agent's full topic contract so main can register it
         with the TopicBus and the planner can auto-wire it correctly.
@@ -743,15 +1020,21 @@ class _RemoteAgentAPI:
             return _AWAITABLE_NONE
         self._subscribed_topics[sub_key] = checked
 
-        task = asyncio.create_task(self._subscription_listener(topic, checked, self.name))
-        self._subscriber_tasks.append(task)
-        # Also let the agent's task list see it so stop() cancels cleanly.
-        try:
-            self._agent._tasks.append(task)
-        except Exception:
-            # Without this the task still runs; it just will not be cancelled by
-            # stop(), which is worth knowing about but not worth failing over.
-            logger.debug("[%s] Could not register listener task", self._agent.name, exc_info=True)
+        # One connection per agent carries every subscription, so only the first
+        # bind starts a task.
+        task = self._hub().bind(topic, _tolerant_invoker(checked, self.name))
+        if task is not None:
+            self._subscriber_tasks.append(task)
+            # Also let the agent's task list see it so stop() cancels cleanly.
+            try:
+                self._agent._tasks.append(task)
+            except Exception:
+                # Without this the task still runs; it just will not be cancelled
+                # by stop(), which is worth knowing about but not worth failing
+                # over.
+                logger.debug(
+                    "[%s] Could not register listener task", self._agent.name, exc_info=True
+                )
 
         # Record the subscription on the contract surface and re-publish the
         # manifest so main learns about it and updates the central TopicBus.
@@ -762,35 +1045,22 @@ class _RemoteAgentAPI:
         # Return an awaitable no-op so `await agent.subscribe(...)` doesn't crash.
         return _AWAITABLE_NONE
 
-    async def _subscription_listener(
-        self, topic: str, callback: Callable[..., Awaitable[Any]], agent_name: str
-    ) -> None:
-        """Consume `topic` until cancelled, reconnecting when the broker drops."""
-        try:
-            import aiomqtt
-        except ImportError:
-            logger.warning("[%s] aiomqtt not installed", agent_name)
-            return
-
-        invoke = _tolerant_invoker(callback, agent_name)
-        while True:
-            try:
-                async with aiomqtt.Client(
-                    self._agent._runner.broker,
-                    self._agent._runner.port,
-                    username=os.environ.get("MQTT_USERNAME") or None,
-                    password=os.environ.get("MQTT_PASSWORD") or None,
-                ) as client:
-                    await client.subscribe(topic)
-                    logger.info("[%s] Subscribed to %s", agent_name, topic)
-                    await _deliver_messages(client, topic, invoke, agent_name)
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.warning(
-                    "[%s] MQTT subscribe error on %s: %s — retrying in 5s", agent_name, topic, e
-                )
-                await asyncio.sleep(5)
+    def _hub(self) -> _NodeSubscriptionHub:
+        """This agent's subscription hub, created on first subscribe."""
+        hub = getattr(self, "_sub_hub", None)
+        if hub is None:
+            runner = self._agent._runner
+            hub = _NodeSubscriptionHub(
+                self.name,
+                str(self.actor_id),
+                runner.broker,
+                runner.port,
+                # A spawn config without a name gets a random one, so the id is
+                # stable only within an incarnation -- nothing to resume.
+                durable=bool(self._agent._config.get("name")),
+            )
+            self._sub_hub = hub
+        return hub
 
     # ── One-shot reads / time windows / world state ──────────────────────────
     async def mqtt_get(self, topic: str, timeout: float = 10.0) -> Any:
@@ -1136,6 +1406,9 @@ class _RemoteAgent:
 
     def __init__(self, config: dict, runner: _RemoteRunner, state_dir: str | None = None) -> None:
         self.name = config.get("name", f"remote-agent-{uuid.uuid4().hex[:6]}")
+        # Mirrors core/actor.py `derive_actor_id`. The one copy that has to
+        # stay: this file is deployed to a node alone. If the two drift, nothing
+        # raises -- main and the node simply disagree about which agent is which.
         self.actor_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{self.name}"))
         self.node_name = runner.node_name
         self._runner = runner
@@ -1157,6 +1430,9 @@ class _RemoteAgent:
         self._tasks: list[asyncio.Task] = []
         self._running = False
         self._status = ""
+        #: Set once the program has asked to end, so a second ask — or a process
+        #: loop still finishing its tick — does not repeat the work.
+        self._ending = False
 
         self._fn_setup: Callable[..., Awaitable[None]] | None = None
         self._fn_process: Callable[..., Awaitable[None]] | None = None
@@ -1296,8 +1572,7 @@ class _RemoteAgent:
             self._fn_handle_task = self._ns.get("handle_task")
         except Exception as e:
             return f"Compile error: {e}\n{traceback.format_exc()}"
-        else:
-            return None
+        return None
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -1319,7 +1594,12 @@ class _RemoteAgent:
                 await self._run_lifecycle()
             except asyncio.CancelledError:
                 break  # deliberate stop() — do not restart
-            except Exception as e:
+            except KeyboardInterrupt:
+                raise
+            # BaseException: a program exit that escaped the lifecycle's own
+            # guards (setup, cleanup) still means this agent crashed, not the
+            # node — it goes through the same restart budget as any other crash.
+            except BaseException as e:
                 if not self._running:
                     break  # stop() was called mid-crash, don't restart
 
@@ -1497,7 +1777,12 @@ class _RemoteAgent:
                         self._restart_count -= 1
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except KeyboardInterrupt:
+                raise
+            # BaseException, not Exception: a node runs the same model-written
+            # programs the host does, and a `sys.exit()` here ends the node —
+            # see DynamicAgent._run_process_forever, which guards the host side.
+            except BaseException as e:
                 consecutive_errors += 1
                 successful_runs = 0
                 err_str = traceback.format_exc()
@@ -1562,7 +1847,9 @@ class _RemoteAgent:
             return {"error": f"Agent '{self.name}' has no handle_task function."}
         try:
             result = await self._fn_handle_task(self._api, payload)
-        except Exception as e:
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            raise
+        except BaseException as e:
             err_str = traceback.format_exc()
             logger.exception("[%s] handle_task() error", self.name)
             await self._publish(
@@ -1604,12 +1891,16 @@ class _RemoteRunner:
         self.port = port
         self.node_name = node_name
         self._agents: dict[str, _RemoteAgent] = {}  # name → agent
-        self._pub_queue: asyncio.Queue[tuple[str, bytes, bool]] | None = (
+        #: (topic, payload, retain, critical). The last field is what lets the
+        #: cap below evict telemetry rather than whatever arrived first.
+        self._pub_queue: asyncio.Queue[tuple[str, bytes, bool, bool]] | None = (
             None  # created in run() inside the event loop
         )
         self._running = False
         self._deps_ready: asyncio.Event | None = None  # set once aiomqtt/paho are importable
         self._start_time: float = time.time()  # for uptime reporting in heartbeat
+        #: Messages the cap discarded, for the log.
+        self._dropped = 0
         # Persistent state directory — survives reboots unlike /tmp
         _state_path = Path.home() / "wactorz" / "state"
         _state_path.mkdir(parents=True, exist_ok=True)
@@ -1618,12 +1909,77 @@ class _RemoteRunner:
     # ── MQTT publish (queue-based, reconnect-safe) ────────────────────────────
 
     async def publish(self, topic: str, data: Any, retain: bool = False) -> None:
+        """Queue a message for the publisher loop. Never waits for room.
+
+        Waiting would push a stalled broker back into the agent code that called
+        this -- the same reasoning as `MQTTPublisher._enqueue` on the server.
+        """
         if self._pub_queue is None:
             return
         payload = json.dumps(data) if not isinstance(data, (str, bytes)) else data
         if isinstance(payload, str):
             payload = payload.encode()
-        await self._pub_queue.put((topic, payload, retain))
+        self._enqueue((topic, payload, retain, _is_critical(topic)))
+
+    def _enqueue(self, item: tuple[str, bytes, bool, bool]) -> None:
+        """Add a message, making room by dropping telemetry when the cap is hit.
+
+        Room is made from the front: the oldest telemetry goes, because the next
+        heartbeat replaces it anyway and the freshest sample is the useful one.
+        If nothing droppable is queued, the incoming message gives way.
+
+        ⚠ **Unlike the server, a message dropped here is gone.** `MQTTPublisher`
+        can discard a queued QoS 1 because the SQLite outbox still holds it; a
+        node has no outbox. The cap is therefore sized so that only a long
+        outage on a busy node reaches it, and every drop is counted and logged.
+        """
+        queue = self._pub_queue
+        if queue is None:
+            return
+        while True:
+            try:
+                queue.put_nowait(item)
+            except asyncio.QueueFull:
+                if not self._discard_one_telemetry():
+                    self._note_drop(item)
+                    return
+            else:
+                return
+
+    def _discard_one_telemetry(self) -> bool:
+        """Drop the oldest non-critical message, if there is one. True if it did.
+
+        Rebuilds the queue rather than reaching into it: `asyncio.Queue` offers
+        no supported way to remove from the middle.
+        """
+        queue = self._pub_queue
+        if queue is None:
+            return False
+        held: list[tuple[str, bytes, bool, bool]] = []
+        dropped = False
+        while not queue.empty():
+            entry = queue.get_nowait()
+            queue.task_done()
+            if not dropped and not entry[3]:
+                dropped = True
+                self._note_drop(entry)
+                continue
+            held.append(entry)
+        for entry in held:
+            queue.put_nowait(entry)
+        return dropped
+
+    def _note_drop(self, item: tuple[str, bytes, bool, bool]) -> None:
+        """Count a discarded message, and say so at a rate a log can carry."""
+        self._dropped += 1
+        if self._dropped == 1 or self._dropped % 1000 == 0:
+            logger.warning(
+                "[runner] publish queue full at %d — discarded %s (%d total). The broker "
+                "is not keeping up, or is not there.",
+                MAX_QUEUED,
+                item[0],
+                self._dropped,
+            )
 
     # ── Spawn / stop agents ───────────────────────────────────────────────────
 
@@ -1694,6 +2050,23 @@ class _RemoteRunner:
                 "timestamp": time.time(),
             },
         )
+
+        # A migration is waiting on this. The ack says the *process started*,
+        # nothing more: a heartbeat or a manifest would conflate arrival with
+        # health, and roll back a migration that worked because the agent's own
+        # code crashed a moment later -- which is a supervision matter.
+        token = config.get("_migration_token")
+        if token:
+            await self.publish(
+                f"nodes/{self.node_name}/spawn_ack",
+                {
+                    "agent": name,
+                    "migration_token": token,
+                    "node": self.node_name,
+                    "timestamp": time.time(),
+                },
+                retain=False,
+            )
 
     async def stop_agent(self, name: str, delete: bool = False) -> None:
         """Stop an agent. When `delete=True`, also wipe everything that would
@@ -1795,6 +2168,15 @@ class _RemoteRunner:
 
     # ── Status heartbeat for the node itself ──────────────────────────────────
 
+    def _node_identity(self) -> dict[str, Any]:
+        """The fields every node heartbeat carries, whatever else it says.
+
+        `version` and `runtime` are how main tells what is running here. A
+        heartbeat without them comes from a runner older than these fields, and
+        main treats it as this runtime at an unknown version.
+        """
+        return {"node": self.node_name, "version": RUNNER_VERSION, "runtime": NODE_RUNTIME}
+
     async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
         """Publish a heartbeat for the runner process itself so it appears in dashboard."""
         node_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.node.{self.node_name}"))
@@ -1813,7 +2195,7 @@ class _RemoteRunner:
                 await self.publish(
                     f"nodes/{self.node_name}/heartbeat",
                     {
-                        "node": self.node_name,
+                        **self._node_identity(),
                         "node_id": node_id,
                         "timestamp": time.time(),
                         "agents": agent_names,
@@ -1842,28 +2224,59 @@ class _RemoteRunner:
         first read.
         """
         import paho.mqtt.client as paho_mqtt
+        from paho.mqtt.enums import CallbackAPIVersion
+        from paho.mqtt.packettypes import PacketTypes
+        from paho.mqtt.properties import Properties
 
-        client = paho_mqtt.Client(client_id=f"runner-pub-{self.node_name}-{uuid.uuid4().hex[:6]}")
+        # Mirrors core/mqtt.py `client_id`. Spelled out rather than imported:
+        # this file is deployed to a node on its own, with no wactorz package
+        # beside it, so the shape has to be kept in step by hand.
+        client = paho_mqtt.Client(
+            # Explicit, not defaulted: omitting it selects paho's callback API
+            # version 1, which is deprecated and warns on every construction.
+            # Nothing here registers a paho callback, so version 2 costs no
+            # migration -- and paho is not pinned anywhere (it arrives through
+            # aiomqtt, which allows <3.0.0), while a node runs `pip install
+            # aiomqtt` fresh on every deploy. A release that drops the old API
+            # would otherwise break deploys with nothing in the tree to catch it.
+            CallbackAPIVersion.VERSION2,
+            client_id=f"wactorz-nodepub-{self.node_name}",
+            # v5, so the kept session below can name a lifetime. v3.1.1 has no
+            # expiry, and a decommissioned node would leave broker state for ever.
+            protocol=paho_mqtt.MQTTv5,
+        )
         user = os.environ.get("MQTT_USERNAME") or None
         if user:
             client.username_pw_set(user, os.environ.get("MQTT_PASSWORD") or None)
-        client.connect(self.broker, self.port, keepalive=60)
+        properties = Properties(PacketTypes.CONNECT)
+        properties.SessionExpiryInterval = NODE_SESSION_EXPIRY_SECONDS
+        # Durable, so QoS 1 messages in flight when the link drops are
+        # redelivered rather than discarded with the session.
+        client.connect(
+            self.broker, self.port, keepalive=60, clean_start=False, properties=properties
+        )
         client.loop_start()
         return client
 
     async def _publish_one_queued(self, client: Any) -> None:
         """Hand the next queued message to the client, waiting for one to arrive.
 
-        The retain flag is optional in the queued tuple, because most callers
-        have no opinion about it and a two-item entry is the common case.
+        Entries are built by `publish` alone, so the shape is fixed:
+        (topic, payload, retain, critical) -- and `critical` decides the QoS as
+        well as what the queue evicts first.
         """
         queue = self._pub_queue
         if queue is None:
             return
         item = await queue.get()
-        topic, payload = item[0], item[1]
-        retain = item[2] if len(item) > 2 else False
-        client.publish(topic, payload, qos=1, retain=retain)
+        topic, payload, retain, critical = item
+        # Telemetry goes out at QoS 0, mirroring MQTTPublisher on the server.
+        # Not only to save queue space: at QoS 1 the broker holds heartbeats for
+        # a subscriber that is away and replays them on reconnect, and main
+        # stamps a node as last seen *now* on receipt -- so a node that died
+        # hours ago would read online for the whole freshness window, which is
+        # exactly what gates migrating an agent onto it.
+        client.publish(topic, payload, qos=1 if critical else 0, retain=retain)
         queue.task_done()
 
     async def _publisher_loop(self) -> None:
@@ -2121,9 +2534,16 @@ class _RemoteRunner:
                     self.port,
                     username=os.environ.get("MQTT_USERNAME") or None,
                     password=os.environ.get("MQTT_PASSWORD") or None,
+                    identifier=f"wactorz-node-{self.node_name}",  # mirrors core/mqtt.py client_id
+                    # Durable: the broker holds control messages sent while this
+                    # node was away, instead of dropping them on the floor. v5
+                    # with an expiry rather than v3.1.1, which has none -- a
+                    # decommissioned node would otherwise cost broker state for
+                    # ever. Mirrors core/mqtt.py session_kwargs.
+                    **_session_kwargs(aiomqtt, NODE_SESSION_EXPIRY_SECONDS),
                 ) as client:
                     for topic in topics:
-                        await client.subscribe(topic)
+                        await client.subscribe(topic, qos=1)
                     logger.info(
                         "[runner] Subscribed to control topics on node '%s'", self.node_name
                     )
@@ -2147,7 +2567,8 @@ class _RemoteRunner:
 
     async def run(self) -> None:
         self._running = True
-        self._pub_queue = asyncio.Queue()  # must be created inside the running event loop
+        # Created inside the running event loop.
+        self._pub_queue = _new_pub_queue()
         self._deps_ready = asyncio.Event()
         logger.info(
             "[runner] Starting node '%s' → broker %s:%s", self.node_name, self.broker, self.port
@@ -2216,7 +2637,7 @@ class _RemoteRunner:
         await self.stop_all()
         await self.publish(
             f"nodes/{self.node_name}/heartbeat",
-            {"node": self.node_name, "status": "restarting", "timestamp": time.time()},
+            {**self._node_identity(), "status": "restarting", "timestamp": time.time()},
         )
         # Drain the publish queue before we replace the process image
         await asyncio.sleep(0.5)
@@ -2227,7 +2648,7 @@ class _RemoteRunner:
         await self.stop_all()
         await self.publish(
             f"nodes/{self.node_name}/heartbeat",
-            {"node": self.node_name, "status": "offline", "timestamp": time.time()},
+            {**self._node_identity(), "status": "offline", "timestamp": time.time()},
         )
         # Drain before exit so the heartbeat reaches the broker
         await asyncio.sleep(0.3)
@@ -2308,11 +2729,13 @@ class _RemoteRunner:
             return_config["node"] = self.node_name
             return_config.pop("_initial_state", None)
             return_config.pop("replace", None)
-            # Stop locally AND delete the state file. The agent has just been
-            # migrated away — keeping its state.json behind would resurrect
-            # stale memory if the agent is ever migrated back to this node.
-            # The snapshot we're about to publish is the authoritative copy.
-            await self.stop_agent(name, delete=True)
+            # Stop, but keep the state file. Main deletes it with an explicit
+            # `stop {"delete": true}` once the agent is confirmed running
+            # somewhere else. Deleting here would mean a migration that fails
+            # after this point has nothing to roll back to -- the snapshot in
+            # flight would be the only copy, and a dropped message would lose
+            # the agent outright.
+            await self.stop_agent(name)
             await asyncio.sleep(0.3)
             await self.publish(
                 f"nodes/{self.node_name}/state_return",
@@ -2341,41 +2764,31 @@ class _RemoteRunner:
             logger.info("[runner] Migration of '%s' to local (main) dispatched.", name)
             return
 
-        if safe_state:
-            config["_initial_state"] = safe_state
-            logger.info(
-                "[runner] migrate '%s': carrying %s state key(s) to '%s': %s",
-                name,
-                len(safe_state),
-                target_node,
-                list(safe_state.keys()),
-            )
-
-        logger.info("[runner] Migrating '%s' from %s → %s", name, self.node_name, target_node)
-
-        # Stop locally AND delete the state file. The agent's state is now in
-        # `config["_initial_state"]` and about to be published to the target
-        # node — that snapshot is authoritative. A stale leftover JSON on this
-        # node would otherwise survive and conflict on any future migrate-back.
-        await self.stop_agent(name, delete=True)
-        await asyncio.sleep(0.3)  # let heartbeat "stopped" reach broker
-
-        # Publish spawn to target node via MQTT
-        await self.publish(f"nodes/{target_node}/spawn", config)
-
+        # Node-to-node migration used to happen here: this runner published
+        # `nodes/{target}/spawn` directly. That is the reproduced lateral-RCE
+        # path -- generated code on one node could spawn code on another -- and
+        # the ACL that closes it forbids a node writing another node's
+        # namespace, which would have broken this anyway. Migration is routed
+        # through main instead, which is the only party allowed to address every
+        # node. Main asks for the state with the `@main` sentinel above and does
+        # the placing itself.
+        logger.warning(
+            "[runner] migrate '%s' to '%s': node-to-node migration is not "
+            "supported; main routes migrations. Ignoring.",
+            name,
+            target_node,
+        )
         await self.publish(
             f"nodes/{self.node_name}/migrate_result",
             {
-                "success": True,
+                "success": False,
+                "error": "node-to-node migration is routed through main",
                 "agent": name,
                 "from_node": self.node_name,
                 "to_node": target_node,
-                "state_keys_transferred": list(safe_state.keys()),
-                "state_keys_dropped": dropped,
                 "timestamp": time.time(),
             },
         )
-        logger.info("[runner] Migration of '%s' to '%s' dispatched.", name, target_node)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

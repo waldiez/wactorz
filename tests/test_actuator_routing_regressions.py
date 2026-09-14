@@ -74,6 +74,7 @@ def test_direct_color_and_brightness_request_does_not_need_llm_json():
 
     actions = agent._resolve_simple_light_actions(_two_color_lights())
 
+    assert actions is not None
     assert len(actions) == 1
     assert actions[0].entity_id == "light.main"
     assert actions[0].service_data == {"rgb_color": [0, 255, 255], "brightness_pct": 100}
@@ -87,6 +88,7 @@ def test_brightness_follow_up_uses_recent_controlled_light():
 
     actions = agent._resolve_simple_light_actions(_two_color_lights())
 
+    assert actions is not None
     assert len(actions) == 1
     assert actions[0].entity_id == "light.led_strip"
     assert actions[0].service_data == {"brightness_step_pct": -15}

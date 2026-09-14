@@ -12,7 +12,13 @@ import logging
 import time
 from typing import Any
 
-from ..core.mqtt import mqtt_client
+from ..core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    install_id,
+    mqtt_client,
+    session_kwargs,
+)
 from ..monitoring.log_redaction import redact
 from . import events, relay, runtime, ws
 
@@ -24,7 +30,7 @@ async def broadcast_mqtt_msg(topic: str, payload: str) -> None:
     parsed: Any = payload
     try:
         parsed = json.loads(payload)
-    except Exception:
+    except Exception:  # noqa: S110  # non-JSON payloads are passed through as text
         # non-JSON: pass the string through
         pass
     await ws.broadcast({"type": "server_event", "topic": topic, "payload": parsed})
@@ -52,6 +58,19 @@ async def handle_message(topic: str, payload: str) -> None:
     if relay.is_relayed(topic):
         await broadcast_mqtt_msg(topic, payload)
     if not event or runtime.hard_resetting:
+        return
+
+    if event.get("type") == events.DELETE_AGENT_FRAME:
+        # A patch only adds and updates, so a snapshot that no longer names the
+        # agent still leaves its card on screen. This is the frame that removes
+        # it, and the same one the REST and WebSocket delete paths send.
+        await ws.broadcast(
+            {
+                "type": events.DELETE_AGENT_FRAME,
+                "agent_id": event.get("agent_id", ""),
+                "state": events.snapshot(),
+            }
+        )
         return
 
     metric = event.get("metric", "")
@@ -104,7 +123,12 @@ async def mqtt_listener() -> None:
     try:
         while True:
             try:
-                async with mqtt_client(runtime.MQTT_BROKER, runtime.MQTT_PORT) as client:
+                async with mqtt_client(
+                    runtime.MQTT_BROKER,
+                    runtime.MQTT_PORT,
+                    identifier=client_id("mon", install_id()),
+                    **session_kwargs(SERVER_SESSION_EXPIRY_SECONDS),
+                ) as client:
                     runtime.mqtt_client_ref = client
                     logger.info("MQTT connected.")
 
@@ -122,7 +146,7 @@ async def mqtt_listener() -> None:
                         )
 
                     for topic in runtime.MQTT_TOPICS:
-                        await client.subscribe(topic)
+                        await client.subscribe(topic, qos=1)
 
                     await set_mqtt_status(True)
 
@@ -164,7 +188,7 @@ async def check_mqtt(attempts: int = 5, delay: float = 0.5) -> bool:
             writer.close()
             try:
                 await writer.wait_closed()
-            except Exception:
+            except Exception:  # noqa: S110  # closing a probe socket already being discarded
                 pass
             return True
         except Exception as exc:

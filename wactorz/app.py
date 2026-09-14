@@ -10,7 +10,7 @@ import logging
 import signal
 import sys
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import retention
@@ -362,6 +362,29 @@ def _install_signal_handlers() -> None:
             signal.signal(sig, _request_stop)
 
 
+async def _run_tui(system: Any, main_actor: Any, companion_runs: list[Any]) -> None:
+    """Run the terminal UI over the system this process has already built.
+
+    Handed that system rather than left to find one: the TUI's own entry point
+    builds a system when it is started on its own, and started from here that
+    would be a second one in the same process — a second main actor, and broker
+    connections under client ids the first set already holds, so each set would
+    knock the other off the broker whenever it reconnected.
+    """
+    try:
+        from wactorz.tui.app import run_async  # optional dependency: the tui extra (textual)
+        from wactorz.tui.context import TUIContext  # same package, imported with it
+    except ImportError:
+        logger.exception("TUI needs the 'tui' extra — pip install 'wactorz[tui]'")
+        sys.exit(1)
+    bots = [asyncio.create_task(run) for run in companion_runs]
+    try:
+        await run_async(TUIContext(main_actor=main_actor, system=system))
+    finally:
+        for bot in bots:
+            bot.cancel()
+
+
 async def app(args: argparse.Namespace):
     # First, so both cover startup as well as steady state. setup_logging builds
     # the handlers with redaction already attached, so no record reaches an
@@ -426,17 +449,7 @@ async def app(args: argparse.Namespace):
                 system._running = True
                 await asyncio.gather(system.run_forever(), *_run_all(companions))
         elif interface == "tui":
-            try:
-                from wactorz.tui.app import run_async as _tui_run
-            except ImportError:
-                logger.exception("TUI needs the 'tui' extra — pip install 'wactorz[tui]'")
-                sys.exit(1)
-            bots = [asyncio.create_task(c) for c in _run_all(companions)]
-            try:
-                await _tui_run()
-            finally:
-                for bot in bots:
-                    bot.cancel()
+            await _run_tui(system, main_actor, _run_all(companions))
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)

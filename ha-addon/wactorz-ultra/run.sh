@@ -153,6 +153,16 @@ export TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID}"
 SOCIAL_RATE_LIMIT_PER_MIN=$(get_config_safe 'social_rate_limit_per_min' '12')
 export SOCIAL_RATE_LIMIT_PER_MIN="${SOCIAL_RATE_LIMIT_PER_MIN}"
 
+# Data retention: days before old entries are deleted, 0 keeps them for ever.
+# The fallbacks must match the config.yaml defaults. Chat is exported as 0 rather
+# than left unset, because unset means Wactorz's own default, which deletes.
+WACTORZ_RETENTION_CHAT_DAYS=$(get_config_safe 'retention_chat_days' '0')
+export WACTORZ_RETENTION_CHAT_DAYS="${WACTORZ_RETENTION_CHAT_DAYS}"
+WACTORZ_RETENTION_TIMESERIES_DAYS=$(get_config_safe 'retention_timeseries_days' '365')
+export WACTORZ_RETENTION_TIMESERIES_DAYS="${WACTORZ_RETENTION_TIMESERIES_DAYS}"
+WACTORZ_RETENTION_OUTBOX_DAYS=$(get_config_safe 'retention_outbox_days' '7')
+export WACTORZ_RETENTION_OUTBOX_DAYS="${WACTORZ_RETENTION_OUTBOX_DAYS}"
+
 # ── Remote deploy targets ─────────────────────────────────────────────────────
 # A list of objects in options.json, flattened into the DEPLOY_TARGETS +
 # DEPLOY_<NAME>_* variables wactorz/config.py reads. SSH credentials are

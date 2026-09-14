@@ -9,7 +9,7 @@ Wactorz 0.6.1 is about staying up: agents and nodes now come through restarts, r
 
 ### Before you upgrade
 
-- **Chat history older than a year is now deleted automatically.** Set `WACTORZ_RETENTION_CHAT_DAYS=0` before upgrading to keep all of it. Sensor history, attached files no message refers to and undelivered broker messages are pruned on their own windows too. The Home Assistant add-on has no option for these windows yet.
+- **Chat history older than a year is now deleted automatically.** Set `WACTORZ_RETENTION_CHAT_DAYS=0` before upgrading to keep all of it. Sensor history, attached files no message refers to and undelivered broker messages are pruned on their own windows too. The Home Assistant add-on offers each window as an option, and keeps chat for ever unless `retention_chat_days` is set, so updating the add-on deletes no conversation.
 - **Redeploy your edge nodes.** Supervision under systemd, version reporting and shared broker connections all ship in the runner, which is copied to each machine, so an existing node keeps the old behaviour until `/deploy` runs again.
 - **Vision agents need an `ultralytics` release that knows YOLO26**, now the default model family. Older releases fail with `FileNotFoundError` on the weights file.
 

@@ -23,7 +23,6 @@ from wactorz.tui import format as fmt
         ("running", "green"),
         ("idle", "green"),
         ("starting", "cyan"),
-        ("paused", "yellow"),
         ("stopping", "yellow"),
         ("stopped", "red"),
         ("failed", "bold red"),

@@ -68,11 +68,27 @@ TabPane {
 .chat-reply {
     margin: 0 0 1 0;
 }
+/* Turns read back from the chat history, a step quieter than this session's. */
+.restored {
+    text-opacity: 75%;
+}
+.chat-divider {
+    color: $text-muted;
+    text-align: center;
+    margin: 0 0 1 0;
+}
 
-/* ── Bottom region: input + key hints + status bar ───────────────────────── */
+/* ── Bottom region: attachments + input + key hints + status bar ─────────── */
 #footer {
     dock: bottom;
-    height: 5;
+    height: auto;
+}
+
+/* Hidden until a file is dropped; the app shows it while files are staged. */
+#attachments {
+    display: none;
+    height: auto;
+    padding: 0 1;
 }
 
 #cmd {

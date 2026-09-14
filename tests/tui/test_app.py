@@ -10,13 +10,18 @@ key event proves that still works.
 
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from textual import events
 from textual.pilot import Pilot
 from textual.widgets import Input, Static, TabbedContent
 
+from wactorz import config
 from wactorz.tui.app import TAB_IDS, WactorzTUI, run, run_async
+from wactorz.tui.attachments import Staged
 from wactorz.tui.context import TUIContext
 from wactorz.tui.meta import VERSION
 from wactorz.tui.panes import ChatPane, LogsPane
@@ -24,27 +29,45 @@ from wactorz.tui.snapshot import HostStats, Snapshot
 
 
 class _Ctx(TUIContext):
-    """A context with a scriptable snapshot and chat stream."""
+    """A context with a scriptable snapshot, chat stream and stored history."""
 
     def __init__(
         self,
         snap: Snapshot | None = None,
         chunks: tuple[str, ...] = ("hi",),
         fail: bool = False,
+        history: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__()
         self._snap = snap if snap is not None else Snapshot()
         self._chunks = chunks
         self._fail = fail
+        self._stored = history or []
         self.asked: list[str] = []
+        self.attached: list[list[dict[str, Any]]] = []
 
     async def snapshot(self) -> Snapshot:
         if self._fail:
             raise RuntimeError("snapshot exploded")
         return self._snap
 
-    async def chat_stream(self, text: str) -> AsyncIterator[str]:
+    async def history(self, limit: int = 200) -> list[dict[str, Any]]:
+        return list(self._stored)
+
+    async def store_attachments(
+        self, staged: list[Staged]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        records = [
+            {"id": "0" * 32, "name": item.name, "mime": "application/pdf", "size": item.size}
+            for item in staged
+        ]
+        return records, []
+
+    async def chat_stream(
+        self, text: str, attachments: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[str]:
         self.asked.append(text)
+        self.attached.append(list(attachments or []))
         for chunk in self._chunks:
             yield chunk
 
@@ -321,7 +344,9 @@ async def test_the_logs_search_box_is_not_treated_as_a_command(app: WactorzTUI) 
 
 async def test_an_agent_failure_is_shown_in_the_transcript() -> None:
     class _Boom(_Ctx):
-        async def chat_stream(self, text: str) -> AsyncIterator[str]:
+        async def chat_stream(
+            self, text: str, attachments: list[dict[str, Any]] | None = None
+        ) -> AsyncIterator[str]:
             yield "partial"
             raise RuntimeError("agent died")
 
@@ -330,6 +355,123 @@ async def test_an_agent_failure_is_shown_in_the_transcript() -> None:
         chat = pilot.app.query_one(ChatPane)
         assert any("[error]" in str(w.content) for w in chat.query(".chat-reply"))
         assert pilot.app.is_running
+
+
+# ── chat history ────────────────────────────────────────────────────────────
+
+
+async def test_the_chat_tab_opens_on_the_stored_conversation() -> None:
+    stored = [
+        {"role": "user", "content": "yesterday's question", "agent_name": "main"},
+        {"role": "assistant", "content": "yesterday's answer", "agent_name": "main"},
+    ]
+    async with WactorzTUI(_Ctx(history=stored)).run_test() as pilot:
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        texts = [str(w.content) for w in pilot.app.query_one(ChatPane).query(Static)]
+        assert any("yesterday's question" in t for t in texts)
+        assert any("yesterday's answer" in t for t in texts)
+
+
+# ── attachments ─────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(name="pdf")
+def pdf_fixture(tmp_path: Path) -> Path:
+    path = tmp_path / "report.pdf"
+    path.write_bytes(b"%PDF-1.7\n")
+    return path
+
+
+async def _paste(pilot: Pilot, text: str) -> None:
+    """Paste into the command bar, as a terminal does when a file is dropped on it."""
+    cmd = pilot.app.query_one("#cmd", Input)
+    cmd.focus()
+    cmd.post_message(events.Paste(text))
+    await pilot.pause()
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+def _tray(pilot: Pilot) -> Static:
+    return pilot.app.query_one("#attachments", Static)
+
+
+async def test_a_dropped_file_is_staged_not_typed(app: WactorzTUI, pdf: Path) -> None:
+    async with app.run_test() as pilot:
+        await _paste(pilot, str(pdf))
+        assert pilot.app.query_one("#cmd", Input).value == ""
+        assert _tray(pilot).display
+        assert "report.pdf" in str(_tray(pilot).content)
+
+
+async def test_the_tray_is_hidden_until_something_is_staged(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        assert not _tray(pilot).display
+
+
+async def test_a_pasted_path_that_is_not_a_file_is_typed(app: WactorzTUI, tmp_path: Path) -> None:
+    missing = str(tmp_path / "missing.pdf")
+    async with app.run_test() as pilot:
+        await _paste(pilot, missing)
+        assert pilot.app.query_one("#cmd", Input).value == missing
+        assert not _tray(pilot).display
+
+
+async def test_ordinary_text_pastes_as_usual(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        await _paste(pilot, "hello there")
+        assert pilot.app.query_one("#cmd", Input).value == "hello there"
+
+
+async def test_a_file_the_dashboard_would_refuse_is_skipped(
+    app: WactorzTUI, tmp_path: Path
+) -> None:
+    exe = tmp_path / "tool.exe"
+    exe.write_bytes(b"MZ")
+    async with app.run_test() as pilot:
+        await _paste(pilot, str(exe))
+        assert not _tray(pilot).display
+        assert pilot.app.query_one("#cmd", Input).value == ""
+
+
+async def test_the_same_file_dropped_twice_is_staged_once(app: WactorzTUI, pdf: Path) -> None:
+    async with app.run_test() as pilot:
+        await _paste(pilot, str(pdf))
+        await _paste(pilot, str(pdf))
+        assert str(_tray(pilot).content).count("report.pdf") == 1
+
+
+async def test_the_staged_files_go_with_the_next_message(app: WactorzTUI, pdf: Path) -> None:
+    async with app.run_test() as pilot:
+        await _paste(pilot, str(pdf))
+        await _submit(pilot, "summarise this")
+        await pilot.app.workers.wait_for_complete()
+        await pilot.pause()
+        assert [[a["name"] for a in turn] for turn in pilot.app.ctx.attached] == [["report.pdf"]]
+        assert not _tray(pilot).display
+        chat = pilot.app.query_one(ChatPane)
+        assert any("report.pdf" in str(w.content) for w in chat.query(".chat-user"))
+
+
+async def test_detach_takes_the_staged_files_off(app: WactorzTUI, pdf: Path) -> None:
+    async with app.run_test() as pilot:
+        await _paste(pilot, str(pdf))
+        await _submit(pilot, "/detach")
+        assert not _tray(pilot).display
+        await _submit(pilot, "hello")
+        await pilot.app.workers.wait_for_complete()
+        assert pilot.app.ctx.attached == [[]]
+
+
+async def test_with_uploads_off_a_dropped_path_is_just_text(
+    monkeypatch: pytest.MonkeyPatch, pdf: Path
+) -> None:
+    monkeypatch.setattr(config, "UPLOADS_ENABLED", False)
+    async with WactorzTUI(_Ctx()).run_test() as pilot:
+        await _paste(pilot, str(pdf))
+        assert pilot.app.query_one("#cmd", Input).value == str(pdf)
+        assert not _tray(pilot).display
 
 
 # ── entry points ────────────────────────────────────────────────────────────

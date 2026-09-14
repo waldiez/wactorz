@@ -87,6 +87,12 @@ def test_the_state_dir_has_a_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert home_mod.state_dir() == "./state"
 
 
+def test_a_blank_state_dir_reads_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A `WACTORZ_STATE_DIR=` line in `.env` is unset to the backend, not "".
+    monkeypatch.setenv("WACTORZ_STATE_DIR", "  ")
+    assert home_mod.state_dir() == "./state"
+
+
 async def test_home_picks_the_compact_logo_when_narrow(app: WactorzTUI, ctx: TUIContext) -> None:
     async with app.run_test(size=(40, 30)) as pilot:
         pane = pilot.app.query_one(HomePane)
@@ -280,6 +286,80 @@ async def test_chat_ignores_the_snapshot(app: WactorzTUI, ctx: TUIContext) -> No
         assert len(chat.query(Static)) == before
 
 
+def _texts(chat: ChatPane) -> list[str]:
+    return [str(w.content) for w in chat.query(Static)]
+
+
+async def test_restored_turns_come_before_anything_said_since(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        chat = pilot.app.query_one(ChatPane)
+        chat.add_user("typed just now")
+        await pilot.pause()
+        chat.restore(
+            [
+                {"role": "user", "content": "earlier question", "agent_name": "main"},
+                {"role": "assistant", "content": "earlier answer", "agent_name": "weather"},
+            ]
+        )
+        await pilot.pause()
+        texts = _texts(chat)
+        earlier = next(i for i, t in enumerate(texts) if "earlier question" in t)
+        now = next(i for i, t in enumerate(texts) if "typed just now" in t)
+        assert earlier < now
+        assert any("weather" in t and "earlier answer" in t for t in texts)
+        assert chat.query(".chat-divider")
+
+
+async def test_nothing_to_restore_adds_nothing(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        chat = pilot.app.query_one(ChatPane)
+        before = len(chat.query(Static))
+        chat.restore([])
+        await pilot.pause()
+        assert len(chat.query(Static)) == before
+        assert not chat.query(".chat-divider")
+
+
+async def test_a_restored_turn_lists_its_attachments(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        chat = pilot.app.query_one(ChatPane)
+        chat.restore(
+            [
+                {
+                    "role": "user",
+                    "content": "what is in this?",
+                    "attachments": [{"id": "0" * 32, "name": "report.pdf", "size": 2048}],
+                }
+            ]
+        )
+        await pilot.pause()
+        assert any("report.pdf" in t and "2 KB" in t for t in _texts(chat))
+
+
+async def test_a_malformed_stored_row_still_renders(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        chat = pilot.app.query_one(ChatPane)
+        chat.restore([{"role": "user", "content": None, "attachments": "not a list"}])
+        await pilot.pause()
+        assert chat.query(".chat-divider")
+
+
+async def test_restored_content_is_not_parsed_as_markup(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        chat = pilot.app.query_one(ChatPane)
+        chat.restore([{"role": "assistant", "content": "[bold]literal[/]", "agent_name": "main"}])
+        await pilot.pause()
+        assert any("[bold]literal[/]" in t for t in _texts(chat))
+
+
+async def test_a_user_message_lists_what_was_attached(app: WactorzTUI) -> None:
+    async with app.run_test() as pilot:
+        chat = pilot.app.query_one(ChatPane)
+        chat.add_user("summarise", [{"name": "deck.pptx", "size": 3 * 1024 * 1024}])
+        await pilot.pause()
+        assert any("deck.pptx" in t and "3.0 MB" in t for t in _texts(chat))
+
+
 # ── settings ────────────────────────────────────────────────────────────────
 
 
@@ -288,7 +368,7 @@ async def test_settings_renders_the_grouped_config(app: WactorzTUI, ctx: TUICont
         pane = pilot.app.query_one(SettingsPane)
         pane.refresh_view(_snap(), ctx)
         body = str(pilot.app.query_one("#settings-body", Static).content)
-        for heading in ("LLM", "MQTT", "Home Assistant", "Observability", "Runtime"):
+        for heading in ("LLM", "MQTT", "Home Assistant", "Runtime"):
             assert heading in body
 
 
@@ -353,11 +433,12 @@ def test_a_cost_limit_of_zero_reads_as_disabled(monkeypatch: pytest.MonkeyPatch)
     assert "$25.00" in "\n".join(settings_mod._llm_lines(_snap(cost_limit_usd=25)))
 
 
-def test_optional_endpoints_read_as_disabled_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OTEL_ENDPOINT", raising=False)
-    assert settings_mod._optional_env("OTEL_ENDPOINT") == "[dim](disabled)[/]"
-    monkeypatch.setenv("OTEL_ENDPOINT", "http://otel:4317")
-    assert "http://otel:4317" in settings_mod._optional_env("OTEL_ENDPOINT")
+def test_settings_show_the_state_dir_as_the_backend_resolves_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WACTORZ_STATE_DIR", "")
+    monkeypatch.setattr(settings_mod, "CONFIG", SimpleNamespace(interface="tui", api_key=""))
+    assert "./state" in "\n".join(settings_mod._runtime_lines())
 
 
 def test_config_rows_are_aligned() -> None:

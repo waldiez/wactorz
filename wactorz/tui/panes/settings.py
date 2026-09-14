@@ -6,13 +6,12 @@ Every value goes through :func:`~wactorz.tui.format.mask_secret` or
 
 from __future__ import annotations
 
-import os
-
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from ...config import CONFIG
+from ...core.paths import resolve_state_dir
 from ..context import Snapshot, TUIContext
 from ..format import mask_secret, plain
 
@@ -20,12 +19,6 @@ from ..format import mask_secret, plain
 def _row(label: str, value: str) -> str:
     """One aligned ``label  value`` line."""
     return f"    [b]{label:<14}[/] {value}"
-
-
-def _optional_env(name: str) -> str:
-    """An env-backed endpoint, or a dim "(disabled)" when unset."""
-    value = os.environ.get(name, "")
-    return plain(value) if value else "[dim](disabled)[/]"
 
 
 def _llm_lines(snap: Snapshot) -> list[str]:
@@ -59,15 +52,11 @@ def _mqtt_lines() -> list[str]:
 
 
 def _integration_lines() -> list[str]:
-    """Home Assistant, observability sinks and chat integrations."""
+    """Home Assistant and the chat integrations."""
     return [
         "  [yellow]Home Assistant[/]",
         _row("url", plain(CONFIG.ha_url)),
         _row("token", mask_secret(CONFIG.ha_token)),
-        "",
-        "  [yellow]Observability[/]",
-        _row("otel", _optional_env("OTEL_ENDPOINT")),
-        _row("influx", _optional_env("INFLUX_URL")),
         "",
         "  [yellow]Integrations[/]",
         _row("discord", mask_secret(CONFIG.discord_token)),
@@ -81,7 +70,7 @@ def _runtime_lines() -> list[str]:
         "  [yellow]Runtime[/]",
         _row("interface", plain(CONFIG.interface)),
         _row("api key", mask_secret(CONFIG.api_key)),
-        _row("state dir", plain(os.environ.get("WACTORZ_STATE_DIR", "./state"))),
+        _row("state dir", plain(resolve_state_dir())),
     ]
 
 

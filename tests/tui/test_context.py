@@ -13,14 +13,19 @@ import builtins
 import socket
 import sys
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
+from wactorz.core.persistence import chat_turn_recorded
 from wactorz.tui import context as ctx_mod
+from wactorz.tui.attachments import Staged
 from wactorz.tui.context import TUIContext, TUIView, _as_float, create_context
 from wactorz.tui.snapshot import Snapshot
+from wactorz.web import uploads
 
 
 class _Actor:
@@ -52,6 +57,37 @@ class _Registry:
 
     def find_by_name(self, name: str) -> object | None:
         return next((a for a in self._actors if a.name == name), None)
+
+
+class _DB:
+    """The two chat_log calls the context makes, recorded."""
+
+    def __init__(self, rows: list[dict[str, Any]] | None = None, fail: bool = False) -> None:
+        self.rows = rows or []
+        self.fail = fail
+        self.writes: list[dict[str, Any]] = []
+
+    def query_chat_log(self, limit: int = 200, **_filters: Any) -> list[dict[str, Any]]:
+        if self.fail:
+            raise RuntimeError("database is locked")
+        return list(self.rows)[:limit]
+
+    def write_chat_log(self, **row: Any) -> None:
+        self.writes.append(row)
+
+
+@pytest.fixture(name="no_db", autouse=True)
+def no_db_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No database unless a test installs one: other suites set the process-wide one."""
+    monkeypatch.setattr(ctx_mod, "get_db", lambda: None)
+
+
+def _use_db(monkeypatch: pytest.MonkeyPatch, db: _DB) -> _DB:
+    monkeypatch.setattr(ctx_mod, "get_db", lambda: db)
+    return db
+
+
+RECORD = {"id": "a" * 32, "name": "report.pdf", "mime": "application/pdf", "size": 9}
 
 
 def _system(registry: object | None = None, client: object = ...) -> SimpleNamespace:
@@ -196,6 +232,174 @@ async def test_chat_falls_back_to_the_non_streaming_call() -> None:
 async def test_an_actor_that_cannot_chat_says_so() -> None:
     chunks = await _collect(TUIContext(main_actor=SimpleNamespace()).chat_stream("hi"))
     assert chunks == ["(chat unavailable on this actor)"]
+
+
+# ── attribution ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("text", "agent"),
+    [("@weather hi", "weather"), ("hi", "main"), ("@", "main"), ("/help", "main")],
+)
+def test_standalone_a_mention_is_taken_at_its_word(text: str, agent: str) -> None:
+    assert TUIContext().attribution(text) == agent
+
+
+def test_attached_the_dashboard_rule_decides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ctx_mod, "turn_attribution", lambda text: "filed-here")
+    assert TUIContext(main_actor=_Actor()).attribution("@ghost hi") == "filed-here"
+
+
+def test_a_bare_at_sign_does_not_break_attribution(monkeypatch: pytest.MonkeyPatch) -> None:
+    def explode(text: str) -> str:
+        raise IndexError(text)
+
+    monkeypatch.setattr(ctx_mod, "turn_attribution", explode)
+    assert TUIContext(main_actor=_Actor()).attribution("@") == "main"
+
+
+# ── history ─────────────────────────────────────────────────────────────────
+
+
+async def test_standalone_there_is_no_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_db(monkeypatch, _DB(rows=[{"content": "someone else's"}]))
+    assert await TUIContext().history() == []
+
+
+async def test_history_comes_back_oldest_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    # chat_log answers newest first; a transcript reads the other way.
+    _use_db(monkeypatch, _DB(rows=[{"content": "newest"}, {"content": "oldest"}]))
+    rows = await TUIContext(main_actor=_Actor()).history()
+    assert [row["content"] for row in rows] == ["oldest", "newest"]
+
+
+async def test_no_database_means_no_history() -> None:
+    assert await TUIContext(main_actor=_Actor()).history() == []
+
+
+async def test_an_unreadable_history_is_an_empty_tab(monkeypatch: pytest.MonkeyPatch) -> None:
+    _use_db(monkeypatch, _DB(fail=True))
+    assert await TUIContext(main_actor=_Actor()).history() == []
+
+
+# ── recording a turn ────────────────────────────────────────────────────────
+
+
+class _Main:
+    """A main actor whose stream answers with fixed chunks and remembers its call."""
+
+    def __init__(self, *chunks: Any) -> None:
+        self.chunks = chunks or ("sun", "ny", {"done": True})
+        self.received: dict[str, Any] = {}
+
+    async def process_user_input_stream(
+        self, text: str, attachments: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator:
+        self.received = {
+            "text": text,
+            "attachments": attachments,
+            "marked": chat_turn_recorded.get(),
+        }
+        for chunk in self.chunks:
+            yield chunk
+
+
+async def test_both_halves_of_a_turn_are_stored(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _use_db(monkeypatch, _DB())
+    await _collect(TUIContext(main_actor=_Main()).chat_stream("weather?"))
+    assert [(w["role"], w["content"], w["agent_name"]) for w in db.writes] == [
+        ("user", "weather?", "main"),
+        ("assistant", "sunny", "main"),
+    ]
+
+
+async def test_the_agent_is_told_the_turn_is_already_stored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_db(monkeypatch, _DB())
+    main = _Main()
+    await _collect(TUIContext(main_actor=main).chat_stream("hi"))
+    assert main.received["marked"] is True
+
+
+async def test_a_stored_turn_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _use_db(monkeypatch, _DB())
+    monkeypatch.setattr(ctx_mod, "redact", lambda text: f"<redacted {len(text)}>")
+    await _collect(TUIContext(main_actor=_Main()).chat_stream("my key is sk-123"))
+    assert all(w["content"].startswith("<redacted") for w in db.writes)
+
+
+async def test_attachments_reach_the_model_as_content_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _use_db(monkeypatch, _DB())
+    monkeypatch.setattr(
+        ctx_mod, "to_blocks", lambda records, _read: [{"doc": r["name"]} for r in records]
+    )
+    main = _Main("read it")
+    await _collect(TUIContext(main_actor=main).chat_stream("summarise", [RECORD]))
+    assert main.received["attachments"] == [{"doc": "report.pdf"}]
+    assert db.writes[0]["attachments"] == [RECORD]
+    assert db.writes[1]["attachments"] is None
+
+
+@pytest.mark.parametrize(
+    ("text", "why"),
+    [("/help", "a command does not take attachments"), ("@weather look", "one agent")],
+)
+async def test_a_turn_that_cannot_carry_files_says_so(
+    monkeypatch: pytest.MonkeyPatch, text: str, why: str
+) -> None:
+    _use_db(monkeypatch, _DB())
+    main = _Main("ok")
+    chunks = await _collect(TUIContext(main_actor=main).chat_stream(text, [RECORD]))
+    assert "report.pdf" in chunks[0]
+    assert why in chunks[0]
+    assert main.received["attachments"] is None
+
+
+async def test_an_actor_without_a_stream_says_files_were_not_sent() -> None:
+    class _OneShot:
+        async def process_user_input(self, text: str) -> str:
+            return "answered"
+
+    chunks = await _collect(TUIContext(main_actor=_OneShot()).chat_stream("look", [RECORD]))
+    assert "takes text only" in chunks[0]
+    assert chunks[-1] == "answered"
+
+
+async def test_a_failed_reply_is_stored_with_the_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _use_db(monkeypatch, _DB())
+
+    class _Dies:
+        async def process_user_input_stream(self, _text: str) -> AsyncIterator:
+            yield "part"
+            raise RuntimeError("agent died")
+
+    with pytest.raises(RuntimeError):
+        await _collect(TUIContext(main_actor=_Dies()).chat_stream("hi"))
+    assert db.writes[-1]["content"] == "part\n[error] agent died"
+
+
+async def test_a_failed_write_does_not_fail_the_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Broken(_DB):
+        def write_chat_log(self, **row: Any) -> None:
+            raise RuntimeError("disk full")
+
+    _use_db(monkeypatch, _Broken())
+    chunks = await _collect(TUIContext(main_actor=_Main("still answered")).chat_stream("hi"))
+    assert chunks == ["still answered"]
+
+
+async def test_dropped_files_are_stored_and_failures_named(tmp_path: Path) -> None:
+    good = tmp_path / "a.pdf"
+    good.write_bytes(b"%PDF-1.7\n")
+    staged = [Staged(good, "a.pdf", 9), Staged(tmp_path / "gone.pdf", "gone.pdf", 9)]
+    with patch.object(uploads, "resolve_state_dir", return_value=str(tmp_path)):
+        records, failed = await TUIContext().store_attachments(staged)
+    assert [r["name"] for r in records] == ["a.pdf"]
+    assert len(failed) == 1
+    assert failed[0].startswith("gone.pdf (")
 
 
 # ── agents / nodes ──────────────────────────────────────────────────────────

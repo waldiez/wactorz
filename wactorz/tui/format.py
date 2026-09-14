@@ -18,7 +18,6 @@ STATE_STYLE: dict[str, str] = {
     "running": "green",
     "idle": "green",
     "starting": "cyan",
-    "paused": "yellow",
     "stopping": "yellow",
     "stopped": "red",
     "failed": "bold red",

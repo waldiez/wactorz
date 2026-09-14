@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
-
 from textual.widgets import Static
 
+from ...core.paths import resolve_state_dir
 from ..context import Snapshot, TUIContext
 from ..format import human_bytes, human_duration
 from ..logo import pick_logo
@@ -17,13 +16,14 @@ _KEYBOARD_HELP = (
     "    Tab / Shift+Tab   switch tabs",
     "    /<tab>            jump to a tab (e.g. /agents)",
     "    Esc               focus the command bar",
+    "    Drop a file       attach it to the next message (/detach removes it)",
     "    /quit             exit",
 )
 
 
 def state_dir() -> str:
-    """Where the backend keeps its state, as the running process sees it."""
-    return os.environ.get("WACTORZ_STATE_DIR", "./state")
+    """Where the backend keeps its state, resolved the way the backend resolves it."""
+    return resolve_state_dir()
 
 
 def _identity_lines(snap: Snapshot, ctx: TUIContext) -> list[str]:

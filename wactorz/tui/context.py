@@ -7,19 +7,34 @@ accessor is defensive: a half-built or absent system never crashes the UI.
 
 from __future__ import annotations
 
+import asyncio
 import getpass
 import inspect
+import logging
 import socket
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
+from ..agents.llm.attachments import to_blocks
+from ..agents.lookup import MAIN_ACTOR_NAME
 from ..config import CONFIG
+from ..core.persistence import chat_turn_recorded, get_db
+from ..monitoring.log_redaction import redact
+from ..web import uploads
+from ..web.chat import turn_attribution
+from .attachments import Staged, store_staged
 from .snapshot import HostStats, Snapshot
 
 if TYPE_CHECKING:
     from wactorz.core.actor import Actor
     from wactorz.core.registry import ActorSystem
+
+logger = logging.getLogger(__name__)
+
+#: How many chat_log rows the chat tab restores on start: the page the
+#: dashboard's own history request asks for when it names no limit.
+HISTORY_LIMIT = 200
 
 
 class _NetCounters(Protocol):  # pylint: disable=too-few-public-methods
@@ -86,36 +101,87 @@ class TUIContext:
 
     # ── Chat ─────────────────────────────────────────────────────────────────
 
-    async def chat_stream(self, text: str) -> AsyncIterator[str]:
+    def attribution(self, text: str) -> str:
+        """Which agent a turn belongs to: the label it gets here, and its chat_log rows.
+
+        With a system attached this is the dashboard's own rule, so a turn typed
+        here lands in the same thread as one typed in the browser. Standalone
+        there is nothing to route to, and a mention is taken at its word.
+        """
+        mentioned = text[1:].split()[0] if text.startswith("@") and text[1:].strip() else ""
+        if self.main_actor is None:
+            return mentioned or MAIN_ACTOR_NAME
+        try:
+            return turn_attribution(text)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # A bare "@" has no name to split off; label it as the fallback does.
+            return mentioned or MAIN_ACTOR_NAME
+
+    async def history(self, limit: int = HISTORY_LIMIT) -> list[dict[str, Any]]:
+        """The latest chat_log rows, oldest first, for the chat tab to restore.
+
+        The table the dashboard rebuilds its threads from, so a conversation had
+        in either shows up in both. Empty when standalone or before a database is
+        open, and a failed read is an empty tab rather than a broken one.
+        """
+        db = get_db() if self.main_actor is not None else None
+        if db is None:
+            return []
+        try:
+            rows = await asyncio.to_thread(db.query_chat_log, limit=limit)
+        except Exception:  # pylint: disable=broad-exception-caught
+            logger.warning("[tui] could not read the chat history", exc_info=True)
+            return []
+        return list(reversed(rows))
+
+    async def store_attachments(
+        self, staged: list[Staged]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Store dropped files as uploads: the records for the turn, and what failed."""
+        records: list[dict[str, Any]] = []
+        failed: list[str] = []
+        for item in staged:
+            try:
+                records.append(await asyncio.to_thread(store_staged, item))
+            except (OSError, ValueError) as exc:
+                failed.append(f"{item.name} ({exc})")
+        return records, failed
+
+    async def chat_stream(
+        self, text: str, attachments: list[dict[str, Any]] | None = None
+    ) -> AsyncIterator[str]:
         """Yield reply chunks for a user message, one piece at a time.
 
         Routes through the main orchestrator, which streams text chunks and
         emits a trailing marker dict (``system_msg`` etc.); ``@name`` targeting
         and slash-commands are resolved there. Falls back to the non-streaming
         call, and to a notice when no system is attached (standalone UI).
+
+        Both halves of the turn are stored here, the way the dashboard's socket
+        stores its own: marked as recorded, so an agent that also stores the
+        turns it answers does not write this one a second time, and stored with
+        the attachments, which only this side knows about.
         """
         actor = self.main_actor
         if actor is None:
             yield "(no system attached — standalone UI)"
             return
 
-        stream = getattr(actor, "process_user_input_stream", None)
-        if stream is not None:
-            async for chunk in stream(text):
-                if isinstance(chunk, dict):
-                    note = chunk.get("system_msg")
-                    if note:
-                        yield f"\n[{note}]"
-                    continue
-                yield str(chunk)
-            return
-
-        reply = getattr(actor, "process_user_input", None)
-        if reply is not None:
-            yield str(await reply(text))
-            return
-
-        yield "(chat unavailable on this actor)"
+        agent = self.attribution(text)
+        # Set inside the task that runs this turn, so the mark follows the call
+        # into the agent and no other turn sees it.
+        chat_turn_recorded.set(True)
+        await _record("user", text, agent, attachments)
+        said: list[str] = []
+        try:
+            async for chunk in _reply(actor, text, attachments or []):
+                said.append(chunk)
+                yield chunk
+        except Exception as exc:
+            said.append(f"\n[error] {exc}")
+            await _record("assistant", "".join(said), agent)
+            raise
+        await _record("assistant", "".join(said), agent)
 
     # ── Snapshot ─────────────────────────────────────────────────────────────
 
@@ -256,6 +322,84 @@ class TUIContext:
             stats.net_down_bps = max(0.0, (io.bytes_recv - recv) / elapsed)
             stats.net_up_bps = max(0.0, (io.bytes_sent - sent) / elapsed)
         self._net_last = (now, io.bytes_recv, io.bytes_sent)
+
+
+async def _reply(actor: object, text: str, attachments: list[dict[str, Any]]) -> AsyncIterator[str]:
+    """The agent's answer to one turn, as the chunks the transcript shows."""
+    stream = getattr(actor, "process_user_input_stream", None)
+    reply = getattr(actor, "process_user_input", None)
+    unsent = _unsent_note(text, attachments, can_attach=stream is not None)
+    if unsent:
+        yield unsent
+
+    if stream is not None:
+        blocks = await _blocks(attachments) if attachments and not unsent else []
+        chunks = stream(text, attachments=blocks) if blocks else stream(text)
+        async for chunk in chunks:
+            if isinstance(chunk, dict):
+                note = chunk.get("system_msg")
+                if note:
+                    yield f"\n[{note}]"
+                continue
+            yield str(chunk)
+        return
+
+    if reply is not None:
+        yield str(await reply(text))
+        return
+
+    yield "(chat unavailable on this actor)"
+
+
+def _unsent_note(text: str, attachments: list[dict[str, Any]], *, can_attach: bool) -> str:
+    """Say which files did not go with the turn, as the dashboard does, or ``""``.
+
+    Main reads attachments only on the turn it answers itself. A command and an
+    ``@mention`` go through its command path, which takes text, so a file sent
+    with either would otherwise vanish while the reply read as though it had
+    been seen.
+    """
+    if not attachments:
+        return ""
+    if text.startswith("/"):
+        why = "a command does not take attachments"
+    elif text.startswith("@"):
+        why = "a message to one agent does not take attachments here"
+    elif not can_attach:
+        why = "this agent takes text only"
+    else:
+        return ""
+    names = ", ".join(str(item.get("name") or "attachment") for item in attachments)
+    return f"[note] {names} not sent — {why}.\n"
+
+
+async def _blocks(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Content blocks for the model, read from the stored files off the event loop."""
+    return await asyncio.to_thread(to_blocks, attachments, uploads.read_bytes)
+
+
+async def _record(
+    role: str, content: str, agent: str, attachments: list[dict[str, Any]] | None = None
+) -> None:
+    """Store one half of a turn in chat_log, redacted as the dashboard's copy is.
+
+    Best-effort: a turn that could not be stored is still a turn the person had,
+    and the reply must not fail over it.
+    """
+    db = get_db()
+    if db is None or not (content or attachments):
+        return
+    try:
+        await asyncio.to_thread(
+            db.write_chat_log,
+            ts=time.time(),
+            agent_name=agent,
+            role=role,
+            content=redact(content),
+            attachments=attachments or None,
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.warning("[tui] chat_log write failed", exc_info=True)
 
 
 def _zero_arg_method(obj: object, name: str) -> Callable[[], Any] | None:

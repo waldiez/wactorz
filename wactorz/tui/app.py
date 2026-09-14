@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from typing import Any
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widgets import Input, Static, TabbedContent, TabPane
 
+from .. import config
+from ..web import uploads
+from .attachments import Staged, describe, examine
+from .command import CommandInput
 from .context import TUIContext, TUIView, create_context
 from .meta import SUBTITLE, VERSION
 from .panes import (
@@ -36,6 +43,7 @@ _RESERVED_COMMANDS = set(TAB_IDS) | {
     "pause",
     "level",
     "filter",
+    "detach",
 }
 
 _REFRESH_INTERVAL = 1.0
@@ -65,6 +73,8 @@ class WactorzTUI(App):
         self._snap = Snapshot()
         self._views: tuple[TUIView, ...] = ()
         self.logs: LogsPane | None = None
+        # Files dropped onto the terminal, waiting for the next message.
+        self._staged: list[Staged] = []
 
     # ── Layout ───────────────────────────────────────────────────────────────
 
@@ -91,7 +101,14 @@ class WactorzTUI(App):
             with TabPane("settings", id="settings"):
                 yield SettingsPane(classes="panel")
         with Vertical(id="footer"):
-            yield Input(placeholder="chat, @agent to target, or / for a command", id="cmd")
+            yield Static("", id="attachments")
+            yield CommandInput(
+                placeholder="chat, @agent to target, or / for a command",
+                id="cmd",
+                # Mirrors the dashboard, which offers no drop zone when uploads
+                # are off: a dropped path is then just text.
+                accept_files=config.UPLOADS_ENABLED,
+            )
             yield Static(self._render_hints(), id="keyhints")
             yield Static("", id="statusbar")
 
@@ -106,6 +123,7 @@ class WactorzTUI(App):
         self.logs = self.query_one(LogsPane)
         self.set_interval(_REFRESH_INTERVAL, self._refresh)
         self.run_worker(self._refresh(), exclusive=False)
+        self.run_worker(self._restore_chat(), exclusive=False)
         self.query_one("#cmd", Input).focus()
 
     # ── Refresh loop ─────────────────────────────────────────────────────────
@@ -133,6 +151,12 @@ class WactorzTUI(App):
             f"broker {broker} {self.ctx.broker} │ "
             f"[dim]{self.ctx.llm_model}[/]"
         )
+
+    # ── Chat history ─────────────────────────────────────────────────────────
+
+    async def _restore_chat(self) -> None:
+        """Open the chat tab on the conversation so far, not on an empty page."""
+        self.query_one(ChatPane).restore(await self.ctx.history())
 
     # ── Key hints (context-aware) ────────────────────────────────────────────
 
@@ -195,6 +219,43 @@ class WactorzTUI(App):
         if self.logs:
             self.logs.clear_logs()
 
+    # ── Attachments (a file dropped onto the terminal) ───────────────────────
+
+    def on_command_input_files_dropped(self, event: CommandInput.FilesDropped) -> None:
+        """Check a drop off the event loop, then stage what the dashboard would take."""
+        self.run_worker(self._stage(event.paths, event.text), exclusive=False)
+
+    async def _stage(self, paths: list[Path], text: str) -> None:
+        checked = await asyncio.to_thread(examine, paths)
+        if checked is None:
+            # Not files after all — a path someone copied. Type it, as a paste would.
+            lines = text.splitlines()
+            self.query_one("#cmd", Input).insert_text_at_cursor(lines[0] if lines else "")
+            return
+        accepted, skipped = checked
+        known = {item.path for item in self._staged}
+        for item in accepted:
+            if item.path in known:
+                continue
+            if len(self._staged) >= uploads.MAX_PER_MESSAGE:
+                skipped.append(f"{item.name} (over {uploads.MAX_PER_MESSAGE} files)")
+                continue
+            self._staged.append(item)
+            known.add(item.path)
+        if skipped:
+            self.notify("Some files skipped: " + ", ".join(skipped), severity="warning", timeout=5)
+        self._update_tray()
+
+    def _update_tray(self) -> None:
+        """Show what goes out with the next message, or hide the tray when nothing does."""
+        tray = self.query_one("#attachments", Static)
+        tray.display = bool(self._staged)
+        line = Text()
+        for item in self._staged:
+            line.append(describe({"name": item.name, "size": item.size}) + "   ")
+        line.append("/detach to remove", style="dim")
+        tray.update(line)
+
     # ── Command bar ──────────────────────────────────────────────────────────
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -218,16 +279,22 @@ class WactorzTUI(App):
         self._send_chat(text)
 
     def _send_chat(self, text: str) -> None:
-        self.run_worker(self._chat_worker(text), exclusive=False)
+        staged, self._staged = self._staged, []
+        self._update_tray()
+        self.run_worker(self._chat_worker(text, staged), exclusive=False)
 
-    async def _chat_worker(self, text: str) -> None:
+    async def _chat_worker(self, text: str, staged: list[Staged]) -> None:
         chat = self.query_one(ChatPane)
         self.query_one(TabbedContent).active = "chat"
-        chat.add_user(text)
-        label = text[1:].split()[0] if text.startswith("@") and text[1:].strip() else "main"
-        chat.begin_reply(label)
+        records: list[dict[str, Any]] = []
+        if staged:
+            records, failed = await self.ctx.store_attachments(staged)
+            if failed:
+                self.notify("Could not attach: " + ", ".join(failed), severity="warning", timeout=5)
+        chat.add_user(text, records)
+        chat.begin_reply(self.ctx.attribution(text))
         try:
-            async for chunk in self.ctx.chat_stream(text):
+            async for chunk in self.ctx.chat_stream(text, records):
                 chat.stream(chunk)
         except Exception as exc:  # pylint: disable=broad-exception-caught
             # Any agent-side failure is shown in the transcript, not raised.
@@ -252,10 +319,14 @@ class WactorzTUI(App):
             self.query_one(TabbedContent).active = "logs"
             if self.logs:
                 self.logs.set_filter(term)
+        elif name == "detach":
+            self._staged = []
+            self._update_tray()
         elif name in ("help", "?"):
             self.notify(
                 "Tabs: Tab/⇧Tab or /<tab> · Logs: F2 level, F3 pause, F4 clear, "
-                "/filter <text> · //text sends a literal / to the agent · /quit exit"
+                "/filter <text> · Drop a file to attach it, /detach removes it · "
+                "//text sends a literal / to the agent · /quit exit"
             )
         else:
             self.notify(f"unknown command: /{cmd}", severity="warning", timeout=3)

@@ -3,6 +3,12 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — pending
+
+### Fixed
+
+- **Stopping Wactorz with one Ctrl-C or `docker stop` no longer occasionally hangs on Python 3.10 and 3.11.** On those interpreters a wait that completes in the same instant it is cancelled discards the cancellation, and both the MQTT client and the Home Assistant client wait that way. A stop request that arrived at that moment was lost: during startup the process carried on starting and then simply ran, and once it was running the dashboard's broker connection or the publisher went on waiting, so the process did not exit until something killed it. A stop request is now asked again until shutdown has begun, and shutdown asks each part again if its first request does not take — the agents, the publisher, the dashboard server, and any task still running at the end — instead of cancelling once and waiting without a limit. A stop that arrives while Wactorz is still starting goes through the same shutdown and stops whatever had started by then. Python 3.12 and later were not affected.
+
 ## [0.6.1] - 2026-09-14
 
 Wactorz 0.6.1 is about staying up: agents and nodes now come through restarts, reconnects and their own bugs, and a long-running install stops filling its disk. A short summary comes first; the full account of each change follows it.

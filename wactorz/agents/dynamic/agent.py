@@ -26,6 +26,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, Message, MessageType
+from ...core.cancellation import cancel_all_until_done
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
 from .api import AgentAPI
@@ -269,23 +270,18 @@ class DynamicAgent(Actor):
         """
         current = asyncio.current_task()
         others = [task for task in self._program_tasks if task is not current and not task.done()]
-        for task in others:
-            task.cancel()
         if others:
-            # asyncio.wait, not wait_for, for the reason given in
-            # Actor._wind_down_tasks: a repair is started from inside the process
-            # loop it replaces, so a cancellation arriving here is one this agent
-            # still has to act on.
-            _done, pending = await asyncio.wait(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
-            if pending:
+            # Asked again while they keep running, and never through wait_for, for
+            # the reasons given in Actor._wind_down_tasks: a repair is started from
+            # inside the process loop it replaces, so a cancellation arriving here
+            # is one this agent still has to act on.
+            still_running = await cancel_all_until_done(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
+            if still_running:
                 logger.warning(
                     "[%s] %d task(s) of the old program did not stop in time.",
                     self.name,
-                    len(pending),
+                    len(still_running),
                 )
-            for task in _done:
-                if not task.cancelled():
-                    task.exception()  # retrieved, so the loop does not warn at GC
         self._program_tasks = [task for task in self._program_tasks if not task.done()]
         self._subscribed_topics.clear()
         # The subscription connection is shared and outlives any one program, so

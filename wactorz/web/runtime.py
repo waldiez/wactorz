@@ -10,6 +10,7 @@ would not be seen. The in-place-mutated containers (``state``, ``ws_clients``)
 are the only names safe to alias-import.
 """
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -45,6 +46,11 @@ mqtt_client_ref: "aiomqtt.Client | None" = None
 # Server↔broker link state. Shared: mqtt sets it, ws reports it to browsers, so
 # it lives here rather than in either module (mqtt already depends on ws).
 mqtt_connected: bool = False
+
+# The monitor server's own task, set by whoever starts it so shutdown can stop it.
+# Nothing else holds it, and a task left for asyncio.run to cancel on the way out
+# is asked once, which is not always enough.
+server_task: "asyncio.Task[None] | None" = None
 
 # ── Live snapshot (mutated in place — never rebound) ─────────────────────────
 state = {

@@ -18,9 +18,14 @@ import threading
 import time
 from pathlib import Path
 
+from .cancellation import cancel_until_done
 from .topics import publish_topic_error
 
 logger = logging.getLogger(__name__)
+
+
+#: How long disconnect() waits for the drain loop to stop, asking again as it goes.
+DRAIN_STOP_TIMEOUT_S = 10.0
 
 
 class MQTTPublisher:
@@ -515,18 +520,21 @@ class MQTTPublisher:
             await asyncio.gather(self._checkpoint_task, return_exceptions=True)
             self._checkpoint_task = None
         if self._task:
-            self._task.cancel()
-            # gather rather than a bare await: the drain loop's own
-            # CancelledError comes back as a value, so ignoring it cannot also
-            # swallow a cancellation aimed at the caller of disconnect().
-            (outcome,) = await asyncio.gather(self._task, return_exceptions=True)
-            # Reported, not dropped. gather *retrieves* the exception, which also
-            # suppresses asyncio's "never retrieved" warning — so a drain loop
-            # that died of something real would otherwise vanish at shutdown,
-            # exactly when someone is looking for why messages stopped going out.
-            # CancelledError is a BaseException, so this is a real crash only.
-            if isinstance(outcome, Exception):
-                logger.warning("[MQTT] Publisher drain loop ended in error: %s", outcome)
+            # cancel_until_done rather than one cancel and an open-ended wait: the
+            # drain loop publishes through aiomqtt, whose wait_for can lose a
+            # cancellation on Python 3.10 and 3.11, and the loop then waits for the
+            # next queued message for ever while the whole shutdown waits on it. A
+            # cancellation aimed at the caller of disconnect() still gets through.
+            if not await cancel_until_done(self._task, timeout=DRAIN_STOP_TIMEOUT_S):
+                logger.warning(
+                    "[MQTT] Publisher drain loop did not stop within %gs", DRAIN_STOP_TIMEOUT_S
+                )
+            # Reported, not dropped. The exception has been retrieved, which also
+            # suppresses asyncio's "never retrieved" warning — so a drain loop that
+            # died of something real would otherwise vanish at shutdown, exactly
+            # when someone is looking for why messages stopped going out.
+            elif not self._task.cancelled() and (crash := self._task.exception()) is not None:
+                logger.warning("[MQTT] Publisher drain loop ended in error: %s", crash)
         # Closing checkpoints the WAL back into the database, so a shutdown does
         # not leave a `-wal` beside it for the next start to recover from.
         self._close_db()

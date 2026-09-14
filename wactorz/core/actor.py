@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 import psutil
 
 from .atomic_io import quarantine_unreadable, write_pickle
+from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
 
 if TYPE_CHECKING:
@@ -381,30 +382,25 @@ class Actor(ABC):
         """
         current = asyncio.current_task()
         others = [task for task in self._tasks if task is not current]
-        for task in others:
-            task.cancel()
         try:
             if others:
                 # Bounded: a task that will not unwind must not hold up shutdown.
-                # asyncio.wait, not wait_for: on Python 3.10 a wait_for whose
-                # guarded future completes in the same instant the caller is
-                # cancelled returns the result from inside its CancelledError
-                # handler, and the caller never learns it was cancelled — the
-                # supervisor's watch loop resumed polling while Supervisor.stop()
-                # awaited it for ever. The tasks are already cancelled above, so
-                # there is nothing for wait_for's cancel-on-timeout to do that
-                # asyncio.wait does not.
-                _done, pending = await asyncio.wait(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
-                if pending:
+                # Each is asked again while it keeps running: on Python 3.10 and
+                # 3.11 a cancellation that lands inside a wait_for is discarded, and
+                # the broker and Home Assistant clients both wait that way, so one
+                # request can leave stop() waiting out the whole timeout.
+                # cancel_all_until_done never uses wait_for itself, for the same
+                # reason: a caller cancelled while waiting here still learns it was.
+                still_running = await cancel_all_until_done(
+                    others, timeout=self.TASK_SHUTDOWN_TIMEOUT
+                )
+                if still_running:
                     logger.warning(
                         "[%s] %d task(s) did not stop within %gs.",
                         self.name,
-                        len(pending),
+                        len(still_running),
                         self.TASK_SHUTDOWN_TIMEOUT,
                     )
-                for task in _done:
-                    if not task.cancelled():
-                        task.exception()  # retrieved, so the loop does not warn at GC
         # CancelledError is deliberately not caught. Swallowing it consumes the
         # caller's own cancellation: the supervisor's watch loop was cancelled
         # here while stopping an actor, never saw the error, resumed its poll

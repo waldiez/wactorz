@@ -2,7 +2,7 @@
 
 ## 0.6.1
 
-- Changed: **chat history older than a year is now deleted automatically.** Sensor and Home Assistant history older than a year, attached files no message refers to any more, and broker messages still undelivered after 7 days are removed on the same schedule, so a long-running install stops filling its disk. The add-on has no option for these windows yet.
+- Added: `retention_chat_days`, `retention_timeseries_days` and `retention_outbox_days` options. Old data is now deleted on a schedule, so a long-running install stops filling its disk: sensor and Home Assistant history after 365 days, broker messages still undelivered after 7 days, and attached files no message refers to any more. **Chat history is kept for ever unless you set `retention_chat_days`**, so updating deletes no conversation; set it to a number such as `365` to stop the history growing. `0` keeps any store for ever.
 - Changed: **edge nodes should be redeployed.** A node deployed with `/deploy` now runs under systemd and comes back after a reboot, reports its Wactorz version in its heartbeat, and shares one broker connection per agent. All of this ships in the runner, which is copied to each machine, so an existing node keeps the old behaviour until `/deploy` runs again.
 - Changed: deleting an agent asks for confirmation first, naming the agent.
 - Changed: vision agents default to Ultralytics YOLO26 models.

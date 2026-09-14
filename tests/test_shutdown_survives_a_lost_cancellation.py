@@ -47,17 +47,28 @@ async def _loses_its_first_cancellation() -> None:
     await asyncio.sleep(3600)
 
 
-def _refusing(give_up: asyncio.Event) -> asyncio.Task[None]:
-    """A task that ignores every cancellation until `give_up` is set."""
+async def _refusing(give_up: asyncio.Event) -> asyncio.Task[None]:
+    """A running task that ignores every cancellation until `give_up` is set.
+
+    Returned only once it is inside its loop. A task cancelled before its first
+    step never reaches its ``except``, it simply ends, and whether a caller's
+    first cancellation lands before that step depends on the interpreter: from
+    Python 3.12 ``asyncio.wait_for`` runs its coroutine in the calling task instead
+    of scheduling a new one behind this.
+    """
+    running = asyncio.Event()
 
     async def refuses() -> None:
+        running.set()
         while not give_up.is_set():
             try:
                 await asyncio.sleep(0.01)
             except asyncio.CancelledError:
                 pass
 
-    return asyncio.ensure_future(refuses())
+    task = asyncio.ensure_future(refuses())
+    await running.wait()
+    return task
 
 
 class TestCancelUntilDone:
@@ -91,7 +102,7 @@ class TestCancelUntilDone:
 
     async def test_a_task_that_will_not_stop_is_given_up_on(self) -> None:
         give_up = asyncio.Event()
-        task = _refusing(give_up)
+        task = await _refusing(give_up)
         try:
             gave_up = await asyncio.wait_for(
                 cancel_until_done(task, timeout=0.2, recancel_after=0.05), timeout=5.0
@@ -175,7 +186,7 @@ class TestTheMonitorAtShutdown:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         give_up = asyncio.Event()
-        task = _refusing(give_up)
+        task = await _refusing(give_up)
         logger = MagicMock()
         monkeypatch.setattr(runtime, "server_task", task)
         monkeypatch.setattr(app_mod, "MONITOR_STOP_TIMEOUT_S", 0.2)
@@ -210,7 +221,7 @@ class TestWhateverIsLeftAtShutdown:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         give_up = asyncio.Event()
-        task = _refusing(give_up)
+        task = await _refusing(give_up)
         task.set_name("stuck-window")
         logger = MagicMock()
         monkeypatch.setattr(app_mod, "logger", logger)
@@ -270,7 +281,7 @@ class TestThePublisherAtShutdown:
     ) -> None:
         give_up = asyncio.Event()
         pub = MQTTPublisher(db_path=str(tmp_path / "outbox.db"))
-        pub._task = _refusing(give_up)
+        pub._task = await _refusing(give_up)
         logger = MagicMock()
         monkeypatch.setattr(mqtt_publisher, "DRAIN_STOP_TIMEOUT_S", 0.2)
         monkeypatch.setattr(mqtt_publisher, "logger", logger)
@@ -558,7 +569,7 @@ class TestAnAgentThatLostACancellation:
 class TestStoppingSeveralTasksTogether:
     async def test_only_the_ones_still_running_are_returned(self) -> None:
         give_up = asyncio.Event()
-        stubborn = _refusing(give_up)
+        stubborn = await _refusing(give_up)
         ordinary = asyncio.ensure_future(_forever())
         await asyncio.sleep(0)
         try:

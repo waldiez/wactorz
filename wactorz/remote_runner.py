@@ -213,7 +213,7 @@ NODE_SESSION_EXPIRY_SECONDS = 86400
 #: scripts/sync_versions.py alongside wactorz/_version.py, and checked equal to
 #: it by the test suite. The file is deployed to a node alone, so it cannot ask
 #: the package; this is how main learns which version a node is running.
-RUNNER_VERSION = "0.6.0"
+RUNNER_VERSION = "0.6.1"
 
 #: What kind of process is speaking on the node topics. A heartbeat names it so
 #: main can tell this single-file runner from a node running the package.

@@ -280,6 +280,9 @@ class NodeManager:
             # comes from a runner older than signing, which checks nothing.
             "signing": data.get("signing") or "off",
             "signing_failures": _as_count(data.get("signing_failures")),
+            # Whether the node reaches the broker over TLS. A heartbeat without it
+            # comes from a runner older than TLS, which does not.
+            "tls": data.get("tls") is True,
         }
         self._bootstrap_contracts(node_name, agents)
         self._touch_monitor(agents)

@@ -20,7 +20,13 @@ class MqttClientFactoryTest(unittest.TestCase):
         fake_aiomqtt = types.SimpleNamespace(
             Client=lambda *a, **k: captured.update(args=a, kwargs=k) or object()
         )
-        cfg = types.SimpleNamespace(mqtt_username=cfg_user, mqtt_password=cfg_pass)
+        cfg = types.SimpleNamespace(
+            mqtt_username=cfg_user,
+            mqtt_password=cfg_pass,
+            mqtt_tls="",
+            mqtt_tls_ca="",
+            mqtt_tls_check_hostname="",
+        )
         # CONFIG is imported lazily inside mqtt_client() (from ..config), so patch
         # it at the source module, not on wactorz.core.mqtt.
         with (

@@ -40,6 +40,8 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "websockets>=15.0",
     "asyncssh>=2.14.0",
+    # The MQTT broker's CA and certificate
+    "cryptography>=48.0.1",
     "tzdata>=2026.3; sys_platform == 'win32'",
 ]
 

@@ -73,6 +73,10 @@ MQTT_USERNAME=$(get_config_safe 'mqtt_username' '')
 export MQTT_USERNAME="${MQTT_USERNAME}"
 MQTT_PASSWORD=$(get_config_safe 'mqtt_password' '')
 export MQTT_PASSWORD="${MQTT_PASSWORD}"
+# The CA a node is given by /deploy to verify the broker's TLS certificate: blank
+# for the one generated below, a path for your own, or `system`.
+MQTT_TLS_CA=$(get_config_safe 'mqtt_tls_ca' '')
+export MQTT_TLS_CA="${MQTT_TLS_CA}"
 
 # Home Assistant Config
 HA_URL=$(get_config_safe 'ha_url' '')
@@ -187,7 +191,7 @@ if [ -f "$options_file" ]; then
             # of non-alphanumerics becomes a single underscore.
             deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
                 | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
-            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password; do
+            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password broker_tls broker_tls_port; do
                 deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" "$options_file")
                 if [ -n "$deploy_value" ]; then
                     deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"
@@ -258,6 +262,34 @@ if [ -z "$LLM_PROVIDER" ] || [ "$LLM_PROVIDER" == "null" ]; then
     export LLM_PROVIDER="anthropic"
 fi
 
+# ── Broker TLS certificate ────────────────────────────────────────────────────
+# Issued from a CA generated once and kept in the state directory, which /deploy
+# hands to a node so it can reach the broker over TLS. The certificate is issued
+# again only when it nears expiry or stops naming the broker's addresses; the CA
+# stays, so deployed nodes keep trusting it. Never fatal: without a certificate
+# every broker serves plain MQTT on 1883, as before.
+MQTT_TLS_DIR=/tmp/mosquitto-tls
+mqtt_tls_ready=false
+if mqtt_tls_log=$(python3 -m wactorz.broker_certificates --export "$MQTT_TLS_DIR" 2>&1); then
+    mqtt_tls_ready=true
+    bashio::log.info "Broker TLS certificate ready (CA: ${WACTORZ_STATE_DIR}/mqtt_tls/ca.crt)."
+else
+    bashio::log.warning "Could not issue the broker TLS certificate; brokers serve plain MQTT only. ${mqtt_tls_log}"
+fi
+
+# For the official Mosquitto add-on, which serves TLS on 8883 once its certfile
+# and keyfile name files in /ssl. Written under names of Wactorz's own:
+# fullchain.pem and privkey.pem are that add-on's defaults, and what a Let's
+# Encrypt certificate is usually called, so those are never touched.
+if [ "$mqtt_tls_ready" = true ] && [ "$MOSQUITTO_EMBEDDED" != "true" ] && [ -d /ssl ] && [ -w /ssl ]; then
+    if install -m 0644 "$MQTT_TLS_DIR/broker.crt" /ssl/wactorz-mqtt.crt \
+        && install -m 0600 "$MQTT_TLS_DIR/broker.key" /ssl/wactorz-mqtt.key; then
+        bashio::log.info "Wrote /ssl/wactorz-mqtt.crt and /ssl/wactorz-mqtt.key. For TLS from the Mosquitto add-on, set its certfile to wactorz-mqtt.crt and keyfile to wactorz-mqtt.key, then restart it."
+    else
+        bashio::log.warning "Could not write the broker TLS certificate to /ssl."
+    fi
+fi
+
 # ── Embedded Mosquitto ────────────────────────────────────────────────────────
 if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     bashio::log.info "Starting embedded Mosquitto MQTT broker..."
@@ -307,6 +339,18 @@ persistence_location /data/mosquitto/
 autosave_interval 30
 MQTTEOF
 
+    # A TLS listener beside it, for remote nodes, when the certificate above was
+    # issued. Same accounts. Unpublished like 1883 until you assign it a port.
+    if [ "$mqtt_tls_ready" = true ]; then
+        chown -R mosquitto:mosquitto "$MQTT_TLS_DIR"
+        cat >> /tmp/mosquitto.conf << MQTTTLSEOF
+
+listener 8883
+certfile ${MQTT_TLS_DIR}/broker.crt
+keyfile ${MQTT_TLS_DIR}/broker.key
+MQTTTLSEOF
+    fi
+
     mosquitto -c /tmp/mosquitto.conf &
 
     # Point wactorz at the local broker with the credentials above.
@@ -328,6 +372,14 @@ MQTTEOF
         i=$((i+1))
     done
     bashio::log.info "Embedded Mosquitto ready on 1883 (authenticated)"
+    if [ "$mqtt_tls_ready" = true ]; then
+        if mosquitto_pub -h localhost -p 8883 --cafile "${WACTORZ_STATE_DIR}/mqtt_tls/ca.crt" \
+            -u "wactorz" -P "$MQTT_PW" -t "wactorz/probe" -m "" -q 0 2>/dev/null; then
+            bashio::log.info "Embedded Mosquitto serving TLS on 8883 (publish 8883 under Network settings for remote nodes)"
+        else
+            bashio::log.warning "Embedded Mosquitto did not answer TLS on 8883; nodes will be deployed on plain MQTT."
+        fi
+    fi
 fi
 
 # ── External broker readiness (non-embedded) ─────────────────────────────────

@@ -77,6 +77,20 @@ def test_targets_parse_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert parsed[1].user == "pi"
 
 
+def test_a_targets_tls_override_parses_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEPLOY_TARGETS", "rpi-kitchen, rpi-garage")
+    monkeypatch.setenv("DEPLOY_RPI_KITCHEN_BROKER_TLS", " off ")
+    monkeypatch.setenv("DEPLOY_RPI_KITCHEN_BROKER_TLS_PORT", "18883")
+    monkeypatch.delenv("DEPLOY_RPI_GARAGE_BROKER_TLS", raising=False)
+    monkeypatch.delenv("DEPLOY_RPI_GARAGE_BROKER_TLS_PORT", raising=False)
+
+    kitchen, garage = config_module._deploy_targets()
+
+    assert (kitchen.broker_tls, kitchen.broker_tls_port) == ("off", 18883)
+    # Unset: the deploy checks from the node, on the usual TLS port.
+    assert (garage.broker_tls, garage.broker_tls_port) == ("", 8883)
+
+
 def test_unset_targets_parse_to_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """No configuration means no targets — not one target named ""."""
     monkeypatch.delenv("DEPLOY_TARGETS", raising=False)

@@ -71,6 +71,7 @@ import logging
 import os
 import re
 import signal
+import ssl
 import subprocess
 import sys
 import time
@@ -205,6 +206,60 @@ def _tolerant_invoker(
                 raise
 
     return _invoke
+
+
+# ── Broker TLS ───────────────────────────────────────────────────────────────
+#
+# A copy of the client rule in wactorz/core/mqtt_tls.py, which explains it: this
+# file runs on a node without the package. tests/test_mqtt_tls.py holds the two
+# to each other. /deploy writes every one of these settings into the node's .env
+# explicitly, since this runner keeps its state in ~/wactorz/state rather than
+# the directory the rule's default names.
+
+_TLS_ON = frozenset({"1", "true", "yes", "on"})
+_TLS_OFF = frozenset({"0", "false", "no", "off"})
+
+
+def _tls_on() -> bool:
+    """Whether ``MQTT_TLS`` puts this node's broker connections on TLS."""
+    return os.environ.get("MQTT_TLS", "").strip().lower() in _TLS_ON
+
+
+def _tls_context() -> ssl.SSLContext | None:
+    """This node's TLS context for the broker, or None when TLS is off.
+
+    Raises ``OSError`` when the CA it names cannot be loaded.
+    """
+    if not _tls_on():
+        return None
+    ca = os.environ.get("MQTT_TLS_CA", "").strip()
+    if ca.lower() == "system":
+        context = ssl.create_default_context()
+    else:
+        state = os.environ.get("WACTORZ_STATE_DIR", "").strip() or "./state"
+        cafile = Path(ca).expanduser() if ca else Path(state) / "mqtt_tls" / "ca.crt"
+        context = ssl.create_default_context(cafile=str(cafile))
+    override = os.environ.get("MQTT_TLS_CHECK_HOSTNAME", "").strip().lower()
+    if override in _TLS_ON | _TLS_OFF:
+        context.check_hostname = override in _TLS_ON
+    else:
+        context.check_hostname = bool(ca)
+    return context
+
+
+def _tls_problem() -> str:
+    """Why this node's TLS context cannot be built, or ``""`` when it can or TLS is off."""
+    try:
+        _tls_context()
+    except OSError as exc:
+        return str(exc)
+    return ""
+
+
+def _tls_kwargs() -> dict[str, Any]:
+    """Keyword arguments that put an aiomqtt client on TLS, when this node uses it."""
+    context = _tls_context()
+    return {"tls_context": context} if context is not None else {}
 
 
 #: How long the broker keeps a node's session. Mirrors
@@ -410,6 +465,7 @@ class _NodeSubscriptionHub:
                     self._port,
                     username=os.environ.get("MQTT_USERNAME") or None,
                     password=os.environ.get("MQTT_PASSWORD") or None,
+                    **_tls_kwargs(),
                     # Mirrors core/mqtt.py client_id.
                     identifier=f"wactorz-agent-{self._actor_id}",
                     **self._session_kwargs(aiomqtt),
@@ -696,6 +752,7 @@ class _RemoteStreamWindow:
                     self._port,
                     username=os.environ.get("MQTT_USERNAME") or None,
                     password=os.environ.get("MQTT_PASSWORD") or None,
+                    **_tls_kwargs(),
                 ) as client:
                     await client.subscribe(self.topic)
                     async for msg in client.messages:
@@ -1085,6 +1142,7 @@ class _RemoteAgentAPI:
                     port,
                     username=os.environ.get("MQTT_USERNAME") or None,
                     password=os.environ.get("MQTT_PASSWORD") or None,
+                    **_tls_kwargs(),
                 ) as client:
                     await client.subscribe(topic)
                     async for msg in client.messages:
@@ -2420,6 +2478,8 @@ class _RemoteRunner:
                         # often something arrived that was not signed for it.
                         "signing": self._control.mode,
                         "signing_failures": self._control.failures,
+                        # Whether this node reaches the broker over TLS.
+                        "tls": _tls_on(),
                     },
                 )
                 await asyncio.sleep(interval)
@@ -2462,6 +2522,9 @@ class _RemoteRunner:
         user = os.environ.get("MQTT_USERNAME") or None
         if user:
             client.username_pw_set(user, os.environ.get("MQTT_PASSWORD") or None)
+        tls = _tls_context()
+        if tls is not None:
+            client.tls_set_context(tls)
         properties = Properties(PacketTypes.CONNECT)
         properties.SessionExpiryInterval = NODE_SESSION_EXPIRY_SECONDS
         # Durable, so QoS 1 messages in flight when the link drops are
@@ -2767,6 +2830,7 @@ class _RemoteRunner:
                     self.port,
                     username=os.environ.get("MQTT_USERNAME") or None,
                     password=os.environ.get("MQTT_PASSWORD") or None,
+                    **_tls_kwargs(),
                     identifier=f"wactorz-node-{self.node_name}",  # mirrors core/mqtt.py client_id
                     # Durable: the broker holds control messages sent while this
                     # node was away, instead of dropping them on the floor. v5
@@ -3069,6 +3133,17 @@ def main() -> None:
             "[runner] Refusing to start: node name %r %s, which cannot appear in an MQTT topic. Rename the node and redeploy.",
             node_name,
             problem,
+        )
+        raise SystemExit(2)
+
+    # Checked once, here, rather than left to the connection loops: they retry for
+    # ever, and a CA that is not there is not going to appear. Exit 2 is the
+    # status the systemd unit does not restart on.
+    tls_problem = _tls_problem()
+    if tls_problem:
+        logger.error(
+            "[runner] Refusing to start: MQTT_TLS is on, but the CA to verify the broker with could not be loaded (%s). Deploy the node again, or correct MQTT_TLS_CA in ~/wactorz/.env.",
+            tls_problem,
         )
         raise SystemExit(2)
 

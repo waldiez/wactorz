@@ -18,6 +18,12 @@ services:
     image: eclipse-mosquitto:2.0
     container_name: wactorz-dev-mosquitto
     restart: unless-stopped
+    depends_on:
+      # Issues the broker's TLS certificate first, under the app profile. Without
+      # it the broker serves plain MQTT only, which is what `make dev` gets.
+      mqtt-certs:
+        condition: service_completed_successfully
+        required: false
     networks:
       - wactorz-net
     ports:
@@ -27,18 +33,23 @@ services:
       # replaced. Container-to-container traffic is unaffected — the app
       # reaches the broker by service name on wactorz-net, not through this.
       - "127.0.0.1:1883:1883"
+      # TLS, loopback too. Answered once mqtt-certs has issued a certificate.
+      - "127.0.0.1:8883:8883"
     volumes:
       # Read-only — see compose.yaml: without it the image's entrypoint chowns
       # this tracked repo file through the bind mount.
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
+      - mqtt-tls:/wactorz-tls:ro
     environment:
       # Defaulted rather than required: this is the development stack, and the
       # same conf file is shared with compose.yaml, so it is authenticated here
       # whether or not anyone set anything.
       MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
       MQTT_PASSWORD: "${MQTT_PASSWORD:-wactorz-dev}"
+    # As in compose.yaml: a TLS listener is added at start when mqtt-certs has left a
+    # certificate in the mqtt-tls volume, and not otherwise.
     command:
       - /bin/sh
       - -c
@@ -47,7 +58,16 @@ services:
         umask 077
         mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
         chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
-        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
+        conf=/mosquitto/config/mosquitto.conf
+        if [ -s /wactorz-tls/broker.crt ] && [ -s /wactorz-tls/broker.key ]; then
+          mkdir -p /mosquitto/config/tls
+          cp /wactorz-tls/broker.crt /wactorz-tls/broker.key /mosquitto/config/tls/
+          chown -R mosquitto:mosquitto /mosquitto/config/tls 2>/dev/null || true
+          { cat "$$conf"; printf '\nlistener 8883\nprotocol mqtt\ncertfile /mosquitto/config/tls/broker.crt\nkeyfile /mosquitto/config/tls/broker.key\n'; } > /mosquitto/config/run.conf
+          conf=/mosquitto/config/run.conf
+          echo "[mosquitto] TLS listener on 8883"
+        fi
+        exec /usr/sbin/mosquitto -c "$$conf"
     healthcheck:
       test:
         [
@@ -57,6 +77,44 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  # ── Broker TLS certificate ─────────────────────────────────────────────────────
+  # One-shot. Issues the broker's certificate from a CA kept in ./state/mqtt_tls
+  # -- minted on the first run, and what /deploy hands a node -- and copies the
+  # certificate and key into the mqtt-tls volume the broker reads. The Wactorz
+  # image does it because the broker image has no tool that can. It never fails
+  # the stack: without a certificate the broker serves plain MQTT, as before.
+  mqtt-certs:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wactorz-dev-mqtt-certs
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      # The names the certificate carries include the broker this server dials.
+      MQTT_HOST: mosquitto
+    # Root only to hand the volume to the runtime user; docker-entrypoint.sh then
+    # fixes the state directory's ownership and drops privileges, as in the app.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        chown wactorz:wactorz /mqtt-tls
+        docker-entrypoint.sh python -m wactorz.broker_certificates --export /mqtt-tls \
+          || echo "[mqtt-certs] No certificate issued; the broker serves plain MQTT only." >&2
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./state:/app/state
+      - mqtt-tls:/mqtt-tls
+    networks:
+      - wactorz-net
 
   # ── Wactorz Python app ───────────────────────────────────────────────────────
   wactorz:
@@ -191,6 +249,7 @@ services:
 volumes:
   mosquitto-data:
   mosquitto-logs:
+  mqtt-tls:
   prometheus-data:
 
 networks:

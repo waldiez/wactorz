@@ -37,15 +37,21 @@ ports:
   8000/tcp: null
   8888/tcp: null
   1883/tcp: null
+  8883/tcp: null
 ports_description:
   8000/tcp: Wactorz REST + WebSocket API — not published by default; set api_key first if you publish it
   8888/tcp: Wactorz Monitor UI — not published by default; use the Wactorz panel, or set api_key first if you publish it
   1883/tcp: MQTT TCP broker (only active when mosquitto_embedded is true)
+  8883/tcp: MQTT over TLS, for remote nodes (only active when mosquitto_embedded is true)
 
 # ── Persistent state ───────────────────────────────────────────────────────────
 map:
   - config:rw
   - share:rw
+  # Home Assistant's certificate folder. Wactorz writes wactorz-mqtt.crt and
+  # wactorz-mqtt.key there, for the official Mosquitto add-on to serve TLS with,
+  # and touches nothing else in it.
+  - ssl:rw
 
 # ── User-configurable options ──────────────────────────────────────────────────
 options:
@@ -79,6 +85,11 @@ options:
   # Home Assistant user/password (or a broker-specific login) when not embedded.
   mqtt_username: ""
   mqtt_password: ""
+  # The CA a remote node is given to verify the broker's TLS certificate with.
+  # Leave blank for the one this add-on generates (it issues the certificates
+  # for the embedded broker and for /ssl); a path for a CA of your own; or
+  # `system` for a certificate from a public CA.
+  mqtt_tls_ca: ""
 
   # Remote edge nodes reachable over SSH. `/deploy <name>` bootstraps the node
   # named here; the credentials never travel through chat. Prefer `key` — put
@@ -88,7 +99,8 @@ options:
   # A remote node connects back to the MQTT broker over the network, so it needs
   # one it can reach. `/deploy` delivers the broker credentials to the node over
   # SSH, so a broker requiring a username and password is fine; mosquitto_embedded
-  # can serve remote nodes only if you publish port 1883 under Network settings.
+  # can serve remote nodes only if you publish port 1883 -- or 8883, for TLS --
+  # under Network settings.
   # A node uses its own broker_user/broker_password when set, and this addon's
   # broker account otherwise — that default means a stolen node holds full
   # broker access, so give a node its own account when that matters. See
@@ -156,6 +168,7 @@ schema:
   mqtt_port: port
   mqtt_username: str?
   mqtt_password: str?
+  mqtt_tls_ca: str?
   ha_connection: list(auto|supervisor|custom)?
   ha_url: url
   ha_token: str?
@@ -180,6 +193,8 @@ schema:
       broker_port: port?
       broker_user: str?
       broker_password: password?
+      broker_tls: list(auto|on|off)?
+      broker_tls_port: port?
       ssh_port: port?
 
 # ── Environment variables injected into the container ─────────────────────────

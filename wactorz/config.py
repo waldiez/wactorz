@@ -281,6 +281,11 @@ class DeployTarget:
     #: Resolving late also keeps the secret out of a frozen, logged dataclass.
     broker_user: str = ""
     broker_password: str = field(default="", repr=False)
+    #: Whether ``/deploy`` puts this node on TLS. Unset, it checks from the node that
+    #: the broker answers TLS on ``broker_tls_port`` and keeps plain MQTT if not;
+    #: ``on`` and ``off`` decide instead. See ``InstallerAgent._decide_node_tls``.
+    broker_tls: str = ""
+    broker_tls_port: int = 8883
 
 
 def _env_slug(name: str) -> str:
@@ -348,6 +353,8 @@ def _deploy_targets() -> tuple[DeployTarget, ...]:
                 ssh_port=_env_int(f"DEPLOY_{slug}_SSH_PORT", 22),
                 broker_user=os.getenv(f"DEPLOY_{slug}_BROKER_USER", "").strip(),
                 broker_password=os.getenv(f"DEPLOY_{slug}_BROKER_PASSWORD", ""),
+                broker_tls=os.getenv(f"DEPLOY_{slug}_BROKER_TLS", "").strip(),
+                broker_tls_port=_env_int(f"DEPLOY_{slug}_BROKER_TLS_PORT", 8883),
             )
         )
     return tuple(targets)
@@ -381,6 +388,10 @@ class AppConfig:
     mqtt_port: int
     mqtt_username: str
     mqtt_password: str
+    #: TLS for this server's own broker connections. See wactorz/core/mqtt_tls.py.
+    mqtt_tls: str
+    mqtt_tls_ca: str
+    mqtt_tls_check_hostname: str
     ha_url: str
     ha_token: str
     ha_state_bridge_output_topic: str
@@ -441,6 +452,9 @@ CONFIG = AppConfig(
     mqtt_port=_env_int("MQTT_PORT", 1883),
     mqtt_username=os.getenv("MQTT_USERNAME", ""),
     mqtt_password=os.getenv("MQTT_PASSWORD", ""),
+    mqtt_tls=os.getenv("MQTT_TLS", ""),
+    mqtt_tls_ca=os.getenv("MQTT_TLS_CA", ""),
+    mqtt_tls_check_hostname=os.getenv("MQTT_TLS_CHECK_HOSTNAME", ""),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_state_bridge_output_topic=os.getenv(

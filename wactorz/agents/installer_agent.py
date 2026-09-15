@@ -11,6 +11,7 @@ import shlex
 import socket
 import sys
 import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,11 +27,100 @@ from ..config import (
     deploy_target_for_host,
 )
 from ..core.actor import Actor, Message, MessageType
+from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
 from ..core.node_signing import next_sequence, node_key
 from ..core.paths import resolve_state_dir
 from . import node_service
 
 logger = logging.getLogger(__name__)
+
+#: Where ``/deploy`` puts the CA a node verifies the broker with, under ``~/wactorz``.
+NODE_CA_FILE = "mqtt-ca.crt"
+
+#: How long the node's TLS check waits for the broker, in seconds.
+TLS_CHECK_TIMEOUT_S = 5
+
+#: What a node runs to learn whether the broker answers TLS with the CA it was
+#: given. Standard library only: it runs before the node's venv exists, with its own
+#: ``python3``. Arguments: host, port, CA (a path or ``system``), whether to check
+#: the hostname (``1``/``0``), and the timeout. Exits 1 and prints why on failure.
+TLS_CHECK_SCRIPT = """
+import socket, ssl, sys
+host, port, ca, check, timeout = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], float(sys.argv[5])
+try:
+    context = ssl.create_default_context() if ca == "system" else ssl.create_default_context(cafile=ca)
+    context.check_hostname = check == "1"
+    with socket.create_connection((host, port), timeout=timeout) as raw:
+        with context.wrap_socket(raw, server_hostname=host):
+            pass
+except (OSError, ValueError) as exc:
+    print(exc)
+    sys.exit(1)
+"""
+
+_TLS_MODE_ON = frozenset({"on", "1", "true", "yes"})
+_TLS_MODE_OFF = frozenset({"off", "0", "false", "no"})
+
+
+class UnknownTlsModeError(ValueError):
+    """A deploy target's ``BROKER_TLS`` names no mode."""
+
+    def __init__(self, target: DeployTarget) -> None:
+        super().__init__(
+            f"{deploy_env_prefix(target.name)}_BROKER_TLS is {target.broker_tls!r}: "
+            "use on or off, or leave it unset to check from the node."
+        )
+
+
+class NoCaForNodeError(ValueError):
+    """A deploy target asks for TLS, and there is no CA to give the node."""
+
+    def __init__(self, target: DeployTarget, source: Path) -> None:
+        super().__init__(
+            f"{deploy_env_prefix(target.name)}_BROKER_TLS is on, but there is no CA at "
+            f"{source} to give the node. Set MQTT_TLS_CA, or start the broker Wactorz "
+            "provides once so it issues one."
+        )
+
+
+@dataclass(frozen=True)
+class NodeTls:
+    """How ``/deploy`` connects a node to the broker, and why."""
+
+    enabled: bool
+    port: int
+    #: ``MQTT_TLS_CA`` as the node reads it: the CA's path there, or ``system``.
+    ca: str = ""
+    check_hostname: bool = False
+    note: str = ""
+
+
+def tls_mode(value: str) -> str | None:
+    """``auto``, ``on`` or ``off`` for a ``DEPLOY_<NODE>_BROKER_TLS`` value, or None."""
+    setting = value.strip().lower()
+    if setting in ("", "auto"):
+        return "auto"
+    if setting in _TLS_MODE_ON:
+        return "on"
+    if setting in _TLS_MODE_OFF:
+        return "off"
+    return None
+
+
+def tls_check_command(broker: str, tls: NodeTls) -> str:
+    """The shell command that runs :data:`TLS_CHECK_SCRIPT` on the node, every value quoted."""
+    return " ".join(
+        [
+            "python3",
+            "-c",
+            shlex.quote(TLS_CHECK_SCRIPT),
+            shlex.quote(broker),
+            str(int(tls.port)),
+            shlex.quote(tls.ca),
+            "1" if tls.check_hostname else "0",
+            str(TLS_CHECK_TIMEOUT_S),
+        ]
+    )
 
 
 # pip package name → importable module name
@@ -489,6 +579,7 @@ class InstallerAgent(Actor):
         node_name: str,
         broker: str,
         port: int,
+        tls: NodeTls | None = None,
     ) -> bool:
         """Write ``<home>/wactorz/.env``, mode 0600. Returns whether it holds credentials.
 
@@ -528,6 +619,11 @@ class InstallerAgent(Actor):
         The node's signing key travels the same way, with the sequence number main
         has reached and what to do with a control message not signed for it
         (``WACTORZ_NODE_SIGNING``). See ``core/node_signing.py``.
+
+        A node on TLS gets its settings spelled out -- the CA's path, and whether the
+        hostname is checked -- rather than left to the defaults of
+        ``core/mqtt_tls.py``, which name the server's state directory, not the
+        node's.
         """
         username = target.broker_user or CONFIG.mqtt_username or ""
         password = target.broker_password or CONFIG.mqtt_password or ""
@@ -539,6 +635,10 @@ class InstallerAgent(Actor):
             f"WACTORZ_CONTROL_SINCE={next_sequence()}",
             f"WACTORZ_NODE_SIGNING={shlex.quote(NODE_SIGNING)}",
         ]
+        if tls is not None and tls.enabled:
+            lines.append("MQTT_TLS=1")
+            lines.append(f"MQTT_TLS_CA={shlex.quote(tls.ca)}")
+            lines.append(f"MQTT_TLS_CHECK_HOSTNAME={1 if tls.check_hostname else 0}")
         credentials = bool(username or password)
         if credentials:
             lines.append(f"MQTT_USERNAME={shlex.quote(username)}")
@@ -553,6 +653,55 @@ class InstallerAgent(Actor):
         # created world-readable and tightened later.
         await sftp.chmod(remote, 0o600)
         return credentials
+
+    async def _decide_node_tls(
+        self, conn: Any, sftp: Any, target: DeployTarget, home: str, broker: str, plain_port: int
+    ) -> NodeTls:
+        """Whether this node reaches the broker over TLS, handing it the CA if so.
+
+        The node is given the CA this server trusts (``MQTT_TLS_CA``): the one this
+        install generated, one of your own, or none for ``system``. Then it checks
+        from the node itself -- the only place the answer is true -- that the broker
+        answers TLS on the target's TLS port with that CA. Unless the target says
+        otherwise, a node whose check fails keeps plain MQTT on its usual port, so a
+        redeploy never strands a node on a broker that serves no TLS.
+
+        ``DEPLOY_<NODE>_BROKER_TLS=on`` gives the node TLS even when the check
+        fails (the broker may not be up yet) and fails the deploy when there is no
+        CA to hand over; ``off`` skips all of it.
+        """
+        mode = tls_mode(target.broker_tls)
+        if mode is None:
+            raise UnknownTlsModeError(target)
+        plain = NodeTls(enabled=False, port=plain_port)
+        if mode == "off":
+            return replace(plain, note="TLS is off for this node.")
+
+        setting = CONFIG.mqtt_tls_ca.strip()
+        check = checks_hostname(setting, CONFIG.mqtt_tls_check_hostname)
+        if setting.lower() == SYSTEM_TRUST:
+            ca = SYSTEM_TRUST
+        else:
+            source = Path(setting).expanduser() if setting else generated_ca_path()
+            if not source.is_file():
+                if mode == "on":
+                    raise NoCaForNodeError(target, source)
+                return replace(plain, note=f"No CA at {source} to give it.")
+            ca = f"{home}/wactorz/{NODE_CA_FILE}"
+            await sftp.put(str(source), ca)
+
+        tls = NodeTls(enabled=True, port=target.broker_tls_port, ca=ca, check_hostname=check)
+        ok, output = await self._ssh_run(conn, tls_check_command(broker, tls))
+        if ok:
+            return replace(tls, note=f"The broker answered TLS on port {tls.port}.")
+        reason = (output.splitlines() or ["no answer"])[-1][:200]
+        if mode == "on":
+            return replace(
+                tls, note=f"TLS is on for this node, though the broker did not answer it: {reason}"
+            )
+        return replace(
+            plain, note=f"The broker did not answer TLS on port {tls.port} from the node: {reason}"
+        )
 
     async def _ssh_kwargs(self, payload: dict) -> dict:
         """Build asyncssh connection kwargs for a task payload.
@@ -810,14 +959,24 @@ class InstallerAgent(Actor):
                 self._log_remote(f"[{node_name}] Directory created at {home_dir}/wactorz.")
 
                 # 2. Upload remote_runner.py and, if the broker needs them, the
-                # credentials it will read from its environment.
+                # credentials it will read from its environment. The CA goes too
+                # when the node is to reach the broker over TLS, which also decides
+                # the port every later step starts the runner with.
                 async with conn.start_sftp_client() as sftp:
                     await sftp.put(str(runner_path), f"{home_dir}/wactorz/remote_runner.py")
+                    tls = await self._decide_node_tls(
+                        conn, sftp, target, home_dir, str(broker), int(mqtt_port)
+                    )
+                    mqtt_port = tls.port
                     has_credentials = await self._put_node_env(
-                        sftp, target, home_dir, node_name, str(broker), int(mqtt_port)
+                        sftp, target, home_dir, node_name, str(broker), mqtt_port, tls
                     )
                 self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
                 self._log_remote(f"[{node_name}] Node environment written to ~/wactorz/.env.")
+                self._log_remote(
+                    f"[{node_name}] Broker connection: "
+                    f"{'TLS' if tls.enabled else 'plain MQTT'} on port {mqtt_port}. {tls.note}"
+                )
                 if has_credentials:
                     self._log_remote(f"[{node_name}] Broker credentials included.")
 
@@ -868,12 +1027,15 @@ class InstallerAgent(Actor):
                 "node_name": node_name,
                 "host": host,
                 "broker": broker,
+                "broker_port": mqtt_port,
+                "tls": tls.enabled,
                 # Reported rather than inferred: a node that fell back to nohup
                 # is otherwise indistinguishable from a supervised one, and the
                 # difference is whether it comes back after a reboot.
                 "supervision": rung.label,
                 "message": (
-                    f"Node '{node_name}' deployed to {user}@{host} ({rung.label}). "
+                    f"Node '{node_name}' deployed to {user}@{host} ({rung.label}), "
+                    f"{'TLS' if tls.enabled else 'plain MQTT'} to the broker. "
                     f"It will appear in /nodes within ~15 seconds."
                 ),
             }

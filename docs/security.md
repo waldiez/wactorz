@@ -102,9 +102,16 @@ the broker. Anything that can publish to it can drive Wactorz.
 
 - **Credentials are required.** The bundled broker refuses anonymous
   connections, and `docker compose` will not start without `MQTT_PASSWORD`.
-- **There is no TLS in the client.** Traffic is cleartext, so the broker and
-  everything talking to it belong on a network you trust. Do not route it across
-  the public internet without a tunnel or VPN.
+- **Edge nodes reach the broker over TLS where the broker serves it.** Wactorz
+  keeps a private CA in the state directory and issues the broker's certificate
+  from it; the compose stack and the add-on's embedded broker serve TLS on `8883`
+  beside plain `1883`. `/deploy` hands a node the CA and switches it to TLS only
+  after checking from the node that the broker answers it — a node that could not
+  stays on cleartext, and the deploy log says so. The server's own connection is
+  cleartext unless `MQTT_TLS` is set, because the broker normally sits beside it.
+  Plain `1883` stays open for anything not yet on TLS, so the broker still belongs
+  on a network you trust, and nothing here replaces a tunnel or VPN across the
+  public internet. See "Encrypted connections (TLS)" in `remote-nodes.md`.
 - **Edge nodes hold broker credentials.** `/deploy` writes them to the node over
   SSH, and by default a node uses the server's own account. A stolen node
   therefore holds full broker access; give a node its own account when that
@@ -148,9 +155,11 @@ the broker. Anything that can publish to it can drive Wactorz.
 4. Give each edge node its own broker account if a stolen node would matter.
 5. Deploy every edge node again after upgrading, so it holds a signing key, and
    set `WACTORZ_NODE_SIGNING=enforce` once no node reports unsigned commands.
+   Publish the broker's `8883` where nodes can reach it first, so the deploy puts
+   them on TLS, and check the deploy log says so.
 6. Give Wactorz only the credentials the agents you run actually need.
 7. Restrict filesystem access to the state directory — it also holds the secret
-   the node keys are derived from.
+   the node keys are derived from, and the key of the CA nodes trust the broker by.
 8. Treat the ability to spawn agents as equivalent to shell access, and hand it
    out on that basis.
 

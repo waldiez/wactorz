@@ -74,6 +74,7 @@ AGENT_CODE = r'''
 import asyncio
 import json
 import os
+import ssl
 import re
 import time
 
@@ -260,6 +261,29 @@ def _route_message(agent, topic, payload):
 # MQTT SUBSCRIBER
 # ══════════════════════════════════════════════════════════════════════════════
 
+
+def _mqtt_tls_kwargs():
+    """TLS for this program's own broker connection, as its host's connections use it.
+
+    A copy of the rule in wactorz/core/mqtt_tls.py: on a node this program cannot
+    import wactorz. tests/test_mqtt_tls.py holds it to the original.
+    """
+    if os.environ.get("MQTT_TLS", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return {}
+    ca = os.environ.get("MQTT_TLS_CA", "").strip()
+    if ca.lower() == "system":
+        context = ssl.create_default_context()
+    else:
+        state = os.environ.get("WACTORZ_STATE_DIR", "").strip() or "./state"
+        cafile = os.path.expanduser(ca) if ca else os.path.join(state, "mqtt_tls", "ca.crt")
+        context = ssl.create_default_context(cafile=cafile)
+    override = os.environ.get("MQTT_TLS_CHECK_HOSTNAME", "").strip().lower()
+    if override in ("1", "true", "yes", "on", "0", "false", "no", "off"):
+        context.check_hostname = override in ("1", "true", "yes", "on")
+    else:
+        context.check_hostname = bool(ca)
+    return {"tls_context": context}
+
 async def _mqtt_subscriber(agent):
     """Subscribe to all configured topics and buffer incoming messages."""
     try:
@@ -277,6 +301,7 @@ async def _mqtt_subscriber(agent):
                 agent._actor._mqtt_port,
                 username=os.environ.get("MQTT_USERNAME") or None,
                 password=os.environ.get("MQTT_PASSWORD") or None,
+                **_mqtt_tls_kwargs(),
             ) as client:
                 for pattern in topics:
                     await client.subscribe(pattern)

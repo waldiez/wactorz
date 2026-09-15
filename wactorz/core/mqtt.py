@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.properties import Properties
 
+from .mqtt_tls import client_context, tls_enabled
+
 if TYPE_CHECKING:  # pragma: no cover
     import aiomqtt
 
@@ -181,10 +183,10 @@ def client_id(role: str, scope: str, detail: str | None = None) -> str:
 
 
 def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
-    """Build an ``aiomqtt.Client`` with broker credentials injected from CONFIG.
+    """Build an ``aiomqtt.Client`` with broker credentials and TLS injected from CONFIG.
 
-    Credentials are only added when configured *and* not already supplied by
-    the caller, so explicit per-call overrides still win.
+    Each is only added when configured *and* not already supplied by the caller,
+    so explicit per-call overrides still win.
     """
     import aiomqtt
 
@@ -194,6 +196,8 @@ def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
         kwargs["username"] = CONFIG.mqtt_username
     if "password" not in kwargs and CONFIG.mqtt_password:
         kwargs["password"] = CONFIG.mqtt_password
+    if tls_enabled(CONFIG.mqtt_tls) and "tls_context" not in kwargs and "tls_params" not in kwargs:
+        kwargs["tls_context"] = client_context(CONFIG.mqtt_tls_ca, CONFIG.mqtt_tls_check_hostname)
     return aiomqtt.Client(hostname, port, **kwargs)
 
 

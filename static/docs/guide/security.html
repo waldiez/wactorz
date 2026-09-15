@@ -262,9 +262,16 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
 <ul>
 <li><strong>Credentials are required.</strong> The bundled broker refuses anonymous
   connections, and <code>docker compose</code> will not start without <code>MQTT_PASSWORD</code>.</li>
-<li><strong>There is no TLS in the client.</strong> Traffic is cleartext, so the broker and
-  everything talking to it belong on a network you trust. Do not route it across
-  the public internet without a tunnel or VPN.</li>
+<li><strong>Edge nodes reach the broker over TLS where the broker serves it.</strong> Wactorz
+  keeps a private CA in the state directory and issues the broker's certificate
+  from it; the compose stack and the add-on's embedded broker serve TLS on <code>8883</code>
+  beside plain <code>1883</code>. <code>/deploy</code> hands a node the CA and switches it to TLS only
+  after checking from the node that the broker answers it — a node that could not
+  stays on cleartext, and the deploy log says so. The server's own connection is
+  cleartext unless <code>MQTT_TLS</code> is set, because the broker normally sits beside it.
+  Plain <code>1883</code> stays open for anything not yet on TLS, so the broker still belongs
+  on a network you trust, and nothing here replaces a tunnel or VPN across the
+  public internet. See "Encrypted connections (TLS)" in <code>remote-nodes.md</code>.</li>
 <li><strong>Edge nodes hold broker credentials.</strong> <code>/deploy</code> writes them to the node over
   SSH, and by default a node uses the server's own account. A stolen node
   therefore holds full broker access; give a node its own account when that
@@ -305,10 +312,12 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
 <li>Put the broker on a trusted network segment, and set <code>MQTT_PASSWORD</code>.</li>
 <li>Give each edge node its own broker account if a stolen node would matter.</li>
 <li>Deploy every edge node again after upgrading, so it holds a signing key, and
-   set <code>WACTORZ_NODE_SIGNING=enforce</code> once no node reports unsigned commands.</li>
+   set <code>WACTORZ_NODE_SIGNING=enforce</code> once no node reports unsigned commands.
+   Publish the broker's <code>8883</code> where nodes can reach it first, so the deploy puts
+   them on TLS, and check the deploy log says so.</li>
 <li>Give Wactorz only the credentials the agents you run actually need.</li>
 <li>Restrict filesystem access to the state directory — it also holds the secret
-   the node keys are derived from.</li>
+   the node keys are derived from, and the key of the CA nodes trust the broker by.</li>
 <li>Treat the ability to spawn agents as equivalent to shell access, and hand it
    out on that basis.</li>
 </ol>

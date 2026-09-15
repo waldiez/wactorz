@@ -244,8 +244,9 @@ at <code>~/.config/systemd/user/wactorz-node.service</code>.</p>
   work — it contains an MQTT wildcard — or a malformed <code>ExecStart</code>. Neither
   succeeds on retry, so restarting is just noise.</li>
 <li><strong>Every argument comes from <code>~/wactorz/.env</code></strong>, which the deploy writes at
-  mode 0600 with <code>WACTORZ_NODE</code>, <code>WACTORZ_BROKER</code>, <code>WACTORZ_PORT</code> and, when the
-  broker needs them, <code>MQTT_USERNAME</code>/<code>MQTT_PASSWORD</code>. Values are quoted so the
+  mode 0600 with <code>WACTORZ_NODE</code>, <code>WACTORZ_BROKER</code>, <code>WACTORZ_PORT</code>, when the
+  broker needs them <code>MQTT_USERNAME</code>/<code>MQTT_PASSWORD</code>, and the <code>MQTT_TLS</code> settings
+  when the node reaches the broker over TLS. Values are quoted so the
   same file is safe both sourced by a shell and read by systemd — but note that
   a <code>VAR=$(cmd)</code> you add by hand is executed by the shell and taken literally by
   systemd, so avoid them.</li>
@@ -362,6 +363,50 @@ refuse on every reboot.</p>
 it up with the rest of the state directory. To rotate the keys, delete it and deploy
 every node again: until a node is redeployed, it reports or refuses what the new
 secret signs.</p>
+<h3 id="encrypted-connections-tls">Encrypted connections (TLS)</h3>
+<p>A node's broker connection carries its account's password and the code of every
+agent spawned on it, so it should be encrypted on any network you do not fully
+trust. Wactorz sets that up with no certificate to buy or renew:</p>
+<ul>
+<li><strong>The broker gets a certificate.</strong> Wactorz keeps a private certificate authority
+  (CA) in <code>&lt;WACTORZ_STATE_DIR&gt;/mqtt_tls/</code>, created the first time it is needed, and
+  issues the broker's certificate from it. The compose stack under the <code>python</code> and
+  <code>full</code> profiles, and the Home Assistant add-on's embedded broker, then serve TLS
+  on port <code>8883</code> beside plain MQTT on <code>1883</code>. The certificate is issued again before
+  it expires, or when it no longer names the broker's addresses; the CA stays, so
+  nodes keep trusting it.</li>
+<li><strong><code>/deploy</code> checks before it switches.</strong> It copies the CA to the node and tries a
+  TLS connection to the broker on <code>8883</code> from the node itself. If that works, the
+  node uses TLS from then on; if not, it stays on plain MQTT, and the deploy log says
+  why. A node deployed before this keeps plain MQTT until it is deployed again.</li>
+</ul>
+<p><code>DEPLOY_&lt;NODE&gt;_BROKER_TLS=on</code> uses TLS even when the check fails — the broker may
+not be up yet — <code>off</code> never does, and <code>DEPLOY_&lt;NODE&gt;_BROKER_TLS_PORT</code> changes the
+port. The node has to be able to reach that port.</p>
+<p>A client trusting the generated CA checks that the broker's certificate came from
+it, but not the host name inside it: that CA signs nothing but this broker, and a
+node should not lose its connection because the broker's LAN address changed.</p>
+<p><strong>A certificate of your own.</strong> Set <code>MQTT_TLS_CA</code> on the server to the CA that signed
+your broker's certificate, or to <code>system</code> for one from a public CA such as Let's
+Encrypt. <code>/deploy</code> hands that to the node instead, and the host name is then
+checked, so give each target a <code>broker</code> name the certificate carries.
+<code>MQTT_TLS_CHECK_HOSTNAME=1</code> or <code>0</code> decides the host name check either way.</p>
+<p><strong>The server's own connection</strong> stays plain unless <code>MQTT_TLS=1</code> is set with the
+broker's TLS port: under compose and in the add-on, the broker is beside the server
+rather than across a network.</p>
+<p><strong>A node started by hand</strong> reads the same settings from its environment:
+<code>MQTT_TLS=1</code>, <code>MQTT_TLS_CA</code> naming a copy of <code>&lt;WACTORZ_STATE_DIR&gt;/mqtt_tls/ca.crt</code>,
+and <code>MQTT_TLS_CHECK_HOSTNAME=0</code>, with <code>--port 8883</code>. A runner told to use TLS that
+cannot load its CA refuses to start rather than connecting unverified.</p>
+<p><strong>A broker you run yourself</strong> can serve the generated certificate:
+<code>python -m wactorz.broker_certificates --export &lt;dir&gt;</code> writes <code>broker.crt</code>, with the
+CA after it, and <code>broker.key</code> there, for its <code>certfile</code> and <code>keyfile</code>; <code>--name</code> adds
+an address it is reached by. With compose's default profile, which starts the broker
+alone, <code>docker compose --profile python run --rm mqtt-certs</code> followed by
+<code>docker compose restart mosquitto</code> does the same.</p>
+<p>Back up <code>mqtt_tls/</code> with the rest of the state directory. Should <code>ca.key</code> be lost,
+delete <code>ca.crt</code> and <code>ca.key</code> and deploy every node again: a new CA is trusted by no
+node holding the old one.</p>
 <h3 id="host-key-verification">Host key verification</h3>
 <p>SSH host keys are checked on every connection. A machine that has not been connected to before has its key recorded on first contact — the same trust-on-first-use that interactive <code>ssh</code> does — and any later change to that key fails the connection instead of being accepted.</p>
 <p>Learned keys live in <code>&lt;WACTORZ_STATE_DIR&gt;/known_hosts</code>, or wherever <code>DEPLOY_KNOWN_HOSTS</code> points. Set <code>DEPLOY_STRICT_HOST_KEYS=1</code> to turn off first-use learning entirely; every target's key must then already be in the file:</p>

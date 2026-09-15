@@ -11,6 +11,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An agent withdrawn while its node is offline no longer starts when the node returns.** A spawn published to a node that was away waits in its broker session, and was delivered when the node came back even if the agent had been withdrawn in the meantime — by clearing spawns in a reset, or by main giving up on a node silent for longer than 90 seconds. Main now also queues a stop for each such agent, which the node receives after the spawn and which undoes it. The same stop reaches agents still running on a node that was silent that long: main has already removed them, and on the node's return they now stop instead of carrying on unsupervised.
+
 - **Stopping Wactorz with one Ctrl-C or `docker stop` no longer occasionally hangs on Python 3.10 and 3.11.** On those interpreters a wait that completes in the same instant it is cancelled discards the cancellation, and both the MQTT client and the Home Assistant client wait that way. A stop request that arrived at that moment was lost: during startup the process carried on starting and then simply ran, and once it was running the dashboard's broker connection or the publisher went on waiting, so the process did not exit until something killed it. A stop request is now asked again until shutdown has begun, and shutdown asks each part again if its first request does not take — the agents, the publisher, the dashboard server, and any task still running at the end — instead of cancelling once and waiting without a limit. A stop that arrives while Wactorz is still starting goes through the same shutdown and stops whatever had started by then. Python 3.12 and later were not affected.
 
 ## [0.6.1] - 2026-09-14

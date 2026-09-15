@@ -503,54 +503,72 @@ class NodeManager:
         while host.state.value not in ("stopped", "failed"):
             try:
                 await asyncio.sleep(OFFLINE_CHECK_INTERVAL_S)
-                now = time.time()
-                # Snapshot to avoid mutation-during-iteration
-                stale_nodes = [
-                    (name, info)
-                    for name, info in list(self.known.items())
-                    if (now - info.get("last_seen", 0)) > OFFLINE_GRACE_S
-                ]
-                if not stale_nodes:
-                    continue
-
-                reg = host._get_spawn_registry()
-                for node_name, _info in stale_nodes:
-                    logger.warning(
-                        "[main] Node %r has been silent for >%.0fs — treating as offline",
-                        node_name,
-                        OFFLINE_GRACE_S,
-                    )
-                    # Find all agents that belong to this node according to the
-                    # spawn registry (the heartbeat's last-known agent list may
-                    # be stale).
-                    lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
-                    for agent_name in lost:
-                        host._remove_from_spawn_registry(agent_name)
-                        # As in _prune_vanished: the retained desired_state has
-                        # to lose the agent too, or the node resurrects it on
-                        # its next reconcile into a main that has forgotten it.
-                        await host._update_node_desired_state(node_name, remove_name=agent_name)
-                        await host._clear_agent_manifest(agent_name)
-                        host._record_agent_deletion(
-                            agent_name,
-                            reason=f"node '{node_name}' went offline",
-                        )
-                    # Drop the node from our tracking. If it comes back, the
-                    # heartbeat listener will re-add it as a fresh entry.
-                    self.known.pop(node_name, None)
-                    if lost:
-                        host._queue_notification(
-                            {
-                                "_monitor_notification": True,
-                                "message": (
-                                    f"Node '{node_name}' is offline. "
-                                    f"Lost agents: {', '.join(lost)}."
-                                ),
-                                "severity": "warning",
-                                "timestamp": now,
-                            }
-                        )
+                await self.forget_offline_nodes(time.time())
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning("[%s] Node offline watcher error: %s", host.name, e)
+
+    async def forget_offline_nodes(self, now: float) -> None:
+        """Treat every node silent for longer than OFFLINE_GRACE_S as gone.
+
+        Its agents are removed as a delete removes them, and a stop is queued for
+        each on the node. The node is away, so the broker holds the stop in its
+        session until it returns, behind whatever already waits there -- a spawn
+        published while it was gone included. On its return the node stops what
+        main has already forgotten, instead of starting a withdrawn spawn or
+        carrying on with agents nothing supervises any more.
+        """
+        host = self.host
+        if host is None:
+            return
+
+        # Snapshot to avoid mutation-during-iteration
+        stale_nodes = [
+            (name, info)
+            for name, info in list(self.known.items())
+            if (now - info.get("last_seen", 0)) > OFFLINE_GRACE_S
+        ]
+        if not stale_nodes:
+            return
+
+        reg = host._get_spawn_registry()
+        for node_name, _info in stale_nodes:
+            logger.warning(
+                "[main] Node %r has been silent for >%.0fs — treating as offline",
+                node_name,
+                OFFLINE_GRACE_S,
+            )
+            # Find all agents that belong to this node according to the
+            # spawn registry (the heartbeat's last-known agent list may
+            # be stale).
+            lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
+            for agent_name in lost:
+                host._remove_from_spawn_registry(agent_name)
+                # As in _prune_vanished: the retained desired_state has
+                # to lose the agent too, or the node resurrects it on
+                # its next reconcile into a main that has forgotten it.
+                await host._update_node_desired_state(node_name, remove_name=agent_name)
+                # Queued in the node's session while it is away, behind
+                # anything already waiting there, so on its return it
+                # stops this agent rather than starting a withdrawn spawn.
+                await host._mqtt_publish(f"nodes/{node_name}/stop", {"name": agent_name}, qos=1)
+                await host._clear_agent_manifest(agent_name)
+                host._record_agent_deletion(
+                    agent_name,
+                    reason=f"node '{node_name}' went offline",
+                )
+            # Drop the node from our tracking. If it comes back, the
+            # heartbeat listener will re-add it as a fresh entry.
+            self.known.pop(node_name, None)
+            if lost:
+                host._queue_notification(
+                    {
+                        "_monitor_notification": True,
+                        "message": (
+                            f"Node '{node_name}' is offline. Lost agents: {', '.join(lost)}."
+                        ),
+                        "severity": "warning",
+                        "timestamp": now,
+                    }
+                )

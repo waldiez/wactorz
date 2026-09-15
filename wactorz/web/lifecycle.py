@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+from typing import Any
 
 from ..agents.lookup import find_main_actor
 from ..core.node_signing import signed_publish_kwargs
@@ -150,6 +151,20 @@ async def purge_node_desired_state(node: str) -> None:
         logger.debug("[purge] Failed to clear retained %s: %s", topic, e)
 
 
+def _withdrawn_on_offline_nodes(
+    main_actor: Any, registry: dict[str, Any], agent: str | None
+) -> list[tuple[str, str]]:
+    """(agent, node) for each withdrawn agent whose node is not online right now."""
+    withdrawn: list[tuple[str, str]] = []
+    for name, cfg in registry.items():
+        if agent and name != agent:
+            continue
+        node = (cfg.get("node") or "").strip()
+        if node and not main_actor.nodes.is_online(node):
+            withdrawn.append((name, node))
+    return withdrawn
+
+
 async def purge_spawn_reconcile(agent: str | None = None) -> None:
     """Tear down the agent-respawn state behind a spawn-registry clear.
 
@@ -195,6 +210,20 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     else:
         await asyncio.gather(
             *[purge_node_desired_state(n) for n in node_names],
+            return_exceptions=True,
+        )
+
+    # A spawn published to a node that is away waits in its broker session and is
+    # delivered on its return, whatever the desired state says by then. A stop
+    # published after it waits behind it and undoes it, so each withdrawn agent on
+    # an offline node gets one. Online nodes are left alone: nothing is queued for
+    # them, and this reset does not stop the agents it forgets anywhere else.
+    if main_actor is not None:
+        await asyncio.gather(
+            *[
+                main_actor._mqtt_publish(f"nodes/{node}/stop", {"name": name}, qos=1)
+                for name, node in _withdrawn_on_offline_nodes(main_actor, reg, agent)
+            ],
             return_exceptions=True,
         )
 

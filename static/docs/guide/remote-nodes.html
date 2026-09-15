@@ -370,11 +370,13 @@ trust. Wactorz sets that up with no certificate to buy or renew:</p>
 <ul>
 <li><strong>The broker gets a certificate.</strong> Wactorz keeps a private certificate authority
   (CA) in <code>&lt;WACTORZ_STATE_DIR&gt;/mqtt_tls/</code>, created the first time it is needed, and
-  issues the broker's certificate from it. The compose stack under the <code>python</code> and
-  <code>full</code> profiles, and the Home Assistant add-on's embedded broker, then serve TLS
-  on port <code>8883</code> beside plain MQTT on <code>1883</code>. The certificate is issued again before
-  it expires, or when it no longer names the broker's addresses; the CA stays, so
-  nodes keep trusting it.</li>
+  issues the broker's certificate from it. The compose broker serves TLS on port
+  <code>8883</code> beside plain MQTT on <code>1883</code> once the certificate is in
+  <code>infra/mosquitto/tls/</code>: the <code>python</code> and <code>full</code> profiles put it there, and so does
+  a <code>wactorz</code> run on the host with <code>MQTT_TLS=1</code>, or <code>make mqtt-certs</code> — restart the
+  broker after the first time. The Home Assistant add-on's embedded broker serves
+  TLS too. The certificate is issued again before it expires, or when it no longer
+  names the broker's addresses; the CA stays, so nodes keep trusting it.</li>
 <li><strong><code>/deploy</code> checks before it switches.</strong> It copies the CA to the node and tries a
   TLS connection to the broker on <code>8883</code> from the node itself. If that works, the
   node uses TLS from then on; if not, it stays on plain MQTT, and the deploy log says
@@ -391,9 +393,13 @@ your broker's certificate, or to <code>system</code> for one from a public CA su
 Encrypt. <code>/deploy</code> hands that to the node instead, and the host name is then
 checked, so give each target a <code>broker</code> name the certificate carries.
 <code>MQTT_TLS_CHECK_HOSTNAME=1</code> or <code>0</code> decides the host name check either way.</p>
-<p><strong>The server's own connection</strong> stays plain unless <code>MQTT_TLS=1</code> is set with the
-broker's TLS port: under compose and in the add-on, the broker is beside the server
-rather than across a network.</p>
+<p><strong>The server's own connection</strong> uses TLS with <code>MQTT_TLS=1</code>: the server then dials
+<code>MQTT_TLS_PORT</code> (default <code>8883</code>) instead of <code>MQTT_PORT</code>, under compose too. It creates
+the generated CA and certificate when it starts if they are missing, and writes the
+broker's copy to <code>MQTT_TLS_EXPORT</code> (<code>infra/mosquitto/tls</code> in <code>.env.template</code>). A CA
+that cannot be loaded stops it at startup, naming the file it looked for. Without
+<code>MQTT_TLS</code> the connection stays plain, which suits a broker beside the server rather
+than across a network.</p>
 <p><strong>A node started by hand</strong> reads the same settings from its environment:
 <code>MQTT_TLS=1</code>, <code>MQTT_TLS_CA</code> naming a copy of <code>&lt;WACTORZ_STATE_DIR&gt;/mqtt_tls/ca.crt</code>,
 and <code>MQTT_TLS_CHECK_HOSTNAME=0</code>, with <code>--port 8883</code>. A runner told to use TLS that
@@ -401,9 +407,7 @@ cannot load its CA refuses to start rather than connecting unverified.</p>
 <p><strong>A broker you run yourself</strong> can serve the generated certificate:
 <code>python -m wactorz.broker_certificates --export &lt;dir&gt;</code> writes <code>broker.crt</code>, with the
 CA after it, and <code>broker.key</code> there, for its <code>certfile</code> and <code>keyfile</code>; <code>--name</code> adds
-an address it is reached by. With compose's default profile, which starts the broker
-alone, <code>docker compose --profile python run --rm mqtt-certs</code> followed by
-<code>docker compose restart mosquitto</code> does the same.</p>
+an address it is reached by.</p>
 <p>Back up <code>mqtt_tls/</code> with the rest of the state directory. Should <code>ca.key</code> be lost,
 delete <code>ca.crt</code> and <code>ca.key</code> and deploy every node again: a new CA is trusted by no
 node holding the old one.</p>

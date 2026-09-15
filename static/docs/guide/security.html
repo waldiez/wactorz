@@ -267,8 +267,8 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
   from it; the compose stack and the add-on's embedded broker serve TLS on <code>8883</code>
   beside plain <code>1883</code>. <code>/deploy</code> hands a node the CA and switches it to TLS only
   after checking from the node that the broker answers it — a node that could not
-  stays on cleartext, and the deploy log says so. The server's own connection is
-  cleartext unless <code>MQTT_TLS</code> is set, because the broker normally sits beside it.
+  stays on cleartext, and the deploy log says so. The server's own connection uses
+  TLS with <code>MQTT_TLS=1</code>, on the broker's TLS port.
   Plain <code>1883</code> stays open for anything not yet on TLS, so the broker still belongs
   on a network you trust, and nothing here replaces a tunnel or VPN across the
   public internet. See "Encrypted connections (TLS)" in <code>remote-nodes.md</code>.</li>

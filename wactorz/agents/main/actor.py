@@ -19,6 +19,7 @@ from ...config import (
     deploy_target_names,
 )
 from ...core.actor import Actor, Message, MessageType
+from ...core.node_signing import node_control_properties
 from ...core.persistence import chat_turn_recorded
 from ..llm_agent import LLMAgent, LLMProvider
 from ..mixins import SpawnMixin, SpawnPlaceholder
@@ -1002,6 +1003,17 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
         await self.spawns._spawn_remote(config, node, save)
+
+    def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
+        """Sign whatever main addresses to a node's control topics.
+
+        Here rather than in Actor, whose publish carries every agent's messages: an
+        agent that published to a node's spawn topic would be signed along with
+        main, and reach nodes as main does. Agent code runs in this process, so
+        this keeps a mistake or a model's code from being signed by accident; it
+        is not a boundary against code that sets out to read the key.
+        """
+        return node_control_properties(topic, encoded)
 
     async def _update_node_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None

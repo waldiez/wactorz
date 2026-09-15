@@ -747,8 +747,8 @@ class Migration:
             # Routed through main, in two legs: ask the source to hand the
             # agent back (the `@main` machinery), then place it on the target
             # ourselves. The source no longer publishes to another node's spawn
-            # topic -- that was lateral remote code execution, and the ACL that
-            # closes it forbids the write anyway.
+            # topic -- that was lateral remote code execution, and a node holding
+            # a signing key refuses a spawn not signed by main.
             return_token = secrets.token_hex(8)
             self.pending_returns[return_token] = {
                 "agent_name": agent_name,

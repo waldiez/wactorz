@@ -44,6 +44,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `retention_timeseries_days` | `365` | Days sensor readings, detections and Home Assistant state history are kept; `0` keeps them for ever. |
 | `retention_outbox_days` | `7` | Days a message the MQTT broker never accepted is kept and retried before it is dropped; `0` keeps retrying for ever. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
+| `node_signing` | `warn` | What a deployed node does with a command that is not signed for it: `warn` acts on it and tells you in chat, `enforce` refuses it. Applies to a node from its next `/deploy` — see [Signed commands](#signed-commands). |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
 > default: the panel reaches Wactorz through ingress, where Home Assistant has
@@ -145,6 +146,21 @@ to be. If you only need agents on the machine running Home Assistant, leave
 > **Credentials never go through chat.** `/deploy` takes a node name and nothing else, and the installer ignores credentials supplied in a task payload. Anything typed into chat is written to the conversation history and the chat log, where it stays long after the deploy finished.
 
 SSH host keys are verified. A machine that has not been connected to before has its key recorded on first contact (stored under `/data/state/known_hosts`, which survives addon updates); a later change to that key fails the connection instead of being accepted silently.
+
+### Signed commands
+
+Every command the addon sends a node — spawn an agent, stop it, restart the node —
+is signed with a key made for that node, which `/deploy` writes to the node with its
+broker credentials. With `node_signing: warn` (the default) a node still acts on a
+command that is not signed for it, and Wactorz tells you in chat when one arrives;
+with `node_signing: enforce` the node refuses it. Nothing changes for a node deployed
+before this: it holds no key, and checks nothing until you run `/deploy` for it
+again. After updating, redeploy your nodes, and switch to `enforce` once nothing
+is reported.
+
+The keys are derived from a secret kept under `/data/state`, which survives addon
+updates. Signing works whichever broker you use, the official Mosquitto addon
+included.
 
 ## MQTT
 

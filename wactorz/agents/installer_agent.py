@@ -18,6 +18,7 @@ import asyncssh
 
 from ..config import (
     CONFIG,
+    NODE_SIGNING,
     DeployTarget,
     deploy_env_prefix,
     deploy_name_error,
@@ -25,6 +26,7 @@ from ..config import (
     deploy_target_for_host,
 )
 from ..core.actor import Actor, Message, MessageType
+from ..core.node_signing import next_sequence, node_key
 from ..core.paths import resolve_state_dir
 from . import node_service
 
@@ -522,6 +524,10 @@ class InstallerAgent(Actor):
         This is the out-of-band channel the broker credentials must travel by:
         sending them over the broker itself would publish the very secret that
         protects it, to a channel that is unauthenticated until they arrive.
+
+        The node's signing key travels the same way, with the sequence number main
+        has reached and what to do with a control message not signed for it
+        (``WACTORZ_NODE_SIGNING``). See ``core/node_signing.py``.
         """
         username = target.broker_user or CONFIG.mqtt_username or ""
         password = target.broker_password or CONFIG.mqtt_password or ""
@@ -529,6 +535,9 @@ class InstallerAgent(Actor):
             f"WACTORZ_NODE={shlex.quote(node_name)}",
             f"WACTORZ_BROKER={shlex.quote(broker)}",
             f"WACTORZ_PORT={shlex.quote(str(port))}",
+            f"WACTORZ_NODE_KEY={shlex.quote(node_key(node_name))}",
+            f"WACTORZ_CONTROL_SINCE={next_sequence()}",
+            f"WACTORZ_NODE_SIGNING={shlex.quote(NODE_SIGNING)}",
         ]
         credentials = bool(username or password)
         if credentials:

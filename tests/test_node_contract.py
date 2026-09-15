@@ -68,8 +68,9 @@ NODE_TOPICS = CONTROL_TOPICS | REPORT_TOPICS | {REPLY_TOPIC} | UNUSED_TOPICS
 
 # ── Payloads ───────────────────────────────────────────────────────────────────
 
-#: Fields main reads off a node heartbeat. `version` and `runtime` are the two
-#: a node may omit -- an older runner does -- and main fills in for it.
+#: Fields main reads off a node heartbeat. `version`, `runtime`, `signing` and
+#: `signing_failures` are the ones a node may omit -- an older runner does -- and
+#: main fills in for it.
 HEARTBEAT_FIELDS = frozenset(
     {
         "node",
@@ -84,6 +85,8 @@ HEARTBEAT_FIELDS = frozenset(
         "mem_free_mb",
         "version",
         "runtime",
+        "signing",
+        "signing_failures",
     }
 )
 
@@ -141,6 +144,7 @@ def _runner_with_capture() -> tuple[remote_runner._RemoteRunner, list[tuple[str,
     runner._agents = {}
     runner._start_time = 0.0
     runner._running = True
+    runner._control = remote_runner._ControlGuard("", "", "", str(ROOT))
     published: list[tuple[str, Any]] = []
 
     async def publish(topic: str, data: Any, retain: bool = False) -> None:

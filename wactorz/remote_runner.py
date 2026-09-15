@@ -62,6 +62,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import ctypes
+import hashlib
+import hmac
 import importlib
 import inspect
 import json
@@ -1881,6 +1883,205 @@ class _RemoteAgent:
 # ── Remote runner (the process that lives on the Pi) ─────────────────────────
 
 
+# ── Control message signing ──────────────────────────────────────────────────
+#
+# A copy of the rule in wactorz/core/node_signing.py, which explains it: this file
+# runs on nodes without the package. tests/test_node_control_signing.py holds the
+# two copies to each other.
+
+_CONTROL_LEAVES = frozenset(
+    {"spawn", "desired_state", "stop", "stop_all", "restart", "restart_agent", "migrate"}
+)
+_SEQUENCE_PROPERTY = "wactorz-seq"
+_SIGNATURE_PROPERTY = "wactorz-sig"
+
+#: The topics whose empty payload is a retained message being cleared, which
+#: their handlers ignore. Every other control topic acts on an empty payload --
+#: `stop_all` shuts the node down whatever it carries -- so it is checked too.
+_CLEARABLE_LEAVES = frozenset({"spawn", "desired_state"})
+
+#: How far behind the newest message already accepted on a topic another may
+#: arrive and still be accepted, in microseconds. Main publishes through more
+#: than one broker connection, and two connections need not deliver in the order
+#: they were written to.
+_REORDER_WINDOW_US = 300 * 1_000_000
+
+#: How many accepted sequence numbers are remembered per topic.
+_SEEN_PER_TOPIC = 256
+
+#: Where accepted sequence numbers are kept, under the node's state directory, so
+#: a message accepted before a restart is still refused after it.
+_SEEN_FILE = "_control_seen.json"
+
+
+def _signing_input(topic: str, sequence: int, payload: bytes) -> bytes:
+    """What a signature covers: the topic, the sequence number and the payload as sent."""
+    return b"\n".join((topic.encode("utf-8"), str(sequence).encode("ascii"), payload))
+
+
+def _message_bytes(payload: Any) -> bytes:
+    """A received payload as the bytes it was sent as."""
+    if payload is None:
+        return b""
+    if isinstance(payload, (bytes, bytearray)):
+        return bytes(payload)
+    return str(payload).encode("utf-8")
+
+
+class _ControlGuard:
+    """Decides which control messages this node acts on.
+
+    Without a key -- a node deployed before signing -- every message is accepted,
+    as it always was, and the node says once that it is open. With one, a message
+    has to be signed with this node's key and not be one already accepted. What
+    happens to one that is not follows the mode it was deployed with: ``warn`` acts
+    on it and counts it, ``enforce`` refuses it and counts it. The count travels in
+    the heartbeat, so main can say so where someone will see it.
+    """
+
+    def __init__(self, key_hex: str, since: str, mode: str, state_dir: str) -> None:
+        self._path = Path(state_dir) / _SEEN_FILE
+        self._key: bytes | None = None
+        self._invalid = False
+        key_hex = key_hex.strip()
+        if key_hex:
+            try:
+                self._key = bytes.fromhex(key_hex)
+            except ValueError:
+                self._invalid = True
+        try:
+            #: The sequence number main had reached when this node was deployed. A
+            #: message older than that was published for an earlier deployment.
+            self._since = int(since.strip() or 0)
+        except ValueError:
+            self._since = 0
+        self._enforce = mode.strip().lower() == "enforce"
+        self._seen: dict[str, list[int]] | None = None
+        self._said_open = False
+        #: Messages that were not signed for this node, acted on or not.
+        self.failures = 0
+
+    @property
+    def mode(self) -> str:
+        """What the heartbeat reports: ``off``, ``warn``, ``enforce`` or ``invalid``."""
+        if self._invalid:
+            return "invalid"
+        if self._key is None:
+            return "off"
+        return "enforce" if self._enforce else "warn"
+
+    def admit(self, leaf: str, topic: str, payload: bytes, properties: dict[str, str]) -> bool:
+        """Whether the control message ``payload`` on ``topic`` may be acted on."""
+        if self._invalid:
+            # Refused rather than treated as unkeyed: a node that was given a key
+            # and cannot read it must not quietly go back to trusting everyone.
+            self.failures += 1
+            logger.error(
+                "[runner] Refused %s: WACTORZ_NODE_KEY is not a valid key. Deploy this node again.",
+                topic,
+            )
+            return False
+        if self._key is None:
+            if not self._said_open:
+                self._said_open = True
+                logger.warning(
+                    "[runner] This node holds no signing key, so it acts on unsigned control "
+                    "messages from anything on the broker. Deploy it again to give it one."
+                )
+            return True
+        problem = self._problem(self._key, leaf, topic, payload, properties)
+        if problem is None:
+            return True
+        self.failures += 1
+        if self._enforce:
+            logger.warning("[runner] Refused %s: %s.", topic, problem)
+            return False
+        logger.warning(
+            "[runner] Acting on %s although %s (WACTORZ_NODE_SIGNING=warn).", topic, problem
+        )
+        return True
+
+    def _problem(
+        self, key: bytes, leaf: str, topic: str, payload: bytes, properties: dict[str, str]
+    ) -> str | None:
+        """Why a message is not one to trust, or None when it is."""
+        signature = properties.get(_SIGNATURE_PROPERTY)
+        raw_sequence = properties.get(_SEQUENCE_PROPERTY, "")
+        if signature is None or not (raw_sequence.isascii() and raw_sequence.isdigit()):
+            return "it is not signed"
+        sequence = int(raw_sequence)
+        expected = hmac.new(key, _signing_input(topic, sequence, payload), hashlib.sha256)
+        if not hmac.compare_digest(
+            signature.encode("utf-8", "replace"), expected.hexdigest().encode("ascii")
+        ):
+            return "its signature was not made with this node's key"
+        if not self._fresh(leaf, sequence):
+            return "it was accepted before, or predates this node's deployment"
+        self._remember(leaf, sequence)
+        return None
+
+    def _fresh(self, leaf: str, sequence: int) -> bool:
+        seen = self._seen_for(leaf)
+        if leaf == "desired_state":
+            # Retained, so the broker hands the latest one over again on every
+            # reconnect, and applying it again is what brings agents back after a
+            # reboot. Only an older one is refused, and the deployment's starting
+            # point does not apply: a desired state published before this node
+            # was redeployed is still the one it should be running.
+            return sequence >= max(seen, default=0)
+        floor = max(self._since, max(seen, default=0) - _REORDER_WINDOW_US)
+        if len(seen) >= _SEEN_PER_TOPIC:
+            # Anything older than the oldest one remembered could have been
+            # forgotten, so it is refused rather than possibly accepted twice.
+            floor = max(floor, seen[0])
+        return sequence > floor and sequence not in seen
+
+    def _remember(self, leaf: str, sequence: int) -> None:
+        seen = [*self._seen_for(leaf), sequence]
+        newest = max(seen)
+        kept = sorted(s for s in seen if s > newest - _REORDER_WINDOW_US)[-_SEEN_PER_TOPIC:]
+        if self._seen is not None:
+            self._seen[leaf] = kept
+        self._save()
+
+    def _seen_for(self, leaf: str) -> list[int]:
+        if self._seen is None:
+            self._seen = self._load()
+        return self._seen.setdefault(leaf, [])
+
+    def _load(self) -> dict[str, list[int]]:
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError):
+            logger.warning(
+                "[runner] %s is unreadable; accepted control messages are remembered from "
+                "this node's deployment onward only",
+                self._path,
+            )
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(leaf): sorted(s for s in values if type(s) is int)
+            for leaf, values in raw.items()
+            if isinstance(values, list)
+        }
+
+    def _save(self) -> None:
+        staging = self._path.with_name(f".{self._path.name}.tmp")
+        try:
+            staging.write_text(json.dumps(self._seen), encoding="utf-8")
+            staging.replace(self._path)
+        except OSError:
+            logger.warning(
+                "[runner] Could not record accepted control messages; one could be accepted "
+                "again after a restart",
+                exc_info=True,
+            )
+
+
 class _RemoteRunner:
     """The long-running process on the edge node.
     Connects to the MQTT broker, listens for spawn commands, manages agents.
@@ -1905,6 +2106,15 @@ class _RemoteRunner:
         _state_path = Path.home() / "wactorz" / "state"
         _state_path.mkdir(parents=True, exist_ok=True)
         self._state_dir = str(_state_path)
+        # Read from the environment rather than a flag, like the broker
+        # credentials, so the key appears in no process listing. Left in the
+        # environment: a restart re-executes this process and needs it again.
+        self._control = _ControlGuard(
+            os.environ.get("WACTORZ_NODE_KEY", ""),
+            os.environ.get("WACTORZ_CONTROL_SINCE", ""),
+            os.environ.get("WACTORZ_NODE_SIGNING", ""),
+            self._state_dir,
+        )
 
     # ── MQTT publish (queue-based, reconnect-safe) ────────────────────────────
 
@@ -2206,6 +2416,10 @@ class _RemoteRunner:
                         "cpu_pct": cpu_pct,
                         "mem_used_mb": mem_used,
                         "mem_free_mb": mem_free,
+                        # Whether this node checks what main sends it, and how
+                        # often something arrived that was not signed for it.
+                        "signing": self._control.mode,
+                        "signing_failures": self._control.failures,
                     },
                 )
                 await asyncio.sleep(interval)
@@ -2316,6 +2530,28 @@ class _RemoteRunner:
 
     # ── Control-plane commands ────────────────────────────────────────────────
 
+    def _admit_control(self, topic_str: str, msg: Any) -> bool:
+        """Whether a message may be acted on.
+
+        Checked once here, for every command alike: a spawn runs code, a desired
+        state starts agents and a stop can delete an agent's state, so none is
+        cheaper to forge than another. The signature travels in the message's MQTT
+        v5 user properties, over the payload bytes as they arrived, so a handler
+        sees the payload untouched either way.
+        """
+        parts = topic_str.split("/")
+        if len(parts) != 3 or parts[:2] != ["nodes", self.node_name]:
+            return True
+        leaf = parts[2]
+        if leaf not in _CONTROL_LEAVES:
+            return True
+        payload = _message_bytes(msg.payload)
+        if not payload and leaf in _CLEARABLE_LEAVES:
+            return True
+        pairs = getattr(getattr(msg, "properties", None), "UserProperty", None) or []
+        properties = {str(name): str(value) for name, value in pairs}
+        return self._control.admit(leaf, topic_str, payload, properties)
+
     async def _dispatch_control(self, topic_str: str, data: Any, msg: Any) -> None:
         """Route one control message to the command it names.
 
@@ -2378,9 +2614,6 @@ class _RemoteRunner:
 
         task = asyncio.create_task(self.spawn_agent(data))
         task.add_done_callback(_log_task_exc)
-        # Clear the retained message so this spawn doesn't re-fire every time
-        # the subscriber reconnects or restarts.
-        asyncio.create_task(self.publish(topic_str, b"", retain=True))
 
     async def _on_stop(self, topic_str: str, data: Any, msg: Any) -> None:
         """Stop a named agent.
@@ -2554,7 +2787,8 @@ class _RemoteRunner:
                             data = json.loads(msg.payload.decode())
                         except Exception:
                             data = msg.payload.decode()
-                        await self._dispatch_control(topic_str, data, msg)
+                        if self._admit_control(topic_str, msg):
+                            await self._dispatch_control(topic_str, data, msg)
 
             except asyncio.CancelledError:
                 break
@@ -2766,12 +3000,12 @@ class _RemoteRunner:
 
         # Node-to-node migration used to happen here: this runner published
         # `nodes/{target}/spawn` directly. That is the reproduced lateral-RCE
-        # path -- generated code on one node could spawn code on another -- and
-        # the ACL that closes it forbids a node writing another node's
-        # namespace, which would have broken this anyway. Migration is routed
-        # through main instead, which is the only party allowed to address every
-        # node. Main asks for the state with the `@main` sentinel above and does
-        # the placing itself.
+        # path -- generated code on one node could spawn code on another. A node
+        # holds only its own signing key, so a node holding one refuses a spawn
+        # another node could publish, and this would have been refused anyway.
+        # Migration is routed through main instead, the one party that can sign
+        # for every node. Main asks for the state with the `@main` sentinel above
+        # and does the placing itself.
         logger.warning(
             "[runner] migrate '%s' to '%s': node-to-node migration is not "
             "supported; main routes migrations. Ignoring.",

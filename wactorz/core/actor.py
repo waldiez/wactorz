@@ -970,9 +970,19 @@ class Actor(ABC):
                     encoded = payload
                 else:
                     encoded = json.dumps(payload)
-                await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
+                user_properties = self._publish_properties(topic, encoded)
+                if user_properties:
+                    await self._mqtt_client.publish(
+                        topic, encoded, retain=retain, qos=qos, user_properties=user_properties
+                    )
+                else:
+                    await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
             except Exception as e:
                 logger.debug("[%s] MQTT publish failed: %s", self.name, e)
+
+    def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
+        """MQTT v5 user properties to send with ``encoded`` on ``topic``. None for most actors."""
+        return None
 
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())

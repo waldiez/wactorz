@@ -57,6 +57,19 @@ VANISH_MISS_THRESHOLD = 3
 #: a brief network gap costs a grey dot rather than a deletion.
 ONLINE_WINDOW_S = 30.0
 
+#: The least time between two republishes of one node's desired state prompted by
+#: what its heartbeats say about signing. A node reporting failures on every
+#: heartbeat would otherwise have it republished on every one.
+SIGNING_REPUBLISH_INTERVAL_S = 60.0
+
+
+def _as_count(value: object) -> int:
+    """A count a heartbeat reported, or 0 for anything that is not one."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(value, 0)
+
+
 #: How long a node may stay silent before its agents are treated as lost.
 #:
 #: Longer than the window above on purpose. That one drives the indicator in the
@@ -95,6 +108,9 @@ class NodeManager:
         self.manifest_registry = manifests if manifests is not None else ManifestRegistry(host)
         #: (node, agent) -> consecutive heartbeats that agent has been missing.
         self.agent_misses: dict[tuple[str, str], int] = {}
+        #: node -> monotonic time its desired state was last republished because of
+        #: what its heartbeat said about signing.
+        self.signing_republished_at: dict[str, float] = {}
 
     def list_nodes(self) -> list[dict[str, Any]]:
         """Every known node, with its age resolved to an `online` flag.
@@ -243,7 +259,8 @@ class NodeManager:
     async def receive_heartbeat(self, node_name: str, data: dict[str, Any]) -> None:
         """Take one heartbeat: prune what vanished, record the node, fill gaps."""
         agents = data.get("agents", [])
-        previous = set(self.known.get(node_name, {}).get("agents", []))
+        before = self.known.get(node_name)
+        previous = set((before or {}).get("agents", []))
         await self._prune_vanished(node_name, set(agents), previous)
         self.known[node_name] = {
             "last_seen": time.time(),
@@ -259,9 +276,80 @@ class NodeManager:
             "cpu_pct": data.get("cpu_pct"),
             "mem_used_mb": data.get("mem_used_mb"),
             "mem_free_mb": data.get("mem_free_mb"),
+            # Whether the node checks what main sends it. A heartbeat without it
+            # comes from a runner older than signing, which checks nothing.
+            "signing": data.get("signing") or "off",
+            "signing_failures": _as_count(data.get("signing_failures")),
         }
         self._bootstrap_contracts(node_name, agents)
         self._touch_monitor(agents)
+        await self.follow_signing(node_name, self.known[node_name], before)
+
+    async def follow_signing(
+        self, node_name: str, record: dict[str, Any], before: dict[str, Any] | None
+    ) -> None:
+        """Act on what a heartbeat says about signing.
+
+        Two things need main. A node that received a control message not signed for
+        it is being sent something main did not sign, and nobody reads a Pi's log,
+        so it is said in chat. And a node that checks signatures needs a signed
+        desired state: the one retained at the broker may predate signing, or be
+        forged, and a node that refuses it does not bring its agents back. Main
+        publishes its own over it -- when the node first says it checks, and again
+        after it reports a failure.
+        """
+        host = self.host
+        if host is None:
+            return
+        mode = record.get("signing", "off")
+        failures = record.get("signing_failures", 0)
+        was_mode = (before or {}).get("signing", "off")
+        was_failures = (before or {}).get("signing_failures", 0)
+        # A runner that restarted counts from zero again.
+        new_failures = failures - was_failures if failures >= was_failures else failures
+        if mode == "invalid":
+            if was_mode != "invalid":
+                host._queue_notification(
+                    {
+                        "severity": "critical",
+                        "message": (
+                            f"Node '{node_name}' cannot read its signing key, so it refuses "
+                            f"everything main sends it. Deploy it again: /deploy {node_name}"
+                        ),
+                    }
+                )
+            return
+        if new_failures:
+            outcome = "refused" if mode == "enforce" else "acted on"
+            logger.warning(
+                "[main] Node %r received %d control message(s) not signed for it, and %s them.",
+                node_name,
+                new_failures,
+                outcome,
+            )
+            host._queue_notification(
+                {
+                    "severity": "warning",
+                    "message": (
+                        f"Node '{node_name}' received {new_failures} command(s) that were not "
+                        f"signed for it, and {outcome} them. A desired state published before "
+                        "the node was redeployed does this once, and main republishes it "
+                        "signed; if it keeps happening, something other than this Wactorz "
+                        "is publishing to the node."
+                    ),
+                }
+            )
+        checks = mode in ("warn", "enforce")
+        if checks and (was_mode != mode or new_failures) and self._signing_republish_due(node_name):
+            await host._update_node_desired_state(node_name)
+
+    def _signing_republish_due(self, node_name: str) -> bool:
+        now = time.monotonic()
+        last = self.signing_republished_at.get(node_name)
+        if last is not None and now - last < SIGNING_REPUBLISH_INTERVAL_S:
+            return False
+        self.signing_republished_at[node_name] = now
+        return True
 
     def agents_to_prune(self, node_name: str, current: set[str], previous: set[str]) -> list[str]:
         """Registry agents on this node that have now missed enough heartbeats.

@@ -194,6 +194,39 @@ RETENTION_TIMESERIES_DAYS = _env_int("WACTORZ_RETENTION_TIMESERIES_DAYS", 365)
 #: any outage worth waiting for, and each one expired is logged with its topic.
 RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
 
+#: What a node does with a control message not signed for it, once it holds a key.
+#:
+#: ``warn``     acts on it, as a node always has, and reports it in its heartbeat.
+#: ``enforce``  refuses it.
+#:
+#: Written into a node's ``.env`` by ``/deploy``, so it applies to a node from its
+#: next deploy. A node deployed before signing holds no key and acts on everything
+#: whichever this is. ``warn`` is the default because a node that refuses what it
+#: cannot check stops working the moment anything is misconfigured; the reports it
+#: sends while warning are how you learn it is safe to enforce.
+NODE_SIGNING_MODES = ("warn", "enforce")
+
+
+def _node_signing_mode() -> str:
+    """The configured mode, or ``warn`` when unset or unrecognised."""
+    value = _unquote(os.getenv("WACTORZ_NODE_SIGNING", "") or "").strip().lower()
+    if not value:
+        return "warn"
+    if value not in NODE_SIGNING_MODES:
+        # Named rather than ignored: a typo in "enforce" would otherwise leave
+        # every node warning while you believe it refuses.
+        warnings.warn(
+            f"WACTORZ_NODE_SIGNING={value!r} is not one of {', '.join(NODE_SIGNING_MODES)} "
+            "— using 'warn'",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return "warn"
+    return value
+
+
+NODE_SIGNING = _node_signing_mode()
+
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
 #: deployment with no Supervisor must never offer it. Inferring it from the peer's

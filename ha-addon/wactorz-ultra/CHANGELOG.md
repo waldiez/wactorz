@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added: `node_signing` option. Every command the add-on sends an edge node is now signed with a key made for that node, which `/deploy` delivers with the node's broker credentials. With `warn`, the default, a node still acts on a command that is not signed for it and Wactorz tells you in chat; with `enforce` the node refuses it. **Nothing changes for a node until you run `/deploy` for it again**, and the keys are derived from a secret kept under `/data/state`, which survives updates.
+
 ## 0.6.1
 
 - Added: the image carries the build tools `reachy_mini` needs (Cairo and GObject headers), so it can be installed inside the add-on.

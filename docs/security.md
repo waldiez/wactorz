@@ -109,6 +109,15 @@ the broker. Anything that can publish to it can drive Wactorz.
   SSH, and by default a node uses the server's own account. A stolen node
   therefore holds full broker access; give a node its own account when that
   matters.
+- **Commands to an edge node are signed.** A node runs the code in a spawn it
+  receives, so broker access alone must not be enough to send one. Main signs
+  every command it sends a node with a key derived for that node, which `/deploy`
+  writes to the node with its broker credentials. With `WACTORZ_NODE_SIGNING=enforce`
+  a node refuses a command not signed for it; with the default, `warn`, it acts on
+  it and main says so in chat, so you can see that nothing legitimate arrives
+  unsigned before you enforce. A node deployed before signing holds no key and
+  checks nothing until it is deployed again. Commands are what is signed: an
+  agent's own messages, and what an agent reads from the broker, are not.
 
 ---
 
@@ -137,9 +146,12 @@ the broker. Anything that can publish to it can drive Wactorz.
    `openssl rand -hex 32`.
 3. Put the broker on a trusted network segment, and set `MQTT_PASSWORD`.
 4. Give each edge node its own broker account if a stolen node would matter.
-5. Give Wactorz only the credentials the agents you run actually need.
-6. Restrict filesystem access to the state directory.
-7. Treat the ability to spawn agents as equivalent to shell access, and hand it
+5. Deploy every edge node again after upgrading, so it holds a signing key, and
+   set `WACTORZ_NODE_SIGNING=enforce` once no node reports unsigned commands.
+6. Give Wactorz only the credentials the agents you run actually need.
+7. Restrict filesystem access to the state directory — it also holds the secret
+   the node keys are derived from.
+8. Treat the ability to spawn agents as equivalent to shell access, and hand it
    out on that basis.
 
 ---

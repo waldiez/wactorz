@@ -11,17 +11,36 @@ Imports nothing else from ``wactorz`` — it talks to a broker, not to actors.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sqlite3
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from .cancellation import cancel_until_done
+from .mqtt import publish_properties
 from .topics import publish_topic_error
 
 logger = logging.getLogger(__name__)
+
+
+#: MQTT v5 user properties as (name, value) pairs, the form they are queued and stored in.
+UserProperties = Sequence[tuple[str, str]]
+
+
+def _stored_properties(raw: str) -> list[tuple[str, str]] | None:
+    """The user properties an outbox row was stored with, or None when it had none."""
+    if not raw:
+        return None
+    try:
+        pairs = json.loads(raw)
+    except ValueError:
+        logger.warning("[MQTT] An outbox row's properties are unreadable; sending it without them")
+        return None
+    return [(str(name), str(value)) for name, value in pairs] or None
 
 
 #: How long disconnect() waits for the drain loop to stop, asking again as it goes.
@@ -332,18 +351,34 @@ class MQTTPublisher:
                     payload TEXT    NOT NULL,
                     retain  INTEGER NOT NULL DEFAULT 0,
                     qos     INTEGER NOT NULL DEFAULT 1,
-                    ts      REAL    NOT NULL
+                    ts      REAL    NOT NULL,
+                    properties TEXT NOT NULL DEFAULT ''
                 )
             """)
+            # Added in place to an outbox written before messages carried user
+            # properties. The default is what those rows mean: none. A signed
+            # message waiting here must keep its signature, or a node holding a
+            # key refuses it once the outbox replays it after a restart.
+            columns = {row[1] for row in db.execute("PRAGMA table_info(outbox)")}
+            if "properties" not in columns:
+                db.execute("ALTER TABLE outbox ADD COLUMN properties TEXT NOT NULL DEFAULT ''")
             db.commit()
 
-    def _save_to_db(self, topic: str, payload: str, retain: bool, qos: int) -> int:
+    def _save_to_db(
+        self,
+        topic: str,
+        payload: str,
+        retain: bool,
+        qos: int,
+        user_properties: UserProperties | None = None,
+    ) -> int:
         """Persist a message to SQLite. Returns row id."""
         try:
             with self._db_lock:
                 db = self._connect()
                 cur = db.execute(
-                    "INSERT INTO outbox (topic, payload, retain, qos, ts) VALUES (?,?,?,?,?)",
+                    "INSERT INTO outbox (topic, payload, retain, qos, ts, properties) "
+                    "VALUES (?,?,?,?,?,?)",
                     (
                         topic,
                         payload
@@ -352,6 +387,7 @@ class MQTTPublisher:
                         int(retain),
                         qos,
                         time.time(),
+                        json.dumps(list(user_properties)) if user_properties else "",
                     ),
                 )
                 db.commit()
@@ -435,7 +471,7 @@ class MQTTPublisher:
         Its stored row goes too; left in the outbox it would be replayed after a
         restart and stall the queue again.
         """
-        topic, _payload, _retain, _qos, row_id = item
+        topic, _payload, _retain, _qos, row_id, _properties = item
         if from_queue:
             self._queue.task_done()
         if row_id >= 0:
@@ -466,21 +502,36 @@ class MQTTPublisher:
             with self._db_lock:
                 rows = (
                     self._connect()
-                    .execute("SELECT id, topic, payload, retain, qos FROM outbox ORDER BY id")
+                    .execute(
+                        "SELECT id, topic, payload, retain, qos, properties FROM outbox ORDER BY id"
+                    )
                     .fetchall()
                 )
             if rows:
                 logger.info("[MQTT] Replaying %s undelivered message(s) from outbox", len(rows))
-            for row_id, topic, payload, retain, qos in rows:
-                self._enqueue((topic, payload, bool(retain), qos, row_id))
+            for row_id, topic, payload, retain, qos, properties in rows:
+                self._enqueue(
+                    (topic, payload, bool(retain), qos, row_id, _stored_properties(properties))
+                )
         except Exception as e:
             logger.debug("[MQTT] Outbox load failed: %s", e)
             self._close_db()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    async def publish(self, topic: str, payload, retain: bool = False, qos: int = 0) -> None:
-        """Queue a message for delivery. Returns without waiting for the broker."""
+    async def publish(
+        self,
+        topic: str,
+        payload,
+        retain: bool = False,
+        qos: int = 0,
+        user_properties: UserProperties | None = None,
+    ) -> None:
+        """Queue a message for delivery. Returns without waiting for the broker.
+
+        ``user_properties`` are MQTT v5 user properties sent with the message
+        and kept with it in the outbox, as (name, value) pairs.
+        """
         if not self._available:
             return
 
@@ -507,11 +558,11 @@ class MQTTPublisher:
 
         if qos >= 1:
             # Durable: persist to SQLite first, then enqueue
-            row_id = self._save_to_db(topic, payload, retain, qos)
-            self._enqueue((topic, payload, retain, qos, row_id))
+            row_id = self._save_to_db(topic, payload, retain, qos, user_properties)
+            self._enqueue((topic, payload, retain, qos, row_id, user_properties))
         else:
             # Best-effort: in-memory only
-            self._enqueue((topic, payload, retain, qos, -1))
+            self._enqueue((topic, payload, retain, qos, -1, user_properties))
 
     async def disconnect(self) -> None:
         """Stop the drain loop and close the connection."""
@@ -591,10 +642,21 @@ class MQTTPublisher:
                         else:
                             item = await self._queue.get()
                             from_queue = True
-                        topic, payload, retain, qos, row_id = item
+                        topic, payload, retain, qos, row_id, user_properties = item
 
                         try:
-                            await client.publish(topic, payload, retain=retain, qos=qos)
+                            # Passed only when there are some, so a client that
+                            # predates properties is called exactly as before.
+                            if user_properties:
+                                await client.publish(
+                                    topic,
+                                    payload,
+                                    qos=qos,
+                                    retain=retain,
+                                    properties=publish_properties(user_properties),
+                                )
+                            else:
+                                await client.publish(topic, payload, qos=qos, retain=retain)
                         except (ValueError, TypeError) as refused:
                             # paho refuses the message itself before sending it — a
                             # wildcard or empty topic, one over 65535 bytes, a payload

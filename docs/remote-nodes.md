@@ -212,6 +212,33 @@ The Wactorz add-on's embedded broker still cannot serve a remote node, but for a
 different reason: its port is deliberately not published, so there is no route
 to it whatever credentials a node holds.
 
+### Signed commands
+
+Everything main tells a node to do — spawn an agent, apply a desired state, stop,
+restart, migrate — is signed with a key derived for that node. `/deploy` writes the
+key to the node's `~/wactorz/.env` with its broker credentials, so it travels over
+SSH and never over the broker. The signature rides in the message's MQTT v5 user
+properties, so the payload is unchanged.
+
+What a node does with a command that is not signed for it is set by
+`WACTORZ_NODE_SIGNING` on the server, and written to the node when it is deployed:
+
+- `warn` (the default) acts on it and counts it. The node reports the count in its
+  heartbeat, and main says in chat when it goes up.
+- `enforce` refuses it.
+
+A node deployed before signing holds no key and acts on everything, as it always
+did; deploy it again to give it one. A node remembers the commands it has
+accepted, so a captured one cannot be replayed, and refuses one published before
+its latest deploy. Once a node reports that it checks, main republishes its desired
+state signed, replacing one retained from before that the node would otherwise
+refuse on every reboot.
+
+The keys are derived from a secret in `<WACTORZ_STATE_DIR>/node_signing.key`. Back
+it up with the rest of the state directory. To rotate the keys, delete it and deploy
+every node again: until a node is redeployed, it reports or refuses what the new
+secret signs.
+
 ### Host key verification
 
 SSH host keys are checked on every connection. A machine that has not been connected to before has its key recorded on first contact — the same trust-on-first-use that interactive `ssh` does — and any later change to that key fails the connection instead of being accepted.
@@ -230,13 +257,14 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 
 | Topic | Direction | Description |
 |-------|-----------|-------------|
-| `nodes/{name}/spawn` | → runner | Spawn a new agent. Payload: full agent config dict. Published with `retain=true`; runner clears retain after processing. |
-| `nodes/{name}/stop` | → runner | Stop a named agent. Payload: `{"name": "agent-name"}`. |
-| `nodes/{name}/stop_all` | → runner | Stop all agents and shut down the runner. |
+| `nodes/{name}/spawn` | → runner | Spawn a new agent. Payload: full agent config dict. Not retained — a node that was away catches up from `desired_state`. Signed. |
+| `nodes/{name}/desired_state` | → runner | Every agent the node should be running. Retained; the runner starts any that are missing when it connects. Signed. |
+| `nodes/{name}/stop` | → runner | Stop a named agent. Payload: `{"name": "agent-name"}`. Signed. |
+| `nodes/{name}/stop_all` | → runner | Stop all agents and shut down the runner. Signed. |
 | `nodes/{name}/list` | → runner | Request the list of running agents. Response on `nodes/{name}/agents`. |
 | `nodes/{name}/agents` | ← runner | Response to `list`. Contains agent names and actor IDs. |
-| `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address. |
-| `nodes/{name}/migrate` | → runner | Migrate a running agent to another node. Payload: `{"name": "...", "target_node": "..."}`. |
+| `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, and whether the node checks signed commands. |
+| `nodes/{name}/migrate` | → runner | Migrate a running agent to another node. Payload: `{"name": "...", "target_node": "..."}`. Signed. |
 | `nodes/{name}/migrate_result` | ← runner | Result of a migration request. |
 | `nodes/{name}/reply/{id}` | ← runner | Reply routing for `agent.send_to()` calls originating on this node. |
 | `agents/{id}/heartbeat` | ← agent | Per-agent heartbeat every 10 s. Includes `"node": "{name}"` field. |

@@ -77,7 +77,7 @@ def publisher_fixture(tmp_path: Any) -> MQTTPublisher:
 class TestOrderAcrossAFailure:
     async def test_the_failed_message_goes_first_not_last(self, publisher: MQTTPublisher) -> None:
         for topic in ("first", "second", "third"):
-            publisher._queue.put_nowait((topic, b"x", False, 0, -1))
+            publisher._queue.put_nowait((topic, b"x", False, 0, -1, None))
         client = _Client(fail_once_on="first")
 
         await _run_briefly(publisher, client)
@@ -86,7 +86,7 @@ class TestOrderAcrossAFailure:
         assert client.published == ["first", "second", "third"]
 
     async def test_nothing_is_lost_when_the_publish_fails(self, publisher: MQTTPublisher) -> None:
-        publisher._queue.put_nowait(("only", b"x", False, 0, -1))
+        publisher._queue.put_nowait(("only", b"x", False, 0, -1, None))
         client = _Client(fail_once_on="only")
 
         await _run_briefly(publisher, client)
@@ -95,7 +95,7 @@ class TestOrderAcrossAFailure:
 
     async def test_a_clean_run_keeps_its_order(self, publisher: MQTTPublisher) -> None:
         for topic in ("a", "b", "c"):
-            publisher._queue.put_nowait((topic, b"x", False, 0, -1))
+            publisher._queue.put_nowait((topic, b"x", False, 0, -1, None))
         client = _Client()
 
         await _run_briefly(publisher, client)
@@ -109,7 +109,7 @@ class TestOrderAcrossAFailure:
         self, publisher: MQTTPublisher
     ) -> None:
         # A slot left full would replay the same message on every reconnect.
-        publisher._queue.put_nowait(("only", b"x", False, 0, -1))
+        publisher._queue.put_nowait(("only", b"x", False, 0, -1, None))
 
         await _run_briefly(publisher, _Client(fail_once_on="only"))
 

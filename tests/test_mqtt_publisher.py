@@ -160,7 +160,7 @@ class TestDurability:
         second._load_pending_from_db()
 
         assert second.queue_depth == 1
-        topic, payload, _retain, qos, row_id = second._queue.get_nowait()
+        topic, payload, _retain, qos, row_id, _properties = second._queue.get_nowait()
         assert (topic, payload, qos) == ("nodes/alpha/spawn", "payload", 1)
         assert row_id > 0
 

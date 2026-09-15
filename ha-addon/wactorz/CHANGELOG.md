@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Added: `node_signing` option. Every command the add-on sends an edge node is now signed with a key made for that node, which `/deploy` delivers with the node's broker credentials. With `warn`, the default, a node still acts on a command that is not signed for it and Wactorz tells you in chat; with `enforce` the node refuses it. **Nothing changes for a node until you run `/deploy` for it again**, and the keys are derived from a secret kept under `/data/state`, which survives updates.
+
 ## 0.6.1
 
 - Added: `retention_chat_days`, `retention_timeseries_days` and `retention_outbox_days` options. Old data is now deleted on a schedule, so a long-running install stops filling its disk: sensor and Home Assistant history after 365 days, broker messages still undelivered after 7 days, and attached files no message refers to any more. **Chat history is kept for ever unless you set `retention_chat_days`**, so updating deletes no conversation; set it to a number such as `365` to stop the history growing. `0` keeps any store for ever.

@@ -20,8 +20,12 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.properties import Properties
 
 if TYPE_CHECKING:  # pragma: no cover
     import aiomqtt
@@ -220,3 +224,14 @@ def broker_exposure_warning(host: str, username: str) -> str | None:
         "Keep the broker on localhost, or put it on a network you trust"
         f"{' and set MQTT_USERNAME/MQTT_PASSWORD' if anonymous else ''}."
     )
+
+
+def publish_properties(user_properties: Sequence[tuple[str, str]]) -> Properties:
+    """MQTT v5 PUBLISH properties carrying ``user_properties``, as (name, value) pairs.
+
+    Only v5 connections carry them; every connection here is one, see
+    :func:`session_kwargs`.
+    """
+    properties = Properties(PacketTypes.PUBLISH)
+    properties.UserProperty = list(user_properties)
+    return properties

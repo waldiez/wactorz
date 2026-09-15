@@ -17,6 +17,7 @@ from aiohttp import web
 from aiohttp.web import Response
 
 from ..agents.lookup import find_main_actor
+from ..core.node_signing import signed_publish_kwargs
 from . import cost, events, lifecycle, runtime, ws
 
 logger = logging.getLogger(__name__)
@@ -181,11 +182,15 @@ async def reset_handler(request: web.Request) -> Response:
                     n = (cfg.get("node") or "").strip()
                     if n:
                         node_names.add(n)
+            wipe_payload = json.dumps({"reason": "wipe everything"})
             if runtime.mqtt_client_ref and node_names:
                 await asyncio.gather(
                     *[
                         runtime.mqtt_client_ref.publish(
-                            f"nodes/{n}/stop_all", json.dumps({"reason": "wipe everything"}), qos=1
+                            f"nodes/{n}/stop_all",
+                            wipe_payload,
+                            qos=1,
+                            **signed_publish_kwargs(f"nodes/{n}/stop_all", wipe_payload),
                         )
                         for n in node_names
                     ],

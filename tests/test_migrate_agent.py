@@ -234,8 +234,8 @@ class TestBetweenTwoNodes:
 
     The source used to publish `nodes/{target}/spawn` itself. That is lateral
     remote code execution -- generated code on one node placing code on another
-    -- and the ACL that closes it forbids the write anyway. So main asks the
-    source to hand the agent back, then places it on the target itself.
+    -- and a node holding a signing key refuses a spawn main did not sign. So main
+    asks the source to hand the agent back, then places it on the target itself.
     """
 
     def _main(self) -> _Main:

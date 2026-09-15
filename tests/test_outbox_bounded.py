@@ -52,7 +52,7 @@ class TestTheCeiling:
         # The freshest sample is the useful one — an old heartbeat tells you
         # nothing the new one does not.
         for i in range(6):
-            publisher._enqueue(("agents/a/heartbeat", f"sample-{i}", False, 0, -1))
+            publisher._enqueue(("agents/a/heartbeat", f"sample-{i}", False, 0, -1, None))
 
         assert [entry[1] for entry in _queued(publisher)] == ["sample-3", "sample-4", "sample-5"]
 
@@ -78,7 +78,7 @@ class TestWhatGivesWay:
         for _ in range(3):
             publisher._enqueue(DURABLE)
 
-        publisher._enqueue(("nodes/rpi/stop", "payload", False, 1, 9))
+        publisher._enqueue(("nodes/rpi/stop", "payload", False, 1, 9, None))
 
         assert [entry[0] for entry in _queued(publisher)] == ["nodes/rpi/spawn"] * 3
 

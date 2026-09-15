@@ -11,6 +11,7 @@ import logging
 import time
 
 from ..agents.lookup import find_main_actor
+from ..core.node_signing import signed_publish_kwargs
 from . import events, runtime
 
 logger = logging.getLogger(__name__)
@@ -268,10 +269,14 @@ async def delete_agent(agent_id: str) -> str:
         # MQTT-only mode (or main unavailable). Route by node if we have one.
         if node:
             try:
+                # Signed as main signs it: this is the path taken when main is
+                # not there to publish it.
+                stop_payload = json.dumps({"name": name})
                 await runtime.mqtt_client_ref.publish(
                     f"nodes/{node}/stop",
-                    json.dumps({"name": name}),
+                    stop_payload,
                     qos=1,
+                    **signed_publish_kwargs(f"nodes/{node}/stop", stop_payload),
                 )
                 routed = f"via nodes/{node}/stop"
             except Exception as e:

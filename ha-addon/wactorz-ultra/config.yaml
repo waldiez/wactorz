@@ -95,6 +95,12 @@ options:
   # "Remote edge nodes" in the documentation before adding entries.
   deploy_targets: []
 
+  # What a deployed node does with a control message that is not signed for it.
+  # warn (default): acts on it and reports it, so nothing changes until you have
+  # seen the reports. enforce: refuses it. Applies to a node from its next
+  # /deploy; a node deployed before signing accepts everything either way.
+  node_signing: warn
+
   # Home Assistant connection (used by HA agents inside Wactorz)
   # auto (default): supervisor proxy when ha_token is blank, custom URL otherwise.
   ha_connection: auto
@@ -163,6 +169,7 @@ schema:
   retention_chat_days: int
   retention_timeseries_days: int
   retention_outbox_days: int
+  node_signing: list(warn|enforce)?
   deploy_targets:
     - name: str
       host: str?

@@ -89,7 +89,9 @@ def _catalogue_helper(module: str) -> Callable[[], dict[str, Any]]:
     """The TLS helper a catalogue program carries, executed on its own."""
     source = next(
         node.value.value
-        for node in ast.parse((ROOT / "wactorz" / "catalogue_agents" / module).read_text()).body
+        for node in ast.parse(
+            (ROOT / "wactorz" / "catalogue_agents" / module).read_text(encoding="utf-8")
+        ).body
         if isinstance(node, ast.Assign)
         and any(isinstance(t, ast.Name) and t.id == "AGENT_CODE" for t in node.targets)
         and isinstance(node.value, ast.Constant)

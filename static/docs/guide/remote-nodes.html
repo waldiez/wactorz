@@ -339,6 +339,29 @@ as you need.</p>
 <p>The Wactorz add-on's embedded broker still cannot serve a remote node, but for a
 different reason: its port is deliberately not published, so there is no route
 to it whatever credentials a node holds.</p>
+<h3 id="signed-commands">Signed commands</h3>
+<p>Everything main tells a node to do — spawn an agent, apply a desired state, stop,
+restart, migrate — is signed with a key derived for that node. <code>/deploy</code> writes the
+key to the node's <code>~/wactorz/.env</code> with its broker credentials, so it travels over
+SSH and never over the broker. The signature rides in the message's MQTT v5 user
+properties, so the payload is unchanged.</p>
+<p>What a node does with a command that is not signed for it is set by
+<code>WACTORZ_NODE_SIGNING</code> on the server, and written to the node when it is deployed:</p>
+<ul>
+<li><code>warn</code> (the default) acts on it and counts it. The node reports the count in its
+  heartbeat, and main says in chat when it goes up.</li>
+<li><code>enforce</code> refuses it.</li>
+</ul>
+<p>A node deployed before signing holds no key and acts on everything, as it always
+did; deploy it again to give it one. A node remembers the commands it has
+accepted, so a captured one cannot be replayed, and refuses one published before
+its latest deploy. Once a node reports that it checks, main republishes its desired
+state signed, replacing one retained from before that the node would otherwise
+refuse on every reboot.</p>
+<p>The keys are derived from a secret in <code>&lt;WACTORZ_STATE_DIR&gt;/node_signing.key</code>. Back
+it up with the rest of the state directory. To rotate the keys, delete it and deploy
+every node again: until a node is redeployed, it reports or refuses what the new
+secret signs.</p>
 <h3 id="host-key-verification">Host key verification</h3>
 <p>SSH host keys are checked on every connection. A machine that has not been connected to before has its key recorded on first contact — the same trust-on-first-use that interactive <code>ssh</code> does — and any later change to that key fails the connection instead of being accepted.</p>
 <p>Learned keys live in <code>&lt;WACTORZ_STATE_DIR&gt;/known_hosts</code>, or wherever <code>DEPLOY_KNOWN_HOSTS</code> points. Set <code>DEPLOY_STRICT_HOST_KEYS=1</code> to turn off first-use learning entirely; every target's key must then already be in the file:</p>
@@ -360,17 +383,22 @@ to it whatever credentials a node holds.</p>
 <tr>
 <td><code>nodes/{name}/spawn</code></td>
 <td>→ runner</td>
-<td>Spawn a new agent. Payload: full agent config dict. Published with <code>retain=true</code>; runner clears retain after processing.</td>
+<td>Spawn a new agent. Payload: full agent config dict. Not retained — a node that was away catches up from <code>desired_state</code>. Signed.</td>
+</tr>
+<tr>
+<td><code>nodes/{name}/desired_state</code></td>
+<td>→ runner</td>
+<td>Every agent the node should be running. Retained; the runner starts any that are missing when it connects. Signed.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/stop</code></td>
 <td>→ runner</td>
-<td>Stop a named agent. Payload: <code>{"name": "agent-name"}</code>.</td>
+<td>Stop a named agent. Payload: <code>{"name": "agent-name"}</code>. Signed.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/stop_all</code></td>
 <td>→ runner</td>
-<td>Stop all agents and shut down the runner.</td>
+<td>Stop all agents and shut down the runner. Signed.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/list</code></td>
@@ -385,12 +413,12 @@ to it whatever credentials a node holds.</p>
 <tr>
 <td><code>nodes/{name}/heartbeat</code></td>
 <td>← runner</td>
-<td>Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address.</td>
+<td>Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, and whether the node checks signed commands.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/migrate</code></td>
 <td>→ runner</td>
-<td>Migrate a running agent to another node. Payload: <code>{"name": "...", "target_node": "..."}</code>.</td>
+<td>Migrate a running agent to another node. Payload: <code>{"name": "...", "target_node": "..."}</code>. Signed.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/migrate_result</code></td>

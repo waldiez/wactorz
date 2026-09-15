@@ -59,7 +59,7 @@ class TestTheComposeBroker:
 
     def test_a_failed_certificate_step_does_not_fail_the_stack(self, name: str) -> None:
         script = _compose(name)["services"]["mqtt-certs"]["command"][0]
-        assert "broker_certificates --export /mqtt-tls" in script
+        assert "broker_certificates --export /tmp/mqtt-tls" in script
         assert "|| echo" in script
 
     def test_the_broker_adds_tls_only_when_a_certificate_is_there(self, name: str) -> None:
@@ -74,11 +74,29 @@ class TestTheComposeBroker:
         assert any(port.endswith(":1883") for port in ports)
 
     def test_the_broker_never_sees_the_ca_key(self, name: str) -> None:
-        # It reads a volume holding the export alone, not the state directory.
+        # It reads a folder holding the export alone, not the state directory.
         mounts = _compose(name)["services"]["mosquitto"]["volumes"]
-        assert "mqtt-tls:/wactorz-tls:ro" in mounts
+        assert "./infra/mosquitto/tls:/wactorz-tls:ro" in mounts
         assert not any("state" in mount for mount in mounts)
-        assert "mqtt-tls" in _compose(name)["volumes"]
+
+    def test_the_certificate_step_writes_the_folder_the_broker_reads(self, name: str) -> None:
+        # One folder, so a certificate from a run on the host serves the same broker.
+        certs = _compose(name)["services"]["mqtt-certs"]
+        assert "./infra/mosquitto/tls:/mqtt-tls" in certs["volumes"]
+        # Handed to the folder's owner, so the checkout keeps its ownership.
+        assert 'chown "$$(stat -c %u:%g /mqtt-tls)"' in certs["command"][0]
+
+    def test_the_app_leaves_writing_the_folder_to_the_certificate_step(self, name: str) -> None:
+        app = _compose(name)["services"][COMPOSE_FILES[name]]
+        assert app["environment"]["MQTT_TLS_EXPORT"] == ""
+
+
+def test_the_certificate_folder_is_always_in_the_checkout() -> None:
+    # Missing, Docker would create it as root, and a run on the host could not write it.
+    assert (ROOT / "infra" / "mosquitto" / "tls" / ".gitkeep").is_file()
+    ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "infra/mosquitto/tls/*" in ignored
+    assert "!infra/mosquitto/tls/.gitkeep" in ignored
 
 
 def test_both_compose_files_start_the_broker_the_same_way() -> None:

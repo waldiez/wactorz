@@ -8,6 +8,8 @@ issues the broker certificate again only when the one there will not do; see
 
 ``--export`` copies the certificate and key somewhere a broker reads them, under
 the names that broker is configured with.
+
+:func:`prepare_server_tls` does the same when the server starts with ``MQTT_TLS`` on.
 """
 
 from __future__ import annotations
@@ -21,6 +23,9 @@ from pathlib import Path
 
 from .config import CONFIG
 from .core import broker_tls
+from .core.mqtt_tls import SYSTEM_TRUST, client_context, generated_ca_path, tls_enabled
+
+logger = logging.getLogger(__name__)
 
 
 def broker_names() -> list[str]:
@@ -32,6 +37,83 @@ def broker_names() -> list[str]:
     names = [CONFIG.mqtt_host, socket.gethostname()]
     names.extend(target.broker for target in CONFIG.deploy_targets if target.broker)
     return names
+
+
+def prepare_server_tls() -> str:
+    """Make this server's broker TLS ready at startup; why it cannot be, or ``""``.
+
+    Nothing to do with ``MQTT_TLS`` off. With the CA Wactorz generates
+    (``MQTT_TLS_CA`` blank), the CA and broker certificate are created when missing,
+    and the broker's copy is written to ``MQTT_TLS_EXPORT`` -- for a broker beside
+    this server that reads it from there, as the compose stacks' does. A CA of your
+    own is only checked, never generated.
+
+    The CA has to load either way. Connecting unverified is not an option, and
+    failing every connection, for ever, with a missing-file error that names no file
+    is no better than refusing to start.
+    """
+    if not tls_enabled(CONFIG.mqtt_tls):
+        return ""
+    ca = CONFIG.mqtt_tls_ca.strip()
+    if not ca:
+        try:
+            files = broker_tls.ensure(broker_names())
+        except (OSError, ValueError) as exc:
+            return f"MQTT_TLS is on, but the broker's TLS certificate could not be issued: {exc}"
+        if CONFIG.mqtt_tls_export:
+            _write_for_broker(files, Path(CONFIG.mqtt_tls_export).expanduser())
+    try:
+        client_context(ca, CONFIG.mqtt_tls_check_hostname)
+    except OSError as exc:
+        if ca.lower() == SYSTEM_TRUST:
+            where = "the system trust store"
+        else:
+            where = str(Path(ca).expanduser() if ca else generated_ca_path())
+        return (
+            f"MQTT_TLS is on, but the CA to verify the broker with could not be loaded from "
+            f"{where} ({exc}). Set MQTT_TLS_CA to your CA's file, leave it blank for the one "
+            "Wactorz generates, or set MQTT_TLS=0."
+        )
+    return ""
+
+
+def _write_for_broker(files: broker_tls.BrokerFiles, directory: Path) -> None:
+    """Write the broker's certificate and key to ``directory``, when they changed.
+
+    Unchanged files are left alone, so a restart of this server does not tell anyone
+    to restart the broker for nothing. Not fatal when it fails: the broker may get its
+    certificate some other way, and this server's own connection does not need it.
+    """
+    chain = files.cert.read_bytes() + files.ca.read_bytes()
+    key = files.key.read_bytes()
+    cert_path = directory / broker_tls.BROKER_CERT_FILE
+    key_path = directory / broker_tls.BROKER_KEY_FILE
+    if _holds(cert_path, chain) and _holds(key_path, key):
+        return
+    try:
+        broker_tls.export(
+            files,
+            directory,
+            cert_name=broker_tls.BROKER_CERT_FILE,
+            key_name=broker_tls.BROKER_KEY_FILE,
+        )
+    except OSError as exc:
+        logger.warning(
+            "[mqtt-tls] Could not write the broker's TLS certificate to %s: %s", directory, exc
+        )
+        return
+    logger.warning(
+        "[mqtt-tls] Wrote the broker's TLS certificate to %s. A broker reads it only when it "
+        "starts: restart it to serve TLS (docker compose restart mosquitto).",
+        directory,
+    )
+
+
+def _holds(path: Path, data: bytes) -> bool:
+    try:
+        return path.read_bytes() == data
+    except OSError:
+        return False
 
 
 def main(argv: Sequence[str] | None = None) -> int:

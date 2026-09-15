@@ -9,6 +9,7 @@ certificate an install issues itself, including a TLS handshake made with them.
 
 import ast
 import datetime
+import logging
 import os
 import ssl
 import stat
@@ -371,3 +372,98 @@ class TestTheExport:
         cert = x509.load_pem_x509_certificate((out / "broker.crt").read_bytes())
         assert {"192.168.1.20", "extra.lan", "core-mosquitto"} <= broker_tls._names_in(cert)
         assert (out / "ca.crt").exists()
+
+
+# ── The server's own connection ────────────────────────────────────────────────
+
+
+class TestTheServerDialsTheTlsPort:
+    def test_tls_on_dials_the_tls_port(self) -> None:
+        assert config.mqtt_dial_port("1", 1883, 8883) == 8883
+
+    def test_tls_off_dials_the_plain_port(self) -> None:
+        assert config.mqtt_dial_port("", 1883, 8883) == 1883
+        assert config.mqtt_dial_port("off", 1883, 8883) == 1883
+
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "on", " On ", "0", "no", "", "maybe"])
+    def test_it_turns_on_for_exactly_what_the_rule_does(self, value: str) -> None:
+        # config.py cannot import the rule, so it holds a copy of its values.
+        assert (config.mqtt_dial_port(value, 1, 2) == 2) == mqtt_tls.tls_enabled(value)
+
+
+class TestTheServerStartup:
+    def _configure(self, monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
+        patched = replace(config.CONFIG, deploy_targets=(), **fields)
+        monkeypatch.setattr(config, "CONFIG", patched)
+        monkeypatch.setattr(broker_certificates, "CONFIG", patched)
+
+    def test_nothing_happens_with_tls_off(
+        self, state: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._configure(monkeypatch, mqtt_tls="")
+
+        assert broker_certificates.prepare_server_tls() == ""
+        assert not (state / "mqtt_tls").exists()
+
+    def test_the_generated_ca_is_created_and_the_brokers_copy_written(
+        self, state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        folder = tmp_path / "infra" / "tls"
+        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_tls_export=str(folder))
+
+        assert broker_certificates.prepare_server_tls() == ""
+
+        assert (state / "mqtt_tls" / "ca.crt").is_file()
+        assert (folder / "broker.crt").read_bytes().count(b"BEGIN CERTIFICATE") == 2
+        assert (folder / "broker.key").is_file()
+
+    def test_an_unchanged_certificate_is_not_written_again(
+        self,
+        state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # A server restart must not tell anyone to restart the broker for nothing.
+        folder = tmp_path / "tls"
+        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_tls_export=str(folder))
+        broker_certificates.prepare_server_tls()
+        written = (folder / "broker.key").stat().st_mtime_ns
+        caplog.clear()
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            assert broker_certificates.prepare_server_tls() == ""
+
+        assert (folder / "broker.key").stat().st_mtime_ns == written
+        assert not [r for r in caplog.records if "restart" in r.getMessage()]
+
+    def test_a_folder_that_cannot_be_written_does_not_stop_the_server(
+        self,
+        state: Path,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        blocker = tmp_path / "a-file"
+        blocker.write_text("not a directory", encoding="utf-8")
+        self._configure(
+            monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_tls_export=str(blocker / "tls")
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            assert broker_certificates.prepare_server_tls() == ""
+
+        assert any("Could not write" in r.getMessage() for r in caplog.records)
+
+    def test_a_ca_of_your_own_that_is_missing_stops_the_server_naming_it(
+        self, state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        missing = tmp_path / "mine.crt"
+        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca=str(missing), mqtt_tls_export="")
+
+        problem = broker_certificates.prepare_server_tls()
+
+        assert str(missing) in problem
+        assert "MQTT_TLS_CA" in problem
+        # Your own CA is checked, never replaced by a generated one.
+        assert not (state / "mqtt_tls").exists()

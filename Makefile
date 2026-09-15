@@ -1,5 +1,5 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt fmt-py lint lint-py format clean \
-        up down logs shell \
+        up down logs shell mqtt-certs \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
@@ -147,6 +147,9 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 
 up: ## Start full stack (build if needed)
 	$(COMPOSE) up --build -d
+
+mqtt-certs: ## Issue the compose broker's TLS certificate from this host, then: docker compose restart mosquitto
+	$(PYTHON) -m wactorz.broker_certificates --export infra/mosquitto/tls
 
 down: ## Stop full stack
 	$(COMPOSE) down

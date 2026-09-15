@@ -77,6 +77,42 @@ def _no_ambient_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, api_key=""))
 
 
+#: The settings that put broker connections on TLS.
+_TLS_VARIABLES = (
+    "MQTT_TLS",
+    "MQTT_TLS_CA",
+    "MQTT_TLS_CHECK_HOSTNAME",
+    "MQTT_TLS_PORT",
+    "MQTT_TLS_EXPORT",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_broker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore broker TLS settings from the developer's environment or `.env`.
+
+    Two places read them. `CONFIG` is built from them at import, and the runner --
+    like the catalogue programs, which cannot import `wactorz` on a node -- reads
+    `MQTT_TLS` straight from the environment, where `load_dotenv` put it. A
+    developer trying TLS with `MQTT_TLS=1` in `.env` otherwise turned every runner
+    test that fakes the broker client into a failure about a CA file.
+
+    Both are reset: the variables removed, and `CONFIG` put back to plain MQTT on
+    the plain port. Tests that want TLS set it explicitly, and win.
+    """
+    for variable in _TLS_VARIABLES:
+        monkeypatch.delenv(variable, raising=False)
+    plain = replace(
+        config.CONFIG,
+        mqtt_tls="",
+        mqtt_tls_ca="",
+        mqtt_tls_check_hostname="",
+        mqtt_tls_export="",
+        mqtt_port=config._env_int("MQTT_PORT", 1883),
+    )
+    monkeypatch.setattr(config, "CONFIG", plain)
+
+
 #: The real factory, for the tests that exist to exercise it.
 real_mqtt_client = mqtt.mqtt_client
 

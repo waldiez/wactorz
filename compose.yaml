@@ -41,8 +41,9 @@ services:
         required: false
     ports:
       - "${MQTT_EXTERNAL_PORT:-1883}:1883"
-      # TLS, for remote nodes. Answered only once mqtt-certs below has issued a
-      # certificate, which it does under the python and full profiles.
+      # TLS. Answered once a certificate is in infra/mosquitto/tls: mqtt-certs
+      # below puts one there under the python and full profiles, and a wactorz
+      # run on this host with MQTT_TLS=1 does too (restart the broker after).
       - "${MQTT_TLS_EXTERNAL_PORT:-8883}:8883"
     volumes:
       # Read-only: the broker never writes its own config, and the image's
@@ -53,7 +54,7 @@ services:
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
-      - mqtt-tls:/wactorz-tls:ro
+      - ./infra/mosquitto/tls:/wactorz-tls:ro
     networks:
       - wactorz-net
     environment:
@@ -68,8 +69,8 @@ services:
     # stale one. chown because mosquitto drops to its own user and would then be
     # unable to read a root-owned 0600 file.
     #
-    # The TLS listener is added the same way, at start and only when mqtt-certs
-    # has left a certificate in the mqtt-tls volume: the tracked config stays one
+    # The TLS listener is added the same way, at start and only when a certificate
+    # is in infra/mosquitto/tls: the tracked config stays one
     # file that also serves compose.dev.yaml, and a broker with no certificate
     # starts exactly as it did.
     command:
@@ -106,9 +107,11 @@ services:
   # ── Broker TLS certificate ─────────────────────────────────────────────────────
   # One-shot. Issues the broker's certificate from a CA kept in ./state/mqtt_tls
   # -- minted on the first run, and what /deploy hands a node -- and copies the
-  # certificate and key into the mqtt-tls volume the broker reads. The Wactorz
-  # image does it because the broker image has no tool that can. It never fails
-  # the stack: without a certificate the broker serves plain MQTT, as before.
+  # certificate and key into infra/mosquitto/tls, where the broker reads them. A
+  # wactorz run on this host with MQTT_TLS=1 writes the same folder, and so does
+  # `make mqtt-certs`. The Wactorz image does it because the broker image has no
+  # tool that can. It never fails the stack: without a certificate the broker
+  # serves plain MQTT, as before.
   mqtt-certs:
     profiles: [python, full]
     build:
@@ -122,23 +125,27 @@ services:
     environment:
       # The names the certificate carries include the broker this server dials.
       MQTT_HOST: mosquitto
-    # Root only to hand the volume to the runtime user; docker-entrypoint.sh then
-    # fixes the state directory's ownership and drops privileges, as in the app.
+    # Issued as the runtime user -- docker-entrypoint.sh fixes the state directory's
+    # ownership and drops privileges, as in the app -- into this container's /tmp.
+    # Root then copies the certificate into the folder and hands it to the folder's
+    # owner, so the checkout keeps its ownership. DAC_OVERRIDE is for that copy: the
+    # folder belongs to whoever cloned the repository, not to root.
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        chown wactorz:wactorz /mqtt-tls
-        docker-entrypoint.sh python -m wactorz.broker_certificates --export /mqtt-tls \
+        docker-entrypoint.sh python -m wactorz.broker_certificates --export /tmp/mqtt-tls \
+          && cp /tmp/mqtt-tls/broker.crt /tmp/mqtt-tls/broker.key /mqtt-tls/ \
+          && chown "$$(stat -c %u:%g /mqtt-tls)" /mqtt-tls/broker.crt /mqtt-tls/broker.key \
           || echo "[mqtt-certs] No certificate issued; the broker serves plain MQTT only." >&2
     cap_drop: [ALL]
-    cap_add: [CHOWN, SETUID, SETGID]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs:
       - /tmp
     volumes:
       - ./state:/app/state
-      - mqtt-tls:/mqtt-tls
+      - ./infra/mosquitto/tls:/mqtt-tls
     networks:
       - wactorz-net
 
@@ -157,6 +164,10 @@ services:
     environment:
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
+      # With MQTT_TLS=1 in .env the app dials the broker's TLS port instead
+      # (MQTT_TLS_PORT, 8883). mqtt-certs writes the broker's copy of the
+      # certificate, so the app does not: its filesystem is read-only.
+      MQTT_TLS_EXPORT: ""
       # Mirrors the broker's defaults above. Without this the app would take
       # MQTT_USERNAME from .env, where it may be unset while the broker
       # defaulted it — the two would disagree and every connection be refused.
@@ -302,5 +313,4 @@ networks:
 volumes:
   mosquitto-data:
   mosquitto-logs:
-  mqtt-tls:
   prometheus-data:

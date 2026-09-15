@@ -32,6 +32,22 @@ else:
     load_dotenv(find_dotenv())
 
 
+#: Values of `MQTT_TLS` that turn TLS on. Mirrors wactorz/core/mqtt_tls.py, which
+#: this module does not import: it is read before anything else in the package.
+_MQTT_TLS_ON = frozenset({"1", "true", "yes", "on"})
+
+
+def mqtt_dial_port(tls: str, plain_port: int, tls_port: int) -> int:
+    """The port this server dials the broker on: its TLS port with TLS on, its plain one otherwise.
+
+    Two settings rather than one port that has to be changed alongside the switch:
+    `MQTT_PORT` stays the plain listener's port wherever it is pinned -- compose pins
+    it for the app -- so turning `MQTT_TLS` on cannot leave the server speaking TLS
+    to a listener that does not.
+    """
+    return tls_port if tls.strip().lower() in _MQTT_TLS_ON else plain_port
+
+
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
 
@@ -385,6 +401,7 @@ class AppConfig:
     llm_timeout_s: float
     ollama_url: str
     mqtt_host: str
+    #: The port this server dials the broker on: `mqtt_tls_port` with TLS on.
     mqtt_port: int
     mqtt_username: str
     mqtt_password: str
@@ -392,6 +409,10 @@ class AppConfig:
     mqtt_tls: str
     mqtt_tls_ca: str
     mqtt_tls_check_hostname: str
+    mqtt_tls_port: int
+    #: Where startup writes the broker's certificate and key, for a broker beside
+    #: this server that reads them from there. Empty writes nothing.
+    mqtt_tls_export: str
     ha_url: str
     ha_token: str
     ha_state_bridge_output_topic: str
@@ -449,12 +470,16 @@ CONFIG = AppConfig(
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     bind_host=_bind_host(),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
-    mqtt_port=_env_int("MQTT_PORT", 1883),
+    mqtt_port=mqtt_dial_port(
+        os.getenv("MQTT_TLS", ""), _env_int("MQTT_PORT", 1883), _env_int("MQTT_TLS_PORT", 8883)
+    ),
     mqtt_username=os.getenv("MQTT_USERNAME", ""),
     mqtt_password=os.getenv("MQTT_PASSWORD", ""),
     mqtt_tls=os.getenv("MQTT_TLS", ""),
     mqtt_tls_ca=os.getenv("MQTT_TLS_CA", ""),
     mqtt_tls_check_hostname=os.getenv("MQTT_TLS_CHECK_HOSTNAME", ""),
+    mqtt_tls_port=_env_int("MQTT_TLS_PORT", 8883),
+    mqtt_tls_export=os.getenv("MQTT_TLS_EXPORT", "").strip(),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_state_bridge_output_topic=os.getenv(

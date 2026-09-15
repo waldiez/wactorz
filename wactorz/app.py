@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import retention
 from wactorz.agents.lookup import find_main_actor
+from wactorz.broker_certificates import prepare_server_tls
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS
 from wactorz.core import cancellation
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
@@ -504,7 +505,11 @@ async def app(args: argparse.Namespace):
     # REST API and the WhatsApp webhook — so a check that lived in the monitor
     # alone left the REST interface serving chat and lifecycle commands to the
     # network in exactly the configuration this refusal exists to stop.
-    refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key)
+    #
+    # The broker's TLS is made ready here as well, before the first connection, and
+    # a CA that cannot be loaded refuses the same way: it would fail every reconnect
+    # after this one too.
+    refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key) or prepare_server_tls()
     if refusal:
         logger.error("[startup] %s", refusal)
         raise SystemExit(1)

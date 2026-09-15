@@ -248,11 +248,13 @@ trust. Wactorz sets that up with no certificate to buy or renew:
 
 - **The broker gets a certificate.** Wactorz keeps a private certificate authority
   (CA) in `<WACTORZ_STATE_DIR>/mqtt_tls/`, created the first time it is needed, and
-  issues the broker's certificate from it. The compose stack under the `python` and
-  `full` profiles, and the Home Assistant add-on's embedded broker, then serve TLS
-  on port `8883` beside plain MQTT on `1883`. The certificate is issued again before
-  it expires, or when it no longer names the broker's addresses; the CA stays, so
-  nodes keep trusting it.
+  issues the broker's certificate from it. The compose broker serves TLS on port
+  `8883` beside plain MQTT on `1883` once the certificate is in
+  `infra/mosquitto/tls/`: the `python` and `full` profiles put it there, and so does
+  a `wactorz` run on the host with `MQTT_TLS=1`, or `make mqtt-certs` — restart the
+  broker after the first time. The Home Assistant add-on's embedded broker serves
+  TLS too. The certificate is issued again before it expires, or when it no longer
+  names the broker's addresses; the CA stays, so nodes keep trusting it.
 - **`/deploy` checks before it switches.** It copies the CA to the node and tries a
   TLS connection to the broker on `8883` from the node itself. If that works, the
   node uses TLS from then on; if not, it stays on plain MQTT, and the deploy log says
@@ -272,9 +274,13 @@ Encrypt. `/deploy` hands that to the node instead, and the host name is then
 checked, so give each target a `broker` name the certificate carries.
 `MQTT_TLS_CHECK_HOSTNAME=1` or `0` decides the host name check either way.
 
-**The server's own connection** stays plain unless `MQTT_TLS=1` is set with the
-broker's TLS port: under compose and in the add-on, the broker is beside the server
-rather than across a network.
+**The server's own connection** uses TLS with `MQTT_TLS=1`: the server then dials
+`MQTT_TLS_PORT` (default `8883`) instead of `MQTT_PORT`, under compose too. It creates
+the generated CA and certificate when it starts if they are missing, and writes the
+broker's copy to `MQTT_TLS_EXPORT` (`infra/mosquitto/tls` in `.env.template`). A CA
+that cannot be loaded stops it at startup, naming the file it looked for. Without
+`MQTT_TLS` the connection stays plain, which suits a broker beside the server rather
+than across a network.
 
 **A node started by hand** reads the same settings from its environment:
 `MQTT_TLS=1`, `MQTT_TLS_CA` naming a copy of `<WACTORZ_STATE_DIR>/mqtt_tls/ca.crt`,
@@ -284,9 +290,7 @@ cannot load its CA refuses to start rather than connecting unverified.
 **A broker you run yourself** can serve the generated certificate:
 `python -m wactorz.broker_certificates --export <dir>` writes `broker.crt`, with the
 CA after it, and `broker.key` there, for its `certfile` and `keyfile`; `--name` adds
-an address it is reached by. With compose's default profile, which starts the broker
-alone, `docker compose --profile python run --rm mqtt-certs` followed by
-`docker compose restart mosquitto` does the same.
+an address it is reached by.
 
 Back up `mqtt_tls/` with the rest of the state directory. Should `ca.key` be lost,
 delete `ca.crt` and `ca.key` and deploy every node again: a new CA is trusted by no

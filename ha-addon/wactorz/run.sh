@@ -335,8 +335,11 @@ password_file /tmp/mosquitto.passwd
 listener 1883
 
 persistence true
-persistence_location /data/mosquitto/
-autosave_interval 30
+persistence_location /data/mosquitto
+# On a clean stop s6 signals every process and mosquitto saves as it exits, so this
+# interval only bounds what a crash or a power cut loses. Each save rewrites the
+# whole database and logs a line, which is why it is not shorter.
+autosave_interval 300
 MQTTEOF
 
     # A TLS listener beside it, for remote nodes, when the certificate above was

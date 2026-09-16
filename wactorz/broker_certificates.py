@@ -9,7 +9,8 @@ issues the broker certificate again only when the one there will not do; see
 ``--export`` copies the certificate and key somewhere a broker reads them, under
 the names that broker is configured with.
 
-:func:`prepare_server_tls` does the same when the server starts with ``MQTT_TLS`` on.
+:func:`prepare_broker_files` does the same when the server starts, and writes the
+node accounts and their access list beside the certificate when those are on.
 """
 
 from __future__ import annotations

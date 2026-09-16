@@ -20,7 +20,12 @@ would break agents that do nothing wrong. Instead every account keeps the broker
 open commons, and each node is denied what is not its own:
 
 - another node's ``nodes/<other>/#`` -- its control topics and its reports, in
-  both directions, so a node can neither drive nor impersonate nor watch another;
+  both directions, so a node can neither drive nor impersonate nor watch another.
+  Every node this install has is named here, so every node that exists is covered;
+  a name no node has yet is not, and a node could leave a message waiting under
+  it for one deployed later. Signing refuses that on arrival. Naming them is the
+  only shape mosquitto allows: a ``deny`` beats every allow, so "all of ``nodes/``
+  except your own" cannot be written;
 - ``agents/+/commands``, which stops server-side agents (a node's own agents are
   stopped through its own ``nodes/<node>/stop``);
 - ``system/#``, which no node publishes.

@@ -113,9 +113,14 @@ the broker. Anything that can publish to it can drive Wactorz.
   on a network you trust, and nothing here replaces a tunnel or VPN across the
   public internet. See "Encrypted connections (TLS)" in `remote-nodes.md`.
 - **Edge nodes hold broker credentials.** `/deploy` writes them to the node over
-  SSH, and by default a node uses the server's own account. A stolen node
-  therefore holds full broker access; give a node its own account when that
-  matters.
+  SSH, and by default a node uses the server's own account, so a stolen node
+  holds full broker access. `WACTORZ_NODE_ACCOUNTS=1` gives each node an account
+  of its own instead, and on the brokers Wactorz configures an access list that
+  keeps a node to its own `nodes/<name>/...` and the shared agent traffic, out of
+  every other node's, out of `agents/+/commands` and out of `system/`. It takes
+  effect for a node at its next `/deploy`, so rotate the shared password once the
+  last one has moved. A node's agents share its account: the boundary is the
+  machine, not the agent.
 - **Commands to an edge node are signed.** A node runs the code in a spawn it
   receives, so broker access alone must not be enough to send one. Main signs
   every command it sends a node with a key derived for that node, which `/deploy`
@@ -152,7 +157,8 @@ the broker. Anything that can publish to it can drive Wactorz.
 2. If you need otherwise, set `API_KEY` to something generated —
    `openssl rand -hex 32`.
 3. Put the broker on a trusted network segment, and set `MQTT_PASSWORD`.
-4. Give each edge node its own broker account if a stolen node would matter.
+4. Set `WACTORZ_NODE_ACCOUNTS=1` so each edge node gets its own broker account,
+   deploy every node again, then rotate the account they shared.
 5. Deploy every edge node again after upgrading, so it holds a signing key, and
    set `WACTORZ_NODE_SIGNING=enforce` once no node reports unsigned commands.
    Publish the broker's `8883` where nodes can reach it first, so the deploy puts

@@ -197,5 +197,66 @@ class TestTheAddons:
         assert "set -e" not in source
 
 
+class TestTheAddonsNodeAccounts:
+    """Each node authenticating as itself, where the add-on's broker has those accounts."""
+
+    @pytest.mark.parametrize("addon", ADDONS)
+    def test_the_option_is_offered_and_off_by_default(self, addon: str) -> None:
+        # On by default it would hand nodes accounts an external broker never had.
+        config = _addon_config(addon)
+        assert config["options"]["node_accounts"] is False
+        assert config["schema"]["node_accounts"] == "bool?"
+
+    @pytest.mark.parametrize("addon", ADDONS)
+    def test_the_embedded_broker_turns_it_on_for_itself(self, addon: str) -> None:
+        # That broker is configured here, and the setting has to be on before the
+        # step that generates the accounts, because that is what generates them.
+        source = _run_sh(addon)
+        assert "WACTORZ_NODE_ACCOUNTS=$(get_config_safe 'node_accounts' 'false')" in source
+        forced = source.index('if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then')
+        assert (
+            forced
+            < source.index("WACTORZ_NODE_ACCOUNTS=true")
+            < source.index("export WACTORZ_NODE_ACCOUNTS")
+        )
+        assert source.index("export WACTORZ_NODE_ACCOUNTS") < source.index(
+            "python3 -m wactorz.broker_certificates"
+        )
+
+    @pytest.mark.parametrize("addon", ADDONS)
+    def test_it_goes_back_off_when_no_accounts_were_generated(self, addon: str) -> None:
+        # A boot where generation failed would otherwise leave this broker with the
+        # shared account while a deploy hands the node a derived one it has never
+        # heard of: the node cannot connect, and nothing says why.
+        source = _run_sh(addon)
+        fallback = source.index('elif [ "$WACTORZ_NODE_ACCOUNTS" = "true" ]; then')
+        assert source.index("WACTORZ_NODE_ACCOUNTS=false", fallback) > fallback
+        assert source.index("export WACTORZ_NODE_ACCOUNTS", fallback) > fallback
+
+    @pytest.mark.parametrize("addon", ADDONS)
+    def test_the_embedded_broker_loads_them_before_any_listener(self, addon: str) -> None:
+        # acl_file and password_file are settings for the broker, not for a listener.
+        source = _run_sh(addon)
+        accounts = source.index('cat "$MQTT_BROKER_FILES/node_passwd" >> /tmp/mosquitto.passwd')
+        acl = source.index('echo "acl_file ${MQTT_BROKER_FILES}/acl" >> /tmp/mosquitto.conf')
+        assert accounts < source.index("# TCP listener only.")
+        assert acl < source.index("# TCP listener only.")
+        # And the accounts go in before the password file is handed to the broker's
+        # user: /tmp is sticky, where a kernel with fs.protected_regular set refuses
+        # even root a write to a file owned by someone else -- the broker would then
+        # not start at all.
+        assert accounts < source.index("chown mosquitto:mosquitto /tmp/mosquitto.passwd")
+
+    @pytest.mark.parametrize("addon", ADDONS)
+    def test_the_official_addon_gets_a_file_to_paste(self, addon: str) -> None:
+        # Its accounts are its own, and no add-on may edit another's configuration.
+        source = _run_sh(addon)
+        written = source.index("--logins /share/wactorz/mosquitto-logins.yaml")
+        guard = source.index(
+            'if [ "$WACTORZ_NODE_ACCOUNTS" = "true" ] && [ "$MOSQUITTO_EMBEDDED" != "true" ]'
+        )
+        assert guard < written
+
+
 def test_both_addons_ship_the_same_run_sh() -> None:
     assert _run_sh("wactorz") == _run_sh("wactorz-ultra")

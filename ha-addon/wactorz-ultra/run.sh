@@ -262,15 +262,30 @@ if [ -z "$LLM_PROVIDER" ] || [ "$LLM_PROVIDER" == "null" ]; then
     export LLM_PROVIDER="anthropic"
 fi
 
+# ── Node broker accounts ──────────────────────────────────────────────────────
+# A deployed node authenticates as itself rather than as this add-on. Only where
+# the broker has those accounts: the embedded broker below is generated here, so
+# it turns this on for itself. With the official Mosquitto add-on, or any broker
+# of your own, you add the accounts there -- a logins: block is written to /share
+# when this option is on -- and nothing changes until you do.
+WACTORZ_NODE_ACCOUNTS=$(get_config_safe 'node_accounts' 'false')
+if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
+    # On before the accounts are generated below, because that is what generates
+    # them -- and off again further down if they did not appear, so a deploy never
+    # hands a node an account its broker has never heard of.
+    WACTORZ_NODE_ACCOUNTS=true
+fi
+export WACTORZ_NODE_ACCOUNTS
+
 # ── Broker TLS certificate ────────────────────────────────────────────────────
 # Issued from a CA generated once and kept in the state directory, which /deploy
 # hands to a node so it can reach the broker over TLS. The certificate is issued
 # again only when it nears expiry or stops naming the broker's addresses; the CA
 # stays, so deployed nodes keep trusting it. Never fatal: without a certificate
 # every broker serves plain MQTT on 1883, as before.
-MQTT_TLS_DIR=/tmp/mosquitto-tls
+MQTT_BROKER_FILES=/tmp/mosquitto-tls
 mqtt_tls_ready=false
-if mqtt_tls_log=$(python3 -m wactorz.broker_certificates --export "$MQTT_TLS_DIR" 2>&1); then
+if mqtt_tls_log=$(python3 -m wactorz.broker_certificates --export "$MQTT_BROKER_FILES" 2>&1); then
     mqtt_tls_ready=true
     bashio::log.info "Broker TLS certificate ready (CA: ${WACTORZ_STATE_DIR}/mqtt_tls/ca.crt)."
 else
@@ -282,11 +297,23 @@ fi
 # fullchain.pem and privkey.pem are that add-on's defaults, and what a Let's
 # Encrypt certificate is usually called, so those are never touched.
 if [ "$mqtt_tls_ready" = true ] && [ "$MOSQUITTO_EMBEDDED" != "true" ] && [ -d /ssl ] && [ -w /ssl ]; then
-    if install -m 0644 "$MQTT_TLS_DIR/broker.crt" /ssl/wactorz-mqtt.crt \
-        && install -m 0600 "$MQTT_TLS_DIR/broker.key" /ssl/wactorz-mqtt.key; then
+    if install -m 0644 "$MQTT_BROKER_FILES/broker.crt" /ssl/wactorz-mqtt.crt \
+        && install -m 0600 "$MQTT_BROKER_FILES/broker.key" /ssl/wactorz-mqtt.key; then
         bashio::log.info "Wrote /ssl/wactorz-mqtt.crt and /ssl/wactorz-mqtt.key. For TLS from the Mosquitto add-on, set its certfile to wactorz-mqtt.crt and keyfile to wactorz-mqtt.key, then restart it."
     else
         bashio::log.warning "Could not write the broker TLS certificate to /ssl."
+    fi
+fi
+
+# For the official Mosquitto add-on, and any other broker you run: its accounts
+# are its own, and no add-on may edit another's configuration, so they are written
+# where you can paste them. Accounts only -- that add-on's authentication plugin
+# answers before any access list Wactorz could provide, so it cannot pen a node in.
+if [ "$WACTORZ_NODE_ACCOUNTS" = "true" ] && [ "$MOSQUITTO_EMBEDDED" != "true" ] && [ -d /share ] && [ -w /share ]; then
+    if logins_log=$(python3 -m wactorz.broker_certificates --logins /share/wactorz/mosquitto-logins.yaml 2>&1); then
+        bashio::log.info "Wrote /share/wactorz/mosquitto-logins.yaml. Paste its logins: entries into the Mosquitto add-on's configuration, keeping any already there, and restart it."
+    else
+        bashio::log.warning "Could not write the node accounts for the Mosquitto add-on. ${logins_log}"
     fi
 fi
 
@@ -317,6 +344,20 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     # The broker reads this file after dropping privileges, so it must be
     # readable by the mosquitto user and by nobody else.
     mosquitto_passwd -b -c /tmp/mosquitto.passwd wactorz "$MQTT_PW"
+    # The node accounts go in here, before the file changes hands: /tmp is sticky
+    # and world-writable, where a kernel with fs.protected_regular set refuses even
+    # root a write to a file owned by someone else.
+    if [ -s "$MQTT_BROKER_FILES/node_passwd" ]; then
+        cat "$MQTT_BROKER_FILES/node_passwd" >> /tmp/mosquitto.passwd
+        bashio::log.info "Embedded Mosquitto: node accounts loaded."
+    elif [ "$WACTORZ_NODE_ACCOUNTS" = "true" ]; then
+        # None were generated -- the step above says why. This broker knows no such
+        # account, so a node deployed with one could not connect and nothing would
+        # say why. Back to the shared account until a start generates them.
+        WACTORZ_NODE_ACCOUNTS=false
+        export WACTORZ_NODE_ACCOUNTS
+        bashio::log.warning "No node accounts were generated; deployed nodes will use this add-on's own broker account."
+    fi
     chown mosquitto:mosquitto /tmp/mosquitto.passwd
     chmod 600 /tmp/mosquitto.passwd
 
@@ -330,6 +371,19 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
 # Home Assistant network — which is exactly who this keeps out.
 allow_anonymous false
 password_file /tmp/mosquitto.passwd
+MQTTEOF
+
+    # The access list that pens each node into its own topics, generated beside
+    # the certificate above. A setting for the broker as a whole, so it goes in
+    # before any listener. (The accounts themselves were appended further up,
+    # while the password file was still this script's to write.)
+    if [ -s "$MQTT_BROKER_FILES/acl" ]; then
+        chown mosquitto:mosquitto "$MQTT_BROKER_FILES/acl"
+        echo "acl_file ${MQTT_BROKER_FILES}/acl" >> /tmp/mosquitto.conf
+        bashio::log.info "Embedded Mosquitto: node access list loaded."
+    fi
+
+    cat >> /tmp/mosquitto.conf << 'MQTTEOF'
 
 # TCP listener only.
 listener 1883
@@ -345,12 +399,12 @@ MQTTEOF
     # A TLS listener beside it, for remote nodes, when the certificate above was
     # issued. Same accounts. Unpublished like 1883 until you assign it a port.
     if [ "$mqtt_tls_ready" = true ]; then
-        chown -R mosquitto:mosquitto "$MQTT_TLS_DIR"
+        chown -R mosquitto:mosquitto "$MQTT_BROKER_FILES"
         cat >> /tmp/mosquitto.conf << MQTTTLSEOF
 
 listener 8883
-certfile ${MQTT_TLS_DIR}/broker.crt
-keyfile ${MQTT_TLS_DIR}/broker.key
+certfile ${MQTT_BROKER_FILES}/broker.crt
+keyfile ${MQTT_BROKER_FILES}/broker.key
 MQTTTLSEOF
     fi
 

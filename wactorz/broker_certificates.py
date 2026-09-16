@@ -180,6 +180,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cert-name", default=broker_tls.BROKER_CERT_FILE)
     parser.add_argument("--key-name", default=broker_tls.BROKER_KEY_FILE)
     parser.add_argument("--ca-name", default="", help="Also export the CA under this name.")
+    parser.add_argument(
+        "--logins",
+        type=Path,
+        default=None,
+        help="Write the node accounts as a logins: block for the official Mosquitto add-on.",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -198,6 +204,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             broker_accounts.write_files(
                 args.export, [target.name for target in CONFIG.deploy_targets]
             )
+    if args.logins is not None:
+        nodes = [target.name for target in CONFIG.deploy_targets]
+        args.logins.parent.mkdir(parents=True, exist_ok=True)
+        args.logins.write_text(broker_accounts.home_assistant_logins(nodes), encoding="utf-8")
     return 0
 
 

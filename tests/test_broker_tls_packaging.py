@@ -142,6 +142,15 @@ class TestTheComposeBroker:
         assert app["environment"]["MQTT_BROKER_DIR"] == ""
 
 
+@pytest.mark.parametrize("name", COMPOSE_FILES)
+def test_the_app_can_be_told_to_stop(name: str) -> None:
+    # `init: true` runs tini as root at pid 1 while the app runs as its own user, so
+    # without KILL tini cannot forward a stop signal and the container is killed after
+    # the timeout -- no drained outbox, no state written on the way out.
+    app = _compose(name)["services"][COMPOSE_FILES[name]]
+    assert "KILL" in app["cap_add"]
+
+
 def test_the_certificate_folder_is_always_in_the_checkout() -> None:
     # Missing, Docker would create it as root, and a run on the host could not write it.
     assert (ROOT / "infra" / "mosquitto" / "generated" / ".gitkeep").is_file()

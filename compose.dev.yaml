@@ -227,7 +227,11 @@ services:
     # See compose.yaml for why these three, and only these three: the entrypoint
     # needs them to chown the state directory before dropping to uid 1000.
     cap_drop: [ALL]
-    cap_add: [CHOWN, SETUID, SETGID]
+    # KILL as well: `init: true` puts tini at pid 1 as root, and the app runs as
+    # its own user after the entrypoint drops privileges, so without it tini
+    # cannot forward a stop signal ("Operation not permitted") and the container
+    # is killed after the timeout instead of shutting down.
+    cap_add: [CHOWN, SETUID, SETGID, KILL]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs:

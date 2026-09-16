@@ -1,0 +1,158 @@
+"""Each node's broker account, and the access list that pens it in.
+
+The account's password is derived rather than stored, so these tests pin what
+that derivation promises: the same install and node always produce the same
+password, two nodes never share one, and a leaked password file says nothing
+about the signing key derived from the same secret.
+
+The access list's shape is pinned here; that mosquitto reads it the way this
+assumes -- deny beating every allow, an unnamed account having no access -- is
+checked against a real broker outside the suite, which has no broker by design.
+"""
+
+import base64
+import hashlib
+import os
+import stat
+from pathlib import Path
+
+import pytest
+
+from wactorz.core import broker_accounts, node_signing
+
+NODES = ("rpi-garage", "rpi-kitchen")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Each test is an install of its own: its own state directory and secret."""
+    state = tmp_path / "state"
+    monkeypatch.setenv("WACTORZ_STATE_DIR", str(state))
+    monkeypatch.setattr(node_signing, "_secret", None)
+    return state
+
+
+def _new_install(monkeypatch: pytest.MonkeyPatch, state: Path) -> None:
+    """Point the module at a different install, as a second machine would be."""
+    monkeypatch.setenv("WACTORZ_STATE_DIR", str(state))
+    monkeypatch.setattr(node_signing, "_secret", None)
+
+
+class TestThePassword:
+    def test_it_is_the_same_every_time(self) -> None:
+        assert broker_accounts.password("rpi") == broker_accounts.password("rpi")
+
+    def test_each_node_gets_its_own(self) -> None:
+        assert broker_accounts.password("rpi") != broker_accounts.password("rpi2")
+
+    def test_another_install_derives_another_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        here = broker_accounts.password("rpi")
+        _new_install(monkeypatch, tmp_path / "elsewhere")
+        assert broker_accounts.password("rpi") != here
+
+    def test_it_says_nothing_about_the_signing_key(self) -> None:
+        # Same secret, different context: a leaked password file must not hand
+        # anyone the key that signs that node's commands.
+        assert broker_accounts.password("rpi") != node_signing.node_key("rpi")
+        assert node_signing.node_key("rpi") not in broker_accounts.password_line("rpi")
+
+    def test_it_carries_no_character_a_password_file_would_break_on(self) -> None:
+        secret = broker_accounts.password("rpi")
+        assert secret.isascii()
+        assert not set(secret) & set(":\n\r \t")
+
+
+class TestThePasswordFile:
+    def test_a_line_is_mosquittos_own_format(self) -> None:
+        node, algorithm, iterations, salt, hashed = broker_accounts.password_line("rpi").split("$")
+        assert node == "rpi:"
+        assert algorithm == "7"
+        recomputed = hashlib.pbkdf2_hmac(
+            "sha512",
+            broker_accounts.password("rpi").encode("ascii"),
+            base64.b64decode(salt),
+            int(iterations),
+            dklen=64,
+        )
+        assert base64.b64encode(recomputed).decode("ascii") == hashed
+
+    def test_writing_it_again_writes_the_same_bytes(self) -> None:
+        # A broker watches these files: a new salt every time would reload it for
+        # nothing, on every start.
+        assert broker_accounts.password_file_text(NODES) == broker_accounts.password_file_text(
+            NODES
+        )
+
+    def test_it_holds_one_line_per_node(self) -> None:
+        lines = broker_accounts.password_file_text(NODES).splitlines()
+        assert [line.split(":")[0] for line in lines] == sorted(NODES)
+
+
+class TestTheAccessList:
+    def test_it_opens_by_granting_every_account_the_commons(self) -> None:
+        # Without it, an account this file does not name -- the server's own, or
+        # one the user added -- would have no access at all.
+        text = broker_accounts.acl_text(NODES)
+        assert text.index("pattern readwrite #") < text.index("user ")
+
+    def test_a_node_is_denied_every_other_nodes_tree(self) -> None:
+        text = broker_accounts.acl_text(NODES)
+        kitchen = text[text.index("user rpi-kitchen") :]
+        assert "topic deny nodes/rpi-garage/#" in kitchen
+        assert "topic deny nodes/rpi-kitchen/#" not in kitchen
+
+    def test_every_node_is_denied_the_servers_own_control_topics(self) -> None:
+        text = broker_accounts.acl_text(NODES)
+        for node in NODES:
+            block = text[text.index(f"user {node}") :]
+            for topic in broker_accounts.FIXED_DENIES:
+                assert f"topic deny {topic}" in block.split("\nuser ")[0]
+
+    def test_one_node_has_only_the_fixed_denies(self) -> None:
+        text = broker_accounts.acl_text(["rpi"])
+        assert text.count("topic deny") == len(broker_accounts.FIXED_DENIES)
+
+    def test_it_says_it_is_generated(self) -> None:
+        assert broker_accounts.acl_text(NODES).startswith("# Generated by Wactorz")
+
+
+class TestNames:
+    @pytest.mark.parametrize("node", ["a+b", "a#b", "a/b", "a:b", "a b", "a\tb", "", " rpi"])
+    def test_a_name_no_broker_could_carry_is_refused(self, node: str) -> None:
+        assert broker_accounts.name_error(node)
+        with pytest.raises(ValueError, match="Node name"):
+            broker_accounts.acl_text([node])
+
+    @pytest.mark.parametrize("node", ["rpi", "rpi-kitchen", "rpi_2", "RPi.local"])
+    def test_an_ordinary_name_is_accepted(self, node: str) -> None:
+        assert broker_accounts.name_error(node) is None
+
+
+class TestWritingThem:
+    def test_both_files_are_written_readable_by_their_owner_only(self, tmp_path: Path) -> None:
+        # The password file is what a node authenticates with, and mosquitto
+        # refuses one that others can read.
+        directory = tmp_path / "broker"
+
+        assert broker_accounts.write_files(directory, NODES) is True
+
+        for name in (broker_accounts.PASSWORD_FILE, broker_accounts.ACL_FILE):
+            if os.name != "nt":
+                assert stat.S_IMODE((directory / name).stat().st_mode) == 0o600
+
+    def test_writing_the_same_nodes_again_changes_nothing(self, tmp_path: Path) -> None:
+        directory = tmp_path / "broker"
+        broker_accounts.write_files(directory, NODES)
+        written = (directory / broker_accounts.ACL_FILE).stat().st_mtime_ns
+
+        assert broker_accounts.write_files(directory, NODES) is False
+        assert (directory / broker_accounts.ACL_FILE).stat().st_mtime_ns == written
+
+    def test_a_new_node_rewrites_them(self, tmp_path: Path) -> None:
+        directory = tmp_path / "broker"
+        broker_accounts.write_files(directory, NODES)
+
+        assert broker_accounts.write_files(directory, [*NODES, "rpi-shed"]) is True
+        assert "user rpi-shed" in (directory / broker_accounts.ACL_FILE).read_text(encoding="utf-8")

@@ -93,10 +93,19 @@ def control_leaf(topic: str) -> str | None:
     return None
 
 
+def derive(context: bytes, name: str) -> bytes:
+    """A key derived from this install's secret for ``name``, bound to one use.
+
+    The context is what separates the uses: a node's broker password and its
+    signing key come from the same secret, and neither says anything about the
+    other. Whatever derives a new kind of key gives it a context of its own.
+    """
+    return hmac.new(_install_secret(), context + name.encode("utf-8"), hashlib.sha256).digest()
+
+
 def node_key(node: str) -> str:
     """The key ``node`` checks signatures with, as hex, for its ``.env``."""
-    derived = hmac.new(_install_secret(), _KEY_CONTEXT + node.encode("utf-8"), hashlib.sha256)
-    return derived.hexdigest()
+    return derive(_KEY_CONTEXT, node).hex()
 
 
 def next_sequence() -> int:

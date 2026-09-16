@@ -83,7 +83,8 @@ _TLS_VARIABLES = (
     "MQTT_TLS_CA",
     "MQTT_TLS_CHECK_HOSTNAME",
     "MQTT_TLS_PORT",
-    "MQTT_TLS_EXPORT",
+    "MQTT_BROKER_DIR",
+    "WACTORZ_NODE_ACCOUNTS",
 )
 
 
@@ -107,7 +108,8 @@ def _no_ambient_broker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
         mqtt_tls="",
         mqtt_tls_ca="",
         mqtt_tls_check_hostname="",
-        mqtt_tls_export="",
+        mqtt_broker_dir="",
+        node_accounts=False,
         mqtt_port=config._env_int("MQTT_PORT", 1883),
     )
     monkeypatch.setattr(config, "CONFIG", plain)

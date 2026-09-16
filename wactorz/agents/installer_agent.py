@@ -26,6 +26,7 @@ from ..config import (
     deploy_target,
     deploy_target_for_host,
 )
+from ..core import broker_accounts
 from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
 from ..core.node_signing import next_sequence, node_key
@@ -60,6 +61,13 @@ except (OSError, ValueError) as exc:
 
 _TLS_MODE_ON = frozenset({"on", "1", "true", "yes"})
 _TLS_MODE_OFF = frozenset({"off", "0", "false", "no"})
+
+
+class UnusableNodeAccountError(ValueError):
+    """A node's name cannot be the broker account it would be deployed with."""
+
+    def __init__(self, problem: str) -> None:
+        super().__init__(problem)
 
 
 class UnknownTlsModeError(ValueError):
@@ -625,8 +633,7 @@ class InstallerAgent(Actor):
         ``core/mqtt_tls.py``, which name the server's state directory, not the
         node's.
         """
-        username = target.broker_user or CONFIG.mqtt_username or ""
-        password = target.broker_password or CONFIG.mqtt_password or ""
+        username, password = self._node_account(target, node_name)
         lines = [
             f"WACTORZ_NODE={shlex.quote(node_name)}",
             f"WACTORZ_BROKER={shlex.quote(broker)}",
@@ -653,6 +660,25 @@ class InstallerAgent(Actor):
         # created world-readable and tightened later.
         await sftp.chmod(remote, 0o600)
         return credentials
+
+    @staticmethod
+    def _node_account(target: DeployTarget, node_name: str) -> tuple[str, str]:
+        """The broker account a node presents: one of its own, a derived one, or the server's.
+
+        A derived account only where the broker has one -- the brokers Wactorz
+        configures, with `WACTORZ_NODE_ACCOUNTS` set -- because an account no broker
+        knows leaves the node authenticating against nothing. Anywhere else the
+        server's own account stays the default, as it has been. A `broker_user` or
+        `broker_password` set for the target wins over both.
+        """
+        default_user, default_password = CONFIG.mqtt_username or "", CONFIG.mqtt_password or ""
+        if CONFIG.node_accounts:
+            problem = broker_accounts.name_error(node_name)
+            if problem:
+                raise UnusableNodeAccountError(problem)
+            default_user = node_name
+            default_password = broker_accounts.password(node_name)
+        return target.broker_user or default_user, target.broker_password or default_password
 
     async def _decide_node_tls(
         self, conn: Any, sftp: Any, target: DeployTarget, home: str, broker: str, plain_port: int

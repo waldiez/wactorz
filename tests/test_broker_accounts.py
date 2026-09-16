@@ -12,12 +12,17 @@ checked against a real broker outside the suite, which has no broker by design.
 
 import base64
 import hashlib
+import logging
 import os
 import stat
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from wactorz import broker_certificates, config
+from wactorz.config import DeployTarget
 from wactorz.core import broker_accounts, node_signing
 
 NODES = ("rpi-garage", "rpi-kitchen")
@@ -156,3 +161,65 @@ class TestWritingThem:
 
         assert broker_accounts.write_files(directory, [*NODES, "rpi-shed"]) is True
         assert "user rpi-shed" in (directory / broker_accounts.ACL_FILE).read_text(encoding="utf-8")
+
+
+class TestAtStartup:
+    """The server writes these files where a broker of ours reads them."""
+
+    def _configure(self, monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
+        patched = replace(config.CONFIG, **fields)
+        monkeypatch.setattr(config, "CONFIG", patched)
+        monkeypatch.setattr(broker_certificates, "CONFIG", patched)
+
+    def test_the_deploy_targets_get_accounts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(directory),
+            deploy_targets=(DeployTarget(name="rpi-kitchen"), DeployTarget(name="rpi-garage")),
+        )
+
+        assert broker_certificates.prepare_broker_files() == ""
+
+        accounts = (directory / broker_accounts.PASSWORD_FILE).read_text(encoding="utf-8")
+        assert sorted(line.split(":")[0] for line in accounts.splitlines()) == [
+            "rpi-garage",
+            "rpi-kitchen",
+        ]
+        assert "user rpi-kitchen" in (directory / broker_accounts.ACL_FILE).read_text(
+            encoding="utf-8"
+        )
+
+    def test_nothing_is_written_when_accounts_are_off(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=False,
+            mqtt_broker_dir=str(directory),
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        assert broker_certificates.prepare_broker_files() == ""
+        assert not directory.exists()
+
+    def test_a_folder_that_cannot_be_written_does_not_stop_the_server(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        blocker = tmp_path / "a-file"
+        blocker.write_text("not a directory", encoding="utf-8")
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(blocker / "broker"),
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            assert broker_certificates.prepare_broker_files() == ""
+
+        assert any("Could not write" in record.getMessage() for record in caplog.records)

@@ -252,6 +252,14 @@ so the account they used to share no longer opens anything.
 **What it does not do:** a node's own agents share the node's account, so the
 containment boundary is the machine, not the agent. Nothing stops an agent
 publishing readings another agent reads — that traffic is a commons by design.
+The access list names the nodes you have configured, so it covers every node that
+exists; a node can still write under a `nodes/<name>/...` that no node has yet, and
+leave a message waiting for one deployed later. Mosquitto cannot express "every
+node's topics except your own" — a `deny` beats every allow, including the node's
+own — so naming them is the only shape available. Two things close the rest:
+`/deploy` clears whatever is retained on that node's control topics before the node
+starts and subscribes, and `WACTORZ_NODE_SIGNING=enforce` makes a node refuse
+anything main did not sign for it.
 
 ### Signed commands
 

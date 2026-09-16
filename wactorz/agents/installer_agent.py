@@ -35,6 +35,11 @@ from . import node_service
 
 logger = logging.getLogger(__name__)
 
+#: The control topics main publishes without retaining them, so a retained message
+#: on one was put there by something else. `desired_state` is not among them: main
+#: retains its own, and republishes it as soon as the node reports that it checks.
+UNRETAINED_CONTROL_TOPICS = ("spawn", "stop", "stop_all", "restart", "restart_agent", "migrate")
+
 #: Where ``/deploy`` puts the CA a node verifies the broker with, under ``~/wactorz``.
 NODE_CA_FILE = "mqtt-ca.crt"
 
@@ -661,6 +666,20 @@ class InstallerAgent(Actor):
         await sftp.chmod(remote, 0o600)
         return credentials
 
+    async def _clear_planted_control(self, node_name: str) -> None:
+        """Clear whatever is retained on this node's control topics, before it starts.
+
+        A node acts on what it finds on those topics the moment it subscribes, and a
+        spawn carries code. Main never retains them, so anything retained there came
+        from somewhere else -- and a broker account can write the topics of a name
+        that is not a node yet, which no access list can name in advance.
+
+        The clears are unsigned, as an empty payload always is; they instruct nothing,
+        and a node ignores them.
+        """
+        for leaf in UNRETAINED_CONTROL_TOPICS:
+            await self._mqtt_publish(f"nodes/{node_name}/{leaf}", b"", retain=True, qos=1)
+
     @staticmethod
     def _node_account(target: DeployTarget, node_name: str) -> tuple[str, str]:
         """The broker account a node presents: one of its own, a derived one, or the server's.
@@ -1033,7 +1052,11 @@ class InstallerAgent(Actor):
                 pattern = f"remote_runner.py.*--name {node_name}"
                 await self._ssh_run(conn, f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true")
 
-                # 6. Supervise it — a systemd unit at the least-privileged rung
+                # 6. Clear anything retained on this node's control topics, before
+                # it is started and subscribes to them.
+                await self._clear_planted_control(node_name)
+
+                # 7. Supervise it — a systemd unit at the least-privileged rung
                 # this node supports, and `nohup` only when it supports none.
                 async def run_on_node(command: str) -> tuple[bool, str]:
                     return await self._ssh_run(conn, command)

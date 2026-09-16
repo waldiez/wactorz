@@ -239,6 +239,19 @@ folder, reloads for a new account, and restarts itself if the access list or the
 certificate appeared for the first time, since mosquitto reads those only at
 startup.
 
+Two lines in the broker log when that list loads are expected:
+
+```
+Warning: ACL pattern '#' does not contain '%c' or '%u'.
+Warning: ACL pattern '$SYS/#' does not contain '%c' or '%u'.
+```
+
+They are the two lines that give every account the commons, the server's own and
+Home Assistant's included. Mosquitto notes that neither names a client, which is
+the point — "everything" is not something `%u` can spell — and the alternative
+spelling (`topic` instead of `pattern`) applies to anonymous clients only, which
+would leave every named account with no access at all.
+
 **Only turn this on where the broker has those accounts.** On a broker you run
 yourself, create them there first (or keep using `DEPLOY_<NODE>_BROKER_USER`).
 A node presenting an account its broker has never heard of is simply refused.

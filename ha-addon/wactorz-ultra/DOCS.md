@@ -146,7 +146,10 @@ a password derived for it rather than stored anywhere.
 - **`mosquitto_embedded: true`** — on automatically, since that broker is
   configured here. It also loads an access list: a node may publish and read its
   own `nodes/<name>/...` and the shared agent traffic, and is refused every other
-  node's topics, `agents/+/commands` and `system/`.
+  node's topics, `agents/+/commands` and `system/`. Two warnings in the log when
+  that list loads — `ACL pattern '#' does not contain '%c' or '%u'` and the same
+  for `$SYS/#` — are expected: those are the lines that leave every other account
+  on the broker, Home Assistant's included, working as before.
 - **Official Mosquitto addon** — Wactorz writes
   `/share/wactorz/mosquitto-logins.yaml`. Paste its `logins:` entries into that
   addon's configuration, keeping any already there, and restart it. Accounts

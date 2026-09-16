@@ -139,7 +139,11 @@ def acl_text(nodes: Iterable[str]) -> str:
     blocks = [
         _HEADER,
         "\n# Every account, including ones this file does not name: the server's own,\n"
-        "# Home Assistant's, and anything else on this broker.\n"
+        "# Home Assistant's, and anything else on this broker. `pattern`, not `topic`:\n"
+        "# a `topic` line outside a `user` block reaches anonymous clients only, and\n"
+        "# swapping it leaves every named account with no access at all. Mosquitto\n"
+        "# warns that this pattern has no %c or %u -- expected, and only a warning:\n"
+        "# `everything` is not something %u can spell.\n"
         "pattern readwrite #\n"
         "# $SYS is not covered by the rule above -- mosquitto keeps its own statistics\n"
         "# out of ordinary topic rules -- and the compose broker's health check reads\n"

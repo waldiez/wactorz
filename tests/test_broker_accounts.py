@@ -133,6 +133,16 @@ class TestTheAccessList:
         text = broker_accounts.acl_text(NODES)
         assert text.index("pattern readwrite #") < text.index("user ")
 
+    def test_the_commons_is_a_pattern_and_not_a_topic(self) -> None:
+        # Mosquitto warns that this pattern names no client, and the obvious way
+        # to silence that warning -- `topic readwrite #` -- applies to anonymous
+        # clients only, leaving every named account, the server's own included,
+        # with no access at all. Measured against 2.0.22, not deduced.
+        text = broker_accounts.acl_text(NODES)
+        commons = text[: text.index("user ")]
+        assert "pattern readwrite #" in commons
+        assert "topic readwrite #" not in commons
+
     def test_a_node_is_denied_every_other_nodes_tree(self) -> None:
         text = broker_accounts.acl_text(NODES)
         kitchen = text[text.index("user rpi-kitchen") :]

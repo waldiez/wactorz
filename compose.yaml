@@ -104,6 +104,9 @@ services:
         write_conf() {
           target=$${1:-/mosquitto/config/run.conf}
           cp /mosquitto/config/mosquitto.conf "$$target"
+          # Readable after the broker drops to its own user: a reload re-reads this
+          # file as that user, unlike the start, which happens while it is still root.
+          chmod 0644 "$$target"
           if [ -s /mosquitto/config/acl ]; then
             printf '\nacl_file /mosquitto/config/acl\n' >> "$$target"
           fi
@@ -182,6 +185,10 @@ services:
       dockerfile: Dockerfile
     image: wactorz-python:latest
     container_name: wactorz-mqtt-certs
+    # Fixed, because the certificate names the host it is generated on: left to
+    # Docker that is the container's id, which changes on every run, and the
+    # certificate would be reissued -- and the broker restarted -- each time.
+    hostname: mosquitto
     restart: "no"
     env_file:
       - .env

@@ -113,6 +113,14 @@ def _no_ambient_broker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
         mqtt_port=config._env_int("MQTT_PORT", 1883),
     )
     monkeypatch.setattr(config, "CONFIG", plain)
+    # Every module that imported the name needs it too, as with the client factory
+    # below: `from ..config import CONFIG` binds the object into that module, and
+    # replacing it here alone leaves those reading the developer's own settings.
+    # By type rather than by identity, because the fixtures above have already put
+    # a replacement on `config` while those modules still hold the original.
+    for module in list(sys.modules.values()):
+        if isinstance(getattr(module, "CONFIG", None), config.AppConfig):
+            monkeypatch.setattr(module, "CONFIG", plain)
 
 
 #: The real factory, for the tests that exist to exercise it.

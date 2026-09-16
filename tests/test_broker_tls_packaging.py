@@ -124,6 +124,19 @@ class TestTheComposeBroker:
         # Handed to the folder's owner, so the checkout keeps its ownership.
         assert 'chown "$$(stat -c %u:%g /wactorz-broker)"' in certs["command"][0]
 
+    def test_the_rebuilt_config_stays_readable_to_the_broker(self, name: str) -> None:
+        # A reload re-reads it as the user the broker dropped to, unlike the start,
+        # which happens while it is still root -- and the watcher writes it under a
+        # umask meant for the password file.
+        script = _compose(name)["services"]["mosquitto"]["command"][-1]
+        assert 'chmod 0644 "$$target"' in script
+
+    def test_the_certificate_step_has_a_fixed_hostname(self, name: str) -> None:
+        # The certificate names the host it is generated on. Left to Docker that is
+        # the container's id, which changes on every run, so the certificate would be
+        # reissued -- and the broker restarted -- on every `up`.
+        assert _compose(name)["services"]["mqtt-certs"]["hostname"] == "mosquitto"
+
     def test_the_app_leaves_writing_the_folder_to_the_certificate_step(self, name: str) -> None:
         app = _compose(name)["services"][COMPOSE_FILES[name]]
         assert app["environment"]["MQTT_BROKER_DIR"] == ""

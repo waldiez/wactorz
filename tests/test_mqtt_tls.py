@@ -272,6 +272,19 @@ class TestTheCertificates:
             x509.load_pem_x509_certificate(again.cert.read_bytes())
         )
 
+    def test_reissuing_keeps_the_names_already_there(self, state: Path) -> None:
+        # Two things issue this certificate -- this server, and the one-shot step in
+        # the compose stack -- and each knows its own addresses. Replacing the names
+        # would have them reissue in turn for ever, restarting the broker each time.
+        broker_tls.ensure(["host-a"])
+        assert broker_tls.ensure(["host-b"]).issued is True
+        assert broker_tls.ensure(["host-a"]).issued is False
+        assert broker_tls.ensure(["host-b"]).issued is False
+        names = broker_tls._names_in(
+            x509.load_pem_x509_certificate((state / "mqtt_tls" / "broker.crt").read_bytes())
+        )
+        assert {"host-a", "host-b"} <= names
+
     def test_a_certificate_near_expiry_is_reissued(self, issued: broker_tls.BrokerFiles) -> None:
         later = datetime.datetime.now(datetime.timezone.utc) + broker_tls.BROKER_LIFETIME
         assert broker_tls.ensure(["broker.lan", "192.168.1.10"], now=later).issued is True

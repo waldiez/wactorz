@@ -66,8 +66,10 @@ _GO_AUTH_ITERATIONS = 100000
 _GO_AUTH_SALT_LENGTH = 16
 _GO_AUTH_KEY_LENGTH = 32
 
-#: Denied to every node account, whatever other nodes exist.
-FIXED_DENIES = ("agents/+/commands", "system/#")
+#: Denied to every node account, whatever other nodes exist. `$SYS` carries the
+#: broker's own statistics, which the compose healthcheck reads and a node has no
+#: use for.
+FIXED_DENIES = ("agents/+/commands", "system/#", "$SYS/#")
 
 #: What a node's name may not contain. `+` and `#` are MQTT wildcards and are
 #: refused in a username by mosquitto itself; `/` separates topic levels; `:`
@@ -133,7 +135,11 @@ def acl_text(nodes: Iterable[str]) -> str:
         _HEADER,
         "\n# Every account, including ones this file does not name: the server's own,\n"
         "# Home Assistant's, and anything else on this broker.\n"
-        "pattern readwrite #\n",
+        "pattern readwrite #\n"
+        "# $SYS is not covered by the rule above -- mosquitto keeps its own statistics\n"
+        "# out of ordinary topic rules -- and the compose broker's health check reads\n"
+        "# it. Nodes are denied it in their blocks below.\n"
+        "pattern read $SYS/#\n",
     ]
     for node in names:
         denied = [f"nodes/{other}/#" for other in names if other != node]

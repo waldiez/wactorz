@@ -410,9 +410,13 @@ class AppConfig:
     mqtt_tls_ca: str
     mqtt_tls_check_hostname: str
     mqtt_tls_port: int
-    #: Where startup writes the broker's certificate and key, for a broker beside
-    #: this server that reads them from there. Empty writes nothing.
-    mqtt_tls_export: str
+    #: Where startup writes what a broker beside this server reads: its TLS
+    #: certificate, and the node accounts and access list when those are on.
+    #: Empty writes nothing.
+    mqtt_broker_dir: str
+    #: Whether a deployed node gets a broker account of its own, derived for it.
+    #: Only for a broker Wactorz configures, which is where those accounts exist.
+    node_accounts: bool
     ha_url: str
     ha_token: str
     ha_state_bridge_output_topic: str
@@ -479,7 +483,8 @@ CONFIG = AppConfig(
     mqtt_tls_ca=os.getenv("MQTT_TLS_CA", ""),
     mqtt_tls_check_hostname=os.getenv("MQTT_TLS_CHECK_HOSTNAME", ""),
     mqtt_tls_port=_env_int("MQTT_TLS_PORT", 8883),
-    mqtt_tls_export=os.getenv("MQTT_TLS_EXPORT", "").strip(),
+    mqtt_broker_dir=os.getenv("MQTT_BROKER_DIR", "").strip(),
+    node_accounts=_env_truthy("WACTORZ_NODE_ACCOUNTS"),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_state_bridge_output_topic=os.getenv(

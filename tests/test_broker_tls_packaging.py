@@ -59,14 +59,50 @@ class TestTheComposeBroker:
 
     def test_a_failed_certificate_step_does_not_fail_the_stack(self, name: str) -> None:
         script = _compose(name)["services"]["mqtt-certs"]["command"][0]
-        assert "broker_certificates --export /tmp/mqtt-tls" in script
+        assert "broker_certificates --export /tmp/broker-files" in script
         assert "|| echo" in script
 
     def test_the_broker_adds_tls_only_when_a_certificate_is_there(self, name: str) -> None:
         script = _compose(name)["services"]["mosquitto"]["command"][-1]
-        guard = script.index("if [ -s /wactorz-tls/broker.crt ] && [ -s /wactorz-tls/broker.key ]")
-        assert guard < script.index("listener 8883") < script.index("fi\n")
-        assert 'exec /usr/sbin/mosquitto -c "$$conf"' in script
+        guard = script.index("if [ -s /mosquitto/config/tls/broker.crt ]")
+        assert guard < script.index("listener 8883") < script.index("fi\n", guard)
+
+    def test_the_broker_adds_the_access_list_only_when_one_is_there(self, name: str) -> None:
+        script = _compose(name)["services"]["mosquitto"]["command"][-1]
+        guard = script.index("if [ -s /mosquitto/config/acl ]")
+        assert guard < script.index("acl_file /mosquitto/config/acl") < script.index("fi\n", guard)
+
+    def test_the_node_accounts_are_added_to_the_brokers_own(self, name: str) -> None:
+        # Appended, never replacing: the broker's own account is written first, and
+        # an install with no node accounts keeps exactly that file.
+        script = _compose(name)["services"]["mosquitto"]["command"][-1]
+        assert "cat /wactorz-broker/node_passwd >> /mosquitto/config/passwd" in script
+        assert script.index("mosquitto_passwd -b -c") < script.index(
+            "cat /wactorz-broker/node_passwd"
+        )
+
+    def test_the_broker_is_told_to_read_them_again_when_they_change(self, name: str) -> None:
+        # A deploy adds an account while the broker runs, and nothing outside its
+        # container can signal it.
+        script = _compose(name)["services"]["mosquitto"]["command"][-1]
+        assert "while sleep" in script
+        # Everything the broker takes from the folder is watched, so a certificate
+        # arriving on its own -- which changes the config, not just its content --
+        # wakes this too.
+        stamp = script[script.index("stamp()") : script.index("while sleep")]
+        for watched in ("node_passwd", "acl", "broker.crt", "broker.key"):
+            assert f"/wactorz-broker/{watched}" in stamp
+        watcher = script[script.index("while sleep") :]
+        # A reload carries new accounts, but mosquitto does not pick up an acl_file
+        # or a listener its config did not already name ("Listeners not valid for
+        # reloading", conf.c) -- so the watcher rebuilds the config, compares it,
+        # and restarts when it changed. Reloading either way would leave the nodes
+        # uncontained with nothing saying so.
+        assert watcher.index("write_conf /tmp/next.conf") < watcher.index("cmp -s")
+        assert "kill -HUP 1" in watcher
+        assert "kill -TERM 1" in watcher
+        # Signalling the broker needs the capability: it runs as its own user.
+        assert "KILL" in _compose(name)["services"]["mosquitto"]["cap_add"]
 
     def test_plain_mqtt_stays_published_beside_tls(self, name: str) -> None:
         ports = _compose(name)["services"]["mosquitto"]["ports"]
@@ -76,27 +112,29 @@ class TestTheComposeBroker:
     def test_the_broker_never_sees_the_ca_key(self, name: str) -> None:
         # It reads a folder holding the export alone, not the state directory.
         mounts = _compose(name)["services"]["mosquitto"]["volumes"]
-        assert "./infra/mosquitto/tls:/wactorz-tls:ro" in mounts
+        assert "./infra/mosquitto/generated:/wactorz-broker:ro" in mounts
         assert not any("state" in mount for mount in mounts)
 
     def test_the_certificate_step_writes_the_folder_the_broker_reads(self, name: str) -> None:
         # One folder, so a certificate from a run on the host serves the same broker.
         certs = _compose(name)["services"]["mqtt-certs"]
-        assert "./infra/mosquitto/tls:/mqtt-tls" in certs["volumes"]
+        assert "./infra/mosquitto/generated:/wactorz-broker" in certs["volumes"]
+        # Everything it generated, not the certificate alone: the accounts too.
+        assert "cp -r /tmp/broker-files/. /wactorz-broker/" in certs["command"][0]
         # Handed to the folder's owner, so the checkout keeps its ownership.
-        assert 'chown "$$(stat -c %u:%g /mqtt-tls)"' in certs["command"][0]
+        assert 'chown "$$(stat -c %u:%g /wactorz-broker)"' in certs["command"][0]
 
     def test_the_app_leaves_writing_the_folder_to_the_certificate_step(self, name: str) -> None:
         app = _compose(name)["services"][COMPOSE_FILES[name]]
-        assert app["environment"]["MQTT_TLS_EXPORT"] == ""
+        assert app["environment"]["MQTT_BROKER_DIR"] == ""
 
 
 def test_the_certificate_folder_is_always_in_the_checkout() -> None:
     # Missing, Docker would create it as root, and a run on the host could not write it.
-    assert (ROOT / "infra" / "mosquitto" / "tls" / ".gitkeep").is_file()
+    assert (ROOT / "infra" / "mosquitto" / "generated" / ".gitkeep").is_file()
     ignored = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    assert "infra/mosquitto/tls/*" in ignored
-    assert "!infra/mosquitto/tls/.gitkeep" in ignored
+    assert "infra/mosquitto/generated/*" in ignored
+    assert "!infra/mosquitto/generated/.gitkeep" in ignored
 
 
 def test_both_compose_files_start_the_broker_the_same_way() -> None:

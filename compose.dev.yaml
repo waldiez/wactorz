@@ -17,6 +17,11 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2.0
     container_name: wactorz-dev-mosquitto
+    cap_drop: [ALL]
+    # As in compose.yaml: KILL lets the reload watcher signal the broker, which
+    # runs as its own user.
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID, KILL]
+    security_opt: [no-new-privileges:true]
     restart: unless-stopped
     depends_on:
       # Issues the broker's TLS certificate first, under the app profile. Without
@@ -33,7 +38,7 @@ services:
       # replaced. Container-to-container traffic is unaffected — the app
       # reaches the broker by service name on wactorz-net, not through this.
       - "127.0.0.1:1883:1883"
-      # TLS, loopback too. Answered once a certificate is in infra/mosquitto/tls.
+      # TLS, loopback too. Answered once a certificate is in infra/mosquitto/generated.
       - "127.0.0.1:8883:8883"
     volumes:
       # Read-only — see compose.yaml: without it the image's entrypoint chowns
@@ -41,7 +46,7 @@ services:
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
-      - ./infra/mosquitto/tls:/wactorz-tls:ro
+      - ./infra/mosquitto/generated:/wactorz-broker:ro
     environment:
       # Defaulted rather than required: this is the development stack, and the
       # same conf file is shared with compose.yaml, so it is authenticated here
@@ -49,7 +54,7 @@ services:
       MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
       MQTT_PASSWORD: "${MQTT_PASSWORD:-wactorz-dev}"
     # As in compose.yaml: a TLS listener is added at start when a certificate is in
-    # infra/mosquitto/tls, and not otherwise.
+    # infra/mosquitto/generated, and not otherwise.
     command:
       - /bin/sh
       - -c
@@ -58,16 +63,76 @@ services:
         umask 077
         mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
         chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
-        conf=/mosquitto/config/mosquitto.conf
-        if [ -s /wactorz-tls/broker.crt ] && [ -s /wactorz-tls/broker.key ]; then
-          mkdir -p /mosquitto/config/tls
-          cp /wactorz-tls/broker.crt /wactorz-tls/broker.key /mosquitto/config/tls/
-          chown -R mosquitto:mosquitto /mosquitto/config/tls 2>/dev/null || true
-          { cat "$$conf"; printf '\nlistener 8883\nprotocol mqtt\ncertfile /mosquitto/config/tls/broker.crt\nkeyfile /mosquitto/config/tls/broker.key\n'; } > /mosquitto/config/run.conf
-          conf=/mosquitto/config/run.conf
-          echo "[mosquitto] TLS listener on 8883"
-        fi
-        exec /usr/sbin/mosquitto -c "$$conf"
+        # Everything Wactorz generates is optional and independent: with none of it
+        # this is the broker as it always was, on 1883 with its own account.
+        take_generated() {
+          # The accounts go after this broker's own, which mosquitto_passwd wrote.
+          if [ -s /wactorz-broker/node_passwd ]; then
+            cat /wactorz-broker/node_passwd >> /mosquitto/config/passwd
+          fi
+          if [ -s /wactorz-broker/acl ]; then
+            cp /wactorz-broker/acl /mosquitto/config/acl
+            chown mosquitto:mosquitto /mosquitto/config/acl 2>/dev/null || true
+          fi
+          if [ -s /wactorz-broker/broker.crt ] && [ -s /wactorz-broker/broker.key ]; then
+            mkdir -p /mosquitto/config/tls
+            cp /wactorz-broker/broker.crt /wactorz-broker/broker.key /mosquitto/config/tls/
+            chown -R mosquitto:mosquitto /mosquitto/config/tls 2>/dev/null || true
+          fi
+        }
+        write_conf() {
+          target=$${1:-/mosquitto/config/run.conf}
+          cp /mosquitto/config/mosquitto.conf "$$target"
+          if [ -s /mosquitto/config/acl ]; then
+            printf '\nacl_file /mosquitto/config/acl\n' >> "$$target"
+          fi
+          if [ -s /mosquitto/config/tls/broker.crt ]; then
+            printf '\nlistener 8883\nprotocol mqtt\ncertfile /mosquitto/config/tls/broker.crt\nkeyfile /mosquitto/config/tls/broker.key\n' >> "$$target"
+          fi
+        }
+        announce_conf() {
+          if [ -s /mosquitto/config/acl ]; then echo "[mosquitto] node access list loaded"; fi
+          if [ -s /mosquitto/config/tls/broker.crt ]; then echo "[mosquitto] TLS listener on 8883"; fi
+        }
+        take_generated
+        write_conf
+        announce_conf
+        # A deploy adds an account while this broker is running, and nothing else can
+        # signal it from another container: watch the folder, rebuild what it feeds
+        # the broker, and ask the broker to read it again. Polling rather than inotify,
+        # which does not cross every file-sharing implementation.
+        (
+          # Everything the broker takes from the folder, so a certificate arriving
+          # on its own wakes this too -- it changes the config, not just content.
+          stamp() { cat /wactorz-broker/node_passwd /wactorz-broker/acl /wactorz-broker/broker.crt /wactorz-broker/broker.key 2>/dev/null | md5sum; }
+          last=$$(stamp)
+          while sleep 5; do
+            now=$$(stamp)
+            if [ "$$now" != "$$last" ]; then
+              last=$$now
+              umask 077
+              mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+              chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
+              take_generated
+              # A reload re-reads the accounts and the access list this broker was
+              # started with; it does not pick up an acl_file or a listener the
+              # config did not name, which is what appears the first time a
+              # certificate or an access list is generated. So: same config, reload;
+              # changed config, stop, and the restart policy brings it back with it.
+              write_conf /tmp/next.conf
+              if cmp -s /tmp/next.conf /mosquitto/config/run.conf; then
+                echo "[mosquitto] node accounts changed; reloading"
+                kill -HUP 1
+              else
+                cp /tmp/next.conf /mosquitto/config/run.conf
+                announce_conf
+                echo "[mosquitto] broker configuration changed; restarting to apply it"
+                kill -TERM 1
+              fi
+            fi
+          done
+        ) &
+        exec /usr/sbin/mosquitto -c /mosquitto/config/run.conf
     healthcheck:
       test:
         [
@@ -81,7 +146,7 @@ services:
   # ── Broker TLS certificate ─────────────────────────────────────────────────────
   # One-shot. Issues the broker's certificate from a CA kept in ./state/mqtt_tls
   # -- minted on the first run, and what /deploy hands a node -- and copies the
-  # certificate and key into infra/mosquitto/tls, where the broker reads them. A
+  # certificate and key into infra/mosquitto/generated, where the broker reads them. A
   # wactorz run on this host with MQTT_TLS=1 writes the same folder, and so does
   # `make mqtt-certs`. The Wactorz image does it because the broker image has no
   # tool that can. It never fails the stack: without a certificate the broker
@@ -106,9 +171,9 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        docker-entrypoint.sh python -m wactorz.broker_certificates --export /tmp/mqtt-tls \
-          && cp /tmp/mqtt-tls/broker.crt /tmp/mqtt-tls/broker.key /mqtt-tls/ \
-          && chown "$$(stat -c %u:%g /mqtt-tls)" /mqtt-tls/broker.crt /mqtt-tls/broker.key \
+        docker-entrypoint.sh python -m wactorz.broker_certificates --export /tmp/broker-files \
+          && cp -r /tmp/broker-files/. /wactorz-broker/ \
+          && chown "$$(stat -c %u:%g /wactorz-broker)" /wactorz-broker/* \
           || echo "[mqtt-certs] No certificate issued; the broker serves plain MQTT only." >&2
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
@@ -118,7 +183,7 @@ services:
       - /tmp
     volumes:
       - ./state:/app/state
-      - ./infra/mosquitto/tls:/mqtt-tls
+      - ./infra/mosquitto/generated:/wactorz-broker
     networks:
       - wactorz-net
 
@@ -150,7 +215,7 @@ services:
       # With MQTT_TLS=1 in .env the app dials the broker's TLS port instead
       # (MQTT_TLS_PORT, 8883). mqtt-certs writes the broker's copy of the
       # certificate, so the app does not: its filesystem is read-only.
-      MQTT_TLS_EXPORT: ""
+      MQTT_BROKER_DIR: ""
       INTERFACE: rest
     # See compose.yaml for why these three, and only these three: the entrypoint
     # needs them to chown the state directory before dropping to uid 1000.

@@ -149,7 +149,7 @@ up: ## Start full stack (build if needed)
 	$(COMPOSE) up --build -d
 
 mqtt-certs: ## Issue the compose broker's TLS certificate from this host, then: docker compose restart mosquitto
-	$(PYTHON) -m wactorz.broker_certificates --export infra/mosquitto/tls
+	$(PYTHON) -m wactorz.broker_certificates --export infra/mosquitto/generated
 
 down: ## Stop full stack
 	$(COMPOSE) down

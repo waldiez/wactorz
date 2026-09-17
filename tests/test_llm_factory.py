@@ -1,5 +1,6 @@
 """Tests for per-call-site LLM provider overrides (wactorz/llm_factory.py)."""
 
+import importlib.util
 import sys
 from typing import cast
 
@@ -198,6 +199,14 @@ def test_override_none_disables_site_llm():
 # ── model flags ──────────────────────────────────────────────────────────────
 
 
+def _installed(module: str) -> bool:
+    """Whether `module` can be imported, including when its parent package is absent."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except ModuleNotFoundError:
+        return False
+
+
 class TestTheModelFlagsDoNotInventAModel:
     """argparse fills a `default=` in whether or not the flag was passed.
 
@@ -215,6 +224,7 @@ class TestTheModelFlagsDoNotInventAModel:
 
         assert getattr(get_args(), flag) is None
 
+    @pytest.mark.skipif(not _installed("google.genai"), reason="the google extra is not installed")
     def test_gemini_falls_back_to_the_configured_model(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

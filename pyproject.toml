@@ -341,9 +341,10 @@ exclude_also = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
     "\\.\\.\\.",               # ellipsis / stub bodies
+    "class .*\\bProtocol\\b.*\\):",  # structural types: no runtime behaviour to cover
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 65
+fail_under = 86
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

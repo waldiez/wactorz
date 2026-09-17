@@ -15,8 +15,10 @@ from typing import Any
 import pytest
 
 from wactorz import config, llm_factory
+from wactorz.agents import llm_agent
 from wactorz.core import mqtt
 from wactorz.core.persistence.stores import Stores
+from wactorz.ext import tts as tts_extension
 
 
 @pytest.fixture(autouse=True)
@@ -154,6 +156,46 @@ def _no_ambient_broker(request: pytest.FixtureRequest, monkeypatch: pytest.Monke
         # already substituted its own is a test driving the connection.
         if getattr(module, "mqtt_client", None) is real_mqtt_client:
             monkeypatch.setattr(module, "mqtt_client", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_voice_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never ask Microsoft's voice service for its voice list from a test.
+
+    The TTS extension warms its voice cache when the web app starts, and that
+    warm-up is a real HTTPS request. Every test that serves the monitor app
+    made it, so each one reached out to the internet and took most of a second
+    to start — work no assertion looked at.
+
+    Refused rather than answered: the extension already treats a failed fetch
+    as an empty list, which is the case a test without a network is really in.
+    """
+    edge_tts = getattr(tts_extension, "edge_tts", None)
+    if edge_tts is None:
+        return
+
+    async def _refuse(*_args: Any, **_kwargs: Any) -> None:
+        raise ConnectionRefusedError("no voice service in tests")
+
+    monkeypatch.setattr(edge_tts, "list_voices", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_price_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never download the model price list when an agent starts in a test.
+
+    Every LLM agent's `on_start` schedules a fetch of LiteLLM's pricing catalogue
+    from GitHub, so a test that starts main or any conversational agent reached
+    out to the internet in a background task no assertion waited on.
+
+    Replaced at the call site, not at its definition, so the tests of the fetch
+    itself still reach the real function.
+    """
+
+    async def _skip() -> None:
+        return None
+
+    monkeypatch.setattr(llm_agent, "refresh_pricing", _skip)
 
 
 def pytest_configure(config: pytest.Config) -> None:

@@ -16,7 +16,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from google.genai import types
+
+types = pytest.importorskip("google.genai.types", reason="the google extra is not installed")
 
 from wactorz.agents.llm.providers.gemini import GeminiProvider, _gemini_schema
 

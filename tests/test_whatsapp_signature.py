@@ -10,7 +10,10 @@ from typing import Any
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
-from twilio.request_validator import RequestValidator
+
+RequestValidator = pytest.importorskip(
+    "twilio.request_validator", reason="the whatsapp extra is not installed"
+).RequestValidator
 
 from wactorz.interfaces.chat.whatsapp import WhatsAppInterface
 

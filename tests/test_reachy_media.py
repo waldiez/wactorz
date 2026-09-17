@@ -1189,10 +1189,17 @@ class AskVoiceCommandTest(unittest.TestCase):
 
             return Transcription("turn on the living-room light", "whisper", "tiny")
 
+        async def fake_prepare(_agent, text, _payload):
+            # Stubbed with `_say`: preparing a sentence is a real edge-tts request,
+            # which needs the package and a network and is not what this checks.
+            return {"text": text}
+
         spoken = mock.AsyncMock(return_value={"said": "The living-room light is on."})
         agent.send_to = send_to
         with (
-            mock.patch.dict(NS, {"_listen": fake_listen, "_say": spoken}),
+            mock.patch.dict(
+                NS, {"_listen": fake_listen, "_say": spoken, "_prepare_speech": fake_prepare}
+            ),
             mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", new=fake_transcribe),
         ):
             res = _run(

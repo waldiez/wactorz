@@ -20,6 +20,7 @@ import pytest
 from wactorz.agents import installer_agent
 from wactorz.agents.installer_agent import InstallerAgent
 from wactorz.config import CONFIG, DeployTarget
+from wactorz.core import broker_accounts, node_signing
 
 
 class FakeSftp:
@@ -189,6 +190,88 @@ class TestWhereItIsWritten:
         )
 
         assert "/var/lib/wactorz-node/wactorz/.env" in sftp.written
+
+
+class TestAnAccountOfItsOwn:
+    """`WACTORZ_NODE_ACCOUNTS`: the node authenticates as itself, not as the server.
+
+    Off by default, because the account has to exist on the broker: it is generated
+    for the brokers Wactorz configures, and on any other broker a node presenting a
+    name that broker has never heard of would simply be refused.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _own_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Passwords are derived from the install's signing secret; the suite's state
+        # directory is a fresh one per test, so the cached secret has to go with it.
+        monkeypatch.setattr(node_signing, "_secret", None)
+
+    def _accounts_on(self, monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
+        monkeypatch.setattr(
+            installer_agent,
+            "CONFIG",
+            replace(CONFIG, node_accounts=True, **fields),
+        )
+
+    async def test_the_node_gets_the_account_derived_for_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._accounts_on(monkeypatch, mqtt_username="wactorz", mqtt_password="the-server's")
+        sftp = FakeSftp()
+
+        assert await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883)
+
+        body = sftp.written["/home/pi/wactorz/.env"]
+        assert "MQTT_USERNAME=rpi" in body
+        assert f"MQTT_PASSWORD={broker_accounts.password('rpi')}" in body
+        assert "the-server's" not in body
+
+    async def test_it_is_off_unless_asked_for(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # An existing install deploys exactly as it did: the server's own account.
+        _server_broker(monkeypatch, "wactorz", "shared")
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883)
+
+        body = sftp.written["/home/pi/wactorz/.env"]
+        assert "MQTT_USERNAME=wactorz" in body
+        assert "MQTT_PASSWORD=shared" in body
+
+    async def test_an_account_set_for_the_target_still_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._accounts_on(monkeypatch)
+        sftp = FakeSftp()
+        target = _target(broker_user="rpi-account", broker_password="per-node")
+
+        await _agent()._put_node_env(sftp, target, "/home/pi", "rpi", "10.0.0.1", 1883)
+
+        body = sftp.written["/home/pi/wactorz/.env"]
+        assert "MQTT_USERNAME=rpi-account" in body
+        assert "MQTT_PASSWORD=per-node" in body
+
+    async def test_a_name_that_cannot_be_an_account_fails_the_deploy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Refused rather than deployed with credentials no broker has: that node
+        # would retry for ever with nothing saying why.
+        self._accounts_on(monkeypatch)
+
+        with pytest.raises(ValueError, match="broker account"):
+            await _agent()._put_node_env(
+                FakeSftp(), _target(), "/home/pi", "rpi:kitchen", "10.0.0.1", 1883
+            )
+
+    async def test_two_nodes_do_not_share_a_password(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._accounts_on(monkeypatch)
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883)
+        await _agent()._put_node_env(sftp, _target(), "/home/other", "other", "10.0.0.1", 1883)
+
+        first = sftp.written["/home/pi/wactorz/.env"]
+        second = sftp.written["/home/other/wactorz/.env"]
+        assert first.split("MQTT_PASSWORD=")[1] != second.split("MQTT_PASSWORD=")[1]
 
 
 def _server_broker(monkeypatch: pytest.MonkeyPatch, user: str, password: str) -> None:

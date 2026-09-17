@@ -45,6 +45,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `retention_timeseries_days` | `365` | Days sensor readings, detections and Home Assistant state history are kept; `0` keeps them for ever. |
 | `retention_outbox_days` | `7` | Days a message the MQTT broker never accepted is kept and retried before it is dropped; `0` keeps retrying for ever. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
+| `node_accounts` | `false` | Give each deployed node its own broker account instead of sharing this addon's. On automatically with `mosquitto_embedded`; with the official Mosquitto addon it writes a `logins:` block for you to paste. See [An account per node](#an-account-per-node). |
 | `node_signing` | `warn` | What a deployed node does with a command that is not signed for it: `warn` acts on it and tells you in chat, `enforce` refuses it. Applies to a node from its next `/deploy` — see [Signed commands](#signed-commands). |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
@@ -135,10 +136,31 @@ deploy_targets:
 ```
 
 The account has to exist on the broker already — this sets what the node
-presents, it does not create anything. With the **official Mosquitto addon**,
-add it as a Home Assistant user. With **`mosquitto_embedded`** you cannot yet:
-the addon generates a single `wactorz` account and rewrites its password file on
-every start, so an account added by hand does not survive a restart.
+presents, it does not create anything. Or let Wactorz issue one per node:
+
+### An account per node
+
+Set `node_accounts: true` and every deployed node authenticates as itself, with
+a password derived for it rather than stored anywhere.
+
+- **`mosquitto_embedded: true`** — on automatically, since that broker is
+  configured here. It also loads an access list: a node may publish and read its
+  own `nodes/<name>/...` and the shared agent traffic, and is refused every other
+  node's topics, `agents/+/commands` and `system/`. Two warnings in the log when
+  that list loads — `ACL pattern '#' does not contain '%c' or '%u'` and the same
+  for `$SYS/#` — are expected: those are the lines that leave every other account
+  on the broker, Home Assistant's included, working as before.
+- **Official Mosquitto addon** — Wactorz writes
+  `/share/wactorz/mosquitto-logins.yaml`. Paste its `logins:` entries into that
+  addon's configuration, keeping any already there, and restart it. Accounts
+  only: that addon's authentication plugin answers before any access list Wactorz
+  could provide, so it cannot keep one node out of another's topics. Signed
+  commands and TLS still apply there.
+
+A node takes its account at its next `/deploy` and keeps the shared one until
+then, so nothing changes for a node you have not redeployed. Once they all have,
+change the addon's own `mqtt_password` (and the account on your broker) so the
+one they shared no longer opens anything.
 
 If your broker accepts anonymous connections, nothing is sent and nothing needs
 to be. If you only need agents on the machine running Home Assistant, leave

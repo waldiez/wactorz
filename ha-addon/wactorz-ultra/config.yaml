@@ -113,6 +113,14 @@ options:
   # /deploy; a node deployed before signing accepts everything either way.
   node_signing: warn
 
+  # Whether a deployed node gets a broker account of its own instead of sharing
+  # this add-on's. With mosquitto_embedded it is on regardless, since that broker
+  # is configured here. With the official Mosquitto add-on, turning it on writes
+  # /share/wactorz/mosquitto-logins.yaml for you to paste into that add-on's
+  # configuration; until you do, its broker knows no such accounts. A node picks
+  # its account up on its next /deploy.
+  node_accounts: false
+
   # Home Assistant connection (used by HA agents inside Wactorz)
   # auto (default): supervisor proxy when ha_token is blank, custom URL otherwise.
   ha_connection: auto
@@ -183,6 +191,7 @@ schema:
   retention_timeseries_days: int
   retention_outbox_days: int
   node_signing: list(warn|enforce)?
+  node_accounts: bool?
   deploy_targets:
     - name: str
       host: str?

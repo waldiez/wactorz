@@ -9,7 +9,8 @@ issues the broker certificate again only when the one there will not do; see
 ``--export`` copies the certificate and key somewhere a broker reads them, under
 the names that broker is configured with.
 
-:func:`prepare_server_tls` does the same when the server starts with ``MQTT_TLS`` on.
+:func:`prepare_broker_files` does the same when the server starts, and writes the
+node accounts and their access list beside the certificate when those are on.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .config import CONFIG
-from .core import broker_tls
+from .core import broker_accounts, broker_tls
 from .core.mqtt_tls import SYSTEM_TRUST, client_context, generated_ca_path, tls_enabled
 
 logger = logging.getLogger(__name__)
@@ -39,12 +40,52 @@ def broker_names() -> list[str]:
     return names
 
 
-def prepare_server_tls() -> str:
+def prepare_broker_files() -> str:
+    """Write what a broker of ours reads, and check this server's own TLS.
+
+    Returns why the server cannot start, or ``""``. The accounts are written first
+    and never stop a start: a broker that has not read them yet refuses a node, not
+    this server.
+    """
+    _write_node_accounts()
+    return _prepare_server_tls()
+
+
+def _write_node_accounts() -> None:
+    """Write the node accounts and access list, when they are on and there is somewhere to.
+
+    The nodes are the deploy targets: adding one is a configuration change, which
+    means a restart, which is when this runs. A broker reads these files when it
+    starts or when it is told to read them again, so a change is worth one line in
+    the log.
+    """
+    if not (CONFIG.node_accounts and CONFIG.mqtt_broker_dir):
+        return
+    directory = Path(CONFIG.mqtt_broker_dir).expanduser()
+    nodes = [target.name for target in CONFIG.deploy_targets]
+    try:
+        changed = broker_accounts.write_files(directory, nodes)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "[mqtt-accounts] Could not write the node accounts to %s: %s", directory, exc
+        )
+        return
+    if changed:
+        logger.warning(
+            "[mqtt-accounts] Wrote %d node account(s) and the access list to %s. A broker reads "
+            "them when it starts, and a reload does not pick up an access list it did not already "
+            "have: restart it before deploying those nodes. The compose broker does that itself.",
+            len(nodes),
+            directory,
+        )
+
+
+def _prepare_server_tls() -> str:
     """Make this server's broker TLS ready at startup; why it cannot be, or ``""``.
 
     Nothing to do with ``MQTT_TLS`` off. With the CA Wactorz generates
     (``MQTT_TLS_CA`` blank), the CA and broker certificate are created when missing,
-    and the broker's copy is written to ``MQTT_TLS_EXPORT`` -- for a broker beside
+    and the broker's copy is written to ``MQTT_BROKER_DIR`` -- for a broker beside
     this server that reads it from there, as the compose stacks' does. A CA of your
     own is only checked, never generated.
 
@@ -60,8 +101,8 @@ def prepare_server_tls() -> str:
             files = broker_tls.ensure(broker_names())
         except (OSError, ValueError) as exc:
             return f"MQTT_TLS is on, but the broker's TLS certificate could not be issued: {exc}"
-        if CONFIG.mqtt_tls_export:
-            _write_for_broker(files, Path(CONFIG.mqtt_tls_export).expanduser())
+        if CONFIG.mqtt_broker_dir:
+            _write_for_broker(files, Path(CONFIG.mqtt_broker_dir).expanduser())
     try:
         client_context(ca, CONFIG.mqtt_tls_check_hostname)
     except OSError as exc:
@@ -140,6 +181,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cert-name", default=broker_tls.BROKER_CERT_FILE)
     parser.add_argument("--key-name", default=broker_tls.BROKER_KEY_FILE)
     parser.add_argument("--ca-name", default="", help="Also export the CA under this name.")
+    parser.add_argument(
+        "--logins",
+        type=Path,
+        default=None,
+        help="Write the node accounts as a logins: block for the official Mosquitto add-on.",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -152,6 +199,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             key_name=args.key_name,
             ca_name=args.ca_name,
         )
+        # The same folder carries the accounts, so one call leaves a broker of ours
+        # everything it reads.
+        if CONFIG.node_accounts:
+            broker_accounts.write_files(
+                args.export, [target.name for target in CONFIG.deploy_targets]
+            )
+    if args.logins is not None:
+        nodes = [target.name for target in CONFIG.deploy_targets]
+        args.logins.parent.mkdir(parents=True, exist_ok=True)
+        args.logins.write_text(broker_accounts.home_assistant_logins(nodes), encoding="utf-8")
     return 0
 
 

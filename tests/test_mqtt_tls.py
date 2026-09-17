@@ -272,6 +272,19 @@ class TestTheCertificates:
             x509.load_pem_x509_certificate(again.cert.read_bytes())
         )
 
+    def test_reissuing_keeps_the_names_already_there(self, state: Path) -> None:
+        # Two things issue this certificate -- this server, and the one-shot step in
+        # the compose stack -- and each knows its own addresses. Replacing the names
+        # would have them reissue in turn for ever, restarting the broker each time.
+        broker_tls.ensure(["host-a"])
+        assert broker_tls.ensure(["host-b"]).issued is True
+        assert broker_tls.ensure(["host-a"]).issued is False
+        assert broker_tls.ensure(["host-b"]).issued is False
+        names = broker_tls._names_in(
+            x509.load_pem_x509_certificate((state / "mqtt_tls" / "broker.crt").read_bytes())
+        )
+        assert {"host-a", "host-b"} <= names
+
     def test_a_certificate_near_expiry_is_reissued(self, issued: broker_tls.BrokerFiles) -> None:
         later = datetime.datetime.now(datetime.timezone.utc) + broker_tls.BROKER_LIFETIME
         assert broker_tls.ensure(["broker.lan", "192.168.1.10"], now=later).issued is True
@@ -402,16 +415,16 @@ class TestTheServerStartup:
     ) -> None:
         self._configure(monkeypatch, mqtt_tls="")
 
-        assert broker_certificates.prepare_server_tls() == ""
+        assert broker_certificates.prepare_broker_files() == ""
         assert not (state / "mqtt_tls").exists()
 
     def test_the_generated_ca_is_created_and_the_brokers_copy_written(
         self, state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         folder = tmp_path / "infra" / "tls"
-        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_tls_export=str(folder))
+        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_broker_dir=str(folder))
 
-        assert broker_certificates.prepare_server_tls() == ""
+        assert broker_certificates.prepare_broker_files() == ""
 
         assert (state / "mqtt_tls" / "ca.crt").is_file()
         assert (folder / "broker.crt").read_bytes().count(b"BEGIN CERTIFICATE") == 2
@@ -426,13 +439,13 @@ class TestTheServerStartup:
     ) -> None:
         # A server restart must not tell anyone to restart the broker for nothing.
         folder = tmp_path / "tls"
-        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_tls_export=str(folder))
-        broker_certificates.prepare_server_tls()
+        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_broker_dir=str(folder))
+        broker_certificates.prepare_broker_files()
         written = (folder / "broker.key").stat().st_mtime_ns
         caplog.clear()
 
         with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
-            assert broker_certificates.prepare_server_tls() == ""
+            assert broker_certificates.prepare_broker_files() == ""
 
         assert (folder / "broker.key").stat().st_mtime_ns == written
         assert not [r for r in caplog.records if "restart" in r.getMessage()]
@@ -447,11 +460,11 @@ class TestTheServerStartup:
         blocker = tmp_path / "a-file"
         blocker.write_text("not a directory", encoding="utf-8")
         self._configure(
-            monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_tls_export=str(blocker / "tls")
+            monkeypatch, mqtt_tls="1", mqtt_tls_ca="", mqtt_broker_dir=str(blocker / "tls")
         )
 
         with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
-            assert broker_certificates.prepare_server_tls() == ""
+            assert broker_certificates.prepare_broker_files() == ""
 
         assert any("Could not write" in r.getMessage() for r in caplog.records)
 
@@ -459,9 +472,9 @@ class TestTheServerStartup:
         self, state: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         missing = tmp_path / "mine.crt"
-        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca=str(missing), mqtt_tls_export="")
+        self._configure(monkeypatch, mqtt_tls="1", mqtt_tls_ca=str(missing), mqtt_broker_dir="")
 
-        problem = broker_certificates.prepare_server_tls()
+        problem = broker_certificates.prepare_broker_files()
 
         assert str(missing) in problem
         assert "MQTT_TLS_CA" in problem

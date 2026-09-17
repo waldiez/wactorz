@@ -326,20 +326,72 @@ and the account is not in the <code>systemd-journal</code> group), so it reports
 <p>A remote node connects back to the MQTT broker over the network, so <code>broker</code> in
 its target block is the address the <strong>node</strong> should dial — your main machine's
 LAN IP, not <code>localhost</code>.</p>
+<p>The Home Assistant add-on's embedded broker publishes no port by default, so
+nothing outside the add-on can reach it: assign <code>1883</code> a host port under the
+add-on's <strong>Network</strong> settings, or <code>8883</code> for TLS, before a remote node can
+connect to it at all — whatever credentials that node holds.</p>
 <p>Broker credentials travel with the deploy. They are written to <code>~/wactorz/.env</code>
 on the node (mode <code>0600</code>) and sourced when the runner starts, so they appear in
 no command line — SSH runs the launch command through a shell whose own
 arguments any local user can read with <code>ps</code>, which is why they are not passed
 that way. A node uses <code>DEPLOY_&lt;NODE&gt;_BROKER_USER</code> / <code>_BROKER_PASSWORD</code> if set,
 and this server's <code>MQTT_USERNAME</code> / <code>MQTT_PASSWORD</code> otherwise.</p>
-<p>Sharing the server's account is the usable default for one broker with one
-account, and it has a cost worth stating: <strong>a stolen node holds full broker
-access</strong>, and the broker carries the code spawned agents run. Give a node its
-own account when that matters — a Mosquitto password file holds as many users
-as you need.</p>
-<p>The Wactorz add-on's embedded broker still cannot serve a remote node, but for a
-different reason: its port is deliberately not published, so there is no route
-to it whatever credentials a node holds.</p>
+<p>Sharing the server's account has a cost worth stating: <strong>a stolen node holds full
+broker access</strong>, and the broker carries the code spawned agents run. An account
+per node is the answer, and Wactorz can issue them.</p>
+<h3 id="an-account-per-node">An account per node</h3>
+<p><code>WACTORZ_NODE_ACCOUNTS=1</code> gives every deployed node an account named after it.
+The password is derived from the same secret the signing keys come from, so
+nothing new is stored and a leaked password file says nothing about a signing
+key, and <code>/deploy</code> writes it into the node's <code>~/wactorz/.env</code> as before. A
+<code>DEPLOY_&lt;NODE&gt;_BROKER_USER</code> / <code>_BROKER_PASSWORD</code> you set still wins.</p>
+<p>For the broker Wactorz configures — compose's, and the add-on's embedded one —
+it also writes an access list into <code>MQTT_BROKER_DIR</code>, beside the TLS
+certificate. With it, a node may:</p>
+<ul>
+<li>publish and read its own <code>nodes/&lt;name&gt;/...</code>, and the shared agent traffic
+  (<code>agents/#</code>, <code>sensors/#</code>, <code>homeassistant/#</code>, whatever your agents use);</li>
+</ul>
+<p>and may not:</p>
+<ul>
+<li>touch another node's <code>nodes/&lt;other&gt;/...</code>, in either direction — so it can
+  neither drive, impersonate nor watch another node;</li>
+<li>write <code>agents/+/commands</code>, which stops agents on the server;</li>
+<li>write anything under <code>system/</code>.</li>
+</ul>
+<p>The compose broker picks up a new node's account on its own: it watches that
+folder, reloads for a new account, and restarts itself if the access list or the
+certificate appeared for the first time, since mosquitto reads those only at
+startup.</p>
+<p>Two lines in the broker log when that list loads are expected:</p>
+<div class="highlight"><pre><span></span><code>Warning: ACL pattern &#39;#&#39; does not contain &#39;%c&#39; or &#39;%u&#39;.
+Warning: ACL pattern &#39;$SYS/#&#39; does not contain &#39;%c&#39; or &#39;%u&#39;.
+</code></pre></div>
+
+<p>They are the two lines that give every account the commons, the server's own and
+Home Assistant's included. Mosquitto notes that neither names a client, which is
+the point — "everything" is not something <code>%u</code> can spell — and the alternative
+spelling (<code>topic</code> instead of <code>pattern</code>) applies to anonymous clients only, which
+would leave every named account with no access at all.</p>
+<p><strong>Only turn this on where the broker has those accounts.</strong> On a broker you run
+yourself, create them there first (or keep using <code>DEPLOY_&lt;NODE&gt;_BROKER_USER</code>).
+A node presenting an account its broker has never heard of is simply refused.</p>
+<p><strong>The rollout is per node.</strong> Every node keeps the shared account until its next
+<code>/deploy</code>, and nothing changes for it until then — so an install with the option
+on and nodes not yet redeployed is exactly as contained as it was. Once the last
+node has been redeployed, change <code>MQTT_PASSWORD</code> (and the broker's own account)
+so the account they used to share no longer opens anything.</p>
+<p><strong>What it does not do:</strong> a node's own agents share the node's account, so the
+containment boundary is the machine, not the agent. Nothing stops an agent
+publishing readings another agent reads — that traffic is a commons by design.
+The access list names the nodes you have configured, so it covers every node that
+exists; a node can still write under a <code>nodes/&lt;name&gt;/...</code> that no node has yet, and
+leave a message waiting for one deployed later. Mosquitto cannot express "every
+node's topics except your own" — a <code>deny</code> beats every allow, including the node's
+own — so naming them is the only shape available. Two things close the rest:
+<code>/deploy</code> clears whatever is retained on that node's control topics before the node
+starts and subscribes, and <code>WACTORZ_NODE_SIGNING=enforce</code> makes a node refuse
+anything main did not sign for it.</p>
 <h3 id="signed-commands">Signed commands</h3>
 <p>Everything main tells a node to do — spawn an agent, apply a desired state, stop,
 restart, migrate — is signed with a key derived for that node. <code>/deploy</code> writes the
@@ -372,7 +424,7 @@ trust. Wactorz sets that up with no certificate to buy or renew:</p>
   (CA) in <code>&lt;WACTORZ_STATE_DIR&gt;/mqtt_tls/</code>, created the first time it is needed, and
   issues the broker's certificate from it. The compose broker serves TLS on port
   <code>8883</code> beside plain MQTT on <code>1883</code> once the certificate is in
-  <code>infra/mosquitto/tls/</code>: the <code>python</code> and <code>full</code> profiles put it there, and so does
+  <code>infra/mosquitto/generated/</code>: the <code>python</code> and <code>full</code> profiles put it there, and so does
   a <code>wactorz</code> run on the host with <code>MQTT_TLS=1</code>, or <code>make mqtt-certs</code> — restart the
   broker after the first time. The Home Assistant add-on's embedded broker serves
   TLS too. The certificate is issued again before it expires, or when it no longer
@@ -396,7 +448,7 @@ checked, so give each target a <code>broker</code> name the certificate carries.
 <p><strong>The server's own connection</strong> uses TLS with <code>MQTT_TLS=1</code>: the server then dials
 <code>MQTT_TLS_PORT</code> (default <code>8883</code>) instead of <code>MQTT_PORT</code>, under compose too. It creates
 the generated CA and certificate when it starts if they are missing, and writes the
-broker's copy to <code>MQTT_TLS_EXPORT</code> (<code>infra/mosquitto/tls</code> in <code>.env.template</code>). A CA
+broker's copy to <code>MQTT_BROKER_DIR</code> (<code>infra/mosquitto/generated</code> in <code>.env.template</code>). A CA
 that cannot be loaded stops it at startup, naming the file it looked for. Without
 <code>MQTT_TLS</code> the connection stays plain, which suits a broker beside the server rather
 than across a network.</p>

@@ -111,7 +111,12 @@ def ensure(
     reason = _why_issue(cert_path, key_path, ca_cert, wanted, moment)
     if reason:
         logger.info("[mqtt-tls] Issuing the broker certificate: %s", reason)
-        _issue(cert_path, key_path, ca_cert, ca_key, wanted, moment)
+        # Keeping the names it already carries, so a certificate stays good for
+        # whoever issued it last. Two things issue it -- this server, and the
+        # one-shot step inside the compose stack -- and each knows its own
+        # addresses, so replacing the names would have them reissue in turn for
+        # ever, restarting the broker each time.
+        _issue(cert_path, key_path, ca_cert, ca_key, _with_existing(cert_path, wanted), moment)
     return BrokerFiles(ca=target / CA_FILE, cert=cert_path, key=key_path, issued=bool(reason))
 
 
@@ -237,6 +242,15 @@ def _issue(
     )
     _write_private(key_path, _private_pem(key))
     _write_public(cert_path, cert.public_bytes(serialization.Encoding.PEM))
+
+
+def _with_existing(cert_path: Path, wanted: list[str]) -> list[str]:
+    """``wanted`` plus every name the certificate at ``cert_path`` already names."""
+    try:
+        current = _names_in(x509.load_pem_x509_certificate(cert_path.read_bytes()))
+    except (OSError, ValueError):
+        return wanted
+    return _wanted_names([*wanted, *current])
 
 
 def _signed_by(cert: x509.Certificate, ca_cert: x509.Certificate) -> bool:

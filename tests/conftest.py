@@ -85,7 +85,8 @@ _TLS_VARIABLES = (
     "MQTT_TLS_CA",
     "MQTT_TLS_CHECK_HOSTNAME",
     "MQTT_TLS_PORT",
-    "MQTT_TLS_EXPORT",
+    "MQTT_BROKER_DIR",
+    "WACTORZ_NODE_ACCOUNTS",
 )
 
 
@@ -104,15 +105,27 @@ def _no_ambient_broker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for variable in _TLS_VARIABLES:
         monkeypatch.delenv(variable, raising=False)
-    plain = replace(
-        config.CONFIG,
-        mqtt_tls="",
-        mqtt_tls_ca="",
-        mqtt_tls_check_hostname="",
-        mqtt_tls_export="",
-        mqtt_port=config._env_int("MQTT_PORT", 1883),
-    )
-    monkeypatch.setattr(config, "CONFIG", plain)
+    plain = {
+        "mqtt_tls": "",
+        "mqtt_tls_ca": "",
+        "mqtt_tls_check_hostname": "",
+        "mqtt_broker_dir": "",
+        "node_accounts": False,
+        "mqtt_port": config._env_int("MQTT_PORT", 1883),
+    }
+    # Every module that imported the name, not just `config`: `from ..config import
+    # CONFIG` binds the object into that module, and replacing it here alone leaves
+    # those reading the developer's own settings.
+    #
+    # By the type's *name*, not the type: `tests/test_dev_mode_defaults.py` reloads
+    # `wactorz.config`, which builds a second `AppConfig` class, and an `isinstance`
+    # check against the current one then silently matches nothing -- leaving the
+    # settings ambient in whichever files ran after it, under a random order.
+    for module in list(sys.modules.values()):
+        ambient = getattr(module, "CONFIG", None)
+        if ambient is None or type(ambient).__name__ != "AppConfig":
+            continue
+        monkeypatch.setattr(module, "CONFIG", replace(ambient, **plain))
 
 
 #: The real factory, for the tests that exist to exercise it.

@@ -273,9 +273,14 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
   on a network you trust, and nothing here replaces a tunnel or VPN across the
   public internet. See "Encrypted connections (TLS)" in <code>remote-nodes.md</code>.</li>
 <li><strong>Edge nodes hold broker credentials.</strong> <code>/deploy</code> writes them to the node over
-  SSH, and by default a node uses the server's own account. A stolen node
-  therefore holds full broker access; give a node its own account when that
-  matters.</li>
+  SSH, and by default a node uses the server's own account, so a stolen node
+  holds full broker access. <code>WACTORZ_NODE_ACCOUNTS=1</code> gives each node an account
+  of its own instead, and on the brokers Wactorz configures an access list that
+  keeps a node to its own <code>nodes/&lt;name&gt;/...</code> and the shared agent traffic, out of
+  every other node's, out of <code>agents/+/commands</code> and out of <code>system/</code>. It takes
+  effect for a node at its next <code>/deploy</code>, so rotate the shared password once the
+  last one has moved. A node's agents share its account: the boundary is the
+  machine, not the agent.</li>
 <li><strong>Commands to an edge node are signed.</strong> A node runs the code in a spawn it
   receives, so broker access alone must not be enough to send one. Main signs
   every command it sends a node with a key derived for that node, which <code>/deploy</code>
@@ -310,7 +315,8 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
 <li>If you need otherwise, set <code>API_KEY</code> to something generated —
    <code>openssl rand -hex 32</code>.</li>
 <li>Put the broker on a trusted network segment, and set <code>MQTT_PASSWORD</code>.</li>
-<li>Give each edge node its own broker account if a stolen node would matter.</li>
+<li>Set <code>WACTORZ_NODE_ACCOUNTS=1</code> so each edge node gets its own broker account,
+   deploy every node again, then rotate the account they shared.</li>
 <li>Deploy every edge node again after upgrading, so it holds a signing key, and
    set <code>WACTORZ_NODE_SIGNING=enforce</code> once no node reports unsigned commands.
    Publish the broker's <code>8883</code> where nodes can reach it first, so the deploy puts

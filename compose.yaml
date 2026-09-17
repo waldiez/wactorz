@@ -28,7 +28,10 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2.0
     cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    # KILL is for the reload above: the broker drops to its own user, and the
+    # watcher that tells it to read the new accounts runs as root, which cannot
+    # signal another user's process without it.
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID, KILL]
     security_opt: [no-new-privileges:true]
     container_name: wactorz-mosquitto
     restart: unless-stopped
@@ -41,7 +44,7 @@ services:
         required: false
     ports:
       - "${MQTT_EXTERNAL_PORT:-1883}:1883"
-      # TLS. Answered once a certificate is in infra/mosquitto/tls: mqtt-certs
+      # TLS. Answered once a certificate is in infra/mosquitto/generated: mqtt-certs
       # below puts one there under the python and full profiles, and a wactorz
       # run on this host with MQTT_TLS=1 does too (restart the broker after).
       - "${MQTT_TLS_EXTERNAL_PORT:-8883}:8883"
@@ -54,7 +57,7 @@ services:
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
-      - ./infra/mosquitto/tls:/wactorz-tls:ro
+      - ./infra/mosquitto/generated:/wactorz-broker:ro
     networks:
       - wactorz-net
     environment:
@@ -70,7 +73,7 @@ services:
     # unable to read a root-owned 0600 file.
     #
     # The TLS listener is added the same way, at start and only when a certificate
-    # is in infra/mosquitto/tls: the tracked config stays one
+    # is in infra/mosquitto/generated: the tracked config stays one
     # file that also serves compose.dev.yaml, and a broker with no certificate
     # starts exactly as it did.
     command:
@@ -81,16 +84,79 @@ services:
         umask 077
         mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
         chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
-        conf=/mosquitto/config/mosquitto.conf
-        if [ -s /wactorz-tls/broker.crt ] && [ -s /wactorz-tls/broker.key ]; then
-          mkdir -p /mosquitto/config/tls
-          cp /wactorz-tls/broker.crt /wactorz-tls/broker.key /mosquitto/config/tls/
-          chown -R mosquitto:mosquitto /mosquitto/config/tls 2>/dev/null || true
-          { cat "$$conf"; printf '\nlistener 8883\nprotocol mqtt\ncertfile /mosquitto/config/tls/broker.crt\nkeyfile /mosquitto/config/tls/broker.key\n'; } > /mosquitto/config/run.conf
-          conf=/mosquitto/config/run.conf
-          echo "[mosquitto] TLS listener on 8883"
-        fi
-        exec /usr/sbin/mosquitto -c "$$conf"
+        # Everything Wactorz generates is optional and independent: with none of it
+        # this is the broker as it always was, on 1883 with its own account.
+        take_generated() {
+          # The accounts go after this broker's own, which mosquitto_passwd wrote.
+          if [ -s /wactorz-broker/node_passwd ]; then
+            cat /wactorz-broker/node_passwd >> /mosquitto/config/passwd
+          fi
+          if [ -s /wactorz-broker/acl ]; then
+            cp /wactorz-broker/acl /mosquitto/config/acl
+            chown mosquitto:mosquitto /mosquitto/config/acl 2>/dev/null || true
+          fi
+          if [ -s /wactorz-broker/broker.crt ] && [ -s /wactorz-broker/broker.key ]; then
+            mkdir -p /mosquitto/config/tls
+            cp /wactorz-broker/broker.crt /wactorz-broker/broker.key /mosquitto/config/tls/
+            chown -R mosquitto:mosquitto /mosquitto/config/tls 2>/dev/null || true
+          fi
+        }
+        write_conf() {
+          target=$${1:-/mosquitto/config/run.conf}
+          cp /mosquitto/config/mosquitto.conf "$$target"
+          # Readable after the broker drops to its own user: a reload re-reads this
+          # file as that user, unlike the start, which happens while it is still root.
+          chmod 0644 "$$target"
+          if [ -s /mosquitto/config/acl ]; then
+            printf '\nacl_file /mosquitto/config/acl\n' >> "$$target"
+          fi
+          if [ -s /mosquitto/config/tls/broker.crt ]; then
+            printf '\nlistener 8883\nprotocol mqtt\ncertfile /mosquitto/config/tls/broker.crt\nkeyfile /mosquitto/config/tls/broker.key\n' >> "$$target"
+          fi
+        }
+        announce_conf() {
+          if [ -s /mosquitto/config/acl ]; then echo "[mosquitto] node access list loaded"; fi
+          if [ -s /mosquitto/config/tls/broker.crt ]; then echo "[mosquitto] TLS listener on 8883"; fi
+        }
+        take_generated
+        write_conf
+        announce_conf
+        # A deploy adds an account while this broker is running, and nothing else can
+        # signal it from another container: watch the folder, rebuild what it feeds
+        # the broker, and ask the broker to read it again. Polling rather than inotify,
+        # which does not cross every file-sharing implementation.
+        (
+          # Everything the broker takes from the folder, so a certificate arriving
+          # on its own wakes this too -- it changes the config, not just content.
+          stamp() { cat /wactorz-broker/node_passwd /wactorz-broker/acl /wactorz-broker/broker.crt /wactorz-broker/broker.key 2>/dev/null | md5sum; }
+          last=$$(stamp)
+          while sleep 5; do
+            now=$$(stamp)
+            if [ "$$now" != "$$last" ]; then
+              last=$$now
+              umask 077
+              mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+              chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
+              take_generated
+              # A reload re-reads the accounts and the access list this broker was
+              # started with; it does not pick up an acl_file or a listener the
+              # config did not name, which is what appears the first time a
+              # certificate or an access list is generated. So: same config, reload;
+              # changed config, stop, and the restart policy brings it back with it.
+              write_conf /tmp/next.conf
+              if cmp -s /tmp/next.conf /mosquitto/config/run.conf; then
+                echo "[mosquitto] node accounts changed; reloading"
+                kill -HUP 1
+              else
+                cp /tmp/next.conf /mosquitto/config/run.conf
+                announce_conf
+                echo "[mosquitto] broker configuration changed; restarting to apply it"
+                kill -TERM 1
+              fi
+            fi
+          done
+        ) &
+        exec /usr/sbin/mosquitto -c /mosquitto/config/run.conf
     healthcheck:
       # Authenticated, or the probe fails the moment anonymous access is off —
       # and wactorz-python waits on service_healthy, so the whole stack would
@@ -107,7 +173,7 @@ services:
   # ── Broker TLS certificate ─────────────────────────────────────────────────────
   # One-shot. Issues the broker's certificate from a CA kept in ./state/mqtt_tls
   # -- minted on the first run, and what /deploy hands a node -- and copies the
-  # certificate and key into infra/mosquitto/tls, where the broker reads them. A
+  # certificate and key into infra/mosquitto/generated, where the broker reads them. A
   # wactorz run on this host with MQTT_TLS=1 writes the same folder, and so does
   # `make mqtt-certs`. The Wactorz image does it because the broker image has no
   # tool that can. It never fails the stack: without a certificate the broker
@@ -119,6 +185,10 @@ services:
       dockerfile: Dockerfile
     image: wactorz-python:latest
     container_name: wactorz-mqtt-certs
+    # Fixed, because the certificate names the host it is generated on: left to
+    # Docker that is the container's id, which changes on every run, and the
+    # certificate would be reissued -- and the broker restarted -- each time.
+    hostname: mosquitto
     restart: "no"
     env_file:
       - .env
@@ -133,9 +203,9 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        docker-entrypoint.sh python -m wactorz.broker_certificates --export /tmp/mqtt-tls \
-          && cp /tmp/mqtt-tls/broker.crt /tmp/mqtt-tls/broker.key /mqtt-tls/ \
-          && chown "$$(stat -c %u:%g /mqtt-tls)" /mqtt-tls/broker.crt /mqtt-tls/broker.key \
+        docker-entrypoint.sh python -m wactorz.broker_certificates --export /tmp/broker-files \
+          && cp -r /tmp/broker-files/. /wactorz-broker/ \
+          && chown "$$(stat -c %u:%g /wactorz-broker)" /wactorz-broker/* \
           || echo "[mqtt-certs] No certificate issued; the broker serves plain MQTT only." >&2
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
@@ -145,7 +215,7 @@ services:
       - /tmp
     volumes:
       - ./state:/app/state
-      - ./infra/mosquitto/tls:/mqtt-tls
+      - ./infra/mosquitto/generated:/wactorz-broker
     networks:
       - wactorz-net
 
@@ -167,7 +237,7 @@ services:
       # With MQTT_TLS=1 in .env the app dials the broker's TLS port instead
       # (MQTT_TLS_PORT, 8883). mqtt-certs writes the broker's copy of the
       # certificate, so the app does not: its filesystem is read-only.
-      MQTT_TLS_EXPORT: ""
+      MQTT_BROKER_DIR: ""
       # Mirrors the broker's defaults above. Without this the app would take
       # MQTT_USERNAME from .env, where it may be unset while the broker
       # defaulted it — the two would disagree and every connection be refused.
@@ -190,7 +260,11 @@ services:
     # so nothing can be picked back up during that window or via a file
     # capability later. `cap_drop: [ALL]` on its own breaks the chown.
     cap_drop: [ALL]
-    cap_add: [CHOWN, SETUID, SETGID]
+    # KILL as well: `init: true` puts tini at pid 1 as root, and the app runs as
+    # its own user after the entrypoint drops privileges, so without it tini
+    # cannot forward a stop signal ("Operation not permitted") and the container
+    # is killed after the timeout instead of shutting down.
+    cap_add: [CHOWN, SETUID, SETGID, KILL]
     security_opt: ["no-new-privileges:true"]
     # Everything the container writes goes to the state mount below, so the image
     # itself can be immutable at runtime. /tmp is a tmpfs because pip needs a

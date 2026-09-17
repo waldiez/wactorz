@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import retention
 from wactorz.agents.lookup import find_main_actor
-from wactorz.broker_certificates import prepare_server_tls
+from wactorz.broker_certificates import prepare_broker_files
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS
 from wactorz.core import cancellation
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
@@ -506,10 +506,11 @@ async def app(args: argparse.Namespace):
     # alone left the REST interface serving chat and lifecycle commands to the
     # network in exactly the configuration this refusal exists to stop.
     #
-    # The broker's TLS is made ready here as well, before the first connection, and
-    # a CA that cannot be loaded refuses the same way: it would fail every reconnect
+    # What a broker of ours reads is written here as well -- its TLS certificate,
+    # and the node accounts when those are on -- before the first connection. A CA
+    # that cannot be loaded refuses the same way: it would fail every reconnect
     # after this one too.
-    refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key) or prepare_server_tls()
+    refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key) or prepare_broker_files()
     if refusal:
         logger.error("[startup] %s", refusal)
         raise SystemExit(1)

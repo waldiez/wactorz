@@ -411,9 +411,7 @@ class SharedStateHub:
         """Publish to a shared state topic (retained by default)."""
         self._cache[topic] = data
         if self._mqtt:
-            import json as _json
-
-            payload = _json.dumps(data) if not isinstance(data, (str, bytes)) else data
+            payload = json.dumps(data) if not isinstance(data, (str, bytes)) else data
             await self._mqtt.publish(topic, payload, retain=retain, qos=1)
 
     async def publish_presence(
@@ -590,13 +588,6 @@ class StreamWindow:
         return self
 
     async def _listen(self, broker: str, port: int):
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
-                "[StreamWindow] aiomqtt not installed"
-            )  # the ImportError is the whole diagnosis
-            return
         from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
 
         while True:

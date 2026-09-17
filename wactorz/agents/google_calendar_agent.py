@@ -1,7 +1,5 @@
 """GoogleCalendarAgent - Read and manage Google Calendar events."""
 
-from __future__ import annotations
-
 import json
 import logging
 import os

@@ -24,10 +24,12 @@ Or via main (natural language):
 import asyncio
 import importlib
 import importlib.metadata
+import importlib.util
 import logging
 import pathlib
 import re
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..core.actor import Actor, Message, MessageType
@@ -104,8 +106,6 @@ def _wants_experimental(text: str) -> bool:
 
 
 def _load_recipe(filename: str) -> str | None:
-    import importlib.util
-
     path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
     if not path.exists():
         logger.warning("[catalog] Recipe file not found: %s", path)
@@ -881,9 +881,7 @@ class CatalogAgent(Actor):
                         logger.info(
                             "[%s] Installing missing deps for '%s': %s", self.name, name, needed
                         )
-                        import uuid as _uuid
-
-                        task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
+                        task_id = f"cat_install_{uuid.uuid4().hex[:8]}"
                         future = asyncio.get_running_loop().create_future()
                         main = find_main_actor(self._registry)
                         if main:

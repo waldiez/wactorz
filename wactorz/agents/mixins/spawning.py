@@ -30,12 +30,13 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 (``self.llm``), so the mixin rests on a stable shared surface.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
+import importlib
 import logging
+import pickle
 import time
+import uuid
 from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, MessageType
@@ -375,8 +376,6 @@ class SpawnMixin(_Host):
         activity feed still shows background installs/spawns. ``_mqtt_publish``
         is on the Actor base; guarded so the mixin stays testable without it.
         """
-        import time
-
         publish = getattr(self, "_mqtt_publish", None)
         try:
             if publish is not None:
@@ -457,8 +456,6 @@ class SpawnMixin(_Host):
         import name often differs from the pip name (opencv-python → cv2), so
         this is a heuristic; re-installing an present package is a cheap no-op.
         """
-        import importlib
-
         needed = []
         for pkg in packages:
             import_name = pkg.replace("-", "_").split("[")[0]
@@ -492,8 +489,6 @@ class SpawnMixin(_Host):
                 agent_name,
             )
             return
-
-        import uuid
 
         task_id = f"install_{uuid.uuid4().hex[:8]}"
         future = asyncio.get_event_loop().create_future()
@@ -562,8 +557,6 @@ class SpawnMixin(_Host):
                 e,
             )
             try:
-                import pickle
-
                 pdir = agent_state_dir(self._persistence_dir.parent, name)
                 pdir.mkdir(parents=True, exist_ok=True)
                 with open(pdir / "state.pkl", "wb") as fh:

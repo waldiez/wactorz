@@ -138,11 +138,6 @@ class CLIInterface:
                 return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
             return f"[error] Agent '{agent_name}' not found. No remote nodes connected."
 
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return "[error] aiomqtt not installed"
-
         reply_topic = f"main/reply/{main.actor_id}/{uuid.uuid4().hex[:8]}"
         result_holder = []
 

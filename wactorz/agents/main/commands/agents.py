@@ -5,8 +5,6 @@ machine. The checks that come first are the point — a command that acts on the
 wrong agent is not recoverable by typing the right one afterwards.
 """
 
-from __future__ import annotations
-
 import logging
 
 from ....core.actor import ActorState

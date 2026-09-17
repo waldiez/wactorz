@@ -30,8 +30,6 @@ Known sites:
 | ``dynamic``| ``get_llm()`` shim inside LLM-generated DynamicAgent code   |
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from collections.abc import Callable

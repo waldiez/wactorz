@@ -12,8 +12,6 @@ logged in are the same state) and why the origin gate is enough — see
 `auth.UNGUARDED_PATHS`.
 """
 
-from __future__ import annotations
-
 import hmac
 import logging
 

@@ -17,8 +17,6 @@ unreadable, near expiry, or does not name an address the broker is reached by is
 simply issued again.
 """
 
-from __future__ import annotations
-
 import datetime
 import ipaddress
 import logging

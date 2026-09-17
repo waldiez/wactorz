@@ -18,6 +18,10 @@ import time
 import traceback
 from typing import Any
 
+import aiomqtt
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.properties import Properties
+
 from ...core.mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client
 from ...core.topic_bus import topic_matches
 
@@ -202,10 +206,6 @@ class SubscriptionHub:
         """Connect arguments that make the broker keep this session, or not."""
         if not self._durable:
             return {}
-        import aiomqtt
-        from paho.mqtt.packettypes import PacketTypes
-        from paho.mqtt.properties import Properties
-
         properties = Properties(PacketTypes.CONNECT)
         properties.SessionExpiryInterval = self.SESSION_EXPIRY_SECONDS
         return {
@@ -235,11 +235,6 @@ class SubscriptionHub:
 
     async def run(self) -> None:
         """Hold the connection open and dispatch what arrives, reconnecting for ever."""
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.exception("[%s] aiomqtt not installed", self._actor.name)
-            return
         while True:
             try:
                 # Workers are cancelled when this task is, so a hub that is

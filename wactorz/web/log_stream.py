@@ -21,8 +21,6 @@ and still served by `GET /api/logs`, so nothing is hidden; they simply do not
 feed the thing that produced them.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any

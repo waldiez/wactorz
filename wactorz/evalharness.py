@@ -41,8 +41,6 @@ runs so the pipeline can be smoke-tested end to end; real experiments should
 supply the full benchmark file.
 """
 
-from __future__ import annotations
-
 import argparse
 import ast
 import asyncio

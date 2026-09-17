@@ -1,6 +1,5 @@
 """Unit tests for the central aiomqtt client factory (wactorz.core.mqtt)."""
 
-import sys
 import types
 import unittest
 from unittest import mock
@@ -31,7 +30,7 @@ class MqttClientFactoryTest(unittest.TestCase):
         # it at the source module, not on wactorz.core.mqtt.
         with (
             mock.patch("wactorz.config.CONFIG", cfg),
-            mock.patch.dict(sys.modules, {"aiomqtt": fake_aiomqtt}),
+            mock.patch.object(m, "aiomqtt", fake_aiomqtt),
         ):
             m.mqtt_client("broker", 1883, **kwargs)
         return captured

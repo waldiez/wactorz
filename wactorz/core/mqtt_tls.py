@@ -21,8 +21,6 @@ copies of this rule, since neither can import ``wactorz`` on a node.
 Standard library only: :mod:`.mqtt` imports this, and is itself imported early.
 """
 
-from __future__ import annotations
-
 import ssl
 from pathlib import Path
 

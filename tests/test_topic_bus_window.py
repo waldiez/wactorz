@@ -5,8 +5,6 @@ Ageing is driven here by writing `_ts` directly instead of sleeping — a window
 measured in minutes cannot be waited out.
 """
 
-from __future__ import annotations
-
 import time
 
 import pytest

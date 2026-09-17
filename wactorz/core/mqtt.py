@@ -7,14 +7,11 @@ Without this, an external broker with ``allow_anonymous false`` — e.g. the
 official Home Assistant Mosquitto add-on — rejects every connection, which is
 why the add-on historically only worked with its bundled, anonymous broker.
 
-Both ``aiomqtt`` and ``CONFIG`` are imported lazily inside the factory, so this
-module has **zero import-time side effects**. That matters because
-``core/actor.py`` imports this at the top and is itself imported very early by
-``wactorz/__init__.py`` — a module-level ``from ..config import CONFIG`` here
-re-enters the half-initialised package and causes a circular import.
+``CONFIG`` is imported inside the factory rather than at the top. That matters
+because ``core/actor.py`` imports this at the top and is itself imported very
+early by ``wactorz/__init__.py`` — a module-level ``from ..config import CONFIG``
+here re-enters the half-initialised package and causes a circular import.
 """
-
-from __future__ import annotations
 
 import logging
 import os
@@ -22,15 +19,13 @@ import time
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+import aiomqtt
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.properties import Properties
 
 from .mqtt_tls import client_context, tls_enabled
-
-if TYPE_CHECKING:  # pragma: no cover
-    import aiomqtt
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +146,6 @@ def session_kwargs(expiry_seconds: int) -> dict[str, Any]:
 
     The protocol version is per connection, so callers adopt this one at a time.
     """
-    import aiomqtt
-    from paho.mqtt.packettypes import PacketTypes
-    from paho.mqtt.properties import Properties
-
     properties = Properties(PacketTypes.CONNECT)
     properties.SessionExpiryInterval = expiry_seconds
     return {
@@ -188,8 +179,6 @@ def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
     Each is only added when configured *and* not already supplied by the caller,
     so explicit per-call overrides still win.
     """
-    import aiomqtt
-
     from ..config import CONFIG
 
     if "username" not in kwargs and CONFIG.mqtt_username:

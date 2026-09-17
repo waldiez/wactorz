@@ -18,8 +18,6 @@ for API-only installs; leave it unset — with the loopback default — for
 dashboard use.
 """
 
-from __future__ import annotations
-
 import hmac
 import logging
 from typing import Any, NoReturn

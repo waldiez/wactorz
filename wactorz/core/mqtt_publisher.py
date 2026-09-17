@@ -186,8 +186,6 @@ class MQTTPublisher:
         """Build a publisher and connect it, or return one that quietly no-ops."""
         pub = cls(db_path=db_path, dead_letter_days=dead_letter_days)
         try:
-            import aiomqtt  # noqa: F401  # pylint: disable=unused-import
-
             pub._init_db()
             # Before the replay: an expired message is dropped, not retried once more.
             pub._expire()
@@ -202,8 +200,6 @@ class MQTTPublisher:
                 pub.client_id,
                 db_path,
             )
-        except ImportError:
-            logger.warning("[MQTT] aiomqtt not installed. MQTT disabled.")
         except Exception as e:
             logger.warning("[MQTT] Publisher unavailable: %s", e)
         return pub

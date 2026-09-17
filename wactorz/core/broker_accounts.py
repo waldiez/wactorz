@@ -37,8 +37,6 @@ all -- which is why the list opens with one pattern granting every account the
 commons, including the server's own and any the user added for something else.
 """
 
-from __future__ import annotations
-
 import base64
 import hashlib
 import os

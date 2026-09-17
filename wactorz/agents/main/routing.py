@@ -7,8 +7,6 @@ self._persist_cost) plus the Actor base (self._registry, self.send, self.spawn,
 self._result_futures, self.actor_id).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import uuid

@@ -13,8 +13,6 @@ Deliberately knows nothing about MQTT, the registry or the actor system. It is a
 dict of heartbeats with questions attached, so it can be tested as one.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

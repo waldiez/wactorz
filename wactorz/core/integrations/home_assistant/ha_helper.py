@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import base64
 import csv
 import hashlib
 import io
@@ -634,8 +633,6 @@ async def get_camera_snapshot(rest_base: str, token: str, camera_entity_id: str)
     Returns {"image_base64": str, "content_type": str, "entity_id": str}
     or {"error": str, "status": int, "detail": str, "entity_id": str} on failure.
     """
-    import base64
-
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{rest_base}/api/camera_proxy/{camera_entity_id}"
     logger.debug("Camera snapshot request: %s", url)

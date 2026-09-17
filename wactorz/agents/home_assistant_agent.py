@@ -20,8 +20,6 @@ to two additional LLM calls internally; simpler ones (list, delete) use
 one.  All HA communication goes through ha_helper.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re

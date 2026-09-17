@@ -9,6 +9,7 @@ import logging
 import re
 import shlex
 import socket
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, replace
@@ -420,8 +421,6 @@ class InstallerAgent(Actor):
         (the default in some Python versions / environments). subprocess.run() works
         correctly on all platforms.
         """
-        import subprocess
-
         cmd = [sys.executable, "-m", "pip", "install", package, "--quiet"]
         if sys.platform != "win32":
             cmd.append("--break-system-packages")
@@ -977,12 +976,10 @@ class InstallerAgent(Actor):
         user = target.user
 
         # Find remote_runner.py relative to this file
-        import pathlib
-
         candidates = [
-            pathlib.Path(__file__).parent.parent / "remote_runner.py",
-            pathlib.Path("remote_runner.py"),
-            pathlib.Path(__file__).parent.parent.parent / "remote_runner.py",
+            Path(__file__).parent.parent / "remote_runner.py",
+            Path("remote_runner.py"),
+            Path(__file__).parent.parent.parent / "remote_runner.py",
         ]
         runner_path = next((p for p in candidates if p.exists()), None)
         if not runner_path:

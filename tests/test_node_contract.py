@@ -10,8 +10,6 @@ Each constant below is the contract as it stands. A change to one is a change
 both sides have to make together, which is the point of failing here first.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import re

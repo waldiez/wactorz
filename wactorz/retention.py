@@ -11,8 +11,6 @@ Not here: the MQTT outbox. It is a database of its own, owned by the publisher,
 which expires undelivered messages on its own checkpoint timer.
 """
 
-from __future__ import annotations
-
 import time
 
 from wactorz import config

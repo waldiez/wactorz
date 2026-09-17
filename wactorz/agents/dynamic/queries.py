@@ -1,7 +1,5 @@
 """Reading back what agents have recorded: time series, detections, HA state."""
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING, Any
 

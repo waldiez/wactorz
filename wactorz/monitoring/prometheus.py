@@ -1,13 +1,17 @@
 """Prometheus integration for the Python Wactorz runtime."""
 
-from __future__ import annotations
-
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from aiohttp import web
-from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Histogram,
+    generate_latest,
+)
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.platform_collector import PlatformCollector
 from prometheus_client.process_collector import ProcessCollector
@@ -177,8 +181,6 @@ class PrometheusMonitor:
         self._registry.register(self._actor_collector)
         ProcessCollector(registry=self._registry)
         PlatformCollector(registry=self._registry)
-
-        from prometheus_client import Counter, Histogram
 
         self._requests_total = Counter(
             "wactorz_http_requests_total",

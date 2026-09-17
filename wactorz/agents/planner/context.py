@@ -5,8 +5,6 @@ planner needs the MQTT topics and Home Assistant entity ids behind them, and
 the field names their payloads actually use.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

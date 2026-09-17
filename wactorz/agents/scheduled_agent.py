@@ -60,8 +60,6 @@ fires, then loops. Every 5 minutes the sleep is also bounded so that DST
 transitions, system clock jumps, and laptop sleep don't strand the agent.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

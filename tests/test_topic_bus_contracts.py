@@ -4,8 +4,6 @@ Topic patterns decide which agent receives which message, so a matching bug is
 silent: the wrong agent is wired, or none is, and nothing raises.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from wactorz.core.topic_bus import TopicContract, TopicRegistry, topic_matches

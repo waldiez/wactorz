@@ -13,8 +13,6 @@ the names that broker is configured with.
 node accounts and their access list beside the certificate when those are on.
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import socket

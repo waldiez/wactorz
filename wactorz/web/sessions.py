@@ -21,8 +21,6 @@ Nothing here reads configuration or touches aiohttp — it is a set of ids with
 ages, so it can be tested for what it is.
 """
 
-from __future__ import annotations
-
 import hashlib
 import hmac
 import json

@@ -24,8 +24,6 @@ Structured commands are still accepted for programmatic callers:
   remember my location as <location>
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re

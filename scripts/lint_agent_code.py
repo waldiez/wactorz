@@ -15,8 +15,6 @@ A fix or a format is written back into the string it came from, so the module
 around it is untouched.
 """
 
-from __future__ import annotations
-
 import argparse
 import ast
 import re

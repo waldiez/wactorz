@@ -1,7 +1,5 @@
 """Getting something out: publishing to MQTT, delegating, alerting, logging."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

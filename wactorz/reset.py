@@ -16,8 +16,6 @@ Each function is safe to call while the system is down (offline reset) or
 while it is running (the next heartbeat / restart will repopulate from scratch).
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import sys

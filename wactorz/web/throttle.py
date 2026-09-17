@@ -19,8 +19,6 @@ direction to fail, and it is the same reasoning as the ingress peer check.
 Nothing here reads configuration or touches aiohttp.
 """
 
-from __future__ import annotations
-
 import time
 
 #: Failures before the door closes entirely.

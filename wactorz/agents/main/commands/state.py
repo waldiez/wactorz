@@ -6,8 +6,6 @@ then exist. Nothing here decides whether the caller is allowed to — a social
 channel never reaches this package at all.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from datetime import datetime, timezone

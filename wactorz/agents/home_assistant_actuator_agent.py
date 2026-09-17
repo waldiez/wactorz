@@ -12,6 +12,7 @@ Designed to be the actuator end of the pipeline:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import operator as _op
 import time
@@ -277,14 +278,6 @@ class HomeAssistantActuatorAgent(Actor):
 
     async def _mqtt_listener(self) -> None:
         """Subscribe to configured MQTT topics and dispatch each message."""
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
-                "[%s] aiomqtt not installed — MQTT listener disabled", self.name
-            )
-            return
-
         # A stable id and a kept session, like any other long-lived listener.
         # These topics carry actuation triggers -- another agent asking for a
         # light or a switch -- so one lost while this agent reconnects is a
@@ -310,8 +303,6 @@ class HomeAssistantActuatorAgent(Actor):
                         if self.state in (ActorState.STOPPED, ActorState.FAILED):
                             break
                         try:
-                            import json
-
                             payload = json.loads(message.payload.decode())
                             await self._on_detection(payload)
                         except Exception:

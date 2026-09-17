@@ -5,8 +5,6 @@ startup warning and the monitor's fail-closed bind check — and neither is a
 natural home for the other's import.
 """
 
-from __future__ import annotations
-
 import ipaddress
 
 #: Hostnames that mean "this machine", where traffic never leaves it.

@@ -7,11 +7,10 @@ Actor base (self.persist/recall, self.spawn, self.send, self._registry,
 self._result_futures).
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
+import re
 import time
 import uuid
 from typing import TYPE_CHECKING, ClassVar
@@ -189,9 +188,7 @@ class PlanningMixin(_Host):
     def get_pending_plans(self) -> dict:
         plans = self.recall(PENDING_PLANS_KEY) or {}
         # Expire stale entries on every read so we don't have to gc separately
-        import time as _t
-
-        now = _t.time()
+        now = time.time()
         expired_ids = [
             pid
             for pid, p in plans.items()
@@ -410,8 +407,6 @@ class PlanningMixin(_Host):
         """Heuristic: does this task benefit from multi-agent coordination?
         Keeps main fast — only escalates genuinely complex requests.
         """
-        import re
-
         lowered = text.lower()
 
         # Explicit user request for coordination
@@ -615,14 +610,11 @@ class PlanningMixin(_Host):
             return planner_result
 
         # Store the proposal
-        import time as _t
-        import uuid as _uuid
-
-        plan_id = _uuid.uuid4().hex[:8]
+        plan_id = uuid.uuid4().hex[:8]
         proposal = {
             "plan_id": plan_id,
             "task": text,
-            "created_at": _t.time(),
+            "created_at": time.time(),
             "status": "pending",
             "envelope": envelope,
         }
@@ -777,8 +769,6 @@ class PlanningMixin(_Host):
         """
         lowered = text.lower()
         # Numbers + units strongly suggest correction ("change to 55%", "every 30s")
-        import re
-
         if re.search(
             r"\b\d+(\.\d+)?\s*(%|c|°|sec|secs|seconds|min|mins|minutes|hour|hours|hr|hrs)\b",
             lowered,
@@ -849,14 +839,11 @@ class PlanningMixin(_Host):
             # Planner returned a regular answer — pass it through
             return planner_result
 
-        import time as _t
-        import uuid as _uuid
-
-        new_id = _uuid.uuid4().hex[:8]
+        new_id = uuid.uuid4().hex[:8]
         new_proposal = {
             "plan_id": new_id,
             "task": original_task,  # keep original; correction lives in envelope
-            "created_at": _t.time(),
+            "created_at": time.time(),
             "status": "pending",
             "envelope": envelope,
             "supersedes": old_id,

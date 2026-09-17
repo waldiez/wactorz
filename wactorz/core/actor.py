@@ -660,10 +660,6 @@ class Actor(ABC):
         Transport only. Needed for actors a caller cannot reach in process —
         after the direct-dispatch change that means agents on remote nodes.
         """
-        try:
-            import aiomqtt  # pylint: disable=unused-import  # noqa: F401
-        except ImportError:
-            return
         # local: avoids core/__init__ import cycle
         from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client, session_kwargs
 

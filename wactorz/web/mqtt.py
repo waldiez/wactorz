@@ -7,6 +7,7 @@ reports it to browsers, so it cannot live here (mqtt already depends on ws).
 """
 
 import asyncio
+import gc
 import json
 import logging
 import time
@@ -163,8 +164,6 @@ async def mqtt_listener() -> None:
     finally:
         # Drop ref and force GC while loop is still open so paho's __del__
         # doesn't fire after the event loop closes (avoids RuntimeError noise).
-        import gc
-
         runtime.mqtt_client_ref = None
         gc.collect()
 

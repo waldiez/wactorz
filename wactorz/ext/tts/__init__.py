@@ -6,8 +6,6 @@ and ``public_config()`` reports ``available: false`` so the frontend falls
 back to browser Web Speech API.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import re

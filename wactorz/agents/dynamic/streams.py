@@ -1,7 +1,5 @@
 """Subscriptions, rolling windows, and the contracts an agent declares."""
 
-from __future__ import annotations
-
 import asyncio
 import inspect
 import json
@@ -203,10 +201,6 @@ class StreamsMixin(_Host):
             stats = await agent.mqtt_get('rpi-room/cpu')
             cpu = stats.get('cpu_percent') if stats else None
         """
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return None
         actor = self._actor
         result = []
 

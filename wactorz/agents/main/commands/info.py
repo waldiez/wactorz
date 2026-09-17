@@ -5,8 +5,6 @@ handler that cannot do damage is one whose move can be judged on whether the
 text still matches.
 """
 
-from __future__ import annotations
-
 import time
 from typing import Any
 

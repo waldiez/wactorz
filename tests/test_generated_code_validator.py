@@ -10,8 +10,6 @@ The validator is exercised through the real class so the pattern lists under
 test are the ones production uses.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from wactorz.agents.dynamic.agent import DynamicAgent

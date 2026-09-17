@@ -4,8 +4,6 @@ Draft-first by design: like Google's hosted Gmail MCP, this agent never sends
 mail. It searches/reads/labels and creates drafts for you to review and send.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re

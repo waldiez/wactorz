@@ -14,9 +14,10 @@ as it always has. On, the broker is verified against ``MQTT_TLS_CA``:
 Anything but the generated CA checks the hostname, since such a CA can sign more
 than this broker. ``MQTT_TLS_CHECK_HOSTNAME`` overrides that either way.
 
-The runner, and the catalogue programs that open a connection of their own, hold
-copies of this rule, since neither can import ``wactorz`` on a node.
-``tests/test_mqtt_tls.py`` holds the copies to it.
+The catalogue programs that open a connection of their own hold copies of this
+rule, since each runs as a quoted string that imports nothing from ``wactorz``.
+``tests/test_mqtt_tls.py`` holds those copies to it. Everything else, a node
+included, calls this module.
 
 Standard library only: :mod:`.mqtt` imports this, and is itself imported early.
 """

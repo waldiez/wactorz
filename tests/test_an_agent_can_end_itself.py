@@ -253,145 +253,93 @@ async def test_any_program_shape_can_end(tmp_path: Path, code: str) -> None:
 
 class TestTheNodeSideOffersTheSameVerb:
     """The prompt teaches `agent.stop()` to every generated program, and a
-    program does not know at authoring time where it will be deployed. A verb
-    that exists only on the host would give a node agent an AttributeError —
-    counted as a process() error, repaired, and retired: the very cycle this
-    feature exists to end, triggered by the prompt that teaches it.
+    program does not know at authoring time where it will be deployed.
+
+    There used to be two API classes to keep in step, and a verb missing from
+    the node's gave a node agent an AttributeError — counted as a process()
+    error, repaired, and retired: the very cycle this feature exists to end,
+    triggered by the prompt that teaches it. There is one class now, so what is
+    left to check is that ending works through the node's own arrangements.
     """
 
-    def test_a_node_agent_has_stop_too(self) -> None:
-        from wactorz.remote_runner import _RemoteAgentAPI
+    @staticmethod
+    def _node_agent(tmp_path: Path) -> Any:
+        from wactorz.node.agent import NodeAgent
+        from wactorz.node.runner import NodeRunner
 
-        assert callable(_RemoteAgentAPI.stop)
+        runner = NodeRunner("localhost", 1883, "rpi", state_dir=str(tmp_path))
+        agent = NodeAgent({"name": "finisher", "code": ""}, runner)
+        runner._configs["finisher"] = agent._config
+        runner.supervisor.supervise("finisher", lambda: agent)
+        return agent
 
-    def test_every_verb_the_prompt_teaches_exists_on_both(self) -> None:
-        """The two APIs are separate classes that have to stay in step."""
+    def test_a_node_agent_is_handed_the_same_api(self, tmp_path: Path) -> None:
         from wactorz.agents.dynamic.api import AgentAPI
-        from wactorz.remote_runner import _RemoteAgentAPI
+
+        assert type(self._node_agent(tmp_path)._api) is AgentAPI
+
+    def test_every_verb_the_prompt_teaches_is_on_it(self, tmp_path: Path) -> None:
+        api = self._node_agent(tmp_path)._api
 
         for verb in ("stop", "publish", "subscribe", "log", "persist", "recall"):
-            assert hasattr(AgentAPI, verb), f"host API is missing {verb}"
-            assert hasattr(_RemoteAgentAPI, verb), f"node API is missing {verb}"
+            assert hasattr(api, verb), f"the agent API is missing {verb}"
 
     async def test_it_stops_and_withdraws(self, tmp_path: Path) -> None:
         """All this side can do, and all it needs to: main reacts to the
         withdrawal for the spawn registry and the node's desired state."""
-        from wactorz.remote_runner import _RemoteAgent, _RemoteAgentAPI
-
+        agent = self._node_agent(tmp_path)
         published: list[tuple[str, Any, bool]] = []
 
-        class Runner:
-            def __init__(self) -> None:
-                self._agents: dict[str, Any] = {}
+        async def _publish(topic: str, payload: Any, retain: bool = False, **_kw: Any) -> None:
+            published.append((topic, payload, retain))
 
-            async def publish(
-                self, topic: str, payload: Any, retain: bool = False, qos: int = 0
-            ) -> None:
-                published.append((topic, payload, retain))
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
 
-        agent = _RemoteAgent.__new__(_RemoteAgent)
-        agent.name = "finisher"
-        agent._ending = False
-        agent._runner = Runner()  # pyright: ignore[reportAttributeAccessIssue]
-        agent._runner._agents["finisher"] = agent
-        stopped: list[bool] = []
+        await agent._api.stop()
 
-        async def _stop() -> None:
-            stopped.append(True)
-
-        agent.stop = _stop  # pyright: ignore[reportAttributeAccessIssue]
-        agent.actor_id = "abc123"  # pyright: ignore[reportAttributeAccessIssue]
-        api = _RemoteAgentAPI.__new__(_RemoteAgentAPI)
-        api._agent = agent
-
-        await api.stop()
-
-        assert stopped == [True]
-        assert ("agents/abc123/manifest", b"", True) in published
-        assert "finisher" not in agent._runner._agents
+        assert (f"agents/{agent.actor_id}/manifest", b"", True) in published
+        # The node's own view is right too, so a reconcile does not bring it back.
+        assert agent._runner.get("finisher") is None
+        assert "finisher" not in agent._runner._configs
 
     async def test_ending_twice_does_the_work_once(self, tmp_path: Path) -> None:
-        from wactorz.remote_runner import _RemoteAgent, _RemoteAgentAPI
+        agent = self._node_agent(tmp_path)
+        published: list[tuple[str, Any]] = []
 
-        published: list[tuple[str, Any, bool]] = []
+        async def _publish(topic: str, payload: Any, retain: bool = False, **_kw: Any) -> None:
+            published.append((topic, payload))
 
-        class Runner:
-            def __init__(self) -> None:
-                self._agents: dict[str, Any] = {}
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
 
-            async def publish(
-                self, topic: str, payload: Any, retain: bool = False, qos: int = 0
-            ) -> None:
-                published.append((topic, payload, retain))
+        await agent._api.stop()
+        withdrawals = [t for t, p in published if t.endswith("/manifest") and p == b""]
+        await agent._api.stop()
 
-        agent = _RemoteAgent.__new__(_RemoteAgent)
-        agent.name = "finisher"
-        agent._ending = False
-        agent._runner = Runner()  # pyright: ignore[reportAttributeAccessIssue]
-
-        async def _stop() -> None:
-            return None
-
-        agent.stop = _stop  # pyright: ignore[reportAttributeAccessIssue]
-        agent.actor_id = "abc123"  # pyright: ignore[reportAttributeAccessIssue]
-        api = _RemoteAgentAPI.__new__(_RemoteAgentAPI)
-        api._agent = agent
-
-        await api.stop()
-        await api.stop()
-
-        assert len(published) == 1
+        assert [t for t, p in published if t.endswith("/manifest") and p == b""] == withdrawals
 
     async def test_the_withdrawal_survives_stopping_the_task_that_asked(
         self, tmp_path: Path
     ) -> None:
-        """The case a rewrite would silently break, and the common one.
+        """The common case: a program ends itself from inside its own task.
 
-        `_RemoteAgent.stop()` cancels every task the agent owns and does not
-        spare the one calling it — unlike the host, whose wind-down excludes the
-        current task. So a program ending itself is cancelled part-way through
-        this method, and only a `finally` gets the withdrawal out. Without it
-        the agent stops on the node and the host never learns it is gone: no
-        spawn-registry drop, no desired-state rewrite, and it returns on the
-        next reconcile.
+        `Actor._wind_down_tasks` spares the task it runs in, which is what lets
+        the withdrawal below the stop still be reached. Without that the agent
+        stops on the node and main never learns it is gone: no spawn-registry
+        drop, no desired-state rewrite, and it returns on the next reconcile.
         """
-        from wactorz.remote_runner import _RemoteAgent, _RemoteAgentAPI
+        agent = self._node_agent(tmp_path)
+        published: list[tuple[str, Any]] = []
 
-        published: list[tuple[str, Any, bool]] = []
+        async def _publish(topic: str, payload: Any, retain: bool = False, **_kw: Any) -> None:
+            published.append((topic, payload))
 
-        class Runner:
-            def __init__(self) -> None:
-                self._agents: dict[str, Any] = {}
-
-            async def publish(
-                self, topic: str, payload: Any, retain: bool = False, qos: int = 0
-            ) -> None:
-                published.append((topic, payload, retain))
-
-        agent = _RemoteAgent.__new__(_RemoteAgent)
-        agent.name = "finisher"
-        agent.actor_id = "abc123"  # pyright: ignore[reportAttributeAccessIssue]
-        agent._ending = False
-        agent._runner = Runner()  # pyright: ignore[reportAttributeAccessIssue]
-        agent._tasks = []
-
-        async def _stop() -> None:
-            # What the real one does: cancel every task, the caller included.
-            for task in agent._tasks:
-                task.cancel()
-            agent._tasks.clear()
-            await asyncio.sleep(0)  # let the cancellation land
-
-        agent.stop = _stop  # pyright: ignore[reportAttributeAccessIssue]
-        api = _RemoteAgentAPI.__new__(_RemoteAgentAPI)
-        api._agent = agent
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
 
         async def program() -> None:
-            await api.stop()
+            await agent._api.stop()
 
         task = asyncio.ensure_future(program())
         agent._tasks.append(task)
         await asyncio.gather(task, return_exceptions=True)
 
-        assert task.cancelled(), "the caller was not cancelled — the test proves nothing"
-        assert ("agents/abc123/manifest", b"", True) in published
+        assert (f"agents/{agent.actor_id}/manifest", b"") in published

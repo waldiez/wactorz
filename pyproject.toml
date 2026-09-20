@@ -268,11 +268,11 @@ ignore = [
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
 # `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag.
 "scripts/*" = ["S603", "S607", "S110"]
-# The runner carries its own `--test` reporter, whose output is the point of it.
-# It also runs agent code it is sent and installs what that code imports, so
-# `exec` and the pip subprocess are the feature rather than an oversight; how far
-# either should be trusted is a design question, not one a lint rule settles.
-"wactorz/remote_runner.py" = ["T201", "S102", "S603", "S606"]
+# A node runs agent code it is sent, installs what that code imports, and
+# re-execs itself when main asks it to restart — so the pip subprocess and the
+# `execv` are the feature rather than an oversight. How far either should be
+# trusted is a design question, not one a lint rule settles.
+"wactorz/node/*.py" = ["S603", "S606"]
 # Console entry points: what they write to the terminal is the thing the user
 # asked for, not incidental output, so a logger is the wrong sink for it.
 # `log_setup` is the strongest case — it reports to stderr that file logging
@@ -344,7 +344,7 @@ exclude_also = [
     "class .*\\bProtocol\\b.*\\):",  # structural types: no runtime behaviour to cover
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 86
+fail_under = 89
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

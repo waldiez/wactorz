@@ -517,10 +517,22 @@ class StreamWindow:
         self._trim()
         return [e[key] for e in self._buffer if key in e]
 
-    def latest(self) -> dict | None:
-        """Return the most recent entry."""
+    def latest(self, key: str | None = None) -> Any:
+        """The most recent entry, or the newest value of one field in it.
+
+        Both spellings are in use in generated code — ``w.latest()`` for the
+        whole entry, ``w.latest('value')`` for one field — so the argument
+        chooses, rather than there being two windows with two meanings. Asking
+        for a field searches backwards for the newest entry that carries it: a
+        stream where only some messages report a key still answers.
+        """
         self._trim()
-        return self._buffer[-1] if self._buffer else None
+        if key is None:
+            return self._buffer[-1] if self._buffer else None
+        for entry in reversed(self._buffer):
+            if key in entry:
+                return entry[key]
+        return None
 
     def mean(self, key: str = "value") -> float | None:
         """Compute mean of a numeric field over the window."""
@@ -583,8 +595,14 @@ class StreamWindow:
         return count
 
     def start(self, mqtt_broker: str, mqtt_port: int):
-        """Start the background MQTT listener for this window."""
-        self._task = asyncio.create_task(self._listen(mqtt_broker, mqtt_port))
+        """Start the background MQTT listener for this window, once.
+
+        Idempotent: generated code calls `agent.window(...)` from a process loop
+        as readily as from setup, and a second listener would hold a second
+        broker connection and push every message into the buffer twice.
+        """
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._listen(mqtt_broker, mqtt_port))
         return self
 
     async def _listen(self, broker: str, port: int):

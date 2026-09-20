@@ -23,7 +23,6 @@ from typing import Any, cast
 
 import pytest
 
-from wactorz import remote_runner
 from wactorz.agents import installer_agent
 from wactorz.agents.installer_agent import InstallerAgent
 from wactorz.agents.main.actor import MainActor
@@ -35,6 +34,8 @@ from wactorz.core import node_signing
 from wactorz.core.actor import Actor, Message
 from wactorz.core.mqtt import publish_properties
 from wactorz.core.mqtt_publisher import MQTTPublisher
+from wactorz.node import runner as node_runner
+from wactorz.node import signing as node_signing_side
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -57,28 +58,33 @@ def _signed(topic: str, payload: bytes) -> dict[str, str]:
 
 def _guard(
     tmp_path: Path, node: str = "rpi", mode: str = "enforce", since: str = ""
-) -> remote_runner._ControlGuard:
+) -> node_signing_side.ControlGuard:
     node_dir = tmp_path / f"node-{node}"
     node_dir.mkdir(exist_ok=True)
-    return remote_runner._ControlGuard(node_signing.node_key(node), since, mode, str(node_dir))
+    return node_signing_side.ControlGuard(node_signing.node_key(node), since, mode, str(node_dir))
 
 
-# ── The two copies of the rule agree ───────────────────────────────────────────
+# ── Both sides read one rule ───────────────────────────────────────────────────
 
 
 class TestBothSidesFollowOneRule:
-    def test_they_name_the_same_control_topics(self) -> None:
-        assert remote_runner._CONTROL_LEAVES == node_signing.CONTROL_LEAVES
+    """Main signs and a node checks, from the same module.
 
-    def test_they_name_the_same_properties(self) -> None:
-        assert remote_runner._SEQUENCE_PROPERTY == node_signing.SEQUENCE_PROPERTY
-        assert remote_runner._SIGNATURE_PROPERTY == node_signing.SIGNATURE_PROPERTY
+    There used to be two copies of this rule, because the node ran a file that
+    could not import the package. It can now, so what these check is that the
+    receiving side really does read the shared definitions rather than having
+    grown its own that agree for the moment.
+    """
 
-    def test_they_sign_the_same_bytes(self) -> None:
-        payload = '{"name": "café", "n": 1.5}'.encode()
-        assert node_signing.signing_input("nodes/rpi/spawn", 42, payload) == (
-            remote_runner._signing_input("nodes/rpi/spawn", 42, payload)
-        )
+    def test_the_node_reads_the_shared_control_topics(self) -> None:
+        assert node_runner.CONTROL_LEAVES is node_signing.CONTROL_LEAVES
+
+    def test_the_node_reads_the_shared_properties(self) -> None:
+        assert node_signing_side.SEQUENCE_PROPERTY is node_signing.SEQUENCE_PROPERTY
+        assert node_signing_side.SIGNATURE_PROPERTY is node_signing.SIGNATURE_PROPERTY
+
+    def test_the_node_signs_over_the_shared_bytes(self) -> None:
+        assert node_signing_side.signing_input is node_signing.signing_input
 
     def test_what_main_signs_a_node_accepts(self, tmp_path: Path) -> None:
         payload = b'{"name": "collector", "code": "async def process(agent): pass"}'
@@ -155,7 +161,7 @@ class TestMainSigns:
 
 class TestANodeWithoutAKey:
     def test_it_acts_on_everything_as_it_always_did(self, tmp_path: Path) -> None:
-        guard = remote_runner._ControlGuard("", "", "", str(tmp_path))
+        guard = node_signing_side.ControlGuard("", "", "", str(tmp_path))
         assert guard.admit("spawn", "nodes/rpi/spawn", b"{}", {})
         assert guard.mode == "off"
         assert guard.failures == 0
@@ -272,14 +278,14 @@ class TestANodeThatWarns:
 
 class TestANodeWithAnUnreadableKey:
     def test_it_refuses_everything_rather_than_trusting_everyone(self, tmp_path: Path) -> None:
-        guard = remote_runner._ControlGuard("not hex", "", "warn", str(tmp_path))
+        guard = node_signing_side.ControlGuard("not hex", "", "warn", str(tmp_path))
         assert guard.mode == "invalid"
         assert not guard.admit("spawn", "nodes/rpi/spawn", b"{}", {})
 
 
 class TestWhatTheRunnerChecks:
-    def _runner(self, tmp_path: Path) -> remote_runner._RemoteRunner:
-        runner = remote_runner._RemoteRunner.__new__(remote_runner._RemoteRunner)
+    def _runner(self, tmp_path: Path) -> node_runner.NodeRunner:
+        runner = node_runner.NodeRunner.__new__(node_runner.NodeRunner)
         runner.node_name = "rpi"
         runner._control = _guard(tmp_path)
         return runner
@@ -470,8 +476,6 @@ def _control_publishes() -> tuple[int, list[str]]:
     found = 0
     unsigned: list[str] = []
     for path in sorted((ROOT / "wactorz").rglob("*.py")):
-        if path.name == "remote_runner.py":
-            continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not (

@@ -1,10 +1,10 @@
-"""Install the remote runner as a systemd service, at the least-privileged rung.
+"""Install the node runner as a systemd service, at the least-privileged rung.
 
-The deploy used to launch `remote_runner.py` with `nohup`, which does not
-survive a reboot and is not restarted when it crashes. This installs a unit
-instead, choosing the weakest privilege the node actually supports and
-reporting which one it got: a node that quietly fell back to `nohup` is
-otherwise indistinguishable from a supervised one.
+The deploy used to launch the runner with `nohup`, which does not survive a
+reboot and is not restarted when it crashes. This installs a unit instead,
+choosing the weakest privilege the node actually supports and reporting which
+one it got: a node that quietly fell back to `nohup` is otherwise
+indistinguishable from a supervised one.
 
 The ladder is root, then a user unit, then passwordless sudo, then `nohup`.
 A user unit sits ahead of sudo deliberately — it needs no privilege at all —
@@ -61,8 +61,8 @@ def unit_file(home: str, user: str, *, system: bool) -> str:
     command line would have needed escaping.
     """
     exec_start = (
-        f"{home}/wactorz/venv/bin/python {home}/wactorz/remote_runner.py "
-        "--broker ${WACTORZ_BROKER} --port ${WACTORZ_PORT} --name ${WACTORZ_NODE}"
+        f"{home}/wactorz/venv/bin/wactorz "
+        "--mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}"
     )
     lines = [
         "[Unit]",

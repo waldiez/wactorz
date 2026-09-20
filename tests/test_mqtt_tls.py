@@ -1,10 +1,11 @@
 """TLS for the broker connection: one rule for trusting the broker, and its certificates.
 
 Every connection to the broker follows one rule, written in
-`wactorz/core/mqtt_tls.py` and copied into the runner and the catalogue programs
-that open their own connection, since those run on nodes without the package. The
-first tests hold the copies to the rule. The rest cover the CA and broker
-certificate an install issues itself, including a TLS handshake made with them.
+`wactorz/core/mqtt_tls.py`. The catalogue programs that open a connection of
+their own carry a copy, because those run as a quoted string with no import of
+the package, and the first tests hold each copy to the rule. The rest cover the
+CA and broker certificate an install issues itself, including a TLS handshake
+made with them.
 """
 
 import ast
@@ -23,10 +24,11 @@ from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID
 
-from wactorz import broker_certificates, config, remote_runner
+from wactorz import broker_certificates, config
 from wactorz.config import DeployTarget
 from wactorz.core import broker_tls, mqtt_tls
 from wactorz.core import mqtt as core_mqtt
+from wactorz.node import cli as node_cli
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOGUE = ("anomaly_detector_agent.py", "timeseries_collector_agent.py")
@@ -141,9 +143,7 @@ def test_every_copy_decides_as_the_rule_does(
         if mqtt_tls.tls_enabled(environment.get("MQTT_TLS", ""))
         else None
     )
-    copies = [remote_runner._tls_context()] + [
-        _catalogue_helper(module)().get("tls_context") for module in CATALOGUE
-    ]
+    copies = [_catalogue_helper(module)().get("tls_context") for module in CATALOGUE]
 
     for copy in copies:
         if expected is None:
@@ -154,29 +154,52 @@ def test_every_copy_decides_as_the_rule_does(
             assert _ca_subjects(copy) == _ca_subjects(expected)
 
 
-class TestTheRunner:
+class TestTheNode:
+    """A node reads the rule from CONFIG, as everything else in the package does.
+
+    Which is why these set CONFIG rather than the environment: a node's settings
+    come from its `.env` through the EnvironmentFile its unit names, so they are
+    in the environment before the process starts and read once at import.
+    """
+
+    @staticmethod
+    def _configure(monkeypatch: pytest.MonkeyPatch, **tls: str) -> None:
+        monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, **tls))
+        monkeypatch.setattr(node_cli, "CONFIG", config.CONFIG)
+
     def test_it_refuses_to_start_when_its_ca_cannot_be_loaded(
         self, state: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("MQTT_TLS", "1")
-        monkeypatch.setenv("MQTT_TLS_CA", str(state / "not-deployed.crt"))
-        monkeypatch.setattr("sys.argv", ["remote_runner.py", "--name", "rpi"])
-
-        def _no_runner(**_kwargs: Any) -> None:
-            raise AssertionError("the runner was built without a CA to verify the broker with")
-
-        monkeypatch.setattr(remote_runner, "_RemoteRunner", _no_runner)
+        self._configure(
+            monkeypatch,
+            mqtt_tls="1",
+            mqtt_tls_ca=str(state / "not-deployed.crt"),
+            mqtt_tls_check_hostname="",
+        )
 
         with pytest.raises(SystemExit) as exited:
-            remote_runner.main()
+            node_cli.check_startable("rpi")
         # The status the node's systemd unit does not restart on.
         assert exited.value.code == 2
 
-    def test_its_heartbeat_says_whether_it_uses_tls(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("MQTT_TLS", raising=False)
-        assert remote_runner._tls_on() is False
-        monkeypatch.setenv("MQTT_TLS", "yes")
-        assert remote_runner._tls_on() is True
+    def test_it_starts_when_the_ca_is_there(
+        self, issued: broker_tls.BrokerFiles, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._configure(
+            monkeypatch, mqtt_tls="1", mqtt_tls_ca=str(issued.ca), mqtt_tls_check_hostname=""
+        )
+
+        assert node_cli.tls_problem() == ""
+        node_cli.check_startable("rpi")
+
+    def test_a_name_that_cannot_be_a_topic_is_refused_before_anything_connects(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._configure(monkeypatch, mqtt_tls="", mqtt_tls_ca="", mqtt_tls_check_hostname="")
+
+        with pytest.raises(SystemExit) as exited:
+            node_cli.check_startable("rpi/kitchen")
+        assert exited.value.code == 2
 
 
 class _Recorder:

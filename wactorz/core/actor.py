@@ -206,6 +206,13 @@ class Actor(ABC):
         self._mqtt_broker: str = "localhost"
         self._mqtt_port: int = 1883
 
+        #: The node this actor runs on, empty when it runs on main. Set by the
+        #: node runner on the agents it starts; every heartbeat carries it, so
+        #: the dashboard can place an agent without having to ask which node
+        #: claimed it. The empty string is what the rest of the framework means
+        #: by local — see main's `is_target_local`.
+        self._node: str = ""
+
         # Persistence
         # Use name as persistence folder so it survives restarts with same name
         # Falls back to actor_id for anonymous actors
@@ -573,6 +580,7 @@ class Actor(ABC):
             "task": self._current_task_description(),
             "protected": self.protected,
             "essential": self.essential,
+            "node": self._node,
         }
 
     def _build_metrics(self) -> dict:

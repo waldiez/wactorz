@@ -44,6 +44,34 @@ def write_pickle(path: Path, obj: Any) -> None:
         raise
 
 
+def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Write ``text`` into ``path``, replacing it in one step.
+
+    The text twin of :func:`write_pickle`, for the files that are read by
+    something other than the process that wrote them — a node's agent state
+    travels to another machine on a migration, so it is JSON rather than a
+    pickle, and it wants the same guarantee.
+
+    Encode before calling: a serialiser that fails half way through has already
+    written half a file, and doing it here would only move that truncation from
+    the target to the temporary.
+    """
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding=encoding) as f:
+            f.write(text)
+            # The rename is atomic, but only orders against data the filesystem
+            # has actually been handed. Without this, a power loss can leave the
+            # rename applied over contents that never landed — and these run on
+            # boards that lose power for a living.
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def quarantine_unreadable(path: Path) -> Path | None:
     """Move a file that could not be read aside, returning where it went.
 

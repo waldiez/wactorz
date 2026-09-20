@@ -146,33 +146,42 @@
   </aside>
   <main class="content">
 <h1 id="remote-nodes">Remote Nodes</h1>
-<p>Deploy a single file to any machine — Raspberry Pi, VM, edge device — and spawn agents on it from the main Wactorz chat. Remote agents heartbeat back to the central dashboard exactly like local ones.</p>
+<p>Install Wactorz on any machine — Raspberry Pi, VM, edge device — start it with <code>--node</code>, and spawn agents on it from the main Wactorz chat. Agents on a node heartbeat back to the central dashboard exactly like local ones.</p>
 <h2 id="overview">Overview</h2>
-<p>The remote node system is built around a single self-contained script: <code>remote_runner.py</code>. It requires no Wactorz installation on the edge device — only Python 3 and three pip packages. It connects to the shared MQTT broker, listens for spawn commands from the main machine, and runs DynamicAgents locally with the same supervisor semantics.</p>
+<p>A node is the same package, started in a different role. It connects to the shared MQTT broker, listens for spawn commands from the main machine, and runs the agents it is sent — the same <code>DynamicAgent</code>, compiled from the same code, against the same <code>agent</code> API, under the same OTP supervisor.</p>
 <div class="highlight"><pre><span></span><code><span class="k">[Main machine]                        [Edge device — Raspberry Pi, VM, etc.]</span>
 
-<span class="na">MainActor  ──MQTT──►  nodes/{name}/spawn  ──►  remote_runner.py</span>
+<span class="na">MainActor  ──MQTT──►  nodes/{name}/spawn  ──►  wactorz --node {name}</span>
 <span class="w">                                                   </span><span class="na">│  compiles + runs agent</span>
 <span class="w">                                                   </span><span class="na">│  local ONE_FOR_ONE supervisor</span>
 <span class="na">Dashboard  ◄──MQTT──  agents/{id}/heartbeat  ◄──┘  heartbeats every 10 s</span>
 </code></pre></div>
 
-<p>Remote agents appear in the central dashboard alongside local agents. The only visual difference is a <code>node</code> field in their heartbeat payload showing which machine they run on.</p>
+<p>Agents on a node appear in the central dashboard alongside local ones. The only visual difference is a <code>node</code> field in their heartbeat payload showing which machine they run on.</p>
+<p>Four things differ on a node, and nothing else does:</p>
+<ul>
+<li><strong>Publishing</strong> goes through a bounded in-memory queue rather than the server's SQLite-backed outbox. A node has no outbox, so the queue is sized for a long outage and every dropped message is counted.</li>
+<li><strong>Agent state</strong> is JSON under <code>~/wactorz/state/</code> rather than a pickle, so it survives the node and main running different Python versions — and so a migration can ship it over MQTT.</li>
+<li><strong>The LLM</strong> stays on main. <code>agent.llm.chat(...)</code> works on a node; the request travels to main, which makes the call. No API key is ever deployed to a node.</li>
+<li><strong>Tasks</strong> arrive on an MQTT topic rather than in a mailbox, and the reply goes back the same way.</li>
+</ul>
+<blockquote>
+<p>Earlier releases deployed a single self-contained <code>remote_runner.py</code> instead, which carried its own copy of the agent contract. A node deployed that way keeps working — main reads its heartbeat as <code>runtime: runner</code> — and redeploying it installs the package. Agent state files carry over untouched.</p>
+</blockquote>
 <hr />
 <h2 id="setup-on-the-edge-device">Setup on the edge device</h2>
-<h4 id="1-install-dependencies-minimal">1. Install dependencies (minimal)</h4>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>aiomqtt<span class="w"> </span>psutil<span class="w"> </span>aiohttp<span class="w"> </span>--break-system-packages
+<h4 id="1-install-wactorz">1. Install Wactorz</h4>
+<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>~/wactorz/venv
+~/wactorz/venv/bin/pip<span class="w"> </span>install<span class="w"> </span>wactorz
 </code></pre></div>
 
-<h4 id="2-copy-remote_runnerpy-to-the-device">2. Copy <code>remote_runner.py</code> to the device</h4>
-<div class="highlight"><pre><span></span><code>scp<span class="w"> </span>wactorz/remote_runner.py<span class="w"> </span>pi@raspberrypi.local:~/
+<p>Install the same version main is running, and at least the one these docs ship with — earlier releases have no node runtime. The two exchange spawn configs, manifests and signed control messages, and a node a release apart from main is the kind of mismatch that surfaces days later as an agent that will not start. A deploy from the dashboard pins the version for you.</p>
+<p>No extra is needed: everything a node uses — <code>aiomqtt</code>, <code>psutil</code>, <code>aiohttp</code> — is a core dependency. An agent that needs more says so in its spawn config's <code>install</code> list, and the node installs it on the spot.</p>
+<h4 id="2-start-it-as-a-node">2. Start it as a node</h4>
+<div class="highlight"><pre><span></span><code>~/wactorz/venv/bin/wactorz<span class="w"> </span>--node<span class="w"> </span>rpi-livingroom<span class="w"> </span>--mqtt-broker<span class="w"> </span><span class="m">192</span>.168.1.10
 </code></pre></div>
 
-<h4 id="3-start-the-runner">3. Start the runner</h4>
-<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>remote_runner.py<span class="w"> </span>--broker<span class="w"> </span><span class="m">192</span>.168.1.10<span class="w"> </span>--name<span class="w"> </span>rpi-livingroom
-</code></pre></div>
-
-<p>Replace <code>192.168.1.10</code> with the IP of the machine running the MQTT broker. The <code>--name</code> is the node identifier — it must be unique across all nodes and is used to address this device when spawning agents.</p>
+<p>Replace <code>192.168.1.10</code> with the IP of the machine running the MQTT broker. The <code>--node</code> value is the node identifier — it must be unique across all nodes and is used to address this device when spawning agents.</p>
 <h4 id="command-line-options">Command-line options</h4>
 <table>
 <thead>
@@ -184,19 +193,19 @@
 </thead>
 <tbody>
 <tr>
-<td><code>--broker</code></td>
-<td><code>localhost</code></td>
-<td>MQTT broker hostname or IP. Also reads <code>$WACTORZ_BROKER</code>.</td>
+<td><code>--node [NAME]</code></td>
+<td><code>$WACTORZ_NODE</code>, else a random <code>node-&lt;hex&gt;</code></td>
+<td>Run as an edge node instead of starting the server. <code>/deploy</code> writes <code>WACTORZ_NODE</code> into the node's <code>.env</code>, so <code>wactorz --node</code> with no name comes up under the right one. The flag is what chooses the role — the variable on its own does not, or a server that inherited it would become a node.</td>
 </tr>
 <tr>
-<td><code>--port</code></td>
-<td><code>1883</code></td>
-<td>MQTT broker port.</td>
+<td><code>--mqtt-broker</code></td>
+<td><code>$MQTT_HOST</code></td>
+<td>MQTT broker hostname or IP. Also reads <code>$WACTORZ_BROKER</code>, which wins — main's own <code>MQTT_HOST</code> is usually <code>localhost</code>, and a node that adopted it would dial itself.</td>
 </tr>
 <tr>
-<td><code>--name</code> / <code>--node</code></td>
-<td>random</td>
-<td>Unique node name. Also reads <code>$WACTORZ_NODE</code>.</td>
+<td><code>--mqtt-port</code></td>
+<td><code>1883</code>, or <code>8883</code> with <code>MQTT_TLS=1</code></td>
+<td>MQTT broker port. Also reads <code>$WACTORZ_PORT</code>.</td>
 </tr>
 <tr>
 <td><code>--loglevel</code></td>
@@ -205,6 +214,7 @@
 </tr>
 </tbody>
 </table>
+<p>The single-file runner's spellings — <code>--name</code>, <code>--broker</code>, <code>--port</code> — still work, so a unit written against them survives the upgrade.</p>
 <h4 id="run-as-a-service-systemd">Run as a service (systemd)</h4>
 <p><strong>A deploy from the dashboard installs this for you.</strong> It picks the least
 privilege the node supports — root, then a user unit with lingering enabled,
@@ -224,7 +234,7 @@ none of them. The deploy result says which it got, so a node reported as
 <span class="na">User</span><span class="o">=</span><span class="s">pi</span>
 <span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/home/pi/wactorz</span>
 <span class="na">EnvironmentFile</span><span class="o">=</span><span class="s">/home/pi/wactorz/.env</span>
-<span class="na">ExecStart</span><span class="o">=</span><span class="s">/home/pi/wactorz/venv/bin/python /home/pi/wactorz/remote_runner.py --broker ${WACTORZ_BROKER} --port ${WACTORZ_PORT} --name ${WACTORZ_NODE}</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">/home/pi/wactorz/venv/bin/wactorz --mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}</span>
 <span class="na">Restart</span><span class="o">=</span><span class="s">on-failure</span>
 <span class="na">RestartSec</span><span class="o">=</span><span class="s">5</span>
 <span class="na">RestartPreventExitStatus</span><span class="o">=</span><span class="s">2</span>
@@ -265,9 +275,6 @@ Raspberry Pi OS install does not exist (no per-user journal files are split out,
 and the account is not in the <code>systemd-journal</code> group), so it reports
 "No journal files were found" while the logs sit in the system journal.</p>
 <p>The <code>~/wactorz/&lt;node&gt;.log</code> file is only written on the <code>nohup</code> fallback.</p>
-<blockquote>
-<p><strong>💡 Self-test</strong> — Run <code>python3 remote_runner.py --test</code> to execute the built-in supervisor test suite without needing a broker. Useful to verify the script works on a new device before connecting it.</p>
-</blockquote>
 <hr />
 <h2 id="spawning-agents-on-a-remote-node">Spawning agents on a remote node</h2>
 <p>From the main Wactorz chat, add a <code>"node"</code> field to any spawn request. The planner and main_actor both support this — or you can do it manually.</p>
@@ -305,7 +312,7 @@ and the account is not in the <code>systemd-journal</code> group), so it reports
 </blockquote>
 <hr />
 <h2 id="automated-deploy-from-chat">Automated deploy from chat</h2>
-<p>MainActor can deploy <code>remote_runner.py</code> to a new machine over SSH, but only to a machine you have configured as a <strong>deploy target</strong>. Add the node to your environment first:</p>
+<p>MainActor can deploy a node to a new machine over SSH, but only to a machine you have configured as a <strong>deploy target</strong>. Add the node to your environment first:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">DEPLOY_TARGETS</span><span class="o">=</span>rpi-bedroom
 <span class="nv">DEPLOY_RPI_BEDROOM_HOST</span><span class="o">=</span><span class="m">192</span>.168.1.52
 <span class="nv">DEPLOY_RPI_BEDROOM_USER</span><span class="o">=</span>pi
@@ -317,7 +324,8 @@ and the account is not in the <code>systemd-journal</code> group), so it reports
 <div class="highlight"><pre><span></span><code>/deploy rpi-bedroom
 </code></pre></div>
 
-<p>The installer agent SSHes in, creates <code>~/wactorz/</code>, uploads <code>remote_runner.py</code>, installs the dependencies into a venv, and starts the runner in the background. After that, the node is available for agent spawning.</p>
+<p>The installer agent SSHes in, creates <code>~/wactorz/</code>, writes the node's <code>.env</code>, installs <code>wactorz</code> at main's own version into a venv, and starts it under a systemd unit. After that, the node is available for agent spawning.</p>
+<p>The package comes from PyPI. Two things send the deploy to a wheel built on the main machine and uploaded over SFTP instead: a version that is not published yet, and a published one that turns out not to carry the node runtime. The second happens while upgrading — a release from before nodes ran the package answers to its own version number — and it is checked rather than assumed, because an older CLI ignores flags it does not know and the node would otherwise come up as a second server. A node that cannot run as one fails the deploy rather than being started.</p>
 <blockquote>
 <p><strong>⚠ Credentials never go through chat.</strong> <code>/deploy</code> takes a node name and nothing else. The older <code>/deploy &lt;node&gt; &lt;host&gt; &lt;user&gt; &lt;password&gt;</code> form is refused: chat messages are written to the conversation history and the chat log, so a password typed there stays on disk long after the deploy. For the same reason, don't ask an agent to SSH somewhere with a password in the request — the installer reads credentials from the environment and ignores any supplied in a task payload.</p>
 </blockquote>
@@ -654,21 +662,11 @@ mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span cl
 <hr />
 <h2 id="debugging">Debugging</h2>
 <h4 id="verbose-diagnostics">Verbose diagnostics</h4>
-<p>The runner has a built-in diagnostics logger that prints startup checks, connection events, and every published message to stderr — even if logging is misconfigured. Run with <code>--loglevel DEBUG</code> to see everything:</p>
-<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>remote_runner.py<span class="w"> </span>--broker<span class="w"> </span><span class="m">192</span>.168.1.10<span class="w"> </span>--name<span class="w"> </span>rpi-test<span class="w"> </span>--loglevel<span class="w"> </span>DEBUG
+<p>Run with <code>--loglevel DEBUG</code> to see every connection event, subscribe and publish:</p>
+<div class="highlight"><pre><span></span><code>~/wactorz/venv/bin/wactorz<span class="w"> </span>--node<span class="w"> </span>rpi-test<span class="w"> </span>--mqtt-broker<span class="w"> </span><span class="m">192</span>.168.1.10<span class="w"> </span>--loglevel<span class="w"> </span>DEBUG
 </code></pre></div>
 
-<p>On startup it prints:</p>
-<ul>
-<li>Whether <code>aiomqtt</code>, <code>psutil</code>, <code>aiohttp</code> are installed</li>
-<li>Whether the broker is TCP-reachable (5 s timeout)</li>
-<li>Every subscribe, publish, and received message with counts</li>
-</ul>
-<h4 id="self-test-no-broker-needed">Self-test (no broker needed)</h4>
-<div class="highlight"><pre><span></span><code>python3<span class="w"> </span>remote_runner.py<span class="w"> </span>--test
-</code></pre></div>
-
-<p>Runs 7 supervisor tests: stable agent, crash + restart, budget exhaustion, deliberate stop, health credit, compile error, setup failure. All should pass.</p>
+<p>A node refuses to start, with exit status 2, in two cases it can detect up front: a node name containing an MQTT wildcard, which the broker would refuse on every operation; and <code>MQTT_TLS</code> turned on with a CA that cannot be read. Both would otherwise be a runner reconnecting every three seconds for ever.</p>
 <h4 id="watch-node-traffic-from-the-main-machine">Watch node traffic from the main machine</h4>
 <div class="highlight"><pre><span></span><code>mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;nodes/#&#39;</span><span class="w"> </span>-v
 mosquitto_sub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s1">&#39;agents/+/heartbeat&#39;</span><span class="w"> </span>-v

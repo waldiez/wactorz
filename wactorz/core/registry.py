@@ -286,6 +286,68 @@ class Supervisor:
         spec._restart_times.clear()
         logger.info("[Supervisor] '%s' is supervised again.", name)
 
+    async def start_supervised(
+        self,
+        name: str,
+        factory: Callable[[], Actor | Awaitable[Actor]],
+        strategy: SupervisorStrategy = SupervisorStrategy.ONE_FOR_ONE,
+        max_restarts: int = 5,
+        restart_window: float = 60.0,
+        restart_delay: float = 1.0,
+    ) -> Actor:
+        """Register an actor and start it now, rather than at :meth:`start`.
+
+        For a caller whose actors arrive while it is already running — a node
+        told to spawn an agent, rather than an app assembling a fixed tree at
+        boot. A name that is already supervised is replaced: the spec keeps its
+        place in ``_order``, so REST_FOR_ONE still restarts the right siblings.
+
+        Raises whatever the factory raises, so the caller can report a spawn
+        that did not start as a failure rather than finding it absent later.
+        """
+        self.supervise(name, factory, strategy, max_restarts, restart_window, restart_delay)
+        spec = self._specs[name]
+        # Held back from the watch loop while it starts. A spec with no actor
+        # reads as "should be running and is not", and starting is not
+        # instantaneous — a generated program's `on_start` compiles it and may
+        # ask an LLM to repair it, which outlasts the poll interval easily. The
+        # loop would spawn a second actor alongside the one still starting, and
+        # spend restart budget doing it.
+        spec.retired = True
+        try:
+            actor = await self._spawn_actor(name, spec)
+        except BaseException:
+            # The spec never held an actor, so there is nothing to stop and
+            # nothing for the watch loop to act on. Dropped rather than left
+            # retired, so the name is free for another attempt.
+            self.drop_supervised(name)
+            raise
+        spec.actor = actor
+        spec.retired = False
+        return actor
+
+    async def stop_supervised(self, name: str) -> None:
+        """Stop an actor and forget it entirely — the undo of :meth:`start_supervised`.
+
+        Stronger than :meth:`release`, which retires a spec but keeps it, so a
+        later actor of the same name inherits its restart history. A node whose
+        agents come and go on request needs the name free again.
+        """
+        spec = self._specs.get(name)
+        self.drop_supervised(name)
+        if spec is not None:
+            await self._stop_actor(name, spec)
+
+    def drop_supervised(self, name: str) -> None:
+        """Forget a spec without stopping its actor.
+
+        For an actor that has already ended itself: stopping it again is not
+        wrong so much as misleading, and leaving the spec behind means the
+        watch loop reads "should be running and is not" and starts it back up.
+        """
+        if self._specs.pop(name, None) is not None and name in self._order:
+            self._order.remove(name)
+
     # ── Startup ───────────────────────────────────────────────────────────────
 
     async def start(self):

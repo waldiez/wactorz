@@ -27,9 +27,10 @@ message cannot be delivered twice. The sequence is this server's clock in
 microseconds, kept strictly increasing, so a node needs no clock of its own to
 check it -- a board without a battery-backed clock may boot into the wrong year.
 
-The runner holds the other half and cannot import this module, since it is a
-single file copied to the node, so the rule is written in both places.
-``tests/test_node_control_signing.py`` holds the two copies to each other.
+The receiving half is :mod:`wactorz.node.signing`, which imports this module
+rather than restating it — a node runs the package. What it adds is the record
+of which sequence numbers it has already accepted.
+``tests/test_node_control_signing.py`` covers both halves.
 """
 
 import hashlib

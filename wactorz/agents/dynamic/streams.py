@@ -26,6 +26,28 @@ else:
 
 logger = logging.getLogger(__name__)
 
+
+def _union(*groups: Any) -> list[str]:
+    """Every topic in ``groups``, once each, in a stable order.
+
+    Sorted rather than first-seen: a manifest is republished on every new topic
+    and compared by whoever reads it, so an ordering that depends on which
+    publish happened first would look like a change when nothing changed.
+    """
+    seen: set[str] = set()
+    for group in groups:
+        seen.update(group or [])
+    return sorted(seen)
+
+
+def _merged(*mappings: Any) -> dict[str, Any]:
+    """Every mapping in turn, later keys winning — the latest word on each."""
+    merged: dict[str, Any] = {}
+    for mapping in mappings:
+        merged.update(mapping or {})
+    return merged
+
+
 #: Shown to generated code that calls subscribe() without a usable callback.
 #: These messages are the contract: the model reads them and repairs its own
 #: code, so they say what to write rather than only what went wrong.
@@ -121,20 +143,9 @@ class StreamsMixin(_Host):
 
         actor = self._actor
 
-        # Wrap the callback so `await None` errors from LLM-generated code
-        # (e.g. `await agent.persist(...)`) don't crash the listener.
-        # We log the first occurrence, then silently suppress subsequent ones.
-        _await_warned = False
-
-        # ── Callback error tracking (actor-level, survives reconnects) ──────
-        # Stored on the actor so:
-        #   1. MQTT reconnects don't reset counts (closure vars would reset)
-        #   2. process() success doesn't clear subscribe errors (_consecutive_errors
-        #      is shared — a clean process() run was resetting callback error counts)
-        #   3. Multiple subscriptions on the same actor share one error budget
-        _cb_attr = f"_cb_err_{topic.replace('/', '_').replace('#', 'x').replace('+', 'y')}"
-        # Every callback failure counts: at CB_LLM_FIX_AT in a row the program is
-        # repaired in place, at CB_MAX_CONSECUTIVE_FAILURES the actor is FAILED.
+        # `await None` out of generated code, and a callback that keeps raising,
+        # are both handled by the hub that runs the callback — see
+        # `listener.py`. Nothing is wrapped here.
 
         # Deduplication guard — prevent double-subscription if setup() is called
         # more than once (e.g. on reconnect). Same topic+callback combo gets one listener.
@@ -171,17 +182,22 @@ class StreamsMixin(_Host):
         so the planner can wire agents by data compatibility, not just by name.
         """
         actor = self._actor
-        # Include TopicContract fields if declared
-        contract = getattr(actor, "_topic_contract", None)
+        # What the program declared, or failing that what the spawn config did.
+        contract = getattr(actor, "_topic_contract", None) or getattr(
+            actor, "_spawn_contract", None
+        )
         manifest = {
             "name": self.name,
             "actor_id": self.actor_id,
             "node": getattr(actor, "_node", None),
             "description": getattr(actor, "description", ""),
-            "capabilities": [],
+            "capabilities": list(getattr(actor, "capabilities", []) or []),
             "input_schema": getattr(actor, "input_schema", {}),
             "output_schema": getattr(actor, "output_schema", {}),
-            "publishes": sorted(self._published_topics),
+            # Driven by real publish() calls, and by anything the contract named
+            # before the first of them — so the planner can see a topic this
+            # agent exists to produce before it has produced one.
+            "publishes": _union(self._published_topics, contract.publishes if contract else []),
             # TopicContract fields — populated via declare_contract()
             "subscribes": contract.subscribes if contract else [],
             "triggers_when": contract.triggers_when if contract else {},
@@ -249,6 +265,14 @@ class StreamsMixin(_Host):
         """
         from ...core.topic_bus import StreamWindow, get_topic_bus
 
+        # One window per topic per agent. Generated code calls this from a
+        # process loop as readily as from setup, and a fresh window each tick
+        # opens a broker connection each tick and reads an empty buffer every
+        # time, because the one that had filled was thrown away.
+        existing = self._windows.get(topic)
+        if existing is not None:
+            return existing
+
         w = None
         try:
             bus = get_topic_bus()
@@ -269,7 +293,9 @@ class StreamsMixin(_Host):
             except Exception as exc:
                 logger.debug("[%s] Local window could not start: %s", self.name, exc)
 
-        return UnAwaitableWindow(w)
+        wrapped = UnAwaitableWindow(w)
+        self._windows[topic] = wrapped
+        return wrapped
 
     def declare_contract(
         self,
@@ -324,13 +350,27 @@ class StreamsMixin(_Host):
 
         from ...core.topic_bus import TopicContract, get_topic_bus
 
+        # Each call adds to what is already known rather than replacing it, from
+        # two sources: what the spawn config declared before any code ran, and
+        # what an earlier call declared. Replacing lost both — an agent spawned
+        # with `publishes` whose setup() then declared a contract of its own
+        # ended up with only the second, and so did one that declared its
+        # outputs and its inputs in two calls, which models write often.
+        prior = [
+            c
+            for c in (
+                getattr(self._actor, "_spawn_contract", None),
+                getattr(self._actor, "_topic_contract", None),
+            )
+            if c is not None
+        ]
         contract = TopicContract(
             name=self.name,
-            publishes=publishes or list(self._published_topics),
-            subscribes=subscribes or [],
-            triggers_when=triggers_when or {},
-            produces_schema=produces_schema or {},
-            consumes_schema=consumes_schema or {},
+            publishes=_union(*(c.publishes for c in prior), publishes, self._published_topics),
+            subscribes=_union(*(c.subscribes for c in prior), subscribes),
+            triggers_when=_merged(*(c.triggers_when for c in prior), triggers_when),
+            produces_schema=_merged(*(c.produces_schema for c in prior), produces_schema),
+            consumes_schema=_merged(*(c.consumes_schema for c in prior), consumes_schema),
             actor_id=self.actor_id,
             node=getattr(self._actor, "_node", None),
         )

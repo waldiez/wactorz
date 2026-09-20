@@ -139,11 +139,27 @@ class MessagingMixin(_Host):
                     remote_node = node_name
                     break
 
-        if not remote_node:
+        if not remote_node and not self._actor._node:
             logger.warning(
                 "[%s] send_to: agent '%s' not found locally or remotely", self.name, agent_name
             )
             return {"error": f"Agent '{agent_name}' not found"}
+
+        if not remote_node:
+            # On a node, and the target is not here. Which machine has it is
+            # main's knowledge, not this one's — but the address below does not
+            # need it: every node subscribes to `agents/by-name/+/task`, so
+            # naming the agent reaches it wherever among them it is running.
+            # Refusing instead, for want of a lookup that can only be done
+            # elsewhere, is what made `send_to` unusable from a node at all.
+            #
+            # ⚠ This reaches agents on nodes, not agents on main: main publishes
+            # to that topic and does not subscribe to it. A node agent that
+            # needs one of main's sends it a task through main instead. The
+            # timeout below is what such a call gets.
+            logger.debug(
+                "[%s] send_to '%s': no local match, addressing it by name", self.name, agent_name
+            )
 
         reply_topic = f"agents/by-name/{self.name}/reply/{uuid.uuid4().hex[:8]}"
 
@@ -170,7 +186,7 @@ class MessagingMixin(_Host):
                 "[%s] send_to '%s' on '%s' timed out after %ss",
                 self.name,
                 agent_name,
-                remote_node,
+                remote_node or "whichever host has it",
                 timeout,
             )
             return {"error": f"Timeout waiting for remote '{agent_name}'"}
@@ -184,12 +200,18 @@ class MessagingMixin(_Host):
         Routing priority:
           1. Local registry — fast in-process mailbox
           2. Remote node via MQTT — agents/by-name/{name}/task with reply topic
-          3. Returns error dict if the agent is unknown in both
+          3. Returns error dict if the agent is unknown in both — except from a
+             node, which cannot do the lookup step 2 depends on and addresses
+             the agent by name regardless
 
-        Works with local DynamicAgent/LLMAgent AND remote _RemoteAgent on any node.
+        Works for an agent on main and for one on any node.
         """
         registry = self._actor._registry
-        if not registry:
+        # `is None`, not falsiness: `ActorRegistry` defines `__len__`, so an
+        # empty one is false, and an agent that holds one would be told it has
+        # none. The answer for an agent that really has no registry is
+        # unchanged — there is nowhere to send and nothing to report it to.
+        if registry is None:
             logger.warning("[%s] send_to: no registry", self.name)
             return None
 

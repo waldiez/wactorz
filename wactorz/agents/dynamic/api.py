@@ -102,26 +102,11 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         self.llm = LLMInterface(actor, self.state) if actor._llm_provider else None
         # Auto-discovered topics this agent publishes to
         self._published_topics: set = set()
-        # MQTT broker info — exposed so generated code can create aiomqtt clients
-        self._mqtt_broker = actor._mqtt_broker
-        self._mqtt_port = actor._mqtt_port
+        #: One window per topic, so repeated `agent.window(...)` calls -- which
+        #: generated code makes from a process loop -- return the one that has
+        #: been filling rather than a fresh empty one on a new connection.
+        self._windows: dict[str, Any] = {}
 
-    # ── Identity properties (parity with _RemoteAgentAPI) ──────────────────
-    # The remote API exposes `agent.node` as the node_name of the runner the
-    # agent is running on. Generated code uses this for topic prefixing
-    # patterns like f"{agent.node}/{agent.name}/detections" — common enough
-    # that the LLM emits it routinely. Without the same property on local
-    # AgentAPI, agents that migrate from a remote node back to main crash
-    # immediately with "'AgentAPI' object has no attribute 'node'".
-    #
-    # The canonical "this agent is local" value across the rest of the
-    # framework (spawn registry, desired_state, list_nodes filters) is the
-    # empty string "" — see main_actor's `is_target_local` check which
-    # treats ("", "local", "main") as equivalent. For *display* though, an
-    # empty string concatenated into a topic produces a malformed leading
-    # slash. We compromise by returning "local" so f-strings stay readable
-    # and topics stay valid; user code that compares against "" should be
-    # updated to also accept "local".
     async def stop(self) -> None:
         """End this agent. Its work is done and it should not come back.
 
@@ -139,27 +124,41 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         """
         await self._actor.end_self()
 
+    # ── The broker this agent's host is on ─────────────────────────────────
+    # Read through to the actor rather than copied at construction: an actor's
+    # broker is set after it is built -- by the supervisor's inject step, or by
+    # a node handing its agent the address it dials -- so a copy taken here was
+    # `localhost:1883` for every agent that had one. Generated code that opens
+    # a connection of its own reads these.
+
+    @property
+    def _mqtt_broker(self) -> str:
+        return self._actor._mqtt_broker
+
+    @property
+    def _mqtt_port(self) -> int:
+        return self._actor._mqtt_port
+
     @property
     def node(self) -> str:
-        node = getattr(self._actor, "_node", None)
-        if node:
-            return str(node)
-        return "local"
+        """Which node this agent runs on, or ``"local"`` when it runs on main.
 
-    # ── LLM convenience shims (parity with remote _RemoteAgentAPI) ─────────
-    # The remote runner exposes agent.chat(messages, ...) directly on the
-    # API object — generated code written on a remote node will use that
-    # form. Without the same surface here, migrating an agent local→remote
-    # and back (or copy-pasting code originally written for a remote node)
-    # crashes with "'AgentAPI' object has no attribute 'chat'".
-    #
-    # These delegate to agent.llm so generated code keeps working in both
-    # environments. Both forms — agent.chat(...) and agent.llm.chat(...) —
-    # are valid; pick whichever feels cleaner in your code.
+        Generated code puts this straight into topics —
+        ``f"{agent.node}/{agent.name}/detections"`` — which is why main answers
+        ``"local"`` rather than the empty string the rest of the framework uses
+        for the same thing (see main's ``is_target_local``): an empty segment
+        makes a topic with a doubled separator in it. Code comparing against
+        ``""`` should accept ``"local"`` too.
+        """
+        return str(self._actor._node) if self._actor._node else "local"
+
+    # ── LLM convenience shims ──────────────────────────────────────────────
+    # Both spellings work: agent.chat(...) and agent.llm.chat(...). Generated
+    # code uses each about as often, and an agent migrating between main and a
+    # node must not have to be rewritten for the one its new host offers.
 
     async def chat(self, messages: Any, system: str = "", timeout: float = 60.0) -> str:
-        """Multi-turn LLM call — mirrors _RemoteAgentAPI.chat() so the same
-        generated code runs locally and remotely.
+        """Multi-turn LLM call.
 
         ``messages`` is a list of {"role": "user"/"assistant", "content": "..."}.
         For a single-turn prompt, prefer ``agent.llm.chat("prompt")`` instead.
@@ -167,14 +166,50 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         if self.llm is None:
             return "[No LLM configured for this agent]"
         # Allow callers passing a bare string by promoting it to a single
-        # user-turn list — same forgiveness the remote side offers in practice.
+        # user-turn list — models write both.
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
-        return await self.llm.complete(messages, system=system)
+        try:
+            return await asyncio.wait_for(
+                self.llm.complete(messages, system=system), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.warning("[%s] chat timed out after %ss", self.name, timeout)
+            return ""
 
     async def complete(self, messages: Any, system: str = "", timeout: float = 60.0) -> str:
         """Alias for chat() — matches LLMInterface.complete() naming."""
         return await self.chat(messages, system=system, timeout=timeout)
+
+    async def ask_llm(self, prompt: str, system: str = "", timeout: float = 60.0) -> str:
+        """Single-turn LLM call, giving up after ``timeout`` seconds.
+
+        The spelling node-written programs use, because on a node this is the
+        request that travels to main. It is the same call as
+        ``agent.llm.chat(prompt)``, and both work in both places.
+
+        The bound is applied here rather than passed down, because a provider
+        need not accept one — and an agent that asked for a 5-second answer must
+        not be left waiting a minute by one that does not. `wait_for`, not
+        `asyncio.timeout`: a node may be running Python 3.10.
+        """
+        if self.llm is None:
+            return "[No LLM configured for this agent]"
+        try:
+            return await asyncio.wait_for(self.llm.chat(prompt, system=system), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("[%s] ask_llm timed out after %ss", self.name, timeout)
+            return ""
+
+    # ── Status ─────────────────────────────────────────────────────────────
+
+    async def set_status(self, status: str) -> None:
+        """Say what this agent is doing, for the line on its dashboard card.
+
+        Free text, replaced each time. An agent that never calls this shows its
+        description instead, which is what it did before.
+        """
+        self._actor._status_text = str(status)
 
     # ── MQTT ───────────────────────────────────────────────────────────────
 
@@ -224,9 +259,9 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
 
     def recall(self, key: str, default: Any = None) -> Any:
         """Load a persisted value. Returns `default` (None by default) if the
-        key doesn't exist — same shape as dict.get(), and identical to the
-        remote runner's _RemoteAgentAPI.recall() so the same agent code
-        works on local and remote without modification.
+        key doesn't exist — same shape as dict.get(). A node stores what was
+        persisted as JSON rather than as a pickle, and this is the same call
+        either way, so the same agent code works in both places.
 
         Note: recall() is synchronous — do NOT use await.
         The sanitizer strips `await agent.recall(...)` at compile time.
@@ -315,7 +350,31 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         main = find_main_actor(self._actor._registry)
         if main:
             return main.list_nodes()
+        # No main in this process, which on a node is the ordinary case rather
+        # than a fault: the cluster-wide view lives there, and what is
+        # answerable here is this node itself. Code that needs the whole
+        # picture sends a task to main for it.
+        if self._actor._node:
+            return [{"node": self.node, "online": True, "agents": self._agent_names()}]
         return []
+
+    def _agent_names(self) -> list[str]:
+        """The agents in this process, by name."""
+        registry = self._actor._registry
+        return [actor.name for actor in registry.all_actors()] if registry else []
+
+    def _local_contracts(self) -> list[tuple[str, Any]]:
+        """Every agent in this process and the contract it declared, if any."""
+        registry = self._actor._registry
+        if not registry:
+            return []
+        return [
+            (
+                actor.name,
+                getattr(actor, "_topic_contract", None) or getattr(actor, "_spawn_contract", None),
+            )
+            for actor in registry.all_actors()
+        ]
 
     def topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
@@ -330,7 +389,18 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         main = find_main_actor(self._actor._registry)
         if main:
             return main.list_topics(keyword)
-        return []
+        if not self._actor._node:
+            return []
+        # The node's own view: what the agents here publish and subscribe to.
+        wanted = keyword.lower().strip()
+        found: dict[str, list[dict[str, Any]]] = {}
+        for name, contract in self._local_contracts():
+            topics = set(contract.publishes) | set(contract.subscribes) if contract else set()
+            for topic in topics:
+                if wanted and wanted not in topic.lower():
+                    continue
+                found.setdefault(topic, []).append({"name": name, "node": self.node})
+        return [{"topic": topic, "agents": found[topic]} for topic in sorted(found)]
 
     def capabilities(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known agents with their full capability profile.
@@ -345,7 +415,26 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         main = find_main_actor(self._actor._registry)
         if main:
             return main.list_capabilities(keyword)
-        return []
+        registry = self._actor._registry
+        if not self._actor._node or not registry:
+            return []
+        # The node's own view, in the same shape main answers in.
+        wanted = keyword.lower().strip()
+        profiles = []
+        for actor in registry.all_actors():
+            description = str(getattr(actor, "description", "") or "")
+            if wanted and wanted not in description.lower() and wanted not in actor.name.lower():
+                continue
+            profiles.append(
+                {
+                    "name": actor.name,
+                    "description": description,
+                    "capabilities": list(getattr(actor, "capabilities", []) or []),
+                    "input_schema": getattr(actor, "input_schema", {}),
+                    "output_schema": getattr(actor, "output_schema", {}),
+                }
+            )
+        return profiles
 
     # ── Topic Bus API ───────────────────────────────────────────────────────
 

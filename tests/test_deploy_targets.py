@@ -639,12 +639,11 @@ async def test_uploads_follow_the_home_the_node_reports(
     """Nothing is addressed as `/home/<user>`.
 
     Every shell step in the deploy uses `~`, so a home that is not under
-    `/home` -- root's `/root` above all -- would put the runner and its `.env`
+    `/home` -- root's `/root` above all -- would put the node's `.env`
     somewhere the venv is not. Deploying as root failed on exactly this.
     """
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
 
-    assert conn.sftp.uploads == ["/root/wactorz/remote_runner.py"]
     assert conn.sftp.opened == ["/root/wactorz/.env"]
 
 
@@ -653,7 +652,6 @@ async def test_an_unusual_home_is_honoured_end_to_end(
 ) -> None:
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/var/lib/node")
 
-    assert conn.sftp.uploads == ["/var/lib/node/wactorz/remote_runner.py"]
     assert conn.sftp.opened == ["/var/lib/node/wactorz/.env"]
 
 
@@ -665,7 +663,7 @@ async def test_the_unit_is_written_against_that_home(
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
 
     unit = next(c for c in conn.commands if "WZUNIT" in c)
-    assert "ExecStart=/root/wactorz/venv/bin/python /root/wactorz/remote_runner.py" in unit
+    assert "ExecStart=/root/wactorz/venv/bin/wactorz " in unit
     assert "/home/pi" not in unit
 
 

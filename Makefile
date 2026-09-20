@@ -193,14 +193,11 @@ precommit-run: ## Run all configured pre-commit hooks across the repo
 
 test: test-py test-frontend ## Run all tests (Python + frontend)
 
-test-py: ## Run Python tests (pytest) + the remote runner's own self-test
+test-py: ## Run Python tests (pytest)
 	@# -n auto here and not in pyproject's addopts: parallel wins on the whole
 	@# suite and loses on a single file, where worker start-up costs more than
 	@# the tests. A focused run should stay serial without having to opt out.
 	$(PYTHON) -m pytest tests -n auto
-	@# remote_runner.py ships to nodes without pytest or the wactorz package, so
-	@# it carries its own tests. Nothing ran them and they had rotted silently.
-	$(PYTHON) wactorz/remote_runner.py --test
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test

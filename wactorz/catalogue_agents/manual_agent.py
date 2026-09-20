@@ -483,8 +483,9 @@ async def _load_manual_async(agent, device: str, explicit_url: str | None = None
     notify_user() when it's ready.
 
     Falls back to a synchronous load when the runtime has no background-task
-    support (e.g. a remote-runner API without run_in_background), so behaviour is
-    safe everywhere.
+    support, so behaviour is safe everywhere. Every current runtime offers it --
+    a node runs the same agent API main does -- but this program is also run by
+    hand and pasted into older installs.
     """
     if hasattr(agent, "run_in_background"):
         agent.run_in_background(_load_manual_bg(agent, device, explicit_url))

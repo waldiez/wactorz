@@ -1057,27 +1057,29 @@ Slides that received a real PDF image skip NIM generation. Slides without one fa
 
 ## 17. Remote Nodes & Edge Deployment
 
-Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. The edge node only needs a single file and one pip package.
+Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. An edge node runs the same package, started in a different role.
 
 ### How It Works
 
 ```
 [Main machine]                        [Raspberry Pi / Edge node]
-main_actor ──MQTT──► nodes/{name}/spawn ──► remote_runner.py
+main_actor ──MQTT──► nodes/{name}/spawn ──► wactorz --node {name}
                                                │  compiles + runs agent
                                                │  heartbeats every 10s
 dashboard  ◄──MQTT── agents/{id}/heartbeat ◄───┘
 ```
 
-The `remote_runner.py` is fully self-contained — it reimplements the DynamicAgent contract inline without importing anything from the wactorz package. Remote agents appear in the dashboard and respond to MQTT commands exactly like local agents.
+A node runs the real `DynamicAgent`, compiled from the same code against the same `agent` API and supervised by the same OTP supervisor — so an agent behaves the same whether it was spawned here or there. Agents on a node appear in the dashboard and respond to MQTT commands exactly like local ones.
 
 ### Edge Node Requirements
 
 ```bash
-# That's it — one package, one file
-pip install aiomqtt --break-system-packages
-python3 remote_runner.py --broker 192.168.1.10 --name rpi-kitchen
+python3 -m venv ~/wactorz/venv
+~/wactorz/venv/bin/pip install wactorz     # the same version main runs
+~/wactorz/venv/bin/wactorz --node rpi-kitchen --mqtt-broker 192.168.1.10
 ```
+
+No extra is needed — everything a node uses is a core dependency. Anything an agent itself imports goes in its spawn config's `install` list.
 
 The broker address must be reachable **from the Pi** (your main machine's LAN IP, not `localhost`).
 
@@ -1105,9 +1107,9 @@ DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
 
 1. Use the configured host (or resolve `rpi-kitchen.local` over mDNS if no host is set)
 2. Verify the SSH host key, recording it on first contact
-3. Upload `remote_runner.py` via SFTP
-4. Install `aiomqtt` into a venv on the Pi
-5. Start the runner in the background
+3. Write the node's environment (broker, credentials, signing key) to `~/wactorz/.env`
+4. Install `wactorz`, at main's own version, into a venv on the Pi
+5. Start it under a systemd unit, so it survives a reboot
 6. The node appears in `/nodes` within ~15 seconds
 
 **From the chat:**
@@ -1342,7 +1344,8 @@ wactorz/
 ├── __main__.py                                Entry point — runs `cli.app()` via `python -m wactorz`
 ├── cli.py                                     argparse, supervision tree wiring, interface dispatch
 ├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, …)
-├── remote_runner.py                           Self-contained edge node runner — deploy to any Pi or machine
+├── node/                                      Edge node runtime — `wactorz --node <name>`
+├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
 │
 ├── core/

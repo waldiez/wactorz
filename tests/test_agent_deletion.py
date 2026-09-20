@@ -479,12 +479,11 @@ class TestDeleteBlocksTheModelWrote:
 
 
 def test_the_runner_derives_the_same_id_as_the_server() -> None:
-    """The node keeps its own copy of the derivation; drift is silent.
+    """A node and main must agree about which agent is which.
 
-    `remote_runner.py` is deployed to a node with no wactorz package beside it,
-    so it cannot import `derive_actor_id` and spells the formula out. Nothing
-    raises if the two diverge -- main and the node just disagree about which
-    agent is which, and a held broker session stops being resumed.
+    They derive the id from one function now, so this pins the formula rather
+    than holding two copies to each other: the id keys a held broker session
+    and every registry entry, so a change to it strands both.
     """
     import uuid
 

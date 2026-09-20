@@ -22,6 +22,7 @@ import asyncssh
 import pytest
 
 from wactorz import config as config_mod
+from wactorz._version import __version__
 from wactorz.agents import installer_agent, node_service
 from wactorz.agents.installer_agent import InstallerAgent, NodeTls
 from wactorz.config import CONFIG, DeployTarget
@@ -34,6 +35,7 @@ class _Conn:
     def __init__(self, answers: dict[str, tuple[bool, str]] | None = None) -> None:
         self.answers = answers or {}
         self.commands: list[str] = []
+        self.sftp = _Sftp()
 
     async def run(self, command: str, check: bool = False) -> Any:
         self.commands.append(command)
@@ -44,7 +46,9 @@ class _Conn:
         return SimpleNamespace(exit_status=0 if ok else 1, stdout=output, stderr="")
 
     def start_sftp_client(self) -> "_Sftp":
-        return _Sftp()
+        # One object across calls, so a test can read every upload the deploy
+        # made rather than only the last client's.
+        return self.sftp
 
     async def __aenter__(self) -> "_Conn":
         return self
@@ -54,8 +58,11 @@ class _Conn:
 
 
 class _Sftp:
+    def __init__(self) -> None:
+        self.uploads: list[tuple[str, str]] = []
+
     async def put(self, local: str, remote: str) -> None:
-        return None
+        self.uploads.append((local, remote))
 
     async def __aenter__(self) -> "_Sftp":
         return self
@@ -471,7 +478,7 @@ class TestNodeDeploy:
         assert result["supervision"] == node_service.NOHUP.label
         assert conn.commands[0] == "mkdir -p ~/wactorz"
         assert any(c.startswith("pkill -f") for c in conn.commands)
-        assert "nohup ~/wactorz/venv/bin/python" in conn.commands[-1]
+        assert "nohup ~/wactorz/venv/bin/wactorz" in conn.commands[-1]
         assert persisted == [("rpi", "10.0.0.5", "pi")]
 
     async def test_a_failure_part_way_is_reported_with_the_node(
@@ -493,22 +500,180 @@ class TestNodeDeploy:
             "error": "sftp closed",
         }
 
-    async def test_a_missing_runner_file_is_reported(
+    async def test_a_node_that_cannot_install_wactorz_is_reported_as_failed(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # The node runs the package. Carrying on to start a unit that has
+        # nothing to run would report a successful deploy for a node that never
+        # appears, with the reason only in this node's own log.
         self._target(monkeypatch, installer)
-        real_exists = Path.exists
 
-        def _no_runner(path: Path) -> bool:
-            return False if path.name == "remote_runner.py" else real_exists(path)
+        async def _tls(*_args: Any) -> NodeTls:
+            return NodeTls(enabled=False, port=1883, note="")
 
-        monkeypatch.setattr(Path, "exists", _no_runner)
+        async def _env(*_args: Any) -> bool:
+            return False
+
+        async def _no_install(*_args: Any, **_kw: Any) -> bool:
+            return False
+
+        monkeypatch.setattr(installer, "_decide_node_tls", _tls)
+        monkeypatch.setattr(installer, "_put_node_env", _env)
+        monkeypatch.setattr(installer, "_install_wactorz", _no_install)
 
         result = await installer._node_deploy({"host": "10.0.0.5", "node_name": "rpi"})
 
-        assert result == {
-            "error": "remote_runner.py not found. Make sure it is in the wactorz root."
-        }
+        assert result["success"] is False
+        assert "wactorz" in result["error"]
+        assert not any("pkill" in c for c in conn.commands), "the node was left half-deployed"
+
+
+class TestInstallingWactorzOnTheNode:
+    """A node runs the package, so the deploy's job is to put it there.
+
+    PyPI first, at main's own version. A checkout running an unreleased version
+    has nothing to install from there, so the wheel is built here and uploaded —
+    which is also the route for a node with no way out to PyPI.
+    """
+
+    async def test_it_installs_the_version_main_is_running(
+        self, installer: InstallerAgent, conn: _Conn
+    ) -> None:
+        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is True
+
+        (install,) = [c for c in conn.commands if "pip" in c]
+        assert f"wactorz=={__version__}" in install
+        assert conn.sftp.uploads == [], "PyPI answered; nothing needed uploading"
+
+    async def test_it_checks_the_install_can_actually_be_a_node(
+        self, installer: InstallerAgent, conn: _Conn
+    ) -> None:
+        # The version is a claim; this is the thing being relied on.
+        await installer._install_wactorz(conn, "rpi", "/home/pi")
+
+        assert any("import wactorz.node" in c for c in conn.commands)
+
+    async def test_a_published_version_without_the_node_runtime_is_replaced(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The number can match while the contents do not.
+
+        Every release before the node runtime existed answers to its own
+        version and carries no `wactorz.node`. Accepting one here would be
+        worse than failing: the runner is started with `--node`, an older CLI
+        discards flags it does not know, and the node would quietly come up as
+        a second *server*. The wheel from this machine replaces it.
+        """
+        wheel = Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
+        probes = []
+
+        async def _can_run(_conn: Any, _home: str) -> bool:
+            # False for what PyPI gave us, true once the wheel is in place.
+            probes.append(1)
+            return len(probes) > 1
+
+        async def _built() -> Path:
+            return wheel
+
+        monkeypatch.setattr(installer, "_can_run_as_node", _can_run)
+        monkeypatch.setattr(installer, "_build_wheel", _built)
+
+        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is True
+
+        assert conn.sftp.uploads == [
+            (str(wheel), "/home/pi/wactorz/wactorz-9.9.9-py3-none-any.whl")
+        ]
+
+    async def test_a_node_that_still_cannot_run_as_one_fails_the_deploy(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Starting a unit against an install that cannot be a node is what this
+        # exists to prevent, so it is reported rather than started.
+        conn.answers = {"import wactorz.node": (False, "ModuleNotFoundError")}
+
+        async def _built() -> Path:
+            return Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
+
+        monkeypatch.setattr(installer, "_build_wheel", _built)
+
+        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is False
+
+    async def test_paths_are_absolute_under_the_home_the_node_reported(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Never `~`.
+
+        SFTP does no tilde expansion, so an upload to `~/wactorz/…` creates a
+        directory literally named `~`; and the install command quotes its
+        argument, which stops a shell expanding one either. Deploying as root,
+        whose home is `/root`, is the case that makes this visible.
+        """
+        conn.answers = {"install wactorz==": (False, "No matching distribution")}
+        wheel = Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
+
+        async def _built() -> Path:
+            return wheel
+
+        monkeypatch.setattr(installer, "_build_wheel", _built)
+
+        assert await installer._install_wactorz(conn, "rpi", "/root") is True
+
+        assert conn.sftp.uploads == [(str(wheel), "/root/wactorz/wactorz-9.9.9-py3-none-any.whl")]
+        assert not any("~" in command for command in conn.commands)
+        from_wheel = [c for c in conn.commands if "wactorz-9.9.9-py3-none-any.whl" in c]
+        assert from_wheel and all("/root/wactorz/" in c for c in from_wheel)
+
+    async def test_the_uploaded_wheel_replaces_a_same_numbered_install(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """pip refuses a wheel whose version is already installed.
+
+        "already installed with the same version as the provided wheel" — and
+        it leaves the old code in place, which is exactly the code this path
+        exists to replace. Deploying from a checkout whose version is published
+        would otherwise install nothing and fail every time.
+        """
+        wheel = Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
+
+        async def _built() -> Path:
+            return wheel
+
+        monkeypatch.setattr(installer, "_build_wheel", _built)
+        monkeypatch.setattr(installer, "_can_run_as_node", _yes_then_no(installer))
+
+        await installer._install_wactorz(conn, "rpi", "/home/pi")
+
+        forced = [c for c in conn.commands if "--force-reinstall" in c]
+        assert forced, "the wheel was offered to pip without forcing it"
+        # Without deps: they came with the call before it, and refetching two
+        # dozen packages over a node's link is minutes rather than seconds.
+        assert all("--no-deps" in c for c in forced)
+
+    async def test_a_node_with_no_wheel_to_fall_back_on_reports_failure(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An installed wactorz with no source tree beside it has nothing to
+        # build. Saying so beats starting a unit with nothing to run.
+        conn.answers = {"install wactorz==": (False, "No matching distribution")}
+
+        async def _no_wheel() -> None:
+            return None
+
+        monkeypatch.setattr(installer, "_build_wheel", _no_wheel)
+
+        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is False
+        assert conn.sftp.uploads == []
+
+
+def _yes_then_no(installer: InstallerAgent) -> Any:
+    """Refuse the first install and accept the second, as an upgrade goes."""
+    seen: list[int] = []
+
+    async def _can_run(_conn: Any, _home: str) -> bool:
+        seen.append(1)
+        return len(seen) > 1
+
+    return _can_run
 
 
 class TestRemoteLog:

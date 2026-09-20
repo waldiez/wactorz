@@ -6,7 +6,6 @@ not the system Python.
 import asyncio
 import importlib
 import logging
-import re
 import shlex
 import socket
 import subprocess
@@ -18,6 +17,7 @@ from typing import Any
 
 import asyncssh
 
+from .._version import __version__
 from ..config import (
     CONFIG,
     NODE_SIGNING,
@@ -32,6 +32,7 @@ from ..core.actor import Actor, Message, MessageType
 from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
 from ..core.node_signing import next_sequence, node_key
 from ..core.paths import resolve_state_dir
+from ..core.pip import is_installable_name
 from . import node_service
 
 logger = logging.getLogger(__name__)
@@ -138,44 +139,6 @@ def tls_check_command(broker: str, tls: NodeTls) -> str:
 
 
 # pip package name → importable module name
-#: What a package name may look like. PEP 508 names are letters, digits, and
-#: `-`/`_`/`.` as internal separators; a version specifier or extras may follow.
-#: Nothing else — no path, no URL, no whitespace, and no leading `-`.
-_PACKAGE_NAME = re.compile(
-    # Name: never a leading dash, which is what makes an option an option.
-    r"[A-Za-z0-9][A-Za-z0-9._-]*"
-    # Optional extras: package[extra,extra]
-    r"(?:\[[A-Za-z0-9,._-]+\])?"
-    # Optional version specifiers, comma-separated: >=1.2,<2. No spaces — a
-    # space would let a second argument ride along inside one list element.
-    r"(?:"
-    r"(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+"
-    r"(?:,(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+)*"
-    r")?"
-)
-
-
-def is_installable_name(package: str) -> bool:
-    """Whether `package` is a package name and not an instruction to pip.
-
-    Two different exposures, one answer.
-
-    Locally the command is built as a *list*, so there is no shell — but pip
-    reads its own options from positional arguments, so `--index-url=http://…`
-    or a bare URL is honoured as configuration rather than treated as a name.
-    That is fetch-and-execute from an attacker-chosen index with no shell
-    involved, and it arrives in a spawn config an LLM wrote.
-
-    Remotely the same list is joined into a string and sent over SSH, so there
-    the value is also shell syntax — `;`, backticks, `$(…)`. `shlex.quote`
-    handles that half; this handles the half quoting cannot, because a properly
-    quoted `--index-url` is still an option.
-
-    An allow-list rather than a deny-list: the set of legitimate names is small
-    and describable, and the set of harmful strings is not.
-    """
-    candidate = (package or "").strip()
-    return bool(candidate) and _PACKAGE_NAME.fullmatch(candidate) is not None
 
 
 PACKAGE_TO_IMPORT = {
@@ -306,7 +269,7 @@ class InstallerAgent(Actor):
             return await self._node_install(payload)
 
         if action == "node_deploy":
-            # Full bootstrap: copy remote_runner.py + install deps + start runner
+            # Full bootstrap: install wactorz on the node + start it as one
             # payload: {host, node_name, broker}; SSH auth comes from the deploy target
             return await self._node_deploy(payload)
 
@@ -828,6 +791,132 @@ class InstallerAgent(Actor):
         output = (result.stdout or "") + (result.stderr or "")
         return result.exit_status == 0, output.strip()
 
+    async def _install_wactorz(self, conn: Any, node_name: str, home: str) -> bool:
+        """Put this exact version of wactorz into the node's venv.
+
+        Pinned to the version main is running, and deliberately: the two
+        exchange spawn configs, manifests and signed control messages, and a
+        node a release apart from main is the kind of mismatch that surfaces as
+        an agent that will not start, days later.
+
+        From PyPI first, which is the ordinary case. A checkout running an
+        unreleased version has nothing to install from there, so the wheel is
+        built here and uploaded instead -- which is also the route for a node
+        that cannot reach PyPI.
+        """
+        # Absolute, from the home the node reported, never `~`: SFTP does no
+        # tilde expansion, so an upload to `~/wactorz/…` creates a directory
+        # literally named `~`; and `shlex.quote` would stop a shell expanding
+        # one anyway, since a quoted tilde is just a character.
+        pip = shlex.quote(f"{home}/wactorz/venv/bin/pip")
+        spec = f"wactorz=={__version__}"
+        self._log_remote(f"[{node_name}] Installing {spec} into the venv...")
+        ok, out = await self._ssh_run(conn, f"{pip} install {shlex.quote(spec)} -q 2>&1")
+        if ok and await self._can_run_as_node(conn, home):
+            self._log_remote(f"[{node_name}] {spec} installed from PyPI.")
+            return True
+
+        if ok:
+            # The number matched and the contents did not. A release published
+            # before the node runtime existed carries no `wactorz.node`, and
+            # installing it here would be worse than failing: the runner is
+            # started with `--node`, an older CLI discards flags it does not
+            # know, and the node would quietly come up as a second *server*.
+            self._log_remote(
+                f"[{node_name}] The published {spec} cannot run as a node. Building a "
+                f"wheel from this machine instead."
+            )
+        else:
+            self._log_remote(
+                f"[{node_name}] {spec} could not be installed from PyPI ({out[-160:]}); "
+                f"building a wheel here instead."
+            )
+
+        wheel = await self._build_wheel()
+        if wheel is None:
+            self._log_remote(
+                f"[{node_name}] No wheel could be built: this install of wactorz has no "
+                f"source tree beside it, so there is nothing to build from."
+            )
+            return False
+
+        remote_wheel = f"{home}/wactorz/{wheel.name}"
+        async with conn.start_sftp_client() as sftp:
+            await sftp.put(str(wheel), remote_wheel)
+        # Twice, and the second time forced with `--no-deps`. Two pip behaviours
+        # meet here and neither can be worked around by one call.
+        #
+        # It refuses a wheel whose version is already installed -- "already
+        # installed with the same version as the provided wheel" -- and leaves
+        # the old code in place, which is the very code this path exists to
+        # replace. So the install has to be forced.
+        #
+        # But `--force-reinstall` alone reinstalls every *dependency* too, healthy
+        # or not. On a node with no route to PyPI -- one of the two reasons this
+        # path exists -- that turns a deploy that would have worked into
+        # "Could not find a version that satisfies the requirement aiomqtt",
+        # because it tears down a satisfied dependency it then cannot replace.
+        # Where there is a route, it still re-fetches and rewrites a dozen
+        # packages onto an SD card on every deploy.
+        #
+        # So: one ordinary call to settle the dependencies, and one forced call
+        # that touches nothing but us.
+        quoted = shlex.quote(remote_wheel)
+        ok, out = await self._ssh_run(conn, f"{pip} install {quoted} -q 2>&1")
+        if ok:
+            ok, out = await self._ssh_run(
+                conn, f"{pip} install --force-reinstall --no-deps {quoted} -q 2>&1"
+            )
+        if not ok:
+            self._log_remote(f"[{node_name}] Installing {wheel.name} failed: {out[-300:]}")
+            return False
+        if not await self._can_run_as_node(conn, home):
+            self._log_remote(
+                f"[{node_name}] {wheel.name} installed but cannot run as a node. "
+                f"Something is shadowing it on this node — check for another wactorz "
+                f"in the venv or on PYTHONPATH."
+            )
+            return False
+        self._log_remote(f"[{node_name}] {wheel.name} installed from this machine.")
+        return True
+
+    async def _can_run_as_node(self, conn: Any, home: str) -> bool:
+        """Whether the wactorz now on this node can actually be a node.
+
+        Asked of the install rather than assumed from its version, because a
+        version number is a claim and this is the thing being relied on. The
+        failure it rules out is silent: every release before the node runtime
+        answers to `wactorz==<that number>` and has no `wactorz.node` in it.
+        """
+        python = shlex.quote(f"{home}/wactorz/venv/bin/python")
+        ok, _ = await self._ssh_run(conn, f"{python} -c 'import wactorz.node'")
+        return ok
+
+    async def _build_wheel(self) -> Path | None:
+        """Build a wheel of this checkout, or None when there is no checkout.
+
+        Off the event loop: a build takes seconds to minutes, and every actor in
+        this process shares the loop it would otherwise hold.
+        """
+        root = Path(__file__).resolve().parent.parent.parent
+        if not (root / "pyproject.toml").exists():
+            return None
+        out_dir = root / "dist"
+
+        def _build() -> int:
+            return subprocess.run(  # noqa: S603  # a literal argv naming this interpreter
+                [sys.executable, "-m", "pip", "wheel", str(root), "--no-deps", "-w", str(out_dir)],
+                capture_output=True,
+                check=False,
+            ).returncode
+
+        if await asyncio.to_thread(_build) != 0:
+            return None
+        built = sorted(
+            out_dir.glob(f"wactorz-{__version__}-*.whl"), key=lambda p: p.stat().st_mtime
+        )
+        return built[-1] if built else None
+
     def _log_remote(self, message: str):
         logger.info("[%s] %s", self.name, message)
         asyncio.create_task(
@@ -917,10 +1006,10 @@ class InstallerAgent(Actor):
 
         Steps:
           1. Create ~/wactorz/ directory
-          2. Upload remote_runner.py
-          3. Install aiomqtt (the only runtime dependency)
-          4. Kill any existing runner with the same node name
-          5. Start the runner in the background
+          2. Write ~/wactorz/.env — broker, credentials, signing key, TLS
+          3. Install wactorz at this machine's version into a venv there
+          4. Kill any runner already answering for this node name
+          5. Install and start a systemd unit, or fall back to nohup
           6. Verify it appears online within 15 seconds
 
         payload keys:
@@ -975,16 +1064,6 @@ class InstallerAgent(Actor):
         # runner into a different account than the one it authenticates as.
         user = target.user
 
-        # Find remote_runner.py relative to this file
-        candidates = [
-            Path(__file__).parent.parent / "remote_runner.py",
-            Path("remote_runner.py"),
-            Path(__file__).parent.parent.parent / "remote_runner.py",
-        ]
-        runner_path = next((p for p in candidates if p.exists()), None)
-        if not runner_path:
-            return {"error": "remote_runner.py not found. Make sure it is in the wactorz root."}
-
         self._log_remote(f"Deploying node '{node_name}' to {user}@{host}...")
 
         try:
@@ -1000,12 +1079,11 @@ class InstallerAgent(Actor):
                 home_dir = resolved.strip() or f"/home/{user}"
                 self._log_remote(f"[{node_name}] Directory created at {home_dir}/wactorz.")
 
-                # 2. Upload remote_runner.py and, if the broker needs them, the
-                # credentials it will read from its environment. The CA goes too
-                # when the node is to reach the broker over TLS, which also decides
-                # the port every later step starts the runner with.
+                # 2. Write the credentials the node will read from its
+                # environment. The CA goes too when the node is to reach the
+                # broker over TLS, which also decides the port every later step
+                # starts the runner with.
                 async with conn.start_sftp_client() as sftp:
-                    await sftp.put(str(runner_path), f"{home_dir}/wactorz/remote_runner.py")
                     tls = await self._decide_node_tls(
                         conn, sftp, target, home_dir, str(broker), int(mqtt_port)
                     )
@@ -1013,7 +1091,6 @@ class InstallerAgent(Actor):
                     has_credentials = await self._put_node_env(
                         sftp, target, home_dir, node_name, str(broker), mqtt_port, tls
                     )
-                self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
                 self._log_remote(f"[{node_name}] Node environment written to ~/wactorz/.env.")
                 self._log_remote(
                     f"[{node_name}] Broker connection: "
@@ -1023,20 +1100,27 @@ class InstallerAgent(Actor):
                     self._log_remote(f"[{node_name}] Broker credentials included.")
 
                 # 3. Create venv if it doesn't exist — avoids all --break-system-packages issues
-                ok, out = await self._ssh_run(
+                _, out = await self._ssh_run(
                     conn,
                     "test -d ~/wactorz/venv && echo exists || python3 -m venv ~/wactorz/venv && echo created",
                 )
                 self._log_remote(f"[{node_name}] venv: {out.strip()}")
 
-                # 4. Install aiomqtt into the venv
-                ok, out = await self._ssh_run(
-                    conn, "~/wactorz/venv/bin/pip install aiomqtt psutil -q 2>&1"
-                )
-                if not ok:
-                    self._log_remote(f"[{node_name}] pip install warning: {out[:150]}")
-                else:
-                    self._log_remote(f"[{node_name}] aiomqtt installed into venv.")
+                # 4. Install wactorz itself into the venv. The node runs the
+                # package, not a copy of one file, so its agents are the same
+                # DynamicAgent main runs.
+                installed = await self._install_wactorz(conn, node_name, home_dir)
+                if not installed:
+                    return {
+                        "success": False,
+                        "node_name": node_name,
+                        "host": host,
+                        "error": (
+                            f"Could not install wactorz {__version__} on {host}. "
+                            f"The node needs it to run; see this node's log above for pip's "
+                            f"own account of why."
+                        ),
+                    }
 
                 # 5. Kill any existing instance with this node name. This runs
                 # whatever supervision we end up installing: a node deployed
@@ -1046,7 +1130,11 @@ class InstallerAgent(Actor):
                 # The pattern is quoted as one argument rather than wrapped in
                 # literal quotes: a name containing a quote would otherwise end
                 # them and the rest would be read as more shell.
-                pattern = f"remote_runner.py.*--name {node_name}"
+                # Matches both spellings: the unit started by this deploy
+                # (`wactorz --node <name>`) and the single-file runner a node
+                # deployed before the package was installed there is still
+                # running (`remote_runner.py --name <name>`).
+                pattern = f"(wactorz.*--node|remote_runner.py.*--name) {node_name}"
                 await self._ssh_run(conn, f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true")
 
                 # 6. Clear anything retained on this node's control topics, before
@@ -1112,10 +1200,10 @@ class InstallerAgent(Actor):
         log_path = shlex.quote(f"{node_name}.log")
         return (
             "set -a; . ~/wactorz/.env; set +a; "
-            "nohup ~/wactorz/venv/bin/python ~/wactorz/remote_runner.py "
-            f"--broker {shlex.quote(str(broker))} "
-            f"--port {shlex.quote(str(mqtt_port))} "
-            f"--name {shlex.quote(node_name)} "
+            "nohup ~/wactorz/venv/bin/wactorz "
+            f"--mqtt-broker {shlex.quote(str(broker))} "
+            f"--mqtt-port {shlex.quote(str(mqtt_port))} "
+            f"--node {shlex.quote(node_name)} "
             f"> ~/wactorz/{log_path} 2>&1 &"
         )
 

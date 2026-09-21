@@ -49,8 +49,21 @@ from .paths import ensure_state_dir
 logger = logging.getLogger(__name__)
 
 #: The topics under ``nodes/<node>/`` that main signs and a keyed node checks.
+#:
+#: ``code_request`` asks a node for the program an agent is actually running,
+#: and is signed like the rest although it commands nothing: what makes the
+#: answer usable is that main asked, so the asking is worth being sure of.
 CONTROL_LEAVES = frozenset(
-    {"spawn", "desired_state", "stop", "stop_all", "restart", "restart_agent", "migrate"}
+    {
+        "spawn",
+        "desired_state",
+        "stop",
+        "stop_all",
+        "restart",
+        "restart_agent",
+        "migrate",
+        "code_request",
+    }
 )
 
 #: The user properties a signed message carries.

@@ -152,6 +152,34 @@ class NodeRunner:
         actor = self.registry.find_by_name(name)
         return actor if isinstance(actor, NodeAgent) else None
 
+    def remember_code(self, name: str, code: str) -> None:
+        """Record that an agent's program has changed under it.
+
+        An agent can repair its own code, and the node keeps the config it
+        would rebuild that agent from — which a restart reads, and which a
+        migration hands to main. Both would otherwise pass on the program that
+        failed, so the repair would be undone by the next thing that touched
+        the agent, and paid for again.
+
+        The stored config is the one the supervisor's factory closed over, so
+        updating it here is also what a supervisor-driven restart sees.
+        """
+        config = self._configs.get(name)
+        if config is None or not code or config.get("code") == code:
+            return
+        config["code"] = code
+        # Main is told that something changed, and nothing more. The program
+        # itself travels only when main asks for it, because code a node
+        # volunteered would end up in the spawn registry and from there on
+        # another machine. A forged notice costs one question and one answer.
+        self._background(
+            self.publish(
+                f"nodes/{self.node_name}/code_changed",
+                {"agent": name, "node": self.node_name, "timestamp": time.time()},
+            ),
+            "code_changed",
+        )
+
     def forget(self, name: str) -> None:
         """Drop an agent that has ended itself, without stopping it again."""
         self._configs.pop(name, None)
@@ -430,6 +458,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/restart": self._on_restart,
             f"nodes/{self.node_name}/restart_agent": self._on_restart_agent,
             f"nodes/{self.node_name}/list": self._on_list,
+            f"nodes/{self.node_name}/code_request": self._on_code_request,
         }
         handler = exact.get(topic_str)
         if handler is not None:
@@ -509,6 +538,41 @@ class NodeRunner:
             {
                 "node": self.node_name,
                 "agents": [{"name": a.name, "actor_id": a.actor_id} for a in self.agents.values()],
+                "timestamp": time.time(),
+            },
+        )
+
+    async def _on_code_request(self, topic_str: str, data: Any, msg: Any) -> None:
+        """Answer with the program an agent here is actually running.
+
+        Main asks when it has been told the program changed, quoting a token it
+        minted; the answer quotes it back. That exchange is what lets main act
+        on code a node sent it -- the same rule a migration follows. Nothing is
+        volunteered: a node that published code main had not asked for could
+        write into the spawn registry, and from there onto another machine.
+
+        A node holding a signing key answers only a request main signed, which
+        the control guard has already checked by the time this runs. One with no
+        key answers anyone -- as it acts on every other command from anyone --
+        and that costs it nothing here: the program is in the spawn that placed
+        the agent and in every heartbeat it sends, both of which the same
+        listener can already read. The answer is not the disclosure; being able
+        to make main *file* it would be, and that needs main's token.
+        """
+        if not isinstance(data, dict):
+            return
+        name = str(data.get("agent") or "")
+        agent = self.get(name)
+        if agent is None:
+            logger.info("[runner] code_request for '%s', which is not running here", name)
+            return
+        await self.publish(
+            f"nodes/{self.node_name}/code_return",
+            {
+                "agent": name,
+                "token": data.get("token", ""),
+                "code": agent._code,
+                "node": self.node_name,
                 "timestamp": time.time(),
             },
         )
@@ -619,6 +683,7 @@ class NodeRunner:
             f"nodes/{self.node_name}/restart_agent",  # restart a single named agent
             f"nodes/{self.node_name}/migrate",
             f"nodes/{self.node_name}/list",
+            f"nodes/{self.node_name}/code_request",
             f"nodes/{self.node_name}/reply/#",
             "agents/by-name/+/task",
         ]

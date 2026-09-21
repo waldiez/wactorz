@@ -44,6 +44,10 @@ CONTROL_TOPICS = frozenset(
         "restart",
         "restart_agent",
         "migrate",
+        # Asks the node for the program an agent is actually running. Signed
+        # like the rest: it commands nothing, but main acting on the answer
+        # rests on main having asked.
+        "code_request",
     }
 )
 
@@ -54,6 +58,11 @@ REPORT_TOPICS = frozenset(
         "spawn_ack",
         "state_return",
         "migrate_result",
+        # A repair happened here. Carries no code by design -- the program
+        # travels only on `code_return`, in answer to a request.
+        "code_changed",
+        # The program itself, quoting the token main asked with.
+        "code_return",
     }
 )
 

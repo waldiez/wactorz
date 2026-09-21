@@ -19,6 +19,7 @@ from wactorz.node.agent import NodeAgent
 from wactorz.node.runner import NodeRunner
 
 CODE = "async def process(agent):\n    pass\n"
+REPAIRED = "async def process(agent):\n    pass  # repaired by the LLM\n"
 
 
 class RecordingRunner(NodeRunner):
@@ -236,6 +237,20 @@ class TestSupervision:
         assert isinstance(rebuilt, NodeAgent)
         assert "second" in rebuilt._code
 
+    async def test_a_restart_of_the_agent_keeps_the_repair(self, runner: RecordingRunner) -> None:
+        # `/nodes restart-agent` rebuilds from the config the node stored, which
+        # held the program that failed — so restarting a repaired agent handed
+        # back the break and paid to fix it again.
+        await runner.spawn_agent({"name": "collector", "code": "# broken"})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent._persist_fixed_code(REPAIRED)
+
+        await runner._restart_agent("collector")
+
+        fresh = runner.get("collector")
+        assert fresh is not None and fresh._code == REPAIRED
+
     async def test_the_supervisor_is_reachable_from_an_agent(self, runner: RecordingRunner) -> None:
         # The same back-reference is how a deliberate stop releases supervision.
         # Absent, that is a silent no-op rather than an error.
@@ -257,6 +272,70 @@ class TestSupervision:
             await asyncio.sleep(0.01)
 
         assert runner.get("collector") is None
+
+
+class TestTellingMainAboutARepair:
+    """The node says a program changed, and hands it over only when asked.
+
+    Code a node volunteered would be filed by main and run wherever the agent
+    goes next, so the notice carries none and the program travels only in
+    answer to a request quoting main's own token.
+    """
+
+    async def test_a_repair_is_announced_without_the_program(self, runner: RecordingRunner) -> None:
+        await runner.spawn_agent({"name": "collector", "code": "# broken"})
+        agent = runner.get("collector")
+        assert agent is not None
+
+        agent._persist_fixed_code(REPAIRED)
+        await _settle()
+
+        (notice,) = [p for t, p, _ in runner.published if t.endswith("/code_changed")]
+        assert notice["agent"] == "collector"
+        assert "code" not in notice, "the notice carried the program"
+
+    async def test_the_same_program_twice_announces_once(self, runner: RecordingRunner) -> None:
+        # A repair that changed nothing is not news, and every notice costs
+        # main a question.
+        await runner.spawn_agent({"name": "collector", "code": "# broken"})
+        agent = runner.get("collector")
+        assert agent is not None
+
+        agent._persist_fixed_code(REPAIRED)
+        agent._persist_fixed_code(REPAIRED)
+        await _settle()
+
+        assert len([t for t in runner.topics if t.endswith("/code_changed")]) == 1
+
+    async def test_it_answers_a_request_with_what_it_is_running(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": "# broken"})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent._code = REPAIRED
+
+        await runner._on_code_request(
+            "nodes/rpi/code_request",
+            {"agent": "collector", "token": "tok-1"},
+            _Message(payload=b"{}"),
+        )
+
+        (answer,) = [p for t, p, _ in runner.published if t.endswith("/code_return")]
+        assert answer["code"] == REPAIRED
+        assert answer["token"] == "tok-1", "the token has to come back or main ignores it"
+        assert answer["agent"] == "collector"
+
+    async def test_a_request_for_an_agent_that_is_not_here_is_not_answered(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner._on_code_request(
+            "nodes/rpi/code_request",
+            {"agent": "elsewhere", "token": "tok-1"},
+            _Message(payload=b"{}"),
+        )
+
+        assert not [t for t in runner.topics if t.endswith("/code_return")]
 
 
 class TestStopping:
@@ -441,6 +520,25 @@ class TestMigration:
         # elsewhere, so a migration that fails after this has something to
         # roll back to.
         assert agent._state_file.path.exists()
+
+    async def test_a_repaired_agent_takes_its_repair_back_to_main(
+        self, runner: RecordingRunner
+    ) -> None:
+        """Migration hands main the program the agent is actually running.
+
+        It sent the spawn config instead, which still held the code that
+        failed — so an agent that had repaired itself on a node arrived back on
+        main broken, and main repaired it over again.
+        """
+        await runner.spawn_agent({"name": "collector", "code": "# broken"})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent._persist_fixed_code(REPAIRED)
+
+        await runner._migrate_agent({"name": "collector", "target_node": "@main"})
+
+        (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
+        assert returned["config"]["code"] == REPAIRED
 
     async def test_state_that_cannot_travel_is_named_rather_than_dropped_silently(
         self, runner: RecordingRunner

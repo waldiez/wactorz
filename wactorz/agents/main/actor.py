@@ -27,6 +27,7 @@ from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from ..prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
 )
+from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
 from .delegation import DelegationManager
@@ -147,6 +148,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.manifests = ManifestRegistry(self)
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
+        self.code_refresh = CodeRefresh(self)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
         self.delegation = DelegationManager(self)
@@ -257,6 +259,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.migration.restore()
         # Receive state + config from remote nodes during remote→local migration
         self._tasks.append(asyncio.create_task(self._state_return_listener()))
+        # Follow agents that repaired themselves on a node, so the registry
+        # holds the program they actually run
+        self._tasks.append(asyncio.create_task(self.code_refresh.listener()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt

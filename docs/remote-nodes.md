@@ -394,10 +394,40 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, and whether the node checks signed commands. |
 | `nodes/{name}/migrate` | → runner | Migrate a running agent to another node. Payload: `{"name": "...", "target_node": "..."}`. Signed. |
 | `nodes/{name}/migrate_result` | ← runner | Result of a migration request. |
+| `nodes/{name}/code_changed` | ← runner | An agent here repaired its own program. Carries the agent's name and no code. |
+| `nodes/{name}/code_request` | → runner | Asks for the program an agent is actually running. Payload: `{"agent": "...", "token": "..."}`. Signed. |
+| `nodes/{name}/code_return` | ← runner | The program, quoting the token it was asked with. |
 | `nodes/{name}/reply/{id}` | ← runner | Reply routing for `agent.send_to()` calls originating on this node. |
 | `agents/{id}/heartbeat` | ← agent | Per-agent heartbeat every 10 s. Includes `"node": "{name}"` field. |
 | `agents/{id}/logs` | ← agent | Log messages from `agent.log()` and `agent.alert()`. |
 | `agents/by-name/{name}/task` | → agent | Task addressed to a named agent on any node. Runner routes to local agents by name. |
+
+
+### Why a repair travels in two steps
+
+An agent can be repaired by the LLM while it runs, and main's spawn registry has
+to learn about it or the next reboot sends the node the program that failed.
+
+The node never volunteers the code. It publishes a notice that *something*
+changed; main then asks for the program on a signed topic, quoting a token it
+minted, and files the answer only for that token, that agent and that node,
+spending the token on use.
+
+The asymmetry is the point. Main executes what a node sends it, so a node that
+could publish code straight into the registry could put it there for any agent
+it hosts — and that code would run wherever the agent went next, including on
+main. It is the same reason node-to-node migration is routed through main, and
+the same rule a returning agent's config follows. A forged notice buys nothing:
+main asks the node, and the node answers with what it is really running.
+
+Two limits keep a notice from being worth sending. Main asks about one agent at
+a time and no more often than every ten seconds, because each question is a
+signed message and signing records a sequence number to disk — a rate meant for
+an operator's commands, not for whatever a node chooses to announce. And an
+answer that quotes a valid token but names the wrong agent or arrives from the
+wrong node is dropped *without* spending the question, so someone who reads a
+token off the broker cannot use it to cancel the exchange and leave the real
+answer refused.
 
 ---
 

@@ -200,6 +200,19 @@ class NodeAgent(DynamicAgent):
         await self._publish_error(phase="handle_task", error=error, traceback_str=details)
         return {"error": str(error), "error_phase": "handle_task", "agent": self.name}
 
+    def _persist_fixed_code(self, fixed_code: str) -> Any:
+        """Keep a repair where everything that rebuilds this agent will see it.
+
+        The base class writes it to main's spawn registry and to the
+        supervisor's factory. The registry is not reachable from here — it is
+        main's, and a node pushing code into it unasked is the lateral path
+        this system deliberately closed. What a node can do is remember the
+        program on its own behalf, which is what a restart here and a migration
+        back to main both read.
+        """
+        self._runner.remember_code(self.name, fixed_code)
+        return super()._persist_fixed_code(fixed_code)
+
     # ── Commands, which main may send straight to the agent ───────────────────
 
     async def apply_command(self, command: str) -> bool:

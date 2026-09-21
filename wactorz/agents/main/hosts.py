@@ -212,6 +212,24 @@ class LifecycleHost(Protocol):
     ) -> None: ...
 
 
+class CodeRefreshHost(ListenerHost, Protocol):
+    """What filing a node's repaired program needs from the actor.
+
+    Narrow on purpose. This writes one field of one registry entry and asks one
+    question over the broker, so it reaches the registry, the connection, and
+    nothing else — the reach is the trust boundary, and it is worth being able
+    to read it in four lines.
+    """
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+
 class NodeReaders(Protocol):
     """The live node view a migration consults.
 

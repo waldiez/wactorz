@@ -128,8 +128,16 @@ class TestSayingWhereItWent:
 
 
 class TestKnowingWhereWeAre:
-    def test_this_checkout_runs_in_one(self) -> None:
-        # The suite runs from `.venv`, so this is measurable rather than mocked.
+    def test_a_prefix_moved_off_the_base_is_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The shape every environment since legacy virtualenv leaves behind:
+        # `prefix` points at the environment, `base_prefix` stays on the
+        # interpreter it was built from. Built here rather than read off the
+        # running interpreter, which is a virtualenv in a checkout and a plain
+        # one on a CI runner.
+        monkeypatch.delattr(sys, "real_prefix", raising=False)
+        monkeypatch.setattr(sys, "prefix", "/opt/an-environment")
+        monkeypatch.setattr(sys, "base_prefix", "/usr")
+
         assert pip.in_virtualenv() is True
 
     def test_a_plain_interpreter_is_not_one(self, monkeypatch: pytest.MonkeyPatch) -> None:

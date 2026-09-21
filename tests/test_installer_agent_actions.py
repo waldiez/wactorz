@@ -531,72 +531,61 @@ class TestNodeDeploy:
 class TestInstallingWactorzOnTheNode:
     """A node runs the package, so the deploy's job is to put it there.
 
-    PyPI first, at main's own version. A checkout running an unreleased version
-    has nothing to install from there, so the wheel is built here and uploaded —
-    which is also the route for a node with no way out to PyPI.
+    A checkout deploys itself: running from a source tree means the code that
+    matters is here. Anything else installs from PyPI at the version this
+    machine runs, and checks that what arrived can actually be a node.
     """
 
-    async def test_it_installs_the_version_main_is_running(
-        self, installer: InstallerAgent, conn: _Conn
+    WHEEL = Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
+
+    def _from_checkout(self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _built() -> Path:
+            return self.WHEEL
+
+        monkeypatch.setattr(installer, "_build_wheel", _built)
+
+    def _from_an_installed_package(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        async def _no_wheel() -> None:
+            return None
+
+        monkeypatch.setattr(installer, "_build_wheel", _no_wheel)
+
+    async def test_a_checkout_deploys_its_own_code(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PyPI is not consulted at all.
+
+        At the same version number pip finds the node already satisfied and
+        changes nothing, so a deploy of edited code shipped the previous one —
+        silently, and exactly when someone is iterating.
+        """
+        self._from_checkout(installer, monkeypatch)
+
         assert await installer._install_wactorz(conn, "rpi", "/home/pi") is True
 
-        (install,) = [c for c in conn.commands if "pip" in c]
-        assert f"wactorz=={__version__}" in install
-        assert conn.sftp.uploads == [], "PyPI answered; nothing needed uploading"
+        assert conn.sftp.uploads == [(str(self.WHEEL), f"/home/pi/wactorz/{self.WHEEL.name}")]
+        assert not any(f"wactorz=={__version__}" in c for c in conn.commands)
 
-    async def test_it_checks_the_install_can_actually_be_a_node(
-        self, installer: InstallerAgent, conn: _Conn
+    async def test_the_uploaded_wheel_replaces_a_same_numbered_install(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The version is a claim; this is the thing being relied on.
+        """pip refuses a wheel whose version is already installed.
+
+        "already installed with the same version as the provided wheel" — and
+        it leaves the old code in place, which is exactly the code this path
+        exists to replace.
+        """
+        self._from_checkout(installer, monkeypatch)
+
         await installer._install_wactorz(conn, "rpi", "/home/pi")
 
-        assert any("import wactorz.node" in c for c in conn.commands)
-
-    async def test_a_published_version_without_the_node_runtime_is_replaced(
-        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The number can match while the contents do not.
-
-        Every release before the node runtime existed answers to its own
-        version and carries no `wactorz.node`. Accepting one here would be
-        worse than failing: the runner is started with `--node`, an older CLI
-        discards flags it does not know, and the node would quietly come up as
-        a second *server*. The wheel from this machine replaces it.
-        """
-        wheel = Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
-        probes = []
-
-        async def _can_run(_conn: Any, _home: str) -> bool:
-            # False for what PyPI gave us, true once the wheel is in place.
-            probes.append(1)
-            return len(probes) > 1
-
-        async def _built() -> Path:
-            return wheel
-
-        monkeypatch.setattr(installer, "_can_run_as_node", _can_run)
-        monkeypatch.setattr(installer, "_build_wheel", _built)
-
-        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is True
-
-        assert conn.sftp.uploads == [
-            (str(wheel), "/home/pi/wactorz/wactorz-9.9.9-py3-none-any.whl")
-        ]
-
-    async def test_a_node_that_still_cannot_run_as_one_fails_the_deploy(
-        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Starting a unit against an install that cannot be a node is what this
-        # exists to prevent, so it is reported rather than started.
-        conn.answers = {"import wactorz.node": (False, "ModuleNotFoundError")}
-
-        async def _built() -> Path:
-            return Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
-
-        monkeypatch.setattr(installer, "_build_wheel", _built)
-
-        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is False
+        forced = [c for c in conn.commands if "--force-reinstall" in c]
+        assert forced, "the wheel was offered to pip without forcing it"
+        # Without deps: they came with the call before it, and refetching two
+        # dozen packages over a node's link is minutes rather than seconds.
+        assert all("--no-deps" in c for c in forced)
 
     async def test_paths_are_absolute_under_the_home_the_node_reported(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
@@ -608,61 +597,50 @@ class TestInstallingWactorzOnTheNode:
         argument, which stops a shell expanding one either. Deploying as root,
         whose home is `/root`, is the case that makes this visible.
         """
-        conn.answers = {"install wactorz==": (False, "No matching distribution")}
-        wheel = Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
-
-        async def _built() -> Path:
-            return wheel
-
-        monkeypatch.setattr(installer, "_build_wheel", _built)
+        self._from_checkout(installer, monkeypatch)
 
         assert await installer._install_wactorz(conn, "rpi", "/root") is True
 
-        assert conn.sftp.uploads == [(str(wheel), "/root/wactorz/wactorz-9.9.9-py3-none-any.whl")]
+        assert conn.sftp.uploads == [(str(self.WHEEL), f"/root/wactorz/{self.WHEEL.name}")]
         assert not any("~" in command for command in conn.commands)
-        from_wheel = [c for c in conn.commands if "wactorz-9.9.9-py3-none-any.whl" in c]
-        assert from_wheel and all("/root/wactorz/" in c for c in from_wheel)
 
-    async def test_the_uploaded_wheel_replaces_a_same_numbered_install(
+    async def test_an_installed_package_deploys_the_published_one(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """pip refuses a wheel whose version is already installed.
+        self._from_an_installed_package(installer, monkeypatch)
 
-        "already installed with the same version as the provided wheel" — and
-        it leaves the old code in place, which is exactly the code this path
-        exists to replace. Deploying from a checkout whose version is published
-        would otherwise install nothing and fail every time.
-        """
-        wheel = Path("/tmp/dist/wactorz-9.9.9-py3-none-any.whl")
+        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is True
 
-        async def _built() -> Path:
-            return wheel
+        (install,) = [c for c in conn.commands if "pip" in c and "install" in c]
+        assert f"wactorz=={__version__}" in install
+        assert conn.sftp.uploads == []
 
-        monkeypatch.setattr(installer, "_build_wheel", _built)
-        monkeypatch.setattr(installer, "_can_run_as_node", _yes_then_no(installer))
+    async def test_it_checks_the_install_can_actually_be_a_node(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The version is a claim; this is the thing being relied on.
+        self._from_an_installed_package(installer, monkeypatch)
 
         await installer._install_wactorz(conn, "rpi", "/home/pi")
 
-        forced = [c for c in conn.commands if "--force-reinstall" in c]
-        assert forced, "the wheel was offered to pip without forcing it"
-        # Without deps: they came with the call before it, and refetching two
-        # dozen packages over a node's link is minutes rather than seconds.
-        assert all("--no-deps" in c for c in forced)
+        assert any("import wactorz.node" in c for c in conn.commands)
 
-    async def test_a_node_with_no_wheel_to_fall_back_on_reports_failure(
+    async def test_a_published_version_that_cannot_be_a_node_fails_the_deploy(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # An installed wactorz with no source tree beside it has nothing to
-        # build. Saying so beats starting a unit with nothing to run.
-        conn.answers = {"install wactorz==": (False, "No matching distribution")}
+        """The number can match while the contents do not.
 
-        async def _no_wheel() -> None:
-            return None
-
-        monkeypatch.setattr(installer, "_build_wheel", _no_wheel)
+        Every release before the node runtime existed answers to its own
+        version and carries no `wactorz.node`. Starting a unit against one
+        would be worse than failing: the runner is started with `--node`, an
+        older CLI discards flags it does not know, and the node would quietly
+        come up as a second *server*. With no source tree to build from, there
+        is nothing else to try, so the deploy says so.
+        """
+        self._from_an_installed_package(installer, monkeypatch)
+        conn.answers = {"import wactorz.node": (False, "ModuleNotFoundError")}
 
         assert await installer._install_wactorz(conn, "rpi", "/home/pi") is False
-        assert conn.sftp.uploads == []
 
 
 def _yes_then_no(installer: InstallerAgent) -> Any:

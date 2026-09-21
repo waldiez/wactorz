@@ -5,6 +5,7 @@ not the system Python.
 
 import asyncio
 import importlib
+import ipaddress
 import logging
 import shlex
 import socket
@@ -136,6 +137,24 @@ def tls_check_command(broker: str, tls: NodeTls) -> str:
             str(TLS_CHECK_TIMEOUT_S),
         ]
     )
+
+
+def known_hosts_address(host: str) -> str:
+    """``host`` if it is an IP address, otherwise ``""``.
+
+    `asyncssh.match_known_hosts` takes a host *and* an address, and parses the
+    address as an IP — a name given there raises `ValueError` before any lookup
+    happens. Passing the host for both failed every deploy to a target named
+    rather than numbered, `.local` names included, which is what the docs tell
+    people to use. Given ``""`` it falls back to the host and tolerates a name,
+    which is what is wanted whenever the address is not separately known.
+    """
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return ""
+    else:
+        return host
 
 
 # pip package name → importable module name
@@ -517,7 +536,9 @@ class InstallerAgent(Actor):
         path = self._known_hosts_path()
         async with self._known_hosts_lock:
             try:
-                known = asyncssh.match_known_hosts(str(path), host, host, port)[0]
+                known = asyncssh.match_known_hosts(
+                    str(path), host, known_hosts_address(host), port
+                )[0]
             except FileNotFoundError:
                 known = []
             if known:
@@ -809,6 +830,15 @@ class InstallerAgent(Actor):
         # literally named `~`; and `shlex.quote` would stop a shell expanding
         # one anyway, since a quoted tilde is just a character.
         pip = shlex.quote(f"{home}/wactorz/venv/bin/pip")
+
+        # A checkout deploys itself. Running from a source tree means the code
+        # that matters is here, not on PyPI -- and at the same version number
+        # pip would find the node already satisfied and change nothing, so a
+        # deploy of edited code silently shipped the previous one.
+        wheel = await self._build_wheel()
+        if wheel is not None:
+            return await self._install_wheel(conn, node_name, home, pip, wheel)
+
         spec = f"wactorz=={__version__}"
         self._log_remote(f"[{node_name}] Installing {spec} into the venv...")
         ok, out = await self._ssh_run(conn, f"{pip} install {shlex.quote(spec)} -q 2>&1")
@@ -816,30 +846,22 @@ class InstallerAgent(Actor):
             self._log_remote(f"[{node_name}] {spec} installed from PyPI.")
             return True
 
-        if ok:
-            # The number matched and the contents did not. A release published
-            # before the node runtime existed carries no `wactorz.node`, and
-            # installing it here would be worse than failing: the runner is
-            # started with `--node`, an older CLI discards flags it does not
-            # know, and the node would quietly come up as a second *server*.
-            self._log_remote(
-                f"[{node_name}] The published {spec} cannot run as a node. Building a "
-                f"wheel from this machine instead."
-            )
-        else:
-            self._log_remote(
-                f"[{node_name}] {spec} could not be installed from PyPI ({out[-160:]}); "
-                f"building a wheel here instead."
-            )
+        why = (
+            f"The published {spec} cannot run as a node."
+            if ok
+            else f"{spec} could not be installed from PyPI ({out[-160:]})."
+        )
+        self._log_remote(
+            f"[{node_name}] {why} There is no source tree beside this install to build "
+            f"a wheel from, so there is nothing else to try."
+        )
+        return False
 
-        wheel = await self._build_wheel()
-        if wheel is None:
-            self._log_remote(
-                f"[{node_name}] No wheel could be built: this install of wactorz has no "
-                f"source tree beside it, so there is nothing to build from."
-            )
-            return False
-
+    async def _install_wheel(
+        self, conn: Any, node_name: str, home: str, pip: str, wheel: Path
+    ) -> bool:
+        """Put a wheel built here onto the node, and check it can be a node."""
+        self._log_remote(f"[{node_name}] Installing {wheel.name} built from this checkout...")
         remote_wheel = f"{home}/wactorz/{wheel.name}"
         async with conn.start_sftp_client() as sftp:
             await sftp.put(str(wheel), remote_wheel)
@@ -852,12 +874,12 @@ class InstallerAgent(Actor):
         # replace. So the install has to be forced.
         #
         # But `--force-reinstall` alone reinstalls every *dependency* too, healthy
-        # or not. On a node with no route to PyPI -- one of the two reasons this
-        # path exists -- that turns a deploy that would have worked into
-        # "Could not find a version that satisfies the requirement aiomqtt",
-        # because it tears down a satisfied dependency it then cannot replace.
-        # Where there is a route, it still re-fetches and rewrites a dozen
-        # packages onto an SD card on every deploy.
+        # or not. On a node with no route to PyPI -- one of the reasons this path
+        # exists -- that turns a deploy that would have worked into "Could not
+        # find a version that satisfies the requirement aiomqtt", because it
+        # tears down a satisfied dependency it then cannot replace. Where there
+        # is a route, it still re-fetches and rewrites a dozen packages onto an
+        # SD card on every deploy.
         #
         # So: one ordinary call to settle the dependencies, and one forced call
         # that touches nothing but us.

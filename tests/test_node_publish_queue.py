@@ -180,3 +180,85 @@ class TestOrdering:
             "agents/abc/errors",
         ]
         assert runner.dropped == 1
+
+
+class _Reason:
+    """A paho v2 reason code, which reports failure through `is_failure`."""
+
+    def __init__(self, failure: bool, text: str = "Not authorized") -> None:
+        self.is_failure = failure
+        self._text = text
+
+    def __str__(self) -> str:
+        return self._text
+
+
+class _Paho:
+    """A paho client that answers the connection the way the broker would."""
+
+    def __init__(self, reason: _Reason | None) -> None:
+        self._reason = reason
+        self.on_connect = None
+        self.closed = False
+
+    def username_pw_set(self, *_a: Any, **_kw: Any) -> None: ...
+    def tls_set_context(self, *_a: Any, **_kw: Any) -> None: ...
+    def loop_start(self) -> None: ...
+
+    def connect(self, *_a: Any, **_kw: Any) -> None:
+        # The answer arrives on the network loop, after connect() returns —
+        # which is the whole reason this has to be waited for.
+        if self._reason is not None and self.on_connect is not None:
+            self.on_connect(self, None, None, self._reason, None)
+
+    def loop_stop(self) -> None:
+        self.closed = True
+
+    def disconnect(self) -> None:
+        self.closed = True
+
+
+class TestTheConnectionIsConfirmed:
+    """`connect` returns once the CONNECT is away; being let in is a later answer.
+
+    Without waiting for it, a node whose credentials the broker refuses reported
+    a connection it did not have and then dropped everything it published —
+    heartbeats included — so the node was simply absent with nothing saying why.
+    """
+
+    def _publisher(self, monkeypatch: pytest.MonkeyPatch, reason: _Reason | None) -> Any:
+        made: list[_Paho] = []
+
+        def _client(*_a: Any, **_kw: Any) -> _Paho:
+            made.append(_Paho(reason))
+            return made[-1]
+
+        monkeypatch.setattr(publishing.paho_mqtt, "Client", _client)
+        monkeypatch.setattr(publishing, "CONNACK_TIMEOUT_S", 0.2)
+        return publishing.NodePublisher("broker.lan", 8883, "rpi"), made
+
+    def test_a_refusal_is_raised_with_its_reason(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        publisher, made = self._publisher(monkeypatch, _Reason(failure=True))
+
+        with pytest.raises(ConnectionError) as caught:
+            publisher.connect()
+
+        assert "Not authorized" in str(caught.value)
+        assert made[0].closed, "the refused client was left open"
+
+    def test_silence_is_raised_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A broker that takes the connection and never answers is the same
+        # problem wearing a different hat: nothing published would arrive.
+        publisher, made = self._publisher(monkeypatch, None)
+
+        with pytest.raises(ConnectionError) as caught:
+            publisher.connect()
+
+        assert "did not answer" in str(caught.value)
+        assert made[0].closed
+
+    def test_being_let_in_returns_the_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        publisher, made = self._publisher(monkeypatch, _Reason(failure=False, text="Success"))
+
+        assert publisher.connect() is made[0]
+        assert not made[0].closed

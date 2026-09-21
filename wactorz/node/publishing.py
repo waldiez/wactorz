@@ -16,6 +16,7 @@ that handles ACKs and keepalives whatever the event loop is doing.
 import asyncio
 import json
 import logging
+import threading
 from typing import Any
 
 import paho.mqtt.client as paho_mqtt
@@ -33,6 +34,10 @@ logger = logging.getLogger(__name__)
 #: publisher, so a node and main agree on what is worth keeping.
 MAX_QUEUED = MQTTPublisher.MAX_QUEUED
 TELEMETRY_TOPIC_SUFFIXES = MQTTPublisher._TELEMETRY_TOPIC_SUFFIXES
+
+#: How long to wait for the broker to say whether it took this connection.
+#: Generous: it is one round trip, and a node on slow wifi is the ordinary case.
+CONNACK_TIMEOUT_S = 15.0
 
 #: One queue entry: the topic, the payload as sent, whether it is retained, and
 #: whether losing it would lose something the system needs.
@@ -183,7 +188,16 @@ class NodePublisher:
     # ── Draining ──────────────────────────────────────────────────────────────
 
     def connect(self) -> Any:
-        """Open a paho client for publishing, with credentials where configured."""
+        """Open a paho client for publishing, and wait to hear that it was let in.
+
+        `connect` returns once the CONNECT packet is away; whether the broker
+        accepted it arrives later, on the network loop. Without waiting for that
+        this reported a connection it did not have — a node with credentials the
+        broker would not take logged "Publisher connected" and then quietly
+        dropped everything it published, heartbeats included, so the node was
+        simply absent with nothing anywhere saying why. The subscriber, which
+        does see its own refusal, was the only thing that said so.
+        """
         client = paho_mqtt.Client(
             # Explicit, not defaulted: omitting it selects paho's callback API
             # version 1, which is deprecated and warns on every construction.
@@ -205,6 +219,17 @@ class NodePublisher:
         # redelivered rather than discarded with the session. The CONNECT
         # properties come from the same helper aiomqtt callers use, so a node
         # and the server ask the broker to hold a session for the same time.
+        # A plain event rather than a queue: several methods here already bind
+        # `queue` to this publisher's own, and a module of the same name reading
+        # differently inside one of them is a trap for the next person.
+        answered = threading.Event()
+        outcome: dict[str, Any] = {}
+
+        def _on_connect(_client: Any, _data: Any, _flags: Any, reason: Any, _props: Any = None):
+            outcome["reason"] = reason
+            answered.set()
+
+        client.on_connect = _on_connect
         client.connect(
             self.broker,
             self.port,
@@ -213,6 +238,15 @@ class NodePublisher:
             properties=session_kwargs(SERVER_SESSION_EXPIRY_SECONDS)["properties"],
         )
         client.loop_start()
+        if not answered.wait(CONNACK_TIMEOUT_S):
+            close_mqtt_client(client, "Unanswered publisher")
+            raise ConnectionError(
+                f"{self.broker}:{self.port} accepted the connection but did not answer"
+            )
+        reason = outcome.get("reason")
+        if getattr(reason, "is_failure", False):
+            close_mqtt_client(client, "Refused publisher")
+            raise ConnectionError(f"{self.broker}:{self.port} refused this node: {reason}")
         return client
 
     async def publish_one_queued(self, client: Any) -> None:

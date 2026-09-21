@@ -132,7 +132,17 @@ class NodeAgent(DynamicAgent):
         back after it is gone.
         """
         self._persistent_state = {}
-        return self._state_file.delete()
+        removed = self._state_file.delete()
+        # `Actor.__init__` makes a directory per agent for the pickle store this
+        # one does not use -- its memory is the flat JSON file above. Left
+        # behind, every agent ever spawned here leaves an empty directory on a
+        # machine chosen for being small. `rmdir`, so anything unexpectedly
+        # inside it survives to be looked at.
+        try:
+            self._persistence_dir.rmdir()
+        except OSError:
+            logger.debug("[%s] Left %s in place", self.name, self._persistence_dir)
+        return removed
 
     # ── Identity ──────────────────────────────────────────────────────────────
 

@@ -278,6 +278,40 @@ class TestCommandsSentStraightToTheAgent:
         # respawn that does not say `replace`.
         assert runner.get("edge-agent") is None
 
+    async def test_a_delete_leaves_nothing_of_the_agent_behind(self, runner: NodeRunner) -> None:
+        """Including the directory the actor base class makes for it.
+
+        Every agent gets one for the pickle store, which a node does not use —
+        its memory is a flat JSON file. Left behind, every agent ever spawned
+        here leaves an empty directory on a machine chosen for being small.
+        """
+        await runner.spawn_agent({"name": "edge-agent", "code": ""})
+        agent = runner.get("edge-agent")
+        assert agent is not None
+        agent.persist("count", 3)
+        state_dir = agent._persistence_dir
+        assert state_dir.is_dir(), "the base class did not make one after all"
+
+        await agent.apply_command("delete")
+
+        assert not agent._state_file.path.exists()
+        assert not state_dir.exists()
+
+    async def test_a_delete_keeps_anything_unexpected_in_that_directory(
+        self, runner: NodeRunner
+    ) -> None:
+        # `rmdir`, not a recursive remove: something in there that this does not
+        # know about survives to be looked at rather than being taken with it.
+        await runner.spawn_agent({"name": "edge-agent", "code": ""})
+        agent = runner.get("edge-agent")
+        assert agent is not None
+        stray = agent._persistence_dir / "something.db"
+        stray.write_text("not ours", encoding="utf-8")
+
+        await agent.apply_command("delete")
+
+        assert stray.exists()
+
     async def test_a_delete_removes_the_memory_a_stop_keeps(self, runner: NodeRunner) -> None:
         await runner.spawn_agent({"name": "edge-agent", "code": ""})
         agent = runner.get("edge-agent")

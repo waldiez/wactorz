@@ -22,6 +22,11 @@ from ..core.atomic_io import write_text
 
 logger = logging.getLogger(__name__)
 
+#: When to say an agent's state has grown expensive to write. Chosen from
+#: measurement on a Raspberry Pi 5 SD card, where a save crosses ~15ms around
+#: here and climbs steeply after it.
+LARGE_STATE_BYTES = 512 * 1024
+
 
 def state_path(state_dir: Path | str, agent_name: str) -> Path:
     """Where this agent's state file lives.
@@ -41,6 +46,13 @@ class JsonState:
     def __init__(self, path: Path, agent_name: str) -> None:
         self.path = path
         self._name = agent_name
+        #: What was last written, so a save that would rewrite the same bytes
+        #: can be skipped. Agents persist a value every tick that changes far
+        #: less often -- `agent.persist("plugs", agent.state["plugs"])` -- and
+        #: the whole file is rewritten for any one key.
+        self._written: str | None = None
+        #: Whether this agent has been told its state is big enough to hurt.
+        self._warned_large = False
 
     def save(self, values: dict[str, Any]) -> None:
         """Write what the agent remembers, keeping what can be kept.
@@ -67,11 +79,43 @@ class JsonState:
                 self._name,
                 ", ".join(dropped),
             )
+        encoded = json.dumps(keepable)
+        if encoded == self._written and self.path.exists():
+            # The file already says this. Writing it again costs the same as
+            # writing something new -- the whole file goes out and is fsynced --
+            # for no change at all.
+            return
+        self._note_if_large(encoded)
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            write_text(self.path, json.dumps(keepable))
+            write_text(self.path, encoded)
+            self._written = encoded
         except Exception as e:
             logger.warning("[%s] State save failed: %s", self._name, e)
+
+    def _note_if_large(self, encoded: str) -> None:
+        """Say so once when this agent's state has grown expensive to write.
+
+        Every key is written by rewriting the whole file, so what a save costs
+        follows the size of everything the agent remembers, not the size of what
+        changed. On a Raspberry Pi 5's SD card that is about 5ms at 9KB, 14ms at
+        440KB and 110ms at 1.7MB -- and it is spent on the event loop, so at the
+        top of that range every other agent on the node waits for it.
+
+        A warning rather than a limit: what an agent should remember is its
+        author's business, and an agent that has quietly grown a megabyte of
+        history is the one case where nobody has considered the question.
+        """
+        if self._warned_large or len(encoded) < LARGE_STATE_BYTES:
+            return
+        self._warned_large = True
+        logger.warning(
+            "[%s] Persisted state is %.1fMB. Every persist rewrites all of it, which on a "
+            "node's storage takes long enough to hold up every other agent there. Keep what "
+            "the agent remembers bounded -- a recent slice rather than the whole history.",
+            self._name,
+            len(encoded) / 1_048_576,
+        )
 
     def load(self) -> dict[str, Any]:
         """Read the agent's state, or return empty if it cannot be read.

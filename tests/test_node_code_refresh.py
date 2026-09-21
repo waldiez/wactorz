@@ -145,10 +145,16 @@ class TestWhatIsRefused:
 
     async def test_an_answer_from_a_different_node(self, refresh: CodeRefresh, main: _Main) -> None:
         await refresh.note_change("rpi", "collector")
+        (token,) = refresh.pending
 
         await refresh.receive_code_return("nodes/elsewhere/code_return", _answer(refresh, main))
 
         assert main.registry["collector"]["code"] == BROKEN
+        # And the question stands, as it does for a wrong agent name. Both are
+        # the same refusal today; asserting only one of them would let a later
+        # split of that check quietly spend the token on this half, which is
+        # how a stranger cancels the exchange.
+        assert token in refresh.pending
 
     async def test_an_answer_that_came_too_late(self, refresh: CodeRefresh, main: _Main) -> None:
         await refresh.note_change("rpi", "collector")

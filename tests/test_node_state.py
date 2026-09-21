@@ -105,6 +105,76 @@ class TestOneBadValueDoesNotCostTheRest:
         assert _state(path).load() == {"n": 2}
 
 
+class TestWritingOnlyWhenThereIsSomethingToWrite:
+    """Every key is saved by rewriting the whole file.
+
+    Agents persist a value on every tick that changes far less often —
+    `agent.persist("plugs", agent.state["plugs"])` — and that rewrote and
+    fsynced the lot each time. On a Raspberry Pi 5's SD card the write is
+    ~4.3ms against ~0.07ms for noticing there is nothing to do.
+    """
+
+    def test_saving_the_same_state_again_does_not_rewrite_it(self, tmp_path):
+        path = tmp_path / "agent_state.json"
+        state = _state(path)
+        state.save({"plugs": {"a": True}})
+        before = path.stat().st_mtime_ns
+
+        state.save({"plugs": {"a": True}})
+
+        assert path.stat().st_mtime_ns == before
+
+    def test_a_change_is_written(self, tmp_path):
+        path = tmp_path / "agent_state.json"
+        state = _state(path)
+        state.save({"plugs": {"a": True}})
+
+        state.save({"plugs": {"a": False}})
+
+        assert state.load() == {"plugs": {"a": False}}
+
+    def test_a_file_that_went_missing_is_written_again(self, tmp_path):
+        # The skip rests on the file saying what we last wrote. If something
+        # removed it, it does not.
+        path = tmp_path / "agent_state.json"
+        state = _state(path)
+        state.save({"n": 1})
+        path.unlink()
+
+        state.save({"n": 1})
+
+        assert state.load() == {"n": 1}
+
+    def test_a_fresh_reader_writes_even_if_the_content_matches(self, tmp_path):
+        # A new JsonState has written nothing yet, so it cannot assume the file
+        # holds what it is about to save.
+        path = tmp_path / "agent_state.json"
+        _state(path).save({"n": 1})
+        path.write_text("{}", encoding="utf-8")
+
+        _state(path).save({"n": 1})
+
+        assert json.loads(path.read_text(encoding="utf-8")) == {"n": 1}
+
+
+class TestSayingWhenStateHasGrownExpensive:
+    def test_it_warns_once_past_the_threshold(self, tmp_path, caplog):
+        state = _state(tmp_path / "agent_state.json")
+        big = {"history": ["x" * 1000] * 700}
+
+        with caplog.at_level("WARNING"):
+            state.save(big)
+            state.save({**big, "n": 1})
+
+        assert caplog.text.count("Every persist rewrites all of it") == 1
+
+    def test_ordinary_state_says_nothing(self, tmp_path, caplog):
+        with caplog.at_level("WARNING"):
+            _state(tmp_path / "agent_state.json").save({"readings": [1, 2, 3]})
+
+        assert "rewrites all of it" not in caplog.text
+
+
 class TestWhatCanTravel:
     def test_json_values_survive_and_the_rest_are_named(self):
         kept, dropped = json_safe({"count": 3, "capture": object()})

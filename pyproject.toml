@@ -344,7 +344,7 @@ exclude_also = [
     "class .*\\bProtocol\\b.*\\):",  # structural types: no runtime behaviour to cover
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 89
+fail_under = 90
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

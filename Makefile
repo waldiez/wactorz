@@ -204,12 +204,16 @@ test-frontend: ## Run frontend tests (vitest)
 
 coverage: coverage-py coverage-frontend ## Generate coverage (Python + frontend)
 
-coverage-py: ## Generate Python coverage XML + terminal report
+coverage-py: ## Generate Python coverage (XML + lcov) + terminal report
 	@# pytest-cov rather than `coverage run -m pytest`: the latter measures only
 	@# the parent process, so under -n auto it reports a fraction of the truth
 	@# with every test still passing. pytest-cov collects from the workers.
 	mkdir -p coverage
 	$(PYTHON) -m pytest tests -n auto --cov --cov-report=xml:coverage/python-coverage.xml --cov-report=term
+	@# lcov as well, because it is the one format both halves of this repo can
+	@# speak: the frontend's vitest writes it too, so one service can add them
+	@# up into a single number for the badge.
+	$(PYTHON) -m coverage lcov -o coverage/python-coverage.lcov
 
 coverage-frontend: ## Generate frontend coverage (gated vitest v8 — fails below the floor)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run coverage

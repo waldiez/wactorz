@@ -644,3 +644,67 @@ class TestMainFollowsSigning:
         await nodes.follow_signing("rpi", _report("invalid", 2), _report("invalid", 1))
         assert [notice["severity"] for notice in host.notices] == ["critical"]
         assert host.republished == []
+
+
+class TestTheRecordOfWhatWasAccepted:
+    """A node remembers which commands it has acted on, so a replay is refused.
+
+    The record is a file, and a file can be unreadable, truncated or written by
+    something else. None of that may stop the node: refusing every command is a
+    worse failure than forgetting which ones were already obeyed.
+    """
+
+    @staticmethod
+    def _with_record(tmp_path: Path, contents: str) -> Any:
+        """A guard whose record already holds ``contents``.
+
+        Written into the directory the guard is actually given — put it beside
+        that instead and the guard finds no file at all, which every test here
+        would pass with while exercising nothing.
+        """
+        node_dir = tmp_path / "node-rpi"
+        node_dir.mkdir(exist_ok=True)
+        (node_dir / node_signing_side.SEEN_FILE).write_text(contents, encoding="utf-8")
+        guard = _guard(tmp_path)
+        assert guard._path.exists(), "the record was written where the guard cannot see it"
+        return guard
+
+    def test_a_file_that_will_not_parse_is_started_over(self, tmp_path: Path) -> None:
+        guard = self._with_record(tmp_path, "{not json")
+
+        # Read as empty rather than raising, and the command still goes through.
+        assert guard._load() == {}
+        payload = b'{"name": "collector"}'
+        assert guard.admit("spawn", "nodes/rpi/spawn", payload, _signed("nodes/rpi/spawn", payload))
+
+    def test_a_file_holding_something_else_entirely_is_ignored(self, tmp_path: Path) -> None:
+        guard = self._with_record(tmp_path, '["not", "a", "map"]')
+
+        assert guard._load() == {}
+        payload = b"{}"
+        assert guard.admit("stop", "nodes/rpi/stop", payload, _signed("nodes/rpi/stop", payload))
+
+    def test_entries_that_are_not_sequence_numbers_are_dropped(self, tmp_path: Path) -> None:
+        # Whatever else is in there, what is kept is a list of integers per
+        # topic — anything else would break the comparison that refuses a replay.
+        guard = self._with_record(tmp_path, '{"spawn": [1, "two", null, 3], "stop": "not a list"}')
+
+        assert guard._load() == {"spawn": [1, 3]}
+
+    def test_a_record_that_cannot_be_written_does_not_stop_the_node(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Losing the record costs replay protection across a restart, and that
+        is worth saying. Refusing the command would cost the command."""
+        guard = _guard(tmp_path)
+        # A directory where the file goes: writing fails, reading is unaffected.
+        guard._path.mkdir(parents=True, exist_ok=True)
+        payload = b'{"name": "collector"}'
+
+        with caplog.at_level("WARNING"):
+            admitted = guard.admit(
+                "spawn", "nodes/rpi/spawn", payload, _signed("nodes/rpi/spawn", payload)
+            )
+
+        assert admitted
+        assert "could not record" in caplog.text.lower()

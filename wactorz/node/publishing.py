@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 MAX_QUEUED = MQTTPublisher.MAX_QUEUED
 TELEMETRY_TOPIC_SUFFIXES = MQTTPublisher._TELEMETRY_TOPIC_SUFFIXES
 
+#: How long to wait before dialling the broker again after it went away. Short:
+#: a node that cannot publish is invisible to main, which after 90s of silence
+#: gives up on it and takes its agents away.
+RETRY_DELAY_S = 3.0
+
 #: How long to wait for the broker to say whether it took this connection.
 #: Generous: it is one round trip, and a node on slow wifi is the ordinary case.
 CONNACK_TIMEOUT_S = 15.0
@@ -42,6 +47,26 @@ CONNACK_TIMEOUT_S = 15.0
 #: One queue entry: the topic, the payload as sent, whether it is retained, and
 #: whether losing it would lose something the system needs.
 QueueItem = tuple[str, bytes, bool, bool]
+
+
+class BrokerRefusedNode(ConnectionError):
+    """The broker would not take this node's publishing connection.
+
+    Its own class rather than a message on a bare `ConnectionError`, because it
+    is the one connection failure that will not fix itself: a node whose
+    credentials the broker declines reconnects for ever, and the reason is the
+    only thing that says which.
+    """
+
+    def __init__(self, broker: str, port: int, reason: Any) -> None:
+        super().__init__(f"{broker}:{port} refused this node: {reason}")
+
+
+class BrokerDidNotAnswer(ConnectionError):
+    """The broker took the connection and never said whether it accepted it."""
+
+    def __init__(self, broker: str, port: int) -> None:
+        super().__init__(f"{broker}:{port} accepted the connection but did not answer")
 
 
 def is_critical(topic: str) -> bool:
@@ -88,6 +113,9 @@ class NodePublisher:
         self._queue: asyncio.Queue[QueueItem] | None = None
         #: Messages the cap discarded, for the log.
         self.dropped = 0
+        #: Taken from the queue and not yet accepted by the client. Held so a
+        #: broker that goes away mid-send costs a retry rather than the message.
+        self._inflight: QueueItem | None = None
         self._running = False
 
     @property
@@ -240,13 +268,11 @@ class NodePublisher:
         client.loop_start()
         if not answered.wait(CONNACK_TIMEOUT_S):
             close_mqtt_client(client, "Unanswered publisher")
-            raise ConnectionError(
-                f"{self.broker}:{self.port} accepted the connection but did not answer"
-            )
+            raise BrokerDidNotAnswer(self.broker, self.port)
         reason = outcome.get("reason")
         if getattr(reason, "is_failure", False):
             close_mqtt_client(client, "Refused publisher")
-            raise ConnectionError(f"{self.broker}:{self.port} refused this node: {reason}")
+            raise BrokerRefusedNode(self.broker, self.port, reason)
         return client
 
     async def publish_one_queued(self, client: Any) -> None:
@@ -259,14 +285,34 @@ class NodePublisher:
         queue = self._queue
         if queue is None:
             return
-        topic, payload, retain, critical = await queue.get()
+        # A message already taken is finished first. `publish` below can fail --
+        # the broker went away between queueing and sending -- and taking the
+        # next one then would have left this one nowhere: off the queue, never
+        # sent, and gone, on a node that has no outbox to fall back on.
+        item = self._inflight or await queue.get()
+        self._inflight = item
+        topic, payload, retain, critical = item
         # Telemetry goes out at QoS 0, mirroring MQTTPublisher on the server.
         # Not only to save queue space: at QoS 1 the broker holds heartbeats for
         # a subscriber that is away and replays them on reconnect, and main
         # stamps a node as last seen *now* on receipt -- so a node that died
         # hours ago would read online for the whole freshness window, which is
         # exactly what gates migrating an agent onto it.
-        client.publish(topic, payload, qos=1 if critical else 0, retain=retain)
+        try:
+            client.publish(topic, payload, qos=1 if critical else 0, retain=retain)
+        except ValueError:
+            # The client refuses this message itself -- an impossible topic or a
+            # payload past the protocol's size. Reconnecting would not change
+            # its mind, so retrying it would stop everything behind it for ever.
+            # `exception`, not `error`: what the client objected to is in the
+            # traceback and nowhere else, and this is the one message that will
+            # never be sent however long the node runs.
+            logger.exception("[runner] Refusing to send %s: the client will not take it", topic)
+            self._inflight = None
+            queue.task_done()
+            self.dropped += 1
+            return
+        self._inflight = None
         queue.task_done()
 
     async def run(self, ready: asyncio.Event | None = None) -> None:
@@ -286,11 +332,13 @@ class NodePublisher:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning("[runner] Publisher error: %s. Reconnecting in 3s...", e)
+                logger.warning(
+                    "[runner] Publisher error: %s. Reconnecting in %gs...", e, RETRY_DELAY_S
+                )
                 if client:
                     close_mqtt_client(client, "Discarded publisher")
                     client = None
-                await asyncio.sleep(3)
+                await asyncio.sleep(RETRY_DELAY_S)
 
         if client:
             close_mqtt_client(client, "Publisher")

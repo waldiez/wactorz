@@ -90,7 +90,19 @@ jobs:
         uses: actions/upload-artifact@v7.0.1
         with:
           name: python-coverage
-          path: coverage/python-coverage.xml
+          path: |
+            coverage/python-coverage.xml
+            coverage/python-coverage.lcov
+
+      # Sent as one half of a parallel build, and added to the other half by
+      # the `coverage` job below. Both halves speak lcov, so the badge is one
+      # number over the whole repository rather than one language's.
+      - name: Send to Coveralls
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        with:
+          file: coverage/python-coverage.lcov
+          flag-name: python
+          parallel: true
 
   lint-python:
     name: Python lint
@@ -155,6 +167,17 @@ jobs:
         working-directory: frontend
         run: bun run coverage
 
+      # `base-path`, because vitest writes paths relative to `frontend/` and
+      # the Python half writes them relative to the repository root. Without it
+      # every file here lands at a path that does not exist.
+      - name: Send to Coveralls
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        with:
+          file: frontend/coverage/lcov.info
+          base-path: frontend
+          flag-name: frontend
+          parallel: true
+
       - name: Build
         working-directory: frontend
         run: bun run build
@@ -172,3 +195,22 @@ jobs:
             exit 1
           fi
           echo "static/app is up to date."
+
+  # Both halves of the coverage above are sent as one parallel build; this
+  # closes it, which is what makes Coveralls add them together. Without it the
+  # build stays open and the badge keeps reporting whichever half arrived last.
+  #
+  # `always()`, so a red frontend still publishes the Python half rather than
+  # leaving the badge on a stale number with nothing saying why. `needs` covers
+  # both, so it runs after whatever they did.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs: [coverage-python, test-frontend]
+    if: always()
+    steps:
+      - name: Combine the two halves
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        with:
+          parallel-finished: true
+          carryforward: python,frontend

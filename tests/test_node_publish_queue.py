@@ -262,3 +262,124 @@ class TestTheConnectionIsConfirmed:
 
         assert publisher.connect() is made[0]
         assert not made[0].closed
+
+
+class TestDrainingTheQueue:
+    """The loop that actually gets a node's messages onto the wire.
+
+    It is the only thing standing between the queue and the broker, and it has
+    to survive a broker that goes away — a node is not somewhere anyone is
+    going to restart a process by hand.
+    """
+
+    class _Client:
+        def __init__(self, fail_after: int | None = None) -> None:
+            self.sent: list[tuple[str, int]] = []
+            self.closed = False
+            self._fail_after = fail_after
+
+        def publish(self, topic: str, _payload: Any, qos: int = 0, retain: bool = False) -> None:
+            if self._fail_after is not None and len(self.sent) >= self._fail_after:
+                raise OSError("the broker went away")
+            self.sent.append((topic, qos))
+
+        def loop_stop(self) -> None:
+            self.closed = True
+
+        def disconnect(self) -> None:
+            self.closed = True
+
+    async def test_it_sends_what_was_queued(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = self._Client()
+        publisher = publishing.NodePublisher("broker.lan", 8883, "rpi")
+        monkeypatch.setattr(publisher, "connect", lambda: client)
+
+        async def _queue_then_wait() -> None:
+            await publisher.publish("nodes/rpi/heartbeat", {"n": 1})
+            await publisher.publish("agents/abc/results", {"n": 2})
+
+        ready = asyncio.Event()
+        task = asyncio.create_task(publisher.run(ready))
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=2)
+            await _queue_then_wait()
+            for _ in range(200):
+                if len(client.sent) >= 2:
+                    break
+                await asyncio.sleep(0.005)
+        finally:
+            publisher.stop()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        # Telemetry at QoS 0, anything whose loss would cost something at 1.
+        assert client.sent == [("nodes/rpi/heartbeat", 0), ("agents/abc/results", 1)]
+
+    async def test_a_broker_that_goes_away_is_reconnected_to(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        made: list[Any] = []
+
+        def _connect() -> Any:
+            made.append(self._Client(fail_after=0 if not made else None))
+            return made[-1]
+
+        publisher = publishing.NodePublisher("broker.lan", 8883, "rpi")
+        monkeypatch.setattr(publisher, "connect", _connect)
+        # The real pause is for a real broker; nothing is learned by waiting it out.
+        monkeypatch.setattr(publishing, "RETRY_DELAY_S", 0.0)
+
+        ready = asyncio.Event()
+        task = asyncio.create_task(publisher.run(ready))
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=2)
+            await publisher.publish("agents/abc/results", {"n": 1})
+            for _ in range(400):
+                if len(made) >= 2 and made[1].sent:
+                    break
+                await asyncio.sleep(0.005)
+        finally:
+            publisher.stop()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        assert made[0].closed, "the broken client was kept"
+        # The message survived the broker going away. It had already been taken
+        # off the queue when the send failed, so without holding it there was
+        # nowhere left for it to be — and a node has no outbox behind this.
+        assert made[1].sent == [("agents/abc/results", 1)]
+
+    async def test_a_message_the_client_will_never_take_is_dropped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Held messages are retried after a reconnect, so one that can never be
+        # sent — an impossible topic, a payload past the protocol's size — would
+        # otherwise stop everything behind it for ever.
+        class _Picky(self._Client):
+            def publish(self, topic: str, _payload: Any, qos: int = 0, retain: bool = False):
+                if topic.startswith("bad/"):
+                    raise ValueError("payload too large")
+                self.sent.append((topic, qos))
+
+        client = _Picky()
+        publisher = publishing.NodePublisher("broker.lan", 8883, "rpi")
+        monkeypatch.setattr(publisher, "connect", lambda: client)
+        monkeypatch.setattr(publishing, "RETRY_DELAY_S", 0.0)
+
+        ready = asyncio.Event()
+        task = asyncio.create_task(publisher.run(ready))
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=2)
+            await publisher.publish("bad/topic", {"n": 1})
+            await publisher.publish("agents/abc/results", {"n": 2})
+            for _ in range(200):
+                if client.sent:
+                    break
+                await asyncio.sleep(0.005)
+        finally:
+            publisher.stop()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        assert client.sent == [("agents/abc/results", 1)], "the queue stalled on it"
+        assert publisher.dropped == 1

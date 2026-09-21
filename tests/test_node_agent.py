@@ -369,6 +369,60 @@ class TestTasksArriveOnATopic:
         assert result["error_phase"] == "handle_task"
         assert "boom" in result["error"]
 
+    async def test_a_task_that_never_returns_answers_anyway(self, runner: NodeRunner) -> None:
+        """The caller is waiting on a reply topic with a timeout of its own.
+
+        A handler that hangs would otherwise leave it waiting out the whole of
+        it for an answer that was never coming, and leave the node holding a
+        task that is going nowhere.
+        """
+        agent = _agent(
+            runner,
+            code=(
+                "import asyncio\n"
+                "async def handle_task(agent, payload):\n"
+                "    await asyncio.sleep(3600)\n"
+            ),
+        )
+        agent._compile_code(agent._code)
+        agent._HANDLE_TASK_TIMEOUT = 0.05  # type: ignore[misc]
+
+        result = await asyncio.wait_for(agent.run_task({}), timeout=5)
+
+        assert result["error_phase"] == "handle_task"
+        assert "timed out" in result["error"]
+
+    async def test_an_ordinary_failure_is_reported_to_the_caller(self, runner: NodeRunner) -> None:
+        agent = _agent(
+            runner,
+            code=("async def handle_task(agent, payload):\n    return 1 / 0\n"),
+        )
+        agent._compile_code(agent._code)
+        sent: list[str] = []
+
+        async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
+            sent.append(topic)
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+
+        result = await agent.run_task({})
+
+        assert result["error_phase"] == "handle_task"
+        assert "division by zero" in result["error"]
+        # And an operator can see it, not only the caller.
+        assert any(t.endswith("/errors") for t in sent)
+
+    async def test_an_interrupt_is_not_swallowed(self, runner: NodeRunner) -> None:
+        # Ctrl-C belongs to whoever is stopping the process, not to the task.
+        agent = _agent(
+            runner,
+            code=("async def handle_task(agent, payload):\n    raise KeyboardInterrupt\n"),
+        )
+        agent._compile_code(agent._code)
+
+        with pytest.raises(KeyboardInterrupt):
+            await agent.run_task({})
+
     async def test_a_program_that_exits_takes_the_task_down_and_not_the_node(
         self, runner: NodeRunner
     ) -> None:

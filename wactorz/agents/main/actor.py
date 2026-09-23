@@ -1087,6 +1087,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """True if ``node_name`` sent a heartbeat inside the freshness window."""
         return self.nodes.is_online(node_name)
 
+    def _node_version_mismatch(self, node_name: str) -> str | None:
+        """Why ``node_name`` cannot take an agent from this server, or None."""
+        return self.nodes.version_mismatch(node_name)
+
     def _online_node_names(self) -> list[str]:
         """Names of all nodes currently considered online."""
         return self.nodes.online_names()

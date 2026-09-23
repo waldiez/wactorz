@@ -1,4 +1,4 @@
-"""Starting a node: ``wactorz --node <name>``.
+"""Starting a node: ``wactorz-node --node <name>``, or ``wactorz --node <name>``.
 
 The node half of :mod:`wactorz.cli`. Two checks happen before anything connects,
 because both describe a node that can never work and both would otherwise show
@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 import uuid
 
 from ..config import CONFIG, deploy_name_error
@@ -118,3 +119,52 @@ def run(args: argparse.Namespace) -> None:
         loop.run_until_complete(runner.run())
     finally:
         loop.close()
+
+
+def get_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """The arguments ``wactorz-node`` takes: the name, the broker, and a log level.
+
+    Its own parser rather than the server's. The server's accepts every flag a
+    server takes and ignores the rest, which is what let an older release start
+    as a *server* when handed ``--node``: the flag was unknown, so it was
+    dropped, and the process came up as a second main on the same broker. A
+    command that exists only in releases carrying the node runtime cannot be
+    misread that way -- an older install has no ``wactorz-node`` at all, and the
+    unit fails with "command not found" instead of starting the wrong thing.
+    """
+    parser = argparse.ArgumentParser(
+        prog="wactorz-node",
+        description="Run this machine as a Wactorz edge node.",
+    )
+    parser.add_argument(
+        "--node",
+        metavar="NAME",
+        default=None,
+        help="This node's name. Defaults to $WACTORZ_NODE, which /deploy writes into ~/wactorz/.env.",
+    )
+    parser.add_argument(
+        "--mqtt-broker",
+        default=None,
+        help="The broker's address as seen from this node. Defaults to $WACTORZ_BROKER.",
+    )
+    parser.add_argument(
+        "--mqtt-port", type=int, default=None, help="The broker's port. Defaults to $WACTORZ_PORT."
+    )
+    parser.add_argument("--loglevel", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    # The spellings the server's parser accepts for the same things, so `run`
+    # reads one shape whichever command started it.
+    args = parser.parse_args(argv)
+    args.name = None
+    args.broker = None
+    args.port = None
+    return args
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Entry point for the ``wactorz-node`` console script."""
+    args = get_args(sys.argv[1:] if argv is None else argv)
+    logging.basicConfig(
+        level=getattr(logging, str(args.loglevel).upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    run(args)

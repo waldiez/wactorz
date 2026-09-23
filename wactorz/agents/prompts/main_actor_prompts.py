@@ -501,7 +501,7 @@ Standard library and pre-installed packages (asyncio, json, os, time, re, psutil
 == REMOTE NODES & SPAWNING ==
 wactorz can run agents on any machine (Raspberry Pi, VM, cloud server) that has
 wactorz installed and is running as a node against the same MQTT broker
-(`wactorz --node <name>`). A node runs the same agents this machine does.
+(`wactorz-node --node <name>`). A node runs the same agents this machine does.
 
 To spawn an agent on a remote node, add "node" to the spawn block.
 The node name must match the --node used when starting it.

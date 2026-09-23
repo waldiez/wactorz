@@ -979,9 +979,17 @@ class InstallerAgent(Actor):
         version number is a claim and this is the thing being relied on. The
         failure it rules out is silent: every release before the node runtime
         answers to `wactorz==<that number>` and has no `wactorz.node` in it.
+
+        The command is checked as well as the module: the unit starts the node
+        through `wactorz-node`, which a release before that script existed
+        installs without, and a unit whose command is missing never starts.
         """
         python = shlex.quote(f"{home}/wactorz/venv/bin/python")
         ok, _ = await self._ssh_run(conn, f"{python} -c 'import wactorz.node'")
+        if not ok:
+            return False
+        script = shlex.quote(f"{home}/wactorz/venv/bin/wactorz-node")
+        ok, _ = await self._ssh_run(conn, f"test -x {script}")
         return ok
 
     async def _build_wheel(self) -> Path | None:
@@ -1406,7 +1414,7 @@ class InstallerAgent(Actor):
         log_path = shlex.quote(f"{node_name}.log")
         return (
             "set -a; . ~/wactorz/.env; set +a; "
-            "nohup ~/wactorz/venv/bin/wactorz "
+            "nohup ~/wactorz/venv/bin/wactorz-node "
             f"--mqtt-broker {shlex.quote(str(broker))} "
             f"--mqtt-port {shlex.quote(str(mqtt_port))} "
             f"--node {shlex.quote(node_name)} "

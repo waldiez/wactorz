@@ -679,6 +679,25 @@ class TestInstallingWactorzOnTheNode:
 
         assert any("import wactorz.node" in c for c in conn.commands)
 
+    async def test_it_checks_the_node_command_is_installed_too(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The unit starts the node through `wactorz-node`; a release that has the
+        # module but not the script leaves a unit whose command does not exist.
+        self._from_an_installed_package(installer, monkeypatch)
+
+        await installer._install_wactorz(conn, "rpi", "/home/pi")
+
+        assert any("test -x" in c and "wactorz-node" in c for c in conn.commands)
+
+    async def test_a_missing_node_command_fails_the_deploy(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._from_an_installed_package(installer, monkeypatch)
+        conn.answers = {"test -x": (False, "")}
+
+        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is False
+
     async def test_a_published_version_that_cannot_be_a_node_fails_the_deploy(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
     ) -> None:

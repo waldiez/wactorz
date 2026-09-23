@@ -669,7 +669,7 @@ async def test_the_unit_is_written_against_that_home(
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
 
     unit = next(c for c in conn.commands if "WZUNIT" in c)
-    assert "ExecStart=/root/wactorz/venv/bin/wactorz " in unit
+    assert "ExecStart=/root/wactorz/venv/bin/wactorz-node " in unit
     assert "/home/pi" not in unit
 
 

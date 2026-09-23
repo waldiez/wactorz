@@ -9,7 +9,7 @@ A node is the same package, started in a different role. It connects to the shar
 ```
 [Main machine]                        [Edge device — Raspberry Pi, VM, etc.]
 
-MainActor  ──MQTT──►  nodes/{name}/spawn  ──►  wactorz --node {name}
+MainActor  ──MQTT──►  nodes/{name}/spawn  ──►  wactorz-node --node {name}
                                                    │  compiles + runs agent
                                                    │  local ONE_FOR_ONE supervisor
 Dashboard  ◄──MQTT──  agents/{id}/heartbeat  ◄──┘  heartbeats every 10 s
@@ -44,7 +44,7 @@ No extra is needed: everything a node uses — `aiomqtt`, `psutil`, `aiohttp` �
 #### 2. Start it as a node
 
 ```bash
-~/wactorz/venv/bin/wactorz --node rpi-livingroom --mqtt-broker 192.168.1.10
+~/wactorz/venv/bin/wactorz-node --node rpi-livingroom --mqtt-broker 192.168.1.10
 ```
 
 Replace `192.168.1.10` with the IP of the machine running the MQTT broker. The `--node` value is the node identifier — it must be unique across all nodes and is used to address this device when spawning agents.
@@ -53,7 +53,7 @@ Replace `192.168.1.10` with the IP of the machine running the MQTT broker. The `
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--node [NAME]` | `$WACTORZ_NODE`, else a random `node-<hex>` | Run as an edge node instead of starting the server. `/deploy` writes `WACTORZ_NODE` into the node's `.env`, so `wactorz --node` with no name comes up under the right one. The flag is what chooses the role — the variable on its own does not, or a server that inherited it would become a node. |
+| `--node [NAME]` | `$WACTORZ_NODE`, else a random `node-<hex>` | The node's name. `/deploy` starts a node through its own command, `wactorz-node`, which takes only a node's flags — an older release, which has no such command, then fails to start rather than coming up as a second server. `wactorz --node` still works for a hand-written launcher. `/deploy` writes `WACTORZ_NODE` into the node's `.env`, so `wactorz --node` with no name comes up under the right one. The flag is what chooses the role — the variable on its own does not, or a server that inherited it would become a node. |
 | `--mqtt-broker` | `$MQTT_HOST` | MQTT broker hostname or IP. Also reads `$WACTORZ_BROKER`, which wins — main's own `MQTT_HOST` is usually `localhost`, and a node that adopted it would dial itself. |
 | `--mqtt-port` | `1883`, or `8883` with `MQTT_TLS=1` | MQTT broker port. Also reads `$WACTORZ_PORT`. |
 | `--loglevel` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` |
@@ -494,7 +494,7 @@ Or trigger it from agent code using `agent.send_to()` if you build a migration m
 Run with `--loglevel DEBUG` to see every connection event, subscribe and publish:
 
 ```bash
-~/wactorz/venv/bin/wactorz --node rpi-test --mqtt-broker 192.168.1.10 --loglevel DEBUG
+~/wactorz/venv/bin/wactorz-node --node rpi-test --mqtt-broker 192.168.1.10 --loglevel DEBUG
 ```
 
 A node refuses to start, with exit status 2, in two cases it can detect up front: a node name containing an MQTT wildcard, which the broker would refuse on every operation; and `MQTT_TLS` turned on with a CA that cannot be read. Both would otherwise be a runner reconnecting every three seconds for ever.

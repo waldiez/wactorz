@@ -1063,7 +1063,7 @@ Wactorz can run agents on any machine on your network — Raspberry Pi, VM, clou
 
 ```
 [Main machine]                        [Raspberry Pi / Edge node]
-main_actor ──MQTT──► nodes/{name}/spawn ──► wactorz --node {name}
+main_actor ──MQTT──► nodes/{name}/spawn ──► wactorz-node --node {name}
                                                │  compiles + runs agent
                                                │  heartbeats every 10s
 dashboard  ◄──MQTT── agents/{id}/heartbeat ◄───┘
@@ -1076,7 +1076,7 @@ A node runs the real `DynamicAgent`, compiled from the same code against the sam
 ```bash
 python3 -m venv ~/wactorz/venv
 ~/wactorz/venv/bin/pip install wactorz     # the same version main runs
-~/wactorz/venv/bin/wactorz --node rpi-kitchen --mqtt-broker 192.168.1.10
+~/wactorz/venv/bin/wactorz-node --node rpi-kitchen --mqtt-broker 192.168.1.10
 ```
 
 No extra is needed — everything a node uses is a core dependency. Anything an agent itself imports goes in its spawn config's `install` list.
@@ -1345,7 +1345,7 @@ wactorz/
 ├── __main__.py                                Entry point — runs `cli.app()` via `python -m wactorz`
 ├── cli.py                                     argparse, supervision tree wiring, interface dispatch
 ├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, …)
-├── node/                                      Edge node runtime — `wactorz --node <name>`
+├── node/                                      Edge node runtime — `wactorz-node --node <name>`
 ├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
 │

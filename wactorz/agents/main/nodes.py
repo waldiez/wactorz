@@ -19,6 +19,7 @@ import logging
 import time
 from typing import Any
 
+from ..._version import __version__
 from ...core.actor import derive_actor_id
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
@@ -147,6 +148,32 @@ class NodeManager:
     def online_names(self) -> list[str]:
         """The online nodes, sorted — this reaches a person in an error message."""
         return sorted(name for name in self.known if self.is_online(name))
+
+    def version_mismatch(self, node_name: str) -> str | None:
+        """Why an agent must not be sent to `node_name`, or None when it may be.
+
+        A node runs the same package as main, at the same version: its agents are
+        built from the same code and speak the same contract, and a spawn config
+        main writes today may name something an older node has never heard of.
+        A node that reports a different version is refused, with the command
+        that brings it level.
+
+        A node that reports no version at all is not judged here. That is a
+        runtime from before the field existed, and what to do about it is the
+        signing and runtime handling's call, made on the same heartbeat. Only
+        ever asked about a node main has heard from: whether the node is online
+        at all is a separate question with its own answer.
+        """
+        info = self.known.get(node_name)
+        if not info:
+            return None
+        reported = info.get("version")
+        if not reported or reported == __version__:
+            return None
+        return (
+            f"node '{node_name}' is running version {reported}, and this server is "
+            f"{__version__}. Redeploy it with `/deploy {node_name}` so both run the same code."
+        )
 
     def running_agent(self, name: str) -> str:
         """The online node running `name`, or "" if none currently claims it.

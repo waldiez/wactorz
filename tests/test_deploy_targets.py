@@ -625,7 +625,13 @@ async def _deploy_with_home(installer, targets, monkeypatch, home: str) -> _Fake
         # dials the target for its host key and the test hangs on the network.
         return "known_hosts"
 
+    async def _account(*_args: object) -> None:
+        # The broker is not part of what these tests are about; the check that
+        # asks it has its own tests.
+        return None
+
     monkeypatch.setattr(installer, "_known_hosts", _known_hosts)
+    monkeypatch.setattr(installer, "_check_node_account", _account)
     monkeypatch.setattr(installer_module.asyncssh, "connect", lambda **_kw: conn)
     monkeypatch.setattr(installer, "_persist_node_info", lambda **_kw: None)
 

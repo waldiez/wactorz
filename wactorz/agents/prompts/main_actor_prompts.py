@@ -659,7 +659,7 @@ Example:
     1. Write the node's environment (broker, credentials, signing key) to ~/wactorz/.env
     2. Install wactorz at this machine's version into a venv on the node
     3. Start it under a systemd unit, so it survives a reboot
-    4. The node appears in /nodes within ~15 seconds
+    4. Wait for the node's first heartbeat; a node that sends none fails the deploy
 
   If the target is not configured, the result explains which variables to set —
   relay that to the user rather than retrying with guessed credentials.

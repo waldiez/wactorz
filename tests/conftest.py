@@ -103,7 +103,7 @@ def _no_ambient_broker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
     Both are reset: the variables removed, and `CONFIG` put back to plain MQTT on
     the plain port. Tests that want TLS set it explicitly, and win.
     """
-    for variable in _TLS_VARIABLES:
+    for variable in (*_TLS_VARIABLES, "MQTT_USERNAME", "MQTT_PASSWORD"):
         monkeypatch.delenv(variable, raising=False)
     plain = {
         "mqtt_tls": "",
@@ -112,6 +112,11 @@ def _no_ambient_broker_tls(monkeypatch: pytest.MonkeyPatch) -> None:
         "mqtt_broker_dir": "",
         "node_accounts": False,
         "mqtt_port": config._env_int("MQTT_PORT", 1883),
+        # The broker account too: a deploy checks the account a node would get
+        # against the broker, and a developer's own credentials in `.env` would
+        # otherwise send that check to a real socket from inside a test.
+        "mqtt_username": "",
+        "mqtt_password": "",
     }
     # Every module that imported the name, not just `config`: `from ..config import
     # CONFIG` binds the object into that module, and replacing it here alone leaves

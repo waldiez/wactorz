@@ -30,11 +30,13 @@ from ..config import (
 )
 from ..core import broker_accounts
 from ..core.actor import Actor, Message, MessageType
+from ..core.mqtt import client_id, install_id, mqtt_client
 from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
 from ..core.node_signing import next_sequence, node_key
 from ..core.paths import resolve_state_dir
 from ..core.pip import is_installable_name
 from . import node_service
+from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,33 @@ except (OSError, ValueError) as exc:
     print(exc)
     sys.exit(1)
 """
+
+#: How long the node's reachability check waits for the broker port, in seconds.
+REACH_CHECK_TIMEOUT_S = 5
+
+#: What a node runs to learn whether the broker's port answers at all. Standard
+#: library only, for the same reason as the TLS check. Arguments: host, port, and
+#: the timeout. Exits 1 and prints why on failure. It answers the question the
+#: node's own log answers only after the deploy has reported success: a firewall
+#: on the broker's host, or an address the node cannot route to, times out here in
+#: seconds rather than retrying there for ever.
+REACH_CHECK_SCRIPT = """
+import socket, sys
+host, port, timeout = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+try:
+    socket.create_connection((host, port), timeout=timeout).close()
+except OSError as exc:
+    print(exc)
+    sys.exit(1)
+"""
+
+#: How long the server waits for the broker to accept the node's account, in seconds.
+CREDENTIAL_CHECK_TIMEOUT_S = 10
+
+#: How long the deploy waits for the node's first heartbeat, in seconds. Generous
+#: rather than tight: a node that installs its packages on first start takes a
+#: while before it connects, and the point is to catch a node that never will.
+FIRST_HEARTBEAT_TIMEOUT_S = 45
 
 _TLS_MODE_ON = frozenset({"on", "1", "true", "yes"})
 _TLS_MODE_OFF = frozenset({"off", "0", "false", "no"})
@@ -99,6 +128,30 @@ class NoCaForNodeError(ValueError):
         )
 
 
+class BrokerUnreachableFromNodeError(RuntimeError):
+    """The node cannot open the broker's port, so a runner started there would never connect."""
+
+    def __init__(self, node_name: str, broker: str, port: int, reason: str) -> None:
+        super().__init__(
+            f"Node '{node_name}' cannot reach the broker at {broker}:{port}: {reason}. "
+            f"Check that the address is the broker as seen from the node "
+            f"({deploy_env_prefix(node_name)}_BROKER), and that a firewall on the broker's "
+            f"host allows inbound {port} from the node."
+        )
+
+
+class BrokerRefusedNodeAccountError(RuntimeError):
+    """The broker will not accept the account the node is about to be given."""
+
+    def __init__(self, node_name: str, username: str, reason: str) -> None:
+        shown = username or "(anonymous)"
+        super().__init__(
+            f"The broker refused the account node '{node_name}' would use ({shown}): {reason}. "
+            f"Check MQTT_USERNAME and MQTT_PASSWORD, or the node's own "
+            f"{deploy_env_prefix(node_name)}_BROKER_USER and _BROKER_PASSWORD."
+        )
+
+
 @dataclass(frozen=True)
 class NodeTls:
     """How ``/deploy`` connects a node to the broker, and why."""
@@ -121,6 +174,20 @@ def tls_mode(value: str) -> str | None:
     if setting in _TLS_MODE_OFF:
         return "off"
     return None
+
+
+def reach_check_command(broker: str, port: int) -> str:
+    """The shell command that runs :data:`REACH_CHECK_SCRIPT` on the node, every value quoted."""
+    return " ".join(
+        [
+            "python3",
+            "-c",
+            shlex.quote(REACH_CHECK_SCRIPT),
+            shlex.quote(broker),
+            str(int(port)),
+            str(REACH_CHECK_TIMEOUT_S),
+        ]
+    )
 
 
 def tls_check_command(broker: str, tls: NodeTls) -> str:
@@ -227,6 +294,9 @@ class InstallerAgent(Actor):
         # Serialises the read-then-append on the known-hosts file: two deploys
         # to new hosts at once would otherwise both read "unknown" and race.
         self._known_hosts_lock = asyncio.Lock()
+        #: When the current deploy began: a heartbeat older than this belongs to
+        #: whatever ran on the node before it.
+        self._deploy_started_at = 0.0
 
     def _current_task_description(self) -> str:
         return "idle"
@@ -1032,7 +1102,7 @@ class InstallerAgent(Actor):
           3. Install wactorz at this machine's version into a venv there
           4. Kill any runner already answering for this node name
           5. Install and start a systemd unit, or fall back to nohup
-          6. Verify it appears online within 15 seconds
+          6. Wait for its first heartbeat, and fail with its log if none arrives
 
         payload keys:
           host       — IP or hostname
@@ -1087,6 +1157,8 @@ class InstallerAgent(Actor):
         user = target.user
 
         self._log_remote(f"Deploying node '{node_name}' to {user}@{host}...")
+        # A heartbeat older than this is the previous runner's, not the new one's.
+        self._deploy_started_at = time.time()
 
         try:
             async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
@@ -1110,6 +1182,15 @@ class InstallerAgent(Actor):
                         conn, sftp, target, home_dir, str(broker), int(mqtt_port)
                     )
                     mqtt_port = tls.port
+                    # Two questions answered before anything is written that the
+                    # node will act on, each from the only place it can be
+                    # answered: the node says whether it can open the broker's
+                    # port, and the server -- which can reach the broker -- says
+                    # whether the broker accepts the account the node is about to
+                    # be given. A node started without either answer retries for
+                    # ever, with the reason in a journal nobody is reading.
+                    await self._check_broker_reachable(conn, node_name, str(broker), mqtt_port)
+                    await self._check_node_account(target, node_name)
                     has_credentials = await self._put_node_env(
                         sftp, target, home_dir, node_name, str(broker), mqtt_port, tls
                     )
@@ -1173,9 +1254,25 @@ class InstallerAgent(Actor):
                     await self._ssh_run(conn, self._nohup_launch(node_name, broker, mqtt_port))
                 self._log_remote(f"[{node_name}] Runner started — supervision: {rung.label}.")
 
-            self._log_remote(
-                f"[{node_name}] Deploy complete! Node will appear in /nodes within 15s."
-            )
+                # 8. Started is not connected. Wait for the node to say so itself,
+                # and when it does not, bring back what it logged instead of
+                # reporting a success the dashboard will contradict.
+                heartbeat_error = await self._await_first_heartbeat(node_name)
+                if heartbeat_error:
+                    tail = await self._node_log_tail(conn, rung, node_name)
+                    msg = f"[{node_name}] {heartbeat_error}"
+                    if tail:
+                        msg += f"\nThe node's log ends with:\n{tail}"
+                    self._log_remote(msg)
+                    return {
+                        "success": False,
+                        "node_name": node_name,
+                        "host": host,
+                        "supervision": rung.label,
+                        "error": msg,
+                    }
+
+            self._log_remote(f"[{node_name}] Deploy complete! Node is online.")
             # Record where the node lives; credentials stay in the environment.
             self._persist_node_info(node_name=node_name, host=host, user=user)
             return {
@@ -1192,7 +1289,7 @@ class InstallerAgent(Actor):
                 "message": (
                     f"Node '{node_name}' deployed to {user}@{host} ({rung.label}), "
                     f"{'TLS' if tls.enabled else 'plain MQTT'} to the broker. "
-                    f"It will appear in /nodes within ~15 seconds."
+                    f"Its first heartbeat has arrived."
                 ),
             }
 
@@ -1200,6 +1297,93 @@ class InstallerAgent(Actor):
             msg = f"Deploy failed for '{node_name}' on {host}: {e}"
             self._log_remote(msg)
             return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
+
+    async def _check_broker_reachable(
+        self, conn: Any, node_name: str, broker: str, port: int
+    ) -> None:
+        """Fail the deploy when the node cannot open the broker's port.
+
+        Run on the node, because that is where the answer is true: the server
+        reaching the broker says nothing about a firewall between the broker's
+        host and the node, or an address that only resolves on the server.
+        """
+        ok, output = await self._ssh_run(conn, reach_check_command(broker, port))
+        if ok:
+            self._log_remote(f"[{node_name}] The broker answers on {broker}:{port} from the node.")
+            return
+        reason = (output.splitlines() or ["no answer"])[-1][:200]
+        raise BrokerUnreachableFromNodeError(node_name, broker, port, reason)
+
+    async def _check_node_account(self, target: DeployTarget, node_name: str) -> None:
+        """Fail the deploy when the broker refuses the account the node would be given.
+
+        Checked from the server, against the broker the server itself uses, with
+        exactly the username and password that are about to be written to the
+        node. A mistyped password, a comment that became one, or an account no
+        broker has are all caught here rather than in the node's journal.
+
+        Skipped where the check could not be honest: a node whose broker address
+        differs from the server's may well be talking to a different broker.
+        """
+        if target.broker and target.broker != CONFIG.mqtt_host:
+            return
+        username, password = self._node_account(target, node_name)
+        if not (username or password):
+            return
+        try:
+            await asyncio.wait_for(
+                self._connect_once(username, password, node_name), CREDENTIAL_CHECK_TIMEOUT_S
+            )
+        except asyncio.TimeoutError as exc:
+            raise BrokerRefusedNodeAccountError(node_name, username, "no answer in time") from exc
+        except Exception as exc:
+            raise BrokerRefusedNodeAccountError(node_name, username, str(exc)[:200]) from exc
+        self._log_remote(f"[{node_name}] The broker accepts the node's account.")
+
+    @staticmethod
+    async def _connect_once(username: str, password: str, node_name: str) -> None:
+        """Open and close one broker connection as the node would."""
+        async with mqtt_client(
+            CONFIG.mqtt_host,
+            CONFIG.mqtt_port,
+            username=username,
+            password=password or None,
+            identifier=client_id("srv", install_id(), f"deploy-{node_name}"),
+        ):
+            pass
+
+    async def _await_first_heartbeat(self, node_name: str) -> str | None:
+        """Wait for main to record a heartbeat from the node; the failure text if none.
+
+        Read off main's own node table, so the deploy reports the same fact the
+        dashboard does. No main in the registry -- the installer running on its
+        own -- means there is nobody to ask, and the wait is skipped rather than
+        failed.
+        """
+        main = find_main_actor(self._registry)
+        if main is None:
+            return None
+        deadline = time.monotonic() + FIRST_HEARTBEAT_TIMEOUT_S
+        while time.monotonic() < deadline:
+            seen = main._known_nodes.get(node_name, {}).get("last_seen", 0.0)
+            if seen and seen >= self._deploy_started_at:
+                return None
+            await asyncio.sleep(1.0)
+        return (
+            f"The node started but sent no heartbeat within "
+            f"{FIRST_HEARTBEAT_TIMEOUT_S}s. It is still running there and will keep "
+            f"retrying; the reason is in its log."
+        )
+
+    async def _node_log_tail(self, conn: Any, rung: Any, node_name: str) -> str:
+        """The last lines the node logged, for a deploy that failed."""
+        if rung is node_service.NOHUP:
+            command = f"tail -n 12 ~/wactorz/{shlex.quote(node_name + '.log')} 2>/dev/null"
+        else:
+            journal = "journalctl --user" if rung is node_service.USER else "journalctl"
+            command = f"{journal} -u {node_service.UNIT_NAME} -n 12 --no-pager -o cat 2>/dev/null"
+        _, output = await self._ssh_run(conn, command)
+        return output.strip()[:1500]
 
     @staticmethod
     def _nohup_launch(node_name: str, broker: Any, mqtt_port: Any) -> str:

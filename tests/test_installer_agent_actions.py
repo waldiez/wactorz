@@ -459,7 +459,11 @@ class TestNodeDeploy:
             await run("systemctl --version")
             return node_service.NOHUP
 
+        async def _account(*_args: Any) -> None:
+            return None
+
         monkeypatch.setattr(installer, "_decide_node_tls", _tls)
+        monkeypatch.setattr(installer, "_check_node_account", _account)
         monkeypatch.setattr(installer, "_put_node_env", _env)
         monkeypatch.setattr(installer_agent.node_service, "install", _install)
         monkeypatch.setattr(

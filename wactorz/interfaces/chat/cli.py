@@ -238,7 +238,7 @@ class CLIInterface:
 
         if result.get("success"):
             print(f"""
-  Node '{node_name}' is live! It will appear in /nodes within ~15 seconds.
+  Node '{node_name}' is live and its first heartbeat has arrived.
 
   Now spawn agents on it — just tell main:
     "spawn a CPU monitor agent on {node_name}"

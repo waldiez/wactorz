@@ -286,7 +286,7 @@ class TestDeploy:
                 "port": 1883,
             }
         ]
-        assert "Node 'rpi' is live!" in capsys.readouterr().out
+        assert "Node 'rpi' is live" in capsys.readouterr().out
 
     async def test_a_host_is_found_by_mdns_and_a_failure_is_explained(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

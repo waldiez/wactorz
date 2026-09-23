@@ -1246,7 +1246,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         if result.get("success"):
             yield (
-                f"[OK] Node '{node_name}' is live! It will appear in /nodes within ~15 seconds.\n\n"
+                f"[OK] Node '{node_name}' is live and its first heartbeat has arrived.\n\n"
                 f"Spawn agents on it:\n"
                 f'  "spawn a CPU monitor agent on {node_name}"\n'
                 f'  "spawn a temperature sensor on {node_name}"'

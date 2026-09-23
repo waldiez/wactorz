@@ -485,6 +485,56 @@ class TestNodeDeploy:
         assert "nohup ~/wactorz/venv/bin/wactorz" in conn.commands[-1]
         assert persisted == [("rpi", "10.0.0.5", "pi")]
 
+    async def test_a_node_that_never_heartbeats_fails_the_deploy_with_its_log(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Started is not connected. A node whose service is up but never reaches
+        # the broker is reported as a failure, with what it logged, rather than
+        # as a success the dashboard then contradicts.
+        self._target(monkeypatch, installer)
+        conn.answers = {
+            "cd ~ && pwd": (True, "/home/pi"),
+            "journalctl": (True, "Publisher error: Not authorized"),
+        }
+        persisted: list[tuple[str, str, str]] = []
+
+        async def _tls(*_args: Any) -> NodeTls:
+            return NodeTls(enabled=False, port=1883, note="plain")
+
+        async def _env(*_args: Any) -> bool:
+            return True
+
+        async def _install(run: Any, *, user: str, home: str) -> Any:
+            return node_service.USER
+
+        async def _account(*_args: Any) -> None:
+            return None
+
+        async def _no_heartbeat(_node_name: str) -> str | None:
+            return "The node started but sent no heartbeat within 45s."
+
+        monkeypatch.setattr(installer, "_decide_node_tls", _tls)
+        monkeypatch.setattr(installer, "_check_node_account", _account)
+        monkeypatch.setattr(installer, "_put_node_env", _env)
+        monkeypatch.setattr(installer, "_await_first_heartbeat", _no_heartbeat)
+        monkeypatch.setattr(installer_agent.node_service, "install", _install)
+        monkeypatch.setattr(
+            installer,
+            "_persist_node_info",
+            lambda **kw: persisted.append((kw["node_name"], kw["host"], kw["user"])),
+        )
+
+        result = await installer._node_deploy(
+            {"host": "10.0.0.5", "node_name": "rpi", "broker": "10.0.0.1"}
+        )
+
+        assert result["success"] is False
+        assert result["supervision"] == node_service.USER.label
+        assert "no heartbeat" in result["error"]
+        assert "Not authorized" in result["error"]
+        # The node is not recorded as deployed: nothing says it is reachable.
+        assert persisted == []
+
     async def test_a_failure_part_way_is_reported_with_the_node(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
     ) -> None:

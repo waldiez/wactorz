@@ -17,7 +17,7 @@ loudest about.
 from collections.abc import AsyncGenerator
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -341,6 +341,63 @@ class TestGuessingGetsExpensive:
         await client.post("/login", data={"key": KEY})
 
         assert throttle.throttle.retry_after("127.0.0.1") == 0.0
+
+
+class TestBehindAProxy:
+    """What a proxy reports is believed only from a proxy listed as trusted.
+
+    The test client connects from loopback, which is also where a local reverse
+    proxy — or a rebound page in the user's own browser — connects from.
+    """
+
+    TLS: ClassVar[dict[str, str]] = {"X-Forwarded-Proto": "https"}
+
+    async def test_the_cookie_is_secure_when_the_proxy_speaks_https(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # TLS ends at the proxy, so the connection reaching the server is
+        # always plain http and cannot decide this by itself.
+        monkeypatch.setattr("wactorz.config.TRUSTED_PROXIES", "127.0.0.1")
+
+        resp = await client.post(
+            "/login", data={"key": KEY}, headers=self.TLS, allow_redirects=False
+        )
+
+        assert "Secure" in resp.headers["Set-Cookie"]
+
+    async def test_an_unlisted_peer_cannot_claim_https(self, client: TestClient) -> None:
+        resp = await client.post(
+            "/login", data={"key": KEY}, headers=self.TLS, allow_redirects=False
+        )
+
+        assert "Secure" not in resp.headers["Set-Cookie"]
+
+    async def test_one_guesser_does_not_lock_everyone_out(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("wactorz.config.TRUSTED_PROXIES", "127.0.0.1")
+        await client.post(
+            "/login", data={"key": "guess"}, headers={"X-Forwarded-For": "203.0.113.66"}
+        )
+
+        resp = await client.post(
+            "/login",
+            data={"key": KEY},
+            headers={"X-Forwarded-For": "203.0.113.7"},
+            allow_redirects=False,
+        )
+
+        assert resp.status == 302
+
+    async def test_an_unlisted_peer_cannot_rotate_its_way_past(self, client: TestClient) -> None:
+        # Otherwise a fresh X-Forwarded-For per attempt is a fresh allowance.
+        await client.post("/login", data={"key": "guess"}, headers={"X-Forwarded-For": "1.1.1.1"})
+
+        resp = await client.post(
+            "/login", data={"key": "guess"}, headers={"X-Forwarded-For": "2.2.2.2"}
+        )
+
+        assert resp.status == 429
 
 
 class TestWhatTheBrowserIsToldAboutSigningOut:

@@ -14,6 +14,12 @@ Two separate questions, both answered here because they fail together:
 
 Non-browser callers send neither header and are unaffected; scripts, `curl` and
 the Python client keep working.
+
+Both checks read the name and scheme through `X-Forwarded-*` only when the peer
+is a proxy listed in `WACTORZ_TRUSTED_PROXIES`. From anyone else those headers
+are ignored: a rebound page can send them on a same-origin request with no
+preflight, and believing `X-Forwarded-Host: localhost` from it is the rebinding
+attack the host check exists to stop.
 """
 
 import ipaddress
@@ -30,6 +36,11 @@ logger = logging.getLogger(__name__)
 #: Ingress peers already named in the log, so each is reported once.
 _seen_peers: set[Any] = set()
 
+#: Peers already told their forwarded headers were ignored, so each is reported
+#: once — up to a cap, since these addresses are the caller's to choose.
+_ignored_peers: set[Any] = set()
+_IGNORED_PEERS_CAP = 256
+
 #: Scheme defaults that never appear in an Origin header.
 _DEFAULT_PORTS = {"http": "80", "https": "443"}
 
@@ -40,6 +51,10 @@ _SCHEME_ALIASES = {"ws": "http", "wss": "https"}
 
 #: Names that always mean "this machine", so a loopback install works untouched.
 _LOOPBACK_NAMES = {"localhost", "localhost.localdomain", ""}
+
+#: The loopback networks by IP version, for spotting a trusted-proxy entry that
+#: would also trust the user's own browser.
+_LOOPBACK_NETS = {4: ipaddress.ip_network("127.0.0.0/8"), 6: ipaddress.ip_network("::1/128")}
 
 
 def normalize_origin(value: str) -> str:
@@ -78,18 +93,121 @@ def _split_host_port(host: str) -> tuple[str, str]:
     return host, ""
 
 
+def _parse_networks(
+    raw: str, setting: str
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
+    """Comma-separated addresses or CIDRs, skipping (and naming) malformed ones."""
+    nets = []
+    for part in raw.split(","):
+        entry = part.strip()
+        if not entry:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning("[origin] ignoring malformed %s entry %r", setting, entry)
+    return tuple(nets)
+
+
+def _peer_address(request: Any) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """The connecting address, or None when there is none to read."""
+    try:
+        return ipaddress.ip_address(getattr(request, "remote", None) or "")
+    except ValueError:
+        return None
+
+
+def from_trusted_proxy(request: Any) -> bool:
+    """Whether the connecting peer is a reverse proxy named in `WACTORZ_TRUSTED_PROXIES`."""
+    address = _peer_address(request)
+    if address is None:
+        return False
+    nets = _parse_networks(config.TRUSTED_PROXIES, "WACTORZ_TRUSTED_PROXIES")
+    return any(address in net for net in nets)
+
+
+def _note_ignored(request: Any, header: str) -> None:
+    """Say once per peer that its forwarded headers were not believed.
+
+    Otherwise a real proxy nobody listed looks like a server refusing its own
+    name. Bounded, because the addresses belong to whoever is calling.
+    """
+    peer = getattr(request, "remote", None)
+    if peer in _ignored_peers or len(_ignored_peers) >= _IGNORED_PEERS_CAP:
+        return
+    _ignored_peers.add(peer)
+    logger.warning(
+        "[origin] ignoring %s from %s — add it to WACTORZ_TRUSTED_PROXIES if it is your proxy",
+        header,
+        peer,
+    )
+
+
+def _forwarded(request: Any, header: str) -> str:
+    """The first hop of a forwarded header, or "" when this peer may not set it.
+
+    The first hop is what the browser addressed. That holds only if the trusted
+    proxy sets the header rather than appending to one the client sent — which
+    is what `proxy_set_header` does, and what the deployment docs ask for.
+    """
+    value = request.headers.get(header, "")
+    if not value:
+        return ""
+    if not from_trusted_proxy(request):
+        _note_ignored(request, header)
+        return ""
+    return value.split(",")[0].strip()
+
+
+def request_host(request: Any) -> str:
+    """The `host[:port]` the browser addressed, seen through a trusted proxy."""
+    return _forwarded(request, "X-Forwarded-Host") or request.headers.get("Host", "")
+
+
+def request_scheme(request: Any) -> str:
+    """The scheme the browser used, seen through a trusted proxy.
+
+    Behind a proxy that terminates TLS the direct scheme is always `http`, which
+    is why this, not `request.scheme`, decides whether a cookie is `Secure`.
+    """
+    return (_forwarded(request, "X-Forwarded-Proto") or request.scheme).lower()
+
+
+def client_address(request: Any) -> str:
+    """The client's address, seen through any trusted proxies.
+
+    `X-Forwarded-For` is read from the right, because each proxy appends the
+    peer it saw: the first hop that is not itself a trusted proxy is the
+    client. Everything to its left is whatever the client chose to send, so it
+    is never taken while an untrusted hop stands to its right.
+    """
+    peer = getattr(request, "remote", None) or ""
+    if not from_trusted_proxy(request):
+        return peer
+    hops = [h.strip() for h in request.headers.get("X-Forwarded-For", "").split(",") if h.strip()]
+    nets = _parse_networks(config.TRUSTED_PROXIES, "WACTORZ_TRUSTED_PROXIES")
+    for hop in reversed(hops):
+        try:
+            address = ipaddress.ip_address(hop)
+        except ValueError:
+            return hop
+        if not any(address in net for net in nets):
+            return hop
+    return hops[0] if hops else peer
+
+
 def request_origin(request: Any) -> str:
     """The origin this request was addressed to.
 
-    Forwarded headers win where present: behind a reverse proxy the request
-    arrives bearing an internal scheme and host, so comparing a browser's Origin
-    against the direct one rejects every legitimate call.
+    Built from the same host and scheme the host check reads, so the two can
+    never be answered from different sources. Behind a trusted proxy that is
+    the name the browser used; comparing a browser's Origin against the proxy's
+    internal one would reject every legitimate call.
     """
-    proto = request.headers.get("X-Forwarded-Proto")
-    host = request.headers.get("X-Forwarded-Host")
-    if proto and host:
-        return normalize_origin(f"{proto.split(',')[0].strip()}://{host.split(',')[0].strip()}")
-    return normalize_origin(str(request.url.origin()))
+    host = request_host(request)
+    if not host:
+        return normalize_origin(str(request.url.origin()))
+    return normalize_origin(f"{request_scheme(request)}://{host}")
 
 
 def parse_allow_list(raw: str) -> set[str]:
@@ -118,8 +236,7 @@ def host_allowed(request: Any, allowed_hosts: set[str]) -> bool:
     configured is refused even though it resolved here, because that is exactly
     what rebinding looks like.
     """
-    host = (request.headers.get("X-Forwarded-Host") or request.headers.get("Host") or "").strip()
-    name, _ = _split_host_port(host.split(",")[0].strip().lower())
+    name, _ = _split_host_port(request_host(request).strip().lower())
     if name in _LOOPBACK_NAMES or name in allowed_hosts:
         return True
     bare = name[1:-1] if name.startswith("[") and name.endswith("]") else name
@@ -149,16 +266,7 @@ STATE_CHANGING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 def _trusted_peers() -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
     """The networks the ingress bypass is accepted from."""
-    nets = []
-    for part in config.INGRESS_PEERS.split(","):
-        raw = part.strip()
-        if not raw:
-            continue
-        try:
-            nets.append(ipaddress.ip_network(raw, strict=False))
-        except ValueError:
-            logger.warning("[origin] ignoring malformed WACTORZ_INGRESS_PEERS entry %r", raw)
-    return tuple(nets)
+    return _parse_networks(config.INGRESS_PEERS, "WACTORZ_INGRESS_PEERS")
 
 
 def log_mode() -> None:
@@ -178,6 +286,26 @@ def log_mode() -> None:
         "[origin] ingress mode on — requests from %s may skip the origin and host checks",
         peers,
     )
+
+
+def warn_loopback_proxies() -> None:
+    """Warn at startup when `WACTORZ_TRUSTED_PROXIES` covers a loopback address.
+
+    A browser on this machine connects from loopback too, so a rebound page that
+    reaches the server directly is then believed when it names `localhost` in
+    `X-Forwarded-Host`. That is sometimes the price of a proxy on the same host,
+    and it should be paid knowingly: having the proxy pass `Host` through avoids
+    it for every check except the cookie's `Secure` flag.
+    """
+    nets = _parse_networks(config.TRUSTED_PROXIES, "WACTORZ_TRUSTED_PROXIES")
+    loopback = [str(net) for net in nets if net.overlaps(_LOOPBACK_NETS[net.version])]
+    if loopback:
+        logger.warning(
+            "[origin] WACTORZ_TRUSTED_PROXIES includes loopback (%s): a web page open in a "
+            "browser on this machine can claim any host name, which undoes the DNS "
+            "rebinding check. Prefer having a local proxy pass Host through.",
+            ", ".join(loopback),
+        )
 
 
 def from_supervisor(request: Any) -> bool:
@@ -258,7 +386,7 @@ def refuse(request: Any, *, strict_origin: bool = False) -> web.Response | None:
     if not host_allowed(request, allowed_hosts):
         logger.warning(
             "[origin] refused host %r — add it to WACTORZ_ALLOWED_HOSTS if this is yours",
-            request.headers.get("X-Forwarded-Host") or request.headers.get("Host"),
+            request_host(request),
         )
         return web.json_response({"error": "host not allowed"}, status=403)
 

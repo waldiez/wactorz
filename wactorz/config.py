@@ -266,6 +266,13 @@ CORS_ORIGINS = os.getenv("WACTORZ_CORS_ORIGINS", "")
 #: like — set this to reach the dashboard by an mDNS or LAN name.
 ALLOWED_HOSTS = os.getenv("WACTORZ_ALLOWED_HOSTS", "")
 
+#: Reverse proxies whose ``X-Forwarded-*`` headers are believed, comma-separated
+#: addresses or CIDRs. Empty by default, and loopback is deliberately not implied:
+#: a browser on this machine connects from loopback too, and a rebound page can
+#: set these headers on its own same-origin requests without a preflight. Trusting
+#: them from anyone would let that page name ``localhost`` and pass the host check.
+TRUSTED_PROXIES = os.getenv("WACTORZ_TRUSTED_PROXIES", "")
+
 
 @dataclass(frozen=True)
 class DeployTarget:

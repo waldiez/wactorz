@@ -8,13 +8,13 @@ parallel, because sleeping the handler does not stop the next request starting.
 Counting is what works: attempts are refused outright once there have been too
 many, whether or not the previous ones have finished.
 
-**Keyed on the peer address, and forwarded headers are deliberately ignored.**
-`X-Forwarded-For` is set by whoever is closest to the server, so behind a proxy
-it is attacker-controlled — a guesser rotating that header would get a fresh
-allowance for every attempt, which is worse than no limit at all because it
-looks like one. The cost is that behind a proxy every request shares the proxy's
-address and a lockout is global rather than per-client. That is the safe
-direction to fail, and it is the same reasoning as the ingress peer check.
+**Keyed on the client's address, as the caller works it out.** `X-Forwarded-For`
+is believed only from a proxy listed in `WACTORZ_TRUSTED_PROXIES`, and then only
+the hop that proxy recorded. From anyone else it is attacker-controlled — a
+guesser rotating that header would get a fresh allowance for every attempt,
+which is worse than no limit at all because it looks like one. Behind a proxy
+nobody listed, every request shares the proxy's address and a lockout is global
+rather than per-client. That is the safe direction to fail.
 
 Nothing here reads configuration or touches aiohttp.
 """

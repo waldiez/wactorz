@@ -161,6 +161,41 @@ def _build_native_catalog() -> dict:
         logger.warning("[catalog] weather-agent unavailable: %s", e)
 
     try:
+        from ..catalogue_agents.flic_agent import FlicAgent
+
+        native["flic"] = {
+            "name": "flic",
+            "type": "native",
+            "factory": FlicAgent,
+            "description": (
+                "Pairs Flic 2 buttons over Bluetooth and publishes each press as its own "
+                "MQTT topic, so a physical button can trigger anything that can be wired "
+                "to a topic. Needs pyflic-ble (wactorz[flic]) and Python 3.12+."
+            ),
+            "capabilities": [
+                "flic",
+                "button",
+                "bluetooth",
+                "ble",
+                "physical_trigger",
+                "event_source",
+            ],
+            "input_schema": {
+                "action": "help | scan | pair | list | rename | listen | stop | status | forget",
+                "name": "str - button to act on, or the name to give a new pairing",
+                "new_name": "str - replacement name, for rename",
+            },
+            "output_schema": {
+                "ok": "bool",
+                "action": "str - the command that ran",
+                "result": "str - what to tell the person who asked",
+            },
+        }
+        logger.info("[catalog] Loaded flic recipe")
+    except ImportError as e:
+        logger.warning("[catalog] flic unavailable: %s", e)
+
+    try:
         from .google_calendar_agent import GoogleCalendarAgent
 
         native["google-calendar-agent"] = {

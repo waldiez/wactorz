@@ -164,6 +164,9 @@ def _reset_fake_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     # A lookup by address is a real Bluetooth scan; here every button is in
     # range unless a test says otherwise.
     monkeypatch.setattr(flic_agent, "find_button", _lookup)
+    # One scan per `pair` unless a test is about waiting for a button.
+    monkeypatch.setattr(flic_agent, "PAIR_WAIT_S", 0.0)
+    monkeypatch.setattr(flic_agent, "PAIR_RESCAN_PAUSE_S", 0.0)
 
 
 async def _lookup(address: str, _timeout: float) -> FakeDevice | None:
@@ -1371,3 +1374,62 @@ class TestOneScanAtATime:
         await asyncio.gather(agent._discover(), agent._discover(), agent._locate("AA"))
 
         assert most == 1
+
+
+class TestTellingThePersonHowToPair:
+    """A button shows up only while it is held in pairing mode, so `pair` says so first."""
+
+    async def test_it_says_to_hold_the_button_before_it_looks(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        order: list[str] = []
+
+        async def discover(_timeout: float) -> list[Any]:
+            order.append("scan")
+            return [FakeDevice("AA:BB:CC:DD:EE:FF")]
+
+        async def notify(text: str, **_extra: Any) -> None:
+            order.append(text)
+
+        monkeypatch.setattr(flic_agent, "discover_buttons", discover)
+        monkeypatch.setattr(agent, "notify_user", notify)
+
+        await agent._handle_cmd(FlicAgentCommand.PAIR, name="kitchen")
+
+        assert order[0] == flic_agent.PAIR_INSTRUCTIONS
+        assert "7 seconds" in order[0]
+        assert order[1] == "scan"
+
+    async def test_it_waits_for_a_button_to_enter_pairing_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Asking first and then picking the button up is the usual order.
+        monkeypatch.setattr(flic_agent, "PAIR_WAIT_S", 5.0)
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        scans = 0
+
+        async def discover(_timeout: float) -> list[Any]:
+            nonlocal scans
+            scans += 1
+            return [FakeDevice("AA:BB:CC:DD:EE:FF")] if scans >= 3 else []
+
+        monkeypatch.setattr(flic_agent, "discover_buttons", discover)
+
+        reply = await agent._handle_cmd(FlicAgentCommand.PAIR, name="kitchen")
+
+        assert scans == 3
+        assert reply.startswith("Paired 'kitchen'")
+
+    async def test_it_gives_up_when_no_button_comes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(flic_agent, "PAIR_WAIT_S", 0.05)
+        monkeypatch.setattr(flic_agent, "PAIR_RESCAN_PAUSE_S", 0.01)
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        monkeypatch.setattr(flic_agent, "discover_buttons", _found())
+
+        reply = await asyncio.wait_for(agent._handle_cmd(FlicAgentCommand.PAIR), timeout=5)
+
+        assert "No button came into pairing mode" in reply
+        assert agent._known_buttons == []

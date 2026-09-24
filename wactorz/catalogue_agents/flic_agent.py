@@ -38,6 +38,15 @@ TWIST_SERVICE_UUID = "00c90000-2cbd-4f2a-a725-5ccd960ffb7d"
 SCAN_TIMEOUT_S = 15.0
 CONNECT_TIMEOUT_S = 45.0
 PAIRING_TIMEOUT_S = 120.0
+#: How long `pair` keeps looking for a button to enter pairing mode, once it has
+#: told the person to hold one down.
+PAIR_WAIT_S = 45.0
+#: A breath between those scans, so a backend that answers at once cannot spin.
+PAIR_RESCAN_PAUSE_S = 1.0
+PAIR_INSTRUCTIONS = (
+    "Hold the Flic button down for about 7 seconds to put it in pairing mode. "
+    f"Looking for it for the next {PAIR_WAIT_S:.0f} seconds..."
+)
 STOP_TIMEOUT_S = 20.0
 #: How long to look for one known button before starting its session, and how
 #: often to look again for a button that is out of range, backing off to the cap.
@@ -359,21 +368,34 @@ class FlicAgent(Actor):
         return "Flic buttons in range:\n" + "\n".join(lines)
 
     async def _pair(self, name: str = "") -> str:
-        """Pair a button being held down, store it and start listening to it."""
-        try:
-            found = await self._discover()
-        except Exception as exc:
-            LOG.exception("[%s] Scan before pairing failed", self.name)
-            return f"Could not scan for buttons: {exc}"
+        """Pair a button being held down, store it and start listening to it.
 
+        Says first what to do with the button, because a button only shows up
+        while it is in pairing mode, and asking is usually what reminds someone
+        to pick it up. Then keeps scanning until one appears or `PAIR_WAIT_S`
+        runs out, so the order of holding and asking does not matter.
+        """
+        await self.notify_user(PAIR_INSTRUCTIONS)
+        deadline = time.monotonic() + PAIR_WAIT_S
         paired = {button.address.lower() for button in self._known_buttons}
-        candidates = [
-            device for device in found if str(getattr(device, "address", "")).lower() not in paired
-        ]
+        while True:
+            try:
+                found = await self._discover()
+            except Exception as exc:
+                LOG.exception("[%s] Scan before pairing failed", self.name)
+                return f"Could not scan for buttons: {exc}"
+            candidates = [
+                device
+                for device in found
+                if str(getattr(device, "address", "")).lower() not in paired
+            ]
+            if candidates or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(PAIR_RESCAN_PAUSE_S)
         if not candidates:
             return (
-                "No unpaired button in range. Hold the button down for about 7 seconds "
-                "to put it in pairing mode, then ask again."
+                f"No button came into pairing mode within {PAIR_WAIT_S:.0f} seconds. "
+                "Hold it down for about 7 seconds and ask again."
             )
 
         # Whichever answered the scan first. More than one is worth saying out

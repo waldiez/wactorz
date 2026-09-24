@@ -19,6 +19,7 @@ import logging
 import time
 from typing import Any
 
+from ..._version import __version__
 from ...core.actor import derive_actor_id
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
@@ -106,6 +107,9 @@ class NodeManager:
         self.manifest_registry = manifests if manifests is not None else ManifestRegistry(host)
         #: (node, agent) -> consecutive heartbeats that agent has been missing.
         self.agent_misses: dict[tuple[str, str], int] = {}
+        #: Nodes a deploy is restarting right now. Their silence and their empty
+        #: heartbeats are main's own doing, not a crash, and are not acted on.
+        self.redeploying: set[str] = set()
         #: node -> monotonic time its desired state was last republished because of
         #: what its heartbeat said about signing.
         self.signing_republished_at: dict[str, float] = {}
@@ -147,6 +151,55 @@ class NodeManager:
     def online_names(self) -> list[str]:
         """The online nodes, sorted — this reaches a person in an error message."""
         return sorted(name for name in self.known if self.is_online(name))
+
+    def begin_redeploy(self, node_name: str) -> None:
+        """Say that `node_name` is about to be stopped and started by a deploy.
+
+        Until :meth:`end_redeploy`, the node's agents are not pruned when its
+        heartbeats stop listing them, and the node is not forgotten when the
+        heartbeats stop altogether. Both are what a redeploy looks like from
+        here: the old process is killed, the new one comes up with no agents and
+        only then reconciles against the desired state. Reading either as a
+        crash is what deleted the agents a redeploy was meant to keep.
+        """
+        self.redeploying.add(node_name)
+
+    def end_redeploy(self, node_name: str) -> None:
+        """The deploy is over, one way or the other: judge the node normally again.
+
+        The miss counters are reset rather than kept: whatever was counted during
+        the deploy was the deploy, and the new node's first heartbeats -- sent
+        before it has reconciled -- must not carry that count over the threshold.
+        """
+        self.redeploying.discard(node_name)
+        for key in [k for k in self.agent_misses if k[0] == node_name]:
+            self.agent_misses.pop(key, None)
+
+    def version_mismatch(self, node_name: str) -> str | None:
+        """Why an agent must not be sent to `node_name`, or None when it may be.
+
+        A node runs the same package as main, at the same version: its agents are
+        built from the same code and speak the same contract, and a spawn config
+        main writes today may name something an older node has never heard of.
+        A node that reports a different version is refused, with the command
+        that brings it level.
+
+        A node that reports no version at all is not judged here. That is a
+        runtime from before the field existed, and what to do about it is the
+        signing and runtime handling's call, made on the same heartbeat. Only
+        ever asked about a node main has heard from: whether the node is online
+        at all is a separate question with its own answer.
+        """
+        info = self.known.get(node_name)
+        if not info:
+            return None
+        reported = info.get("version")
+        if not reported or reported == __version__:
+            return None
+        return (
+            f"node '{node_name}' is running version {reported}, and this server is "
+            f"{__version__}. Redeploy it with `/deploy {node_name}` so both run the same code."
+        )
 
     def running_agent(self, name: str) -> str:
         """The online node running `name`, or "" if none currently claims it.
@@ -362,7 +415,7 @@ class NodeManager:
         node's to lose.
         """
         host = self.host
-        if host is None:
+        if host is None or node_name in self.redeploying:
             return []
         to_prune: list[str] = []
         for agent_name, cfg in list(host._get_spawn_registry().items()):
@@ -528,7 +581,7 @@ class NodeManager:
         stale_nodes = [
             (name, info)
             for name, info in list(self.known.items())
-            if (now - info.get("last_seen", 0)) > OFFLINE_GRACE_S
+            if (now - info.get("last_seen", 0)) > OFFLINE_GRACE_S and name not in self.redeploying
         ]
         if not stale_nodes:
             return

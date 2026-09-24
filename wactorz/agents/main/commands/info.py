@@ -8,6 +8,7 @@ text still matches.
 import time
 from typing import Any
 
+from ...._version import __version__
 from .dispatch import CommandContext, command
 
 #: Every command, as the help text lists them. Kept as data rather than one
@@ -80,6 +81,16 @@ async def show_help(_ctx: CommandContext, _argument: str) -> str:
     return "\n".join(HELP_LINES)
 
 
+def _node_version_label(node: dict[str, Any]) -> str:
+    """What a node row says about its version: the number, and whether it matches."""
+    reported = node.get("version")
+    if not reported:
+        return "v? (older runtime)"
+    if reported == __version__:
+        return f"v{reported}"
+    return f"v{reported} ≠ server, redeploy"
+
+
 @command(
     "/nodes",
     exact=("main.list_nodes", "list_nodes", "/nodes"),
@@ -93,15 +104,19 @@ async def show_nodes(ctx: CommandContext, _argument: str) -> str:
     if ctx.actor._registry:
         local_agents = sorted(a.name for a in ctx.actor._registry.all_actors())
     local_str = ", ".join("@" + n for n in local_agents) or "(none)"
-    lines = [f"  {'local':22s} 🟢 online  |  agents: {local_str}"]
+    lines = [f"  {'local':22s} 🟢 online  |  v{__version__}  |  agents: {local_str}"]
 
-    # Remote rows
+    # Remote rows. The version sits beside the status because it decides
+    # whether the node can take an agent at all: one that differs from the
+    # server's is refused, and this is where a person looks to see why.
     for nd in sorted(nodes, key=lambda x: x["node"]):
         status = "🟢 online " if nd["online"] else "🔴 offline"
         agents = ", ".join("@" + a for a in nd["agents"]) or "(no agents)"
         age = int(time.time() - nd["last_seen"])
+        version = _node_version_label(nd)
         lines.append(
-            f"  {nd['node']:22s} {status}  |  agents: {agents}  |  last heartbeat: {age}s ago"
+            f"  {nd['node']:22s} {status}  |  {version}  |  agents: {agents}"
+            f"  |  last heartbeat: {age}s ago"
         )
 
     footer = ""

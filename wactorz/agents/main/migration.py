@@ -730,6 +730,17 @@ class Migration:
                 f"'{current_node or 'local'}'.",
             }
 
+        mismatch = None if is_target_local else self.host._node_version_mismatch(target_node)
+        if mismatch:
+            # Same footing as an offline target: nothing has moved yet, so the
+            # agent simply stays where it is.
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}': {mismatch} "
+                f"Migration aborted — the agent stays on "
+                f"'{current_node or 'local'}'.",
+            }
+
         if current_node and not is_target_local:
             # ── Remote → Remote migration ────────────────────────────────────
             # The source node still has the agent's compiled code and state;

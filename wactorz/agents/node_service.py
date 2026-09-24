@@ -61,7 +61,7 @@ def unit_file(home: str, user: str, *, system: bool) -> str:
     command line would have needed escaping.
     """
     exec_start = (
-        f"{home}/wactorz/venv/bin/wactorz "
+        f"{home}/wactorz/venv/bin/wactorz-node "
         "--mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}"
     )
     lines = [

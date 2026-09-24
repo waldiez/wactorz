@@ -151,7 +151,7 @@
 <p>A node is the same package, started in a different role. It connects to the shared MQTT broker, listens for spawn commands from the main machine, and runs the agents it is sent — the same <code>DynamicAgent</code>, compiled from the same code, against the same <code>agent</code> API, under the same OTP supervisor.</p>
 <div class="highlight"><pre><span></span><code><span class="k">[Main machine]                        [Edge device — Raspberry Pi, VM, etc.]</span>
 
-<span class="na">MainActor  ──MQTT──►  nodes/{name}/spawn  ──►  wactorz --node {name}</span>
+<span class="na">MainActor  ──MQTT──►  nodes/{name}/spawn  ──►  wactorz-node --node {name}</span>
 <span class="w">                                                   </span><span class="na">│  compiles + runs agent</span>
 <span class="w">                                                   </span><span class="na">│  local ONE_FOR_ONE supervisor</span>
 <span class="na">Dashboard  ◄──MQTT──  agents/{id}/heartbeat  ◄──┘  heartbeats every 10 s</span>
@@ -178,7 +178,7 @@
 <p>Install the same version main is running, and at least the one these docs ship with — earlier releases have no node runtime. The two exchange spawn configs, manifests and signed control messages, and a node a release apart from main is the kind of mismatch that surfaces days later as an agent that will not start. A deploy from the dashboard pins the version for you.</p>
 <p>No extra is needed: everything a node uses — <code>aiomqtt</code>, <code>psutil</code>, <code>aiohttp</code> — is a core dependency. An agent that needs more says so in its spawn config's <code>install</code> list, and the node installs it on the spot.</p>
 <h4 id="2-start-it-as-a-node">2. Start it as a node</h4>
-<div class="highlight"><pre><span></span><code>~/wactorz/venv/bin/wactorz<span class="w"> </span>--node<span class="w"> </span>rpi-livingroom<span class="w"> </span>--mqtt-broker<span class="w"> </span><span class="m">192</span>.168.1.10
+<div class="highlight"><pre><span></span><code>~/wactorz/venv/bin/wactorz-node<span class="w"> </span>--node<span class="w"> </span>rpi-livingroom<span class="w"> </span>--mqtt-broker<span class="w"> </span><span class="m">192</span>.168.1.10
 </code></pre></div>
 
 <p>Replace <code>192.168.1.10</code> with the IP of the machine running the MQTT broker. The <code>--node</code> value is the node identifier — it must be unique across all nodes and is used to address this device when spawning agents.</p>
@@ -195,7 +195,7 @@
 <tr>
 <td><code>--node [NAME]</code></td>
 <td><code>$WACTORZ_NODE</code>, else a random <code>node-&lt;hex&gt;</code></td>
-<td>Run as an edge node instead of starting the server. <code>/deploy</code> writes <code>WACTORZ_NODE</code> into the node's <code>.env</code>, so <code>wactorz --node</code> with no name comes up under the right one. The flag is what chooses the role — the variable on its own does not, or a server that inherited it would become a node.</td>
+<td>The node's name. <code>/deploy</code> starts a node through its own command, <code>wactorz-node</code>, which takes only a node's flags — an older release, which has no such command, then fails to start rather than coming up as a second server. <code>wactorz --node</code> still works for a hand-written launcher. <code>/deploy</code> writes <code>WACTORZ_NODE</code> into the node's <code>.env</code>, so <code>wactorz --node</code> with no name comes up under the right one. The flag is what chooses the role — the variable on its own does not, or a server that inherited it would become a node.</td>
 </tr>
 <tr>
 <td><code>--mqtt-broker</code></td>
@@ -699,7 +699,7 @@ mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span cl
 <h2 id="debugging">Debugging</h2>
 <h4 id="verbose-diagnostics">Verbose diagnostics</h4>
 <p>Run with <code>--loglevel DEBUG</code> to see every connection event, subscribe and publish:</p>
-<div class="highlight"><pre><span></span><code>~/wactorz/venv/bin/wactorz<span class="w"> </span>--node<span class="w"> </span>rpi-test<span class="w"> </span>--mqtt-broker<span class="w"> </span><span class="m">192</span>.168.1.10<span class="w"> </span>--loglevel<span class="w"> </span>DEBUG
+<div class="highlight"><pre><span></span><code>~/wactorz/venv/bin/wactorz-node<span class="w"> </span>--node<span class="w"> </span>rpi-test<span class="w"> </span>--mqtt-broker<span class="w"> </span><span class="m">192</span>.168.1.10<span class="w"> </span>--loglevel<span class="w"> </span>DEBUG
 </code></pre></div>
 
 <p>A node refuses to start, with exit status 2, in two cases it can detect up front: a node name containing an MQTT wildcard, which the broker would refuse on every operation; and <code>MQTT_TLS</code> turned on with a CA that cannot be read. Both would otherwise be a runner reconnecting every three seconds for ever.</p>

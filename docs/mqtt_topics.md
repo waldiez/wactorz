@@ -331,7 +331,7 @@ Remote agents never hold API keys — they route LLM calls through `main`, which
 replies on a per-request ephemeral topic.
 
 ### `main/llm_request`
-**Published by:** Agents running on a node (`wactorz --node`)
+**Published by:** Agents running on a node (`wactorz-node`)
 **Subscribed by:** MainActor's LLM bridge (`agents/main/llm_bridge.py`)
 **Purpose:** Centralized LLM calls so no API key leaves `main`.
 

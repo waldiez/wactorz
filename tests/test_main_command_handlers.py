@@ -16,6 +16,7 @@ from typing import Any, cast
 
 import pytest
 
+from wactorz._version import __version__
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.commands import agents as agent_cmds
 from wactorz.agents.main.commands import info, state
@@ -360,8 +361,34 @@ class TestHelpAndNodes:
         lines = text.splitlines()
         assert "agents: @main, @weather" in lines[1]
         assert lines[2].lstrip().startswith("rpi-a")
-        assert "🔴 offline  |  agents: (no agents)" in lines[3]
+        assert "🔴 offline  |  v? (older runtime)  |  agents: (no agents)" in lines[3]
         assert text.endswith("To remove a remote node: /nodes remove <node-name>")
+
+    async def test_nodes_say_their_version_and_whether_it_matches(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "same",
+                "online": True,
+                "agents": [],
+                "last_seen": time.time(),
+                "version": __version__,
+            },
+            {
+                "node": "behind",
+                "online": True,
+                "agents": [],
+                "last_seen": time.time(),
+                "version": "0.0.1",
+            },
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        rows = {line.split()[0]: line for line in text.splitlines()[1:] if line.strip()}
+        assert f"v{__version__}" in rows["local"]
+        assert f"|  v{__version__}  |" in rows["same"]
+        assert "v0.0.1 ≠ server, redeploy" in rows["behind"]
 
     async def test_no_remote_nodes_suggests_deploying_one(self, main: _Main) -> None:
         main._registry = None

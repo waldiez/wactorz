@@ -979,9 +979,17 @@ class InstallerAgent(Actor):
         version number is a claim and this is the thing being relied on. The
         failure it rules out is silent: every release before the node runtime
         answers to `wactorz==<that number>` and has no `wactorz.node` in it.
+
+        The command is checked as well as the module: the unit starts the node
+        through `wactorz-node`, which a release before that script existed
+        installs without, and a unit whose command is missing never starts.
         """
         python = shlex.quote(f"{home}/wactorz/venv/bin/python")
         ok, _ = await self._ssh_run(conn, f"{python} -c 'import wactorz.node'")
+        if not ok:
+            return False
+        script = shlex.quote(f"{home}/wactorz/venv/bin/wactorz-node")
+        ok, _ = await self._ssh_run(conn, f"test -x {script}")
         return ok
 
     async def _build_wheel(self) -> Path | None:
@@ -1237,6 +1245,10 @@ class InstallerAgent(Actor):
                 # (`wactorz --node <name>`) and the single-file runner a node
                 # deployed before the package was installed there is still
                 # running (`remote_runner.py --name <name>`).
+                # From here until the node's first heartbeat after the restart,
+                # main must not read the node's silence, or its empty first
+                # heartbeats, as agents crashing: they are this deploy.
+                self._mark_redeploying(node_name)
                 pattern = f"(wactorz.*--node|remote_runner.py.*--name) {node_name}"
                 await self._ssh_run(conn, f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true")
 
@@ -1257,7 +1269,12 @@ class InstallerAgent(Actor):
                 # 8. Started is not connected. Wait for the node to say so itself,
                 # and when it does not, bring back what it logged instead of
                 # reporting a success the dashboard will contradict.
-                heartbeat_error = await self._await_first_heartbeat(node_name)
+                try:
+                    heartbeat_error = await self._await_first_heartbeat(node_name)
+                finally:
+                    # Whatever happened, the node is judged normally from here:
+                    # a deploy that failed must not leave it exempt for ever.
+                    self._unmark_redeploying(node_name)
                 if heartbeat_error:
                     tail = await self._node_log_tail(conn, rung, node_name)
                     msg = f"[{node_name}] {heartbeat_error}"
@@ -1294,6 +1311,7 @@ class InstallerAgent(Actor):
             }
 
         except Exception as e:
+            self._unmark_redeploying(node_name)
             msg = f"Deploy failed for '{node_name}' on {host}: {e}"
             self._log_remote(msg)
             return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
@@ -1352,6 +1370,17 @@ class InstallerAgent(Actor):
         ):
             pass
 
+    def _mark_redeploying(self, node_name: str) -> None:
+        """Tell main a deploy is restarting the node; see `NodeManager.begin_redeploy`."""
+        main = find_main_actor(self._registry)
+        if main is not None:
+            main.nodes.begin_redeploy(node_name)
+
+    def _unmark_redeploying(self, node_name: str) -> None:
+        main = find_main_actor(self._registry)
+        if main is not None:
+            main.nodes.end_redeploy(node_name)
+
     async def _await_first_heartbeat(self, node_name: str) -> str | None:
         """Wait for main to record a heartbeat from the node; the failure text if none.
 
@@ -1406,7 +1435,7 @@ class InstallerAgent(Actor):
         log_path = shlex.quote(f"{node_name}.log")
         return (
             "set -a; . ~/wactorz/.env; set +a; "
-            "nohup ~/wactorz/venv/bin/wactorz "
+            "nohup ~/wactorz/venv/bin/wactorz-node "
             f"--mqtt-broker {shlex.quote(str(broker))} "
             f"--mqtt-port {shlex.quote(str(mqtt_port))} "
             f"--node {shlex.quote(node_name)} "

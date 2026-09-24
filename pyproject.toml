@@ -112,6 +112,7 @@ all = [
 
 [project.scripts]
 wactorz         = "wactorz.cli:main"
+wactorz-node    = "wactorz.node.cli:main"
 wactorz-mcp     = "wactorz.interfaces.mcp_server:main"
 wactorz-reset   = "wactorz.reset:main"
 wactorz-google-login = "wactorz.interfaces.google_login:main"

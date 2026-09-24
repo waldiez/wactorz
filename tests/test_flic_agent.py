@@ -465,6 +465,10 @@ class TestKeepingAPairing:
         assert [b.name for b in agent._known_buttons] == ["kitchen"]
         assert agent._clients["kitchen"].started is True  # pyright: ignore[reportAttributeAccessIssue]
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX mode bits; on Windows the folder's ACL decides who can read it",
+    )
     async def test_the_keys_file_is_readable_only_by_this_user(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -18,7 +18,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `api_key` | *(blank)* | Only consulted if you publish a port (see below). The Wactorz panel does not use it. |
+| `api_key` | *(blank)* | The key for everything except the panel. Blank generates a private one; set your own before publishing a port (see below). The Wactorz panel does not use it. |
 | `llm_provider` | `anthropic` | LLM backend: `anthropic`, `openai`, `gemini`, `ollama`, `nim` |
 | `llm_model` | `claude-sonnet-4-6` | Model name for the chosen provider |
 | `llm_api_key` | *(blank)* | API key for the chosen provider |
@@ -54,15 +54,15 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 > Supervisor. On that path the key is never consulted, which is why setting one
 > changes nothing for panel users.
 >
-> It matters in one case. If you assign a host port to `8000` or `8888` under
-> the add-on's **Network** settings, the API and dashboard land on your network
-> directly, and anything that can reach them can delete agents, read the chat
-> log and spend your LLM budget. Outside the add-on, Wactorz refuses to start in
-> that configuration — but the add-on declares its exposure already handled,
-> which is true right up until you publish a port, and that declaration switches
-> the refusal off. **Set `api_key` before publishing a port**, and reach the API
-> with `X-API-Key: <your key>` or `Authorization: Bearer <your key>`. Something
-> like `openssl rand -hex 32` gives a key nobody has to remember.
+> Everything else needs it. Other add-ons on the Home Assistant network can reach
+> ports `8000` and `8888` even when no host port is published, and a host port
+> puts them on your network too — and anything that can reach them unguarded can
+> spawn agents, which run code, read the chat log and spend your LLM budget. So
+> the add-on always has a key: yours if you set one, otherwise a random one it
+> generates once, keeps under `/data`, and never shows. **Set `api_key` before
+> publishing a port**, and reach the API with `X-API-Key: <your key>` or
+> `Authorization: Bearer <your key>`. Something like `openssl rand -hex 32` gives
+> a key nobody has to remember.
 >
 > **The bots are capability-restricted.** Discord and Telegram allow conversation, Home Assistant
 > questions, and everyday device control (lights, switches, climate, covers, media players). They

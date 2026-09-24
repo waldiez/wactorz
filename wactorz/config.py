@@ -52,6 +52,32 @@ def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
 
 
+def _api_key() -> str:
+    """``API_KEY``, or else the contents of the file ``API_KEY_FILE`` names.
+
+    The file form is for a key a deployment generates or mounts rather than
+    writes into its environment: compose's ``api-key`` service, or a Docker or
+    Kubernetes secret. The variable wins where both are set. A named file that
+    cannot be read is reported and counts as no key, which a wide bind then
+    refuses to start with.
+    """
+    key = os.getenv("API_KEY", "")
+    if key:
+        return key
+    path = os.getenv("API_KEY_FILE", "").strip()
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        warnings.warn(
+            f"API_KEY_FILE={path!r} could not be read ({exc}); running with no API key.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return ""
+
+
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None:
@@ -251,10 +277,12 @@ NODE_SIGNING = _node_signing_mode()
 INGRESS_ENABLED = os.getenv("WACTORZ_INGRESS", "0").strip().lower() not in ("", "0", "false", "no")
 
 #: Addresses the Home Assistant ingress bypass is accepted from, comma-separated
-#: CIDRs. Defaults to the Supervisor proxy's own range. The bypass exists because
-#: Supervisor authenticates the user before proxying; a header alone cannot show
-#: a request came from it, since any peer on the container network can set one.
-INGRESS_PEERS = os.getenv("WACTORZ_INGRESS_PEERS", "").strip() or "172.30.32.0/23"
+#: CIDRs. Defaults to the Supervisor's own address, the one Home Assistant tells
+#: add-ons to accept ingress from. Not the network around it: every other add-on
+#: lives there too, and any of them can set the ingress header. The bypass exists
+#: because Supervisor authenticates the user before proxying; a header alone
+#: cannot show a request came from it.
+INGRESS_PEERS = os.getenv("WACTORZ_INGRESS_PEERS", "").strip() or "172.30.32.2/32"
 
 #: Extra browser origins allowed to call the API, comma-separated. The page the
 #: server serves is always allowed; this is for a dashboard hosted elsewhere.
@@ -265,6 +293,13 @@ CORS_ORIGINS = os.getenv("WACTORZ_CORS_ORIGINS", "")
 #: when it resolves here, because that is what a DNS rebinding attack looks
 #: like — set this to reach the dashboard by an mDNS or LAN name.
 ALLOWED_HOSTS = os.getenv("WACTORZ_ALLOWED_HOSTS", "")
+
+#: Reverse proxies whose ``X-Forwarded-*`` headers are believed, comma-separated
+#: addresses or CIDRs. Empty by default, and loopback is deliberately not implied:
+#: a browser on this machine connects from loopback too, and a rebound page can
+#: set these headers on its own same-origin requests without a preflight. Trusting
+#: them from anyone would let that page name ``localhost`` and pass the host check.
+TRUSTED_PROXIES = os.getenv("WACTORZ_TRUSTED_PROXIES", "")
 
 
 @dataclass(frozen=True)
@@ -503,7 +538,7 @@ CONFIG = AppConfig(
     twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
     twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
     twilio_whatsapp_number=os.getenv("TWILIO_WHATSAPP_NUMBER", ""),
-    api_key=os.getenv("API_KEY", ""),
+    api_key=_api_key(),
     deploy_targets=_deploy_targets(),
     # Empty means "<state dir>/known_hosts", resolved at connect time so the
     # path follows WACTORZ_STATE_DIR instead of freezing the import-time value.

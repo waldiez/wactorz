@@ -146,6 +146,37 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── API key ────────────────────────────────────────────────────────────────────
+  # One-shot, as in compose.yaml: the app always runs with a key -- API_KEY from
+  # .env, or one generated here and kept in the api-key-data volume. Read it with
+  #   docker compose -f compose.dev.yaml exec wactorz cat /run/wactorz/api_key
+  api-key:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wactorz-dev-api-key
+    restart: "no"
+    environment:
+      API_KEY: "${API_KEY:-}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -n "$$API_KEY" ]; then echo "[api-key] Using API_KEY from .env."; exit 0; fi
+        if [ ! -s /run/wactorz/api_key ]; then
+          python -c 'import secrets; print(secrets.token_hex(32), end="")' > /run/wactorz/api_key.tmp
+          chmod 0644 /run/wactorz/api_key.tmp
+          mv /run/wactorz/api_key.tmp /run/wactorz/api_key
+          echo "[api-key] Generated an API key. Read it with: docker compose -f compose.dev.yaml exec wactorz cat /run/wactorz/api_key"
+        fi
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    network_mode: none
+    volumes:
+      - api-key-data:/run/wactorz
+
   # ── Broker TLS certificate ─────────────────────────────────────────────────────
   # One-shot. Issues the broker's certificate from a CA kept in ./state/mqtt_tls
   # -- minted on the first run, and what /deploy hands a node -- and copies the
@@ -209,10 +240,10 @@ services:
       - .env
     environment:
       # A published port cannot reach a process bound to the container's own
-      # loopback, so the wide bind is required — and declared, since the
-      # mappings below publish only to the host's loopback.
+      # loopback, so the wide bind is required. It passes the fail-closed check
+      # because a key is always set: API_KEY from .env, or the generated one.
       WACTORZ_BIND_HOST: "0.0.0.0"
-      WACTORZ_EXPOSED_OK: "1"
+      API_KEY_FILE: /run/wactorz/api_key
       MQTT_HOST: mosquitto
       # Same defaults as the broker above, or the two disagree and `make dev`
       # comes up with an app that cannot connect to its own broker.
@@ -239,16 +270,18 @@ services:
     init: true
     networks:
       - wactorz-net
-    # Loopback-bound: these carry no authentication of their own, so they are
-    # reachable from this host only. Drop the 127.0.0.1 prefix to expose them.
+    # Loopback-bound. Both require the API key, but they speak plain HTTP.
     ports:
       - "127.0.0.1:8000:8000"
       - "127.0.0.1:8888:8888"
     volumes:
       - ./state:/app/state
+      - api-key-data:/run/wactorz:ro
     depends_on:
       mosquitto:
         condition: service_healthy
+      api-key:
+        condition: service_completed_successfully
     healthcheck:
       # /health, not /: every other route needs the key once API_KEY is set, and
       # a probe cannot carry one. Curling / would report unhealthy forever while
@@ -271,6 +304,9 @@ services:
       PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
+      # The app is always keyed, so the scrape carries its key or gets 401.
+      API_KEY: "${API_KEY:-}"
+      API_KEY_FILE: /run/wactorz/api_key
     ports:
       - "${PROMETHEUS_EXTERNAL_PORT:-9090}:9090"
     extra_hosts:
@@ -280,6 +316,7 @@ services:
       - ./infra/prometheus/render-config.sh:/etc/prometheus/render-config.sh:ro
       - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
+      - api-key-data:/run/wactorz:ro
     command:
       - |
         export PROMETHEUS_TEMPLATE_FILE=/etc/prometheus/prometheus.yml.template
@@ -290,6 +327,8 @@ services:
           --web.console.libraries=/etc/prometheus/console_libraries \
           --web.console.templates=/etc/prometheus/consoles
     depends_on:
+      api-key:
+        condition: service_completed_successfully
       wactorz:
         condition: service_started
       blackbox-exporter:
@@ -333,6 +372,7 @@ services:
       start_period: 60s
 
 volumes:
+  api-key-data:
   mosquitto-data:
   mosquitto-logs:
   prometheus-data:

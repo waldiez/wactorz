@@ -15,6 +15,7 @@ on.
 | --- | --- |
 | **Default install** | It listens on `127.0.0.1` only. Nothing off the machine can reach it. |
 | **Reachable install** | `API_KEY`. Binding to a reachable address without one refuses to start. |
+| **Compose stack** | `API_KEY` from `.env`, or one generated on first start. Every container on the stack's network can reach the app, so it never runs without one. |
 | **Home Assistant add-on** | Home Assistant's own login. The panel goes through ingress, and requests are verified as coming from the Supervisor. |
 
 The refusal is deliberate rather than a warning: a warning scrolls past in a
@@ -109,9 +110,11 @@ the broker. Anything that can publish to it can drive Wactorz.
   after checking from the node that the broker answers it — a node that could not
   stays on cleartext, and the deploy log says so. The server's own connection uses
   TLS with `MQTT_TLS=1`, on the broker's TLS port.
-  Plain `1883` stays open for anything not yet on TLS, so the broker still belongs
-  on a network you trust, and nothing here replaces a tunnel or VPN across the
-  public internet. See "Encrypted connections (TLS)" in `remote-nodes.md`.
+  The compose stack publishes plain `1883` to its own host only; set
+  `MQTT_EXTERNAL_BIND=0.0.0.0` for a node not yet on TLS, until it is deployed
+  again. The add-on's embedded broker publishes nothing unless you map a port.
+  The broker still belongs on a network you trust, and nothing here replaces a
+  tunnel or VPN across the public internet. See "Encrypted connections (TLS)" in `remote-nodes.md`.
 - **Edge nodes hold broker credentials.** `/deploy` writes them to the node over
   SSH, and by default a node uses the server's own account, so a stolen node
   holds full broker access. `WACTORZ_NODE_ACCOUNTS=1` gives each node an account
@@ -156,6 +159,11 @@ the broker. Anything that can publish to it can drive Wactorz.
 1. Keep the default `127.0.0.1` bind unless you need otherwise.
 2. If you need otherwise, set `API_KEY` to something generated —
    `openssl rand -hex 32`.
+   Behind a reverse proxy, list it in `WACTORZ_TRUSTED_PROXIES` and have it set
+   `X-Forwarded-Host` and `X-Forwarded-Proto` rather than append to them.
+   Forwarded headers from any other peer are ignored. Do not list a loopback
+   address: a page in a browser on the same machine connects from there too. For
+   a proxy on the same host, have it pass `Host` through instead.
 3. Put the broker on a trusted network segment, and set `MQTT_PASSWORD`.
 4. Set `WACTORZ_NODE_ACCOUNTS=1` so each edge node gets its own broker account,
    deploy every node again, then rotate the account they shared.

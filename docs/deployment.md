@@ -39,13 +39,19 @@ docker compose --profile python up -d
 
 Open `http://localhost:8888` (monitor UI) or `http://localhost:8000` (REST API).
 
+Both ask for the API key. With `API_KEY` blank in `.env`, the stack generates one
+on first start and keeps it in a volume. Read it with
+`docker compose exec wactorz-python cat /run/wactorz/api_key`, or follow the
+one-time sign-in link in `docker compose logs wactorz-python`. Set `API_KEY` in
+`.env` to choose your own.
+
 ### Services
 
 Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring up more services.
 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
-| _(all)_ | mosquitto | `mosquitto:1883` | `:1883` |
+| _(all)_ | mosquitto | `mosquitto:1883` | `127.0.0.1:1883`, and `:8883` (TLS) |
 | `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
 | `python` | monitor UI | `wactorz-python:8888` | `:8888` |
 | `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |

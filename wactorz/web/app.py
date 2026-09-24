@@ -236,6 +236,7 @@ async def main(exit_on_failure: bool = False) -> None:
     sessions.store.bind(ensure_state_dir(), CONFIG.api_key)
 
     origins.log_mode()
+    origins.warn_loopback_proxies()
     app = build_app()
 
     runner = web.AppRunner(app)

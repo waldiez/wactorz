@@ -140,9 +140,33 @@ case "$ha_probe" in
     *)       bashio::log.warning "HA probe returned ${ha_probe} — mode=${HA_MODE} url=${HA_URL}.";;
 esac
 
-# Other Integrations
+# ── API key ───────────────────────────────────────────────────────────────────
+# The panel never needs one: a request through ingress is recognised as the
+# Supervisor's and let through. Everything else does. Another add-on on the Home
+# Assistant network reaches both ports whether or not a host port is published,
+# and an open API lets it spawn agents, which run code. So a key is always set:
+# yours if you gave one, otherwise a random one generated once and kept in /data,
+# which survives restarts and updates, and signed-in sessions with it. It is
+# never logged; set api_key to choose one you can use.
 API_KEY=$(get_config_safe 'api_key' '')
+if [ -z "$API_KEY" ]; then
+    api_key_file="${API_KEY_FILE:-/data/api_key}"
+    if [ ! -s "$api_key_file" ]; then
+        if (umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$api_key_file") 2>/dev/null; then
+            bashio::log.info "No api_key set: generated one for connections that do not come through the panel."
+        fi
+    fi
+    API_KEY=$(cat "$api_key_file" 2>/dev/null || true)
+    if [ -z "$API_KEY" ]; then
+        # A key for this start alone still closes the ports. What it costs is
+        # that dashboard sessions end at the next restart.
+        API_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        bashio::log.warning "Could not keep a generated api_key in ${api_key_file}; using one for this start only."
+    fi
+fi
 export API_KEY="${API_KEY}"
+
+# Other Integrations
 
 DISCORD_BOT_TOKEN=$(get_config_safe 'discord_bot_token' '')
 export DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN}"
@@ -226,11 +250,9 @@ export PORT=8000
 # every interface. No port is published (see config.yaml), so this is not a
 # route in from outside Home Assistant.
 export WACTORZ_BIND_HOST=0.0.0.0
-# The wide bind above is required for ingress, and the add-on sets no API key.
-# Without this the fail-closed rule refuses to start. It is honest here: the
-# add-on publishes no ports, so ingress is the only way in, and Home Assistant
-# authenticates the user before proxying.
-export WACTORZ_EXPOSED_OK=1
+# No WACTORZ_EXPOSED_OK: an API key is always set above, so the wide bind passes
+# the fail-closed check on its own. Were that ever to stop being true, the add-on
+# would refuse to start rather than serve an open API to the network.
 # This deployment sits behind Home Assistant's ingress, which signs the user in
 # before proxying — so a request it forwards is allowed to skip the origin and
 # host checks. Nothing else may claim that: a plain Docker or bare install never

@@ -191,6 +191,11 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Open <code>http://localhost:8888</code> (monitor UI) or <code>http://localhost:8000</code> (REST API).</p>
+<p>Both ask for the API key. With <code>API_KEY</code> blank in <code>.env</code>, the stack generates one
+on first start and keeps it in a volume. Read it with
+<code>docker compose exec wactorz-python cat /run/wactorz/api_key</code>, or follow the
+one-time sign-in link in <code>docker compose logs wactorz-python</code>. Set <code>API_KEY</code> in
+<code>.env</code> to choose your own.</p>
 <h3 id="services">Services</h3>
 <p>Default profile (no flag) starts Mosquitto only. Add <code>--profile</code> flags to bring up more services.</p>
 <table>
@@ -207,7 +212,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <td><em>(all)</em></td>
 <td>mosquitto</td>
 <td><code>mosquitto:1883</code></td>
-<td><code>:1883</code></td>
+<td><code>127.0.0.1:1883</code>, and <code>:8883</code> (TLS)</td>
 </tr>
 <tr>
 <td><code>python</code></td>

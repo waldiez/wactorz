@@ -11,10 +11,10 @@
 #                 docker compose --profile full up -d
 #
 # External ports (defaults, override via .env):
-#   :1883  → MQTT TCP                  MQTT_EXTERNAL_PORT
+#   :1883  → MQTT TCP                  MQTT_EXTERNAL_PORT       (this host only; MQTT_EXTERNAL_BIND)
 #   :8883  → MQTT over TLS             MQTT_TLS_EXTERNAL_PORT   (python/full)
 #   :8000  → Python REST API           REST_EXTERNAL_PORT       (python/full)
-#   :8888  → Python monitor Web UI     MONITOR_EXTERNAL_PORT    (python/full)
+#   :8888  → Python monitor Web UI     MONITOR_PORT             (python/full)
 #   :9090  → Prometheus UI            (python profile)
 #   :8123  → Home Assistant                                      (full)
 #
@@ -43,7 +43,11 @@ services:
         condition: service_completed_successfully
         required: false
     ports:
-      - "${MQTT_EXTERNAL_PORT:-1883}:1883"
+      # Plain MQTT carries the broker password in the clear, so it is published to
+      # this host only. Remote nodes use TLS on 8883 below, which /deploy switches
+      # them to. A node still on plain MQTT needs MQTT_EXTERNAL_BIND=0.0.0.0 in .env
+      # until it is deployed again.
+      - "${MQTT_EXTERNAL_BIND:-127.0.0.1}:${MQTT_EXTERNAL_PORT:-1883}:1883"
       # TLS. Answered once a certificate is in infra/mosquitto/generated: mqtt-certs
       # below puts one there under the python and full profiles, and a wactorz
       # run on this host with MQTT_TLS=1 does too (restart the broker after).
@@ -170,6 +174,44 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── API key ────────────────────────────────────────────────────────────────────
+  # One-shot. The app listens on every interface inside its container, so
+  # everything on wactorz-net reaches it -- Home Assistant under the full profile
+  # included -- and so does the network once a port is published. It therefore
+  # always runs with a key: API_KEY from .env when set, otherwise one generated
+  # here on the first run and kept in the api-key-data volume. Read it with
+  #   docker compose exec wactorz-python cat /run/wactorz/api_key
+  # or follow the one-time sign-in link in `docker compose logs wactorz-python`.
+  # World-readable inside the volume because the app and Prometheus read it as
+  # different users; nothing else mounts it.
+  api-key:
+    profiles: [python, full]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wactorz-python:latest
+    container_name: wactorz-api-key
+    restart: "no"
+    environment:
+      API_KEY: "${API_KEY:-}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -n "$$API_KEY" ]; then echo "[api-key] Using API_KEY from .env."; exit 0; fi
+        if [ ! -s /run/wactorz/api_key ]; then
+          python -c 'import secrets; print(secrets.token_hex(32), end="")' > /run/wactorz/api_key.tmp
+          chmod 0644 /run/wactorz/api_key.tmp
+          mv /run/wactorz/api_key.tmp /run/wactorz/api_key
+          echo "[api-key] Generated an API key. Read it with: docker compose exec wactorz-python cat /run/wactorz/api_key"
+        fi
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    network_mode: none
+    volumes:
+      - api-key-data:/run/wactorz
+
   # ── Broker TLS certificate ─────────────────────────────────────────────────────
   # One-shot. Issues the broker's certificate from a CA kept in ./state/mqtt_tls
   # -- minted on the first run, and what /deploy hands a node -- and copies the
@@ -248,12 +290,11 @@ services:
       # the host's loopback, which is what keeps this off the network; a process
       # bound to the container's own loopback would be unreachable through them.
       WACTORZ_BIND_HOST: "0.0.0.0"
-      # Declares that the wide bind above is deliberate and already contained.
-      # Without it the process refuses to start: reachable with no API_KEY is
-      # the configuration that refusal exists to stop shipping. Here the
-      # containment is the port mapping above, which publishes only to the
-      # host's loopback.
-      WACTORZ_EXPOSED_OK: "1"
+      # API_KEY from .env wins; otherwise the key the api-key service generated.
+      # No WACTORZ_EXPOSED_OK: with a key always set the wide bind passes the
+      # fail-closed check on its own, and if the key went missing the app would
+      # refuse to start rather than serve an open API.
+      API_KEY_FILE: /run/wactorz/api_key
     # The entrypoint is root only long enough to chown the state directory, then
     # drops to uid 1000. These three are the only capabilities that step needs —
     # the app itself runs with none. Dropping the rest shrinks the bounding set,
@@ -275,16 +316,20 @@ services:
     init: true
     networks:
       - wactorz-net
-    # Loopback-bound: these carry no authentication of their own, so they are
-    # reachable from this host only. Drop the 127.0.0.1 prefix to expose them.
+    # Loopback-bound. Both require the API key, but they speak plain HTTP, so
+    # reach them from elsewhere through a TLS proxy rather than by dropping the
+    # 127.0.0.1 prefix.
     ports:
       - "127.0.0.1:${REST_EXTERNAL_PORT:-8000}:8000"              # REST API
       - "127.0.0.1:${MONITOR_PORT:-8888}:${MONITOR_PORT:-8888}"  # Web UI monitor
     volumes:
       - ./state:/app/state
+      - api-key-data:/run/wactorz:ro
     depends_on:
       mosquitto:
         condition: service_healthy
+      api-key:
+        condition: service_completed_successfully
     healthcheck:
       # /health, not /: every other route needs the key once API_KEY is set, and
       # a probe cannot carry one. Curling / would report unhealthy forever while
@@ -309,9 +354,11 @@ services:
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz-python}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
       REST_EXTERNAL_PORT: "${REST_EXTERNAL_PORT:-8000}"
-      # The scrape authenticates when the app is keyed. Without it the
-      # wactorz-python target answers 401 and goes quietly down.
+      # The scrape authenticates with the app's key -- from .env, or the file
+      # the api-key service generated. Without it the wactorz-python target
+      # answers 401 and goes quietly down.
       API_KEY: "${API_KEY:-}"
+      API_KEY_FILE: /run/wactorz/api_key
     # Loopback-bound: the Prometheus UI has no auth and exposes agent names and
     # spend. Scraping happens over the internal network, not this port.
     ports:
@@ -323,6 +370,7 @@ services:
       - ./infra/prometheus/render-config.sh:/etc/prometheus/render-config.sh:ro
       - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
+      - api-key-data:/run/wactorz:ro
     command:
       - |
         export PROMETHEUS_TEMPLATE_FILE=/etc/prometheus/prometheus.yml.template
@@ -333,6 +381,8 @@ services:
           --web.console.libraries=/etc/prometheus/console_libraries \
           --web.console.templates=/etc/prometheus/consoles
     depends_on:
+      api-key:
+        condition: service_completed_successfully
       wactorz-python:
         condition: service_started
       blackbox-exporter:
@@ -385,6 +435,7 @@ networks:
   wactorz-net:
 
 volumes:
+  api-key-data:
   mosquitto-data:
   mosquitto-logs:
   prometheus-data:

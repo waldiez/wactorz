@@ -185,11 +185,11 @@ install-dev: ## Install everything including dev/docs deps
 install-frontend: ## Install frontend dependencies
 	cd $(FRONTEND_DIR) && $(PKG_MGR) install
 
-precommit-install: ## Install the git pre-commit hook
-	pre-commit install
+precommit-install: ## Install the git pre-commit hook (prek)
+	prek install
 
-precommit-run: ## Run all configured pre-commit hooks across the repo
-	pre-commit run --all-files
+precommit-run: ## Run all configured hooks across the repo (prek)
+	prek run --all-files
 
 test: test-py test-frontend ## Run all tests (Python + frontend)
 

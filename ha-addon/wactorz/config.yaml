@@ -29,10 +29,9 @@ webui: http://[HOST]:[PORT:8888]
 # Nothing is published to the host by default: the dashboard is reached through
 # the Wactorz panel (ingress), which goes through Home Assistant's own login.
 # Assign a host port below only if you need to reach these from outside Home
-# Assistant, and note that doing so puts them on your network directly. Set
-# `api_key` if you do: the add-on tells Wactorz its exposure is already handled
-# by ingress, which is true until a port is published, and that also switches
-# off the refusal that would otherwise stop an unauthenticated wide bind.
+# Assistant, and note that doing so puts them on your network directly. Both
+# always require an API key except through the panel -- set `api_key` to one you
+# can use before publishing either.
 ports:
   8000/tcp: null
   8888/tcp: null
@@ -70,11 +69,12 @@ options:
   # with it — e.g. a LiteLLM proxy, Groq, Together, vLLM, or LM Studio.
   openai_url: ""
 
-  # Only needed if you publish port 8000 or 8888 above. Reaching Wactorz
-  # through its panel goes via ingress, where Home Assistant has already
-  # signed you in and the request is verified as coming from the Supervisor —
-  # so the key is not consulted on that path and setting one changes nothing
-  # for panel users.
+  # The key for everything that does not come through the panel: a published
+  # port 8000 or 8888, and other add-ons on the Home Assistant network. Leave it
+  # blank and a random one is generated and kept private, which closes those
+  # routes; set your own to use them. The panel goes via ingress, where Home
+  # Assistant has already signed you in and the request is verified as coming
+  # from the Supervisor, so the key is never consulted there.
   api_key: ""
 
   # MQTT broker — set to the Mosquitto addon host if using the official addon
@@ -164,10 +164,10 @@ options:
 
 
 schema:
-  api_key: str?
+  api_key: password?
   llm_provider: list(anthropic|ollama|openai|gemini|nim)
   llm_model: str
-  llm_api_key: str?
+  llm_api_key: password?
   llm_cost_limit_usd: float
   llm_cost_limit_period: list(daily|weekly|monthly)
   ollama_url: url
@@ -175,15 +175,15 @@ schema:
   mqtt_host: str
   mqtt_port: port
   mqtt_username: str?
-  mqtt_password: str?
+  mqtt_password: password?
   mqtt_tls_ca: str?
   ha_connection: list(auto|supervisor|custom)?
   ha_url: url
-  ha_token: str?
+  ha_token: password?
   mosquitto_embedded: bool
-  discord_bot_token: str?
+  discord_bot_token: password?
   discord_allowed_user_ids: str?
-  telegram_bot_token: str?
+  telegram_bot_token: password?
   telegram_allowed_user_ids: str?
   telegram_allowed_user_id: int
   social_rate_limit_per_min: int

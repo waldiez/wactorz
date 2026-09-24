@@ -334,7 +334,7 @@ def from_supervisor(request: Any) -> bool:
     if any(address in net for net in _trusted_peers()):
         if address not in _seen_peers:
             # Named once per address so an operator can confirm which proxy is
-            # actually reaching them, rather than trusting a documented range.
+            # actually reaching them, rather than trusting a documented address.
             # At warning because it is the fact someone goes looking for, and a
             # deployment that logs only warnings is exactly where it is needed.
             _seen_peers.add(address)
@@ -374,7 +374,7 @@ def refuse(request: Any, *, strict_origin: bool = False) -> web.Response | None:
         # preflight, and it is deliberately absent from the Allow-Headers below,
         # so the browser refuses before sending the real request. Nor can another
         # peer on the container network, whatever headers it sets, because the
-        # marker is only honoured from Supervisor's own address range.
+        # marker is only honoured from Supervisor's own address.
         #
         # Both halves are required: the value is validated rather than merely
         # present, and it is corroborated by the peer address, so neither a

@@ -46,7 +46,7 @@ class _Request:
 
     def __init__(self, origin: str = "http://localhost:8888", **headers: str) -> None:
         self.url = _Url(origin)
-        self.remote: str | None = "172.30.32.1"
+        self.remote: str | None = "172.30.32.2"
         self.scheme = origin.partition("://")[0]
         # Read when a refusal is logged, so a double without it turns a real
         # refusal into an AttributeError.
@@ -205,7 +205,7 @@ class TestWhichHostsWeAnswerTo:
 @pytest.fixture(name="trusted_proxy")
 def trusted_proxy_fixture() -> Iterator[None]:
     """A reverse proxy at the fake request's peer address, listed as trusted."""
-    with patch.object(config, "TRUSTED_PROXIES", "172.30.32.1"):
+    with patch.object(config, "TRUSTED_PROXIES", "172.30.32.2"):
         yield
 
 
@@ -261,7 +261,7 @@ class TestTrustedProxies:
             assert from_trusted_proxy(request)
 
     def test_a_malformed_entry_is_skipped_not_fatal(self) -> None:
-        with patch.object(config, "TRUSTED_PROXIES", "not-an-address, 172.30.32.1"):
+        with patch.object(config, "TRUSTED_PROXIES", "not-an-address, 172.30.32.2"):
             assert from_trusted_proxy(_Request())
 
     def test_a_peer_we_cannot_see_is_not_trusted(self, trusted_proxy: None) -> None:
@@ -313,7 +313,7 @@ class TestWhoTheClientIs:
     def test_the_peer_when_nothing_is_trusted(self) -> None:
         request = _Request(X_Forwarded_For="1.2.3.4")
 
-        assert client_address(request) == "172.30.32.1"
+        assert client_address(request) == "172.30.32.2"
 
     def test_the_hop_the_trusted_proxy_recorded(self, trusted_proxy: None) -> None:
         # The left end is what the client sent; rotating it must not buy a
@@ -330,7 +330,7 @@ class TestWhoTheClientIs:
             assert client_address(request) == "203.0.113.7"
 
     def test_a_trusted_proxy_with_no_header_is_the_client(self, trusted_proxy: None) -> None:
-        assert client_address(_Request()) == "172.30.32.1"
+        assert client_address(_Request()) == "172.30.32.2"
 
 
 @pytest.fixture(name="ingress")
@@ -352,7 +352,7 @@ class TestTheBypassOnlyExistsWhereIngressDoes:
             X_Ingress_Path="/api/hassio_ingress/abc123",
             Origin="https://evil.example.com",
         )
-        request.remote = "172.30.32.1"
+        request.remote = "172.30.32.2"
 
         assert refuse(request, strict_origin=True) is not None
 
@@ -420,7 +420,7 @@ class TestTheIngressPeer:
 
     def test_supervisor_gets_the_bypass(self, ingress: None) -> None:
         request = _Request("http://172.30.33.2:8888", **self.INGRESS, **self.FOREIGN)
-        request.remote = "172.30.32.1"
+        request.remote = "172.30.32.2"
 
         assert refuse(request, strict_origin=True) is None
 
@@ -430,6 +430,22 @@ class TestTheIngressPeer:
         # differs.
         request = _Request("http://172.30.33.2:8888", **self.INGRESS, **self.FOREIGN)
         request.remote = "192.168.1.50"
+
+        assert refuse(request, strict_origin=True) is not None
+
+    def test_another_addon_does_not(self, ingress: None) -> None:
+        # Every add-on sits on the Supervisor's network and can set the header.
+        # Trusting that network rather than the Supervisor's own address let any
+        # of them past the key.
+        request = _Request("http://172.30.33.2:8888", **self.INGRESS, **self.FOREIGN)
+        request.remote = "172.30.33.5"
+
+        assert refuse(request, strict_origin=True) is not None
+
+    def test_nor_does_home_assistant_core(self, ingress: None) -> None:
+        # Core hands ingress to the Supervisor, which is what proxies it here.
+        request = _Request("http://172.30.33.2:8888", **self.INGRESS, **self.FOREIGN)
+        request.remote = "172.30.32.1"
 
         assert refuse(request, strict_origin=True) is not None
 
@@ -445,7 +461,7 @@ class TestTheIngressPeer:
         # Every gate is required, and they live in different places: the
         # shape check belongs to the accessor, the address to this one.
         request = _Request("http://172.30.33.2:8888", X_Ingress_Path="../../nope", **self.FOREIGN)
-        request.remote = "172.30.32.1"
+        request.remote = "172.30.32.2"
 
         assert refuse(request, strict_origin=True) is not None
 
@@ -471,7 +487,7 @@ class TestSayingWhichModeWeAreIn:
             log_mode()
 
         assert "ingress mode on" in caplog.text
-        assert "172.30.32.0/23" in caplog.text
+        assert "172.30.32.2/32" in caplog.text
 
     def test_an_unavailable_one_says_nothing_at_warning(
         self, caplog: pytest.LogCaptureFixture

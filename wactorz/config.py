@@ -251,10 +251,12 @@ NODE_SIGNING = _node_signing_mode()
 INGRESS_ENABLED = os.getenv("WACTORZ_INGRESS", "0").strip().lower() not in ("", "0", "false", "no")
 
 #: Addresses the Home Assistant ingress bypass is accepted from, comma-separated
-#: CIDRs. Defaults to the Supervisor proxy's own range. The bypass exists because
-#: Supervisor authenticates the user before proxying; a header alone cannot show
-#: a request came from it, since any peer on the container network can set one.
-INGRESS_PEERS = os.getenv("WACTORZ_INGRESS_PEERS", "").strip() or "172.30.32.0/23"
+#: CIDRs. Defaults to the Supervisor's own address, the one Home Assistant tells
+#: add-ons to accept ingress from. Not the network around it: every other add-on
+#: lives there too, and any of them can set the ingress header. The bypass exists
+#: because Supervisor authenticates the user before proxying; a header alone
+#: cannot show a request came from it.
+INGRESS_PEERS = os.getenv("WACTORZ_INGRESS_PEERS", "").strip() or "172.30.32.2/32"
 
 #: Extra browser origins allowed to call the API, comma-separated. The page the
 #: server serves is always allowed; this is for a dashboard hosted elsewhere.

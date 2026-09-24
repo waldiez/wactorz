@@ -170,6 +170,10 @@ on.</p>
 <td><code>API_KEY</code>. Binding to a reachable address without one refuses to start.</td>
 </tr>
 <tr>
+<td><strong>Compose stack</strong></td>
+<td><code>API_KEY</code> from <code>.env</code>, or one generated on first start. Every container on the stack's network can reach the app, so it never runs without one.</td>
+</tr>
+<tr>
 <td><strong>Home Assistant add-on</strong></td>
 <td>Home Assistant's own login. The panel goes through ingress, and requests are verified as coming from the Supervisor.</td>
 </tr>
@@ -269,9 +273,11 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
   after checking from the node that the broker answers it — a node that could not
   stays on cleartext, and the deploy log says so. The server's own connection uses
   TLS with <code>MQTT_TLS=1</code>, on the broker's TLS port.
-  Plain <code>1883</code> stays open for anything not yet on TLS, so the broker still belongs
-  on a network you trust, and nothing here replaces a tunnel or VPN across the
-  public internet. See "Encrypted connections (TLS)" in <code>remote-nodes.md</code>.</li>
+  The compose stack publishes plain <code>1883</code> to its own host only; set
+  <code>MQTT_EXTERNAL_BIND=0.0.0.0</code> for a node not yet on TLS, until it is deployed
+  again. The add-on's embedded broker publishes nothing unless you map a port.
+  The broker still belongs on a network you trust, and nothing here replaces a
+  tunnel or VPN across the public internet. See "Encrypted connections (TLS)" in <code>remote-nodes.md</code>.</li>
 <li><strong>Edge nodes hold broker credentials.</strong> <code>/deploy</code> writes them to the node over
   SSH, and by default a node uses the server's own account, so a stolen node
   holds full broker access. <code>WACTORZ_NODE_ACCOUNTS=1</code> gives each node an account

@@ -45,6 +45,16 @@ cat >>"$out_file" <<EOF
       type: Bearer
       credentials: '${api_key_yaml}'
 EOF
+elif [ -n "${API_KEY_FILE:-}" ] && [ -s "$API_KEY_FILE" ]; then
+    # A key compose generated rather than one written into .env. Named, not
+    # copied: Prometheus reads the file on every scrape, so the key never lands
+    # in the rendered config at all. Quoted the same way as the key above.
+    api_key_file_yaml=$(printf '%s' "$API_KEY_FILE" | sed "s/'/''/g")
+cat >>"$out_file" <<EOF
+    authorization:
+      type: Bearer
+      credentials_file: '${api_key_file_yaml}'
+EOF
 fi
 
 if is_enabled "$monitor_mosquitto"; then

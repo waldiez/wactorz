@@ -313,7 +313,12 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
 <ol>
 <li>Keep the default <code>127.0.0.1</code> bind unless you need otherwise.</li>
 <li>If you need otherwise, set <code>API_KEY</code> to something generated —
-   <code>openssl rand -hex 32</code>.</li>
+   <code>openssl rand -hex 32</code>.
+   Behind a reverse proxy, list it in <code>WACTORZ_TRUSTED_PROXIES</code> and have it set
+   <code>X-Forwarded-Host</code> and <code>X-Forwarded-Proto</code> rather than append to them.
+   Forwarded headers from any other peer are ignored. Do not list a loopback
+   address: a page in a browser on the same machine connects from there too. For
+   a proxy on the same host, have it pass <code>Host</code> through instead.</li>
 <li>Put the broker on a trusted network segment, and set <code>MQTT_PASSWORD</code>.</li>
 <li>Set <code>WACTORZ_NODE_ACCOUNTS=1</code> so each edge node gets its own broker account,
    deploy every node again, then rotate the account they shared.</li>

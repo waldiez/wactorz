@@ -995,8 +995,24 @@ class TestSayingWhyNot:
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
 
-        assert "7 seconds" in reply
+        # Holding a paired button down puts it in pairing mode too; "nothing
+        # came" would send the person looking for a fault that is not there.
+        assert reply == (
+            "Only 'kitchen' came into pairing mode, and it is already paired here. "
+            "Hold down the new button instead, or forget one first to pair it again."
+        )
         assert len(agent._known_buttons) == 1
+
+    async def test_pairing_with_nothing_seen_at_all(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found())
+
+        reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
+
+        assert reply.startswith("No button came into pairing mode")
 
     async def test_a_scan_that_fails_before_pairing_is_reported(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1093,6 +1109,45 @@ class TestTheSmallParts:
         assert await agent._handle_cmd(FlicAgentCommand.STATUS) == (
             "1 button paired, 1 connected. Listening."
         )
+        await agent.on_stop()
+
+    async def test_status_names_the_buttons_it_is_still_looking_for(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # "Listening." with nothing connected read as all being well.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("kitchen"), button("hall", "11:22:33:44:55:66")]
+        OUT_OF_RANGE.add("AA:BB:CC:DD:EE:FF")
+        await agent._listen()
+
+        assert await agent._handle_cmd(FlicAgentCommand.STATUS) == (
+            "2 buttons paired, 1 connected. Listening; still looking for 'kitchen'."
+        )
+        await agent.on_stop()
+
+    async def test_listen_sends_the_search_looking_at_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A search deep in its back-off would otherwise make `listen` a no-op
+        # for a button that already has a client.
+        monkeypatch.setattr(flic_agent, "FIND_INTERVAL_S", 60.0)
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        OUT_OF_RANGE.add("AA:BB:CC:DD:EE:FF")
+        await agent._listen()
+        client = _client(agent, "kitchen")
+        await asyncio.sleep(0.01)
+        # The search looked once, found nothing, and is now waiting a minute.
+        assert client.devices_given == []
+
+        OUT_OF_RANGE.clear()
+        await agent._handle_cmd(FlicAgentCommand.LISTEN)
+        for _ in range(100):
+            if client.devices_given:
+                break
+            await asyncio.sleep(0.01)
+
+        assert [device.address for device in client.devices_given] == ["AA:BB:CC:DD:EE:FF"]
         await agent.on_stop()
 
     def test_status_reads_as_a_sentence(self) -> None:

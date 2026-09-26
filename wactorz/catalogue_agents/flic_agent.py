@@ -503,6 +503,16 @@ class FlicAgent(Actor):
             device for device in found if str(getattr(device, "address", "")).lower() not in paired
         ]
         if not candidates:
+            seen = {str(getattr(device, "address", "")).lower() for device in found}
+            already = [b.name for b in self._known_buttons if b.address.lower() in seen]
+            if already:
+                # Holding a paired button down puts it in pairing mode too, and
+                # "nothing came" would send the person looking for a fault.
+                return (
+                    f"Only {name_list(already)} came into pairing mode, and "
+                    f"{'it is' if len(already) == 1 else 'they are'} already paired here. "
+                    "Hold down the new button instead, or forget one first to pair it again."
+                )
             return (
                 f"No button came into pairing mode within {PAIR_WAIT_S:.0f} seconds. "
                 "Hold it down for about 7 seconds and ask again."
@@ -606,6 +616,10 @@ class FlicAgent(Actor):
         waiting: list[str] = []
         for button in self._known_buttons:
             (connected if await self._start_button(button) else waiting).append(button.name)
+        if waiting:
+            # Asking to listen is asking for the buttons now: the search looks
+            # at once rather than whenever its back-off next comes round.
+            self._restart_finder()
         return listening_reply(connected, waiting)
 
     async def _stop(self, remember: bool = True) -> str:
@@ -635,10 +649,17 @@ class FlicAgent(Actor):
         """Whether the library is present, and what is paired and connected."""
         if not self._have_lib():
             return MISSING_LIB
-        connected = sum(
-            1 for client in self._clients.values() if getattr(client, "is_connected", False)
+        waiting = [
+            button.name
+            for button in self._known_buttons
+            if not getattr(self._clients.get(button.key), "is_connected", False)
+        ]
+        return status_reply(
+            len(self._known_buttons),
+            len(self._known_buttons) - len(waiting),
+            self._listening,
+            waiting,
         )
-        return status_reply(len(self._known_buttons), connected, self._listening)
 
     def _button(self, name: str) -> FlicButton | None:
         """The paired button a person means, by name or serial, or None.
@@ -787,6 +808,13 @@ class FlicAgent(Actor):
         """
         if self._listening and (self._finder is None or self._finder.done()):
             self._finder = asyncio.create_task(self._find_missing(hold_off))
+
+    def _restart_finder(self) -> None:
+        """Start the search over: an immediate look, and its back-off from the start."""
+        finder, self._finder = self._finder, None
+        if finder:
+            finder.cancel()
+        self._ensure_finder()
 
     def _ensure_finder_after_drop(self) -> None:
         """Start looking for a button that has just dropped, after giving it time.
@@ -1245,11 +1273,22 @@ def battery_volts(button: FlicButton) -> float | None:
     return round(button.battery * 3.6 / 1024.0, 2)
 
 
-def status_reply(paired: int, connected: int, listening: bool) -> str:
-    """What `status` says, as a sentence rather than a row of fields."""
+def status_reply(
+    paired: int, connected: int, listening: bool, waiting: list[str] | None = None
+) -> str:
+    """What `status` says, as a sentence rather than a row of fields.
+
+    `waiting` names the paired buttons not connected, so "Listening" with none
+    connected says what it is waiting for instead of reading as all is well.
+    """
     if not paired:
         return "No buttons paired yet. Say 'pair' while holding one down."
-    listens = "Listening." if listening else "Not listening; say 'listen' to start."
+    if not listening:
+        listens = "Not listening; say 'listen' to start."
+    elif waiting:
+        listens = f"Listening; still looking for {name_list(waiting)}."
+    else:
+        listens = "Listening."
     return f"{count_of(paired, 'button')} paired, {connected} connected. {listens}"
 
 

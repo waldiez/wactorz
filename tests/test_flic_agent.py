@@ -695,8 +695,8 @@ class TestReachingTheButtons:
 
         assert _client(agent, "hall").is_connected
         assert reply == (
-            "Listening to 'hall'. Still connecting to 'kitchen' in the background; "
-            "its presses are published once connected."
+            "Listening to 'hall'. Still connecting to 'kitchen' in the background. "
+            + flic_agent.wake_hint(publish_queued=False)
         )
         await agent._stop()
 
@@ -706,9 +706,17 @@ class TestReachingTheButtons:
             "Listening to 'Flic Lamp' and 'Flic 2'."
         )
         assert flic_agent.listening_reply([], ["Flic Lamp", "Flic 2"]) == (
-            "Still connecting to 'Flic Lamp' and 'Flic 2' in the background; "
-            "their presses are published once connected."
+            "Still connecting to 'Flic Lamp' and 'Flic 2' in the background. "
+            "A disconnected button sleeps until pressed: press it once to wake it "
+            "(that press only wakes it and is not published)."
         )
+
+    def test_the_wake_hint_says_what_happens_to_the_press(self) -> None:
+        # A disconnected Flic 2 advertises only once pressed, and that press
+        # arrives late: published only when the agent was spawned to.
+        assert "is not published" in flic_agent.wake_hint(publish_queued=False)
+        assert "is published once it connects" in flic_agent.wake_hint(publish_queued=True)
+        assert "press each button once" in flic_agent.HELP_TEXT
         assert flic_agent.name_list(["a", "b", "c"]) == "'a', 'b' and 'c'"
 
     async def test_a_connected_button_says_so_on_a_retained_topic(
@@ -995,11 +1003,13 @@ class TestSayingWhyNot:
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
 
-        # Holding a paired button down puts it in pairing mode too; "nothing
-        # came" would send the person looking for a fault that is not there.
+        # A paired button advertises when held down, and when it has dropped
+        # and wants to reconnect; "nothing came" would send the person looking
+        # for a fault, and "in pairing mode" may not be true.
         assert reply == (
-            "Only 'kitchen' came into pairing mode, and it is already paired here. "
-            "Hold down the new button instead, or forget one first to pair it again."
+            "No new button showed up; only 'kitchen', which is already paired here. "
+            "Hold down the new button for about 7 seconds and ask again, "
+            "or forget a paired one first to pair it again."
         )
         assert len(agent._known_buttons) == 1
 
@@ -1052,7 +1062,7 @@ class TestSayingWhyNot:
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
 
-        assert "rename <old> <new>" in await agent._handle_cmd(
+        assert "rename <old> to <new>" in await agent._handle_cmd(
             FlicAgentCommand.RENAME, name="kitchen"
         )
 
@@ -1121,7 +1131,8 @@ class TestTheSmallParts:
         await agent._listen()
 
         assert await agent._handle_cmd(FlicAgentCommand.STATUS) == (
-            "2 buttons paired, 1 connected. Listening; still looking for 'kitchen'."
+            "2 buttons paired, 1 connected. Listening; still looking for 'kitchen'. "
+            + flic_agent.wake_hint(publish_queued=False)
         )
         await agent.on_stop()
 
@@ -1393,7 +1404,7 @@ class TestMoreThanOneButtonWaiting:
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
 
-        assert "Another button was in pairing mode" in reply
+        assert "Another new button showed up too" in reply
         assert len(agent._known_buttons) == 1
 
     async def test_one_button_alone_is_not_talked_about(
@@ -1717,7 +1728,7 @@ class TestTellingThePersonHowToPair:
 
         assert asked == [(5.0, {"11:22:33:44:55:66"})]
         assert reply.startswith("Paired 'kitchen'")
-        assert "Another button" not in reply
+        assert "Another new button" not in reply
 
     async def test_it_gives_up_when_no_button_comes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1839,7 +1850,7 @@ class TestFromTheReview:
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
 
-        assert "2 more buttons were in pairing mode" in reply
+        assert "2 more new buttons showed up too" in reply
 
     async def test_an_action_nobody_knows_is_not_reported_as_done(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1957,6 +1968,8 @@ class FakeScanner:
 
     instances: ClassVar[list["FakeScanner"]] = []
     fail_to_stop: ClassVar[bool] = False
+    #: How many starts fail before one succeeds.
+    fail_to_start: ClassVar[int] = 0
 
     def __init__(self, detection_callback: Callable[[Any, Any], None], service_uuids: list[str]):
         self.callback = detection_callback
@@ -1966,6 +1979,9 @@ class FakeScanner:
         FakeScanner.instances.append(self)
 
     async def start(self) -> None:
+        if FakeScanner.fail_to_start:
+            FakeScanner.fail_to_start -= 1
+            raise OSError("[org.bluez.Error.InProgress] Operation already in progress")
         self.started += 1
 
     async def stop(self) -> None:
@@ -1984,6 +2000,7 @@ class TestWatchingForAButton:
     def _bleak(self, monkeypatch: pytest.MonkeyPatch) -> None:
         FakeScanner.instances = []
         FakeScanner.fail_to_stop = False
+        FakeScanner.fail_to_start = 0
         module = types.ModuleType("bleak")
         module.BleakScanner = FakeScanner  # pyright: ignore[reportAttributeAccessIssue]
         monkeypatch.setitem(sys.modules, "bleak", module)
@@ -1991,8 +2008,9 @@ class TestWatchingForAButton:
     @staticmethod
     async def _scanner() -> FakeScanner:
         for _ in range(100):
-            if FakeScanner.instances and FakeScanner.instances[0].started:
-                return FakeScanner.instances[0]
+            started = [scanner for scanner in FakeScanner.instances if scanner.started]
+            if started:
+                return started[0]
             await asyncio.sleep(0.001)
         raise AssertionError("the scan never started")
 
@@ -2034,6 +2052,29 @@ class TestWatchingForAButton:
 
         assert [device.address for device in found] == ["AA:BB:CC:DD:EE:FF"]
         assert scanner.stopped == 1
+
+    async def test_a_scan_bluez_will_not_start_is_tried_once_more(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # BlueZ is still stopping a scan that ended moments before.
+        monkeypatch.setattr(flic_agent, "SCAN_RETRY_PAUSE_S", 0.0)
+        FakeScanner.fail_to_start = 1
+        watch = asyncio.create_task(flic_agent.watch_for_buttons(30.0, set()))
+        scanner = await self._scanner()
+
+        scanner.advertise("AA:BB:CC:DD:EE:FF")
+        found = await asyncio.wait_for(watch, timeout=1)
+
+        assert [device.address for device in found] == ["AA:BB:CC:DD:EE:FF"]
+
+    async def test_a_scan_that_will_not_start_twice_is_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(flic_agent, "SCAN_RETRY_PAUSE_S", 0.0)
+        FakeScanner.fail_to_start = 2
+
+        with pytest.raises(OSError, match="InProgress"):
+            await flic_agent.watch_for_buttons(30.0, set())
 
     async def test_a_scan_that_will_not_stop_keeps_what_it_saw(self) -> None:
         # The controller that refused its stop still saw the button.

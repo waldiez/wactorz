@@ -48,6 +48,8 @@ PAIR_INSTRUCTIONS = (
     f"Looking for it for the next {PAIR_WAIT_S:.0f} seconds..."
 )
 STOP_TIMEOUT_S = 20.0
+#: How long to wait before the one retry of a scan BlueZ would not start.
+SCAN_RETRY_PAUSE_S = 2.0
 #: How long to look for one known button before starting its session, and how
 #: often to look again for a button that is out of range, backing off to the cap.
 FIND_TIMEOUT_S = 10.0
@@ -214,7 +216,10 @@ HELP_TEXT = """Flic buttons:
 
 Every press is published on custom/flic/<serial>/<click|double_click|hold>,
 so renaming a button never breaks what is wired to it. `list` shows each
-button's serial."""
+button's topic.
+
+After a restart, press each button once: a disconnected Flic sleeps until it
+is pressed. That press only wakes it and is not published."""
 
 
 class FlicAgent(Actor):
@@ -315,7 +320,7 @@ class FlicAgent(Actor):
             self._known_buttons = []
             self._battery_volts.clear()
             try:
-                self._buttons_json.unlink(missing_ok=True)
+                await asyncio.to_thread(self._buttons_json.unlink, missing_ok=True)
             except OSError:
                 LOG.warning(
                     "[%s] Could not delete %s", self.name, self._buttons_json, exc_info=True
@@ -483,9 +488,9 @@ class FlicAgent(Actor):
     async def _pair(self, name: str = "") -> str:
         """Pair a button being held down, store it and start listening to it.
 
-        Says first what to do with the button, because a button only shows up
-        while it is in pairing mode, and asking is usually what reminds someone
-        to pick it up. Then watches until one appears or `PAIR_WAIT_S` runs out,
+        Says first what to do with the button, because a new button only shows
+        up while it is held in pairing mode, and asking is usually what reminds
+        someone to pick it up. Then watches until one appears or `PAIR_WAIT_S` runs out,
         so the order of holding and asking does not matter. The watch is one
         scan rather than a scan repeated, because each scan is switched on and
         off again on a controller that may be holding other buttons' sessions,
@@ -506,21 +511,24 @@ class FlicAgent(Actor):
             seen = {str(getattr(device, "address", "")).lower() for device in found}
             already = [b.name for b in self._known_buttons if b.address.lower() in seen]
             if already:
-                # Holding a paired button down puts it in pairing mode too, and
-                # "nothing came" would send the person looking for a fault.
+                # The watch hears any Flic that advertises: one held down, and
+                # one that is disconnected and looking to reconnect. Either
+                # way, "nothing came" would send the person looking for a
+                # fault, and "in pairing mode" may not be true.
                 return (
-                    f"Only {name_list(already)} came into pairing mode, and "
-                    f"{'it is' if len(already) == 1 else 'they are'} already paired here. "
-                    "Hold down the new button instead, or forget one first to pair it again."
+                    f"No new button showed up; only {name_list(already)}, "
+                    f"{'which is' if len(already) == 1 else 'which are'} already paired here. "
+                    "Hold down the new button for about 7 seconds and ask again, "
+                    "or forget a paired one first to pair it again."
                 )
             return (
                 f"No button came into pairing mode within {PAIR_WAIT_S:.0f} seconds. "
                 "Hold it down for about 7 seconds and ask again."
             )
 
-        # Whichever answered the scan first. More than one is worth saying out
-        # loud, because the reply names what was paired and the other button is
-        # still waiting.
+        # Whichever answered the scan first. More than one new button is worth
+        # saying out loud, because the reply names what was paired and the
+        # other one is still waiting.
         device = candidates[0]
         button = await self._pair_device(device, name)
         if button is None:
@@ -541,9 +549,9 @@ class FlicAgent(Actor):
             f"Its presses are on {TOPIC_ROOT}/{button.key}/<gesture>."
         )
         if also == 1:
-            reply += " Another button was in pairing mode; ask again to pair it."
+            reply += " Another new button showed up too; ask again to pair it."
         elif also:
-            reply += f" {also} more buttons were in pairing mode; ask again for each."
+            reply += f" {also} more new buttons showed up too; ask again for each."
         return reply
 
     def _list(self) -> str:
@@ -569,7 +577,7 @@ class FlicAgent(Actor):
             # "rename it to …" with one button paired can only mean that one.
             name = self._known_buttons[0].name
         if not name or not new_name:
-            return "Say which button to rename and what to call it: rename <old> <new>."
+            return "Say which button to rename and what to call it: rename <old> to <new>."
         button = self._button(name)
         if button is None:
             return f"No button called '{name}'. Say 'list' to see them."
@@ -620,7 +628,7 @@ class FlicAgent(Actor):
             # Asking to listen is asking for the buttons now: the search looks
             # at once rather than whenever its back-off next comes round.
             self._restart_finder()
-        return listening_reply(connected, waiting)
+        return listening_reply(connected, waiting, self.publish_queued)
 
     async def _stop(self, remember: bool = True) -> str:
         """Stop listening, keeping the pairings.
@@ -659,6 +667,7 @@ class FlicAgent(Actor):
             len(self._known_buttons) - len(waiting),
             self._listening,
             waiting,
+            self.publish_queued,
         )
 
     def _button(self, name: str) -> FlicButton | None:
@@ -1148,11 +1157,23 @@ async def watch_for_buttons(timeout: float, skip: Collection[str]) -> list[Any]:
         if address not in ignored:
             arrived.set()
 
-    scanner = BleakScanner(
-        detection_callback=detected,
-        service_uuids=[FLIC_SERVICE_UUID, TWIST_SERVICE_UUID],
-    )
-    await asyncio.wait_for(scanner.start(), timeout=STOP_TIMEOUT_S)
+    # BlueZ refuses to start a scan while it is still stopping an earlier one
+    # ("Operation already in progress"), which a stop moments before leaves
+    # behind: the agent restarting, or its own search. One more try, a moment
+    # later, before the person is told it failed.
+    for attempt in range(2):
+        scanner = BleakScanner(
+            detection_callback=detected,
+            service_uuids=[FLIC_SERVICE_UUID, TWIST_SERVICE_UUID],
+        )
+        try:
+            await asyncio.wait_for(scanner.start(), timeout=STOP_TIMEOUT_S)
+            break
+        except Exception:
+            if attempt:
+                raise
+            LOG.info("Starting the Bluetooth scan failed; trying once more", exc_info=True)
+            await asyncio.sleep(SCAN_RETRY_PAUSE_S)
     try:
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(arrived.wait(), timeout=timeout)
@@ -1180,7 +1201,7 @@ def parse_command(text: str) -> tuple[FlicAgentCommand, dict[str, str]]:
 
     The first recognised word wins, so "please pair the kitchen button" and
     "pair kitchen" both pair. What follows it is a name, and a name keeps every
-    word it has: "pair Lamp Flic" pairs `lamp-flic`. A rename splits old from new
+    word it has: "pair Lamp Flic" names the button "Lamp Flic". A rename splits old from new
     at "to", "as" or "into"; without one, the first word is the old name and the
     rest is the new one.
     """
@@ -1274,7 +1295,11 @@ def battery_volts(button: FlicButton) -> float | None:
 
 
 def status_reply(
-    paired: int, connected: int, listening: bool, waiting: list[str] | None = None
+    paired: int,
+    connected: int,
+    listening: bool,
+    waiting: list[str] | None = None,
+    publish_queued: bool = False,
 ) -> str:
     """What `status` says, as a sentence rather than a row of fields.
 
@@ -1286,7 +1311,7 @@ def status_reply(
     if not listening:
         listens = "Not listening; say 'listen' to start."
     elif waiting:
-        listens = f"Listening; still looking for {name_list(waiting)}."
+        listens = f"Listening; still looking for {name_list(waiting)}. {wake_hint(publish_queued)}"
     else:
         listens = "Listening."
     return f"{count_of(paired, 'button')} paired, {connected} connected. {listens}"
@@ -1297,22 +1322,35 @@ def count_of(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
-def listening_reply(connected: list[str], waiting: list[str]) -> str:
+def listening_reply(connected: list[str], waiting: list[str], publish_queued: bool = False) -> str:
     """What `listen` says: the buttons by name, not counts that read like indices.
 
     A button not connected yet is still being connected to in the background,
-    usually within seconds, so it is described as that rather than as a failure.
+    so it is described as that rather than as a failure, with how to wake it.
     """
     parts: list[str] = []
     if connected:
         parts.append(f"Listening to {name_list(connected)}.")
     if waiting:
-        they = "its presses are" if len(waiting) == 1 else "their presses are"
-        parts.append(
-            f"Still connecting to {name_list(waiting)} in the background; "
-            f"{they} published once connected."
-        )
+        parts.append(f"Still connecting to {name_list(waiting)} in the background.")
+        parts.append(wake_hint(publish_queued))
     return " ".join(parts)
+
+
+def wake_hint(publish_queued: bool) -> str:
+    """How to bring back a button that is not connecting, and what that press does.
+
+    A disconnected Flic 2 advertises only after it is pressed, to save its
+    battery; nothing the host does makes it reachable before then. The press
+    that wakes it arrives late, and a late press is published only when the
+    agent was asked to.
+    """
+    fate = (
+        "that press is published once it connects"
+        if publish_queued
+        else "that press only wakes it and is not published"
+    )
+    return f"A disconnected button sleeps until pressed: press it once to wake it ({fate})."
 
 
 def name_list(names: list[str]) -> str:

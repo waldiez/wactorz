@@ -388,6 +388,31 @@ class TestAPressBecomesATopic:
         # Whatever is wired to it can tell, and decide for itself.
         assert published.payload_for(f"{TOPIC_ROOT}/{KEY}/click")["late"] is True
 
+    async def test_a_press_is_said_on_the_console(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # So a press can be seen arriving without a subscriber open.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("Desk")]
+
+        with caplog_at_info() as records:
+            await agent._publish_press(KEY, "double_click", 1000.0, {"was_queued": False})
+
+        assert f"[flic] 'Desk' double_click → {TOPIC_ROOT}/{KEY}/double_click" in records
+
+    async def test_a_dropped_late_press_is_said_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # "I pressed and nothing happened" usually starts here.
+        agent, published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("Desk")]
+
+        with caplog_at_info() as records:
+            await agent._publish_press(KEY, "click", 1000.0, {"was_queued": True})
+
+        assert published.messages == []
+        assert any("'Desk' click was made while it was disconnected" in r for r in records)
+
     async def test_a_press_made_while_connected_is_not_marked_late(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

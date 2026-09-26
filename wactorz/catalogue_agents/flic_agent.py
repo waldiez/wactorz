@@ -1041,11 +1041,19 @@ class FlicAgent(Actor):
         if kind not in GESTURES:
             self._note_unpublished(kind)
             return
-        late = bool(data.get("was_queued"))
-        if late and not self.late_presses:
-            return
         button = self._by_key(key)
         if button is None:
+            return
+        late = bool(data.get("was_queued"))
+        if late and not self.late_presses:
+            # Said, because "I pressed and nothing happened" usually starts here.
+            LOG.info(
+                "[%s] '%s' %s was made while it was disconnected; not published "
+                "(late presses are off)",
+                self.name,
+                button.name,
+                kind,
+            )
             return
         self._last_press[button.key] = at
         payload: dict[str, Any] = {
@@ -1064,7 +1072,12 @@ class FlicAgent(Actor):
         # whatever is wired to it can decide whether a late press still counts.
         if late:
             payload["late"] = True
-        await self._mqtt_publish(f"{TOPIC_ROOT}/{button.key}/{kind}", payload)
+        topic = f"{TOPIC_ROOT}/{button.key}/{kind}"
+        await self._mqtt_publish(topic, payload)
+        # On the console, so a press can be seen arriving without a subscriber.
+        LOG.info(
+            "[%s] '%s' %s%s → %s", self.name, button.name, kind, " (late)" if late else "", topic
+        )
 
     def _note_unpublished(self, kind: str) -> None:
         """Say once that a kind of event arrived that nothing is wired to.

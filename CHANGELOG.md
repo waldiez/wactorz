@@ -23,6 +23,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Chat turns show on the console.** Every message the dashboard's chat carries — what was asked, and what the agent answered — is logged under `wactorz.chat` at INFO, redacted as the stored chat log is and cut short after 500 characters. The server keeps `wactorz.web` at warnings, which is why these never showed before.
 
+- **The planner sees what each agent says about itself.** Every agent's manifest carries a description, and the planner was shown only its topics and payload fields — so two agents, or two devices of one agent, whose topics differ only by an id were a guess. The description now travels with the agent's topic contract into the planner's view of live data flows, cut short if it runs long. The Flic agent uses it to say which button name is which serial.
+
 - **An agent can remove what a delete should not leave behind.** `Actor.on_delete` runs before the stop that ends a deletion — main's delete, an agent's own `delete` command, and a factory reset forgetting it — for the files an agent keeps of its own and retained messages outside `agents/<id>/`, which the purge that follows does not know about. A failure in it is logged and the deletion carries on. A node's runner does not call it, because its delete also drops the copy a migrated agent leaves behind.
 
 ### Fixed

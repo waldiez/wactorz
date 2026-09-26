@@ -39,6 +39,7 @@ from wactorz.catalogue_agents.flic_agent import (
     unique_name,
 )
 from wactorz.core.actor import Message, MessageType
+from wactorz.core.topic_bus import TopicContract, TopicRegistry
 
 #: A key as the button gives it: bytes that are not text in any encoding.
 PAIRING_KEY = bytes.fromhex("a9018f3c774e5b0126ff9d40b71c3e88")
@@ -637,6 +638,31 @@ class TestMovingAndRemovingButtons:
 
         assert f"'Kitchen' is {TOPIC_ROOT}/{KEY}" in manifest["description"]
         assert "flic-1" not in manifest["description"]
+
+    async def test_the_planner_can_tell_two_buttons_apart_by_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Their topics differ only by serial; what the planner is shown has to
+        # say which name is which, or "the desk button" is a guess.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("Desk"), button("Lamp", "11:22:33:44:55:66")]
+        manifest: dict[str, Any] = {}
+        monkeypatch.setattr(agent, "publish_manifest", _capture(manifest))
+        await agent._announce()
+        registry = TopicRegistry()
+        # What main does with a manifest it receives.
+        registry.register(
+            TopicContract(
+                name="flic",
+                publishes=manifest["publishes"],
+                description=manifest["description"],
+            )
+        )
+
+        context = registry.to_planner_context()
+
+        assert f"'Desk' is {TOPIC_ROOT}/{KEY}" in context
+        assert f"'Lamp' is {TOPIC_ROOT}/{OTHER_KEY}" in context
 
     async def test_a_press_after_a_rename_carries_the_new_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

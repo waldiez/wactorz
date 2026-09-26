@@ -1099,10 +1099,10 @@ class Actor(ABC):
 
         It runs where an agent is deleted in this process: main's delete, the
         actor's own `delete` command, and a factory reset forgetting it. A
-        node's runner does not call it. Its
-        delete also drops the copy an agent leaves behind when it migrates, and
-        there the agent lives on elsewhere under the same topics, so removing
-        its retained messages would take them from the copy that is running.
+        node's runner does not call it. Its delete also drops the copy an agent
+        leaves behind when it migrates, and there the agent lives on elsewhere
+        under the same topics, so removing its retained messages would take
+        them from the copy that is running.
         """
 
     @abstractmethod

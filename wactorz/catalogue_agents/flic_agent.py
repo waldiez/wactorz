@@ -502,7 +502,8 @@ class FlicAgent(Actor):
         """Buttons in range, marking which are already paired here."""
         try:
             found = await self._discover()
-        except TimeoutError:
+        # `asyncio.wait_for` raises its own class on 3.10, the builtin only from 3.11.
+        except asyncio.TimeoutError:
             return "The scan timed out. Is Bluetooth on?"
         except Exception as exc:
             LOG.exception("[%s] Scan failed", self.name)
@@ -1230,7 +1231,9 @@ async def watch_for_buttons(timeout: float, skip: Collection[str]) -> list[Any]:
             LOG.info("Starting the Bluetooth scan failed; trying once more", exc_info=True)
             await asyncio.sleep(SCAN_RETRY_PAUSE_S)
     try:
-        with contextlib.suppress(TimeoutError):
+        # `asyncio.TimeoutError`, not the builtin: on 3.10 they differ, and
+        # this is what `wait_for` raises.
+        with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(arrived.wait(), timeout=timeout)
     finally:
         try:

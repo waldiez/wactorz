@@ -964,7 +964,7 @@ class TestScanning:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
-        monkeypatch.setattr(flic_agent, "discover_buttons", _raises(TimeoutError()))
+        monkeypatch.setattr(flic_agent, "discover_buttons", _raises(asyncio.TimeoutError()))
 
         assert "timed out" in await agent._handle_cmd(FlicAgentCommand.SCAN)
 

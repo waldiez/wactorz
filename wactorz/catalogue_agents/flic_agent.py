@@ -259,6 +259,9 @@ class FlicAgent(Actor):
         #: two commands can run at once. Those that change the set of buttons
         #: or clients take turns, or two pairings pick the same button.
         self._command_lock = asyncio.Lock()
+        #: The command holding `_command_lock`, so one that has to wait for it
+        #: can say what it is waiting for.
+        self._busy_with: FlicAgentCommand | None = None
         #: The latest battery voltage each button reported on connecting.
         self._battery_volts: dict[str, float] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -419,8 +422,19 @@ class FlicAgent(Actor):
         if not self._have_lib() and cmd not in (FlicAgentCommand.HELP, FlicAgentCommand.STATUS):
             return MISSING_LIB
         if cmd in CHANGES_BUTTONS:
+            busy = self._busy_with
+            if busy is not None and self._command_lock.locked():
+                # A pairing can hold the lock for most of a minute; without a
+                # word, the command asked for looks as if it was never heard.
+                await self.notify_user(
+                    f"Waiting for '{busy.value}' to finish, then doing '{cmd.value}'."
+                )
             async with self._command_lock:
-                return await self._run_cmd(cmd, **kwargs)
+                self._busy_with = cmd
+                try:
+                    return await self._run_cmd(cmd, **kwargs)
+                finally:
+                    self._busy_with = None
         return await self._run_cmd(cmd, **kwargs)
 
     async def _run_cmd(self, cmd: FlicAgentCommand, **kwargs: Any) -> str:

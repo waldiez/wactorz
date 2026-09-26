@@ -1697,6 +1697,58 @@ class TestFromTheReview:
         assert [b.address for b in agent._known_buttons] == ["AA:BB:CC:DD:EE:FF"]
         assert first.startswith("Paired") != second.startswith("Paired")
 
+    async def test_a_command_that_has_to_wait_says_what_for(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A pairing holds the lock while it watches; a `listen` asked for
+        # meanwhile should not look as if it was never heard.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("hall", "11:22:33:44:55:66")]
+        watching = asyncio.Event()
+        release = asyncio.Event()
+        said: list[str] = []
+
+        async def watch(_timeout: float, _skip: Collection[str]) -> list[Any]:
+            watching.set()
+            await release.wait()
+            return [FakeDevice("AA:BB:CC:DD:EE:FF")]
+
+        async def notify(text: str, **_extra: Any) -> None:
+            said.append(text)
+
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", watch)
+        monkeypatch.setattr(agent, "notify_user", notify)
+
+        pairing = asyncio.create_task(agent._handle_cmd(FlicAgentCommand.PAIR, name="kitchen"))
+        await watching.wait()
+        listening = asyncio.create_task(agent._handle_cmd(FlicAgentCommand.LISTEN))
+        await asyncio.sleep(0.01)
+
+        assert said[-1] == "Waiting for 'pair' to finish, then doing 'listen'."
+        assert not listening.done()
+
+        release.set()
+        assert (await pairing).startswith("Paired 'kitchen'")
+        assert (await listening).startswith("Listening to")
+        assert agent._busy_with is None
+
+    async def test_a_command_with_nothing_ahead_of_it_says_nothing_extra(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        said: list[str] = []
+
+        async def notify(text: str, **_extra: Any) -> None:
+            said.append(text)
+
+        monkeypatch.setattr(agent, "notify_user", notify)
+
+        await agent._handle_cmd(FlicAgentCommand.LISTEN)
+
+        assert said == []
+        await agent.on_stop()
+
     async def test_several_waiting_buttons_are_counted_properly(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

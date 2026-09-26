@@ -237,6 +237,7 @@ class TestSayingWhatYouWant:
             ("unpair kitchen", FlicAgentCommand.FORGET),
             ("stop", FlicAgentCommand.STOP),
             ("status", FlicAgentCommand.STATUS),
+            ("late presses on", FlicAgentCommand.LATE),
             ("", FlicAgentCommand.HELP),
             ("do something unrelated", FlicAgentCommand.HELP),
         ],
@@ -378,11 +379,24 @@ class TestAPressBecomesATopic:
     ) -> None:
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
-        agent.publish_queued = True
+        agent.late_presses = True
 
         await agent._publish_press(KEY, "click", 1000.0, {"was_queued": True})
 
         assert published.topics() == [f"{TOPIC_ROOT}/{KEY}/click"]
+        # Whatever is wired to it can tell, and decide for itself.
+        assert published.payload_for(f"{TOPIC_ROOT}/{KEY}/click")["late"] is True
+
+    async def test_a_press_made_while_connected_is_not_marked_late(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        agent.late_presses = True
+
+        await agent._publish_press(KEY, "click", 1000.0, {"was_queued": False})
+
+        assert "late" not in published.payload_for(f"{TOPIC_ROOT}/{KEY}/click")
 
     async def test_a_press_is_stamped_with_the_host_clock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -696,7 +710,7 @@ class TestReachingTheButtons:
         assert _client(agent, "hall").is_connected
         assert reply == (
             "Listening to 'hall'. Still connecting to 'kitchen' in the background. "
-            + flic_agent.wake_hint(publish_queued=False)
+            + flic_agent.wake_hint(late_presses=False)
         )
         await agent._stop()
 
@@ -714,8 +728,8 @@ class TestReachingTheButtons:
     def test_the_wake_hint_says_what_happens_to_the_press(self) -> None:
         # A disconnected Flic 2 advertises only once pressed, and that press
         # arrives late: published only when the agent was spawned to.
-        assert "is not published" in flic_agent.wake_hint(publish_queued=False)
-        assert "is published once it connects" in flic_agent.wake_hint(publish_queued=True)
+        assert "is not published" in flic_agent.wake_hint(late_presses=False)
+        assert "is published once it connects" in flic_agent.wake_hint(late_presses=True)
         assert "press each button once" in flic_agent.HELP_TEXT
         assert flic_agent.name_list(["a", "b", "c"]) == "'a', 'b' and 'c'"
 
@@ -1132,7 +1146,7 @@ class TestTheSmallParts:
 
         assert await agent._handle_cmd(FlicAgentCommand.STATUS) == (
             "2 buttons paired, 1 connected. Listening; still looking for 'kitchen'. "
-            + flic_agent.wake_hint(publish_queued=False)
+            + flic_agent.wake_hint(late_presses=False)
         )
         await agent.on_stop()
 
@@ -1957,10 +1971,93 @@ class TestStopIsKept:
 
 
 class TestLatePresses:
-    def test_they_are_off_unless_the_spawn_config_asks(self, tmp_path: Path) -> None:
-        assert FlicAgent(persistence_dir=str(tmp_path)).publish_queued is False
-        on = FlicAgent(persistence_dir=str(tmp_path), publish_queued=True)
-        assert on.publish_queued is True
+    """Presses made while disconnected: off unless asked, and kept once asked."""
+
+    def test_they_are_off_by_default(self, tmp_path: Path) -> None:
+        # A lamp switching up to a minute after the press is usually worse
+        # than a press that did nothing.
+        assert FlicAgent(persistence_dir=str(tmp_path)).late_presses is False
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("late presses on", {"value": "on"}),
+            ("late off", {"value": "off"}),
+            ("turn off late presses", {"value": "off"}),
+            ("please enable late presses", {"value": "on"}),
+            ("late presses", {}),
+        ],
+    )
+    def test_the_switch_is_found_anywhere_in_the_sentence(
+        self, text: str, expected: dict[str, str]
+    ) -> None:
+        assert parse_command(text) == (FlicAgentCommand.LATE, expected)
+
+    async def test_turning_them_on_is_kept_across_a_restart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first, _published = make_agent(tmp_path, monkeypatch)
+        first._known_buttons = [button()]
+
+        reply = await first.chat("late presses on")
+
+        assert reply.startswith("Late presses are on")
+        second, _again = make_agent(tmp_path, monkeypatch)
+        await second.on_start()
+        assert second.late_presses is True
+        await second.on_stop()
+
+    async def test_asking_without_a_switch_says_which_they_are(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+
+        reply = await agent.chat("late presses")
+
+        assert reply.startswith("Late presses are off")
+        assert agent.late_presses is False
+        assert not agent._buttons_json.exists(), "asking is not changing"
+
+    async def test_a_task_can_set_them(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        sent: list[Any] = []
+
+        async def record(_target: str, _kind: MessageType, payload: Any) -> None:
+            sent.append(payload)
+
+        monkeypatch.setattr(agent, "send", record)
+
+        await agent.handle_message(
+            Message(
+                type=MessageType.TASK,
+                sender_id="main",
+                payload={"action": "late", "value": "on"},
+            )
+        )
+
+        assert sent[0]["ok"] is True
+        assert agent.late_presses is True
+
+    async def test_status_says_when_they_are_on(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        await agent._listen()
+        await agent.chat("late presses on")
+
+        assert (await agent._handle_cmd(FlicAgentCommand.STATUS)).endswith("Late presses are on.")
+        await agent.on_stop()
+
+    def test_a_file_from_before_the_setting_means_off(self) -> None:
+        assert flic_agent.late_presses_from_store({"buttons": []}) is False
+        assert flic_agent.late_presses_from_store([]) is False
+        assert flic_agent.late_presses_from_store({"late_presses": True}) is True
+
+    def test_help_says_how(self) -> None:
+        assert "late presses on|off" in flic_agent.HELP_TEXT
 
 
 class FakeScanner:

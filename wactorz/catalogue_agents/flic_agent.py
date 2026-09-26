@@ -165,9 +165,11 @@ class FlicAgentCommand(str, Enum):
     STOP = "stop"
     STATUS = "status"
     FORGET = "forget"
+    LATE = "late"
 
 
-#: Commands that change the set of buttons or clients, which take turns.
+#: Commands that change the buttons, their clients or the stored settings,
+#: which take turns.
 CHANGES_BUTTONS = frozenset(
     {
         FlicAgentCommand.PAIR,
@@ -175,6 +177,7 @@ CHANGES_BUTTONS = frozenset(
         FlicAgentCommand.FORGET,
         FlicAgentCommand.LISTEN,
         FlicAgentCommand.STOP,
+        FlicAgentCommand.LATE,
     }
 )
 
@@ -203,6 +206,19 @@ COMMAND_WORDS: dict[str, FlicAgentCommand] = {
     "stop": FlicAgentCommand.STOP,
     "pause": FlicAgentCommand.STOP,
     "status": FlicAgentCommand.STATUS,
+    "late": FlicAgentCommand.LATE,
+}
+
+#: The words that turn late presses on or off, after "late".
+_SWITCH_WORDS = {
+    "on": "on",
+    "yes": "on",
+    "true": "on",
+    "enable": "on",
+    "off": "off",
+    "no": "off",
+    "false": "off",
+    "disable": "off",
 }
 
 HELP_TEXT = """Flic buttons:
@@ -212,6 +228,7 @@ HELP_TEXT = """Flic buttons:
   rename <old> to <new> rename a button; its topics stay the same
   forget <name>         unpair a button and take back its topics
   listen / stop         start or stop listening, keeping the pairings
+  late presses on|off   publish presses made while a button was disconnected
   status                what is installed, paired and connected
 
 Every press is published on custom/flic/<serial>/<click|double_click|hold>,
@@ -219,7 +236,8 @@ so renaming a button never breaks what is wired to it. `list` shows each
 button's topic.
 
 After a restart, press each button once: a disconnected Flic sleeps until it
-is pressed. That press only wakes it and is not published."""
+is pressed. That press only wakes it, unless late presses are on: then it is
+published when the button connects, up to a minute late, marked "late"."""
 
 
 class FlicAgent(Actor):
@@ -233,11 +251,13 @@ class FlicAgent(Actor):
         kwargs.setdefault("name", "flic")
         # Every spawn passes one; this agent parses commands and never asks a model.
         kwargs.pop("llm_provider", None)
-        #: Whether a press the button stored while out of range, and delivers
-        #: late on reconnecting, is published. Off unless the spawn config asks:
-        #: a press from minutes ago switching a light on now is usually wrong.
-        self.publish_queued = bool(kwargs.pop("publish_queued", False))
         super().__init__(**kwargs)
+        #: Whether a press the button stored while disconnected, and delivers
+        #: on reconnecting, is published. Set by `late presses on|off` and kept
+        #: in the buttons file. Off by default: such a press arrives up to a
+        #: minute late, and a lamp switching then is usually worse than a
+        #: press that did nothing.
+        self.late_presses = False
         self._buttons_json = self._persistence_dir / "buttons.json"
         self._known_buttons: list[FlicButton] = []
         self._clients: dict[str, FlicClient] = {}
@@ -288,6 +308,7 @@ class FlicAgent(Actor):
         stored = await self._restore()
         self._known_buttons = flic_buttons_from_store(stored)
         self._paused = not listening_from_store(stored)
+        self.late_presses = late_presses_from_store(stored)
         self._loop = asyncio.get_running_loop()
         if self._have_lib():
             self._pump = asyncio.create_task(self._publish_presses())
@@ -360,15 +381,23 @@ class FlicAgent(Actor):
                 "event_source",
             ],
             input_schema={
-                "action": "str - help | scan | pair | list | rename | listen | stop | status | forget",
+                "action": (
+                    "str - help | scan | pair | list | rename | listen | stop | status "
+                    "| forget | late"
+                ),
                 "name": "str - button to act on, or the name to give a new pairing",
                 "new_name": "str - replacement name, for rename",
+                "value": "str - on | off, for late",
             },
             output_schema={
                 "button": "str - the button that was pressed",
                 "serial": "str - its serial number",
                 "gesture": "str - click | double_click | hold",
                 "at": "float - unix epoch when the host received the press",
+                "late": (
+                    "bool - present, and true, when the press was made while the "
+                    "button was disconnected and arrived when it reconnected"
+                ),
             },
         )
 
@@ -396,7 +425,9 @@ class FlicAgent(Actor):
                 understood = action.lower() in COMMAND_WORDS
                 command = COMMAND_WORDS.get(action.lower(), FlicAgentCommand.HELP)
                 arguments = {
-                    key: str(raw[key]) for key in ("name", "new_name") if raw.get(key) is not None
+                    key: str(raw[key])
+                    for key in ("name", "new_name", "value")
+                    if raw.get(key) is not None
                 }
             else:
                 text = raw.get("text") or raw.get("content") or raw.get("query") or ""
@@ -463,6 +494,8 @@ class FlicAgent(Actor):
             return await self._stop()
         if cmd == FlicAgentCommand.STATUS:
             return self._status()
+        if cmd == FlicAgentCommand.LATE:
+            return await self._late(str(kwargs.get("value") or ""))
         return HELP_TEXT
 
     async def _scan(self) -> str:
@@ -628,7 +661,7 @@ class FlicAgent(Actor):
             # Asking to listen is asking for the buttons now: the search looks
             # at once rather than whenever its back-off next comes round.
             self._restart_finder()
-        return listening_reply(connected, waiting, self.publish_queued)
+        return listening_reply(connected, waiting, self.late_presses)
 
     async def _stop(self, remember: bool = True) -> str:
         """Stop listening, keeping the pairings.
@@ -653,6 +686,22 @@ class FlicAgent(Actor):
             await self._publish_state(button, connected=False)
         return "Stopped listening. The pairings are kept."
 
+    async def _late(self, value: str) -> str:
+        """Turn late presses on or off, or say which they are."""
+        wanted = _SWITCH_WORDS.get(value.strip().lower())
+        if wanted is not None:
+            self.late_presses = wanted == "on"
+            await self._remember()
+        if self.late_presses:
+            return (
+                "Late presses are on: a press made while a button was disconnected is "
+                'published when it reconnects, up to a minute late, marked "late": true.'
+            )
+        return (
+            "Late presses are off: a press made while a button was disconnected only "
+            "wakes it. Say 'late presses on' to publish those too."
+        )
+
     def _status(self) -> str:
         """Whether the library is present, and what is paired and connected."""
         if not self._have_lib():
@@ -667,7 +716,7 @@ class FlicAgent(Actor):
             len(self._known_buttons) - len(waiting),
             self._listening,
             waiting,
-            self.publish_queued,
+            self.late_presses,
         )
 
     def _button(self, name: str) -> FlicButton | None:
@@ -991,7 +1040,8 @@ class FlicAgent(Actor):
         if kind not in GESTURES:
             self._note_unpublished(kind)
             return
-        if data.get("was_queued") and not self.publish_queued:
+        late = bool(data.get("was_queued"))
+        if late and not self.late_presses:
             return
         button = self._by_key(key)
         if button is None:
@@ -1009,6 +1059,10 @@ class FlicAgent(Actor):
         index = data.get("button_index")
         if index is not None:
             payload["button_index"] = index
+        # Made while the button was disconnected, and delivered on reconnecting:
+        # whatever is wired to it can decide whether a late press still counts.
+        if late:
+            payload["late"] = True
         await self._mqtt_publish(f"{TOPIC_ROOT}/{button.key}/{kind}", payload)
 
     def _note_unpublished(self, kind: str) -> None:
@@ -1110,6 +1164,7 @@ class FlicAgent(Actor):
         payload = {
             "buttons": [button.to_dict() for button in self._known_buttons],
             "listening": not self._paused,
+            "late_presses": self.late_presses,
         }
         try:
             await asyncio.to_thread(write_private_json, self._buttons_json, payload)
@@ -1213,6 +1268,13 @@ def parse_command(text: str) -> tuple[FlicAgentCommand, dict[str, str]]:
         following = words[index + 1 :]
         if command == FlicAgentCommand.RENAME:
             return command, _rename_arguments(following)
+        if command == FlicAgentCommand.LATE:
+            # Anywhere in the sentence: "turn off late presses" as much as
+            # "late presses off".
+            switch = next(
+                (_SWITCH_WORDS[w.lower()] for w in words if w.lower() in _SWITCH_WORDS), None
+            )
+            return command, {"value": switch} if switch else {}
         name = _name_from(following)
         if name and command in (FlicAgentCommand.PAIR, FlicAgentCommand.FORGET):
             return command, {"name": name}
@@ -1299,7 +1361,7 @@ def status_reply(
     connected: int,
     listening: bool,
     waiting: list[str] | None = None,
-    publish_queued: bool = False,
+    late_presses: bool = False,
 ) -> str:
     """What `status` says, as a sentence rather than a row of fields.
 
@@ -1311,10 +1373,11 @@ def status_reply(
     if not listening:
         listens = "Not listening; say 'listen' to start."
     elif waiting:
-        listens = f"Listening; still looking for {name_list(waiting)}. {wake_hint(publish_queued)}"
+        listens = f"Listening; still looking for {name_list(waiting)}. {wake_hint(late_presses)}"
     else:
         listens = "Listening."
-    return f"{count_of(paired, 'button')} paired, {connected} connected. {listens}"
+    late = " Late presses are on." if late_presses else ""
+    return f"{count_of(paired, 'button')} paired, {connected} connected. {listens}{late}"
 
 
 def count_of(count: int, noun: str) -> str:
@@ -1322,7 +1385,7 @@ def count_of(count: int, noun: str) -> str:
     return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
-def listening_reply(connected: list[str], waiting: list[str], publish_queued: bool = False) -> str:
+def listening_reply(connected: list[str], waiting: list[str], late_presses: bool = False) -> str:
     """What `listen` says: the buttons by name, not counts that read like indices.
 
     A button not connected yet is still being connected to in the background,
@@ -1333,21 +1396,21 @@ def listening_reply(connected: list[str], waiting: list[str], publish_queued: bo
         parts.append(f"Listening to {name_list(connected)}.")
     if waiting:
         parts.append(f"Still connecting to {name_list(waiting)} in the background.")
-        parts.append(wake_hint(publish_queued))
+        parts.append(wake_hint(late_presses))
     return " ".join(parts)
 
 
-def wake_hint(publish_queued: bool) -> str:
+def wake_hint(late_presses: bool) -> str:
     """How to bring back a button that is not connecting, and what that press does.
 
     A disconnected Flic 2 advertises only after it is pressed, to save its
     battery; nothing the host does makes it reachable before then. The press
-    that wakes it arrives late, and a late press is published only when the
-    agent was asked to.
+    that wakes it arrives late, and a late press is published only when late
+    presses are on.
     """
     fate = (
-        "that press is published once it connects"
-        if publish_queued
+        "that press is published once it connects, marked late"
+        if late_presses
         else "that press only wakes it and is not published"
     )
     return f"A disconnected button sleeps until pressed: press it once to wake it ({fate})."
@@ -1391,6 +1454,11 @@ def read_store(path: Path) -> Any:
     if not path.exists():
         return []
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def late_presses_from_store(stored: Any) -> bool:
+    """Whether the stored file turns late presses on. Anything but an explicit yes is off."""
+    return isinstance(stored, dict) and stored.get("late_presses") is True
 
 
 def listening_from_store(stored: Any) -> bool:

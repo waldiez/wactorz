@@ -181,9 +181,12 @@ def _build_native_catalog() -> dict:
                 "event_source",
             ],
             "input_schema": {
-                "action": "help | scan | pair | list | rename | listen | stop | status | forget",
+                "action": (
+                    "help | scan | pair | list | rename | listen | stop | status | forget | late"
+                ),
                 "name": "str - button to act on, or the name to give a new pairing",
                 "new_name": "str - replacement name, for rename",
+                "value": "str - on | off, for late",
             },
             "output_schema": {
                 "ok": "bool",

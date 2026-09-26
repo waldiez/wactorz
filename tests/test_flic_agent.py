@@ -17,7 +17,8 @@ import os
 import stat
 import sys
 import types
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -68,8 +69,10 @@ class FakeClient:
         pairing_key: bytes | None = None,
         serial_number: str | None = None,
         sig_bits: int = 0,
+        push_twist_mode: Any = "default",
     ) -> None:
         self.address = address
+        self.push_twist_mode = push_twist_mode
         self.ble_device = ble_device
         self.pairing_id = pairing_id
         self.pairing_key = pairing_key
@@ -90,7 +93,7 @@ class FakeClient:
         self.is_connected = True
 
     async def full_verify_pairing(self) -> tuple[int, bytes, str, int, int, bytes, int]:
-        return (7, PAIRING_KEY, "BH16-F58317", 88, 31, b"\x01\x02\x03", 9)
+        return (7, PAIRING_KEY, serial_for(self.address), 88, 31, b"\x01\x02\x03", 9)
 
     async def start(self) -> None:
         if self.address in FakeClient.fail_to_start:
@@ -114,11 +117,12 @@ class FakeClient:
         self.ble_device = ble_device
         self.devices_given.append(ble_device)
 
-    def connection(self, connected: bool) -> None:
+    def connection(self, connected: bool, battery_voltage: float | None = None) -> None:
         """Report a connection change the way the library does."""
         self.is_connected = connected
+        state = types.SimpleNamespace(connected=connected, battery_voltage=battery_voltage)
         for callback in self.state_callbacks:
-            callback(types.SimpleNamespace(connected=connected))
+            callback(state)
 
     def press(self, kind: str, **data: Any) -> None:
         """Fire a press the way the library does: synchronously."""
@@ -164,9 +168,8 @@ def _reset_fake_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     # A lookup by address is a real Bluetooth scan; here every button is in
     # range unless a test says otherwise.
     monkeypatch.setattr(flic_agent, "find_button", _lookup)
-    # One scan per `pair` unless a test is about waiting for a button.
+    # No waiting for a button to come into pairing mode unless a test is about it.
     monkeypatch.setattr(flic_agent, "PAIR_WAIT_S", 0.0)
-    monkeypatch.setattr(flic_agent, "PAIR_RESCAN_PAUSE_S", 0.0)
 
 
 async def _lookup(address: str, _timeout: float) -> FakeDevice | None:
@@ -191,15 +194,28 @@ async def _noop_manifest(**_kwargs: Any) -> None:
     """A manifest goes nowhere unless a test is looking at it."""
 
 
+def serial_for(address: str) -> str:
+    """A serial number of the real shape, one per address, as real buttons have."""
+    return "BH16-" + address.replace(":", "")[-6:]
+
+
+#: The default button's serial, and the key its topics are published under.
+SERIAL = serial_for("AA:BB:CC:DD:EE:FF")
+KEY = slug(SERIAL)
+#: The same for the second button several tests pair beside it.
+OTHER_KEY = slug(serial_for("11:22:33:44:55:66"))
+
+
 def button(name: str = "kitchen", address: str = "AA:BB:CC:DD:EE:FF") -> FlicButton:
     return FlicButton(
         name=name,
         address=address,
         pairing_id=7,
         pairing_key=PAIRING_KEY,
-        serial_number="BH16-F58317",
+        serial_number=serial_for(address),
         sig_bits=31,
-        battery=88,
+        # Raw, as a Flic 2 reports it: 850 of 1024 against 3.6 V.
+        battery=850,
     )
 
 
@@ -273,17 +289,36 @@ class TestSayingWhatYouWant:
 
         reply = await agent.chat("rename it to Lamp Flic")
 
-        assert [b.name for b in agent._known_buttons] == ["lamp-flic"]
-        assert f"{TOPIC_ROOT}/lamp-flic/<gesture>" in reply
+        assert [b.name for b in agent._known_buttons] == ["Lamp Flic"]
+        assert f"{TOPIC_ROOT}/{KEY}/<gesture>" in reply
 
-    def test_a_name_becomes_a_topic_segment(self) -> None:
-        # A name reaches MQTT, where a slash starts a new level and `+` and `#`
+    def test_a_slug_is_safe_in_a_topic(self) -> None:
+        # A key reaches MQTT, where a slash starts a new level and `+` and `#`
         # are wildcards.
         assert slug("Kitchen Light/Switch") == "kitchen-light-switch"
+        assert slug("BH16-F58317") == "bh16-f58317"
+
+    def test_a_name_keeps_what_the_person_typed(self) -> None:
+        assert unique_name("  Lamp   Flic ", set()) == "Lamp Flic"
+        assert button("Lamp Flic").slug == "lamp-flic"
 
     def test_a_second_button_does_not_take_the_first_ones_name(self) -> None:
-        assert unique_name("kitchen", {"kitchen"}) == "kitchen-2"
-        assert unique_name("kitchen", {"kitchen", "kitchen-2"}) == "kitchen-3"
+        # Unique by slug, so "kitchen" and "Kitchen" cannot both be paired.
+        assert unique_name("Kitchen", {"kitchen"}) == "Kitchen 2"
+        assert unique_name("Kitchen", {"kitchen", "kitchen-2"}) == "Kitchen 3"
+
+    def test_a_name_with_nothing_to_address_it_by_is_not_kept(self) -> None:
+        assert unique_name("!!!", set()) == "Flic"
+
+    async def test_a_button_answers_to_its_name_however_it_is_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("Lamp Flic")]
+
+        for said in ("Lamp Flic", "lamp flic", "lamp-flic", SERIAL, SERIAL.lower()):
+            assert agent._button(said) == agent._known_buttons[0], said
+        assert agent._button("") is None
 
 
 class TestAPressBecomesATopic:
@@ -294,9 +329,9 @@ class TestAPressBecomesATopic:
         agent._known_buttons = [button()]
 
         for gesture in GESTURES:
-            await agent._publish_press("kitchen", gesture, 1000.0, {"was_queued": False})
+            await agent._publish_press(KEY, gesture, 1000.0, {"was_queued": False})
 
-        assert published.topics() == [f"{TOPIC_ROOT}/kitchen/{g}" for g in GESTURES]
+        assert published.topics() == [f"{TOPIC_ROOT}/{KEY}/{g}" for g in GESTURES]
 
     async def test_the_payload_names_the_button_and_the_gesture(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -304,11 +339,11 @@ class TestAPressBecomesATopic:
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
 
-        await agent._publish_press("kitchen", "click", 1000.5, {"was_queued": False})
+        await agent._publish_press(KEY, "click", 1000.5, {"was_queued": False})
 
-        assert published.payload_for(f"{TOPIC_ROOT}/kitchen/click") == {
+        assert published.payload_for(f"{TOPIC_ROOT}/{KEY}/click") == {
             "button": "kitchen",
-            "serial": "BH16-F58317",
+            "serial": SERIAL,
             "gesture": "click",
             "at": 1000.5,
         }
@@ -322,7 +357,7 @@ class TestAPressBecomesATopic:
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
 
-        await agent._publish_press("kitchen", kind, 1000.0, {"was_queued": False})
+        await agent._publish_press(KEY, kind, 1000.0, {"was_queued": False})
 
         assert published.messages == []
 
@@ -334,7 +369,7 @@ class TestAPressBecomesATopic:
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
 
-        await agent._publish_press("kitchen", "click", 1000.0, {"was_queued": True})
+        await agent._publish_press(KEY, "click", 1000.0, {"was_queued": True})
 
         assert published.messages == []
 
@@ -345,9 +380,9 @@ class TestAPressBecomesATopic:
         agent._known_buttons = [button()]
         agent.publish_queued = True
 
-        await agent._publish_press("kitchen", "click", 1000.0, {"was_queued": True})
+        await agent._publish_press(KEY, "click", 1000.0, {"was_queued": True})
 
-        assert published.topics() == [f"{TOPIC_ROOT}/kitchen/click"]
+        assert published.topics() == [f"{TOPIC_ROOT}/{KEY}/click"]
 
     async def test_a_press_is_stamped_with_the_host_clock(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -360,11 +395,11 @@ class TestAPressBecomesATopic:
         agent._pump = asyncio.create_task(agent._publish_presses())
         monkeypatch.setattr(flic_agent.time, "time", lambda: 1700000000.0)
 
-        agent._make_press_handler("kitchen")("click", {"timestamp_ms": 4242, "was_queued": False})
+        agent._make_press_handler(KEY)("click", {"timestamp_ms": 4242, "was_queued": False})
         await settle(published)
         agent._pump.cancel()
 
-        assert published.payload_for(f"{TOPIC_ROOT}/kitchen/click")["at"] == 1700000000.0
+        assert published.payload_for(f"{TOPIC_ROOT}/{KEY}/click")["at"] == 1700000000.0
 
     async def test_a_press_from_a_button_nobody_knows_is_ignored(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -392,13 +427,13 @@ class TestAPressBecomesATopic:
         monkeypatch.setattr(agent, "_mqtt_publish", flaky)
         agent._pump = asyncio.create_task(agent._publish_presses())
 
-        handler = agent._make_press_handler("kitchen")
+        handler = agent._make_press_handler(KEY)
         handler("click", {"was_queued": False})
         handler("hold", {"was_queued": False})
         await settle(published)
         agent._pump.cancel()
 
-        assert published.topics() == [f"{TOPIC_ROOT}/kitchen/hold"]
+        assert published.topics() == [f"{TOPIC_ROOT}/{KEY}/hold"]
 
 
 class TestWhatThePlannerIsTold:
@@ -406,14 +441,14 @@ class TestWhatThePlannerIsTold:
         topics = gesture_topics([button("kitchen"), button("hall", "11:22:33:44:55:66")])
 
         assert topics == [
-            f"{TOPIC_ROOT}/kitchen/click",
-            f"{TOPIC_ROOT}/kitchen/double_click",
-            f"{TOPIC_ROOT}/kitchen/hold",
-            f"{TOPIC_ROOT}/kitchen/state",
-            f"{TOPIC_ROOT}/hall/click",
-            f"{TOPIC_ROOT}/hall/double_click",
-            f"{TOPIC_ROOT}/hall/hold",
-            f"{TOPIC_ROOT}/hall/state",
+            f"{TOPIC_ROOT}/{KEY}/click",
+            f"{TOPIC_ROOT}/{KEY}/double_click",
+            f"{TOPIC_ROOT}/{KEY}/hold",
+            f"{TOPIC_ROOT}/{KEY}/state",
+            f"{TOPIC_ROOT}/{OTHER_KEY}/click",
+            f"{TOPIC_ROOT}/{OTHER_KEY}/double_click",
+            f"{TOPIC_ROOT}/{OTHER_KEY}/hold",
+            f"{TOPIC_ROOT}/{OTHER_KEY}/state",
         ]
 
     async def test_a_paired_button_reaches_the_manifest(
@@ -426,7 +461,7 @@ class TestWhatThePlannerIsTold:
 
         await agent._announce()
 
-        assert f"{TOPIC_ROOT}/kitchen/click" in manifest["publishes"]
+        assert f"{TOPIC_ROOT}/{KEY}/click" in manifest["publishes"]
         assert "flic" in manifest["capabilities"]
 
     async def test_nothing_is_declared_without_the_library(
@@ -457,13 +492,15 @@ class TestKeepingAPairing:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
-        monkeypatch.setattr(flic_agent, "discover_buttons", _found("AA:BB:CC:DD:EE:FF"))
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found("AA:BB:CC:DD:EE:FF"))
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR, name="Kitchen")
 
-        assert "kitchen" in reply
-        assert [b.name for b in agent._known_buttons] == ["kitchen"]
-        assert agent._clients["kitchen"].started is True  # pyright: ignore[reportAttributeAccessIssue]
+        # The name as given; the topics keyed by the serial the button reported.
+        assert reply.startswith(f"Paired 'Kitchen' ({SERIAL})")
+        assert f"{TOPIC_ROOT}/{KEY}/<gesture>" in reply
+        assert [b.name for b in agent._known_buttons] == ["Kitchen"]
+        assert _client(agent, "kitchen").started is True
 
     @pytest.mark.skipif(
         sys.platform == "win32",
@@ -477,7 +514,7 @@ class TestKeepingAPairing:
         agent, _published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
 
-        agent._remember()
+        await agent._remember()
 
         assert stat.S_IMODE(os.stat(agent._buttons_json).st_mode) == 0o600
 
@@ -489,8 +526,8 @@ class TestKeepingAPairing:
         agent, _published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
 
-        agent._remember()
-        restored = flic_buttons_from_store(agent._restore())
+        await agent._remember()
+        restored = flic_buttons_from_store(await agent._restore())
 
         assert restored == [button()]
         stored = json.loads(agent._buttons_json.read_text(encoding="utf-8"))
@@ -502,15 +539,21 @@ class TestKeepingAPairing:
         # The pairing is the expensive part — someone walked to the button and
         # held it down — so it has to outlive the process.
         first, _published = make_agent(tmp_path, monkeypatch)
-        monkeypatch.setattr(flic_agent, "discover_buttons", _found("AA:BB:CC:DD:EE:FF"))
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found("AA:BB:CC:DD:EE:FF"))
         await first._handle_cmd(FlicAgentCommand.PAIR, name="kitchen")
 
         second, _again = make_agent(tmp_path, monkeypatch)
         await second.on_start()
+        client = _client(second, "kitchen")
+        for _ in range(100):
+            if client.devices_given:
+                break
+            await asyncio.sleep(0.01)
 
         assert [b.name for b in second._known_buttons] == ["kitchen"]
         assert second._known_buttons[0].pairing_key == PAIRING_KEY
-        assert second._clients["kitchen"].started is True  # pyright: ignore[reportAttributeAccessIssue]
+        # Found in the background and handed to the library, which connects.
+        assert [device.address for device in client.devices_given] == ["AA:BB:CC:DD:EE:FF"]
         await second.on_stop()
 
     def test_a_damaged_record_costs_only_itself(self) -> None:
@@ -531,31 +574,66 @@ class TestKeepingAPairing:
         agent, _published = make_agent(tmp_path, monkeypatch)
         agent._buttons_json.write_text("{ not json", encoding="utf-8")
 
-        assert agent._restore() == []
+        assert await agent._restore() == []
 
 
-def _found(*addresses: str) -> Callable[[float], Any]:
-    async def discover(_timeout: float) -> list[Any]:
+def _found(*addresses: str) -> Callable[..., Any]:
+    """A stand-in for `discover_buttons` or `watch_for_buttons` that sees these."""
+
+    async def discover(_timeout: float, _skip: Collection[str] = ()) -> list[Any]:
         return [FakeDevice(address) for address in addresses]
 
     return discover
 
 
 class TestMovingAndRemovingButtons:
-    async def test_a_rename_moves_the_topics_and_retracts_the_old_state(
+    async def test_a_rename_leaves_the_topics_where_they_are(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # What is wired to a button keeps working through a rename.
+        agent, published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("flic-1")]
+        await agent._listen()
+        client = _client(agent, "flic-1")
+        manifest: dict[str, Any] = {}
+        monkeypatch.setattr(agent, "publish_manifest", _capture(manifest))
+        before = list(published.messages)
+
+        reply = await agent._handle_cmd(FlicAgentCommand.RENAME, name="flic-1", new_name="Kitchen")
+
+        assert (
+            reply == f"'flic-1' is now 'Kitchen'. Its presses stay on {TOPIC_ROOT}/{KEY}/<gesture>."
+        )
+        assert published.messages == before
+        assert _client(agent, "kitchen") is client
+        assert client.stopped is False
+        assert manifest["publishes"] == gesture_topics([button("flic-1")])
+
+    async def test_the_manifest_says_which_button_is_which(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Topics named by serial mean nothing to a planner asked for "the
+        # kitchen button" unless the manifest says which serial that is.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("flic-1")]
+        manifest: dict[str, Any] = {}
+        monkeypatch.setattr(agent, "publish_manifest", _capture(manifest))
+
+        await agent._handle_cmd(FlicAgentCommand.RENAME, name="flic-1", new_name="Kitchen")
+
+        assert f"'Kitchen' is {TOPIC_ROOT}/{KEY}" in manifest["description"]
+        assert "flic-1" not in manifest["description"]
+
+    async def test_a_press_after_a_rename_carries_the_new_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button("flic-1")]
-        await agent._listen()
-        manifest: dict[str, Any] = {}
-        monkeypatch.setattr(agent, "publish_manifest", _capture(manifest))
+        await agent._handle_cmd(FlicAgentCommand.RENAME, name="flic-1", new_name="Kitchen")
 
-        reply = await agent._handle_cmd(FlicAgentCommand.RENAME, name="flic-1", new_name="Kitchen")
+        await agent._publish_press(KEY, "click", 1000.0, {"was_queued": False})
 
-        assert "kitchen" in reply
-        assert f"{TOPIC_ROOT}/flic-1/state" in published.retained_empty()
-        assert manifest["publishes"] == gesture_topics([button("kitchen")])
+        assert published.payload_for(f"{TOPIC_ROOT}/{KEY}/click")["button"] == "Kitchen"
 
     async def test_a_rename_will_not_collide_with_another_button(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -563,9 +641,19 @@ class TestMovingAndRemovingButtons:
         agent, _published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button("flic-1"), button("kitchen", "11:22:33:44:55:66")]
 
-        await agent._handle_cmd(FlicAgentCommand.RENAME, name="flic-1", new_name="kitchen")
+        await agent._handle_cmd(FlicAgentCommand.RENAME, name="flic-1", new_name="Kitchen")
 
-        assert sorted(b.name for b in agent._known_buttons) == ["kitchen", "kitchen-2"]
+        assert sorted(b.name for b in agent._known_buttons) == ["Kitchen 2", "kitchen"]
+
+    async def test_renaming_to_a_different_case_is_not_a_clash_with_itself(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button("kitchen")]
+
+        await agent._handle_cmd(FlicAgentCommand.RENAME, name="kitchen", new_name="Kitchen")
+
+        assert [b.name for b in agent._known_buttons] == ["Kitchen"]
 
     async def test_forgetting_takes_back_the_state_and_the_keys(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -573,15 +661,15 @@ class TestMovingAndRemovingButtons:
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
         await agent._listen()
-        client = agent._clients["kitchen"]
+        client = _client(agent, "kitchen")
 
         reply = await agent._handle_cmd(FlicAgentCommand.FORGET, name="kitchen")
 
         assert "Forgot 'kitchen'" in reply
         assert agent._known_buttons == []
         assert client.stopped is True  # pyright: ignore[reportAttributeAccessIssue]
-        assert f"{TOPIC_ROOT}/kitchen/state" in published.retained_empty()
-        assert json.loads(agent._buttons_json.read_text(encoding="utf-8")) == {"buttons": []}
+        assert f"{TOPIC_ROOT}/{KEY}/state" in published.retained_empty()
+        assert json.loads(agent._buttons_json.read_text(encoding="utf-8"))["buttons"] == []
 
     async def test_forgetting_a_button_that_is_not_there_says_so(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -605,7 +693,7 @@ class TestReachingTheButtons:
 
         reply = await agent._handle_cmd(FlicAgentCommand.LISTEN)
 
-        assert agent._clients["hall"].is_connected
+        assert _client(agent, "hall").is_connected
         assert "1 could not be reached yet" in reply
         await agent._stop()
 
@@ -617,9 +705,11 @@ class TestReachingTheButtons:
 
         await agent._listen()
 
-        assert (f"{TOPIC_ROOT}/kitchen/state", {"connected": True, "battery": 88}, True) in (
-            published.messages
-        )
+        assert (
+            f"{TOPIC_ROOT}/{KEY}/state",
+            {"connected": True, "battery_voltage": 2.99},
+            True,
+        ) in (published.messages)
 
     async def test_a_client_that_will_not_let_go_is_dropped_anyway(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -633,13 +723,48 @@ class TestReachingTheButtons:
         async def never() -> None:
             await asyncio.sleep(3600)
 
-        monkeypatch.setattr(agent._clients["kitchen"], "stop", never)
+        monkeypatch.setattr(_client(agent, "kitchen"), "stop", never)
         monkeypatch.setattr(flic_agent, "STOP_TIMEOUT_S", 0.01)
 
         await asyncio.wait_for(agent._handle_cmd(FlicAgentCommand.STOP), timeout=5)
 
         assert agent._clients == {}
         assert agent._listening is False
+
+    async def test_buttons_that_will_not_let_go_are_waited_for_together(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A controller that stops answering stalls every disconnect; waited
+        # for one after another, a shutdown takes a timeout per button.
+        agent, published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [
+            button("kitchen"),
+            button("hall", "11:22:33:44:55:66"),
+            button("porch", "77:88:99:AA:BB:CC"),
+        ]
+        await agent._listen()
+
+        async def never() -> None:
+            await asyncio.sleep(3600)
+
+        for name in ("kitchen", "hall", "porch"):
+            monkeypatch.setattr(_client(agent, name), "stop", never)
+        monkeypatch.setattr(flic_agent, "STOP_TIMEOUT_S", 0.2)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+
+        await agent._stop(remember=False)
+
+        assert loop.time() - started < 0.4
+        assert agent._clients == {}
+        disconnected = [
+            topic
+            for topic, payload, _keep in published.messages
+            if payload == {"connected": False, "battery_voltage": 2.99}
+        ]
+        assert sorted(disconnected) == sorted(
+            f"{TOPIC_ROOT}/{b.key}/state" for b in agent._known_buttons
+        )
 
     async def test_stopping_keeps_the_pairings(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -733,16 +858,47 @@ class TestBeingAsked:
     async def test_deleting_the_agent_takes_back_its_retained_topics(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The pairings stay on disk, but a retained state nothing maintains any
-        # more is told to every subscriber that connects later.
+        # A retained state nothing maintains any more is told to every
+        # subscriber that connects later, so the retraction must come last.
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
         await agent._listen()
 
-        await agent.handle_message(Message(type=MessageType.DELETE, sender_id="main"))
+        await agent.on_delete()
 
-        assert f"{TOPIC_ROOT}/kitchen/state" in published.retained_empty()
+        state = f"{TOPIC_ROOT}/{KEY}/state"
+        retained = [
+            payload for topic, payload, keep in published.messages if keep and topic == state
+        ]
+        assert retained[-1] == b""
         assert agent._clients == {}
+
+    async def test_deleting_the_agent_deletes_the_pairing_keys(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A delete promises to leave nothing behind, and the store purge that
+        # follows does not know about the buttons file.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        await agent._remember()
+        assert agent._buttons_json.exists()
+
+        await agent.on_delete()
+
+        assert not agent._buttons_json.exists()
+        assert agent._known_buttons == []
+
+    async def test_the_delete_command_runs_the_hook_before_stopping(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Both delete paths call it: main's, and an actor's own `delete`.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        await agent._remember()
+
+        await agent.apply_command("delete")
+
+        assert not agent._buttons_json.exists()
 
 
 class TestScanning:
@@ -808,8 +964,8 @@ class TestScanning:
         assert [device.address for device in found] == ["AA:BB:CC:DD:EE:FF"]
 
 
-def _raises(error: BaseException) -> Callable[[float], Any]:
-    async def discover(_timeout: float) -> list[Any]:
+def _raises(error: BaseException) -> Callable[..., Any]:
+    async def discover(_timeout: float, _skip: Collection[str] = ()) -> list[Any]:
         raise error
 
     return discover
@@ -821,7 +977,7 @@ class TestSayingWhyNot:
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
-        monkeypatch.setattr(flic_agent, "discover_buttons", _found("AA:BB:CC:DD:EE:FF"))
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found("AA:BB:CC:DD:EE:FF"))
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
 
@@ -832,7 +988,7 @@ class TestSayingWhyNot:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
-        monkeypatch.setattr(flic_agent, "discover_buttons", _raises(OSError("no adapter")))
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _raises(OSError("no adapter")))
 
         assert "Could not scan" in await agent._handle_cmd(FlicAgentCommand.PAIR)
 
@@ -840,7 +996,7 @@ class TestSayingWhyNot:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
-        monkeypatch.setattr(flic_agent, "discover_buttons", _found("AA:BB:CC:DD:EE:FF"))
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found("AA:BB:CC:DD:EE:FF"))
 
         async def refuse(self: FakeClient) -> tuple[int, bytes, str, int, int, bytes, int]:
             raise OSError("the button stopped listening")
@@ -910,7 +1066,7 @@ class TestTheSmallParts:
 
         reply = await agent._handle_cmd(FlicAgentCommand.LIST)
 
-        assert "kitchen — BH16-F58317, connected, battery 88%" in reply
+        assert f"kitchen — {TOPIC_ROOT}/{KEY}, connected, battery 2.99 V" in reply
         assert "not since start" in reply
 
     async def test_status_counts_what_is_connected(
@@ -980,7 +1136,7 @@ class TestTheSmallParts:
         agent._loop = asyncio.get_running_loop()
         agent._pump = asyncio.create_task(agent._publish_presses())
         await agent._listen()
-        client = agent._clients["kitchen"]
+        client = _client(agent, "kitchen")
 
         await agent.on_stop()
 
@@ -1047,11 +1203,9 @@ class TestButtonsThatAreNotFlic2:
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
 
-        await agent._publish_press(
-            "kitchen", "click", 1000.0, {"was_queued": False, "button_index": 1}
-        )
+        await agent._publish_press(KEY, "click", 1000.0, {"was_queued": False, "button_index": 1})
 
-        assert published.payload_for(f"{TOPIC_ROOT}/kitchen/click")["button_index"] == 1
+        assert published.payload_for(f"{TOPIC_ROOT}/{KEY}/click")["button_index"] == 1
 
     async def test_a_single_button_device_carries_no_index(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1059,9 +1213,9 @@ class TestButtonsThatAreNotFlic2:
         agent, published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
 
-        await agent._publish_press("kitchen", "click", 1000.0, {"was_queued": False})
+        await agent._publish_press(KEY, "click", 1000.0, {"was_queued": False})
 
-        assert "button_index" not in published.payload_for(f"{TOPIC_ROOT}/kitchen/click")
+        assert "button_index" not in published.payload_for(f"{TOPIC_ROOT}/{KEY}/click")
 
     async def test_an_event_nothing_is_wired_to_is_mentioned_once(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1073,10 +1227,8 @@ class TestButtonsThatAreNotFlic2:
 
         with caplog_at_info() as records:
             for _ in range(3):
-                await agent._publish_press(
-                    "kitchen", "rotate_clockwise", 1000.0, {"was_queued": False}
-                )
-            await agent._publish_press("kitchen", "swipe_left", 1000.0, {"was_queued": False})
+                await agent._publish_press(KEY, "rotate_clockwise", 1000.0, {"was_queued": False})
+            await agent._publish_press(KEY, "swipe_left", 1000.0, {"was_queued": False})
 
         assert published.messages == []
         assert [r for r in records if "rotate_clockwise" in r].__len__() == 1
@@ -1158,19 +1310,19 @@ class TestMoreThanOneButtonWaiting:
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
         monkeypatch.setattr(
-            flic_agent, "discover_buttons", _found("AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66")
+            flic_agent, "watch_for_buttons", _found("AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66")
         )
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
 
-        assert "1 other button was in pairing mode" in reply
+        assert "Another button was in pairing mode" in reply
         assert len(agent._known_buttons) == 1
 
     async def test_one_button_alone_is_not_talked_about(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
-        monkeypatch.setattr(flic_agent, "discover_buttons", _found("AA:BB:CC:DD:EE:FF"))
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found("AA:BB:CC:DD:EE:FF"))
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
 
@@ -1178,7 +1330,10 @@ class TestMoreThanOneButtonWaiting:
 
 
 def _client(agent: FlicAgent, name: str) -> FakeClient:
-    return cast(FakeClient, agent._clients[name])
+    """The client of the button a person would call `name`."""
+    found = agent._button(name)
+    assert found is not None, f"no button called {name!r}"
+    return cast(FakeClient, agent._clients[found.key])
 
 
 class TestFindingTheButton:
@@ -1204,7 +1359,7 @@ class TestFindingTheButton:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         agent, _published = make_agent(tmp_path, monkeypatch)
-        monkeypatch.setattr(flic_agent, "discover_buttons", _found("AA:BB:CC:DD:EE:FF"))
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found("AA:BB:CC:DD:EE:FF"))
         # A second lookup would find the same button; making it fail proves
         # none is made.
         OUT_OF_RANGE.add("AA:BB:CC:DD:EE:FF")
@@ -1303,12 +1458,15 @@ class TestConnectionsTheLibraryMakes:
         FakeClient.fail_to_start = {"AA:BB:CC:DD:EE:FF"}
         await agent._listen()
 
-        _client(agent, "kitchen").connection(True)
+        _client(agent, "kitchen").connection(True, battery_voltage=3.01)
         await settle(published)
 
-        assert (f"{TOPIC_ROOT}/kitchen/state", {"connected": True, "battery": 88}, True) in (
-            published.messages
-        )
+        # The voltage the library just read, not the one from pairing.
+        assert (
+            f"{TOPIC_ROOT}/{KEY}/state",
+            {"connected": True, "battery_voltage": 3.01},
+            True,
+        ) in (published.messages)
         await agent.on_stop()
 
     async def test_a_drop_is_published_and_sets_the_search_going(
@@ -1326,8 +1484,8 @@ class TestConnectionsTheLibraryMakes:
         await asyncio.sleep(0)
 
         assert published.messages[-1] == (
-            f"{TOPIC_ROOT}/kitchen/state",
-            {"connected": False, "battery": 88},
+            f"{TOPIC_ROOT}/{KEY}/state",
+            {"connected": False, "battery_voltage": 2.99},
             True,
         )
         assert agent._finder is not None
@@ -1345,7 +1503,7 @@ class TestConnectionsTheLibraryMakes:
         await agent._handle_cmd(FlicAgentCommand.FORGET, name="kitchen")
         before = list(published.messages)
 
-        await agent._publish_connection("kitchen", True)
+        await agent._publish_connection(KEY, True)
 
         assert published.messages == before
         assert client.stopped
@@ -1389,14 +1547,14 @@ class TestTellingThePersonHowToPair:
         agent, _published = make_agent(tmp_path, monkeypatch)
         order: list[str] = []
 
-        async def discover(_timeout: float) -> list[Any]:
+        async def discover(_timeout: float, _skip: Collection[str]) -> list[Any]:
             order.append("scan")
             return [FakeDevice("AA:BB:CC:DD:EE:FF")]
 
         async def notify(text: str, **_extra: Any) -> None:
             order.append(text)
 
-        monkeypatch.setattr(flic_agent, "discover_buttons", discover)
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", discover)
         monkeypatch.setattr(agent, "notify_user", notify)
 
         await agent._handle_cmd(FlicAgentCommand.PAIR, name="kitchen")
@@ -1405,35 +1563,357 @@ class TestTellingThePersonHowToPair:
         assert "7 seconds" in order[0]
         assert order[1] == "scan"
 
-    async def test_it_waits_for_a_button_to_enter_pairing_mode(
+    async def test_it_watches_once_for_the_whole_wait_past_its_own_buttons(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Asking first and then picking the button up is the usual order.
+        # Asking first and then picking the button up is the usual order, so
+        # the watch covers the whole wait, and a button already paired here
+        # does not end it.
         monkeypatch.setattr(flic_agent, "PAIR_WAIT_S", 5.0)
         agent, _published = make_agent(tmp_path, monkeypatch)
-        scans = 0
+        agent._known_buttons = [button("hall", "11:22:33:44:55:66")]
+        asked: list[tuple[float, set[str]]] = []
 
-        async def discover(_timeout: float) -> list[Any]:
-            nonlocal scans
-            scans += 1
-            return [FakeDevice("AA:BB:CC:DD:EE:FF")] if scans >= 3 else []
+        async def watch(timeout: float, skip: Collection[str]) -> list[Any]:
+            asked.append((timeout, set(skip)))
+            return [FakeDevice("11:22:33:44:55:66"), FakeDevice("AA:BB:CC:DD:EE:FF")]
 
-        monkeypatch.setattr(flic_agent, "discover_buttons", discover)
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", watch)
 
         reply = await agent._handle_cmd(FlicAgentCommand.PAIR, name="kitchen")
 
-        assert scans == 3
+        assert asked == [(5.0, {"11:22:33:44:55:66"})]
         assert reply.startswith("Paired 'kitchen'")
+        assert "Another button" not in reply
 
     async def test_it_gives_up_when_no_button_comes(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(flic_agent, "PAIR_WAIT_S", 0.05)
-        monkeypatch.setattr(flic_agent, "PAIR_RESCAN_PAUSE_S", 0.01)
         agent, _published = make_agent(tmp_path, monkeypatch)
-        monkeypatch.setattr(flic_agent, "discover_buttons", _found())
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found())
 
         reply = await asyncio.wait_for(agent._handle_cmd(FlicAgentCommand.PAIR), timeout=5)
 
         assert "No button came into pairing mode" in reply
         assert agent._known_buttons == []
+
+
+class TestFromTheReview:
+    async def test_starting_does_not_wait_on_the_radio(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # `Actor.start` runs `on_start` before the message loop and heartbeat
+        # exist; a button that takes its time must not hold those back.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        await agent._remember()
+
+        async def slow(_address: str, _timeout: float) -> Any:
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr(flic_agent, "find_button", slow)
+
+        await asyncio.wait_for(agent.on_start(), timeout=1)
+
+        assert KEY in agent._clients
+        await agent.on_stop()
+
+    async def test_two_pairings_at_once_do_not_take_the_same_button(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Chat calls the agent directly, outside its mailbox, so two requests
+        # can be running together.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+
+        async def discover(_timeout: float, _skip: Collection[str]) -> list[Any]:
+            # A real scan waits on the radio, which is when the other request
+            # gets to run.
+            await asyncio.sleep(0.01)
+            return [FakeDevice("AA:BB:CC:DD:EE:FF")]
+
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", discover)
+
+        first, second = await asyncio.gather(
+            agent._handle_cmd(FlicAgentCommand.PAIR, name="kitchen"),
+            agent._handle_cmd(FlicAgentCommand.PAIR, name="hall"),
+        )
+
+        assert [b.address for b in agent._known_buttons] == ["AA:BB:CC:DD:EE:FF"]
+        assert first.startswith("Paired") != second.startswith("Paired")
+
+    async def test_several_waiting_buttons_are_counted_properly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            flic_agent,
+            "watch_for_buttons",
+            _found("AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", "77:88:99:AA:BB:CC"),
+        )
+
+        reply = await agent._handle_cmd(FlicAgentCommand.PAIR)
+
+        assert "2 more buttons were in pairing mode" in reply
+
+    async def test_an_action_nobody_knows_is_not_reported_as_done(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        sent: list[Any] = []
+
+        async def record(_target: str, _kind: MessageType, payload: Any) -> None:
+            sent.append(payload)
+
+        monkeypatch.setattr(agent, "send", record)
+
+        await agent.handle_message(
+            Message(type=MessageType.TASK, sender_id="main", payload={"action": "levitate"})
+        )
+
+        assert sent[0]["ok"] is False
+        assert sent[0]["result"] == flic_agent.HELP_TEXT
+
+    async def test_a_twist_keeps_its_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        twist = replace(button(), device_type="twist", twist_push_mode="selector")
+        agent._known_buttons = [twist]
+
+        await agent._listen()
+
+        assert _client(agent, "kitchen").push_twist_mode == "selector"
+
+    def test_a_twist_reports_its_battery_in_millivolts(self) -> None:
+        twist = replace(button(), device_type="twist", battery=2950)
+
+        assert flic_agent.battery_volts(twist) == 2.95
+
+    def test_no_reading_is_not_zero_volts(self) -> None:
+        assert flic_agent.battery_volts(replace(button(), battery=0)) is None
+
+
+class TestStopIsKept:
+    """A stop someone asked for outlives a restart; a shutdown is not a stop."""
+
+    async def test_a_restart_after_stop_stays_stopped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first, _published = make_agent(tmp_path, monkeypatch)
+        first._known_buttons = [button()]
+        await first._handle_cmd(FlicAgentCommand.LISTEN)
+        await first._handle_cmd(FlicAgentCommand.STOP)
+
+        second, _again = make_agent(tmp_path, monkeypatch)
+        await second.on_start()
+
+        assert second._clients == {}
+        assert second._listening is False
+        await second.on_stop()
+
+    async def test_listen_undoes_it_for_the_next_restart_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first, _published = make_agent(tmp_path, monkeypatch)
+        first._known_buttons = [button()]
+        await first._handle_cmd(FlicAgentCommand.STOP)
+        await first._handle_cmd(FlicAgentCommand.LISTEN)
+
+        second, _again = make_agent(tmp_path, monkeypatch)
+        await second.on_start()
+
+        assert KEY in second._clients
+        await second.on_stop()
+
+    async def test_shutting_down_is_not_a_stop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        first, _published = make_agent(tmp_path, monkeypatch)
+        first._known_buttons = [button()]
+        await first._remember()
+        await first.on_start()
+        await first.on_stop()
+
+        second, _again = make_agent(tmp_path, monkeypatch)
+        await second.on_start()
+
+        assert KEY in second._clients
+        await second.on_stop()
+
+    async def test_pairing_ends_a_stop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pairing starts listening to the new button, so the stored choice
+        # has to say the same.
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        await agent._handle_cmd(FlicAgentCommand.STOP)
+        monkeypatch.setattr(flic_agent, "watch_for_buttons", _found("AA:BB:CC:DD:EE:FF"))
+
+        await agent._handle_cmd(FlicAgentCommand.PAIR, name="kitchen")
+
+        assert json.loads(agent._buttons_json.read_text(encoding="utf-8"))["listening"] is True
+
+    def test_a_file_from_before_the_choice_was_stored_means_listen(self) -> None:
+        assert flic_agent.listening_from_store({"buttons": []}) is True
+        assert flic_agent.listening_from_store([]) is True
+        assert flic_agent.listening_from_store({"listening": False}) is False
+
+
+class TestLatePresses:
+    def test_they_are_off_unless_the_spawn_config_asks(self, tmp_path: Path) -> None:
+        assert FlicAgent(persistence_dir=str(tmp_path)).publish_queued is False
+        on = FlicAgent(persistence_dir=str(tmp_path), publish_queued=True)
+        assert on.publish_queued is True
+
+
+class FakeScanner:
+    """A `BleakScanner` whose adverts a test plays in, after it has started."""
+
+    instances: ClassVar[list["FakeScanner"]] = []
+    fail_to_stop: ClassVar[bool] = False
+
+    def __init__(self, detection_callback: Callable[[Any, Any], None], service_uuids: list[str]):
+        self.callback = detection_callback
+        self.service_uuids = service_uuids
+        self.started = 0
+        self.stopped = 0
+        FakeScanner.instances.append(self)
+
+    async def start(self) -> None:
+        self.started += 1
+
+    async def stop(self) -> None:
+        self.stopped += 1
+        if FakeScanner.fail_to_stop:
+            raise OSError("[org.bluez.Error.InProgress] Operation already in progress")
+
+    def advertise(self, address: str) -> None:
+        self.callback(FakeDevice(address), None)
+
+
+class TestWatchingForAButton:
+    """`pair` watches with one scan, which some controllers need to survive."""
+
+    @pytest.fixture(autouse=True)
+    def _bleak(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        FakeScanner.instances = []
+        FakeScanner.fail_to_stop = False
+        module = types.ModuleType("bleak")
+        module.BleakScanner = FakeScanner  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setitem(sys.modules, "bleak", module)
+
+    @staticmethod
+    async def _scanner() -> FakeScanner:
+        for _ in range(100):
+            if FakeScanner.instances and FakeScanner.instances[0].started:
+                return FakeScanner.instances[0]
+            await asyncio.sleep(0.001)
+        raise AssertionError("the scan never started")
+
+    async def test_it_ends_as_soon_as_a_new_button_appears(self) -> None:
+        watch = asyncio.create_task(flic_agent.watch_for_buttons(30.0, set()))
+        scanner = await self._scanner()
+
+        scanner.advertise("AA:BB:CC:DD:EE:FF")
+        found = await asyncio.wait_for(watch, timeout=1)
+
+        assert [device.address for device in found] == ["AA:BB:CC:DD:EE:FF"]
+        assert (scanner.started, scanner.stopped) == (1, 1)
+        assert scanner.service_uuids == [
+            flic_agent.FLIC_SERVICE_UUID,
+            flic_agent.TWIST_SERVICE_UUID,
+        ]
+
+    async def test_a_button_it_already_knows_does_not_end_it(self) -> None:
+        watch = asyncio.create_task(flic_agent.watch_for_buttons(30.0, {"aa:bb:cc:dd:ee:ff"}))
+        scanner = await self._scanner()
+
+        scanner.advertise("AA:BB:CC:DD:EE:FF")
+        await asyncio.sleep(0.01)
+        assert not watch.done()
+
+        scanner.advertise("11:22:33:44:55:66")
+        found = await asyncio.wait_for(watch, timeout=1)
+
+        # One scan the whole time: switching it on and off is what upsets controllers.
+        assert len(FakeScanner.instances) == 1
+        assert [device.address for device in found] == ["AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66"]
+
+    async def test_it_gives_up_at_the_timeout_with_what_it_saw(self) -> None:
+        watch = asyncio.create_task(flic_agent.watch_for_buttons(0.05, {"aa:bb:cc:dd:ee:ff"}))
+        scanner = await self._scanner()
+        scanner.advertise("AA:BB:CC:DD:EE:FF")
+
+        found = await asyncio.wait_for(watch, timeout=1)
+
+        assert [device.address for device in found] == ["AA:BB:CC:DD:EE:FF"]
+        assert scanner.stopped == 1
+
+    async def test_a_scan_that_will_not_stop_keeps_what_it_saw(self) -> None:
+        # The controller that refused its stop still saw the button.
+        FakeScanner.fail_to_stop = True
+        watch = asyncio.create_task(flic_agent.watch_for_buttons(30.0, set()))
+        scanner = await self._scanner()
+
+        scanner.advertise("AA:BB:CC:DD:EE:FF")
+        found = await asyncio.wait_for(watch, timeout=1)
+
+        assert [device.address for device in found] == ["AA:BB:CC:DD:EE:FF"]
+
+
+class TestWhenBluetoothFails:
+    """A scan that fails is not a button away: the search keeps checking often."""
+
+    async def test_it_does_not_back_off_while_scanning_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(flic_agent, "FIND_INTERVAL_S", 0.01)
+        monkeypatch.setattr(flic_agent, "FIND_MAX_INTERVAL_S", 10.0)
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        lookups = 0
+
+        async def no_adapter(_address: str, _timeout: float) -> Any:
+            nonlocal lookups
+            lookups += 1
+            raise OSError("No Bluetooth adapters found.")
+
+        monkeypatch.setattr(flic_agent, "find_button", no_adapter)
+        agent._watch_all()
+        await asyncio.sleep(0.3)
+
+        # Backing off from 0.01 doubles past 0.3 in a handful of rounds; a
+        # steady interval fits many more.
+        assert lookups > 10
+        await agent._stop(remember=False)
+
+    async def test_the_button_comes_back_with_the_adapter(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(flic_agent, "FIND_INTERVAL_S", 0.01)
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._known_buttons = [button()]
+        adapter = False
+
+        async def lookup(address: str, _timeout: float) -> Any:
+            if not adapter:
+                raise OSError("No Bluetooth adapters found.")
+            return FakeDevice(address)
+
+        monkeypatch.setattr(flic_agent, "find_button", lookup)
+        with caplog_at_info() as records:
+            agent._watch_all()
+            await asyncio.sleep(0.05)
+            adapter = True
+            client = _client(agent, "kitchen")
+            for _ in range(100):
+                if client.devices_given:
+                    break
+                await asyncio.sleep(0.01)
+
+        assert [device.address for device in client.devices_given] == ["AA:BB:CC:DD:EE:FF"]
+        # Said when it starts and when it ends, not every round in between.
+        assert len([r for r in records if "scanning is failing" in r]) == 1
+        assert len([r for r in records if "works again" in r]) == 1
+        await agent._stop(remember=False)

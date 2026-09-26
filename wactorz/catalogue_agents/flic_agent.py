@@ -11,14 +11,16 @@ agent's state rather than through `persist()`, whose store is not secret.
 import asyncio
 import base64
 import binascii
+import contextlib
 import json
 import logging
 import re
 import sys
 import time
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import asdict, dataclass, replace
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from ..core.actor import Actor, Message, MessageType
@@ -39,10 +41,8 @@ SCAN_TIMEOUT_S = 15.0
 CONNECT_TIMEOUT_S = 45.0
 PAIRING_TIMEOUT_S = 120.0
 #: How long `pair` keeps looking for a button to enter pairing mode, once it has
-#: told the person to hold one down.
+#: told the person to hold one down. One scan covers the whole wait.
 PAIR_WAIT_S = 45.0
-#: A breath between those scans, so a backend that answers at once cannot spin.
-PAIR_RESCAN_PAUSE_S = 1.0
 PAIR_INSTRUCTIONS = (
     "Hold the Flic button down for about 7 seconds to put it in pairing mode. "
     f"Looking for it for the next {PAIR_WAIT_S:.0f} seconds..."
@@ -84,6 +84,10 @@ class FlicButton:
 
     Only what survives a restart is here. The `BLEDevice` a connection wants is
     found by scanning, so it is never stored.
+
+    `name` is whatever the person called the button, spaces and capitals kept.
+    Two derived identities sit beside it: `slug`, the name as chat addresses
+    it, and `key`, which names the button in its topics and never changes.
     """
 
     name: str
@@ -93,10 +97,31 @@ class FlicButton:
     serial_number: str
     sig_bits: int
     device_type: Literal["flic2", "duo", "twist"] = "flic2"
+    #: The battery reading taken at pairing, raw as the button reports it: an
+    #: ADC value for a Flic 2 or Duo, millivolts for a Twist. `battery_volts`
+    #: turns it into something a person can read.
     battery: int = 0
     button_uuid: str = ""
     firmware_version: int = 0
     twist_push_mode: Literal["default", "continuous", "selector"] = "default"
+
+    @property
+    def key(self) -> str:
+        """The segment that identifies this button in its topics, for good.
+
+        The serial number, printed on the button and unique to it, so a rename
+        never moves a topic that something has been wired to. The address
+        stands in for a record that has no serial.
+        """
+        return slug(self.serial_number) or slug(self.address)
+
+    @property
+    def slug(self) -> str:
+        """The name as chat addresses it: "Lamp Flic" answers to `lamp-flic`.
+
+        Derived rather than stored, so it cannot drift from the name.
+        """
+        return slug(self.name)
 
     def to_dict(self) -> dict[str, Any]:
         """The button as JSON-safe fields, for the buttons file.
@@ -140,6 +165,17 @@ class FlicAgentCommand(str, Enum):
     FORGET = "forget"
 
 
+#: Commands that change the set of buttons or clients, which take turns.
+CHANGES_BUTTONS = frozenset(
+    {
+        FlicAgentCommand.PAIR,
+        FlicAgentCommand.RENAME,
+        FlicAgentCommand.FORGET,
+        FlicAgentCommand.LISTEN,
+        FlicAgentCommand.STOP,
+    }
+)
+
 #: The words that reach each command. A press should do the same thing however
 #: it was asked for, so the parse is a table rather than a model.
 COMMAND_WORDS: dict[str, FlicAgentCommand] = {
@@ -171,12 +207,14 @@ HELP_TEXT = """Flic buttons:
   scan                  buttons in range, and which are already paired
   pair [name]           hold a button down for 7s, then pair it
   list                  paired buttons, with battery and last press
-  rename <old> <new>    rename a button and move its topics
+  rename <old> to <new> rename a button; its topics stay the same
   forget <name>         unpair a button and take back its topics
   listen / stop         start or stop listening, keeping the pairings
   status                what is installed, paired and connected
 
-Every press is published on custom/flic/<name>/<click|double_click|hold>."""
+Every press is published on custom/flic/<serial>/<click|double_click|hold>,
+so renaming a button never breaks what is wired to it. `list` shows each
+button's serial."""
 
 
 class FlicAgent(Actor):
@@ -190,6 +228,10 @@ class FlicAgent(Actor):
         kwargs.setdefault("name", "flic")
         # Every spawn passes one; this agent parses commands and never asks a model.
         kwargs.pop("llm_provider", None)
+        #: Whether a press the button stored while out of range, and delivers
+        #: late on reconnecting, is published. Off unless the spawn config asks:
+        #: a press from minutes ago switching a light on now is usually wrong.
+        self.publish_queued = bool(kwargs.pop("publish_queued", False))
         super().__init__(**kwargs)
         self._buttons_json = self._persistence_dir / "buttons.json"
         self._known_buttons: list[FlicButton] = []
@@ -198,6 +240,9 @@ class FlicAgent(Actor):
         self._listening = False
         self._checked_lib = False
         self._client_cls: type[FlicClient] | None = None
+        #: Turns a stored twist mode into the library's enum. Plain `str` until
+        #: the library is found, which is what the library compares against.
+        self._twist_mode: Any = str
         self._presses: asyncio.Queue[tuple[str, str, float, dict[str, Any]]] = asyncio.Queue()
         self._pump: asyncio.Task[None] | None = None
         #: Looks for buttons whose session is down and hands the library a fresh
@@ -207,30 +252,79 @@ class FlicAgent(Actor):
         #: stopping gets "No discovery started" when it stops its own, so every
         #: scan and lookup here takes turns.
         self._scan_lock = asyncio.Lock()
+        #: Whether the background search's last scan failed, so the failure is
+        #: logged when it starts and when it ends rather than every round.
+        self._scan_failing = False
+        #: Chat reaches `chat()` directly rather than through the mailbox, so
+        #: two commands can run at once. Those that change the set of buttons
+        #: or clients take turns, or two pairings pick the same button.
+        self._command_lock = asyncio.Lock()
+        #: The latest battery voltage each button reported on connecting.
+        self._battery_volts: dict[str, float] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
-        self.publish_queued = False
+        #: Set by `stop`, and kept in the buttons file, so a restart does not
+        #: start listening to buttons someone asked to be left alone.
+        self._paused = False
         #: Kinds of event seen that this agent does not publish, so each is
         #: mentioned once rather than every time one arrives.
         self._unpublished: set[str] = set()
 
     async def on_start(self) -> None:
-        """Load the paired buttons, start listening to them, and announce."""
-        self._known_buttons = flic_buttons_from_store(self._restore())
+        """Load the paired buttons, start listening to them, and announce.
+
+        Nothing here waits on the radio. `Actor.start` runs this before the
+        message loop and heartbeat exist, and connecting button by button can
+        take minutes when some are away. The buttons are handed to the
+        background search instead, which connects each as it is found.
+        """
+        stored = await self._restore()
+        self._known_buttons = flic_buttons_from_store(stored)
+        self._paused = not listening_from_store(stored)
         self._loop = asyncio.get_running_loop()
         if self._have_lib():
             self._pump = asyncio.create_task(self._publish_presses())
-            if self._known_buttons:
-                await self._listen()
+            if self._known_buttons and not self._paused:
+                self._watch_all()
         else:
             LOG.warning("[%s] %s", self.name, MISSING_LIB)
         await self._announce()
 
     async def on_stop(self) -> None:
         """Put every button down before the agent goes."""
-        await self._stop()
+        # Shutting down is not someone asking to stop: the next start listens.
+        await self._stop(remember=False)
         pump, self._pump = self._pump, None
         if pump:
             pump.cancel()
+
+    async def on_delete(self) -> None:
+        """Remove what a delete should not leave behind: retained state, and the keys.
+
+        Deleting an agent promises to leave no trace of it, and the store purge
+        that follows knows nothing of the buttons file. Stopping first, because
+        stopping publishes "disconnected", which would otherwise be the last word
+        on each button's retained topic.
+        """
+        async with self._command_lock:
+            await self._stop(remember=False)
+            for button in self._known_buttons:
+                await self._clear_retained(button)
+            self._known_buttons = []
+            self._battery_volts.clear()
+            try:
+                self._buttons_json.unlink(missing_ok=True)
+            except OSError:
+                LOG.warning(
+                    "[%s] Could not delete %s", self.name, self._buttons_json, exc_info=True
+                )
+
+    def _watch_all(self) -> None:
+        """Listen to every paired button, leaving the connecting to the search."""
+        self._listening = True
+        for button in self._known_buttons:
+            if button.key not in self._clients:
+                self._clients[button.key] = self._new_client(button, None)
+        self._ensure_finder()
 
     async def _announce(self) -> None:
         """Publish what this agent answers to and what its buttons publish.
@@ -245,6 +339,7 @@ class FlicAgent(Actor):
                 "Pairs Flic buttons over Bluetooth and publishes each press as its "
                 "own MQTT topic, so a physical button can trigger anything that can "
                 "be wired to a topic."
+                + (button_directory(self._known_buttons) if ready else "")
                 + ("" if ready else f" Not usable as installed: {MISSING_LIB}")
             ),
             publishes=gesture_topics(self._known_buttons) if ready else [],
@@ -281,22 +376,16 @@ class FlicAgent(Actor):
         routes those to its own handlers and only falls through to this for the
         rest.
         """
-        if msg.type == MessageType.DELETE:
-            # The agent is going away for good. The pairings stay on disk, so
-            # spawning it again finds its buttons, but the retained state of a
-            # button nothing is listening to has to be taken back.
-            await self._stop()
-            for button in self._known_buttons:
-                await self._clear_retained(button)
-            return
         if msg.type != MessageType.TASK:
             return
 
         raw = msg.payload
         arguments: dict[str, str] = {}
+        understood = True
         if isinstance(raw, dict):
             action = str(raw.get("action") or "").strip()
             if action:
+                understood = action.lower() in COMMAND_WORDS
                 command = COMMAND_WORDS.get(action.lower(), FlicAgentCommand.HELP)
                 arguments = {
                     key: str(raw[key]) for key in ("name", "new_name") if raw.get(key) is not None
@@ -308,7 +397,9 @@ class FlicAgent(Actor):
             command, arguments = parse_command(str(raw or ""))
 
         result: dict[str, Any] = {
-            "ok": True,
+            # An action nobody knows gets the help text back, and says so: a
+            # caller told "ok" would take the help for the thing it asked.
+            "ok": understood,
             "action": command.value,
             "result": await self._handle_cmd(command, **arguments),
         }
@@ -327,6 +418,13 @@ class FlicAgent(Actor):
         """Run one parsed command and return what to say about it."""
         if not self._have_lib() and cmd not in (FlicAgentCommand.HELP, FlicAgentCommand.STATUS):
             return MISSING_LIB
+        if cmd in CHANGES_BUTTONS:
+            async with self._command_lock:
+                return await self._run_cmd(cmd, **kwargs)
+        return await self._run_cmd(cmd, **kwargs)
+
+    async def _run_cmd(self, cmd: FlicAgentCommand, **kwargs: Any) -> str:
+        """Dispatch one command; `_handle_cmd` decides whether it takes the lock."""
         if cmd == FlicAgentCommand.SCAN:
             return await self._scan()
         if cmd == FlicAgentCommand.PAIR:
@@ -372,26 +470,23 @@ class FlicAgent(Actor):
 
         Says first what to do with the button, because a button only shows up
         while it is in pairing mode, and asking is usually what reminds someone
-        to pick it up. Then keeps scanning until one appears or `PAIR_WAIT_S`
-        runs out, so the order of holding and asking does not matter.
+        to pick it up. Then watches until one appears or `PAIR_WAIT_S` runs out,
+        so the order of holding and asking does not matter. The watch is one
+        scan rather than a scan repeated, because each scan is switched on and
+        off again on a controller that may be holding other buttons' sessions,
+        and some controllers fail at switching off under that load.
         """
         await self.notify_user(PAIR_INSTRUCTIONS)
-        deadline = time.monotonic() + PAIR_WAIT_S
         paired = {button.address.lower() for button in self._known_buttons}
-        while True:
-            try:
-                found = await self._discover()
-            except Exception as exc:
-                LOG.exception("[%s] Scan before pairing failed", self.name)
-                return f"Could not scan for buttons: {exc}"
-            candidates = [
-                device
-                for device in found
-                if str(getattr(device, "address", "")).lower() not in paired
-            ]
-            if candidates or time.monotonic() >= deadline:
-                break
-            await asyncio.sleep(PAIR_RESCAN_PAUSE_S)
+        try:
+            async with self._scan_lock:
+                found = await watch_for_buttons(PAIR_WAIT_S, paired)
+        except Exception as exc:
+            LOG.exception("[%s] Scan before pairing failed", self.name)
+            return f"Could not scan for buttons: {exc}"
+        candidates = [
+            device for device in found if str(getattr(device, "address", "")).lower() not in paired
+        ]
         if not candidates:
             return (
                 f"No button came into pairing mode within {PAIR_WAIT_S:.0f} seconds. "
@@ -409,7 +504,8 @@ class FlicAgent(Actor):
         also = len(candidates) - 1
 
         self._known_buttons.append(button)
-        self._remember()
+        self._paused = False
+        await self._remember()
         self._listening = True
         # The device the scan just found: the session needs one, and looking
         # again would only find the same button.
@@ -417,10 +513,12 @@ class FlicAgent(Actor):
         await self._announce()
         reply = (
             f"Paired '{button.name}' ({button.serial_number}). "
-            f"Its presses are on {TOPIC_ROOT}/{topic_key(button)}/<gesture>."
+            f"Its presses are on {TOPIC_ROOT}/{button.key}/<gesture>."
         )
-        if also:
-            reply += f" {also} other button was in pairing mode; ask again to pair it."
+        if also == 1:
+            reply += " Another button was in pairing mode; ask again to pair it."
+        elif also:
+            reply += f" {also} more buttons were in pairing mode; ask again for each."
         return reply
 
     def _list(self) -> str:
@@ -429,19 +527,19 @@ class FlicAgent(Actor):
             return "No buttons paired yet. Say 'pair' while holding one down."
         lines = []
         for button in self._known_buttons:
-            client = self._clients.get(button.name)
+            client = self._clients.get(button.key)
             connected = bool(client is not None and getattr(client, "is_connected", False))
-            last = self._last_press.get(button.name)
+            last = self._last_press.get(button.key)
             when = f"{time.time() - last:.0f}s ago" if last else "not since start"
             lines.append(
-                f"  {button.name} — {button.serial_number}, "
+                f"  {button.name} — {TOPIC_ROOT}/{button.key}, "
                 f"{'connected' if connected else 'disconnected'}, "
-                f"battery {button.battery}%, last press {when}"
+                f"battery {self._battery_text(button)}, last press {when}"
             )
         return "Paired buttons:\n" + "\n".join(lines)
 
     async def _rename(self, name: str, new_name: str) -> str:
-        """Rename a button, moving its topics and announcing them again."""
+        """Rename a button. Its topics are keyed by serial, so they stay put."""
         if not name and len(self._known_buttons) == 1:
             # "rename it to …" with one button paired can only mean that one.
             name = self._known_buttons[0].name
@@ -450,21 +548,18 @@ class FlicAgent(Actor):
         button = self._button(name)
         if button is None:
             return f"No button called '{name}'. Say 'list' to see them."
-        wanted = unique_name(new_name, {b.name for b in self._known_buttons} - {button.name})
-
-        # The old topics stop existing, so the retained state under them is
-        # taken back before the button answers to anything else.
-        await self._clear_retained(button)
-        await self._stop_button(button)
+        wanted = unique_name(new_name, {b.slug for b in self._known_buttons} - {button.slug})
 
         renamed = replace(button, name=wanted)
-        self._known_buttons = [renamed if b.name == button.name else b for b in self._known_buttons]
-        self._last_press.pop(button.name, None)
-        self._remember()
-        if self._listening:
-            await self._start_button(renamed)
+        self._known_buttons = [renamed if b.key == button.key else b for b in self._known_buttons]
+        await self._remember()
+        # The topics are unchanged, but the manifest names the buttons, and the
+        # planner reads names when it is asked for "the kitchen button".
         await self._announce()
-        return f"'{button.name}' is now '{wanted}', publishing on {TOPIC_ROOT}/{wanted}/<gesture>."
+        return (
+            f"'{button.name}' is now '{wanted}'. "
+            f"Its presses stay on {TOPIC_ROOT}/{button.key}/<gesture>."
+        )
 
     async def _forget(self, name: str = "") -> str:
         """Stop a button, delete its keys and take back its retained state."""
@@ -477,9 +572,10 @@ class FlicAgent(Actor):
 
         await self._stop_button(button)
         await self._clear_retained(button)
-        self._known_buttons = [b for b in self._known_buttons if b.name != button.name]
-        self._last_press.pop(button.name, None)
-        self._remember()
+        self._known_buttons = [b for b in self._known_buttons if b.key != button.key]
+        self._last_press.pop(button.key, None)
+        self._battery_volts.pop(button.key, None)
+        await self._remember()
         await self._announce()
         return f"Forgot '{button.name}'. Pair it again whenever you like."
 
@@ -488,6 +584,9 @@ class FlicAgent(Actor):
         if not self._known_buttons:
             return "No buttons paired yet. Say 'pair' while holding one down."
         self._listening = True
+        if self._paused:
+            self._paused = False
+            await self._remember()
         started = 0
         for button in self._known_buttons:
             if await self._start_button(button):
@@ -500,17 +599,27 @@ class FlicAgent(Actor):
             )
         return f"Listening to {started}."
 
-    async def _stop(self) -> str:
-        """Stop listening, keeping the pairings."""
+    async def _stop(self, remember: bool = True) -> str:
+        """Stop listening, keeping the pairings.
+
+        `remember` is for a person asking: the choice is written down so a
+        restart keeps it. Shutting down and deleting pass False.
+        """
         self._listening = False
+        if remember:
+            self._paused = True
+            await self._remember()
         finder, self._finder = self._finder, None
         if finder:
             finder.cancel()
-        for button in list(self._known_buttons):
-            await self._stop_button(button)
-        # A client for a button no longer known can still be running.
-        for name in list(self._clients):
-            await self._close(name)
+        listened = [button for button in self._known_buttons if button.key in self._clients]
+        # Every client at once, a client for a button no longer known included.
+        # A controller that has stopped answering makes each close wait out its
+        # whole timeout, and one after another those add up to a shutdown that
+        # seems to hang.
+        await asyncio.gather(*(self._close(key) for key in list(self._clients)))
+        for button in listened:
+            await self._publish_state(button, connected=False)
         return "Stopped listening. The pairings are kept."
 
     def _status(self) -> str:
@@ -526,12 +635,22 @@ class FlicAgent(Actor):
         )
 
     def _button(self, name: str) -> FlicButton | None:
-        """The paired button by that name, or None."""
+        """The paired button a person means, by name or serial, or None.
+
+        Compared as slugs, so "lamp flic", "Lamp Flic" and "lamp-flic" are one
+        button, and its serial number finds it whatever it is called.
+        """
         wanted = slug(name)
+        if not wanted:
+            return None
         for button in self._known_buttons:
-            if button.name == wanted or button.serial_number.lower() == name.strip().lower():
+            if wanted in (button.slug, button.key):
                 return button
         return None
+
+    def _by_key(self, key: str) -> FlicButton | None:
+        """The paired button with that key, or None once it has been forgotten."""
+        return next((button for button in self._known_buttons if button.key == key), None)
 
     async def _pair_device(self, device: Any, name: str) -> FlicButton | None:
         """Verify a pairing with a button in range and return what it gave back."""
@@ -557,9 +676,9 @@ class FlicAgent(Actor):
         finally:
             await self._disconnect(client)
 
-        taken = {button.name for button in self._known_buttons}
+        taken = {button.slug for button in self._known_buttons}
         return FlicButton(
-            name=unique_name(name or f"flic-{len(self._known_buttons) + 1}", taken),
+            name=unique_name(name or f"Flic {len(self._known_buttons) + 1}", taken),
             address=address,
             pairing_id=int(pairing_id),
             pairing_key=bytes(pairing_key),
@@ -584,24 +703,14 @@ class FlicAgent(Actor):
         button out of range therefore never stops the others, and comes back
         without anyone asking.
         """
-        client_cls = self._client_cls
-        if client_cls is None:
+        if self._client_cls is None:
             return False
-        if button.name in self._clients:
-            return bool(getattr(self._clients[button.name], "is_connected", False))
+        if button.key in self._clients:
+            return bool(getattr(self._clients[button.key], "is_connected", False))
         if device is None:
             device = await self._locate(button.address)
-        client = client_cls(
-            address=button.address,
-            ble_device=device,
-            pairing_id=button.pairing_id,
-            pairing_key=button.pairing_key,
-            serial_number=button.serial_number,
-            sig_bits=button.sig_bits,
-        )
-        client.on_button_event = self._make_press_handler(button.name)
-        client.register_state_callback(self._make_state_handler(button.name))
-        self._clients[button.name] = client
+        client = self._new_client(button, device)
+        self._clients[button.key] = client
         if device is None:
             LOG.info("[%s] '%s' is not in range; still looking for it", self.name, button.name)
             self._ensure_finder()
@@ -623,19 +732,46 @@ class FlicAgent(Actor):
         await self._publish_state(button, connected=True)
         return True
 
+    def _new_client(self, button: FlicButton, device: Any) -> "FlicClient":
+        """A client for one button, wired to this agent but not yet started."""
+        client_cls = self._client_cls
+        if client_cls is None:
+            raise RuntimeError("pyflic-ble is not loaded; callers check _have_lib first")
+        client = client_cls(
+            address=button.address,
+            ble_device=device,
+            pairing_id=button.pairing_id,
+            pairing_key=button.pairing_key,
+            serial_number=button.serial_number,
+            sig_bits=button.sig_bits,
+            # Stored with the pairing, so a Twist keeps the mode it was set to.
+            push_twist_mode=self._twist_mode(button.twist_push_mode),
+        )
+        client.on_button_event = self._make_press_handler(button.key)
+        client.register_state_callback(self._make_state_handler(button.key))
+        return client
+
     async def _discover(self) -> list[Any]:
         """Flic buttons in range, one scan at a time."""
         async with self._scan_lock:
             return await discover_buttons(SCAN_TIMEOUT_S)
 
     async def _locate(self, address: str) -> Any:
-        """The `BLEDevice` for one known button, or None when it is not in range."""
+        """The `BLEDevice` for one known button, or None when it cannot be found."""
+        try:
+            return await self._look_up(address)
+        except Exception:
+            LOG.debug("[%s] Looking for %s failed", self.name, address, exc_info=True)
+            return None
+
+    async def _look_up(self, address: str) -> Any:
+        """The `BLEDevice` for one known button, or None when it is not in range.
+
+        Raises when the scan itself cannot run — no adapter, or a controller
+        refusing — which says nothing about where the button is.
+        """
         async with self._scan_lock:
-            try:
-                return await find_button(address, FIND_TIMEOUT_S)
-            except Exception:
-                LOG.debug("[%s] Looking for %s failed", self.name, address, exc_info=True)
-                return None
+            return await find_button(address, FIND_TIMEOUT_S)
 
     def _ensure_finder(self) -> None:
         """Start looking for unconnected buttons, unless something already is."""
@@ -649,35 +785,67 @@ class FlicAgent(Actor):
         lookup by address, backing off while a button stays away. A device that
         went stale while the button was gone is replaced the same way. Ends when
         every button is connected, and starts again when one drops.
+
+        A scan that fails is not a button away. When the adapter is gone the
+        search keeps its shortest interval rather than backing off, so the
+        buttons come back soon after the adapter does instead of after the
+        longest wait.
         """
         delay = FIND_INTERVAL_S
         while self._listening:
             waiting = [
-                (name, client)
-                for name, client in self._clients.items()
+                (key, client)
+                for key, client in self._clients.items()
                 if not getattr(client, "is_connected", False)
             ]
             if not waiting:
                 return
-            for name, client in waiting:
-                button = self._button(name)
-                if button is None:
-                    continue
-                device = await self._locate(button.address)
-                if device is not None and self._clients.get(name) is client:
-                    client.set_ble_device(device)
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, FIND_MAX_INTERVAL_S)
+            if await self._hand_over_devices(waiting):
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, FIND_MAX_INTERVAL_S)
+            else:
+                await asyncio.sleep(FIND_INTERVAL_S)
+                delay = FIND_INTERVAL_S
+
+    async def _hand_over_devices(self, waiting: list[tuple[str, Any]]) -> bool:
+        """Give each waiting client the device a lookup finds. False if Bluetooth failed.
+
+        The first failed scan ends the round: every other lookup would fail
+        the same way. The failure is logged once when it starts and once when
+        it ends, rather than on every round in between.
+        """
+        for key, client in waiting:
+            button = self._by_key(key)
+            if button is None:
+                continue
+            try:
+                device = await self._look_up(button.address)
+            except Exception as exc:
+                if not self._scan_failing:
+                    self._scan_failing = True
+                    LOG.warning(
+                        "[%s] Bluetooth scanning is failing (%s); trying again every %.0fs",
+                        self.name,
+                        exc,
+                        FIND_INTERVAL_S,
+                    )
+                return False
+            if device is not None and self._clients.get(key) is client:
+                client.set_ble_device(device)
+        if self._scan_failing:
+            self._scan_failing = False
+            LOG.info("[%s] Bluetooth scanning works again", self.name)
+        return True
 
     async def _stop_button(self, button: FlicButton) -> None:
         """Stop listening to one button, leaving its pairing alone."""
-        if button.name in self._clients:
-            await self._close(button.name)
+        if button.key in self._clients:
+            await self._close(button.key)
             await self._publish_state(button, connected=False)
 
-    async def _close(self, name: str) -> None:
+    async def _close(self, key: str) -> None:
         """Drop a client, whether or not it manages to say goodbye."""
-        client = self._clients.pop(name, None)
+        client = self._clients.pop(key, None)
         if client is None:
             return
         try:
@@ -686,7 +854,7 @@ class FlicAgent(Actor):
             # `stop()` can stall while disconnecting, and a shutdown that waits
             # on a radio is a shutdown that does not finish. The client is
             # dropped either way.
-            LOG.warning("[%s] '%s' did not stop cleanly", self.name, name, exc_info=True)
+            LOG.warning("[%s] '%s' did not stop cleanly", self.name, key, exc_info=True)
 
     @staticmethod
     async def _disconnect(client: Any) -> None:
@@ -696,7 +864,7 @@ class FlicAgent(Actor):
         except Exception:
             LOG.debug("Disconnect did not complete cleanly", exc_info=True)
 
-    def _make_press_handler(self, name: str):
+    def _make_press_handler(self, key: str):
         """A callback for one button's presses.
 
         The library calls this synchronously while handling a BLE notification,
@@ -710,11 +878,11 @@ class FlicAgent(Actor):
             loop = self._loop
             if loop is None:
                 return
-            loop.call_soon_threadsafe(self._presses.put_nowait, (name, kind, at, dict(data)))
+            loop.call_soon_threadsafe(self._presses.put_nowait, (key, kind, at, dict(data)))
 
         return handler
 
-    def _make_state_handler(self, name: str):
+    def _make_state_handler(self, key: str):
         """A callback for one button's connection coming and going.
 
         The library reconnects by itself, so the first start is not the only
@@ -727,9 +895,12 @@ class FlicAgent(Actor):
             if loop is None:
                 return
             connected = bool(getattr(state, "connected", False))
+            change: dict[str, Any] = {"connected": connected}
+            volts = getattr(state, "battery_voltage", None)
+            if isinstance(volts, (int, float)):
+                change["battery_voltage"] = float(volts)
             loop.call_soon_threadsafe(
-                self._presses.put_nowait,
-                (name, CONNECTION_EVENT, time.time(), {"connected": connected}),
+                self._presses.put_nowait, (key, CONNECTION_EVENT, time.time(), change)
             )
             if not connected:
                 loop.call_soon_threadsafe(self._ensure_finder)
@@ -739,28 +910,31 @@ class FlicAgent(Actor):
     async def _publish_presses(self) -> None:
         """Publish presses as they are handed over, until the agent stops."""
         while True:
-            name, kind, at, data = await self._presses.get()
+            key, kind, at, data = await self._presses.get()
             try:
                 if kind == CONNECTION_EVENT:
-                    await self._publish_connection(name, bool(data.get("connected")))
+                    volts = data.get("battery_voltage")
+                    if volts is not None:
+                        self._battery_volts[key] = volts
+                    await self._publish_connection(key, bool(data.get("connected")))
                     continue
-                await self._publish_press(name, kind, at, data)
+                await self._publish_press(key, kind, at, data)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                LOG.exception("[%s] Could not publish a press from '%s'", self.name, name)
+                LOG.exception("[%s] Could not publish a press from '%s'", self.name, key)
 
-    async def _publish_press(self, name: str, kind: str, at: float, data: dict[str, Any]) -> None:
+    async def _publish_press(self, key: str, kind: str, at: float, data: dict[str, Any]) -> None:
         """Publish one press, if it is one anybody wired anything to."""
         if kind not in GESTURES:
             self._note_unpublished(kind)
             return
         if data.get("was_queued") and not self.publish_queued:
             return
-        button = self._button(name)
+        button = self._by_key(key)
         if button is None:
             return
-        self._last_press[button.name] = at
+        self._last_press[button.key] = at
         payload: dict[str, Any] = {
             "button": button.name,
             "serial": button.serial_number,
@@ -773,14 +947,15 @@ class FlicAgent(Actor):
         index = data.get("button_index")
         if index is not None:
             payload["button_index"] = index
-        await self._mqtt_publish(f"{TOPIC_ROOT}/{topic_key(button)}/{kind}", payload)
+        await self._mqtt_publish(f"{TOPIC_ROOT}/{button.key}/{kind}", payload)
 
     def _note_unpublished(self, kind: str) -> None:
         """Say once that a kind of event arrived that nothing is wired to.
 
-        A Duo's swipes and a Twist's rotation reach the agent and go no further.
-        Said once per kind, because a rotation arrives many times a second and
-        the point is that it happened at all, not how often.
+        A Duo's swipes and `up`/`down` arrive as button events and go no further.
+        (A Twist's rotation never gets this far: it comes through the client's
+        `on_rotate_event`, which this agent does not set.) Said once per kind,
+        because the point is that it happened at all, not how often.
         """
         if kind in self._unpublished:
             return
@@ -792,24 +967,35 @@ class FlicAgent(Actor):
             ", ".join(GESTURES),
         )
 
-    async def _publish_connection(self, name: str, connected: bool) -> None:
+    async def _publish_connection(self, key: str, connected: bool) -> None:
         """Publish a connection change for a button still being listened to."""
-        button = self._button(name)
-        if button is None or name not in self._clients:
+        button = self._by_key(key)
+        if button is None or key not in self._clients:
             return
         await self._publish_state(button, connected=connected)
 
     async def _publish_state(self, button: FlicButton, connected: bool) -> None:
         """Say whether a button is reachable, for whoever asks later."""
         await self._mqtt_publish(
-            f"{TOPIC_ROOT}/{topic_key(button)}/state",
-            {"connected": connected, "battery": button.battery},
+            f"{TOPIC_ROOT}/{button.key}/state",
+            {"connected": connected, "battery_voltage": self._battery_voltage(button)},
             retain=True,
             # At least once, like the retraction that undoes it: a dropped
             # retained message leaves the broker telling every later subscriber
             # the opposite of where the button is.
             qos=1,
         )
+
+    def _battery_voltage(self, button: FlicButton) -> float | None:
+        """The freshest battery voltage for a button, or None when nothing was read."""
+        latest = self._battery_volts.get(button.key)
+        if latest is not None:
+            return round(latest, 2)
+        return battery_volts(button)
+
+    def _battery_text(self, button: FlicButton) -> str:
+        volts = self._battery_voltage(button)
+        return f"{volts:.2f} V" if volts is not None else "unknown"
 
     async def _clear_retained(self, button: FlicButton) -> None:
         """Take back the retained state of a button that is going away.
@@ -818,45 +1004,53 @@ class FlicAgent(Actor):
         broker keeps telling every later subscriber about a button that is no
         longer here.
         """
-        await self._mqtt_publish(f"{TOPIC_ROOT}/{topic_key(button)}/state", b"", retain=True, qos=1)
+        await self._mqtt_publish(f"{TOPIC_ROOT}/{button.key}/state", b"", retain=True, qos=1)
 
     def _have_lib(self) -> bool:
         """Whether the Bluetooth library is importable, looked up once."""
         if not self._checked_lib:
             self._checked_lib = True
             try:
-                from pyflic_ble import FlicClient  # pyright: ignore[reportMissingImports]
+                # Optional dependency (wactorz[flic], Python 3.12+): the agent
+                # must load, and say what is missing, on a host without it.
+                from pyflic_ble import (  # pyright: ignore[reportMissingImports]
+                    FlicClient,
+                    PushTwistMode,
+                )
 
                 self._client_cls = FlicClient
+                self._twist_mode = PushTwistMode
             except ImportError:
                 return False
         return self._client_cls is not None
 
-    def _restore(self) -> Any:
-        """Whatever the buttons file holds, or an empty list.
+    async def _restore(self) -> Any:
+        """Whatever the buttons file holds, or an empty list, read off the event loop.
 
         A file that cannot be read is treated as an absent one: buttons can be
         paired again, while refusing to start over a damaged file leaves
         nothing working at all.
         """
-        if not self._buttons_json.exists():
-            return []
         try:
-            return json.loads(self._buttons_json.read_text(encoding="utf-8"))
+            return await asyncio.to_thread(read_store, self._buttons_json)
         except Exception:
             LOG.warning("[%s] Could not read %s", self.name, self._buttons_json, exc_info=True)
             return []
 
-    def _remember(self) -> None:
-        """Write the paired buttons back to the private file.
+    async def _remember(self) -> None:
+        """Write the paired buttons, and whether to listen, back to the private file.
 
-        A failed write is logged rather than raised, so a command that has
-        already paired a button still answers; the pairing is live either way
-        until the process restarts.
+        Written off the event loop, since disk can stall. A failed write is
+        logged rather than raised, so a command that has already paired a
+        button still answers; the pairing is live either way until the process
+        restarts.
         """
+        payload = {
+            "buttons": [button.to_dict() for button in self._known_buttons],
+            "listening": not self._paused,
+        }
         try:
-            payload = {"buttons": [button.to_dict() for button in self._known_buttons]}
-            write_private_json(self._buttons_json, payload)
+            await asyncio.to_thread(write_private_json, self._buttons_json, payload)
         except Exception:
             LOG.exception("[%s] Failed to store known buttons", self.name)
 
@@ -877,6 +1071,44 @@ async def discover_buttons(timeout: float) -> list[Any]:
         timeout=timeout * 2,
     )
     return list(found)
+
+
+async def watch_for_buttons(timeout: float, skip: Collection[str]) -> list[Any]:
+    """Flic buttons advertising, watched for until one not in `skip` shows up.
+
+    One scan, however long it runs, that ends as soon as a button whose address
+    is not in `skip` appears or `timeout` passes. Returns every Flic button seen
+    by then, first seen first. A scan that will not stop is logged and what it
+    found is kept: the buttons it saw are real whether or not the controller
+    acknowledges the stop.
+    """
+    # Optional dependency, as in `discover_buttons`.
+    from bleak import BleakScanner  # pyright: ignore[reportMissingImports]
+
+    ignored = {address.lower() for address in skip}
+    seen: dict[str, Any] = {}
+    arrived = asyncio.Event()
+
+    def detected(device: Any, _advertisement: Any) -> None:
+        address = str(getattr(device, "address", "")).lower()
+        seen.setdefault(address, device)
+        if address not in ignored:
+            arrived.set()
+
+    scanner = BleakScanner(
+        detection_callback=detected,
+        service_uuids=[FLIC_SERVICE_UUID, TWIST_SERVICE_UUID],
+    )
+    await asyncio.wait_for(scanner.start(), timeout=STOP_TIMEOUT_S)
+    try:
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(arrived.wait(), timeout=timeout)
+    finally:
+        try:
+            await asyncio.wait_for(scanner.stop(), timeout=STOP_TIMEOUT_S)
+        except Exception:
+            LOG.warning("Stopping the Bluetooth scan failed; keeping what it saw", exc_info=True)
+    return list(seen.values())
 
 
 async def find_button(address: str, timeout: float) -> Any:
@@ -935,20 +1167,27 @@ def _rename_arguments(words: list[str]) -> dict[str, str]:
 
 
 def slug(text: str) -> str:
-    """A name as it appears in a topic: lowercase, no separators of its own."""
+    """Text as an identifier: lowercase, runs of anything else one hyphen."""
     return re.sub(r"[^a-z0-9]+", "-", (text or "").strip().lower()).strip("-")
 
 
 def unique_name(wanted: str, taken: Iterable[str]) -> str:
-    """`wanted` as a topic-safe name that nothing else here answers to."""
-    base = slug(wanted) or "flic"
+    """`wanted`, tidied, as a name whose slug no other button answers to.
+
+    Capitals and spaces are the person's to choose; only the slug has to be
+    unique, since that is what chat finds a button by. A clash gets a number:
+    a second "Kitchen" becomes "Kitchen 2".
+    """
+    base = " ".join((wanted or "").split()) or "Flic"
+    if not slug(base):
+        base = "Flic"
     existing = set(taken)
-    if base not in existing:
+    if slug(base) not in existing:
         return base
     suffix = 2
-    while f"{base}-{suffix}" in existing:
+    while slug(f"{base} {suffix}") in existing:
         suffix += 1
-    return f"{base}-{suffix}"
+    return f"{base} {suffix}"
 
 
 def device_type_of(serial: str) -> Literal["flic2", "duo", "twist"]:
@@ -968,13 +1207,27 @@ def as_hex(value: Any) -> str:
     return str(value or "")
 
 
-def topic_key(button: FlicButton) -> str:
-    """The segment that identifies one button inside its topics.
+def battery_volts(button: FlicButton) -> float | None:
+    """The battery reading from pairing, in volts, or None when there was none.
 
-    A rename moves a button's topics, and this is the only place that decides
-    which ones they are.
+    The same conversion the library makes: a Twist reports millivolts, and a
+    Flic 2 or Duo a 10-bit reading against a 3.6 V reference.
     """
-    return button.name
+    if button.battery <= 0:
+        return None
+    if button.device_type == "twist":
+        return round(button.battery / 1000.0, 2)
+    return round(button.battery * 3.6 / 1024.0, 2)
+
+
+def button_directory(buttons: Iterable[FlicButton]) -> str:
+    """Which button each topic belongs to, for the manifest.
+
+    Topics are keyed by serial, so without this a planner asked for "the
+    kitchen button" has a list of serial numbers and nothing to match it to.
+    """
+    entries = [f"'{button.name}' is {TOPIC_ROOT}/{button.key}" for button in buttons]
+    return f" Buttons: {'; '.join(entries)}." if entries else ""
 
 
 def gesture_topics(buttons: Iterable[FlicButton]) -> list[str]:
@@ -986,10 +1239,22 @@ def gesture_topics(buttons: Iterable[FlicButton]) -> list[str]:
     """
     topics: list[str] = []
     for button in buttons:
-        base = f"{TOPIC_ROOT}/{topic_key(button)}"
+        base = f"{TOPIC_ROOT}/{button.key}"
         topics.extend(f"{base}/{gesture}" for gesture in GESTURES)
         topics.append(f"{base}/state")
     return topics
+
+
+def read_store(path: Path) -> Any:
+    """The parsed buttons file, or an empty list when there is none yet."""
+    if not path.exists():
+        return []
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def listening_from_store(stored: Any) -> bool:
+    """Whether the stored file says to listen. Anything but an explicit no means yes."""
+    return not (isinstance(stored, dict) and stored.get("listening") is False)
 
 
 def flic_buttons_from_store(stored: Any) -> list[FlicButton]:

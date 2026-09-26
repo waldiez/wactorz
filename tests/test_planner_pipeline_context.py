@@ -413,7 +413,9 @@ class TestDecomposePipeline:
         async def _urls(task: str) -> str:
             return "URL-SECTION"
 
-        async def _feasible(task: str, section: str) -> list[dict[str, Any]] | None:
+        async def _feasible(
+            task: str, section: str, topics: str = ""
+        ) -> list[dict[str, Any]] | None:
             checked.append(task)
             return verdict
 
@@ -910,6 +912,52 @@ class TestCheckHaFeasibility:
         assert verdict == [
             {"_feasibility_error": "Cannot fulfill request with available HA entities."}
         ]
+
+    async def test_the_checker_is_shown_what_running_agents_publish(self, tmp_path: Path) -> None:
+        # A Flic button is no Home Assistant entity; shown only entities, the
+        # checker refused "when the Desk button is double-clicked" as missing.
+        planner = _planner(tmp_path, script={"Desk": '{"feasible": true}'})
+        topics = "  [flic]\n    about     : Buttons: 'Desk' is custom/flic/bh16-f58317."
+
+        await planner._check_ha_feasibility(
+            "when the Desk button is double-clicked, toggle the lamp", "  light.hall", topics
+        )
+
+        prompt = _prompt(planner)
+        assert "LIVE MQTT DATA FLOWS" in prompt
+        assert "'Desk' is custom/flic/bh16-f58317" in prompt
+
+    async def test_the_topics_gathered_for_design_reach_the_checker(self, tmp_path: Path) -> None:
+        planner = _planner(tmp_path)
+        seen: list[str] = []
+
+        async def _ha() -> tuple[str, bool, str]:
+            return "  light.hall", True, "  light.hall"
+
+        async def _cameras(task: str, ha: str) -> tuple[str, str]:
+            return "", ""
+
+        async def _bus() -> tuple[str, str]:
+            return "BUS-SECTION", ""
+
+        async def _urls(task: str) -> str:
+            return ""
+
+        async def _feasible(
+            task: str, section: str, topics: str = ""
+        ) -> list[dict[str, Any]] | None:
+            seen.append(topics)
+            return [{"_feasibility_error": "stop here"}]
+
+        planner._gather_ha_entities = _ha  # pyright: ignore[reportAttributeAccessIssue]
+        planner._gather_camera_context = _cameras  # pyright: ignore[reportAttributeAccessIssue]
+        planner._gather_topic_bus_context = _bus  # pyright: ignore[reportAttributeAccessIssue]
+        planner._gather_notification_urls = _urls  # pyright: ignore[reportAttributeAccessIssue]
+        planner._check_ha_feasibility = _feasible  # pyright: ignore[reportAttributeAccessIssue]
+
+        await planner._decompose_pipeline("toggle the lamp when the Desk button is pressed", [])
+
+        assert seen == ["BUS-SECTION"]
 
     @pytest.mark.parametrize("answer", ['{"feasible": true}', "not json at all"])
     async def test_a_yes_or_an_unreadable_answer_lets_planning_continue(

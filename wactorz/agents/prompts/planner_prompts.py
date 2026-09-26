@@ -119,6 +119,9 @@ USER REQUEST: {task}
 AVAILABLE HA ENTITIES:
 {ha_section}
 
+LIVE MQTT DATA FLOWS (what running agents publish — a trigger or data source can come from here instead of Home Assistant):
+{topic_section}
+
 Return JSON only:
 {{"feasible": true/false, "reason": "<one sentence if not feasible>", "relevant_entities": ["entity_id", ...]}}
 
@@ -132,7 +135,8 @@ Rules — be PERMISSIVE, default to feasible=true:
 - relevant_entities should list the matching entity_ids you'd use.
 - Camera/webcam/Discord/notification requests: always feasible=true.
 - Pure logging / observability tasks (no HA target): always feasible=true. Examples: 'log a heartbeat every hour', 'write a warning when X', 'print uptime'.
-- Time-based triggers without HA action (just logging or publishing): always feasible=true."""
+- Time-based triggers without HA action (just logging or publishing): always feasible=true.
+- A trigger or data source that matches a LIVE MQTT DATA FLOW — by agent name, its 'about' line, or a topic — is available even though no HA entity matches it. A button, sensor or device that an agent publishes is NOT missing because Home Assistant does not list it. Judge only the Home Assistant targets against AVAILABLE HA ENTITIES."""
 
 
 #: Asks for duplicates and contradictions between a new rule and the active ones.

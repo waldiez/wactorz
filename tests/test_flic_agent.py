@@ -694,8 +694,22 @@ class TestReachingTheButtons:
         reply = await agent._handle_cmd(FlicAgentCommand.LISTEN)
 
         assert _client(agent, "hall").is_connected
-        assert "1 could not be reached yet" in reply
+        assert reply == (
+            "Listening to 'hall'. Still connecting to 'kitchen' in the background; "
+            "its presses are published once connected."
+        )
         await agent._stop()
+
+    def test_listen_names_the_buttons_rather_than_counting_them(self) -> None:
+        # "Listening to 0; 2 …" reads like indices.
+        assert flic_agent.listening_reply(["Flic Lamp", "Flic 2"], []) == (
+            "Listening to 'Flic Lamp' and 'Flic 2'."
+        )
+        assert flic_agent.listening_reply([], ["Flic Lamp", "Flic 2"]) == (
+            "Still connecting to 'Flic Lamp' and 'Flic 2' in the background; "
+            "their presses are published once connected."
+        )
+        assert flic_agent.name_list(["a", "b", "c"]) == "'a', 'b' and 'c'"
 
     async def test_a_connected_button_says_so_on_a_retained_topic(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1076,7 +1090,16 @@ class TestTheSmallParts:
         agent._known_buttons = [button()]
         await agent._listen()
 
-        assert "1 paired, 1 connected" in await agent._handle_cmd(FlicAgentCommand.STATUS)
+        assert await agent._handle_cmd(FlicAgentCommand.STATUS) == (
+            "1 button paired, 1 connected. Listening."
+        )
+        await agent.on_stop()
+
+    def test_status_reads_as_a_sentence(self) -> None:
+        assert flic_agent.status_reply(2, 0, False) == (
+            "2 buttons paired, 0 connected. Not listening; say 'listen' to start."
+        )
+        assert flic_agent.status_reply(0, 0, True).startswith("No buttons paired yet.")
 
     async def test_the_dashboard_is_told_what_the_agent_is_doing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1084,7 +1107,7 @@ class TestTheSmallParts:
         agent, _published = make_agent(tmp_path, monkeypatch)
         agent._known_buttons = [button()]
 
-        assert agent._current_task_description() == "flic (1 paired, listening=False)"
+        assert agent._current_task_description() == "flic (1 button paired, not listening)"
 
     async def test_nothing_is_paired_without_a_client_class(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

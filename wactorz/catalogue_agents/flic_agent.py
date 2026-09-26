@@ -415,7 +415,8 @@ class FlicAgent(Actor):
             await self.send(target, MessageType.RESULT, result)
 
     def _current_task_description(self) -> str:
-        return f"flic ({len(self._known_buttons)} paired, listening={self._listening})"
+        state = "listening" if self._listening else "not listening"
+        return f"flic ({count_of(len(self._known_buttons), 'button')} paired, {state})"
 
     async def _handle_cmd(self, cmd: FlicAgentCommand, **kwargs: Any) -> str:
         """Run one parsed command and return what to say about it."""
@@ -601,17 +602,11 @@ class FlicAgent(Actor):
         if self._paused:
             self._paused = False
             await self._remember()
-        started = 0
+        connected: list[str] = []
+        waiting: list[str] = []
         for button in self._known_buttons:
-            if await self._start_button(button):
-                started += 1
-        failed = len(self._known_buttons) - started
-        if failed:
-            return (
-                f"Listening to {started}; {failed} could not be reached yet. "
-                "They are retried in the background and start publishing when they connect."
-            )
-        return f"Listening to {started}."
+            (connected if await self._start_button(button) else waiting).append(button.name)
+        return listening_reply(connected, waiting)
 
     async def _stop(self, remember: bool = True) -> str:
         """Stop listening, keeping the pairings.
@@ -643,10 +638,7 @@ class FlicAgent(Actor):
         connected = sum(
             1 for client in self._clients.values() if getattr(client, "is_connected", False)
         )
-        return (
-            f"{len(self._known_buttons)} paired, "
-            f"{connected} connected, listening={self._listening}."
-        )
+        return status_reply(len(self._known_buttons), connected, self._listening)
 
     def _button(self, name: str) -> FlicButton | None:
         """The paired button a person means, by name or serial, or None.
@@ -1251,6 +1243,45 @@ def battery_volts(button: FlicButton) -> float | None:
     if button.device_type == "twist":
         return round(button.battery / 1000.0, 2)
     return round(button.battery * 3.6 / 1024.0, 2)
+
+
+def status_reply(paired: int, connected: int, listening: bool) -> str:
+    """What `status` says, as a sentence rather than a row of fields."""
+    if not paired:
+        return "No buttons paired yet. Say 'pair' while holding one down."
+    listens = "Listening." if listening else "Not listening; say 'listen' to start."
+    return f"{count_of(paired, 'button')} paired, {connected} connected. {listens}"
+
+
+def count_of(count: int, noun: str) -> str:
+    """A count with its noun: "1 button", "2 buttons"."""
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def listening_reply(connected: list[str], waiting: list[str]) -> str:
+    """What `listen` says: the buttons by name, not counts that read like indices.
+
+    A button not connected yet is still being connected to in the background,
+    usually within seconds, so it is described as that rather than as a failure.
+    """
+    parts: list[str] = []
+    if connected:
+        parts.append(f"Listening to {name_list(connected)}.")
+    if waiting:
+        they = "its presses are" if len(waiting) == 1 else "their presses are"
+        parts.append(
+            f"Still connecting to {name_list(waiting)} in the background; "
+            f"{they} published once connected."
+        )
+    return " ".join(parts)
+
+
+def name_list(names: list[str]) -> str:
+    """Names quoted and joined as a sentence would: 'a', 'b' and 'c'."""
+    quoted = [f"'{name}'" for name in names]
+    if len(quoted) <= 1:
+        return "".join(quoted)
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
 
 
 def button_directory(buttons: Iterable[FlicButton]) -> str:

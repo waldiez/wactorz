@@ -651,6 +651,7 @@ class Actor(ABC):
             await self.stop()
         elif command == "delete":
             self._release_from_supervision()
+            await self.delete_own_traces()
             if self._registry:
                 main = self._registry.find_by_name("main")
                 if main and hasattr(main, "_remove_from_spawn_registry"):
@@ -661,6 +662,13 @@ class Actor(ABC):
             logger.warning("[%s] Unknown command: %r", self.name, command)
             return False
         return True
+
+    async def delete_own_traces(self) -> None:
+        """Run `on_delete`, never letting a failure in it stop the deletion."""
+        try:
+            await self.on_delete()
+        except Exception:
+            logger.exception("[%s] on_delete failed; deleting anyway", self.name)
 
     async def _command_listener(self):
         """Carry commands from agents/{id}/commands to :meth:`apply_command`.
@@ -1080,6 +1088,15 @@ class Actor(ABC):
 
     async def on_stop(self):
         """Called when actor stops. Override for cleanup."""
+
+    async def on_delete(self):
+        """Called before the stop that ends a deletion. Override to remove what stop keeps.
+
+        A stop is expected to be undone later, so it keeps state; a delete
+        promises that no trace of the agent is left. The caller purges the
+        stores it knows about afterwards. This is for everything else the agent
+        owns: files of its own, and retained messages outside `agents/<id>/`.
+        """
 
     @abstractmethod
     async def handle_message(self, msg: Message):

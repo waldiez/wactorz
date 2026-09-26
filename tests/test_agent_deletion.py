@@ -63,9 +63,15 @@ class _Agent:
         self.stopped = 0
         self._persistence_api = persistence
         self._persistence_dir = pdir
+        #: What happened to it, in order: "traces" for its own clean-up, "stop".
+        self.calls: list[str] = []
+
+    async def delete_own_traces(self) -> None:
+        self.calls.append("traces")
 
     async def stop(self) -> None:
         self.stopped += 1
+        self.calls.append("stop")
 
 
 class _Supervisor:
@@ -220,6 +226,16 @@ class TestLeavingNothingBehind:
         await main.delete("sensor")
 
         assert main.removed_from_registry == ["sensor"]
+
+    async def test_a_local_agent_removes_its_own_traces_before_it_stops(self) -> None:
+        # Its own files and retained topics are its to clear, and stopping
+        # would otherwise publish the last word on them.
+        agent = _Agent("collector")
+        main = _Main(local={"collector": agent})
+
+        await main.delete("collector")
+
+        assert agent.calls == ["traces", "stop"]
 
     async def test_a_local_agents_persistence_is_purged(self) -> None:
         store = _Persistence()

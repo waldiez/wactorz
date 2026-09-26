@@ -14,6 +14,7 @@ import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
 import { emit, listen } from "../../events";
+import { el, iconButton, named } from "../dom";
 
 /** The composer's prompt: it names the recipient, or invites picking one. */
 export function composerPlaceholder(target: string): string {
@@ -41,11 +42,7 @@ function buildTextarea(
     ghost: HTMLElement,
     mentionPanel: HTMLElement,
 ): HTMLTextAreaElement {
-    const input = document.createElement("textarea");
-    input.className = "af-iobar-input";
-    input.id = "af-iobar-input";
-    input.name = "chat-message";
-    input.setAttribute("aria-label", "Chat message");
+    const input = named(el("textarea", "af-iobar-input"), "chat-message", "Chat message", "af-iobar-input");
     input.rows = 1;
     input.placeholder = composerPlaceholder(deps.target());
 
@@ -84,11 +81,11 @@ function buildSendBtn(
     input: HTMLTextAreaElement,
     mentionPanel: HTMLElement,
 ): HTMLButtonElement {
-    const sendBtn = document.createElement("button");
-    sendBtn.className = "af-send-btn";
-    sendBtn.title = "Send message";
-    sendBtn.setAttribute("aria-label", "Send message");
-    sendBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`;
+    const sendBtn = iconButton(
+        "af-send-btn",
+        "Send message",
+        `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1 13L13 7 1 1v4.5l8.5 1.5-8.5 1.5V13z" fill="currentColor"/></svg>`,
+    );
     sendBtn.addEventListener("click", () => {
         deps.chatInput.closePanel(mentionPanel);
         deps.send(input); // recordSent() clears the ghost
@@ -98,12 +95,12 @@ function buildSendBtn(
 
 /** Stop button: shown only while a turn is streaming; cancels generation. */
 function buildStopBtn(deps: IobarDeps): HTMLButtonElement {
-    const stopBtn = document.createElement("button");
-    stopBtn.className = "af-stop-btn";
-    stopBtn.title = "Stop generating";
-    stopBtn.setAttribute("aria-label", "Stop generating");
+    const stopBtn = iconButton(
+        "af-stop-btn",
+        "Stop generating",
+        `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>`,
+    );
     stopBtn.style.display = "none";
-    stopBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>`;
     stopBtn.addEventListener("click", () => deps.stop());
     return stopBtn;
 }
@@ -236,11 +233,7 @@ function micAvailable(): boolean {
 
 /** Mic button: click to record, click again to transcribe into the input. */
 function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.className = "af-mic-btn";
-    btn.title = "Voice input";
-    btn.setAttribute("aria-label", "Voice input");
-    btn.innerHTML = iconMarkup("mic", 16);
+    const btn = iconButton("af-mic-btn", "Voice input", iconMarkup("mic", 16));
     btn.addEventListener("click", () => void toggleMic(stt, input, btn));
     return btn;
 }
@@ -251,21 +244,15 @@ function buildInputArea(
     deps: IobarDeps,
     select: HTMLSelectElement,
 ): { inputWrap: HTMLElement; input: HTMLTextAreaElement; mentionPanel: HTMLElement } {
-    const inputWrap = document.createElement("div");
-    inputWrap.className = "af-input-wrap";
-    const mentionPanel = document.createElement("div");
-    mentionPanel.className = "af-mention-panel";
-    const ghost = document.createElement("div");
-    ghost.className = "af-input-ghost";
+    const inputWrap = el("div", "af-input-wrap");
+    const mentionPanel = el("div", "af-mention-panel");
+    const ghost = el("div", "af-input-ghost");
     ghost.setAttribute("aria-hidden", "true");
     const input = buildTextarea(deps, select, ghost, mentionPanel);
-    const hint = document.createElement("div");
-    hint.className = "af-input-hint";
-    hint.textContent = "↑↓ history · Tab accept · @agent";
+    const hint = el("div", "af-input-hint", "↑↓ history · Tab accept · @agent");
     // Pending-attachment chip tray (hidden while empty via CSS); filled by the
     // chat controller from `af-attachment-added` events (drop / paste).
-    const tray = document.createElement("div");
-    tray.className = "af-attach-tray";
+    const tray = el("div", "af-attach-tray");
     tray.id = "af-attach-tray";
     // Always attached, gated inside: the input is built before /api/config has
     // answered, so a check here would decide with an answer nobody has yet.
@@ -305,13 +292,9 @@ async function attachFiles(files: File[]): Promise<void> {
  *  Dropping needs a window to drop onto and the file already in view, neither of
  *  which holds on a phone or when it sits several folders deep. */
 function buildAttachBtn(): { button: HTMLButtonElement; picker: HTMLInputElement } {
-    const btn = document.createElement("button");
-    btn.className = "af-attach-btn";
-    btn.title = "Attach files";
-    btn.setAttribute("aria-label", "Attach files");
-    btn.innerHTML = iconMarkup("paperclip", 16);
+    const btn = iconButton("af-attach-btn", "Attach files", iconMarkup("paperclip", 16));
 
-    const picker = document.createElement("input");
+    const picker = el("input");
     picker.type = "file";
     picker.multiple = true;
     // ACCEPTED_MIME holds both prefixes ("image/") and exact types
@@ -335,14 +318,14 @@ function buildAttachBtn(): { button: HTMLButtonElement; picker: HTMLInputElement
 
 /** Build the full chat input bar. */
 export function buildIobar(deps: IobarDeps): HTMLElement {
-    const bar = document.createElement("div");
-    bar.className = "af-iobar";
+    const bar = el("div", "af-iobar");
 
-    const select = document.createElement("select");
-    select.className = "af-target-select";
-    select.id = "af-target-select";
-    select.name = "chat-target";
-    select.setAttribute("aria-label", "Chat target agent");
+    const select = named(
+        el("select", "af-target-select"),
+        "chat-target",
+        "Chat target agent",
+        "af-target-select",
+    );
     deps.populateSelect(select);
 
     const { inputWrap, input, mentionPanel } = buildInputArea(deps, select);

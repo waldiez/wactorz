@@ -13,6 +13,7 @@
  */
 import { iconMarkup } from "./icons";
 import { safeStorage } from "../../safeStorage";
+import { iconButton } from "../dom";
 
 /** Where the seeded server capability is kept. See `config/serverConfig.ts`. */
 export const SIGN_OUT_KEY = "wactorz-can-sign-out";
@@ -48,11 +49,7 @@ export function signOut(): void {
  * load — only on the reload after one.
  */
 export function buildSignOutButton(): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.className = "af-view-btn af-view-btn-icon";
-    btn.title = "Sign out";
-    btn.setAttribute("aria-label", "Sign out");
-    btn.innerHTML = iconMarkup("sign-out");
+    const btn = iconButton("af-view-btn af-view-btn-icon", "Sign out", iconMarkup("sign-out"));
     btn.addEventListener("click", () => signOut());
     btn.classList.add("af-sign-out-btn");
     applySignOutVisibility(btn);

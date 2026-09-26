@@ -404,7 +404,8 @@ describe("CardDashboard behaviour", () => {
             const link = withHa.root.querySelector(".af-ha-nav-link");
             expect(link.getAttribute("href")).toBe("http://ha.local:8123");
             expect(link.target).toBe("_blank");
-            expect(link.rel).toBe("noopener");
+            // noreferrer as well: Home Assistant has no use for this page's address.
+            expect(link.rel).toBe("noopener noreferrer");
             withHa.destroy();
         });
 

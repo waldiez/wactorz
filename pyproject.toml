@@ -58,6 +58,9 @@ tts       = [
     "edge-tts>=6.1.9",
 ]
 cron      = ["croniter>=2.0.0"]
+# Bluetooth for Flic buttons. Out of `all`: it needs 3.12, and a host with
+# no Bluetooth adapter has nothing to install it for.
+flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
 data      = ["pandas>=2.0.0"]
 vision    = ["opencv-python>=4.8.0"]
 docs      = [

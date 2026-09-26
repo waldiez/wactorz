@@ -62,6 +62,20 @@ logger = logging.getLogger(__name__)
 # ── Topic Contract ─────────────────────────────────────────────────────────────
 
 
+#: How much of an agent's description the planner is shown. Enough for what an
+#: agent says about its topics; a description written as an essay is cut, so
+#: one agent cannot crowd the others out of the prompt.
+PLANNER_DESCRIPTION_CHARS = 600
+
+
+def planner_description(text: str) -> str:
+    """A description as one line for the planner, cut at `PLANNER_DESCRIPTION_CHARS`."""
+    line = " ".join(text.split())
+    if len(line) > PLANNER_DESCRIPTION_CHARS:
+        return line[:PLANNER_DESCRIPTION_CHARS].rstrip() + "…"
+    return line
+
+
 @dataclass
 class TopicContract:
     """Declares what an agent produces and consumes via MQTT topics.
@@ -108,6 +122,12 @@ class TopicContract:
     #       "example": {"temp": 30.5, "humidity": 47.7}
     #   }}
     observed_samples: dict = field(default_factory=dict)
+    #: What the agent says about itself in its manifest. Topics alone can be
+    #: indistinguishable — two buttons publish the same gestures under
+    #: different serials — and the description is where an agent says which
+    #: is which. Not stored with the contract: the retained manifest brings it
+    #: back after a restart.
+    description: str = ""
 
     def __post_init__(self):
         """Guard against LLM mistakes:
@@ -177,6 +197,7 @@ class TopicContract:
             "actor_id": self.actor_id,
             "timestamp": self.timestamp,
             "observed_samples": self.observed_samples,
+            "description": self.description,
         }
 
     @classmethod
@@ -192,6 +213,7 @@ class TopicContract:
             actor_id=d.get("actor_id"),
             timestamp=d.get("timestamp", time.time()),
             observed_samples=d.get("observed_samples", {}),
+            description=d.get("description", "") or "",
         )
 
     @classmethod
@@ -356,6 +378,8 @@ class TopicRegistry:
         lines = ["LIVE DATA FLOWS (topic contracts):"]
         for c in sorted(self._contracts.values(), key=lambda x: x.name):
             lines.append(f"\n  [{c.name}]" + (f" on {c.node}" if c.node else ""))
+            if c.description:
+                lines.append(f"    about     : {planner_description(c.description)}")
             if c.publishes:
                 lines.append(f"    publishes : {', '.join(c.publishes)}")
             if c.subscribes:

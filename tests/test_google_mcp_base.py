@@ -13,7 +13,10 @@ must not erase the one already stored, or every later refresh fails.
 
 import asyncio
 import json
+import os
 import socket
+import stat
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -518,6 +521,23 @@ class TestTokens:
         client._save_access_token("fresh")
 
         assert _stored(config) == {"tokens": {"access_token": "fresh"}}
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+    def test_a_refreshed_access_token_is_private_even_as_the_first_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A refresh can create the token file; it gets the same 0600 as the
+        # token response, whatever the umask.
+        config = _config(tmp_path, monkeypatch)
+        client = GoogleMcpClient(config)
+        previous = os.umask(0)
+        try:
+            client._save_access_token("fresh")
+        finally:
+            os.umask(previous)
+
+        path = Path(config.token_file()).expanduser()
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
     async def test_refreshing_needs_a_refresh_token_and_a_client(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

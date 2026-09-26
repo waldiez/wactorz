@@ -9,6 +9,7 @@ Imports nothing from ``wactorz``, so modules loaded during ``core`` package
 initialisation can use it at file scope.
 """
 
+import json
 import os
 import pickle
 import time
@@ -70,6 +71,29 @@ def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def write_private_json(path: Path, data: dict[str, Any]) -> None:
+    """Write JSON to `path` so only this user can read it back.
+
+    Created at 0600 rather than chmod-ed afterwards: creating it at the umask's
+    permissions and narrowing them after leaves a window in which the secrets
+    are readable by anyone on the machine, and leaves them that way for good if
+    the chmod fails. Replaced rather than written in place, so a crash mid-write
+    leaves the previous file whole instead of a truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Named for this process and created exclusively: two writers cannot land on
+    # the same temp file, and O_EXCL refuses a path that already exists — so a
+    # symlink planted there is an error rather than somewhere the secrets go.
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def quarantine_unreadable(path: Path) -> Path | None:

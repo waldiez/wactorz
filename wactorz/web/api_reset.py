@@ -86,6 +86,20 @@ def forget_legacy_state(actor: Any, keys: tuple[str, ...] | None = None) -> None
         state.pop(key, None)
 
 
+async def forget_actor(actor: Any) -> None:
+    """Stop an actor a factory reset is forgetting, after its own clean-up.
+
+    The reset removes the agent for good, as a delete does, and purges what it
+    knows about: the agent's retained `agents/<id>/` topics, its pickle, its
+    spawn entry. What an agent keeps elsewhere — files of its own, retained
+    messages under its own topics — only the agent knows, and `on_delete` is
+    where it removes them. Stopped without it, those outlive the reset, and a
+    fresh spawn of the same agent picks them up again.
+    """
+    await actor.delete_own_traces()
+    await actor.stop()
+
+
 def survives_factory_reset(name: str, protected: bool) -> bool:
     """Whether an agent is kept by ``reset all`` (factory reset).
 
@@ -166,7 +180,9 @@ async def reset_handler(request: web.Request) -> Response:
             if supervisor is not None:
                 for actor in stoppable:
                     supervisor.release(actor.name)
-            await asyncio.gather(*[actor.stop() for actor in stoppable], return_exceptions=True)
+            await asyncio.gather(
+                *[forget_actor(actor) for actor in stoppable], return_exceptions=True
+            )
             await asyncio.gather(
                 *[runtime.registry.unregister(a.actor_id) for a in stoppable if runtime.registry],
                 return_exceptions=True,

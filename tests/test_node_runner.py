@@ -369,6 +369,26 @@ class TestStopping:
         assert f"agents/{agent.actor_id}/manifest" in cleared
         assert f"agents/{agent.actor_id}/heartbeat" in cleared
 
+    async def test_a_delete_here_does_not_run_the_agents_own_delete_hook(
+        self, runner: RecordingRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The same delete drops the copy a migration leaves behind, while the
+        # agent carries on elsewhere under the same topics. Its own clean-up
+        # would take retained state from the copy that is still running.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        hooks: list[str] = []
+
+        async def on_delete() -> None:
+            hooks.append("on_delete")
+
+        monkeypatch.setattr(agent, "on_delete", on_delete)
+
+        await runner.stop_agent("collector", delete=True)
+
+        assert hooks == []
+
     async def test_stopping_something_that_is_not_here_is_harmless(
         self, runner: RecordingRunner
     ) -> None:

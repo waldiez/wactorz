@@ -1491,6 +1491,61 @@ class TestConnectionsTheLibraryMakes:
         assert agent._finder is not None
         await agent.on_stop()
 
+    async def test_after_a_drop_the_library_gets_the_first_turn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The library retries with the device it has; a scan started over
+        # those retries can knock down the connection being made.
+        monkeypatch.setattr(flic_agent, "FIND_INTERVAL_S", 0.2)
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._loop = asyncio.get_running_loop()
+        agent._known_buttons = [button()]
+        await agent._listen()
+        lookups: list[str] = []
+
+        async def lookup(address: str, _timeout: float) -> Any:
+            lookups.append(address)
+            return FakeDevice(address)
+
+        monkeypatch.setattr(flic_agent, "find_button", lookup)
+        client = _client(agent, "kitchen")
+
+        client.connection(False)
+        await asyncio.sleep(0.1)
+        assert lookups == []
+
+        await asyncio.sleep(0.2)
+        assert lookups == ["AA:BB:CC:DD:EE:FF"]
+        assert client.devices_given
+        await agent.on_stop()
+
+    async def test_a_button_the_library_brings_back_is_never_scanned_for(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(flic_agent, "FIND_INTERVAL_S", 0.05)
+        agent, _published = make_agent(tmp_path, monkeypatch)
+        agent._loop = asyncio.get_running_loop()
+        agent._known_buttons = [button()]
+        await agent._listen()
+        lookups: list[str] = []
+
+        async def lookup(address: str, _timeout: float) -> Any:
+            lookups.append(address)
+            return FakeDevice(address)
+
+        monkeypatch.setattr(flic_agent, "find_button", lookup)
+        client = _client(agent, "kitchen")
+
+        client.connection(False)
+        await asyncio.sleep(0.01)
+        client.connection(True)
+        finder = agent._finder
+        assert finder is not None
+        await asyncio.wait_for(finder, timeout=1)
+
+        assert lookups == []
+        await agent.on_stop()
+
     async def test_a_forgotten_button_publishes_nothing_more(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

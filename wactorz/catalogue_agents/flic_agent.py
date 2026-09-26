@@ -773,12 +773,28 @@ class FlicAgent(Actor):
         async with self._scan_lock:
             return await find_button(address, FIND_TIMEOUT_S)
 
-    def _ensure_finder(self) -> None:
-        """Start looking for unconnected buttons, unless something already is."""
-        if self._listening and (self._finder is None or self._finder.done()):
-            self._finder = asyncio.create_task(self._find_missing())
+    def _ensure_finder(self, hold_off: bool = False) -> None:
+        """Start looking for unconnected buttons, unless something already is.
 
-    async def _find_missing(self) -> None:
+        `hold_off` delays the first lookup by one interval; see
+        `_ensure_finder_after_drop`.
+        """
+        if self._listening and (self._finder is None or self._finder.done()):
+            self._finder = asyncio.create_task(self._find_missing(hold_off))
+
+    def _ensure_finder_after_drop(self) -> None:
+        """Start looking for a button that has just dropped, after giving it time.
+
+        A button that drops still has the device the library reconnects with,
+        and the library's own retries usually bring it back within seconds. A
+        scan started meanwhile competes with them, and on some controllers
+        starting one knocks down the connection being made. The search is for
+        a button the library cannot reach by itself, so it waits one interval
+        before its first look.
+        """
+        self._ensure_finder(hold_off=True)
+
+    async def _find_missing(self, hold_off: bool = False) -> None:
         """Hand a fresh device to every listening client that is not connected.
 
         Home Assistant does this from every advertisement it hears; here it is a
@@ -791,6 +807,8 @@ class FlicAgent(Actor):
         buttons come back soon after the adapter does instead of after the
         longest wait.
         """
+        if hold_off:
+            await asyncio.sleep(FIND_INTERVAL_S)
         delay = FIND_INTERVAL_S
         while self._listening:
             waiting = [
@@ -887,7 +905,8 @@ class FlicAgent(Actor):
 
         The library reconnects by itself, so the first start is not the only
         moment a button becomes reachable. Handed to the loop like a press, and
-        a drop also sets the finder looking, in case the device went stale.
+        a drop also sets the finder looking, after the library has had its turn,
+        in case the device went stale.
         """
 
         def handler(state: Any) -> None:
@@ -903,7 +922,7 @@ class FlicAgent(Actor):
                 self._presses.put_nowait, (key, CONNECTION_EVENT, time.time(), change)
             )
             if not connected:
-                loop.call_soon_threadsafe(self._ensure_finder)
+                loop.call_soon_threadsafe(self._ensure_finder_after_drop)
 
         return handler
 

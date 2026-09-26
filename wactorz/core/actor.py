@@ -1096,6 +1096,12 @@ class Actor(ABC):
         promises that no trace of the agent is left. The caller purges the
         stores it knows about afterwards. This is for everything else the agent
         owns: files of its own, and retained messages outside `agents/<id>/`.
+
+        It runs where an agent is deleted in this process: main's delete, and
+        the actor's own `delete` command. A node's runner does not call it. Its
+        delete also drops the copy an agent leaves behind when it migrates, and
+        there the agent lives on elsewhere under the same topics, so removing
+        its retained messages would take them from the copy that is running.
         """
 
     @abstractmethod

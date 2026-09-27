@@ -438,22 +438,25 @@ class TestTokensWithNoKeyNameToFindThemBy:
 class TestNoCatastrophicBacktracking:
     """Agent output reaches the log, so the patterns meet adversarial input."""
 
+    # Named, not identified by their text: pytest puts a test's id in the
+    # PYTEST_CURRENT_TEST environment variable, and on Windows a variable longer
+    # than 32767 characters fails the test before it runs.
     @pytest.mark.parametrize(
         "hostile",
         [
-            "password=" + "a" * 20_000,
-            "token=" + "a=" * 10_000,
-            "mqtt://" + "u:" * 10_000 + "@host",
-            "-----BEGIN RSA PRIVATE KEY-----" + "A" * 20_000,
-            "{'api_key': '" + "x" * 20_000,
-            "Bearer " + "-" * 20_000,
-            " " * 20_000 + "password=x",
-            "/bot" + "1" * 20_000,
-            "/bot123:" + "a" * 20_000,
-            "eyJ" + "a" * 20_000 + ".eyJ" + "b" * 20_000,
-            "eyJ." * 5_000,
-            "sk-" * 7_000,
-            "ghp_" + "a" * 20_000,
+            pytest.param("password=" + "a" * 20_000, id="assignment"),
+            pytest.param("token=" + "a=" * 10_000, id="assignment-repeated"),
+            pytest.param("mqtt://" + "u:" * 10_000 + "@host", id="url-userinfo"),
+            pytest.param("-----BEGIN RSA PRIVATE KEY-----" + "A" * 20_000, id="pem-open"),
+            pytest.param("{'api_key': '" + "x" * 20_000, id="dict-open"),
+            pytest.param("Bearer " + "-" * 20_000, id="bearer"),
+            pytest.param(" " * 20_000 + "password=x", id="leading-space"),
+            pytest.param("/bot" + "1" * 20_000, id="telegram-id"),
+            pytest.param("/bot123:" + "a" * 20_000, id="telegram-token"),
+            pytest.param("eyJ" + "a" * 20_000 + ".eyJ" + "b" * 20_000, id="jwt-open"),
+            pytest.param("eyJ." * 5_000, id="jwt-repeated"),
+            pytest.param("sk-" * 7_000, id="sk-repeated"),
+            pytest.param("ghp_" + "a" * 20_000, id="github"),
         ],
     )
     def test_completes_promptly(self, hostile: str) -> None:

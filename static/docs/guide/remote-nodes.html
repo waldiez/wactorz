@@ -349,6 +349,10 @@ broker access</strong>, and the broker carries the code spawned agents run. An a
 per node is the answer, and Wactorz can issue them.</p>
 <h3 id="an-account-per-node">An account per node</h3>
 <p><code>WACTORZ_NODE_ACCOUNTS=1</code> gives every deployed node an account named after it.
+The compose files turn it on for their own broker, and the add-ons for their
+embedded one; <code>WACTORZ_NODE_ACCOUNTS=0</code> in <code>.env</code> keeps compose's nodes on the
+shared account. A node already deployed keeps the shared account until its next
+<code>/deploy</code>, so change <code>MQTT_PASSWORD</code> once every node has been deployed again.
 The password is derived from the same secret the signing keys come from, so
 nothing new is stored and a leaked password file says nothing about a signing
 key, and <code>/deploy</code> writes it into the node's <code>~/wactorz/.env</code> as before. A
@@ -409,10 +413,14 @@ properties, so the payload is unchanged.</p>
 <p>What a node does with a command that is not signed for it is set by
 <code>WACTORZ_NODE_SIGNING</code> on the server, and written to the node when it is deployed:</p>
 <ul>
-<li><code>warn</code> (the default) acts on it and counts it. The node reports the count in its
-  heartbeat, and main says in chat when it goes up.</li>
-<li><code>enforce</code> refuses it.</li>
+<li><code>enforce</code> (the default) refuses it. Main signs everything it sends a node, so an
+  unsigned command came from something else with access to the broker.</li>
+<li><code>warn</code> acts on it and counts it. The node reports the count in its heartbeat, and
+  main says in chat when it goes up — the way to find out what sends unsigned
+  commands on an install before refusing them.</li>
 </ul>
+<p>A node takes the mode at its next <code>/deploy</code>: one deployed while the default was
+<code>warn</code> keeps warning until then.</p>
 <p>A node deployed before signing holds no key and acts on everything, as it always
 did; deploy it again to give it one. A node remembers the commands it has
 accepted, so a captured one cannot be replayed, and refuses one published before

@@ -339,6 +339,102 @@ class TestFilterRecordHandling:
         assert SecretRedactingFilter().filter(record("%d items", "not-a-number")) is True
 
 
+def _token(*parts: str) -> str:
+    """A token-shaped string, assembled so this file holds none.
+
+    Secret scanners read the source, not the value: a fake written out whole is
+    reported as a leaked credential and blocks the push that carries it.
+    """
+    return "".join(parts)
+
+
+#: Fakes in the shapes the redactor recognises. None of them is real.
+TELEGRAM_TOKEN = _token("123456789", ":", "AAH4kE3xQ", "-abcdEFGHijklMNOPqrstUVwxyz")
+JWT = _token(
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    ".",
+    "eyJpc3MiOiIxMjM0NTY3ODkwIn0",
+    ".",
+    "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+)
+PREFIXED_KEYS = [
+    _token("sk-", "ant-api03-", "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"),
+    _token("sk-", "proj-", "AbCdEfGhIjKlMnOpQrStUvWxYz0123"),
+    _token("gh", "p_", "abcdefghijklmnopqrstuvwxyz0123456789"),
+    _token("github", "_pat_", "11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz"),
+    _token("xo", "xb-", "1234567890-", "abcdefghijklmn"),
+]
+
+
+class TestTokensWithNoKeyNameToFindThemBy:
+    """Recognised by their own shape, since nothing next to them says what they are."""
+
+    def test_a_telegram_bot_token_in_the_api_url(self) -> None:
+        # The HTTP client logs every request URL at INFO, token and all.
+        line = (
+            f"HTTP Request: POST https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates "
+            '"HTTP/1.1 200 OK"'
+        )
+
+        out = redact(line)
+
+        assert "AAH4kE3xQ" not in out
+        assert f"https://api.telegram.org/bot{REDACTED}/getUpdates" in out
+
+    def test_a_json_web_token(self) -> None:
+        # The form of Home Assistant's long-lived access tokens.
+        assert redact(f"authorising with {JWT} now") == f"authorising with {REDACTED} now"
+
+    @pytest.mark.parametrize("key", PREFIXED_KEYS)
+    def test_an_api_key_with_a_telling_prefix(self, key: str) -> None:
+        assert redact(f"using {key} for this") == f"using {REDACTED} for this"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "sklearn is installed",
+            "skip-this-step",
+            "a lone eyJ",
+            "task-1234",
+            "desk-lamp-kitchen-01",
+        ],
+    )
+    def test_ordinary_words_are_left_alone(self, text: str) -> None:
+        assert redact(text) == text
+
+    def test_a_second_pass_changes_nothing(self) -> None:
+        line = redact(f"bot /bot{TELEGRAM_TOKEN}/ and sk-" + "a" * 30)
+
+        assert redact(line) == line
+
+    def test_a_logger_turned_up_at_runtime_still_cannot_leak_it(self) -> None:
+        # What `POST /api/logs/capture` can do: put the HTTP client back at INFO.
+        seen: list[str] = []
+
+        class Collect(logging.Handler):
+            def emit(self, rec: logging.LogRecord) -> None:
+                seen.append(rec.getMessage())
+
+        handler = Collect()
+        handler.addFilter(SecretRedactingFilter())
+        client = logging.getLogger("httpx")
+        previous = client.level
+        client.addHandler(handler)
+        client.setLevel(logging.INFO)
+        try:
+            client.info(
+                'HTTP Request: %s %s "%s"',
+                "POST",
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates",
+                "HTTP/1.1 200 OK",
+            )
+        finally:
+            client.removeHandler(handler)
+            client.setLevel(previous)
+
+        assert seen and "AAH4kE3xQ" not in seen[0]
+
+
 class TestNoCatastrophicBacktracking:
     """Agent output reaches the log, so the patterns meet adversarial input."""
 
@@ -352,6 +448,12 @@ class TestNoCatastrophicBacktracking:
             "{'api_key': '" + "x" * 20_000,
             "Bearer " + "-" * 20_000,
             " " * 20_000 + "password=x",
+            "/bot" + "1" * 20_000,
+            "/bot123:" + "a" * 20_000,
+            "eyJ" + "a" * 20_000 + ".eyJ" + "b" * 20_000,
+            "eyJ." * 5_000,
+            "sk-" * 7_000,
+            "ghp_" + "a" * 20_000,
         ],
     )
     def test_completes_promptly(self, hostile: str) -> None:

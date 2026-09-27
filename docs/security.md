@@ -89,7 +89,10 @@ that text into a prompt. Nothing about that PDF is under your control. It
 reaches that agent's own model first and the main agent's context only
 indirectly, through the reply — two hops rather than a direct line to the
 spawner, which is why it is worth stating plainly rather than assuming the
-distance protects you.
+distance protects you. What it can fetch is bounded: only public web addresses,
+every redirect checked the same way, so a search result cannot send it to a
+router or a cloud metadata address on the network it runs in, and nothing past
+50 MB.
 
 Assume any document an agent reads can attempt to instruct it. Give agents the
 narrowest credentials that let them do their job.
@@ -148,7 +151,11 @@ the broker. Anything that can publish to it can drive Wactorz.
 ## Secrets, logs and stored data
 
 - **Logs are redacted** as they are written — known credential shapes are
-  scrubbed before anything is stored or served. This is a floor, not a
+  scrubbed before anything is stored or served: a secret named as one
+  (`password=`, `"api_key": …`), a `Bearer` header, credentials in a URL, a
+  private key, and tokens recognisable by their shape alone — a Telegram bot
+  token in the Bot API's URLs, a JSON web token such as Home Assistant's, and
+  `sk-`, `ghp_`, `github_pat_` and `xox?-` keys. This is a floor, not a
   guarantee: a log can carry a secret nobody chose to write into it. Treat the
   log view as shareable with care.
 - **Raising a library to `DEBUG`** puts request bodies and headers into that same

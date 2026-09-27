@@ -250,10 +250,13 @@ wactorz --interface whatsapp
 
 ```bash
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-TWILIO_AUTH_TOKEN=your_auth_token
+TWILIO_AUTH_TOKEN=your_auth_token               # required — the webhook checks Twilio's signature with it
 TWILIO_WHATSAPP_NUMBER=whatsapp:+14155238886
 WHATSAPP_ALLOWED_NUMBERS=+306912345678        # required — comma-separate for several people
 ```
+
+The webhook will not start without both. It answers Twilio at once and replies
+to the message when the model has, so a slow answer is never delivered twice.
 
 > **The allow-list is required.** The webhook is a public HTTP endpoint, so without it the interface refuses to start. Messages from other numbers are dropped before reaching the LLM.
 

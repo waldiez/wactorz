@@ -16,6 +16,7 @@ from aiohttp.web_response import Response
 from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...core.actor import forbidden
 from ...monitoring import PrometheusMonitor
+from ...web import origins
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
@@ -258,6 +259,24 @@ class RESTInterface:
             return web.json_response(payload)
 
         @web.middleware
+        async def origin_middleware(request: Request, handler: Any) -> Response:
+            """With no key, refuse a host or origin that is not this machine's own.
+
+            Without a key the API is open, and these checks are all that keeps a
+            web page out of it: one that rebinds its own name to this address, or
+            posts to it from another site. With a key they add nothing, since
+            neither kind of page can present the key, and the host check would
+            refuse the name a scraper on the container network uses. The probe
+            endpoints are left alone either way: they change nothing and say only
+            that the process is up, and a load balancer asks under its own name.
+            """
+            if not self.api_key and request.path not in UNGUARDED_PATHS:
+                refusal = origins.refuse(request)
+                if refusal is not None:
+                    return refusal
+            return await handler(request)
+
+        @web.middleware
         async def auth_middleware(request: Request, handler: Any) -> Response:
             """Apply the key check to every route but the probe endpoints.
 
@@ -270,7 +289,7 @@ class RESTInterface:
             return await handler(request)
 
         app = web.Application(
-            middlewares=[self._monitor.middleware, auth_middleware],
+            middlewares=[self._monitor.middleware, origin_middleware, auth_middleware],
             client_max_size=MAX_REQUEST_BYTES,
         )
         app.router.add_get("/health", health_endpoint)

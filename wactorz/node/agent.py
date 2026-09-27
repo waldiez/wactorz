@@ -152,6 +152,10 @@ class NodeAgent(DynamicAgent):
 
     # ── Talking to main ───────────────────────────────────────────────────────
 
+    def sign_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        """``request`` signed with this node's key, so main can tell who is asking."""
+        return self._runner.sign_request(request)
+
     async def ask_main(self, topic: str, payload: dict[str, Any], timeout: float) -> Any:
         """Publish a request to main and wait for the reply it sends back."""
         return await request_over_mqtt(self, topic, payload, timeout)

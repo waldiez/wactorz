@@ -137,6 +137,10 @@ class NodeRunner:
         """Queue a message for the publisher loop. Never waits for room."""
         await self.publisher.publish(topic, data, retain=retain)
 
+    def sign_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        """``request`` signed with this node's key, if it has one."""
+        return self._control.sign_request(request)
+
     # ── The agents running here ───────────────────────────────────────────────
 
     @property

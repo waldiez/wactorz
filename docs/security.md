@@ -135,6 +135,13 @@ the broker. Anything that can publish to it can drive Wactorz.
   refusing them. A node deployed before signing holds no key and checks nothing
   until it is deployed again, and a node takes the mode at its next `/deploy`. Commands are what is signed: an
   agent's own messages, and what an agent reads from the broker, are not.
+- **Main's LLM answers only the nodes it deployed.** An agent on a node asks main's
+  LLM over the broker (`main/llm_request`), and main answers with its own budget and
+  an account the broker lets write anywhere. So a request names its node and is
+  signed with that node's key, and main replies only on that node's own
+  `nodes/<name>/reply/...` topics: a request naming any other reply topic gets
+  nothing at all. An unsigned request follows `WACTORZ_NODE_SIGNING` like a command:
+  `enforce` answers it with an error, `warn` answers it and main says so in chat.
 
 ---
 

@@ -27,6 +27,10 @@ message cannot be delivered twice. The sequence is this server's clock in
 microseconds, kept strictly increasing, so a node needs no clock of its own to
 check it -- a board without a battery-backed clock may boot into the wrong year.
 
+The other direction uses the same key. A node signs the requests it sends
+main's LLM bridge (``main/llm_request``), so main spends its budget only for a
+node it deployed, and only as that node: see :func:`sign_request`.
+
 The receiving half is :mod:`wactorz.node.signing`, which imports this module
 rather than restating it — a node runs the package. What it adds is the record
 of which sequence numbers it has already accepted.
@@ -35,6 +39,7 @@ of which sequence numbers it has already accepted.
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -140,6 +145,49 @@ def next_sequence() -> int:
 def signing_input(topic: str, sequence: int, payload: bytes) -> bytes:
     """What a signature covers: the topic, the sequence number and the payload as sent."""
     return b"\n".join((topic.encode("utf-8"), str(sequence).encode("ascii"), payload))
+
+
+#: Where a signed request to main's LLM bridge carries its signature.
+REQUEST_SIGNATURE_FIELD = "_sig"
+
+#: Binds a request signature to that use. The node's key also checks the
+#: commands main sends it, so without this a signature made for one could be
+#: offered as the other.
+_REQUEST_CONTEXT = b"wactorz-llm-request-v1\n"
+
+
+def request_signing_input(request: dict[str, Any]) -> bytes:
+    """What a bridge request's signature covers: every field but the signature.
+
+    Written canonically -- sorted keys, compact separators -- so the node signing
+    it and main checking it agree however their JSON writers differ; main has
+    only the parsed request to recompute from. The reply topic is among the
+    fields, and it is unique per request, which is what makes a replay
+    recognisable. No timestamp: main never relies on a node's clock.
+    """
+    body = {key: value for key, value in request.items() if key != REQUEST_SIGNATURE_FIELD}
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return _REQUEST_CONTEXT + canonical.encode("utf-8")
+
+
+def sign_request(request: dict[str, Any], key: bytes) -> dict[str, Any]:
+    """``request`` with its signature added, made with a node's ``key``."""
+    digest = hmac.new(key, request_signing_input(request), hashlib.sha256).hexdigest()
+    return {**request, REQUEST_SIGNATURE_FIELD: digest}
+
+
+def request_signed_for(request: dict[str, Any], node: str) -> bool:
+    """Whether ``request`` carries a valid signature made with ``node``'s key."""
+    signature = request.get(REQUEST_SIGNATURE_FIELD)
+    if not isinstance(signature, str) or not node:
+        return False
+    try:
+        key = bytes.fromhex(node_key(node))
+    except (OSError, ValueError):
+        logger.exception("[nodes] Could not derive %r's key to check a request", node)
+        return False
+    expected = hmac.new(key, request_signing_input(request), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
 
 
 def node_control_properties(topic: str, payload: Any) -> list[tuple[str, str]] | None:

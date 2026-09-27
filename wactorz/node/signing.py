@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from ..core.atomic_io import write_text
-from ..core.node_signing import SEQUENCE_PROPERTY, SIGNATURE_PROPERTY, signing_input
+from ..core.node_signing import (
+    SEQUENCE_PROPERTY,
+    SIGNATURE_PROPERTY,
+    sign_request,
+    signing_input,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +84,16 @@ class ControlGuard:
         self._said_open = False
         #: Messages that were not signed for this node, acted on or not.
         self.failures = 0
+
+    def sign_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        """``request`` signed with this node's key, for main's LLM bridge.
+
+        Unchanged when the node holds no usable key: main then answers it or
+        refuses it by its own signing mode, and says which.
+        """
+        if self._key is None:
+            return request
+        return sign_request(request, self._key)
 
     @property
     def mode(self) -> str:

@@ -14,6 +14,7 @@ the sliding window in `test_topic_bus_window.py`; nothing here repeats them.
 import argparse
 import asyncio
 import contextlib
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,10 +26,12 @@ from wactorz import cli
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
 from wactorz.core.actor import derive_actor_id
+from wactorz.core.node_signing import REQUEST_SIGNATURE_FIELD, node_key, request_signed_for
 from wactorz.node import cli as node_cli
 from wactorz.node.agent import NodeAgent
 from wactorz.node.llm import BridgeProvider
 from wactorz.node.runner import NodeRunner
+from wactorz.node.signing import ControlGuard
 
 
 @pytest.fixture(name="runner")
@@ -151,6 +154,26 @@ class TestWhatIsDifferentOnANode:
         assert topic == "main/llm_request"
         assert payload["_reply_topic"].startswith("nodes/node-a/reply/")
         assert payload["agent"] == "edge-agent"
+
+    async def test_a_bridged_call_is_signed_so_main_can_tell_who_asks(
+        self, runner: NodeRunner
+    ) -> None:
+        # Main answers only a node it deployed, and only as that node.
+        runner._control = ControlGuard(node_key("node-a"), "", "enforce", runner.state_dir)
+        agent = _agent(runner)
+        sent: list[dict[str, Any]] = []
+
+        async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
+            if isinstance(payload, dict) and "_reply_topic" in payload:
+                sent.append(payload)
+                agent.deliver_reply(payload["_reply_topic"], {"text": "42"})
+
+        agent._mqtt_publish = _publish  # type: ignore[method-assign]
+
+        await agent._api.ask_llm("how many?")
+
+        assert REQUEST_SIGNATURE_FIELD in sent[0]
+        assert request_signed_for(json.loads(json.dumps(sent[0])), "node-a")
 
     async def test_a_bridged_call_that_is_never_answered_gives_up(self, runner: NodeRunner) -> None:
         # `wait_for`, not `asyncio.timeout`: a node may be running Python 3.10.

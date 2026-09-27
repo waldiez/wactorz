@@ -328,7 +328,7 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 ## LLM Bridge & RPC Reply Topics
 
 Remote agents never hold API keys — they route LLM calls through `main`, which
-replies on a per-request ephemeral topic.
+replies on a per-request topic in the asking node's own reply space.
 
 ### `main/llm_request`
 **Published by:** Agents running on a node (`wactorz-node`)
@@ -337,17 +337,32 @@ replies on a per-request ephemeral topic.
 
 ```json
 {
-  "prompt":       "...",
-  "_reply_topic": "main/reply/{actor_id}/{uuid}"
+  "messages":     [{"role": "user", "content": "..."}],
+  "system":       "...",
+  "agent":        "collector",
+  "node":         "rpi-kitchen",
+  "_reply_topic": "nodes/rpi-kitchen/reply/{id}",
+  "_sig":         "{hex HMAC-SHA256}"
 }
 ```
 
+`prompt` may stand in for `messages`. `_sig` is made with the node's signing key
+over every other field, written canonically (sorted keys, compact separators);
+see `sign_request` in `core/node_signing.py`. Main answers only when
+`_reply_topic` is `nodes/<node>/reply/<hex id>` for the `node` the request names,
+and refuses an unsigned or wrongly signed request under
+`WACTORZ_NODE_SIGNING=enforce` with an error reply.
+
 ---
 
-### `main/reply/{actor_id}/{uuid}`
-**Published by:** MainActor (and any RPC responder)
-**Trigger:** Reply to an `main/llm_request` or task request
-**Purpose:** Ephemeral, per-request reply channel (UUID suffix, one-shot).
+### `nodes/{node}/reply/{id}`
+**Published by:** MainActor's LLM bridge
+**Trigger:** Reply to a `main/llm_request`
+**Purpose:** Per-request reply channel for one node (random id, one-shot).
+
+```json
+{ "text": "..." }
+```
 
 ---
 

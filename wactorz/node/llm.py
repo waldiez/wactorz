@@ -77,15 +77,18 @@ async def request_over_mqtt(
     future: asyncio.Future = asyncio.get_event_loop().create_future()
     agent._result_futures[reply_topic] = future
     try:
-        await agent._mqtt_publish(
-            topic,
+        # Signed last, so the signature covers the reply topic and who is asking:
+        # main answers only a node it deployed, only as that node, and only on
+        # that node's own reply topics.
+        request = agent.sign_request(
             {
                 **payload,
                 "_reply_topic": reply_topic,
                 "agent": agent.name,
                 "node": agent.node,
-            },
+            }
         )
+        await agent._mqtt_publish(topic, request)
         return await asyncio.wait_for(future, timeout=timeout)
     except asyncio.TimeoutError:
         logger.warning("[%s] %s timed out after %ss", agent.name, topic, timeout)

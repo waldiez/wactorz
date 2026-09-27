@@ -29,6 +29,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A long agent message in the feed can be read in full anywhere.** Agent rows cut a message at 120 characters and kept the rest in a hover tooltip, which a touchscreen or the keyboard never shows and which flattened the message onto one line. They now open in place like log records: click the row, or press Enter or Space on it, to show the whole message with its line breaks. The text past the cut is also found by the feed's search now.
+
 - **A pipeline triggered by an agent's topic is no longer refused as impossible.** Before designing a pipeline, the planner checks that what it needs exists, and that check was shown only Home Assistant's entities. A trigger that comes from a running agent instead — a Flic button, a sensor on a node — has no entity, so "when the Desk button is double-clicked, toggle the lamp" could be refused as "no Flic button entity". The check is now shown what the running agents publish as well, and judges only the Home Assistant targets against the entity list.
 
 - **A refreshed Google access token no longer leaves the token file readable by other users.** The Calendar and Gmail integrations write their OAuth tokens to a file only its owner can read, but a token refresh wrote the file on its own, at the default permissions when it was the one creating it, and in place, so a crash mid-write could truncate it. Both now go through the same private write: created at 0600, and replaced whole.

@@ -100,19 +100,25 @@ function splitMention(item: FeedItem): { mention: string | null; body: string } 
     return m ? { mention: m[1]!, body: m[2]! } : { mention: null, body: raw };
 }
 
+/** The line a row shows collapsed: the first line of `text`, cut at `TRUNCATE_AT`. */
+function summaryLine(text: string): string {
+    const firstLine = text.split("\n", 1)[0] ?? "";
+    return firstLine.length > TRUNCATE_AT ? firstLine.slice(0, TRUNCATE_AT) + "…" : firstLine;
+}
+
+/** Whether `text` has more to show than its summary line. */
+function needsExpanding(text: string): boolean {
+    return text.includes("\n") || (text.split("\n", 1)[0] ?? "").length > TRUNCATE_AT;
+}
+
 /** The message span: the `@agent` mention (if any) as a styled token, then the
- *  body text, truncated at 120 chars with the full text kept as a tooltip. */
-function buildTextSpan(item: FeedItem): HTMLElement {
+ *  body's summary line. The rest is in the row's expander, not a tooltip. */
+function buildTextSpan(mention: string | null, body: string): HTMLElement {
     const text = el("span", "af-feed-text");
-    const { mention, body } = splitMention(item);
     if (mention) {
         text.append(el("span", "af-feed-mention", mention), document.createTextNode(" "));
     }
-    const shown = body.length > TRUNCATE_AT ? body.slice(0, TRUNCATE_AT) + "…" : body;
-    text.appendChild(document.createTextNode(shown));
-    if (body.length > TRUNCATE_AT) {
-        text.title = body;
-    }
+    text.appendChild(document.createTextNode(summaryLine(body)));
     return text;
 }
 
@@ -130,7 +136,13 @@ export function shortOrigin(origin: string): string {
     return parts.length <= 2 ? origin : parts.slice(-2).join(".");
 }
 
-/** Append a single agent-activity row to `container`. */
+/**
+ * Append a single agent-activity row to `container`.
+ *
+ * A long or multi-line message — an agent's reply, an error it reports — shows
+ * its first line and opens in place, like a log record. A tooltip showed it only
+ * to a mouse, never to a touchscreen or the keyboard, and flattened its lines.
+ */
 export function feedItemEl(container: HTMLElement, item: FeedItem): void {
     const row = el("div", `af-feed-item ${TYPE_CLASS[item.type] ?? ""}`.trim());
     row.dataset["source"] = "agent";
@@ -142,7 +154,11 @@ export function feedItemEl(container: HTMLElement, item: FeedItem): void {
     const iconName = TYPE_ICON[item.type];
     icon.innerHTML = iconName ? iconMarkup(iconName, 14) : "·";
 
-    row.append(icon, timeSpan(item.timestamp), buildAgentSpan(item), buildTextSpan(item));
+    const { mention, body } = splitMention(item);
+    row.append(icon, timeSpan(item.timestamp), buildAgentSpan(item), buildTextSpan(mention, body));
+    if (needsExpanding(body)) {
+        attachExpander(row, mention ? `${mention} ${body}` : body, "af-feed-full-prose");
+    }
     container.appendChild(row);
 }
 
@@ -163,38 +179,32 @@ export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
     const origin = el("span", "af-feed-agent", shortOrigin(item.origin));
     origin.title = item.origin;
 
-    const firstLine = item.text.split("\n", 1)[0] ?? "";
-    const expandable = item.text.includes("\n") || firstLine.length > TRUNCATE_AT;
-
-    const text = el(
-        "span",
-        "af-feed-text af-feed-log-text",
-        firstLine.length > TRUNCATE_AT ? firstLine.slice(0, TRUNCATE_AT) + "…" : firstLine,
-    );
+    const text = el("span", "af-feed-text af-feed-log-text", summaryLine(item.text));
 
     row.append(icon, timeSpan(item.ts * 1000), origin, text);
 
-    if (expandable) {
+    if (needsExpanding(item.text)) {
         attachExpander(row, item.text);
     }
     container.appendChild(row);
 }
 
 /**
- * Make a row reveal its whole record in place.
+ * Make a row reveal its whole text in place.
  *
- * `textContent`, never `innerHTML`. This is the one place the *entire*
- * untrusted record is rendered, and a traceback is exactly the string an agent
- * can be induced to emit — the reach for `innerHTML` here is stored XSS in the
+ * `textContent`, never `innerHTML`. This is where the *entire* untrusted text
+ * is rendered — a traceback, an agent's reply — which is exactly what an agent
+ * can be induced to emit; the reach for `innerHTML` here is stored XSS in the
  * feature whose purpose is displaying attacker-influenceable strings.
+ * `extraClass` styles the expanded text, such as prose rather than a log record.
  */
-function attachExpander(row: HTMLElement, fullText: string): void {
+function attachExpander(row: HTMLElement, fullText: string, extraClass = ""): void {
     row.classList.add("af-feed-expandable");
     row.tabIndex = 0;
     row.setAttribute("role", "button");
     row.setAttribute("aria-expanded", "false");
 
-    const full = el("pre", "af-feed-full", fullText);
+    const full = el("pre", `af-feed-full ${extraClass}`.trim(), fullText);
     full.hidden = true;
     row.appendChild(full);
 

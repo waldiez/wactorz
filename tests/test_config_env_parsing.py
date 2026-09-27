@@ -80,6 +80,34 @@ class TestTheBooleanVocabulary:
         assert _env_truthy("WACTORZ_TEST_FLAG") is False
 
 
+class TestTheNodeSigningMode:
+    """A node holding a key refuses unsigned commands unless told otherwise.
+
+    Main signs every command it sends a node, so an unsigned one came from
+    something else on the broker.
+    """
+
+    def test_unset_enforces(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("WACTORZ_NODE_SIGNING", raising=False)
+
+        assert config._node_signing_mode() == "enforce"
+
+    def test_warn_is_still_honoured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # For finding out what sends unsigned commands before refusing them.
+        monkeypatch.setenv("WACTORZ_NODE_SIGNING", "Warn")
+
+        assert config._node_signing_mode() == "warn"
+
+    def test_a_typo_takes_the_default_and_says_so(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("WACTORZ_NODE_SIGNING", "enforc")
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert config._node_signing_mode() == "enforce"
+
+        assert any("WACTORZ_NODE_SIGNING" in str(w.message) for w in caught)
+
+
 def test_the_state_bridge_flag_is_wired_to_the_shared_parser() -> None:
     """The behaviour change worth naming, and the reason for a source check.
 

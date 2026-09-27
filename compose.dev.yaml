@@ -201,6 +201,11 @@ services:
     environment:
       # The names the certificate carries include the broker this server dials.
       MQTT_HOST: mosquitto
+      # Node accounts are on for this broker: it is configured here, so it knows
+      # the accounts this writes. The app below hands them out at /deploy, and
+      # both must agree. WACTORZ_NODE_ACCOUNTS=0 in .env keeps every node on the
+      # shared account.
+      WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
     # Issued as the runtime user -- docker-entrypoint.sh fixes the state directory's
     # ownership and drops privileges, as in the app -- into this container's /tmp.
     # Root then copies the certificate into the folder and hands it to the folder's
@@ -244,6 +249,8 @@ services:
       # because a key is always set: API_KEY from .env, or the generated one.
       WACTORZ_BIND_HOST: "0.0.0.0"
       API_KEY_FILE: /run/wactorz/api_key
+      # On for this broker, as in mqtt-certs above, which writes what it serves.
+      WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
       MQTT_HOST: mosquitto
       # Same defaults as the broker above, or the two disagree and `make dev`
       # comes up with an app that cannot connect to its own broker.

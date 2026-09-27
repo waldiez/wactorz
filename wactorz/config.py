@@ -238,32 +238,37 @@ RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
 
 #: What a node does with a control message not signed for it, once it holds a key.
 #:
-#: ``warn``     acts on it, as a node always has, and reports it in its heartbeat.
 #: ``enforce``  refuses it.
+#: ``warn``     acts on it and reports it in its heartbeat.
 #:
 #: Written into a node's ``.env`` by ``/deploy``, so it applies to a node from its
 #: next deploy. A node deployed before signing holds no key and acts on everything
-#: whichever this is. ``warn`` is the default because a node that refuses what it
-#: cannot check stops working the moment anything is misconfigured; the reports it
-#: sends while warning are how you learn it is safe to enforce.
+#: whichever this is. ``enforce`` is the default: a node that holds a key was
+#: deployed by a main that signs every command it sends, so an unsigned one comes
+#: from something else with access to the broker -- which is what signing is for.
+#: ``warn`` is for finding out, from those reports, what an install sends that is
+#: not signed before refusing it.
 NODE_SIGNING_MODES = ("warn", "enforce")
+
+#: The mode when none is set, or when the one set is not a mode.
+DEFAULT_NODE_SIGNING = "enforce"
 
 
 def _node_signing_mode() -> str:
-    """The configured mode, or ``warn`` when unset or unrecognised."""
+    """The configured mode, or ``DEFAULT_NODE_SIGNING`` when unset or unrecognised."""
     value = _unquote(os.getenv("WACTORZ_NODE_SIGNING", "") or "").strip().lower()
     if not value:
-        return "warn"
+        return DEFAULT_NODE_SIGNING
     if value not in NODE_SIGNING_MODES:
-        # Named rather than ignored: a typo in "enforce" would otherwise leave
-        # every node warning while you believe it refuses.
+        # Named rather than ignored: a typo would otherwise leave every node on a
+        # mode nobody chose.
         warnings.warn(
             f"WACTORZ_NODE_SIGNING={value!r} is not one of {', '.join(NODE_SIGNING_MODES)} "
-            "— using 'warn'",
+            f"— using {DEFAULT_NODE_SIGNING!r}",
             RuntimeWarning,
             stacklevel=2,
         )
-        return "warn"
+        return DEFAULT_NODE_SIGNING
     return value
 
 

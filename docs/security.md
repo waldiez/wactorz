@@ -116,9 +116,11 @@ the broker. Anything that can publish to it can drive Wactorz.
   The broker still belongs on a network you trust, and nothing here replaces a
   tunnel or VPN across the public internet. See "Encrypted connections (TLS)" in `remote-nodes.md`.
 - **Edge nodes hold broker credentials.** `/deploy` writes them to the node over
-  SSH, and by default a node uses the server's own account, so a stolen node
-  holds full broker access. `WACTORZ_NODE_ACCOUNTS=1` gives each node an account
-  of its own instead, and on the brokers Wactorz configures an access list that
+  SSH. On a broker Wactorz does not configure, a node uses the server's own account
+  unless told otherwise, so a stolen node holds full broker access.
+  `WACTORZ_NODE_ACCOUNTS=1` — the default in the compose files and the add-ons'
+  embedded broker — gives each node an account of its own instead, and on the
+  brokers Wactorz configures an access list that
   keeps a node to its own `nodes/<name>/...` and the shared agent traffic, out of
   every other node's, out of `agents/+/commands` and out of `system/`. It takes
   effect for a node at its next `/deploy`, so rotate the shared password once the
@@ -127,11 +129,11 @@ the broker. Anything that can publish to it can drive Wactorz.
 - **Commands to an edge node are signed.** A node runs the code in a spawn it
   receives, so broker access alone must not be enough to send one. Main signs
   every command it sends a node with a key derived for that node, which `/deploy`
-  writes to the node with its broker credentials. With `WACTORZ_NODE_SIGNING=enforce`
-  a node refuses a command not signed for it; with the default, `warn`, it acts on
-  it and main says so in chat, so you can see that nothing legitimate arrives
-  unsigned before you enforce. A node deployed before signing holds no key and
-  checks nothing until it is deployed again. Commands are what is signed: an
+  writes to the node with its broker credentials. With `WACTORZ_NODE_SIGNING=enforce`,
+  the default, a node refuses a command not signed for it; with `warn` it acts on
+  it and main says so in chat, to find out what sends unsigned commands before
+  refusing them. A node deployed before signing holds no key and checks nothing
+  until it is deployed again, and a node takes the mode at its next `/deploy`. Commands are what is signed: an
   agent's own messages, and what an agent reads from the broker, are not.
 
 ---
@@ -165,10 +167,12 @@ the broker. Anything that can publish to it can drive Wactorz.
    address: a page in a browser on the same machine connects from there too. For
    a proxy on the same host, have it pass `Host` through instead.
 3. Put the broker on a trusted network segment, and set `MQTT_PASSWORD`.
-4. Set `WACTORZ_NODE_ACCOUNTS=1` so each edge node gets its own broker account,
-   deploy every node again, then rotate the account they shared.
-5. Deploy every edge node again after upgrading, so it holds a signing key, and
-   set `WACTORZ_NODE_SIGNING=enforce` once no node reports unsigned commands.
+4. Give each edge node its own broker account: the compose files and the add-ons'
+   embedded broker do by default; elsewhere set `WACTORZ_NODE_ACCOUNTS=1` once the
+   broker has the accounts. Deploy every node again, then rotate the account they
+   shared.
+5. Deploy every edge node again after upgrading, so it holds a signing key and
+   refuses unsigned commands (`WACTORZ_NODE_SIGNING=enforce`, the default).
    Publish the broker's `8883` where nodes can reach it first, so the deploy puts
    them on TLS, and check the deploy log says so.
 6. Give Wactorz only the credentials the agents you run actually need.

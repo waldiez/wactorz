@@ -237,6 +237,11 @@ services:
     environment:
       # The names the certificate carries include the broker this server dials.
       MQTT_HOST: mosquitto
+      # Node accounts are on for this broker: it is configured here, so it knows
+      # the accounts this writes. The app below hands them out at /deploy, and
+      # both must agree. WACTORZ_NODE_ACCOUNTS=0 in .env keeps every node on the
+      # shared account.
+      WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
     # Issued as the runtime user -- docker-entrypoint.sh fixes the state directory's
     # ownership and drops privileges, as in the app -- into this container's /tmp.
     # Root then copies the certificate into the folder and hands it to the folder's
@@ -295,6 +300,8 @@ services:
       # fail-closed check on its own, and if the key went missing the app would
       # refuse to start rather than serve an open API.
       API_KEY_FILE: /run/wactorz/api_key
+      # On for this broker, as in mqtt-certs above, which writes what it serves.
+      WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
     # The entrypoint is root only long enough to chown the state directory, then
     # drops to uid 1000. These three are the only capabilities that step needs —
     # the app itself runs with none. Dropping the rest shrinks the bounding set,

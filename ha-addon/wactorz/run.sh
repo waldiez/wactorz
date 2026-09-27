@@ -192,7 +192,7 @@ WACTORZ_RETENTION_OUTBOX_DAYS=$(get_config_safe 'retention_outbox_days' '7')
 export WACTORZ_RETENTION_OUTBOX_DAYS="${WACTORZ_RETENTION_OUTBOX_DAYS}"
 
 # What a deployed node does with a control message not signed for it: warn or enforce.
-WACTORZ_NODE_SIGNING=$(get_config_safe 'node_signing' 'warn')
+WACTORZ_NODE_SIGNING=$(get_config_safe 'node_signing' 'enforce')
 export WACTORZ_NODE_SIGNING="${WACTORZ_NODE_SIGNING}"
 
 # ── Remote deploy targets ─────────────────────────────────────────────────────

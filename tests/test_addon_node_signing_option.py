@@ -5,10 +5,10 @@ Configured by three files that cannot see each other: `wactorz/config.py` reads
 offers and its default, and `run.sh` turns the option into the variable, with a
 fallback of its own for an options file written before the option existed.
 
-The default warns. A node that refuses what it cannot check stops working the
-moment anything is misconfigured, and an option only appears after the update
-that brings it, so a refusing default would act on an install before its owner
-could see the setting.
+The default enforces, as the server's does: the add-on signs every command it
+sends a node, so an unsigned one came from something else on the broker. It
+reaches a node only at that node's next `/deploy`, which its owner starts, and an
+install that saved `warn` keeps it.
 """
 
 import re
@@ -46,12 +46,12 @@ def _export(addon: str) -> tuple[str, str] | None:
 
 @pytest.mark.parametrize("addon", ADDONS)
 class TestTheModeIsWired:
-    def test_it_is_offered_and_warns_by_default(self, addon: str) -> None:
-        assert _config(addon)["options"][OPTION] == "warn"
+    def test_it_is_offered_and_enforces_by_default(self, addon: str) -> None:
+        assert _config(addon)["options"][OPTION] == config.DEFAULT_NODE_SIGNING == "enforce"
 
     def test_the_schema_offers_exactly_the_modes_wactorz_accepts(self, addon: str) -> None:
         # A mode missing here cannot be chosen; one Wactorz does not know falls back
-        # to warn with a warning, which would surprise someone who picked it.
+        # to the default with a warning, which would surprise someone who picked it.
         schema = _config(addon)["schema"][OPTION]
         match = re.fullmatch(r"list\(([\w|]+)\)\??", schema)
         assert match, schema

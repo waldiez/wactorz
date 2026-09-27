@@ -225,6 +225,10 @@ per node is the answer, and Wactorz can issue them.
 ### An account per node
 
 `WACTORZ_NODE_ACCOUNTS=1` gives every deployed node an account named after it.
+The compose files turn it on for their own broker, and the add-ons for their
+embedded one; `WACTORZ_NODE_ACCOUNTS=0` in `.env` keeps compose's nodes on the
+shared account. A node already deployed keeps the shared account until its next
+`/deploy`, so change `MQTT_PASSWORD` once every node has been deployed again.
 The password is derived from the same secret the signing keys come from, so
 nothing new is stored and a leaked password file says nothing about a signing
 key, and `/deploy` writes it into the node's `~/wactorz/.env` as before. A
@@ -295,9 +299,14 @@ properties, so the payload is unchanged.
 What a node does with a command that is not signed for it is set by
 `WACTORZ_NODE_SIGNING` on the server, and written to the node when it is deployed:
 
-- `warn` (the default) acts on it and counts it. The node reports the count in its
-  heartbeat, and main says in chat when it goes up.
-- `enforce` refuses it.
+- `enforce` (the default) refuses it. Main signs everything it sends a node, so an
+  unsigned command came from something else with access to the broker.
+- `warn` acts on it and counts it. The node reports the count in its heartbeat, and
+  main says in chat when it goes up — the way to find out what sends unsigned
+  commands on an install before refusing them.
+
+A node takes the mode at its next `/deploy`: one deployed while the default was
+`warn` keeps warning until then.
 
 A node deployed before signing holds no key and acts on everything, as it always
 did; deploy it again to give it one. A node remembers the commands it has

@@ -57,10 +57,14 @@ class _Recorder(Actor):
 class _Supervisor:
     def __init__(self) -> None:
         self.released: list[str] = []
+        self.forgotten: list[str] = []
         self.resupervised: list[str] = []
 
     def release(self, name: str) -> None:
         self.released.append(name)
+
+    def drop_supervised(self, name: str) -> None:
+        self.forgotten.append(name)
 
     def resupervise(self, name: str, _actor: Actor) -> None:
         self.resupervised.append(name)
@@ -147,13 +151,17 @@ class TestApplyCommand:
         assert registry.supervisor.released == ["worker"]
         assert actor.calls == ["stop"]
 
-    async def test_delete_releases_unregisters_and_stops(self) -> None:
+    async def test_delete_forgets_unregisters_and_stops(self) -> None:
+        # Forgotten rather than released: a deleted actor does not come back,
+        # and a released entry would keep its factory for as long as the
+        # process runs.
         actor = _Recorder()
         registry = _attach(actor, _Registry(actor))
 
         assert await actor.apply_command("delete") is True
 
-        assert registry.supervisor.released == ["worker"]
+        assert registry.supervisor.forgotten == ["worker"]
+        assert registry.supervisor.released == []
         assert registry.unregistered == [actor.actor_id]
         assert actor.calls == ["stop"]
 

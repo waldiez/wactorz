@@ -182,6 +182,16 @@ class ActorRegistry:
     def __len__(self) -> int:
         return len(self._actors)
 
+    def __bool__(self) -> bool:
+        """A registry is true whenever it exists, however many actors it holds.
+
+        Defining ``__len__`` alone makes an empty container false, while every
+        ``if self._registry:`` in the codebase means "is there one". Read the
+        other way, an empty registry would count as none, and `Actor.spawn`
+        would neither register its first child nor put it under supervision.
+        """
+        return True
+
 
 class Supervisor:
     """OTP-inspired supervision tree node.
@@ -231,7 +241,11 @@ class Supervisor:
         restart_window: float = 60.0,
         restart_delay: float = 1.0,
     ) -> Supervisor:
-        """Register an actor to be supervised. Call before start()."""
+        """Register an actor to be supervised. Call before start().
+
+        A name already supervised is replaced in place: it keeps its position in
+        ``_order``, which is what REST_FOR_ONE restarts by, and appears there once.
+        """
         spec = SupervisedSpec(
             factory=factory,
             strategy=strategy,
@@ -240,8 +254,34 @@ class Supervisor:
             restart_delay=restart_delay,
         )
         self._specs[name] = spec
-        self._order.append(name)
+        if name not in self._order:
+            self._order.append(name)
         return self  # fluent
+
+    def adopt(
+        self,
+        name: str,
+        factory: Callable[[], Actor | Awaitable[Actor]],
+        actor: Actor,
+        strategy: SupervisorStrategy = SupervisorStrategy.ONE_FOR_ONE,
+        max_restarts: int = 5,
+        restart_window: float = 60.0,
+        restart_delay: float = 1.0,
+    ) -> None:
+        """Supervise ``actor``, which is already running, rebuilding it with ``factory``.
+
+        For a child an actor has just spawned. A name seen before is re-armed
+        rather than skipped: a spec retired by :meth:`release` -- an agent
+        stopped, replaced with new code, migrated home, or deleted and spawned
+        again -- would otherwise stay retired, and the new actor would crash and
+        stay down with nobody told. The new factory replaces the old, whose
+        closure rebuilt the actor as it used to be, and the restart history is
+        the old actor's, not this one's.
+        """
+        self.supervise(name, factory, strategy, max_restarts, restart_window, restart_delay)
+        spec = self._specs[name]
+        spec.actor = actor
+        actor.supervisor_id = str(id(self))
 
     def release(self, name: str):
         """Voluntarily remove an actor from supervision — the Erlang 'unlink' equivalent.
@@ -341,19 +381,28 @@ class Supervisor:
     def drop_supervised(self, name: str) -> None:
         """Forget a spec without stopping its actor.
 
-        For an actor that has already ended itself: stopping it again is not
-        wrong so much as misleading, and leaving the spec behind means the
-        watch loop reads "should be running and is not" and starts it back up.
+        For an actor that has ended for good -- deleted, or ended itself:
+        stopping it again is not wrong so much as misleading, and leaving the
+        spec behind means the watch loop reads "should be running and is not"
+        and starts it back up. Unlike :meth:`release`, nothing is kept: a
+        retired spec holds its factory, and the factory's closure holds whatever
+        the actor was built from, for as long as the process runs.
         """
-        if self._specs.pop(name, None) is not None and name in self._order:
+        spec = self._specs.pop(name, None)
+        if spec is None:
+            return
+        if name in self._order:
             self._order.remove(name)
+        if spec.actor is not None:
+            # Or it goes on reporting supervised=True, as with release().
+            spec.actor.supervisor_id = None
+        logger.info("[Supervisor] Forgot '%s'.", name)
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
     async def start(self):
         """Spawn all supervised actors and start the watch loop."""
-        for name in self._order:
-            spec = self._specs[name]
+        for name, spec in self._entries():
             actor = await self._spawn_actor(name, spec)
             spec.actor = actor
 
@@ -465,29 +514,41 @@ class Supervisor:
         elif crashed_spec.strategy == SupervisorStrategy.ONE_FOR_ALL:
             logger.info("[Supervisor] ONE_FOR_ALL — restarting all supervised actors.")
             # Stop all others first (reverse order), then restart in order
-            for name in reversed(self._order):
-                spec = self._specs[name]
+            for name, spec in reversed(self._entries()):
                 if spec.actor and name != crashed_name:
                     await self._stop_actor(name, spec)
-            for name in self._order:
-                spec = self._specs[name]
+            for name, spec in self._entries():
                 if spec.retired:
                     continue
                 await self._restart_one(name, spec)
 
         elif crashed_spec.strategy == SupervisorStrategy.REST_FOR_ONE:
+            if crashed_name not in self._order:
+                # Forgotten between detection and now: nothing left to restart.
+                return
             idx = self._order.index(crashed_name)
             affected = self._order[idx:]  # crashed + everyone registered after it
             logger.info("[Supervisor] REST_FOR_ONE — restarting: %s", affected)
-            for name in reversed(affected):
-                spec = self._specs[name]
+            for name, spec in reversed(self._entries(affected)):
                 if spec.actor and name != crashed_name:
                     await self._stop_actor(name, spec)
-            for name in affected:
-                spec = self._specs[name]
+            for name, spec in self._entries(affected):
                 if spec.retired:
                     continue
                 await self._restart_one(name, spec)
+
+    def _entries(self, names: list[str] | None = None) -> list[tuple[str, SupervisedSpec]]:
+        """``names`` (every supervised name by default) with their specs, in order.
+
+        Read with ``.get()``: a spec can be dropped while a strategy or a
+        shutdown is part-way through the list, which is awaiting all the time,
+        and a name without one is skipped rather than raising halfway through.
+        """
+        return [
+            (name, spec)
+            for name in list(self._order if names is None else names)
+            if (spec := self._specs.get(name)) is not None
+        ]
 
     # ── Individual restart ────────────────────────────────────────────────────
 
@@ -529,6 +590,13 @@ class Supervisor:
         if spec.restart_delay > 0:
             await asyncio.sleep(spec.restart_delay)
 
+        # The lock was released before the strategy ran, and the delay above is
+        # the widest part of that window: a delete, a reset or a deliberate stop
+        # landing in it must not be undone by bringing the actor back.
+        if not self._still_supervised(name, spec):
+            logger.info("[Supervisor] Not restarting '%s': it left supervision meanwhile.", name)
+            return
+
         logger.info(
             "[Supervisor] Restarting '%s' (attempt %s/%s).",
             name,
@@ -558,6 +626,12 @@ class Supervisor:
             # retrying forever.
             return
         spec.actor = new_actor
+        if not self._still_supervised(name, spec):
+            # Left during the spawn itself. Nothing would supervise or own the
+            # actor just started, so it is stopped rather than left running.
+            logger.info("[Supervisor] '%s' left supervision while restarting; stopping it.", name)
+            await self._stop_actor(name, spec)
+            return
         new_actor.metrics.restart_count = len(spec._restart_times)
         # Fresh start — reset error counter so error-storm detector doesn't
         # immediately re-trigger on the very first poll after restart.
@@ -587,6 +661,14 @@ class Supervisor:
         await actor.start()
         logger.debug("[Supervisor] Spawned '%s' (%s).", name, actor.actor_id[:8])
         return actor
+
+    def _still_supervised(self, name: str, spec: SupervisedSpec) -> bool:
+        """Whether ``spec`` is still the live entry for ``name``.
+
+        False once it has been forgotten, replaced by a spawn under the same name,
+        or released by a deliberate stop.
+        """
+        return self._specs.get(name) is spec and not spec.retired
 
     async def _stop_actor(self, name: str, spec: SupervisedSpec):
         """Stop an actor gracefully, unregister it, swallow errors."""
@@ -663,8 +745,7 @@ class Supervisor:
     def status(self) -> list[dict]:
         """Return a snapshot of all supervised actors for dashboard/CLI."""
         result = []
-        for name in self._order:
-            spec = self._specs[name]
+        for name, spec in self._entries():
             actor = spec.actor
             result.append(
                 {
@@ -700,8 +781,10 @@ class Supervisor:
                 logger.error("[Supervisor] watch loop ended in error: %s", outcome)
             self._watch_task = None
         async with self._lock:
-            for name in reversed(self._order):
-                await self._stop_actor(name, self._specs[name])
+            # A missing entry must not end the loop: every actor after it would
+            # be left running, and its state never flushed.
+            for name, spec in reversed(self._entries()):
+                await self._stop_actor(name, spec)
         logger.info("[Supervisor] Stopped.")
 
 

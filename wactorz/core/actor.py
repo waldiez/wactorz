@@ -608,6 +608,19 @@ class Actor(ABC):
             if sup is not None:
                 sup.release(self.name)
 
+    def _leave_supervision(self) -> None:
+        """Tell the supervisor this actor is gone for good: deleted, or ended itself.
+
+        Stronger than :meth:`_release_from_supervision`, which keeps the entry so
+        a stopped actor can be supervised again when it starts. An actor that
+        will not come back needs no entry, and a kept one holds what the actor
+        was built from until the process exits.
+        """
+        if self._registry and hasattr(self._registry, "_supervisor_ref"):
+            sup = self._registry._supervisor_ref
+            if sup is not None:
+                sup.drop_supervised(self.name)
+
     def _resume_supervision(self) -> None:
         """Put this actor back under supervision after a deliberate stop.
 
@@ -650,7 +663,7 @@ class Actor(ABC):
             self._release_from_supervision()
             await self.stop()
         elif command == "delete":
-            self._release_from_supervision()
+            self._leave_supervision()
             await self.delete_own_traces()
             if self._registry:
                 main = self._registry.find_by_name("main")
@@ -791,7 +804,7 @@ class Actor(ABC):
         try:
             if self._registry and hasattr(self._registry, "_supervisor_ref"):
                 supervisor = self._registry._supervisor_ref
-                if supervisor is not None and child.name not in supervisor._specs:
+                if supervisor is not None:
                     # Snapshot what the child was built from. The factory runs
                     # again on every restart, possibly much later, and must
                     # rebuild the child as it was rather than from whatever this
@@ -824,20 +837,18 @@ class Actor(ABC):
                                 pass
                         return c
 
-                    supervisor.supervise(
+                    # Adopted as it runs, so the watch loop monitors it at once
+                    # without a redundant restart -- and re-armed if the name
+                    # was supervised before and released, or it would not be.
+                    supervisor.adopt(
                         child.name,
                         _child_factory,
+                        child,
                         strategy=SupervisorStrategy.ONE_FOR_ONE,
                         max_restarts=5,
                         restart_window=60.0,
                         restart_delay=2.0,
                     )
-                    # Point spec.actor at the already-running child so the watch loop
-                    # starts monitoring immediately without a redundant restart.
-                    supervisor._specs[child.name].actor = child
-                    if child.name not in supervisor._order:
-                        supervisor._order.append(child.name)
-                    child.supervisor_id = str(id(supervisor))
                     logger.info(
                         "[%s] Child '%s' auto-registered under Supervisor.", self.name, child.name
                     )

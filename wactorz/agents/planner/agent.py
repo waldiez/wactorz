@@ -542,20 +542,20 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     async def _release_from_registry(self) -> None:
         """Let go of everything holding this planner alive, Supervisor first.
 
-        spawn() registers every child with the Supervisor, which keeps a strong
-        reference and a name in its order. Unregistering alone would drop the
-        planner from the message registry while the Supervisor still held the
-        object, so _specs would grow by one planner per request until the app
-        restarted. release() drops the reference and retires the spec, which
-        also rules out a restart race. Mirrors the delete path main uses.
+        spawn() registers every child with the Supervisor, which keeps a spec, a
+        factory closure over what the planner was built from, and a name in its
+        order. Each planner has a name of its own, so a spec left behind -- even a
+        retired one -- is one more per pipeline request until the app restarts.
+        drop_supervised() forgets it, which also rules out a restart race.
+        Mirrors the delete path main uses.
         """
         if self._registry:
             sup = getattr(self._registry, "_supervisor_ref", None)
             if sup is not None:
                 try:
-                    sup.release(self.name)
+                    sup.drop_supervised(self.name)
                 except Exception as exc:
-                    logger.debug("[%s] Supervisor release failed: %s", self.name, exc)
+                    logger.debug("[%s] Leaving supervision failed: %s", self.name, exc)
 
         if self._registry:
             try:

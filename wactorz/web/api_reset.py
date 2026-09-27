@@ -178,8 +178,10 @@ async def reset_handler(request: web.Request) -> Response:
             # Release supervised actors first so the Supervisor doesn't race to
             # restart them, then stop + unregister the live local ones.
             if supervisor is not None:
+                # Forgotten, not released: a factory reset removes these agents
+                # for good, and a retired entry would outlive them.
                 for actor in stoppable:
-                    supervisor.release(actor.name)
+                    supervisor.drop_supervised(actor.name)
             await asyncio.gather(
                 *[forget_actor(actor) for actor in stoppable], return_exceptions=True
             )

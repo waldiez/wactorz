@@ -37,13 +37,13 @@ class _Actor:
 
 class _Supervisor:
     def __init__(self, fail: bool = False) -> None:
-        self.released: list[str] = []
+        self.forgotten: list[str] = []
         self._fail = fail
 
-    def release(self, name: str) -> None:
+    def drop_supervised(self, name: str) -> None:
         if self._fail:
             raise RuntimeError("supervisor busy")
-        self.released.append(name)
+        self.forgotten.append(name)
 
 
 class _Registry:
@@ -670,7 +670,7 @@ class TestEnding:
         assert task.done()
         assert not planner._terminated
 
-    async def test_teardown_fails_pending_work_releases_and_withdraws_once(
+    async def test_teardown_fails_pending_work_forgets_and_withdraws_once(
         self, planner: PlannerAgent, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         supervisor = _Supervisor()
@@ -697,7 +697,9 @@ class TestEnding:
         assert pending.cancelled()
         assert planner._result_futures == {}
         assert planner._lifetime_task.cancelled()
-        assert supervisor.released == [planner.name]
+        # Forgotten, not retired: every planner has a name of its own, so an
+        # entry kept per request would grow for as long as the app runs.
+        assert supervisor.forgotten == [planner.name]
         assert registry.unregistered == [planner.actor_id]
         assert published.count((f"agents/{planner.actor_id}/manifest", b"")) == 1
 

@@ -77,9 +77,13 @@ class _Agent:
 class _Supervisor:
     def __init__(self) -> None:
         self.released: list[str] = []
+        self.forgotten: list[str] = []
 
     def release(self, name: str) -> None:
         self.released.append(name)
+
+    def drop_supervised(self, name: str) -> None:
+        self.forgotten.append(name)
 
 
 class _Registry:
@@ -246,13 +250,15 @@ class TestLeavingNothingBehind:
         assert store.purged == 1
 
     async def test_the_supervisor_stops_holding_it(self) -> None:
-        # Still held, its factory brings the agent back at the next restart.
+        # Still held, its factory brings the agent back at the next restart; and
+        # held as a retired entry, it stays in memory for as long as main runs.
         supervisor = _Supervisor()
         main = _Main(local={"collector": _Agent("collector")}, supervisor=supervisor)
 
         await main.delete("collector")
 
-        assert supervisor.released == ["collector"]
+        assert supervisor.forgotten == ["collector"]
+        assert supervisor.released == []
 
     async def test_the_manifest_stops_being_reported(self) -> None:
         main = _Main(

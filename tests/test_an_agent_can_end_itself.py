@@ -69,9 +69,13 @@ class Registry:
 class Supervisor:
     def __init__(self) -> None:
         self.released: list[str] = []
+        self.forgotten: list[str] = []
 
     def release(self, name: str) -> None:
         self.released.append(name)
+
+    def drop_supervised(self, name: str) -> None:
+        self.forgotten.append(name)
 
 
 def make_main(dropped: list[str]) -> Any:
@@ -118,7 +122,7 @@ class TestEndingIsARemoval:
 
         await agent.end_self()
 
-        assert registry._supervisor_ref.released == ["finisher"]
+        assert registry._supervisor_ref.forgotten == ["finisher"]
 
     async def test_it_leaves_the_spawn_registry(self, tmp_path: Path) -> None:
         """So a restart does not restore an agent that has already finished."""
@@ -210,7 +214,7 @@ class TestItIsSafeToRepeat:
 
         assert dropped == ["finisher"]
         assert registry.unregistered == [agent.actor_id]
-        assert registry._supervisor_ref.released == ["finisher"]
+        assert registry._supervisor_ref.forgotten == ["finisher"]
 
     async def test_it_survives_having_no_registry(self, tmp_path: Path) -> None:
         """An agent constructed without one still has to be able to finish."""

@@ -241,7 +241,7 @@ class DynamicAgent(Actor):
         on the next restart, and nothing it could do afterwards would bring
         itself back — no more of its code runs.
 
-        Supervision is released first, or the watchdog reads the stop as a
+        Supervision is left first, for good, or the watchdog reads the stop as a
         crash. The spawn-registry entry goes so a restart does not restore it,
         and the manifest is withdrawn last, after the final status, so the
         dashboard reads one unambiguous "gone" rather than a stop it might show
@@ -253,7 +253,7 @@ class DynamicAgent(Actor):
         if self._ending:
             return
         self._ending = True
-        self._release_from_supervision()
+        self._leave_supervision()
         registry = self._registry
         if registry is not None:
             main = find_main_actor(registry)

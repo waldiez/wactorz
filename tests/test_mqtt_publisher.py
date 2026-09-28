@@ -288,7 +288,7 @@ class TestWithoutABroker:
         assert pub.queue_depth == 0
         assert not (tmp_path / "outbox.db").exists()
 
-    async def test_create_survives_an_outbox_it_cannot_open(
+    async def test_an_outbox_it_cannot_open_costs_durability_not_delivery(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def _explode(self) -> None:
@@ -296,11 +296,18 @@ class TestWithoutABroker:
 
         monkeypatch.setattr(MQTTPublisher, "_init_db", _explode)
         pub = await MQTTPublisher.create("localhost", 1883, db_path=str(tmp_path / "o.db"))
-
-        # A publisher that cannot start must not take the actor system with it.
-        assert pub._available is False
-        await pub.publish("nodes/alpha/spawn", "payload", qos=1)
-        assert pub.queue_depth == 0
+        try:
+            # Heartbeats, commands and chat still go out, held in memory until
+            # they do, rather than nothing being sent for the life of the process.
+            assert pub._available is True
+            assert pub._memory_only is True
+            await pub.publish("nodes/alpha/spawn", "payload", qos=1)
+            assert pub.queue_depth == 1
+            assert pub._queue.get_nowait()[4] == -1
+            # Kept running: it is what tries the outbox again.
+            assert pub._checkpoint_task is not None
+        finally:
+            await pub.disconnect()
 
     async def test_disconnect_is_safe_before_create(self, tmp_path: Path) -> None:
         await MQTTPublisher(db_path=str(tmp_path / "o.db")).disconnect()

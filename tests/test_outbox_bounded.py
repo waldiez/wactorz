@@ -5,13 +5,14 @@ without limit until the process died. The failure was a memory graph rather than
 a message, which is what made it easy to leave alone.
 
 What is discarded matters more than that something is. QoS 1 is written to the
-SQLite outbox *before* it is queued, so dropping it from memory costs a wait
-until the reconnect that reloads it — not the message. QoS 0 is memory-only, and
+SQLite outbox *before* it is queued, so one that does not fit waits there until
+the queue has room — it costs a wait, not the message. QoS 0 is memory-only, and
 it is heartbeats, metrics and status: the next sample supersedes the last, so
 the oldest is the right one to lose.
 """
 
 import asyncio
+from collections import deque
 
 import pytest
 
@@ -27,6 +28,7 @@ def publisher_fixture(tmp_path) -> MQTTPublisher:  # type: ignore[no-untyped-def
     publisher._queue = asyncio.Queue(maxsize=3)
     publisher.MAX_QUEUED = 3  # type: ignore[misc]
     publisher._dropped = 0
+    publisher._spilled = deque()
     return publisher
 
 
@@ -69,18 +71,19 @@ class TestWhatGivesWay:
 
         assert [entry[3] for entry in _queued(publisher)] == [1, 1, 1]
 
-    def test_a_queue_of_durable_messages_drops_the_incoming_one(
+    def test_a_queue_of_durable_messages_spills_the_incoming_one(
         self, publisher: MQTTPublisher
     ) -> None:
         # Nothing droppable is queued, so the new arrival gives way instead. It
-        # is already in the SQLite outbox, so what is lost is the wait until the
-        # next connect reloads it.
+        # is already in the SQLite outbox, so it waits there for room.
         for _ in range(3):
             publisher._enqueue(DURABLE)
 
         publisher._enqueue(("nodes/rpi/stop", "payload", False, 1, 9, None))
 
         assert [entry[0] for entry in _queued(publisher)] == ["nodes/rpi/spawn"] * 3
+        assert list(publisher._spilled) == [9]
+        assert publisher._dropped == 0
 
     def test_nothing_is_discarded_below_the_cap(self, publisher: MQTTPublisher) -> None:
         publisher._enqueue(TELEMETRY)

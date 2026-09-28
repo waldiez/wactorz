@@ -445,17 +445,19 @@ answer refused.
 Each agent on a remote node runs under a local **ONE_FOR_ONE** supervisor — identical semantics to the main machine. If an agent crashes, the supervisor restarts it with exponential back-off:
 
 ```python
-delay = min(restart_delay * (2 ** (restart_count - 1)), 60.0)
+delay = min(restart_delay * (2 ** (crashes_in_a_row - 1)), 60.0)
 # restart_delay=3.0: 3s → 6s → 12s → 24s → 48s → 60s (cap)
 ```
+
+An agent that stays up for `restart_window` (60 s) after a restart has recovered: its next
+crash starts from `restart_delay` again.
 
 | Scenario | Behaviour |
 |----------|-----------|
 | Crash in `process()` | Back-off, restart. After 5 consecutive failures in one run, escalates to supervisor for a clean restart. |
 | Crash in `setup()` | Fatal — supervisor stops. Broken code won't fix itself on retry. |
 | Compile error | Fatal — supervisor stops immediately. |
-| Restart budget exhausted (`max_restarts`) | Agent is marked `failed`, removed from the registry, and a fatal event is published. |
-| 10 consecutive successful `process()` calls | One restart token is credited back (gradual budget recovery). |
+| `max_restarts` crashes in a row | Restarts slow down: 5 minutes, then doubling up to an hour. Main says so in chat, once, and again when the agent recovers. It is never given up on automatically — delete it to stop it. |
 | Deliberate `stop` command | No restart — clean shutdown. |
 
 Default values: `max_restarts=5`, `restart_delay=3.0`. Override per agent in the spawn config.

@@ -3,9 +3,9 @@
 Asked for an agent that stops after a while, a model reaches for `sys.exit()`,
 because until now the API offered nothing else. That no longer takes the process
 down, but it is still counted as a crash: repaired by the model at three
-consecutive errors, and retired by the Supervisor at five — so an agent that did
-exactly what it was asked gets billed repairs and a notification asking someone
-to intervene. Worse, a successful repair removes the exit, leaving a "stop after
+consecutive errors, and restarted by the Supervisor — so an agent that did
+exactly what it was asked gets billed repairs, is brought back, and before long
+earns a notification asking someone to intervene. Worse, a successful repair removes the exit, leaving a "stop after
 45 seconds" agent running for ever doing nothing.
 
 `agent.stop()` is that missing ending. It is a removal, not a pause: nothing the

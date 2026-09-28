@@ -6,6 +6,7 @@ Supervisor implements Erlang/OTP-style supervision trees.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import gc
 import inspect
 import logging
@@ -42,9 +43,11 @@ class SupervisedSpec:
     factory      : zero-arg async callable that creates and returns a fresh
                    Actor instance (already injected with MQTT / registry).
     strategy     : how to react when THIS actor crashes.
-    max_restarts : max restarts within restart_window seconds before giving up.
-    restart_window: sliding window in seconds for max_restarts accounting.
-    restart_delay : seconds to wait before restarting (lets dependencies settle).
+    max_restarts : crashes in a row before restarts slow right down (see
+                   `Supervisor.SLOW_RETRY_DELAY`). Nothing is given up on.
+    restart_window: how long an actor must stay up for its crash streak to end.
+    restart_delay : the wait before the first restart; each crash in a row
+                    doubles it, up to `Supervisor.MAX_RESTART_DELAY`.
     """
 
     factory: Callable[[], Actor | Awaitable[Actor]]
@@ -55,26 +58,34 @@ class SupervisedSpec:
 
     # Runtime state — managed by Supervisor, not set by caller
     actor: Actor | None = field(default=None, repr=False)
-    _restart_times: list = field(default_factory=list, repr=False)
-    # Set to True when an actor is intentionally stopped/deleted by the user,
-    # or when it has exhausted its restart budget.  The watch_loop skips retired specs.
+    # Set when an actor is deliberately stopped. The watch loop skips retired specs.
     retired: bool = field(default=False, repr=False)
+    #: Crashes in a row, the latest included. Ends once an actor stays up for
+    #: ``restart_window``; it is what the restart delay grows with.
+    crash_streak: int = field(default=0, repr=False)
+    #: Restarts made for this entry; what the actor's ``restart_count`` reports.
+    restarts: int = field(default=0, repr=False)
+    #: Whether restarts have slowed down, after ``max_restarts`` crashes in a row.
+    slow: bool = field(default=False, repr=False)
+    #: When the actor's errors were noticed, for the storm check's window.
+    _error_times: list[float] = field(default_factory=list, repr=False)
+    #: The actor's error count when last looked at, to tell how many are new.
+    _errors_seen: int = field(default=0, repr=False)
+    #: A restart waiting out its delay or under way. The watch loop leaves the
+    #: spec alone until it ends, rather than starting a second one.
+    _restart_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
-    def record_restart(self) -> bool:
-        """Record a restart attempt. Returns True if still within budget."""
-        now = time.time()
-        cutoff = now - self.restart_window
-        self._restart_times = [t for t in self._restart_times if t > cutoff]
-        self._restart_times.append(now)
-        return len(self._restart_times) <= self.max_restarts
+    def reset_history(self) -> None:
+        """Forget the crashes and errors of an actor this spec no longer runs."""
+        self.crash_streak = 0
+        self.slow = False
+        self._error_times.clear()
+        self._errors_seen = 0
 
     @property
-    def exhausted(self) -> bool:
-        """Whether the restart budget for the current window is spent."""
-        now = time.time()
-        cutoff = now - self.restart_window
-        recent = [t for t in self._restart_times if t > cutoff]
-        return len(recent) >= self.max_restarts
+    def restarting(self) -> bool:
+        """Whether a restart is waiting or under way."""
+        return self._restart_task is not None and not self._restart_task.done()
 
 
 logger = logging.getLogger(__name__)
@@ -322,8 +333,8 @@ class Supervisor:
         spec.actor = actor
         actor.supervisor_id = str(id(self))
         # The old crashes are not this run's. Leaving them counted means an actor
-        # started after a rough patch gets a fraction of a restart budget.
-        spec._restart_times.clear()
+        # started after a rough patch starts out slow.
+        spec.reset_history()
         logger.info("[Supervisor] '%s' is supervised again.", name)
 
     async def start_supervised(
@@ -396,6 +407,12 @@ class Supervisor:
         if spec.actor is not None:
             # Or it goes on reporting supervised=True, as with release().
             spec.actor.supervisor_id = None
+        # A restart waiting out its delay would find the spec gone and do
+        # nothing, but only after the delay -- and once the spec is out of
+        # _specs, stop() cannot reach it to cancel it.
+        task = spec._restart_task
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
         logger.info("[Supervisor] Forgot '%s'.", name)
 
     # ── Startup ───────────────────────────────────────────────────────────────
@@ -413,26 +430,54 @@ class Supervisor:
     # An actor is considered "silent" if its heartbeat is older than this.
     # (Actor heartbeats every 10s by default; allow 3× grace period.)
     HEARTBEAT_TIMEOUT = 35.0  # seconds without a heartbeat → treat as crashed
-    # An actor that has accumulated this many errors is "storming" — restart it.
-    ERROR_STORM_THRESHOLD = 10  # cumulative errors within the actor's lifetime
+    # This many errors within ERROR_STORM_WINDOW is a storm — restart the actor.
+    # Over a window rather than a lifetime: an agent with the odd flaky poll
+    # would otherwise be restarted, sooner or later, for errors it handled itself.
+    ERROR_STORM_THRESHOLD = 10
+    ERROR_STORM_WINDOW = 60.0  # seconds
+    # The longest wait between restarts while an actor is still expected back.
+    MAX_RESTART_DELAY = 60.0  # seconds
+    # After max_restarts crashes in a row, restarts slow to this, doubling to
+    # MAX_SLOW_RETRY_DELAY. Never stopping: an outage of what an agent depends on
+    # ends, and a retired agent would stay down until someone noticed. Slowing:
+    # a restart is not free -- a generated agent may ask the LLM to repair itself.
+    SLOW_RETRY_DELAY = 300.0  # seconds
+    MAX_SLOW_RETRY_DELAY = 3600.0  # seconds
 
     async def _watch_loop(self):
-        """Poll supervised actors for failure and trigger restarts.
+        """Poll supervised actors for failure and start their restarts.
 
-        Detection runs under the lock; the restart itself does not. Restarting
-        means waiting out ``restart_delay``, stopping an actor and starting a
-        new one — holding the lock across all of that made one slow actor stall
-        supervision of every other, and blocked anything else that needed it.
+        Detection runs under the lock; restarts run as tasks of their own. A
+        restart waits out its delay -- up to an hour for an actor that keeps
+        crashing -- and awaiting it here would leave every other actor
+        unwatched for as long.
         """
         while True:
             try:
                 await asyncio.sleep(self._poll_interval)
-                for name, spec in await self._detect_failures():
-                    await self._supervise_one(name, spec)
+                failures, recovered = await self._detect_failures()
+                for name in recovered:
+                    await self._notify_main(
+                        f"✅ **{name}** has stayed up since its last restart; it is back to "
+                        "normal supervision.",
+                        severity="info",
+                    )
+                for name, spec in failures:
+                    self._schedule_restart(name, spec)
             except asyncio.CancelledError:
                 break
             except Exception:
                 logger.exception("[Supervisor] watch_loop error")
+
+    def _schedule_restart(self, name: str, spec: SupervisedSpec) -> None:
+        """Handle one detected failure in a task of its own."""
+        spec._restart_task = asyncio.create_task(
+            self._supervise_one(name, spec), name=f"supervise-{name}"
+        )
+
+    def slow_retrying(self) -> list[str]:
+        """Names of the actors whose restarts have slowed down after repeated crashes."""
+        return [name for name, spec in self._entries() if spec.slow and not spec.retired]
 
     def _failure_reason(self, spec: SupervisedSpec) -> str | None:
         """Why this spec needs supervision, or None if there is nothing to do.
@@ -465,22 +510,56 @@ class Supervisor:
                     f"(threshold {self.HEARTBEAT_TIMEOUT}s) — presumed crashed"
                 )
 
-        if actor.metrics.errors >= self.ERROR_STORM_THRESHOLD:
+        if len(spec._error_times) >= self.ERROR_STORM_THRESHOLD:
             return (
-                f"{actor.metrics.errors} errors "
+                f"{len(spec._error_times)} errors in {self.ERROR_STORM_WINDOW:.0f}s "
                 f"(threshold {self.ERROR_STORM_THRESHOLD}) — error storm"
             )
 
         return None
 
-    async def _detect_failures(self) -> list[tuple[str, SupervisedSpec]]:
-        """Specs needing attention this cycle. Brief, and the only locked part."""
+    def _note_health(self, spec: SupervisedSpec, now: float) -> bool:
+        """Update a spec's error window and crash streak. True if it just recovered.
+
+        The bookkeeping `_failure_reason` reads, kept apart from it so that one
+        stays a question that can be asked twice.
+        """
+        actor = spec.actor
+        if actor is None or spec.retired or spec.restarting:
+            return False
+        errors = actor.metrics.errors
+        # Lower than last time means the count was reset: all of it is new.
+        new = errors - spec._errors_seen if errors >= spec._errors_seen else errors
+        spec._errors_seen = errors
+        if new > 0:
+            spec._error_times.extend([now] * min(new, self.ERROR_STORM_THRESHOLD))
+        cutoff = now - self.ERROR_STORM_WINDOW
+        spec._error_times = [t for t in spec._error_times if t > cutoff]
+
+        if spec.crash_streak and actor.metrics.uptime >= self._recovery_time(spec):
+            was_slow = spec.slow
+            spec.crash_streak = 0
+            spec.slow = False
+            return was_slow
+        return False
+
+    async def _detect_failures(self) -> tuple[list[tuple[str, SupervisedSpec]], list[str]]:
+        """Specs needing a restart this cycle, and the names that just recovered.
+
+        Brief, and the only locked part. A spec with a restart already pending
+        is left to it.
+        """
+        now = time.time()
         async with self._lock:
-            return [
+            recovered = [
+                name for name, spec in list(self._specs.items()) if self._note_health(spec, now)
+            ]
+            failures = [
                 (name, spec)
                 for name, spec in list(self._specs.items())
-                if self._failure_reason(spec) is not None
+                if not spec.restarting and self._failure_reason(spec) is not None
             ]
+            return failures, recovered
 
     async def _supervise_one(self, name: str, spec: SupervisedSpec) -> None:
         """Act on one detected failure, having confirmed it is still real."""
@@ -502,40 +581,51 @@ class Supervisor:
     # ── Strategy application ─────────────────────────────────────────────────
 
     async def _apply_strategy(self, crashed_name: str, crashed_spec: SupervisedSpec):
-        """Restart the siblings the strategy calls for, skipping retired specs.
+        """Restart the actors the strategy calls for.
 
-        A retired spec is one that was deliberately released — stopped, deleted,
-        or given up on after exhausting its budget. Restarting it because a
-        *different* actor crashed would undo a decision someone made on purpose.
+        Skipped: retired specs -- deliberately stopped or deleted, and restarting
+        one because a *different* actor crashed would undo a decision someone
+        made on purpose -- and siblings with a restart of their own already
+        pending, which that restart will see to. Only the actor that crashed
+        counts it as a crash; its siblings are restarted without adding to
+        their streaks.
         """
         if crashed_spec.strategy == SupervisorStrategy.ONE_FOR_ONE:
-            await self._restart_one(crashed_name, crashed_spec)
-
+            names = [crashed_name]
         elif crashed_spec.strategy == SupervisorStrategy.ONE_FOR_ALL:
             logger.info("[Supervisor] ONE_FOR_ALL — restarting all supervised actors.")
-            # Stop all others first (reverse order), then restart in order
-            for name, spec in reversed(self._entries()):
-                if spec.actor and name != crashed_name:
-                    await self._stop_actor(name, spec)
-            for name, spec in self._entries():
-                if spec.retired:
-                    continue
-                await self._restart_one(name, spec)
-
-        elif crashed_spec.strategy == SupervisorStrategy.REST_FOR_ONE:
+            names = list(self._order)
+        else:  # REST_FOR_ONE
             if crashed_name not in self._order:
                 # Forgotten between detection and now: nothing left to restart.
                 return
-            idx = self._order.index(crashed_name)
-            affected = self._order[idx:]  # crashed + everyone registered after it
-            logger.info("[Supervisor] REST_FOR_ONE — restarting: %s", affected)
-            for name, spec in reversed(self._entries(affected)):
+            names = self._order[self._order.index(crashed_name) :]
+            logger.info("[Supervisor] REST_FOR_ONE — restarting: %s", names)
+
+        group = [
+            (name, spec)
+            for name, spec in self._entries(names)
+            if not spec.retired and (name == crashed_name or not spec.restarting)
+        ]
+        # Claimed for as long as this runs. A sibling sits stopped, with no
+        # actor, until its turn comes, and the watch loop would otherwise read
+        # that as a crash and start a second restart of it.
+        this = asyncio.current_task()
+        for _, spec in group:
+            spec._restart_task = this
+        try:
+            # Stop the others first, in reverse order, then restart in order.
+            for name, spec in reversed(group):
                 if spec.actor and name != crashed_name:
                     await self._stop_actor(name, spec)
-            for name, spec in self._entries(affected):
+            for name, spec in group:
                 if spec.retired:
                     continue
-                await self._restart_one(name, spec)
+                await self._restart_one(name, spec, crashed=name == crashed_name)
+        finally:
+            for _, spec in group:
+                if spec._restart_task is this:
+                    spec._restart_task = None
 
     def _entries(self, names: list[str] | None = None) -> list[tuple[str, SupervisedSpec]]:
         """``names`` (every supervised name by default) with their specs, in order.
@@ -552,43 +642,58 @@ class Supervisor:
 
     # ── Individual restart ────────────────────────────────────────────────────
 
-    async def _retire(self, name: str, spec: SupervisedSpec, why: str) -> None:
-        """Stop supervising an actor for good, and say so where someone will see it.
+    def _recovery_time(self, spec: SupervisedSpec) -> float:
+        """How long an actor must stay up for its crash streak to end.
 
-        Retiring is the end of the line for a spec: nothing restarts it
-        afterwards. Doing that silently leaves an agent absent from the system
-        with no account of why, which is only discovered when someone notices
-        the work it was doing has stopped.
+        ``restart_window``, or once restarts have slowed, as long as its last
+        restart waited: an agent that runs a few minutes between crashes
+        would otherwise leave slow retry and enter it again, each time with a
+        notice, instead of settling at a pace.
         """
-        # The watch loop skips retired specs, so this also stops the same
-        # critical message repeating on every poll.
-        spec.retired = True
-        # _stop_actor clears spec.actor; dropping the reference without stopping
-        # the actor first leaves its tasks running with nothing left to stop them.
-        await self._stop_actor(name, spec)
-        logger.critical("[Supervisor] Retiring '%s': %s. Manual intervention required.", name, why)
-        await self._notify_main(
-            f"🚨 **{name}** has crashed {spec.max_restarts} times and the Supervisor has given up. "
-            f"It is permanently stopped. Delete it and spawn a new one, or fix its code.",
-            severity="critical",
-        )
+        if spec.slow:
+            return max(spec.restart_window, self._restart_delay(spec, crashed=True))
+        return spec.restart_window
 
-    async def _restart_one(self, name: str, spec: SupervisedSpec):
-        if spec.exhausted:
-            await self._retire(
-                name,
-                spec,
-                f"exhausted its restart budget ({spec.max_restarts} restarts "
-                f"/ {spec.restart_window}s)",
+    def _restart_delay(self, spec: SupervisedSpec, crashed: bool) -> float:
+        """How long to wait before this restart.
+
+        Doubles with each crash in a row, from ``restart_delay`` up to
+        ``MAX_RESTART_DELAY``; once restarts have slowed, from
+        ``SLOW_RETRY_DELAY`` up to ``MAX_SLOW_RETRY_DELAY``. A sibling restarted
+        because another actor crashed waits only its ``restart_delay``.
+        """
+        if not crashed:
+            return spec.restart_delay
+        if spec.slow:
+            slow_attempt = spec.crash_streak - spec.max_restarts
+            return min(
+                self.SLOW_RETRY_DELAY * 2 ** max(slow_attempt - 1, 0), self.MAX_SLOW_RETRY_DELAY
             )
-            return
+        return min(spec.restart_delay * 2 ** max(spec.crash_streak - 1, 0), self.MAX_RESTART_DELAY)
 
-        if not spec.record_restart():
-            await self._retire(name, spec, "restart budget exceeded")
-            return
+    async def _restart_one(self, name: str, spec: SupervisedSpec, crashed: bool = True):
+        """Restart one actor, after a delay that grows while it keeps crashing.
 
-        if spec.restart_delay > 0:
-            await asyncio.sleep(spec.restart_delay)
+        A failed respawn leaves the spec without an actor, which the watch loop
+        reads as a crash on its next poll: it waits out the next, longer delay
+        rather than retrying at the poll's pace.
+        """
+        if crashed:
+            spec.crash_streak += 1
+            if not spec.slow and spec.crash_streak > spec.max_restarts:
+                spec.slow = True
+                await self._notify_main(
+                    f"🚨 **{name}** has crashed {spec.crash_streak} times in a row. It will keep "
+                    f"being restarted, but less often: in {self.SLOW_RETRY_DELAY / 60:.0f} minutes, "
+                    f"then with the wait doubling up to {self.MAX_SLOW_RETRY_DELAY / 3600:.0f} "
+                    "hour. Fix its code, or delete it, if it is not going to recover on its own.",
+                    severity="critical",
+                )
+
+        delay = self._restart_delay(spec, crashed)
+        if delay > 0:
+            logger.info("[Supervisor] Restarting '%s' in %.0fs.", name, delay)
+            await asyncio.sleep(delay)
 
         # The lock was released before the strategy ran, and the delay above is
         # the widest part of that window: a delete, a reset or a deliberate stop
@@ -597,33 +702,19 @@ class Supervisor:
             logger.info("[Supervisor] Not restarting '%s': it left supervision meanwhile.", name)
             return
 
-        logger.info(
-            "[Supervisor] Restarting '%s' (attempt %s/%s).",
-            name,
-            len(spec._restart_times),
-            spec.max_restarts,
-        )
+        logger.info("[Supervisor] Restarting '%s' (crash %s in a row).", name, spec.crash_streak)
 
         # Stop the old actor cleanly if possible
         if spec.actor:
             await self._stop_actor(name, spec)
 
-        # Spawn a fresh one. _stop_actor above has already cleared spec.actor, so
-        # a failure here leaves the spec with no actor — and the watch loop's own
-        # error handler only logs. Without catching it the spec sat at None
-        # forever, skipped on every subsequent poll: one bad factory call and the
-        # agent was gone for the life of the process, with a single log line.
+        # Spawn a fresh one. A failure leaves the spec with no actor, which the
+        # watch loop reads as another crash and retries after a longer delay.
         try:
             new_actor = await self._spawn_actor(name, spec)
         except Exception:
             spec.actor = None
             logger.exception("[Supervisor] Respawn of '%s' failed", name)
-            if spec.exhausted:
-                await self._retire(name, spec, "every restart attempt failed to start it")
-            # Otherwise the spec keeps its actor at None, which the watch loop
-            # now reads as "should be running but isn't" and tries again — each
-            # attempt costing budget, so a persistent failure ends rather than
-            # retrying forever.
             return
         spec.actor = new_actor
         if not self._still_supervised(name, spec):
@@ -632,18 +723,21 @@ class Supervisor:
             logger.info("[Supervisor] '%s' left supervision while restarting; stopping it.", name)
             await self._stop_actor(name, spec)
             return
-        new_actor.metrics.restart_count = len(spec._restart_times)
-        # Fresh start — reset error counter so error-storm detector doesn't
-        # immediately re-trigger on the very first poll after restart.
+        spec.restarts += 1
+        new_actor.metrics.restart_count = spec.restarts
+        # A fresh actor starts a fresh error count, and the window follows it.
         new_actor.metrics.errors = 0
+        spec._errors_seen = 0
+        spec._error_times.clear()
 
         logger.info("[Supervisor] '%s' restarted successfully.", name)
-        await self._notify_main(
-            f"♻️ **{name}** crashed and was automatically restarted "
-            f"(restart #{new_actor.metrics.restart_count} of {spec.max_restarts}). "
-            f"It is running again.",
-            severity="warning",
-        )
+        if crashed and not spec.slow:
+            streak = f" ({spec.crash_streak} crashes in a row)" if spec.crash_streak > 1 else ""
+            await self._notify_main(
+                f"♻️ **{name}** crashed and was automatically restarted{streak}. "
+                "It is running again.",
+                severity="warning",
+            )
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -658,7 +752,16 @@ class Supervisor:
         self._inject(actor)
         actor.supervisor_id = str(id(self))
         await self._registry.register(actor)
-        await actor.start()
+        try:
+            await actor.start()
+        except BaseException:
+            # Cancellation included: registered but never handed back, the actor
+            # is held by nothing that would stop it.
+            with contextlib.suppress(Exception):
+                await actor.stop()
+            with contextlib.suppress(Exception):
+                await self._registry.unregister(actor.actor_id)
+            raise
         logger.debug("[Supervisor] Spawned '%s' (%s).", name, actor.actor_id[:8])
         return actor
 
@@ -752,8 +855,9 @@ class Supervisor:
                     "name": name,
                     "strategy": spec.strategy.value,
                     "max_restarts": spec.max_restarts,
-                    "restarts_used": len(spec._restart_times),
-                    "exhausted": spec.exhausted,
+                    "restarts_used": spec.restarts,
+                    "crash_streak": spec.crash_streak,
+                    "slow_retry": spec.slow,
                     "retired": spec.retired,
                     "actor_state": actor.state.value if actor else "none",
                     "actor_id": actor.actor_id[:8] if actor else None,
@@ -780,6 +884,19 @@ class Supervisor:
             if isinstance(outcome, Exception):
                 logger.error("[Supervisor] watch loop ended in error: %s", outcome)
             self._watch_task = None
+        # Pending restarts too: one waiting out its delay would otherwise start
+        # an actor after everything else has stopped. A set, because the
+        # siblings a strategy restarts share its task.
+        pending = {
+            task
+            for spec in self._specs.values()
+            if (task := spec._restart_task) is not None
+            and not task.done()
+            and task is not asyncio.current_task()
+        }
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         async with self._lock:
             # A missing entry must not end the loop: every actor after it would
             # be left running, and its state never flushed.

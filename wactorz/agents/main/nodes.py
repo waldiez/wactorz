@@ -69,6 +69,13 @@ def _as_count(value: object) -> int:
     return max(value, 0)
 
 
+def _as_names(value: object) -> list[str]:
+    """A list of agent names from a heartbeat, or none if it is not one."""
+    if not isinstance(value, list):
+        return []
+    return [name for name in value if isinstance(name, str)]
+
+
 #: How long a node may stay silent before its agents are treated as lost.
 #:
 #: Longer than the window above on purpose. That one drives the indicator in the
@@ -78,6 +85,16 @@ OFFLINE_GRACE_S = 90.0
 
 #: How often the watcher looks for nodes that have gone quiet.
 OFFLINE_CHECK_INTERVAL_S = 15.0
+
+
+def _runner_restarted(record: dict[str, Any], before: dict[str, Any]) -> bool:
+    """Whether two heartbeats of one node came from different runs of its runner."""
+    if record.get("pid") != before.get("pid"):
+        return True
+    uptime, was_uptime = record.get("uptime_s"), before.get("uptime_s")
+    if isinstance(uptime, (int, float)) and isinstance(was_uptime, (int, float)):
+        return uptime < was_uptime
+    return False
 
 
 def remote_actor_id(agent_name: str) -> str:
@@ -334,10 +351,57 @@ class NodeManager:
             # Whether the node reaches the broker over TLS. A heartbeat without it
             # comes from a runner older than TLS, which does not.
             "tls": data.get("tls") is True,
+            # The node's agents whose restarts have slowed after repeated
+            # crashes. A heartbeat without it comes from a runner older than
+            # slow retry, which reports none.
+            "slow_retry": _as_names(data.get("slow_retry")),
         }
         self._bootstrap_contracts(node_name, agents)
         self._touch_monitor(agents)
         await self.follow_signing(node_name, self.known[node_name], before)
+        self.follow_restarts(node_name, self.known[node_name], before)
+
+    def follow_restarts(
+        self, node_name: str, record: dict[str, Any], before: dict[str, Any] | None
+    ) -> None:
+        """Say in chat when an agent on a node starts or stops crashing repeatedly.
+
+        On main the supervisor tells main itself; a node's supervisor has no main
+        to tell, so the node lists these agents in its heartbeat and main tells
+        the user what changed. Once each way, not on every heartbeat.
+        """
+        host = self.host
+        if host is None:
+            return
+        now = set(record.get("slow_retry", []))
+        was = set((before or {}).get("slow_retry", []))
+        for name in sorted(now - was):
+            host._queue_notification(
+                {
+                    "severity": "critical",
+                    "message": (
+                        f"🚨 **{name}** on node '{node_name}' keeps crashing. It will keep "
+                        "being restarted, but less often, with the wait growing up to an "
+                        "hour. Fix its code, or delete it, if it is not going to recover "
+                        "on its own."
+                    ),
+                }
+            )
+        # Only those still there, on a runner that has not restarted: one
+        # deleted is not a recovery, and a runner that restarted starts every
+        # agent with a clean slate, recovered or not.
+        if before is None or _runner_restarted(record, before):
+            return
+        for name in sorted((was - now) & set(record.get("agents", []))):
+            host._queue_notification(
+                {
+                    "severity": "info",
+                    "message": (
+                        f"✅ **{name}** on node '{node_name}' has stayed up since its last "
+                        "restart; it is back to normal supervision."
+                    ),
+                }
+            )
 
     async def follow_signing(
         self, node_name: str, record: dict[str, Any], before: dict[str, Any] | None

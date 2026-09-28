@@ -414,6 +414,10 @@ class NodeRunner:
                         "signing_failures": self._control.failures,
                         # Whether this node reaches the broker over TLS.
                         "tls": tls_enabled(CONFIG.mqtt_tls),
+                        # Agents here that keep crashing, now restarted slowly.
+                        # Main says so in chat: the supervisor's own notices
+                        # reach only a main in the same process.
+                        "slow_retry": self.supervisor.slow_retrying(),
                     },
                 )
                 await asyncio.sleep(interval)

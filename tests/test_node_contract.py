@@ -105,6 +105,7 @@ HEARTBEAT_FIELDS = frozenset(
         "signing",
         "signing_failures",
         "tls",
+        "slow_retry",
     }
 )
 

@@ -169,7 +169,8 @@ class TestSupervision:
             NodeAgent.start = real_start  # type: ignore[method-assign]
 
         assert len(built) == 1, f"the watch loop spawned {len(built)} actors for one agent"
-        assert runner.supervisor._specs["collector"]._restart_times == []
+        spec = runner.supervisor._specs["collector"]
+        assert (spec.crash_streak, spec.restarts) == (0, 0)
 
     async def test_a_spawn_that_fails_leaves_the_name_free(self, runner: RecordingRunner) -> None:
         # Not left retired-but-present: the next spawn of that name must be

@@ -67,14 +67,21 @@ class TestAFailedRespawn:
         spec = supervisor._specs["gone"]
         spec.actor = None
 
-        assert await supervisor._detect_failures() == [("gone", spec)]
+        assert await supervisor._detect_failures() == ([("gone", spec)], [])
 
-    async def test_a_persistently_failing_factory_retires_and_reports(
-        self, supervisor: Supervisor
+    async def test_a_persistently_failing_factory_slows_down_and_reports(
+        self, supervisor: Supervisor, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def _factory() -> Actor:
             raise RuntimeError("will never start")
 
+        notices: list[tuple[str, str]] = []
+
+        async def _notify(message: str, severity: str = "critical") -> None:
+            notices.append((severity, message))
+
+        monkeypatch.setattr(supervisor, "_notify_main", _notify)
+        monkeypatch.setattr(supervisor, "SLOW_RETRY_DELAY", 0)
         supervisor.supervise("doomed", _factory, max_restarts=2, restart_delay=0)
         spec = supervisor._specs["doomed"]
         spec.actor = _Worker(name="doomed")
@@ -83,10 +90,12 @@ class TestAFailedRespawn:
         for _ in range(5):
             await supervisor._supervise_one("doomed", spec)
 
-        # Retrying forever would be as bad as giving up silently: the budget
-        # bounds it, and retirement is announced rather than assumed.
-        assert spec.retired is True
-        assert len(spec._restart_times) <= spec.max_restarts
+        # Still supervised, but slowed down, and said so once rather than on
+        # every attempt.
+        assert spec.retired is False
+        assert spec.slow is True
+        assert spec.crash_streak == 5
+        assert [severity for severity, _ in notices] == ["critical"]
 
     async def test_a_retired_spec_is_left_alone(self, supervisor: Supervisor) -> None:
         supervisor.supervise("stopped", lambda: _Worker(name="stopped"), restart_delay=0)
@@ -96,7 +105,7 @@ class TestAFailedRespawn:
 
         # release() retires a spec and clears its actor. If "no actor" alone
         # triggered a restart, every deliberate stop would be undone.
-        assert await supervisor._detect_failures() == []
+        assert await supervisor._detect_failures() == ([], [])
 
 
 class TestTheLockIsNotHeldAcrossRestarts:
@@ -144,7 +153,7 @@ class TestTheLockIsNotHeldAcrossRestarts:
         # what must hold is that the spec stays retired and the watch loop
         # will not pick it up again.
         assert spec.retired is True
-        assert await supervisor._detect_failures() == []
+        assert await supervisor._detect_failures() == ([], [])
 
     async def test_stopping_abandons_an_in_flight_restart(self, supervisor: Supervisor) -> None:
         release = asyncio.Event()
@@ -180,7 +189,7 @@ class TestResupervise:
         supervisor.supervise("w", lambda: _Worker(name="w"), restart_delay=0)
         spec = supervisor._specs["w"]
         supervisor.release("w")
-        assert await supervisor._detect_failures() == []
+        assert await supervisor._detect_failures() == ([], [])
 
         actor = _Worker(name="w")
         supervisor.resupervise("w", actor)
@@ -188,18 +197,17 @@ class TestResupervise:
         assert spec.retired is False
         assert spec.actor is actor
 
-    async def test_the_restart_budget_starts_fresh(self, supervisor: Supervisor) -> None:
+    async def test_the_crash_streak_starts_fresh(self, supervisor: Supervisor) -> None:
         supervisor.supervise("w", lambda: _Worker(name="w"), max_restarts=2, restart_delay=0)
         spec = supervisor._specs["w"]
-        spec.record_restart()
-        spec.record_restart()
-        assert spec.exhausted is True
+        spec.crash_streak = 3
+        spec.slow = True
 
         supervisor.resupervise("w", _Worker(name="w"))
 
         # Crashes from before a deliberate stop are not this run's. Carrying
-        # them over would give a freshly started actor no budget at all.
-        assert spec.exhausted is False
+        # them over would start a fresh actor out slowed down.
+        assert (spec.crash_streak, spec.slow) == (0, False)
 
     async def test_an_unsupervised_name_is_ignored(self, supervisor: Supervisor) -> None:
         supervisor.resupervise("never-registered", _Worker(name="x"))
@@ -265,7 +273,10 @@ class TestDetectionIsUnchanged:
         spec.actor = actor
 
         actor.metrics.errors = Supervisor.ERROR_STORM_THRESHOLD - 1
-        assert supervisor._failure_reason(spec) is None
+        failures, _ = await supervisor._detect_failures()
+        assert failures == []
 
         actor.metrics.errors = Supervisor.ERROR_STORM_THRESHOLD
+        failures, _ = await supervisor._detect_failures()
+        assert failures == [("w", spec)]
         assert "error storm" in (supervisor._failure_reason(spec) or "")

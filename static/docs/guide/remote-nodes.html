@@ -603,10 +603,12 @@ answer refused.</p>
 <hr />
 <h2 id="supervisor-behaviour">Supervisor behaviour</h2>
 <p>Each agent on a remote node runs under a local <strong>ONE_FOR_ONE</strong> supervisor — identical semantics to the main machine. If an agent crashes, the supervisor restarts it with exponential back-off:</p>
-<div class="highlight"><pre><span></span><code><span class="n">delay</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">restart_delay</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span> <span class="o">**</span> <span class="p">(</span><span class="n">restart_count</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span> <span class="mf">60.0</span><span class="p">)</span>
+<div class="highlight"><pre><span></span><code><span class="n">delay</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">restart_delay</span> <span class="o">*</span> <span class="p">(</span><span class="mi">2</span> <span class="o">**</span> <span class="p">(</span><span class="n">crashes_in_a_row</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span> <span class="mf">60.0</span><span class="p">)</span>
 <span class="c1"># restart_delay=3.0: 3s → 6s → 12s → 24s → 48s → 60s (cap)</span>
 </code></pre></div>
 
+<p>An agent that stays up for <code>restart_window</code> (60 s) after a restart has recovered: its next
+crash starts from <code>restart_delay</code> again.</p>
 <table>
 <thead>
 <tr>
@@ -628,12 +630,8 @@ answer refused.</p>
 <td>Fatal — supervisor stops immediately.</td>
 </tr>
 <tr>
-<td>Restart budget exhausted (<code>max_restarts</code>)</td>
-<td>Agent is marked <code>failed</code>, removed from the registry, and a fatal event is published.</td>
-</tr>
-<tr>
-<td>10 consecutive successful <code>process()</code> calls</td>
-<td>One restart token is credited back (gradual budget recovery).</td>
+<td><code>max_restarts</code> crashes in a row</td>
+<td>Restarts slow down: 5 minutes, then doubling up to an hour. Main says so in chat, once, and again when the agent recovers. It is never given up on automatically — delete it to stop it.</td>
 </tr>
 <tr>
 <td>Deliberate <code>stop</code> command</td>

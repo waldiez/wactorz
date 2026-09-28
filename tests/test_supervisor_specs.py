@@ -46,7 +46,7 @@ async def _parent(supervisor: Supervisor) -> _Worker:
 
 class TestARespawnedAgentIsSupervised:
     async def test_a_name_released_before_is_supervised_again(self, supervisor: Supervisor) -> None:
-        # What the retirement message tells a user to do: delete it, spawn it again.
+        # What the slow-retry notice suggests to a user: delete it, spawn it again.
         parent = await _parent(supervisor)
         first = await parent.spawn(_Worker, name="child")
         supervisor.release("child")
@@ -82,13 +82,14 @@ class TestARespawnedAgentIsSupervised:
     ) -> None:
         supervisor.supervise("child", lambda: _Worker(name="child"), max_restarts=2)
         spec = supervisor._specs["child"]
-        spec.record_restart()
-        spec.record_restart()
+        spec.crash_streak = 3
+        spec.slow = True
         supervisor.release("child")
 
         supervisor.adopt("child", lambda: _Worker(name="child"), _Worker(name="child"))
 
-        assert supervisor._specs["child"].exhausted is False
+        adopted = supervisor._specs["child"]
+        assert (adopted.crash_streak, adopted.slow) == (0, False)
 
     async def test_the_new_factory_replaces_the_old(self, supervisor: Supervisor) -> None:
         # The old factory rebuilds the actor as it was: the code it replaced.
@@ -217,7 +218,8 @@ class TestARestartDoesNotUndoARemoval:
         await asyncio.sleep(0.01)
 
         supervisor.drop_supervised("worker")
-        await restart
+        # Cancelled by the drop, or ending on its own: either way, nothing back.
+        await asyncio.gather(restart, return_exceptions=True)
 
         assert supervisor._registry.find_by_name("worker") is None
         assert "worker" not in supervisor._specs

@@ -533,7 +533,8 @@ async def process(agent):
 
 Remote agents run under a local supervisor — if an agent crashes, it is automatically
 restarted with exponential back-off (restart_delay doubles each attempt, capped at 60s).
-After max_restarts consecutive failures it is marked failed and removed.
+After max_restarts crashes in a row it keeps being restarted, but slowly (from 5 minutes,
+doubling up to an hour), and the user is told; it is never given up on automatically.
 Compile errors and setup() fatals are never retried.
 
 Inside remote agent code, agent.node gives the node name the agent is running on.

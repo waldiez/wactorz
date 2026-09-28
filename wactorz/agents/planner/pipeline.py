@@ -149,7 +149,9 @@ class PipelineMixin(_Host):
         # Agents wait for MQTT changes, but if the entity is already in the
         # target state before they spawned they would never receive a trigger.
         if spawned:
-            asyncio.create_task(self._bootstrap_ha_entity_states(task, plan))
+            self.run_detached(
+                self._bootstrap_ha_entity_states(task, plan), name="bootstrap-ha-states"
+            )
 
         if rule_agents:
             self._persist_pipeline_rule(task, rule_agents)

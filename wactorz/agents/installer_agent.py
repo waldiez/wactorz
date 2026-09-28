@@ -1019,11 +1019,12 @@ class InstallerAgent(Actor):
 
     def _log_remote(self, message: str):
         logger.info("[%s] %s", self.name, message)
-        asyncio.create_task(
+        self.run_detached(
             self._mqtt_publish(
                 f"agents/{self.actor_id}/logs",
                 {"type": "log", "message": message, "timestamp": time.time()},
-            )
+            ),
+            name="log",
         )
 
     async def _node_install(self, payload: dict) -> dict:

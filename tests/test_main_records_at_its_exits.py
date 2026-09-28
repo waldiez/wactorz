@@ -20,7 +20,7 @@ import pytest
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.delegation import DelegationManager
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
-from wactorz.core.actor import Message, MessageType
+from wactorz.core.actor import ActorState, Message, MessageType
 from wactorz.core.persistence import WactorzDB, chat_turn_recorded
 
 NS: dict[str, Any] = {}
@@ -66,6 +66,8 @@ def _main(
     m.actor_id = "main-0001"
     m._conversation_history = []
     m.metrics = SimpleNamespace(messages_processed=0)  # pyright: ignore[reportAttributeAccessIssue]
+    m._tasks = []  # where run_detached keeps fact extraction
+    m.state = ActorState.RUNNING  # run_detached refuses work once stopped
     m.delegation = DelegationManager(m)
 
     m._drain_notifications = lambda: ""

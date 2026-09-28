@@ -126,10 +126,15 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         self._lifetime_task = asyncio.create_task(self._lifetime_watchdog())
 
         if self._task:
-            asyncio.create_task(self._report_plan(self._task))
+            self.run_detached(self._report_plan(self._task), name="report-plan")
 
     async def on_stop(self) -> None:
         """Persist final cost metrics so lifetime spend survives agent termination."""
+        # Stopped from outside, the watchdog would still wake at its deadline
+        # and tear down a planner that is already gone.
+        watchdog = self._lifetime_task
+        if watchdog is not None and not watchdog.done() and watchdog is not asyncio.current_task():
+            watchdog.cancel()
         if self.total_cost_usd > 0:
             self.persist(
                 "_final_cost",
@@ -330,7 +335,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
 
         await self._log("Task complete.")
         if self._auto_terminate:
-            asyncio.create_task(self._deferred_stop())
+            self.run_detached(self._deferred_stop(), name="self-stop")
 
         return answer
 

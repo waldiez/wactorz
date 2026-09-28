@@ -406,17 +406,10 @@ class DynamicAgent(Actor):
         await self._run_generated_cleanup()
 
         release_open_resources(self._api, self._ns, self.name)
+        self._api._close_windows()
 
-        # ── Cancel any tasks spawned inside setup/process code ─────────────
-        # Generated code may have called asyncio.create_task() directly without
-        # adding to _tasks. We can't track those, but we can ensure all tasks
-        # we DO track are properly cancelled and awaited.
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
-        # Give cancelled tasks a moment to actually stop
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+        # The tasks themselves, program tasks included, were cancelled and
+        # awaited by stop() before this ran; only the bookkeeping is left.
         self._program_tasks.clear()
 
     # ── Code compilation ───────────────────────────────────────────────────

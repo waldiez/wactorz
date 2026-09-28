@@ -725,3 +725,17 @@ class TestEnding:
     def test_the_task_description_is_the_task(self, tmp_path: Path) -> None:
         assert _planner(tmp_path)._current_task_description() == "waiting for task"
         assert _planner(tmp_path, task="x" * 100)._current_task_description() == "x" * 60
+
+
+async def test_stopping_a_planner_ends_its_lifetime_watchdog(tmp_path: Path) -> None:
+    # Left running, it would wake at its deadline and tear down a planner that
+    # is already gone.
+    planner = _planner(tmp_path, max_lifetime_s=3600)
+    await planner.start()
+    watchdog = planner._lifetime_task
+    assert watchdog is not None and not watchdog.done()
+
+    await planner.stop()
+    await asyncio.gather(watchdog, return_exceptions=True)
+
+    assert watchdog.done()

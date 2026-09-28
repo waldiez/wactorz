@@ -450,7 +450,7 @@ async def setup(agent) -> None:
     )
 
     # Start MQTT listener for real-time detection
-    asyncio.create_task(_mqtt_detector(agent))
+    agent.run_in_background(_mqtt_detector(agent))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

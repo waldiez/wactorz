@@ -121,30 +121,36 @@ class PersistenceAPI:
         the destination calls this once BEFORE the agent's on_start() runs so
         recall() finds the migrated values during initialization.
 
-        When ``replace`` is True (default), every existing value for this
-        agent is wiped first — this is the correct semantics for migration,
-        where the incoming snapshot must fully replace any stale local state
-        from a prior incarnation of the same name. Pass replace=False for
-        merge semantics (advanced; rarely the right thing).
+        When ``replace`` is True (default), the snapshot replaces everything
+        this agent had stored -- the right semantics for migration, where it
+        must fully replace any stale local state from a prior incarnation of
+        the same name. The snapshot is written first and what it leaves out is
+        removed after, so a crash part-way leaves the migrated state plus some
+        stale keys rather than nothing at all. Pass replace=False to merge
+        (advanced; rarely the right thing).
 
         Returns a summary dict for logging.
         """
-        if replace:
-            self.purge()
-
         applied = {"sqlite": 0, "memory": 0, "pickle": 0}
         if not isinstance(snapshot, dict):
+            if replace:
+                self.purge()
             return applied
 
         # Pickle keys are anything not in the SQLite or ephemeral sets — we group
         # them so one disk write covers all of them instead of N writes.
         pickle_blob: dict = {}
+        # Keys whose old values stay: the ones just written, and any whose write
+        # failed -- a failed write keeps what was there rather than deleting it.
+        keep: set[str] = set()
         for key, value in snapshot.items():
             try:
                 if key in SQLITE_KEYS:
+                    keep.add(key)
                     self.db.kv_set(self.agent, key, value)
                     applied["sqlite"] += 1
                 elif key in EPHEMERAL_KEYS:
+                    keep.add(key)
                     self.memory.set(f"{self.agent}:{key}", value)
                     applied["memory"] += 1
                 else:
@@ -157,12 +163,14 @@ class PersistenceAPI:
                     e,
                 )
 
-        if pickle_blob:
-            try:
-                self.pickle.save(self.agent, pickle_blob)
-                applied["pickle"] = len(pickle_blob)
-            except Exception as e:
-                logger.warning("[Persistence] Pickle bulk-load failed for '%s': %s", self.agent, e)
+        try:
+            self._write_pickled(pickle_blob, replace=replace)
+            applied["pickle"] = len(pickle_blob)
+        except Exception as e:
+            logger.warning("[Persistence] Pickle bulk-load failed for '%s': %s", self.agent, e)
+
+        if replace:
+            self._remove_all_but(frozenset(keep))
 
         logger.info(
             "[Persistence] Loaded snapshot for '%s': %s SQLite keys, %s in-memory keys, %s pickle keys",
@@ -172,6 +180,34 @@ class PersistenceAPI:
             applied["pickle"],
         )
         return applied
+
+    def _write_pickled(self, values: dict[str, Any], *, replace: bool) -> None:
+        """Write a snapshot's pickled keys: in place of the file, or merged into it.
+
+        Replacing writes one file in one step, so it is never empty on the way.
+        """
+        if replace:
+            if values:
+                self.pickle.save(self.agent, values)
+            else:
+                self.pickle.delete(self.agent)
+        elif values:
+            self.pickle.save(self.agent, {**self.pickle.load(self.agent), **values})
+
+    def _remove_all_but(self, keep: frozenset[str]) -> None:
+        """Remove this agent's SQLite and in-memory values whose keys are not in ``keep``."""
+        try:
+            for key in self.db.kv_all(self.agent):
+                if key not in keep:
+                    self.db.kv_delete(self.agent, key)
+        except Exception as e:
+            logger.warning("[Persistence] Could not clear stale keys for %s: %s", self.agent, e)
+        for key in EPHEMERAL_KEYS:
+            if key not in keep:
+                try:
+                    self.memory.delete(f"{self.agent}:{key}")
+                except Exception as e:
+                    logger.debug("[Persistence] memory delete %s failed: %s", key, e)
 
     def purge(self) -> dict[str, Any]:
         """Permanently delete EVERY stored value for this agent across all

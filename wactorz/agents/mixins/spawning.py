@@ -39,7 +39,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
-from ...core.actor import Actor, MessageType
+from ...core.actor import Actor, ActorState, MessageType
 from ...core.paths import agent_state_dir
 from ...core.topics import topic_name_error
 from ..lookup import find_main_actor
@@ -366,7 +366,9 @@ class SpawnMixin(_Host):
         logger.info(
             "[%s] Scheduling background install+spawn for '%s': %s", self.name, name, needed
         )
-        asyncio.create_task(self._install_then_spawn(config, name, code, needed))
+        self.run_detached(
+            self._install_then_spawn(config, name, code, needed), name=f"install-{name}"
+        )
         return SpawnPlaceholder(name)
 
     async def _install_then_spawn(self, config: dict, name: str, code: str, packages: list):
@@ -388,6 +390,11 @@ class SpawnMixin(_Host):
                     },
                 )
             await self._install_packages(packages, agent_name=name)
+            if self.state == ActorState.STOPPED:
+                # An install can outlast the stop meant to cancel it. Spawning
+                # now would register an agent into a system that has shut down.
+                logger.info("[%s] Not spawning '%s': stopped during its install", self.name, name)
+                return
             actor = await self._do_spawn_dynamic(config, name, code)
             if actor is not None:
                 self._register_spawn(config)

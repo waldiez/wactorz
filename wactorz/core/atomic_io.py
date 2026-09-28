@@ -13,24 +13,35 @@ import json
 import os
 import pickle
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+
+
+def _temporary(path: Path) -> Path:
+    """A temporary beside ``path``, unique to this write.
+
+    Beside it so the rename stays within one filesystem, which is what makes it
+    atomic. Unique per write, not per process: an agent's blocking work runs on
+    threads, two of which can save the same file at once, and sharing one
+    temporary lets one write's rename carry the other's half-written bytes.
+    """
+    return path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
 
 
 def write_pickle(path: Path, obj: Any) -> None:
     """Pickle ``obj`` into ``path``, replacing it in one step.
 
-    The temporary sits beside the target so the rename stays within one
-    filesystem, which is what makes it atomic; the pid keeps two processes
-    writing the same agent from colliding on it. On any failure the temporary is
-    removed and the previous contents are still there.
+    Written to a temporary first (see :func:`_temporary`) and renamed over the
+    target. On any failure the temporary is removed and the previous contents
+    are still there.
 
     Raises whatever the write raised — callers decide whether a lost save is
     worth reporting. On Windows the replace itself can fail, because it refuses
     to overwrite a file another handle has open; the previous contents survive
     that, which is the whole point.
     """
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = _temporary(path)
     try:
         with open(tmp, "wb") as f:
             pickle.dump(obj, f)
@@ -57,7 +68,7 @@ def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     written half a file, and doing it here would only move that truncation from
     the target to the temporary.
     """
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = _temporary(path)
     try:
         with open(tmp, "w", encoding=encoding) as f:
             f.write(text)
@@ -83,10 +94,10 @@ def write_private_json(path: Path, data: dict[str, Any]) -> None:
     leaves the previous file whole instead of a truncated one.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Named for this process and created exclusively: two writers cannot land on
+    # Unique to this write and created exclusively: two writers cannot land on
     # the same temp file, and O_EXCL refuses a path that already exists — so a
     # symlink planted there is an error rather than somewhere the secrets go.
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = _temporary(path)
     try:
         fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:

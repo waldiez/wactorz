@@ -126,6 +126,9 @@ class SubscriptionHub:
         self._bindings: list[_Binding] = []
         self._client: Any = None
         self._task: asyncio.Task | None = None
+        #: Subscriptions sent on the live connection and not yet acknowledged,
+        #: held so none is collected part-way through.
+        self._subscribing: set[asyncio.Task] = set()
         self._warned = [False]
 
     def bind(self, topic: str, callback: Any) -> asyncio.Task | None:
@@ -140,7 +143,9 @@ class SubscriptionHub:
         self._bindings.append(binding)
         binding.worker = asyncio.create_task(self._drain(binding))
         if self._client is not None:
-            asyncio.create_task(self._subscribe_now(topic))
+            task = asyncio.create_task(self._subscribe_now(topic))
+            self._subscribing.add(task)
+            task.add_done_callback(self._subscribing.discard)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self.run())
             return self._task
@@ -159,6 +164,8 @@ class SubscriptionHub:
         self._bindings.clear()
         for binding in bindings:
             self._stop_worker(binding)
+        for task in list(self._subscribing):
+            task.cancel()
         client = self._client
         if client is None:
             return

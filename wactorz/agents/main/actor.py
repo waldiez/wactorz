@@ -336,10 +336,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Route interface tasks through the full orchestrator without blocking replies."""
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         if payload.get("_via_interface"):
-            task = asyncio.create_task(self._handle_interface_request(payload, msg))
-            self._tasks.append(task)
-            task.add_done_callback(
-                lambda done: self._tasks.remove(done) if done in self._tasks else None
+            self.run_detached(
+                self._handle_interface_request(payload, msg), name="interface-request"
             )
             return
         await super()._handle_task(msg)
@@ -417,7 +415,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         response = await super().chat(user_message, attachments)
         # Fire-and-forget fact extraction — strip auto-injected context first
         clean_msg = _strip_live_context(user_message)
-        asyncio.create_task(self._extract_and_save_facts(clean_msg, response))
+        self.run_detached(self._extract_and_save_facts(clean_msg, response), name="facts")
         return response
 
     async def chat_stream(
@@ -436,7 +434,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Skips early-exit cases like cost-limit errors so no extra LLM call is made.
         if full_response and got_usage:
             clean_msg = _strip_live_context(user_message)
-            asyncio.create_task(self._extract_and_save_facts(clean_msg, "".join(full_response)))
+            self.run_detached(
+                self._extract_and_save_facts(clean_msg, "".join(full_response)), name="facts"
+            )
 
     async def _record_external_exchange(
         self, user_message: str, assistant_response: str, *, ts_user: float
@@ -472,7 +472,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             logger.warning("[%s] Failed to record external exchange: %s", self.name, e)
         self._log_delivered_turn(user_message, str(assistant_response), ts_user=ts_user)
         # Fire-and-forget fact extraction — same as chat()
-        asyncio.create_task(self._extract_and_save_facts(user_message, str(assistant_response)))
+        self.run_detached(
+            self._extract_and_save_facts(user_message, str(assistant_response)), name="facts"
+        )
 
     def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
         """Store nothing: main stores a turn at the exit it leaves by.

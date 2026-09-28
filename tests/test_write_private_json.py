@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from wactorz.core import atomic_io
 from wactorz.core.atomic_io import write_private_json
 
 #: Windows has no POSIX mode bits to assert on; the guarantee there comes from
@@ -133,12 +134,28 @@ def test_a_failed_write_leaves_no_temp_file_behind(tmp_path: Path) -> None:
 
 
 @posix_only
-def test_a_symlink_at_the_temp_path_is_refused(tmp_path: Path) -> None:
-    """The write goes through a temp file created with O_EXCL, so a symlink left
-    at that path is an error rather than somewhere the tokens are delivered."""
+def test_a_symlink_at_a_guessable_temp_path_is_not_followed(tmp_path: Path) -> None:
+    """The temp file's name is unique to each write, so there is no path to plant
+    a symlink at ahead of time; and it is created with O_EXCL, so one that
+    appeared there anyway would be an error rather than where the tokens go."""
     target = tmp_path / "token.json"
     elsewhere = tmp_path / "attacker-readable.json"
     (tmp_path / f".{target.name}.{os.getpid()}.tmp").symlink_to(elsewhere)
+
+    write_private_json(target, {"tokens": {"refresh_token": "secret"}})
+
+    assert not elsewhere.exists()
+    assert json.loads(target.read_text())["tokens"]["refresh_token"] == "secret"
+
+
+def test_the_temp_file_is_created_exclusively(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "token.json"
+    elsewhere = tmp_path / "attacker-readable.json"
+    planted = tmp_path / ".token.json.planted.tmp"
+    planted.symlink_to(elsewhere)
+    monkeypatch.setattr(atomic_io, "_temporary", lambda _path: planted)
 
     with pytest.raises(FileExistsError):
         write_private_json(target, {"tokens": {"refresh_token": "secret"}})

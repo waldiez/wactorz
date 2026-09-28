@@ -297,6 +297,21 @@ class StreamsMixin(_Host):
         self._windows[topic] = wrapped
         return wrapped
 
+    def _close_windows(self) -> None:
+        """Stop every window this agent opened; each holds a broker connection of its own.
+
+        For when the agent stops. A restart builds a new agent with windows of
+        its own, and a window left behind reconnects for the life of the
+        process. A repaired program keeps them: it runs on the same agent, and
+        its `window()` calls find the ones already filled.
+        """
+        for topic, window in list(self._windows.items()):
+            try:
+                window.stop()
+            except Exception as exc:
+                logger.debug("[%s] Window on %s would not stop: %s", self.name, topic, exc)
+        self._windows.clear()
+
     def declare_contract(
         self,
         publishes: Any = None,
@@ -379,7 +394,7 @@ class StreamsMixin(_Host):
             bus.register_contract(contract)
         # Also include in manifest so remote agents and planner can see it
         self._actor._topic_contract = contract
-        asyncio.ensure_future(self._publish_manifest())
+        self._actor.run_detached(self._publish_manifest(), name="manifest")
         return AWAITABLE_NONE  # safe to await
 
     def wiring_opportunities(self) -> list[dict[str, Any]]:

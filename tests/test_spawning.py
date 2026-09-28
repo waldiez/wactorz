@@ -23,6 +23,7 @@ from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
+from wactorz.core.actor import ActorState
 
 
 def run(coro):
@@ -75,6 +76,8 @@ class _BaseHost(SpawnMixin):
         self.spawn_calls = []  # (cls, kwargs)
         self.sent = []  # installer payloads
         self.published = []  # mqtt dashboard echoes
+        self.state = ActorState.RUNNING
+        self.detached: list[asyncio.Task] = []  # background work the host was handed
 
     async def spawn(self, actor_class, **kwargs):
         self.spawn_calls.append((actor_class, kwargs))
@@ -97,6 +100,11 @@ class _BaseHost(SpawnMixin):
 
     def recall(self, key, default=None):
         return default
+
+    def run_detached(self, coro, *, name=None):
+        task = asyncio.create_task(coro, name=name)
+        self.detached.append(task)
+        return task
 
 
 class MainHost(_BaseHost):
@@ -540,3 +548,40 @@ def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
     run(SpawnService(host)._spawn_remote({"name": "all#"}, "rpi", save=True))  # pyright: ignore[reportArgumentType]
 
     assert published == []
+
+
+def test_a_background_install_is_owned_by_the_host(main_host):
+    # Kept by the host, so its stop cancels the install rather than leaving it
+    # running against a system that has shut down.
+    main_host._registry.add(FakeActor("installer"))
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d4", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=False,
+        )
+        assert [task.get_name() for task in main_host.detached] == ["install-d4"]
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+
+
+def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    real_install = main_host._install_packages
+
+    async def install_then_stop(packages, agent_name):
+        await real_install(packages, agent_name=agent_name)
+        main_host.state = ActorState.STOPPED
+
+    main_host._install_packages = install_then_stop
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d5", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=False,
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+    assert main_host.spawn_calls == []

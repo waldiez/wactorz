@@ -205,15 +205,17 @@ class TestIdentityAndLifecycle:
         assert task in api._actor._tasks
         assert await task == "done"
 
-    async def test_background_work_still_runs_when_it_cannot_be_tracked(
-        self, api: AgentAPI
-    ) -> None:
-        api._actor._tasks = None  # pyright: ignore[reportAttributeAccessIssue]
-
+    async def test_finished_background_work_is_let_go(self, api: AgentAPI) -> None:
+        # Held until it ends, not for the life of the agent: one per call to a
+        # process loop would otherwise pile up.
         async def _work() -> str:
             return "done"
 
-        assert await api.run_in_background(_work()) == "done"
+        task = api.run_in_background(_work())
+        await task
+        await asyncio.sleep(0)
+
+        assert task not in api._actor._tasks
 
     def test_persist_can_be_awaited_by_mistake(self, api: AgentAPI) -> None:
         assert inspect.isawaitable(api.persist("k", 1))

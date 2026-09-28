@@ -497,9 +497,9 @@ async def setup(agent):
     )
 
     # Start the background workers
-    asyncio.create_task(_mqtt_subscriber(agent))
-    asyncio.create_task(_flush_loop(agent))
-    asyncio.create_task(_prune_loop(agent))
+    agent.run_in_background(_mqtt_subscriber(agent))
+    agent.run_in_background(_flush_loop(agent))
+    agent.run_in_background(_prune_loop(agent))
 
     await agent.log(
         f"Time-series collector ready | "

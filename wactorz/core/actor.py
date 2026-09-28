@@ -5,6 +5,7 @@ Every agent IS an actor. Actors communicate via message passing only.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import pickle
@@ -12,7 +13,7 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -372,6 +373,51 @@ class Actor(ABC):
 
     #: How long stop() waits for a cancelled task before giving up on it.
     TASK_SHUTDOWN_TIMEOUT = 5.0
+
+    async def _discard_child(self, child: Actor) -> None:
+        """Stop and unregister a child whose start did not complete."""
+        with contextlib.suppress(Exception):
+            await child.stop()
+        if self._registry:
+            with contextlib.suppress(Exception):
+                await self._registry.unregister(child.actor_id)
+
+    def run_detached(
+        self, coro: Coroutine[Any, Any, Any], *, name: str | None = None
+    ) -> asyncio.Task[Any]:
+        """Run ``coro`` alongside the actor, as a task the actor owns.
+
+        For work the caller does not wait for. A bare ``asyncio.create_task``
+        keeps no reference, so the task can be garbage-collected part-way
+        through, and nothing cancels it when the actor stops: it goes on
+        running against an actor, or a system, that has already shut down.
+        This one is held in ``_tasks`` until it ends, so ``stop()`` cancels and
+        waits for it like the actor's own loops, and a failure is logged rather
+        than surfacing as "exception never retrieved" whenever it is collected.
+        """
+        task = asyncio.create_task(coro, name=name)
+        if self.state == ActorState.STOPPED:
+            # Too late to own it: stop() sets this before winding tasks down,
+            # so one added now would be cleared without being cancelled.
+            task.cancel()
+            logger.debug("[%s] Not starting %s: the actor has stopped", self.name, task.get_name())
+            return task
+        self._tasks.append(task)
+        task.add_done_callback(self._forget_detached)
+        return task
+
+    def _forget_detached(self, task: asyncio.Task[Any]) -> None:
+        """Drop a finished detached task, reporting how it failed if it did."""
+        # Already gone when stop() cleared the list while winding down.
+        if task in self._tasks:
+            self._tasks.remove(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "[%s] Background task %s failed", self.name, task.get_name(), exc_info=error
+            )
 
     async def _wind_down_tasks(self) -> None:
         """Cancel the actor's own tasks and wait for them to actually finish.
@@ -795,8 +841,19 @@ class Actor(ABC):
         if self._registry:
             await self._registry.register(child)
 
-        # Start the child
-        await child.start()
+        # Start the child. Registered already, so a start that fails or is
+        # cancelled must take it back out: nothing else holds it to stop, and
+        # supervision has not adopted it yet.
+        try:
+            await child.start()
+        except BaseException:
+            # Shielded, so a second cancellation cannot cut the cleanup short;
+            # it is still passed on once the cleanup is done.
+            try:
+                await asyncio.shield(self._discard_child(child))
+            except asyncio.CancelledError:
+                raise asyncio.CancelledError from None
+            raise
 
         # ── Erlang/OTP: register child under Supervisor so it's never an orphan ──
         # We reach into the registry to find the ActorSystem's supervisor.

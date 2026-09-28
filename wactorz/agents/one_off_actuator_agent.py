@@ -424,7 +424,7 @@ class OneOffActuatorAgent(Actor):
                 "_task_id": "str — correlation id echoed back to the parent actor",
             },
         )
-        asyncio.create_task(self._run())
+        self.run_detached(self._run(), name="actuation")
 
     async def handle_message(self, msg: Message):
         if msg.type == MessageType.TASK:
@@ -448,7 +448,7 @@ class OneOffActuatorAgent(Actor):
             logger.exception("[%s] One-shot actuation failed", self.name)
             await self._send_result(f"Actuation failed: {exc}")
         finally:
-            asyncio.create_task(self._deferred_stop())
+            self.run_detached(self._deferred_stop(), name="self-stop")
 
     async def _execute_request(self) -> str:
         if not CONFIG.ha_url or not CONFIG.ha_token:
@@ -1028,14 +1028,27 @@ class OneOffActuatorAgent(Actor):
     async def _deferred_stop(self) -> None:
         await asyncio.sleep(2.0)
         await self._log("Self-terminating.")
-        if self._registry:
-            await self._registry.unregister(self.actor_id)
         await self.stop()
-        # After stop(), so the final status it publishes cannot be mistaken for
-        # an actuator that is still here. This is what tells the dashboard the
-        # card is gone; without it the entry outlives the agent.
-        await self.withdraw_manifest()
-        self._delete_persistence_dir()
+
+    async def stop(self) -> None:
+        """Stop, then leave no trace: a one-shot actuator is finished however it stops.
+
+        Whether it ends itself after its request or is stopped from outside
+        first, it will not run again, so the registry entry, the retained
+        manifest and the state directory all go. Each step is safe to repeat,
+        since a self-stop can meet one from outside.
+        """
+        try:
+            await super().stop()
+        finally:
+            if self._registry:
+                await self._registry.unregister(self.actor_id)
+            # After stopping, so the final status it publishes cannot be
+            # mistaken for an actuator that is still here. This is what tells
+            # the dashboard the card is gone; without it the entry outlives the
+            # agent.
+            await self.withdraw_manifest()
+            self._delete_persistence_dir()
 
     async def _log(self, msg: str) -> None:
         logger.info("[%s] %s", self.name, msg)

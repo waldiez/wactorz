@@ -222,16 +222,16 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
 
         class _LoggerShim:
             def info(self, msg: Any) -> None:
-                asyncio.ensure_future(api.log(msg, "info"))
+                api._actor.run_detached(api.log(msg, "info"), name="log")
 
             def warning(self, msg: Any) -> None:
-                asyncio.ensure_future(api.log(msg, "warning"))
+                api._actor.run_detached(api.log(msg, "warning"), name="log")
 
             def error(self, msg: Any) -> None:
-                asyncio.ensure_future(api.log(msg, "error"))
+                api._actor.run_detached(api.log(msg, "error"), name="log")
 
             def debug(self, msg: Any) -> None:
-                asyncio.ensure_future(api.log(msg, "debug"))
+                api._actor.run_detached(api.log(msg, "debug"), name="log")
 
         return _LoggerShim()
 
@@ -244,12 +244,7 @@ class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):
         ack from handle_task, do the work in here, then call notify_user() with
         the result when it's ready.
         """
-        task = asyncio.create_task(coro)
-        try:
-            self._actor._tasks.append(task)
-        except Exception as exc:
-            logger.debug("[%s] Could not track a background task: %s", self.name, exc)
-        return task
+        return self._actor.run_detached(coro, name="background")
 
     # ── Persistence ────────────────────────────────────────────────────────
 

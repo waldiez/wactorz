@@ -25,6 +25,11 @@ from wactorz.core.atomic_io import write_private_json
 #: Windows has no POSIX mode bits to assert on; the guarantee there comes from
 #: the directory's ACL, which is a different test.
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX mode bits")
+#: Windows follows a dangling symlink on an exclusive create and makes its target,
+#: where POSIX refuses the path. There the unguessable name is the protection.
+posix_symlinks = pytest.mark.skipif(
+    sys.platform == "win32", reason="O_EXCL refuses a symlink on POSIX only"
+)
 
 
 @posix_only
@@ -148,6 +153,7 @@ def test_a_symlink_at_a_guessable_temp_path_is_not_followed(tmp_path: Path) -> N
     assert json.loads(target.read_text())["tokens"]["refresh_token"] == "secret"
 
 
+@posix_symlinks
 def test_the_temp_file_is_created_exclusively(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

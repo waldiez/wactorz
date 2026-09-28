@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 import pickle
+import sys
 import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -210,7 +211,11 @@ class TestTemporaryFiles:
         for thread in threads:
             thread.join()
 
-        assert errors == []
+        # Windows refuses to replace a file another thread is replacing at that
+        # moment: that save is lost and says so, and the file keeps the previous
+        # contents whole (see write_pickle). Nothing else may go wrong.
+        expected = (PermissionError,) if sys.platform == "win32" else ()
+        assert [e for e in errors if not isinstance(e, expected)] == []
         with target.open("rb") as f:
             assert pickle.load(f)["pad"] == "x" * 10_000  # written just above
         assert list(tmp_path.glob(".*.tmp")) == []

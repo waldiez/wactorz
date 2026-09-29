@@ -247,6 +247,23 @@ def get_native_factory(name: str):
     return recipe.get("factory") if recipe else None
 
 
+def current_recipe_config(saved: dict) -> dict:
+    """A saved catalog agent's config, brought up to date with its recipe.
+
+    The spawn registry keeps a whole recipe, code included, as it was on the day
+    the agent was spawned. Restored from that alone, a catalog agent never
+    receives a fix shipped in a later release. Only trusted entries are
+    refreshed, because only the catalog writes those; what the recipe does not
+    define — where the agent runs, state shipped with a migration — is kept.
+    """
+    if not saved.get("trusted") or saved.get("type", "dynamic") != "dynamic":
+        return saved
+    recipe = _build_catalog().get(str(saved.get("name") or ""))
+    if not recipe or recipe.get("type") != "dynamic":
+        return saved
+    return {**saved, **recipe, "trusted": True}
+
+
 def _build_catalog() -> dict:
     catalog = _build_native_catalog()
 

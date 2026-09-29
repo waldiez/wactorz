@@ -35,8 +35,10 @@ from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
 from ..core.node_signing import next_sequence, node_key
 from ..core.paths import resolve_state_dir
 from ..core.pip import (
+    NO_INSTALLER_MESSAGE,
     PIP_INSTALL_TIMEOUT_S,
     installed_versions,
+    installer_command,
     is_installable_name,
     make_user_site_importable,
     requirement_is_satisfied,
@@ -510,8 +512,12 @@ class InstallerAgent(Actor):
         (the default in some Python versions / environments). subprocess.run() works
         correctly on all platforms.
         """
-        cmd = [sys.executable, "-m", "pip", "install", package, "--quiet"]
-        if sys.platform != "win32":
+        base = installer_command()
+        if base is None:
+            return False, NO_INSTALLER_MESSAGE
+        cmd = [*base, package, "--quiet"]
+        if sys.platform != "win32" and base[1:2] == ["-m"]:
+            # pip's flag; uv installs into the environment it is pointed at.
             cmd.append("--break-system-packages")
 
         def _run_pip() -> tuple[bool, str]:

@@ -192,3 +192,33 @@ class TestMakeUserSiteImportable:
 
         assert make_user_site_importable() is False
         assert str(tmp_path) not in sys.path
+
+
+class TestInstallerCommand:
+    """pip when the environment has it; uv for one made by `uv venv`, which has none."""
+
+    def test_pip_is_used_where_it_is_installed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(pip.importlib.util, "find_spec", lambda name: object())
+
+        assert pip.installer_command() == [sys.executable, "-m", "pip", "install"]
+
+    def test_uv_installs_into_this_interpreter_without_pip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(pip.importlib.util, "find_spec", lambda name: None)
+        monkeypatch.setattr(pip.shutil, "which", lambda name: "/usr/bin/uv")
+
+        assert pip.installer_command() == [
+            "/usr/bin/uv",
+            "pip",
+            "install",
+            "--python",
+            sys.executable,
+        ]
+
+    def test_with_neither_there_is_nothing_to_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(pip.importlib.util, "find_spec", lambda name: None)
+        monkeypatch.setattr(pip.shutil, "which", lambda name: None)
+
+        assert pip.installer_command() is None
+        assert "ensurepip" in pip.NO_INSTALLER_MESSAGE

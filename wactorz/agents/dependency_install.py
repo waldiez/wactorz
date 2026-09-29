@@ -50,6 +50,13 @@ class InstallOutcome:
                 f"Try spawning it again; anything already installed is kept."
             )
         if self.failed:
+            errors = {error.strip()[-300:] or "pip failed" for error in self.failed.values()}
+            if len(errors) == 1 and len(self.failed) > 1:
+                # One cause for every package, so it is said once.
+                return (
+                    f"{agent_name} was not started because its packages could not be "
+                    f"installed: {errors.pop()}"
+                )
             lines = "\n".join(
                 f"- {pkg}: {error.strip()[-300:] or 'pip failed'}"
                 for pkg, error in self.failed.items()

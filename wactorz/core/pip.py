@@ -8,8 +8,10 @@ the rule about what a name may look like has to be the same in both places.
 
 import importlib
 import importlib.metadata
+import importlib.util
 import os
 import re
+import shutil
 import site
 import sys
 from collections.abc import Sequence
@@ -263,6 +265,29 @@ def install_command(packages: Sequence[str]) -> tuple[list[str], dict[str, str]]
         env["PIP_BREAK_SYSTEM_PACKAGES"] = "1"
     cmd += [*packages, "-q"]
     return cmd, env
+
+
+#: Why nothing can be installed, for an environment with neither pip nor uv.
+NO_INSTALLER_MESSAGE = (
+    f"This Python environment ({sys.executable}) has no pip, so nothing can be installed "
+    "into it. Add pip with `python -m ensurepip --upgrade` (in a uv environment, "
+    "`uv venv --seed` creates it with pip), then try again."
+)
+
+
+def installer_command() -> list[str] | None:
+    """The command that installs packages into this interpreter's environment.
+
+    pip when this environment has it. Otherwise uv, which environments made by
+    `uv venv` rely on, as they come without pip; `--python` points it at this
+    interpreter. None when there is neither, and nothing can be installed.
+    """
+    if importlib.util.find_spec("pip") is not None:
+        return [sys.executable, "-m", "pip", "install"]
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "pip", "install", "--python", sys.executable]
+    return None
 
 
 def install_destination() -> str:

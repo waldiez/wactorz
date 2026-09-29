@@ -492,6 +492,24 @@ class TestDynamicSpawn:
         assert spawner.calls == []
         assert main.spawn_registry == []
 
+    async def test_one_cause_for_every_package_is_said_once(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        installer = _Installer(
+            main,
+            {
+                "failed": ["numpy", "pillow"],
+                "results": {"numpy": "failed: no pip here", "pillow": "failed: no pip here"},
+            },
+        )
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["numpy"])
+        _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("anomaly-detector", {})
+
+        assert result["message"].count("no pip here") == 1
+
     async def test_a_replaced_loaded_package_asks_for_a_restart_and_keeps_the_recipe(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:

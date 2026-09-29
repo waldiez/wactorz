@@ -350,6 +350,38 @@ class TestLocalInstall:
             "requests",
         ]
 
+    async def test_an_environment_without_pip_uses_uv(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        commands: list[list[str]] = []
+
+        def _run(cmd: list[str], **_kwargs: Any) -> Any:
+            commands.append(cmd)
+            return SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        monkeypatch.setattr(
+            installer_agent, "installer_command", lambda: ["uv", "pip", "install", "--python", "py"]
+        )
+
+        assert (await installer._pip_install("requests"))[0] is True
+        # pip's --break-system-packages is not passed to uv.
+        assert commands == [["uv", "pip", "install", "--python", "py", "requests", "--quiet"]]
+
+    async def test_an_environment_with_neither_says_how_to_get_pip(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _unexpected(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("there is nothing to run")
+
+        monkeypatch.setattr(subprocess, "run", _unexpected)
+        monkeypatch.setattr(installer_agent, "installer_command", lambda: None)
+
+        ok, message = await installer._pip_install("requests")
+
+        assert ok is False
+        assert "ensurepip" in message
+
     async def test_a_successful_install_is_made_importable_at_once(
         self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
     ) -> None:

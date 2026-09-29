@@ -442,6 +442,7 @@ class SpawnMixin(_Host):
             llm_provider=self.llm,
             persistence_dir=str(self._persistence_dir.parent),
             trusted=bool(config.get("trusted", False)),
+            task_timeout_s=config.get("task_timeout_s"),
         )
 
         if actor is not None and (config.get("publishes") or config.get("subscribes")):

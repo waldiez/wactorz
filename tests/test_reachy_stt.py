@@ -377,6 +377,7 @@ class ProviderAbstractionTest(unittest.TestCase):
                 },
             )
 
+        assert turn.transcription is not None
         self.assertEqual(turn.transcription.text, "hello Reachy")
         self.assertEqual(turn.transcription.backend, "deepgram-streaming")
         self.assertEqual(turn.transcription.confidence, 0.96)
@@ -489,6 +490,7 @@ class ProviderAbstractionTest(unittest.TestCase):
         self.assertTrue(connection.finalized)
         self.assertTrue(connection.finished)
         self.assertEqual(option_calls[0]["language"], "multi")
+        assert turn.transcription is not None
         self.assertEqual(turn.transcription.text, "κλείσε μου τα φώτα")
         self.assertEqual(turn.transcription.backend, "deepgram-streaming")
 
@@ -574,6 +576,7 @@ class ProviderAbstractionTest(unittest.TestCase):
 
         self.assertGreater(turn.capture.audio.size, 0)
         self.assertIsNone(turn.transcription)
+        assert turn.error is not None
         self.assertIn("socket lost", turn.error)
 
 

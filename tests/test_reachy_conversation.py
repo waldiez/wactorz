@@ -5,6 +5,7 @@ import os
 import threading
 import types
 import unittest
+from typing import Any
 from unittest import mock
 
 import numpy as np
@@ -38,6 +39,8 @@ class FakeAgent:
     name = "reachy-mini"
     # Set by the tests that hand a turn to another agent.
     send_to: mock.AsyncMock
+    # Set by the tests that stand in for the hosting actor.
+    _actor: Any
 
     def __init__(self):
         self.state = {
@@ -1013,13 +1016,29 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             get_imu_data=dict,
         )
 
+        agent.state["motor_fault_watch_connected"] = True
+
         result = await NS["_health"](agent)
 
         self.assertEqual(
             result["result"],
-            "I'm connected to my body. My motors report no faults. "
+            "I'm connected to my body. My live motor-fault monitor has not seen a fault. "
             "Reachy Mini doesn't provide a battery reading.",
         )
+
+    async def test_health_does_not_call_an_unread_fault_monitor_all_clear(self):
+        agent = FakeAgent()
+        agent.state["mini"] = types.SimpleNamespace(
+            media=types.SimpleNamespace(
+                audio=types.SimpleNamespace(daemon_url="http://reachy.invalid")
+            ),
+            get_imu_data=dict,
+        )
+
+        result = await NS["_health"](agent)
+
+        self.assertIn("I cannot currently read the live motor-fault monitor", result["result"])
+        self.assertNotIn("has not seen a fault", result["result"])
 
     async def test_media_disconnect_reconnects_once_with_a_cooldown(self):
         agent = FakeAgent()

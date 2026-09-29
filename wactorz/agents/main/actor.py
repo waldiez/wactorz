@@ -262,9 +262,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def on_start(self) -> None:
         await super().on_start()
-        # Executable blocks are transport syntax, not conversation. Older
-        # versions persisted the raw block, which taught the model to replay a
-        # completed or failed action on later, unrelated turns.
+        # Executable blocks are transport syntax, not conversation. One left in
+        # stored history reads to the model as an example to follow, and it
+        # replays a completed or failed action on later, unrelated turns.
         history_changed = False
         for item in self._conversation_history:
             if item.get("role") != "assistant":

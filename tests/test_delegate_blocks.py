@@ -83,8 +83,10 @@ class _Main:
                 return _Agent(name), True
             return (_Agent(real) if real else None), name in spawnable
 
-        async def _delegate(name: str, task: str, timeout: float = 60.0) -> Any:
-            self.dispatched.append((name, json.loads(task)))
+        async def _delegate(name: str, task: Any, timeout: float = 60.0) -> Any:
+            # Payloads travel as the structure the model wrote, not as JSON text.
+            assert isinstance(task, dict), f"payload for {name} arrived as {type(task).__name__}"
+            self.dispatched.append((name, task))
             if delegate_raises:
                 raise RuntimeError(_MAILBOX_CLOSED)
             return result if result is not None else {"text": "done"}

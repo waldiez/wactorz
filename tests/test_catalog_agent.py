@@ -392,6 +392,20 @@ class TestDynamicSpawn:
         assert main.spawn_registry[0]["trusted"] is True
         assert _topics(catalog).count(f"agents/{catalog.actor_id}/logs") == 2
 
+    async def test_a_recipe_may_ask_for_a_longer_task_limit_for_its_agent(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: [])
+        spawner = _spawner(catalog, monkeypatch)
+
+        await catalog._action_spawn("reachy-mini", {})
+        await catalog._action_spawn("smart-energy", {})
+
+        (_, reachy), (_, energy) = spawner.calls
+        assert reachy["task_timeout_s"] == catalog._catalog["reachy-mini"]["task_timeout_s"]
+        assert energy["task_timeout_s"] is None
+
     async def test_installed_dependencies_skip_the_installer(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -600,3 +614,15 @@ class TestPublicSurface:
         count = len(catalog.list_recipes())
 
         assert catalog._current_task_description() == f"catalog ({count} recipes)"
+
+
+class TestTaskTimeout:
+    """A recipe's own handle_task() limit, and the default everyone else keeps."""
+
+    def test_an_agent_keeps_the_default_unless_its_recipe_says_otherwise(self) -> None:
+        default = DynamicAgent(code="", name="plain")
+        longer = DynamicAgent(code="", name="player", task_timeout_s=140.0)
+
+        assert default._HANDLE_TASK_TIMEOUT == DynamicAgent._HANDLE_TASK_TIMEOUT
+        assert longer._HANDLE_TASK_TIMEOUT == 140.0
+        assert DynamicAgent._HANDLE_TASK_TIMEOUT == 60.0

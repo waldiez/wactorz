@@ -157,9 +157,7 @@ class ReconnectCommandTest(unittest.TestCase):
 
         self.assertFalse(configured)
         self.assertFalse(agent.state["conversation_echo_control"])
-        self.assertTrue(
-            any("automatic voice interruption is disabled" in line for line in agent.logs)
-        )
+        self.assertTrue(any("Voice interruption is unavailable" in line for line in agent.logs))
 
     def test_reconnect_opens_link_and_brings_robot_up(self):
         agent = FakeAgent(mini=None)

@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import sys
 import types
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, cast
 
 import pytest
 
@@ -34,14 +35,15 @@ class FakeAgent:
         self.logs.append(text)
 
 
-def load_names(moves_object) -> list[str]:
+def load_names(moves_object: Any) -> list[str]:
     """Run just the probe, against a stand-in for whatever the SDK returned."""
     names: list[str] = []
     for attr in ("list_moves", "available", "list", "keys"):
         f = getattr(moves_object, attr, None)
         if callable(f):
             try:
-                names = list(f())
+                # The SDK's move listing, whichever shape this stand-in gives it.
+                names = list(cast("Iterable[str]", f()))
                 break
             except Exception:
                 continue

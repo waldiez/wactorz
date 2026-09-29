@@ -6,22 +6,13 @@ from wactorz.agents.main.turn_actions import TurnActions
 from wactorz.agents.mixins import SpawnPlaceholder
 
 
-def test_reachy_install_summary_explains_what_is_happening() -> None:
-    summary = TurnActions(spawned=(SpawnPlaceholder("reachy-mini"),)).summary("")
-
-    assert summary == (
-        "Preparing Reachy Mini — installing its robot and voice support; "
-        "it will announce when ready"
-    )
-
-
-def test_reachy_started_summary_sets_the_connection_expectation() -> None:
-    summary = TurnActions(spawned=(SimpleNamespace(name="reachy-mini"),)).summary("")
-
-    assert summary == "Reachy Mini started — it will announce when the robot connection is ready"
-
-
-def test_other_agents_keep_the_existing_summary() -> None:
+def test_an_agent_still_installing_is_said_to_appear_later() -> None:
     summary = TurnActions(spawned=(SpawnPlaceholder("chart-maker"),)).summary("")
 
     assert summary == "Installing packages for 'chart-maker' — will appear shortly"
+
+
+def test_a_running_agent_is_said_to_survive_a_restart() -> None:
+    summary = TurnActions(spawned=(SimpleNamespace(name="chart-maker"),)).summary("")
+
+    assert summary == "Spawned 'chart-maker' — will auto-restore on restart"

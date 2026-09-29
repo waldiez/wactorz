@@ -67,16 +67,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   second language request, Home Assistant status tables are reduced to their answer for speech,
   repeated verified unknown device requests use a short-lived negative cache, and health replies
   use conversational wording.
-- **Long Reachy speech is no longer canceled at the generated-agent timeout.** The bounded task
-  budget now accommodates real-time media playback while remaining below the dashboard gateway's
-  own deadline.
+- **Long Reachy speech is no longer canceled at the generated-agent timeout.** A catalogue
+  recipe can now declare its own `task_timeout_s`, and Reachy's allows for real-time playback
+  while staying below the dashboard gateway's own deadline. Every other agent keeps the default
+  limit.
 - **Structured agent delegations remain structured end to end.** Dictionary payloads such as a
   weather city are no longer converted into JSON text before local or remote dispatch, preventing
   an agent from silently falling back to its default input.
-- **Reachy's lifecycle messages are concise and actionable.** Its spawn notice explains that robot
-  and voice support are being prepared, while the startup log collapses connection, audio, and
-  ambient-motion details into one ready message with the next voice action. Setup-only internals
-  now stay in debug logs; a failed connection names the recovery action first.
+- **Reachy's lifecycle messages are concise and actionable.** The startup log collapses
+  connection, audio, and ambient-motion details into one ready message with the next voice
+  action. Setup-only internals now stay in debug logs; a failed connection names the recovery
+  action first.
 
 - **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Voice
   conversations stream Reachy's WebRTC microphone while local VAD guards speech onset, motor

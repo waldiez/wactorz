@@ -189,7 +189,7 @@ class DelegationManager:
             task_id = uuid.uuid4().hex
             future = asyncio.get_event_loop().create_future()
             self.host._result_futures[task_id] = future
-            payload = dict(task) if isinstance(task, dict) else {"text": str(task)}
+            payload: dict[str, Any] = dict(task) if isinstance(task, dict) else {"text": str(task)}
             payload.update(
                 {
                     "_task_id": task_id,

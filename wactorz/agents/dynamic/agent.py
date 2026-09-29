@@ -92,10 +92,15 @@ class DynamicAgent(Actor):
         output_schema: dict[str, Any] | None = None,  # returned result fields
         llm_provider: Any = None,  # optional LLM for agent.llm.chat()
         trusted: bool = False,  # True = catalog agent, skip safety validator
+        task_timeout_s: float | None = None,  # recipe's own handle_task() limit
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._code = code
+        if task_timeout_s is not None:
+            # A recipe whose tasks legitimately run long (real-time playback, a
+            # hardware move) declares so; every other agent keeps the default.
+            self._HANDLE_TASK_TIMEOUT = float(task_timeout_s)
         self.poll_interval = poll_interval
         self.description = description
         self.input_schema = input_schema or {}
@@ -792,10 +797,7 @@ class DynamicAgent(Actor):
     # Max time a single process() or handle_task() call can take before
     # we assume it's stuck in a blocking call and cancel it.
     _PROCESS_TIMEOUT = 120.0  # seconds
-    # A task may include real-time media playback. Keep this below the chat
-    # gateway's 150-second deadline, but leave enough room for a healthy long
-    # utterance or hardware trajectory to finish.
-    _HANDLE_TASK_TIMEOUT = 140.0
+    _HANDLE_TASK_TIMEOUT = 60.0
 
     # ── How many consecutive process() errors before we attempt LLM self-fix ──
     _PROCESS_LLM_FIX_THRESHOLD = 3  # try to fix after this many errors in a row

@@ -443,7 +443,9 @@ def capture_deepgram_turn(
     if keyterms:
         options_kwargs["keyterm"] = keyterms
 
-    connection = DeepgramClient(api_key).listen.websocket.v("1")
+    # The SDK types `v()` as a union of every listen client, REST ones included;
+    # this one is the live websocket client, whose `on`/`send`/`finish` are used.
+    connection: Any = DeepgramClient(api_key).listen.websocket.v("1")
     endpoint = threading.Event()
     final_result = threading.Event()
     lock = threading.Lock()

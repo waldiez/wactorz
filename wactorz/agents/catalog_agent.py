@@ -478,6 +478,10 @@ def _build_catalog() -> dict:
                 # installed separately.
                 "deepgram-sdk>=3,<4",
             ],
+            # A task can include real-time speech playback or a hardware move,
+            # which outlasts the default handle_task() limit. Kept below the chat
+            # gateway's own reply deadline so a reply still arrives.
+            "task_timeout_s": 140.0,
             "input_schema": {
                 "cmd": "str  — help|wake|sleep|pose|turn|antennas|look_at|look_pixel|camera|listen|ask_voice|conversation_start|conversation_stop|doa|emotion|set_pose|bind|unbind|list_emotions|stop|say|volume|health|ha|life",
                 "text": "str   — words to speak (cmd=say); TTS via edge-tts through Reachy's speaker",
@@ -992,6 +996,7 @@ class CatalogAgent(Actor):
             llm_provider=main.llm if main else None,
             persistence_dir=str(main._persistence_dir.parent) if main else resolve_state_dir(),
             trusted=True,  # catalog agents are pre-built — skip safety validator
+            task_timeout_s=recipe.get("task_timeout_s"),
         )
         if not actor:
             return {"ok": False, "message": f"Spawn returned no actor for '{name}'"}

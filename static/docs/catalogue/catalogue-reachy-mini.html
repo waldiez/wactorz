@@ -156,15 +156,20 @@ unattended production workflows. Keep the robot within reach while testing motio
 <h2 id="before-you-start">Before you start</h2>
 <p>You need:</p>
 <ul>
-<li><strong>Wactorz running</strong>, with its dashboard open and an LLM provider set up. If you have not
-  done that yet, follow the <a href="https://github.com/waldiez/wactorz#readme">README quick start</a>
-  first.</li>
-<li><strong>Internet access</strong> on the computer running Wactorz. The first spawn downloads the robot
-  packages, and Reachy's voice comes from an online speech service.</li>
 <li><strong>A Reachy Mini</strong>, Wireless or Lite.</li>
-<li><strong>Wactorz running on a computer</strong>, installed with <code>pip</code>. Where it runs decides what
-  Reachy can do:</li>
+<li><strong>Internet access</strong> on the computer running Wactorz. Reachy's voice comes from an online
+  speech service.</li>
+<li><strong>Wactorz installed with Reachy's packages</strong>, with its dashboard open and an LLM provider
+  set up. Install both together, putting your provider's extra in place of <code>anthropic</code>:</li>
 </ul>
+<p><code>bash
+  pip install 'wactorz[anthropic,reachy]'</code></p>
+<p>From a clone of the repository, use <code>pip install -e '.[anthropic,reachy]'</code>. The <code>reachy</code>
+  extra installs the robot SDK and its speech packages alongside Wactorz, so adding Reachy
+  later has nothing to install and needs no restart. Already running Wactorz? Run
+  <code>pip install 'wactorz[reachy]'</code> in the same environment and restart it once. For the rest
+  of the setup, follow the <a href="https://github.com/waldiez/wactorz#readme">README quick start</a>.</p>
+<p>Where Wactorz runs decides what Reachy can do:</p>
 <table>
 <thead>
 <tr>
@@ -203,10 +208,12 @@ first. On Debian or Ubuntu:</p>
 does not work on Python 3.14, which is the default on Ubuntu 26.04; there, create the
 virtual environment with an older Python and with pip in it, for example:</p>
 <div class="highlight"><pre><span></span><code>uv<span class="w"> </span>venv<span class="w"> </span>--seed<span class="w"> </span>-p<span class="w"> </span><span class="m">3</span>.13<span class="w"> </span>venv
+venv/bin/pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;wactorz[anthropic,reachy]&#39;</span>
 </code></pre></div>
 
-<p>Without <code>--seed</code> the environment has no pip; Wactorz then installs packages with <code>uv</code>, as
-long as <code>uv</code> is on the <code>PATH</code> of the shell that starts Wactorz.</p>
+<p>Without <code>--seed</code> the environment has no pip; install with <code>uv pip install</code> instead, and
+Wactorz uses <code>uv</code> for any later installs as long as it is on the <code>PATH</code> of the shell that
+starts Wactorz.</p>
 <p>Wactorz then connects without Reachy's camera and microphone, and says so. Movement and
 speech work; listening, conversation and the camera stay off until GStreamer's WebRTC
 plugin (gst-plugins-rs) is installed, which means building it from source.</p>
@@ -238,11 +245,14 @@ voice comes last and is optional.</p>
 <div class="highlight"><pre><span></span><code>@catalog spawn reachy-mini
 </code></pre></div>
 
-<p>The first time, Wactorz installs Reachy's packages before starting it. You do not need to
-run <code>pip install</code> yourself. This is what you will see in chat:</p>
+<p><strong>Installed with the <code>reachy</code> extra:</strong> the chat answers "reachy-mini spawned and running".
+Go on to step 3. The first start takes up to a minute longer while the robot SDK downloads
+Reachy's gesture library, once.</p>
+<p><strong>Installed without it:</strong> Wactorz installs Reachy's packages first. This is what you will
+see in chat:</p>
 <ol>
 <li>Straight away, a reply saying which packages it is installing. The whole install takes
-   a few minutes, longer on a Home Assistant box or a slow connection.</li>
+   a few minutes, longer on a slow connection.</li>
 <li>One line per package as it installs, for example
    <code>Installing reachy-mini==1.8.4 (1/6) for reachy-mini…</code>.</li>
 <li>Then one of these:</li>
@@ -250,7 +260,9 @@ run <code>pip install</code> yourself. This is what you will see in chat:</p>
 <li><strong>"…restart Wactorz once to finish; reachy-mini will start by itself after the
      restart"</strong>: this is normal on a first install. The robot packages need an older
      version of a library Wactorz had already loaded, and Python cannot swap it while it
-     runs. Restart Wactorz (<code>Ctrl+C</code>, then start it again) and Reachy comes back on its own.</li>
+     runs. Restart Wactorz (<code>Ctrl+C</code>, then start it again) and Reachy comes back on its own.
+     Installing with the <code>reachy</code> extra, as in <a href="#before-you-start">Before you start</a>,
+     avoids this.</li>
 <li><strong>"…was not started because some of its packages failed to install"</strong>: the message
      names each package and pip's error. Fix the cause it names, usually the network, then
      send <code>@catalog spawn reachy-mini</code> again. Packages that did install are kept.</li>
@@ -320,7 +332,7 @@ sent to it.</p>
 </tr>
 <tr>
 <td>"…restart Wactorz once to finish…"</td>
-<td>Normal on a first install. Restart Wactorz; Reachy starts by itself.</td>
+<td>Normal when Reachy's packages are installed at spawn. Restart Wactorz; Reachy starts by itself. Installing with the <code>reachy</code> extra avoids it.</td>
 </tr>
 <tr>
 <td>"…some of its packages failed to install"</td>
@@ -405,14 +417,16 @@ payload: {&quot;robot_host&quot;: &quot;192.168.1.42&quot;, &quot;connection_mod
 
 <p>An address set this way is remembered, and it overrides the one in <code>.env</code>. The address in
 use is published in <code>custom/reachy/state</code> as <code>robot_host</code>.</p>
-<h3 id="install-dependencies-manually">Install dependencies manually</h3>
-<p>The catalogue installer handles these dependencies during the first spawn. If you manage
-the environment yourself, install them with:</p>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;reachy-mini==1.8.4&quot;</span><span class="w"> </span>numpy<span class="w"> </span>edge-tts<span class="w"> </span>pillow<span class="w"> </span>webrtcvad-wheels<span class="w"> </span><span class="s2">&quot;deepgram-sdk&gt;=3,&lt;4&quot;</span>
+<h3 id="reachys-packages">Reachy's packages</h3>
+<p>The <code>reachy</code> extra installs everything the agent uses, in the versions it was tested
+with:</p>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;wactorz[reachy]&#39;</span>
 </code></pre></div>
 
-<p><code>edge-tts</code> enables speech. Deepgram is used only for voice input and needs an API key;
-text control and speech output do not need one.</p>
+<p>It holds the same list the catalogue installs on a first spawn: the robot SDK
+(<code>reachy-mini</code>), <code>numpy</code>, <code>pillow</code>, <code>edge-tts</code> for speech, <code>webrtcvad-wheels</code> for voice
+detection, and <code>deepgram-sdk</code> for voice input. Deepgram needs an API key; text control and
+speech output do not.</p>
 <h3 id="optional-make-reachys-voice-louder-with-ffmpeg">Optional: make Reachy's voice louder with ffmpeg</h3>
 <p>Reachy speaks without <code>ffmpeg</code>. With it, speech gets a loudness boost that makes it
 clearly louder, which helps in a noisy room or in front of an audience. Without it, Reachy

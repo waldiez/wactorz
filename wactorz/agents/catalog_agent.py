@@ -453,9 +453,10 @@ def _build_catalog() -> dict:
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
                 "2. For Reachy Mini Lite, start the local daemon first: "
                 "reachy-mini-daemon -p <serial_port>.\n"
-                "3. Spawn the agent: @catalog spawn reachy-mini. The first spawn "
-                "installs its packages, which takes a few minutes, and usually asks "
-                "for one restart of Wactorz; Reachy starts by itself after it.\n"
+                "3. Spawn the agent: @catalog spawn reachy-mini. With Wactorz "
+                "installed as `pip install 'wactorz[reachy]'` it starts at once; "
+                "otherwise the first spawn installs its packages, which takes a few "
+                "minutes, and usually asks for one restart of Wactorz.\n"
                 "4. If Reachy is not found (always the case from WSL or a virtual "
                 'machine), publish {"robot_host": "192.168.1.42", '
                 '"connection_mode": "network"} to custom/reachy/config, then say '
@@ -512,6 +513,12 @@ def _build_catalog() -> dict:
                 # installed separately.
                 "deepgram-sdk>=3,<4",
             ],
+            # Shown when the packages are installed at spawn: installed with
+            # Wactorz instead, they resolve before it starts and need no restart.
+            "install_hint": (
+                "Next time, `pip install 'wactorz[reachy]'` puts these in place "
+                "ahead of time, and the spawn has nothing to install."
+            ),
             # A task can include real-time speech playback or a hardware move,
             # which outlasts the default handle_task() limit. Kept below the chat
             # gateway's own reply deadline so a reply still arrives.
@@ -948,7 +955,7 @@ class CatalogAgent(Actor):
                 }
             needed = missing_requirements(recipe.get("install", []))
             if needed:
-                heads_up = self._install_heads_up(resolved, needed)
+                heads_up = self._install_heads_up(resolved, needed, recipe.get("install_hint", ""))
                 if background_install:
                     # The reply is the notice here; sending it to chat as well
                     # would show it twice.
@@ -977,13 +984,14 @@ class CatalogAgent(Actor):
             return {"ok": False, "message": msg}
 
     @staticmethod
-    def _install_heads_up(name: str, needed: list[str]) -> str:
+    def _install_heads_up(name: str, needed: list[str], hint: str = "") -> str:
         """The chat notice sent before a recipe's packages are installed."""
-        return (
+        notice = (
             f"Installing {len(needed)} package(s) for {name} first: {', '.join(needed)}. "
             "A first install can take a few minutes; I'll post here when "
             f"{name} is ready."
         )
+        return f"{notice} {hint}" if hint else notice
 
     def _install_failed(self, name: str, recipe: dict, outcome: InstallOutcome) -> dict:
         """The result for a recipe whose packages did not leave it ready to run.
@@ -991,15 +999,19 @@ class CatalogAgent(Actor):
         When only a restart stands in the way, the recipe is recorded now, so the
         restart the message asks for brings it up without being asked again.
         """
+        message = outcome.problem(name)
         if outcome.restart_required:
             main = find_main_actor(self._registry)
             if main:
                 main._save_to_spawn_registry({**recipe, "trusted": True})
+            # The way to not meet this again, said where it was met.
+            if recipe.get("install_hint"):
+                message = f"{message} {recipe['install_hint']}"
         return {
             "ok": False,
             "agent": name,
             "restart_required": bool(outcome.restart_required),
-            "message": outcome.problem(name),
+            "message": message,
         }
 
     async def _install_then_spawn(

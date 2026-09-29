@@ -526,6 +526,8 @@ class TestDynamicSpawn:
         assert result["restart_required"] is True
         assert "restart Wactorz" in result["message"]
         assert "websockets 17.1 -> 15.0.1" in result["message"]
+        # ...and how to not meet it again.
+        assert "pip install 'wactorz[reachy]'" in result["message"]
         assert spawner.calls == []
         # Recorded, so the restart the message asks for brings it up.
         assert [cfg["name"] for cfg in main.spawn_registry] == ["reachy-mini"]
@@ -597,6 +599,18 @@ class TestDynamicSpawn:
 
         assert told == ["Failed to spawn 'anomaly-detector': disk full"]
         assert "anomaly-detector" not in catalog._installing
+
+    async def test_the_heads_up_says_how_to_skip_the_install_next_time(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry(_Installer(main))  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", lambda _reqs: ["reachy-mini"])
+        monkeypatch.setattr(catalog, "run_detached", lambda coro, name=None: coro.close())
+
+        reply = await catalog._handle("spawn reachy-mini")
+
+        assert reply["installing"] is True
+        assert "pip install 'wactorz[reachy]'" in reply["message"]
 
     async def test_a_second_request_during_an_install_does_not_start_another(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch

@@ -397,12 +397,13 @@ async def _open_robot(agent):
     return mini, last_err, tried
 
 
-async def _bring_up_robot(agent, *, require_motion=False):
+async def _bring_up_robot(agent, *, require_motion=False, quiet=False):
     """Post-connect bring-up. Requires agent.state['mini'] to be a live handle.
 
     Runs on both the setup() path and cmd=reconnect, so a reconnected robot is
     in the same state a freshly-spawned one is: audio routing selected, volume
-    synced from the daemon, motor torque on, awake.
+    synced from the daemon, motor torque on, awake. `quiet` wakes without the
+    SDK's wake-up sound, for a recovery nobody asked for.
     """
     mini = agent.state.get("mini")
 
@@ -440,7 +441,10 @@ async def _bring_up_robot(agent, *, require_motion=False):
     await _ensure_motors_enabled(agent)
 
     try:
-        await _do(mini.wake_up)
+        if quiet:
+            await _wake_quietly(agent)
+        else:
+            await _do(mini.wake_up)
         agent.state["awake"] = True
         await agent.publish("custom/reachy/events", {"type": "wake", "ts": time.time()})
     except Exception as e:
@@ -3139,7 +3143,7 @@ async def _reconnect(agent, payload=None):
                     ),
                 },
             )
-        await _bring_up_robot(agent, require_motion=True)
+        await _bring_up_robot(agent, require_motion=True, quiet=bool(payload.get("quiet")))
     finally:
         agent.state["_reconnecting"] = False
 
@@ -3240,6 +3244,39 @@ _MOTION_COMMANDS = frozenset(
 _MOTION_LINK_ERROR_MARKERS = ("task did not complete in time", "lost connection with the server")
 _MOTION_RECONNECT_INITIAL_S = 1.0
 _MOTION_RECONNECT_MAX_S = 30.0
+#: Longest an automatic recovery waits for Reachy to finish speaking. Recovery
+#: moves the head, and the daemon stops the current sound to play any other, so
+#: it waits; but a link that stays down matters more than an unusually long reply.
+_RECOVERY_SPEECH_WAIT_S = 60.0
+#: The SDK's rest position for the antennas, in radians, as `wake_up()` uses.
+_REST_ANTENNAS_RAD = (-0.1745, 0.1745)
+
+
+async def _wait_until_quiet(agent, limit=None):
+    """Return once the speech that is playing has ended, or after `limit` seconds."""
+    limit = _RECOVERY_SPEECH_WAIT_S if limit is None else limit
+    deadline = time.monotonic() + max(0.0, float(limit))
+    while time.monotonic() < deadline:
+        ends_at = float(agent.state.get("_speech_ends_at") or 0.0)
+        if not agent.state.get("_speaking") and time.monotonic() >= ends_at:
+            return
+        await asyncio.sleep(0.1)
+
+
+async def _wake_quietly(agent):
+    """Bring the head and antennas to rest the way `wake_up()` does, without its sound.
+
+    `wake_up()` plays a sound on the robot, and the daemon stops whatever is
+    playing to start it: run as part of a recovery, it cuts Reachy off mid-word.
+    """
+    mini = agent.state["mini"]
+    create_head_pose = agent.state["create_head_pose"]
+    await _do(
+        mini.goto_target,
+        head=create_head_pose(),
+        antennas=list(_REST_ANTENNAS_RAD),
+        duration=1.0,
+    )
 
 
 def _is_motion_link_error(error):
@@ -3272,9 +3309,10 @@ async def _motion_reconnect_loop(agent):
     delay = _MOTION_RECONNECT_INITIAL_S
     while True:
         try:
+            await _wait_until_quiet(agent)
             await agent.log("Reachy motor link is down; attempting automatic reconnect", level="warning")
             if not await _reconnect_motion_client(agent):
-                await _reconnect(agent, {"force": True})
+                await _reconnect(agent, {"force": True, "quiet": True})
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -3314,7 +3352,7 @@ async def _reconnect_motion_client(agent):
         new_client = await _do(connector, host=host, port=port, timeout=5.0)
         mini.client = new_client
         await _ensure_motors_enabled(agent)
-        await _do(mini.wake_up)
+        await _wake_quietly(agent)
         agent.state["awake"] = True
         agent.state.pop("motion_link_error", None)
         await agent.publish("custom/reachy/events", {"type": "wake", "ts": time.time()})
@@ -4066,6 +4104,7 @@ async def _stop_audio(agent):
     even while a say is otherwise holding the (serial) actor mailbox.
     """
     agent.state["stop_speaking"] = True
+    agent.state.pop("_speech_ends_at", None)
     mini = agent.state.get("mini")
     if mini is None:
         return False
@@ -5557,6 +5596,9 @@ async def _say(agent, payload):
             raise RuntimeError("Reachy reconnected without a media manager") from exc
         await _do(media.play_sound, play_path)
     agent.state["_speaking"] = True
+    # Kept even when the caller does not wait for playback, so anything that
+    # would make a sound or move the head can tell the robot is still talking.
+    agent.state["_speech_ends_at"] = time.monotonic() + float(speech_seconds or 0.0)
 
     # Speech-matched motion starts with the audio and is cancelled with it, so
     # it tracks playback rather than a prediction of it. Opt out per utterance

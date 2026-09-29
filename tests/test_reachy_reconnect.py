@@ -77,6 +77,8 @@ class FakeAgent:
             "motors_enabled": False,
             "awake": False,
             "last_cmd": None,
+            # What setup() stores from the SDK; a marker is enough to see it used.
+            "create_head_pose": lambda: "home-pose",
         }
         self.published: list[tuple[str, Any]] = []
         self.logs: list[str] = []
@@ -117,6 +119,7 @@ def _fake_mini():
     mini = types.SimpleNamespace()
     mini.connected = True
     mini.wake_up = mock.Mock()
+    mini.goto_target = mock.Mock()
     mini.__exit__ = mock.Mock(return_value=False)
     mini.media = types.SimpleNamespace(
         audio=types.SimpleNamespace(
@@ -427,9 +430,82 @@ class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(mini.client, new_client)
         mini._connect_single.assert_called_once_with(host="192.168.68.64", port=8000, timeout=5.0)
         old_client.disconnect.assert_called_once()
-        mini.wake_up.assert_called_once()
         self.assertTrue(agent.state["awake"])
         self.assertNotIn("motion_link_error", agent.state)
+
+    async def test_an_automatic_recovery_wakes_without_a_sound(self):
+        # wake_up() plays a sound, and the daemon stops whatever is playing to
+        # start it: a recovery run while Reachy talks would cut him off.
+        mini = _fake_mini()
+        mini.client = types.SimpleNamespace(host="robot", port=8000, disconnect=mock.Mock())
+        mini._connect_single = mock.Mock(return_value=types.SimpleNamespace(disconnect=mock.Mock()))
+        agent = FakeAgent(mini=mini)
+
+        await NS["_reconnect_motion_client"](agent)
+
+        mini.wake_up.assert_not_called()
+        mini.goto_target.assert_called_once()
+        self.assertEqual(mini.goto_target.call_args.kwargs["head"], "home-pose")
+
+    async def test_the_full_reconnect_fallback_is_quiet_too(self):
+        agent = FakeAgent(mini=_fake_mini())
+        payloads = []
+
+        async def fake_reconnect(_agent, payload):
+            payloads.append(payload)
+            _agent.state.pop("motion_link_error", None)
+            return {"connected": True}
+
+        async def no_motion_client(_agent):
+            return False
+
+        with mock.patch.dict(
+            NS, {"_reconnect": fake_reconnect, "_reconnect_motion_client": no_motion_client}
+        ):
+            await NS["_motion_reconnect_loop"](agent)
+
+        self.assertEqual(payloads, [{"force": True, "quiet": True}])
+
+    async def test_a_quiet_bring_up_never_plays_the_wake_sound(self):
+        mini = _fake_mini()
+        agent = FakeAgent(mini=mini)
+
+        await NS["_bring_up_robot"](agent, quiet=True)
+
+        mini.wake_up.assert_not_called()
+        mini.goto_target.assert_called_once()
+        self.assertTrue(agent.state["awake"])
+
+    async def test_recovery_waits_for_the_current_speech_to_end(self):
+        agent = FakeAgent(mini=_fake_mini())
+        agent.state["_speaking"] = True
+        order = []
+
+        async def fake_reconnect(_agent, _payload):
+            order.append("reconnect")
+            _agent.state.pop("motion_link_error", None)
+            return {"connected": True}
+
+        async def no_motion_client(_agent):
+            return False
+
+        async def finish_speaking():
+            await asyncio.sleep(0.2)
+            order.append("speech ended")
+            agent.state["_speaking"] = False
+
+        with mock.patch.dict(
+            NS, {"_reconnect": fake_reconnect, "_reconnect_motion_client": no_motion_client}
+        ):
+            await asyncio.gather(NS["_motion_reconnect_loop"](agent), finish_speaking())
+
+        self.assertEqual(order, ["speech ended", "reconnect"])
+
+    async def test_waiting_for_quiet_gives_up_after_its_limit(self):
+        agent = FakeAgent(mini=_fake_mini())
+        agent.state["_speaking"] = True  # never ends
+
+        await asyncio.wait_for(NS["_wait_until_quiet"](agent, limit=0.2), timeout=2)
 
     async def test_forced_failure_classification_covers_changed_sdk_wording(self):
         agent = FakeAgent(mini=_fake_mini())

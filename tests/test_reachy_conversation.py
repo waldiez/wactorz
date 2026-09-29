@@ -3,6 +3,7 @@
 import asyncio
 import os
 import threading
+import time
 import types
 import unittest
 from typing import Any
@@ -1783,6 +1784,33 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(prepared_text, [long_text.strip()])
         self.assertEqual(result["said"], long_text.strip())
         self.assertEqual(played, ["/tmp/direct-long.mp3"])
+
+    async def test_a_reply_nobody_waits_for_still_records_when_it_ends(self):
+        # The speaking flag clears as soon as an unawaited say returns, while
+        # the robot goes on talking; recovery reads the end time instead.
+        agent = FakeAgent()
+        media = types.SimpleNamespace(
+            audio=types.SimpleNamespace(),
+            daemon_url="http://reachy.local",
+            play_sound=lambda _path: None,
+        )
+        agent.state.update({"mini": types.SimpleNamespace(media=media), "life_enabled": False})
+
+        async def prepare(_agent, _text, _payload):
+            return {
+                "raw_path": "/tmp/reply.mp3",
+                "play_path": "/tmp/reply.mp3",
+                "voice": "test-voice",
+                "speech_seconds": 30.0,
+                "trim_db": 0.0,
+                "beats": [],
+            }
+
+        with mock.patch.dict(NS, {"_prepare_speech": prepare}):
+            await NS["_say"](agent, {"text": "A long answer.", "await_playback": False})
+
+        self.assertFalse(agent.state["_speaking"])
+        self.assertGreater(agent.state["_speech_ends_at"], time.monotonic() + 25)
 
     async def test_shutup_during_a_sentence_drops_the_rest_of_the_reply(self):
         agent = FakeAgent()

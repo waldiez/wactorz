@@ -292,6 +292,13 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
   effect for a node at its next <code>/deploy</code>, so rotate the shared password once the
   last one has moved. A node's agents share its account: the boundary is the
   machine, not the agent.</li>
+<li><strong><code>/deploy</code> trusts a node's SSH host key the first time it connects.</strong> The key is
+  recorded in <code>&lt;WACTORZ_STATE_DIR&gt;/known_hosts</code>, or wherever <code>DEPLOY_KNOWN_HOSTS</code>
+  points, and a later change fails the connection. The first connection is the
+  exposure: whatever answers at the node's address then is trusted, and is handed
+  the node's broker credentials and signing key. On a network you do not fully
+  trust, set <code>DEPLOY_STRICT_HOST_KEYS=1</code> and add each key yourself after checking
+  its fingerprint. See "Host key verification" in <code>remote-nodes.md</code>.</li>
 <li><strong>Commands to an edge node are signed.</strong> A node runs the code in a spawn it
   receives, so broker access alone must not be enough to send one. Main signs
   every command it sends a node with a key derived for that node, which <code>/deploy</code>

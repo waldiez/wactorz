@@ -283,11 +283,11 @@ log_dest stdout
 <p>Fill in at minimum your LLM key and provider. Make sure these Docker-specific values are set:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">MQTT_HOST</span><span class="o">=</span>wactorz-mosquitto
 <span class="nv">PORT</span><span class="o">=</span><span class="m">8000</span>
-<span class="nv">WS_PORT</span><span class="o">=</span><span class="m">8888</span>
+<span class="nv">MONITOR_PORT</span><span class="o">=</span><span class="m">8888</span>
 </code></pre></div>
 
 <blockquote>
-<p><strong>Port conflict?</strong> On some Windows machines port <code>8888</code> is reserved by a system service. If the monitor UI is unreachable, change <code>WS_PORT</code> to any free port (e.g. <code>8887</code>) and use that port in Step 4.</p>
+<p><strong>Port conflict?</strong> On some Windows machines port <code>8888</code> is reserved by a system service. If the monitor UI is unreachable, change <code>MONITOR_PORT</code> to any free port (e.g. <code>8887</code>) and use that port in Step 4.</p>
 </blockquote>
 <h3 id="step-3-start-mosquitto">Step 3 — Start Mosquitto</h3>
 <div class="highlight"><pre><span></span><code><span class="no">[System.IO.File]</span><span class="p">::</span><span class="n">WriteAllText</span><span class="p">(</span>

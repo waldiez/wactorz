@@ -39,6 +39,12 @@ def test_tokens_generic_only_request():
     assert hints == {"media_player"}
 
 
+def test_tokens_recognize_greek_light_request():
+    specific, hints = _request_tokens("κλείσε μου τα φώτα")
+    assert specific == set()
+    assert hints == {"light"}
+
+
 def test_tokens_ignore_colors_digits_stopwords():
     specific, hints = _request_tokens("set the light to pink at 50")
     assert specific == set()
@@ -87,6 +93,14 @@ def test_keeps_generic_domain_action():
     clim = _action("climate", "set_temperature", "climate.living_room")
     kept, dropped = filter_unrequested_actions("make it warmer", [clim], _DEVICES)
     assert kept == [clim]
+    assert dropped == []
+
+
+def test_keeps_every_light_for_greek_plural_request():
+    hue = _action("light", "turn_off", "light.philips_hue_lct015")
+    wiz = _action("light", "turn_off", "light.wiz_rgbw_tunable_351b6e")
+    kept, dropped = filter_unrequested_actions("Κλείσα μου τα φώτα", [hue, wiz], _DEVICES)
+    assert kept == [hue, wiz]
     assert dropped == []
 
 

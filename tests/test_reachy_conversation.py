@@ -2,14 +2,17 @@
 
 import asyncio
 import os
+import threading
+import time
 import types
 import unittest
+from typing import Any
 from unittest import mock
 
 import numpy as np
 
 from wactorz.catalogue_agents.reachy_mini_agent import AGENT_CODE
-from wactorz.catalogue_agents.reachy_stt import Transcription
+from wactorz.catalogue_agents.reachy_stt import StreamingTurn, Transcription
 from wactorz.catalogue_agents.reachy_vad import VoiceCapture
 
 NS = {}
@@ -37,6 +40,8 @@ class FakeAgent:
     name = "reachy-mini"
     # Set by the tests that hand a turn to another agent.
     send_to: mock.AsyncMock
+    # Set by the tests that stand in for the hosting actor.
+    _actor: Any
 
     def __init__(self):
         self.state = {
@@ -84,6 +89,24 @@ async def immediate_cooldown(agent, session, turn, _seconds):
 
 
 class ConversationTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # Developer .env settings must not turn deterministic unit captures into
+        # real network streams or background motor loops.
+        self._environment = mock.patch.dict(
+            os.environ,
+            {
+                "REACHY_STT_STREAMING": "0",
+                "REACHY_STT_LANGUAGE": "",
+                "REACHY_STT_STREAM_LANGUAGE": "",
+                "REACHY_CONVERSATION_STATE_MOTION": "0",
+                "REACHY_CONVERSATION_IDLE_MOTION": "0",
+            },
+        )
+        self._environment.start()
+
+    def tearDown(self):
+        self._environment.stop()
+
     async def run_session(self, agent, payload, clips, texts, bridge):
         clips, texts = iter(clips), iter(texts)
 
@@ -639,6 +662,30 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(actuation, "Okay, the light is pink.")
 
+    def test_spoken_ha_status_reads_the_answer_not_the_table(self):
+        reply = (
+            "None of your lights are currently on. Here's the full status:\n\n"
+            "| Light | State |\n|---|---|\n| **Lampa** | 🔴 Off |"
+        )
+
+        spoken = NS["_voice_friendly_reply"](
+            reply,
+            user_text="which of my lights are on right now?",
+        )
+
+        self.assertEqual(spoken, "None of your lights are currently on.")
+
+    def test_verified_delegation_result_wins_over_guessed_trailing_prose(self):
+        raw = (
+            "✅ weather-agent completed: result=Athens is clear and 34 degrees.\n\n"
+            "It is probably overcast and 19 degrees."
+        )
+
+        self.assertEqual(
+            NS["_verified_delegation_reply"](raw),
+            "Athens is clear and 34 degrees.",
+        )
+
     def test_planner_details_become_a_short_voice_approval_prompt(self):
         raw = (
             "Proposed pipeline abc with 7 internal steps. "
@@ -717,7 +764,9 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("creation is disabled", result["result"])
 
     def test_reachy_name_is_repaired_without_naming_the_user(self):
-        for alias in ("Richie", "Riti", "Ritsy", "Ritzy", "Rizzi", "Lizzy"):
+        # Ricci is not a guess: it is what faster-whisper large-v3-turbo returns
+        # for spoken "Reachy" on the machine that drives the robot.
+        for alias in ("Richie", "Riti", "Ritsy", "Ritzy", "Rizzi", "Lizzy", "Ricci", "Richi"):
             with self.subTest(alias=alias):
                 self.assertEqual(
                     NS["_normalize_reachy_transcript"](f"Hey {alias}"),
@@ -788,6 +837,112 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transcribe.await_args_list[1].args[1]["stt_language"], "el")
         self.assertEqual(session["stt_retry_count"], 1)
 
+    async def test_low_confidence_multilingual_result_retries_in_greek(self):
+        agent = FakeAgent()
+        session = {"stt_language_hint": None, "stt_retry_count": 0}
+        garbled = Transcription(
+            "Reachy cliche tilamba",
+            "deepgram",
+            "nova-3",
+            0.56,
+            None,
+            "multi",
+            None,
+        )
+        greek = Transcription(
+            "Ρίτσι, κλείσε τη λάμπα",
+            "deepgram",
+            "nova-3",
+            0.99,
+            None,
+            "el",
+            None,
+        )
+        transcribe = mock.AsyncMock(side_effect=[garbled, greek])
+
+        with mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", transcribe):
+            result, retried = await NS["_conversation_transcribe"](
+                agent,
+                b"RIFFmock",
+                {"stt_language": "multi", "stt_fallback_language": "el"},
+                session,
+            )
+
+        self.assertTrue(retried)
+        self.assertEqual(result.text, "Ρίτσι, κλείσε τη λάμπα")
+        self.assertEqual(transcribe.await_args_list[1].args[1]["stt_language"], "el")
+
+    async def test_silence_does_not_trigger_a_second_language_request(self):
+        agent = FakeAgent()
+        session = {"stt_language_hint": None, "stt_retry_count": 0}
+        silence = Transcription("", "deepgram", "nova-3", 0.0, None, "multi", None)
+        transcribe = mock.AsyncMock(return_value=silence)
+
+        with mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", transcribe):
+            result, retried = await NS["_conversation_transcribe"](
+                agent,
+                b"RIFFmock",
+                {"stt_language": "multi", "stt_fallback_language": "el"},
+                session,
+            )
+
+        self.assertFalse(retried)
+        self.assertIs(result, silence)
+        transcribe.assert_awaited_once()
+
+    async def test_confident_multilingual_result_stays_single_pass(self):
+        agent = FakeAgent()
+        session = {"stt_language_hint": None, "stt_retry_count": 0}
+        english = Transcription(
+            "Reachy turn off Lampa",
+            "deepgram",
+            "nova-3",
+            0.99,
+            None,
+            "multi",
+            None,
+        )
+        transcribe = mock.AsyncMock(return_value=english)
+
+        with mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", transcribe):
+            result, retried = await NS["_conversation_transcribe"](
+                agent,
+                b"RIFFmock",
+                {"stt_language": "multi", "stt_fallback_language": "el"},
+                session,
+            )
+
+        self.assertFalse(retried)
+        self.assertIs(result, english)
+        transcribe.assert_awaited_once()
+
+    async def test_a_worse_greek_retry_does_not_replace_the_first_result(self):
+        agent = FakeAgent()
+        session = {"stt_language_hint": None, "stt_retry_count": 0}
+        english = Transcription(
+            "Reachy turn off Lampa",
+            "deepgram",
+            "nova-3",
+            0.70,
+            None,
+            "multi",
+            None,
+        )
+        worse = Transcription("", "deepgram", "nova-3", 0.0, None, "el", None)
+        transcribe = mock.AsyncMock(side_effect=[english, worse])
+
+        with mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", transcribe):
+            result, retried = await NS["_conversation_transcribe"](
+                agent,
+                b"RIFFmock",
+                {"stt_language": "multi", "stt_fallback_language": "el"},
+                session,
+            )
+
+        self.assertTrue(retried)
+        self.assertIs(result, english)
+        self.assertEqual(session["stt_retry_count"], 1)
+
     def test_uncertain_language_is_not_routed_without_a_fallback(self):
         uncertain = Transcription("Giritui", "fake", "fake", 0.8, 0.02, "en", 0.17)
 
@@ -846,6 +1001,120 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
                     NS["_embodied_command_for_text"](phrase),
                     {"cmd": "look_around"},
                 )
+
+    def test_natural_health_question_uses_live_robot_health(self):
+        self.assertEqual(
+            NS["_embodied_command_for_text"]("Are you healthy and connected?"),
+            {"cmd": "health"},
+        )
+
+    async def test_health_sounds_like_reachy_not_an_sdk_diagnostic(self):
+        agent = FakeAgent()
+        agent.state["mini"] = types.SimpleNamespace(
+            media=types.SimpleNamespace(
+                audio=types.SimpleNamespace(daemon_url="http://reachy.invalid")
+            ),
+            get_imu_data=dict,
+        )
+
+        agent.state["motor_fault_watch_connected"] = True
+
+        with mock.patch.dict(NS, {"_ffmpeg_path": lambda: "/usr/bin/ffmpeg"}):
+            result = await NS["_health"](agent)
+
+        self.assertEqual(
+            result["result"],
+            "I'm connected to my body. My live motor-fault monitor has not seen a fault. "
+            "Reachy Mini doesn't provide a battery reading.",
+        )
+
+    async def test_health_says_when_the_voice_boost_is_off(self):
+        agent = FakeAgent()
+        agent.state["mini"] = types.SimpleNamespace(
+            media=types.SimpleNamespace(audio=types.SimpleNamespace(daemon_url="")),
+            get_imu_data=dict,
+        )
+
+        with mock.patch.dict(NS, {"_ffmpeg_path": lambda: None}):
+            result = await NS["_health"](agent)
+
+        self.assertFalse(result["loudness_boost"])
+        self.assertIn("voice boost is off because ffmpeg isn't installed", result["result"])
+
+    async def test_health_does_not_call_an_unread_fault_monitor_all_clear(self):
+        agent = FakeAgent()
+        agent.state["mini"] = types.SimpleNamespace(
+            media=types.SimpleNamespace(
+                audio=types.SimpleNamespace(daemon_url="http://reachy.invalid")
+            ),
+            get_imu_data=dict,
+        )
+
+        with mock.patch.dict(NS, {"_ffmpeg_path": lambda: "/usr/bin/ffmpeg"}):
+            result = await NS["_health"](agent)
+
+        self.assertIn("I cannot currently read the live motor-fault monitor", result["result"])
+        self.assertNotIn("has not seen a fault", result["result"])
+
+    async def test_media_disconnect_reconnects_once_with_a_cooldown(self):
+        agent = FakeAgent()
+        agent.state["audio_on_robot"] = True
+        reconnect = mock.AsyncMock(return_value={"connected": True})
+
+        with mock.patch.dict(NS, {"_reconnect": reconnect}):
+            first = await NS["_recover_media_link"](agent, "receiver is gone")
+            second = await NS["_recover_media_link"](agent, "receiver is gone")
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        reconnect.assert_awaited_once_with(agent, {"force": True})
+
+    def test_unsupported_limbs_are_not_claimed(self):
+        command = NS["_embodied_command_for_text"]("Wave your right hand at me")
+
+        self.assertEqual(command["cmd"], "capability")
+        self.assertIn("don't have arms or hands", command["result"])
+
+    def test_ha_state_questions_use_the_information_agent(self):
+        self.assertEqual(
+            NS["_ha_delegate_for_request"]("is Lampa on?"),
+            "home-assistant-agent",
+        )
+        self.assertEqual(
+            NS["_ha_delegate_for_request"]("turn on Lampa"),
+            "actuator",
+        )
+
+    async def test_repeated_unknown_ha_device_uses_reachys_negative_cache(self):
+        class Actor:
+            actor_id = "reachy-id"
+            _llm_provider = None
+            _persistence_dir = types.SimpleNamespace(parent="state")
+
+            def __init__(self):
+                self._result_futures = {}
+                self.spawn_count = 0
+
+            async def spawn(self, _cls, **kwargs):
+                self.spawn_count += 1
+                self._result_futures[kwargs["task_id"]].set_result(
+                    {"result": "I couldn't identify a matching device for that request."}
+                )
+
+        agent = FakeAgent()
+        agent._actor = Actor()
+
+        first = await NS["_ha_actuate"](agent, "turn on the unicorn lamp")
+        second = await NS["_ha_actuate"](agent, "turn on the unicorn lamp")
+
+        self.assertEqual(first["result"], second["result"])
+        self.assertTrue(second["cached_no_match"])
+        self.assertEqual(agent._actor.spawn_count, 1)
+
+    def test_wactorz_agent_questions_bypass_home_assistant_planning(self):
+        self.assertTrue(NS["_is_wactorz_orchestration_request"]("What agents are running?"))
+        self.assertTrue(NS["_is_wactorz_orchestration_request"]("Spawn the weather agent"))
+        self.assertFalse(NS["_is_wactorz_orchestration_request"]("Which lights are on?"))
 
     async def test_voice_vision_uses_reachy_camera_instead_of_main(self):
         agent = FakeAgent()
@@ -993,6 +1262,38 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ran", quiet["result"])
         self.assertIn("ran 2 of 2", verbose["result"])
         self.assertEqual(agent.notifications, ["There are books behind me."])
+
+    async def test_compound_home_and_robot_actions_confirm_both(self):
+        async def planner(_agent, _text):
+            return [
+                {"cmd": "ha", "request": "turn on Lampa"},
+                {"cmd": "gesture", "name": "dance"},
+            ]
+
+        async def dispatch(_agent, cmd, _payload, return_result=False):
+            if cmd == "ha":
+                return {"ok": True, "cmd": cmd, "result": "Done: light.turn_on -> light.lampa."}
+            return {"ok": True, "cmd": cmd, "result": "Ta-da! I did a little dance."}
+
+        with mock.patch.dict(NS, {"_nl_to_commands": planner, "_dispatch": dispatch}):
+            result = await NS["handle_task"](
+                FakeAgent(),
+                {"text": "turn on Lampa and do a little dance"},
+            )
+
+        self.assertEqual(result["result"], "Okay, the light is on. Ta-da! I did a little dance.")
+
+    async def test_single_home_action_hides_the_service_receipt(self):
+        async def planner(_agent, _text):
+            return [{"cmd": "ha", "request": "turn off Lampa"}]
+
+        async def dispatch(_agent, cmd, _payload, return_result=False):
+            return {"ok": True, "cmd": cmd, "result": "Done: light.turn_off -> light.lampa."}
+
+        with mock.patch.dict(NS, {"_nl_to_commands": planner, "_dispatch": dispatch}):
+            result = await NS["handle_task"](FakeAgent(), {"text": "turn off Lampa"})
+
+        self.assertEqual(result["result"], "Okay, the light is off.")
 
     async def test_voice_behind_you_speaks_the_rear_description_once(self):
         agent = FakeAgent()
@@ -1162,6 +1463,150 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             await NS["_conversation_capture"](agent, session, object())
         await asyncio.gather(idle_task, return_exceptions=True)
 
+    async def test_deepgram_streaming_reuses_reachy_media_and_publishes_interim_text(self):
+        agent = FakeAgent()
+        session = {
+            "state": "listening",
+            "cancel_event": threading.Event(),
+            "worker": None,
+            "pending_capture": None,
+            "stt_stream_fallbacks": 0,
+        }
+        turn = NS["_conversation_turn"](session)
+        transcription = Transcription(
+            "final words", "deepgram-streaming", "nova-3", confidence=0.95, language="en"
+        )
+
+        def stream(media, _cancel, _config, _payload, on_speech_start, on_interim):
+            self.assertIs(media, agent.state["mini"].media)
+            on_speech_start()
+            on_interim("final wor")
+            return StreamingTurn(captured(), transcription)
+
+        with (
+            mock.patch.dict(os.environ, {"DEEPGRAM_API_KEY": "test-only"}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.capture_deepgram_turn", stream),
+        ):
+            capture, result = await NS["_conversation_listen"](
+                agent,
+                session,
+                object(),
+                {"stt_backend": "deepgram", "stt_streaming": True},
+                turn,
+            )
+            await asyncio.sleep(0)
+
+        self.assertGreater(capture.audio.size, 0)
+        self.assertIs(result, transcription)
+        interim = [payload for _, payload in agent.published if payload.get("interim_transcript")]
+        self.assertEqual(interim[-1]["interim_transcript"], "final wor")
+
+    async def test_stream_error_keeps_the_same_capture_for_batch_fallback(self):
+        agent = FakeAgent()
+        session = {
+            "state": "listening",
+            "cancel_event": threading.Event(),
+            "worker": None,
+            "pending_capture": None,
+            "stt_stream_fallbacks": 0,
+        }
+        clip = captured()
+
+        def stream(*_args):
+            return StreamingTurn(clip, None, "socket lost")
+
+        with (
+            mock.patch.dict(os.environ, {"DEEPGRAM_API_KEY": "test-only"}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.capture_deepgram_turn", stream),
+        ):
+            capture, result = await NS["_conversation_listen"](
+                agent,
+                session,
+                object(),
+                {"stt_backend": "deepgram", "stt_streaming": True},
+                NS["_conversation_turn"](session),
+            )
+
+        self.assertIs(capture, clip)
+        self.assertIsNone(result)
+        self.assertEqual(session["stt_stream_fallbacks"], 1)
+        self.assertTrue(any("transcribing the captured turn" in text for _, text in agent.logs))
+
+    async def test_dropped_webrtc_microphone_reconnects_and_listens_again(self):
+        agent = FakeAgent()
+        session = {
+            "state": "listening",
+            "cancel_event": threading.Event(),
+            "worker": None,
+            "pending_capture": None,
+            "stt_stream_fallbacks": 0,
+        }
+        recovered_capture = captured()
+        recover = mock.AsyncMock(return_value=True)
+        recapture = mock.AsyncMock(return_value=recovered_capture)
+
+        def stream(*_args):
+            raise RuntimeError("signalling error: receiver is gone")
+
+        with (
+            mock.patch.dict(
+                NS,
+                {"_recover_media_link": recover, "_conversation_capture": recapture},
+            ),
+            mock.patch.dict(os.environ, {"DEEPGRAM_API_KEY": "test-only"}),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.capture_deepgram_turn", stream),
+        ):
+            capture, result = await NS["_conversation_listen"](
+                agent,
+                session,
+                object(),
+                {"stt_backend": "deepgram", "stt_streaming": True},
+                NS["_conversation_turn"](session),
+            )
+
+        self.assertIs(capture, recovered_capture)
+        self.assertIsNone(result)
+        recover.assert_awaited_once()
+        recapture.assert_awaited_once_with(agent, session, mock.ANY)
+
+    async def test_live_transcript_routes_without_a_second_recognizer_call(self):
+        agent = FakeAgent()
+        transcription = Transcription(
+            "Turn off the light",
+            "deepgram-streaming",
+            "nova-3",
+            confidence=0.96,
+            language="en",
+        )
+
+        async def listen(*_args):
+            return captured(), transcription
+
+        async def bridge(_agent, _text, _task_id, **kwargs):
+            await kwargs["before_speak"]("Done")
+            return {"result": "Done", "spoke": True, "spoken_result": "Done"}
+
+        batch = mock.AsyncMock(side_effect=AssertionError("batch STT should not run"))
+        with (
+            mock.patch.dict(
+                NS,
+                {
+                    "_conversation_listen": listen,
+                    "_conversation_cooldown": immediate_cooldown,
+                    "_bridge_to_main": bridge,
+                },
+            ),
+            mock.patch("wactorz.catalogue_agents.reachy_stt.transcribe_wav", batch),
+        ):
+            await NS["_conversation_start"](agent, {"max_turns": 1})
+            session = agent.state["conversation_session"]
+            await session["task"]
+
+        batch.assert_not_awaited()
+        self.assertEqual(session["stop_reason"], "max_turns")
+        final = [payload for _, payload in agent.published if payload.get("state") == "stopped"][-1]
+        self.assertTrue(final["stt_streaming"])
+
     async def test_idle_sweep_is_fluid_and_antenna_only(self):
         agent, calls = FakeAgent(), []
 
@@ -1281,6 +1726,106 @@ class SpeakReplyChunkingTest(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.assertEqual(len(NS["_speech_chunks"](self.REPLY)), 3)
+
+    async def test_speaker_disconnect_reconnects_and_retries_the_same_audio(self):
+        agent = FakeAgent()
+        recovered_paths = []
+
+        def fail_play(_path):
+            raise RuntimeError("websocket connection is closed")
+
+        failed_media = types.SimpleNamespace(
+            audio=types.SimpleNamespace(daemon_url="http://reachy.local"),
+            play_sound=fail_play,
+        )
+        recovered_media = types.SimpleNamespace(
+            audio=types.SimpleNamespace(daemon_url="http://reachy.local"),
+            play_sound=lambda path: recovered_paths.append(path),
+        )
+        agent.state.update(
+            {
+                "mini": types.SimpleNamespace(media=failed_media),
+                "life_enabled": False,
+                "stop_speaking": False,
+            }
+        )
+
+        async def recover(_agent, _error):
+            _agent.state["mini"] = types.SimpleNamespace(media=recovered_media)
+            return True
+
+        with mock.patch.dict(
+            NS,
+            {"_prepare_speech": fake_prepare, "_recover_media_link": recover},
+        ):
+            result = await NS["_say"](agent, {"text": "Connection restored."})
+
+        self.assertEqual(result["said"], "Connection restored.")
+        self.assertEqual(len(recovered_paths), 1)
+
+    async def test_direct_say_does_not_truncate_after_500_characters(self):
+        agent = FakeAgent()
+        played = []
+        media = types.SimpleNamespace(
+            audio=types.SimpleNamespace(),
+            daemon_url="http://reachy.local",
+            play_sound=lambda path: played.append(path),
+        )
+        agent.state.update(
+            {
+                "mini": types.SimpleNamespace(media=media),
+                "life_enabled": False,
+                "stop_speaking": False,
+            }
+        )
+        long_text = "This sentence must reach synthesis intact. " * 20
+        self.assertGreater(len(long_text), 500)
+        prepared_text = []
+
+        async def prepare(_agent, text, _payload):
+            prepared_text.append(text)
+            return {
+                "raw_path": "/tmp/direct-long.mp3",
+                "play_path": "/tmp/direct-long.mp3",
+                "voice": "test-voice",
+                "speech_seconds": 0.0,
+                "trim_db": 0.0,
+                "beats": [],
+            }
+
+        with mock.patch.dict(NS, {"_prepare_speech": prepare}):
+            result = await NS["_say"](agent, {"text": long_text})
+
+        self.assertEqual(prepared_text, [long_text.strip()])
+        self.assertEqual(result["said"], long_text.strip())
+        self.assertEqual(played, ["/tmp/direct-long.mp3"])
+
+    async def test_a_reply_nobody_waits_for_still_records_when_it_ends(self):
+        # The speaking flag clears as soon as an unawaited say returns, while
+        # the robot goes on talking; recovery reads the end time instead.
+        agent = FakeAgent()
+        media = types.SimpleNamespace(
+            audio=types.SimpleNamespace(),
+            daemon_url="http://reachy.local",
+            play_sound=lambda _path: None,
+        )
+        agent.state.update({"mini": types.SimpleNamespace(media=media), "life_enabled": False})
+
+        async def prepare(_agent, _text, _payload):
+            return {
+                "raw_path": "/tmp/reply.mp3",
+                "play_path": "/tmp/reply.mp3",
+                "voice": "test-voice",
+                "speech_seconds": 30.0,
+                "trim_db": 0.0,
+                "beats": [],
+            }
+
+        with mock.patch.dict(NS, {"_prepare_speech": prepare}):
+            await NS["_say"](agent, {"text": "A long answer.", "await_playback": False})
+
+        self.assertFalse(agent.state["_speaking"])
+        self.assertGreater(agent.state["_speech_ends_at"], time.monotonic() + 25)
 
     async def test_shutup_during_a_sentence_drops_the_rest_of_the_reply(self):
         agent = FakeAgent()
@@ -1413,9 +1958,8 @@ class BridgeReplyShownInChatTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(green, blue)
 
     async def test_an_ordinary_answer_keeps_its_full_text(self):
-        # The spoken form of a long answer is truncated and ends "I've put the
-        # rest in Wactorz chat". Showing that in chat would point it at itself,
-        # so anything that is not an acknowledgement is displayed whole.
+        # Only machine acknowledgements are rewritten. Ordinary answers retain
+        # their original text in both the spoken and displayed result.
         answer = "The living room is 21 degrees and the hallway sensor is offline."
 
         shown, result = await self._display(answer, "what is the temperature")

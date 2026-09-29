@@ -34,7 +34,16 @@ from ..core.mqtt import client_id, install_id, mqtt_client
 from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
 from ..core.node_signing import next_sequence, node_key
 from ..core.paths import resolve_state_dir
-from ..core.pip import is_installable_name
+from ..core.pip import (
+    NO_INSTALLER_MESSAGE,
+    PIP_INSTALL_TIMEOUT_S,
+    installed_versions,
+    installer_command,
+    is_installable_name,
+    make_user_site_importable,
+    requirement_is_satisfied,
+    stale_loaded_distributions,
+)
 from . import node_service
 from .lookup import find_main_actor
 
@@ -338,7 +347,11 @@ class InstallerAgent(Actor):
             packages = payload.get("packages", [])
             if isinstance(packages, str):
                 packages = [p.strip() for p in packages.replace(",", " ").split()]
-            return await self._install_packages(packages)
+            return await self._install_packages(
+                packages,
+                for_agent=str(payload.get("for_agent") or ""),
+                notify=bool(payload.get("notify")),
+            )
 
         if action == "check":
             packages = payload.get("packages", [])
@@ -376,18 +389,26 @@ class InstallerAgent(Actor):
 
     # ── Core install logic ──────────────────────────────────────────────────
 
-    async def _install_packages(self, packages: list[str]) -> dict:
+    async def _install_packages(
+        self, packages: list[str], *, for_agent: str = "", notify: bool = False
+    ) -> dict:
+        """Install `packages` one at a time, reporting each and the outcome.
+
+        With `notify`, each package actually being installed is announced in
+        chat as well as the activity log: a first install of a robot SDK takes
+        minutes, and a chat that says nothing for that long reads as a hang.
+        """
         if not packages:
             return {"error": "No packages specified"}
 
         results = {}
         failed = []
+        wanted = [p.strip() for p in packages if p.strip()]
+        suffix = f" for {for_agent}" if for_agent else ""
+        before = installed_versions()
+        ran_pip = False
 
-        for pkg in packages:
-            pkg = pkg.strip()
-            if not pkg:
-                continue
-
+        for index, pkg in enumerate(wanted, start=1):
             # Resolve import name → pip name (e.g. "cv2" → "opencv-python")
             pip_name = IMPORT_TO_PACKAGE.get(pkg, pkg)
 
@@ -400,9 +421,10 @@ class InstallerAgent(Actor):
                 failed.append(pkg)
                 continue
 
-            # Check if already importable (invalidate cache so fresh installs show up)
-            import_name = PACKAGE_TO_IMPORT.get(pip_name, pip_name)
-            if self._is_installed(import_name):
+            # Installed metadata, version specifier included: a pinned
+            # `name==1.2` is not "installed" just because some other version
+            # imports, and a pip name need not be the module's name.
+            if requirement_is_satisfied(pip_name):
                 logger.info("[%s] %s already installed.", self.name, pip_name)
                 results[pip_name] = "already_installed"
                 continue
@@ -412,7 +434,10 @@ class InstallerAgent(Actor):
                 f"agents/{self.actor_id}/logs",
                 {"type": "log", "message": f"Installing {pip_name}...", "timestamp": time.time()},
             )
+            if notify:
+                await self.notify_user(f"Installing {pip_name} ({index}/{len(wanted)}){suffix}…")
 
+            ran_pip = True
             success, output = await self._pip_install(pip_name)
 
             # duckduckgo-search was renamed to ddgs in v9 — try the other name as fallback
@@ -455,10 +480,24 @@ class InstallerAgent(Actor):
                 {"type": "log", "message": status, "timestamp": time.time()},
             )
 
+        # A dependency pip upgraded or downgraded on the way can be one this
+        # process already imported, and then no agent that needs it will work
+        # until the process restarts. Said here, where it is known, rather than
+        # left to surface later as an ImportError nobody can explain.
+        restart_required = (
+            stale_loaded_distributions(before, installed_versions()) if ran_pip else []
+        )
+        if restart_required:
+            logger.warning(
+                "[%s] Install replaced packages this process already loaded: %s — restart needed",
+                self.name,
+                ", ".join(restart_required),
+            )
         return {
             "results": results,
             "failed": failed,
             "success": len(failed) == 0,
+            "restart_required": restart_required,
             "message": f"Installed {len(results) - len(failed)}/{len(results)} packages",
         }
 
@@ -473,8 +512,12 @@ class InstallerAgent(Actor):
         (the default in some Python versions / environments). subprocess.run() works
         correctly on all platforms.
         """
-        cmd = [sys.executable, "-m", "pip", "install", package, "--quiet"]
-        if sys.platform != "win32":
+        base = installer_command()
+        if base is None:
+            return False, NO_INSTALLER_MESSAGE
+        cmd = [*base, package, "--quiet"]
+        if sys.platform != "win32" and base[1:2] == ["-m"]:
+            # pip's flag; uv installs into the environment it is pointed at.
             cmd.append("--break-system-packages")
 
         def _run_pip() -> tuple[bool, str]:
@@ -482,12 +525,12 @@ class InstallerAgent(Actor):
                 result = subprocess.run(  # noqa: S603  # argv, no shell; name pre-screened
                     cmd,
                     capture_output=True,
-                    timeout=180,
+                    timeout=PIP_INSTALL_TIMEOUT_S,
                 )
                 output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
                 return result.returncode == 0, output
             except subprocess.TimeoutExpired:
-                return False, "pip timed out after 180s"
+                return False, f"pip timed out after {PIP_INSTALL_TIMEOUT_S:.0f}s"
             except FileNotFoundError:
                 return False, f"Python executable not found: {sys.executable}"
             except Exception as e:
@@ -499,6 +542,7 @@ class InstallerAgent(Actor):
 
             if success:
                 # Refresh import machinery so the new package is visible immediately
+                make_user_site_importable()
                 importlib.invalidate_caches()
 
             return success, output

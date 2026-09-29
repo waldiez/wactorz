@@ -1,96 +1,285 @@
-# Reachy Mini agent
+# Reachy Mini
 
-`reachy-mini` controls a Reachy Mini from Wactorz. Use it for wake/sleep, head pose,
-antennas, gaze, speech, expressive gestures, and optional Home Assistant actions.
+Connect a Reachy Mini to Wactorz, then control it in plain language. Reachy can move,
+look around, speak, listen, take photos, perform expressive gestures, and optionally
+control Home Assistant devices.
 
-## Hardware setup
+> **Beta:** Reachy Mini is an experimental agent. Use it for supervised trials, not
+> unattended production workflows. Keep the robot within reach while testing motion.
 
-Reachy Mini Wireless:
+## Before you start
 
-1. Power on the robot.
-2. Put the robot and the Wactorz host on the same WiFi network.
-3. Make sure the network does not block local device discovery.
-4. Stop any Hugging Face app running on the robot before Wactorz connects.
+You need:
 
-Reachy Mini Lite:
+- **Wactorz running**, with its dashboard open and an LLM provider set up. If you have not
+  done that yet, follow the [README quick start](https://github.com/waldiez/wactorz#readme)
+  first.
+- **Internet access** on the computer running Wactorz. The first spawn downloads the robot
+  packages, and Reachy's voice comes from an online speech service.
+- **A Reachy Mini**, Wireless or Lite.
+- **Wactorz running on a computer**, installed with `pip`. Where it runs decides what
+  Reachy can do:
 
-1. Connect the robot over USB.
-2. Start the local daemon before spawning the agent:
+| Wactorz runs on… | What works |
+|---|---|
+| Windows or macOS | Everything. The robot SDK brings the media libraries it needs. |
+| Linux | Movement and speech, after the preparation in [Linux](#linux). Listening, conversation and the camera also need GStreamer's WebRTC plugin, which Linux distributions do not package. |
+| Docker, or the Home Assistant add-on | **Not supported yet.** Their images cannot install the robot SDK. |
+
+To restart Wactorz, which a first install asks for once, stop it with `Ctrl+C` and start
+it again.
+
+### Linux
+
+The robot SDK compiles part of itself on Linux, so install the build tools and GStreamer
+first. On Debian or Ubuntu:
+
+```bash
+sudo apt install python3-venv python3-dev build-essential pkg-config \
+  libcairo2-dev libgirepository1.0-dev \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-nice gstreamer1.0-libav \
+  gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0
+```
+
+Run Wactorz with **Python 3.13 or older**. The SDK needs a version of PyGObject that
+does not work on Python 3.14, which is the default on Ubuntu 26.04; there, create the
+virtual environment with an older Python and with pip in it, for example:
+
+```bash
+uv venv --seed -p 3.13 venv
+```
+
+Without `--seed` the environment has no pip; Wactorz then installs packages with `uv`, as
+long as `uv` is on the `PATH` of the shell that starts Wactorz.
+
+Wactorz then connects without Reachy's camera and microphone, and says so. Movement and
+speech work; listening, conversation and the camera stay off until GStreamer's WebRTC
+plugin (gst-plugins-rs) is installed, which means building it from source.
+
+This was tested on Ubuntu 26.04 with Python 3.13 and a Reachy Mini Wireless.
+
+## Quick start
+
+This path gets the robot moving from the Wactorz dashboard. Start with text commands;
+voice comes last and is optional.
+
+### 1. Prepare the robot
+
+Choose the model you have:
+
+**Reachy Mini Wireless**
+
+1. Power on Reachy.
+2. Connect Reachy and the computer running Wactorz to the same Wi-Fi network.
+3. Close any Hugging Face or Reachy Mini control app that is controlling the robot.
+
+**Reachy Mini Lite**
+
+1. Connect Reachy to the computer over USB.
+2. Find the robot's serial port. It looks like `COM3` on Windows or `/dev/ttyACM0`
+   on Linux.
+3. Open a terminal and start the daemon, replacing `<serial_port>` with that value:
 
 ```bash
 reachy-mini-daemon -p <serial_port>
 ```
 
-## Install dependencies
+Leave that terminal open while using Reachy.
 
-The catalogue installer can install recipe dependencies on first spawn. To install them
-manually:
+### 2. Add Reachy to Wactorz
 
-```bash
-pip install "reachy-mini==1.8.4" numpy edge-tts webrtcvad-wheels
-```
-
-`edge-tts` is required for the `say` command (speech synthesis); the other
-commands work without it.
-
-**Optional:** install `ffmpeg` (a system binary, not a pip package) on the host
-if the robot's speech comes out too quiet. It is used only to boost the TTS
-loudness by roughly 3-4x. Without it, `say` still works - it plays the raw,
-quieter audio and says so once per session. The Home Assistant add-on image does
-not carry it, since it serves this one optional agent; install it on the host
-running Wactorz if you want the louder speech.
-
-## Spawn
+In the dashboard chat, send:
 
 ```text
 @catalog spawn reachy-mini
 ```
 
-Confirm it is running:
+The first time, Wactorz installs Reachy's packages before starting it. You do not need to
+run `pip install` yourself. This is what you will see in chat:
+
+1. Straight away, a reply saying which packages it is installing. The whole install takes
+   a few minutes, longer on a Home Assistant box or a slow connection.
+2. One line per package as it installs, for example
+   `Installing reachy-mini==1.8.4 (1/6) for reachy-mini…`.
+3. Then one of these:
+   - **"reachy-mini spawned and running"**: go on to step 3.
+   - **"…restart Wactorz once to finish; reachy-mini will start by itself after the
+     restart"**: this is normal on a first install. The robot packages need an older
+     version of a library Wactorz had already loaded, and Python cannot swap it while it
+     runs. Restart Wactorz (`Ctrl+C`, then start it again) and Reachy comes back on its own.
+   - **"…was not started because some of its packages failed to install"**: the message
+     names each package and pip's error. Fix the cause it names, usually the network, then
+     send `@catalog spawn reachy-mini` again. Packages that did install are kept.
+
+Later spawns and restarts skip the install. The first start after it takes up to a
+minute longer while the robot SDK downloads Reachy's gesture library, once.
+
+### 3. Check the connection
+
+Send:
 
 ```text
-/agents
+@reachy-mini health
 ```
 
-If the robot was disconnected and reconnected:
+A good reply starts with **"I'm connected to my body"**. If it says Reachy is not
+connected, jump to [If Reachy does not connect](#if-reachy-does-not-connect).
+
+### 4. Try the first commands
+
+Send these one at a time:
 
 ```text
-/agents restart reachy-mini
+@reachy-mini wake up
+@reachy-mini look left
+@reachy-mini do a happy gesture
+@reachy-mini say hello
 ```
 
-## Pin a Wireless host
+Reachy should move for the first three commands and speak for the last one. The dashboard
+also shows the result, so an audio or motor problem does not look like a successful command.
 
-The Reachy SDK usually auto-detects the robot. If discovery is unreliable, publish the host
-once, then say `reconnect` to apply it (no restart needed):
+If Reachy's voice is quiet, see
+[make Reachy's voice louder with ffmpeg](#optional-make-reachys-voice-louder-with-ffmpeg).
+
+### 5. Optional: talk to Reachy
+
+Text commands and Reachy's speech need nothing more. To **talk to** Reachy, Wactorz needs
+a speech recognition service. The default is Deepgram, a hosted service; voice audio is
+sent to it.
+
+1. Sign up at [console.deepgram.com](https://console.deepgram.com) and create an API key.
+2. Put it in the `.env` file Wactorz reads, then restart Wactorz:
+
+   ```dotenv
+   DEEPGRAM_API_KEY=your-key-here
+   ```
+
+3. Try one question, then a conversation:
+
+   ```text
+   @reachy-mini listen and ask Wactorz
+   @reachy-mini start conversation
+   ```
+
+   `listen and ask Wactorz` records five seconds, then answers out loud.
+   `start conversation` (or `start listening`) keeps listening until you say
+   "goodbye" or send `@reachy-mini stop conversation`.
+
+To keep audio on your own computer instead, use the local recognizer described in
+[Push-to-talk voice input](#push-to-talk-voice-input).
+
+### Where to go next
+
+- If something is not working, see [Common problems](#common-problems).
+- To use Wactorz and Home Assistant through Reachy, see
+  [Use Reachy as the Wactorz interface](#use-reachy-as-the-wactorz-interface).
+- For everything Reachy can do, send `@reachy-mini help`.
+- For MQTT or code-driven control, see [Structured commands](#structured-commands).
+
+## Common problems
+
+| What you see | What to do |
+|---|---|
+| The spawn reply says it is installing, and nothing else happens for a few minutes | Normal on a first install. Each package is announced as it starts. |
+| "…restart Wactorz once to finish…" | Normal on a first install. Restart Wactorz; Reachy starts by itself. |
+| "…some of its packages failed to install" | Fix what pip's error names, usually the network, then spawn again. |
+| "This Python environment … has no pip" | Add pip with `python -m ensurepip --upgrade`, or put `uv` on the `PATH`, then spawn again. |
+| "reachy-mini could not start: the Python module '…' is not installed" | Send `@catalog spawn reachy-mini` again to install what is missing. |
+| "reachy not connected" | See [If Reachy does not connect](#if-reachy-does-not-connect). |
+| Reachy talks but does not move | Close the Reachy Mini control app, then send `@reachy-mini reconnect`. |
+| Reachy's voice is quiet | Install ffmpeg, see [make Reachy's voice louder](#optional-make-reachys-voice-louder-with-ffmpeg), or say `presenter mode`. |
+| Voice input says `DEEPGRAM_API_KEY` is required | Do [step 5](#5-optional-talk-to-reachy). |
+| "Reachy is connected without its camera and microphone…" | Expected on Linux: movement and speech work. See [Linux](#linux). |
+| The Wactorz log shows `ERROR … No Reachy Mini Audio USB device found!` at startup | Harmless on Reachy Mini Wireless: the robot SDK first looks for the Lite's USB audio. |
+| Reachy stops talking in the middle of a sentence | Check the Wactorz log at that moment for `Reachy motor link is down`, and report it with the lines around it. |
+
+## If Reachy does not connect
+
+Work through these checks in order:
+
+1. Make sure Reachy is powered on and that the preparation steps above still apply.
+2. For Wireless, confirm the robot and Wactorz host are on the same local network. Guest
+   Wi-Fi often blocks devices from seeing one another.
+3. For Wireless, close the Reachy Mini control app. For Lite, confirm the daemon terminal
+   is still running and shows no connection error.
+4. Ask the already-running agent to try again with `@reachy-mini reconnect`.
+5. If Wireless discovery still fails, or Wactorz runs inside WSL or a virtual machine, set the robot address
+   explicitly as described in [Set a Wireless address](#set-a-wireless-address).
+
+Use `@reachy-mini reconnect force` when the dashboard claims the link is alive but the
+robot does not respond. Reinstalling or respawning should not be the first troubleshooting
+step.
+
+## Detailed setup
+
+### Set a Wireless address
+
+Automatic discovery is easiest when it works. It does not reach the robot from inside
+WSL or a virtual machine, which see the network through their host, and it can be
+unreliable elsewhere. Then tell Wactorz the robot's address yourself.
+
+Find the address in your router's list of connected devices, or try the name
+`reachy-mini.local`. The examples below use `192.168.1.42`; replace it with yours.
+
+Add these lines to the `.env` file Wactorz reads:
+
+```dotenv
+REACHY_CONNECTION_MODE=network
+REACHY_ROBOT_HOST=192.168.1.42
+```
+
+`.env` is read when Wactorz starts, so restarting only the agent is not enough. Restart
+Wactorz.
+
+**Without restarting:** publish the address to Wactorz's MQTT broker, then reconnect. Use
+`mosquitto_pub`, or Home Assistant's **Settings → Devices & services → MQTT → Configure →
+Publish a packet** when it shares the broker:
 
 ```text
 topic: custom/reachy/config
-payload: {"robot_host": "192.168.1.42"}
+payload: {"robot_host": "192.168.1.42", "connection_mode": "network"}
 ```
-
-Use the robot's IP address or hostname. The current host is reported in
-`custom/reachy/state` as `robot_host`.
-
-## Reconnect after the robot was off
-
-The agent connects once at spawn. If the robot was powered off then — or the daemon
-link drops — the agent stays up and refuses robot commands with a `reachy not
-connected` message. Power the robot on and say:
 
 ```text
 @reachy-mini reconnect
 ```
 
-`connect`, `try again`, and `retry` work too, as does publishing `{"cmd": "reconnect"}`
-to `custom/reachy/cmd`. It re-runs the same connection ladder `setup()` uses and brings
-the robot back up (volume sync, motor torque, wake), reporting what actually happened —
-a failed attempt says so rather than claiming success. Use `reconnect force` to re-open
-a link that looks alive but isn't behaving.
+An address set this way is remembered, and it overrides the one in `.env`. The address in
+use is published in `custom/reachy/state` as `robot_host`.
 
-Because the ladder reads the *current* config, a `custom/reachy/config` publish followed
-by `reconnect` re-targets a new host or mode without a restart. Values set in `.env`
-(`REACHY_ROBOT_HOST`, `REACHY_CONNECTION_MODE`, `REACHY_MEDIA_BACKEND`) are read only at
-spawn, so changing those still needs a restart.
+### Install dependencies manually
+
+The catalogue installer handles these dependencies during the first spawn. If you manage
+the environment yourself, install them with:
+
+```bash
+pip install "reachy-mini==1.8.4" numpy edge-tts pillow webrtcvad-wheels "deepgram-sdk>=3,<4"
+```
+
+`edge-tts` enables speech. Deepgram is used only for voice input and needs an API key;
+text control and speech output do not need one.
+
+### Optional: make Reachy's voice louder with ffmpeg
+
+Reachy speaks without `ffmpeg`. With it, speech gets a loudness boost that makes it
+clearly louder, which helps in a noisy room or in front of an audience. Without it, Reachy
+asks the speech service for its loudest clean voice instead, which is louder than plain
+speech but not as loud as the boost.
+
+If `ffmpeg` is missing, Reachy says so once in chat, the first time it speaks, with the
+command for your system. `@reachy-mini health` also says whether the boost is on.
+
+Install it on the **computer running Wactorz**, not on the robot, then restart Wactorz:
+
+| System | Command |
+|---|---|
+| Windows | `winget install ffmpeg` |
+| macOS | `brew install ffmpeg` |
+| Debian, Ubuntu, Raspberry Pi OS | `sudo apt install ffmpeg` |
+
+Or turn Reachy up instead: say `presenter mode` or `speak louder`.
 
 ## Hardware warnings and what Reachy can tell you about itself
 
@@ -129,7 +318,7 @@ The one temperature available is the IMU's own, reported by `health` when the ro
 IMU. It is the inertial chip, not a motor, so treat it as the robot's internal ambient — the
 thing that actually overheats reports through the fault watch above.
 
-## Choose a connection mode
+## Connection modes (advanced)
 
 By default the SDK auto-detects: it probes `localhost` first, then the robot. If you
 run the robot wirelessly and do **not** have the Reachy Mini control app open, pin
@@ -158,18 +347,43 @@ routing is set separately by `media_backend`.
 > stream but not its motor control. Use `network` mode (no control app), or make sure
 > the control app / simulator is running for `local` mode.
 
-## Use it
+## Everyday commands
 
 Plain English works for normal use:
 
 ```text
-wake up
-do a happy gesture
-wiggle your antennas
-look left
-say hello
-turn on the light and nod
+@reachy-mini wake up
+@reachy-mini do a happy gesture
+@reachy-mini wiggle your antennas
+@reachy-mini look left
+@reachy-mini say hello
+@reachy-mini turn on the light and nod
 ```
+
+### Ask Reachy for help
+
+Help is built into the agent and works even when the robot is disconnected. In chat—or
+while an opt-in conversation is running—say:
+
+```text
+@reachy-mini help
+```
+
+The full answer shows examples and keywords for movement, speech, voice input, camera,
+connection status, volume, and Wactorz/Home Assistant. Ask for a shorter topic guide with:
+
+```text
+@reachy-mini help movement
+@reachy-mini help voice
+@reachy-mini help camera
+@reachy-mini help connection
+@reachy-mini help volume
+@reachy-mini help home
+```
+
+Natural questions work too: `what can you do?`, `how do I use the camera?`, and
+`how can I start a conversation?`. In voice mode, Reachy speaks a short answer and puts
+the complete command guide in its dashboard thread.
 
 Other agents can send the same requests directly:
 
@@ -221,11 +435,18 @@ payload: {"duration": 5}
 
 `ask_voice` remains one-shot. There is deliberately no always-on microphone or wake
 word.
-The default backend is local `faster-whisper`; install and configure one backend before
-using `ask_voice`:
+The default backend is hosted Deepgram Nova-3. It needs an API key, see
+[step 5](#5-optional-talk-to-reachy). `ask_voice` uploads one bounded WAV clip; conversation mode streams Reachy's
+WebRTC microphone as mono PCM while the user speaks:
 
 ~~~bash
-# Local, recommended default
+# Hosted default
+pip install 'deepgram-sdk>=3,<4'
+DEEPGRAM_API_KEY=...
+REACHY_STT_BACKEND=deepgram
+REACHY_STT_MODEL=nova-3
+
+# Local alternative; audio stays on this machine
 pip install faster-whisper
 REACHY_STT_BACKEND=faster-whisper
 REACHY_STT_MODEL=Infomaniak-AI/faster-whisper-large-v3-turbo
@@ -245,9 +466,11 @@ OPENAI_API_KEY=...
 Optional `REACHY_STT_LANGUAGE`, `REACHY_STT_FALLBACK_LANGUAGE`,
 `REACHY_STT_DEVICE`, `REACHY_STT_COMPUTE_TYPE`, and `REACHY_STT_HOTWORDS`
 settings tune language, uncertain-language fallback, local inference, and recognition
-bias. Leave the primary language unset to auto-detect. Short utterances whose language
-probability is below `stt_min_language_probability` (default `0.60`) are retried in
-the configured fallback language; unresolved guesses are silently discarded instead
+bias. `REACHY_STT_TIMEOUT_S` bounds hosted calls and defaults to 60 seconds. Use
+`REACHY_STT_LANGUAGE=multi` and `REACHY_STT_STREAM_LANGUAGE=multi` with Nova-3 for
+English and Greek in one conversation; set either to `en` or `el` to constrain a session.
+Short utterances whose language probability is below `stt_min_language_probability`
+(default `0.60`) are retried in the configured fallback language; unresolved guesses are silently discarded instead
 of being routed as commands. The MQTT payload can override these settings with
 `stt_backend`, `stt_model`, `language`, `stt_fallback_language`, `stt_device`,
 `stt_compute_type`, `stt_hotwords`, and `stt_min_language_probability`. Keys are read
@@ -293,7 +516,13 @@ less-literal embodied request can still move the robot without a Main → Reachy
 delegation loop. Wactorz core contains no Reachy dependency; without the catalogue
 agent, Main behaves exactly as before.
 
-Each turn uses voice-activity detection and ends after about one second of silence.
+With Deepgram selected, each turn streams the PCM frames already being read from
+Reachy's WebRTC microphone. Local WebRTC VAD remains responsible for confirmed speech
+onset, motor-noise rejection, cancellation, and inactivity limits. Deepgram endpointing
+normally closes the turn after 500 ms of silence, with a 1200 ms utterance-end backstop.
+Interim recognition is published on `custom/reachy/events` while the user speaks. If the
+stream cannot start, disconnects, or returns no final transcript, the completed local
+capture goes through prerecorded Deepgram transcription without asking the user to repeat.
 The complete reply appears in Reachy's dashboard thread before playback begins, and
 the same sanitized reply is spoken in sentence-sized chunks without replacing its
 ending with a "rest in Wactorz chat" notice. Recognized
@@ -305,9 +534,10 @@ Execution receipts such as `ran 4 of 4` are also hidden by default; say
 `disable debug` to return to the normal user-facing view. Debug always starts off
 after an agent restart. Punctuation-only recognition noise is ignored.
 
-Conversation sessions auto-detect the spoken language, so English and Greek can be
-used without restarting the session. Set `stt_language` (or `REACHY_STT_LANGUAGE`)
-only when you deliberately want to lock recognition to one language. Common names
+Prerecorded conversation turns auto-detect the spoken language. Streaming uses
+`stt_stream_language` (or `REACHY_STT_STREAM_LANGUAGE`), which defaults to `multi`: English
+and Greek in the same conversation. Set it to `en` or `el` to keep a session to one
+language. Common names
 and device terms are supplied as hotwords; override them with `stt_hotwords` or
 `REACHY_STT_HOTWORDS`. Common mishearings such as "Richie", "Riti", "Ritzy", and
 "Lizzy" are corrected to "Reachy" when used as the robot's name. Main is explicitly
@@ -318,6 +548,16 @@ previous-transcript conditioning, and reports confidence/no-speech scores. Resul
 below `stt_min_confidence` (default `0.25`) or above `stt_max_no_speech` (default
 `0.60`) are silently discarded without consuming a turn.
 
+Speech comes back out in whatever language the reply is written in. `TTS_VOICE`
+sets the voice; a *Multilingual* edge-tts voice
+(`en-US-BrianMultilingualNeural`, `en-AU-WilliamMultilingualNeural`, ...)
+pronounces every supported language itself, so Reachy keeps one voice across
+English and Greek. Any other voice speaks a single language and would read Greek
+out as Unicode letter names, so Greek text is redirected to `TTS_VOICE_EL`
+instead - `el-GR-AthinaNeural` (female) by default, or `el-GR-NestorasNeural`
+(male); edge-tts ships no others. A per-call `{"voice": "..."}` on `say`
+overrides both.
+
 Confident auto-detected languages become a session hint for later ambiguous turns.
 Voice-originated turns create no durable personal facts unless the user explicitly
 says to remember or save something. This prevents a bad transcript from becoming the
@@ -325,6 +565,121 @@ user's name or household profile while preserving intentional voice memory.
 
 Greek and English requests to lower or raise Reachy's own voice are handled locally
 as robot speaker-volume changes rather than being sent to Home Assistant.
+
+### Idle presets
+
+Amplitude, tempo, which joints move and how often attract beats play are five
+independent settings, and nobody wants to reason about five settings with an
+audience already in front of the robot. A preset sets all of them at once:
+
+| Preset | What it looks like |
+| --- | --- |
+| `off` | **The default.** Completely still. Motors stay live and every command still works — this is stillness, not sleep. |
+| `calm` | Barely moving, and *slower* as well as smaller. Breathing that is only shallower reads as a robot turned down; breathing that is also slower reads as something at rest. |
+| `antennas` | Antennas alive, head and body held absolutely still. For a plinth where a sweeping head is a hazard, or when he should look like he is listening rather than performing. |
+| `alive` | **What you get when you turn ambient motion on without naming a preset.** Breathing, gaze drift, an attract beat every half minute or so. |
+| `showtime` | Bigger and quicker, with beats two to three times as often. Too much for a quiet room, and meant to be. |
+
+Set it whichever way is nearest to hand:
+
+```json
+{"cmd": "life", "preset": "showtime"}
+```
+
+```text
+REACHY_IDLE_PRESET=alive                        # .env, at boot
+custom/reachy/config {"idle_preset": "calm"}    # persists
+```
+
+Or just say it — this is the control you reach for with people watching, so it
+works out loud, in English or Greek:
+
+> "calm down" · "settle down" · "antennas only" · "showtime" · "show off" ·
+> "stop moving" · "alive" · "back to normal"
+> "ηρέμησε" · "μόνο τις κεραίες" · "μη κουνιέσαι" · "πιο ζωηρά" · "κανονικά"
+
+Naming a preset next to any word meaning *how you move* also works, so
+"set preset animation alive", "idle showtime" and "motion calm" all land. A bare
+preset name is matched only as the whole message: "alive" changes the preset,
+"are you alive?" stays a question.
+
+If ambient motion is ever held down by a flag that outlived whatever set it,
+it releases itself after 25 seconds and logs which flag it was. Nothing
+legitimate holds one that long, and the alternative — a robot that stops moving
+permanently and silently while every command still reports success — is the
+worst failure this feature has.
+
+`{"cmd": "life"}` with no arguments reports the current preset and lists the
+rest with a description of each. Individual settings are applied *after* a
+preset, so `{"preset": "calm", "attract": true}` reads the way it looks: that
+mood, with one deliberate exception.
+
+### Ambient motion
+
+A robot holding one pose perfectly still is hard to tell from a prop, which
+matters most in a room where people are walking past. `REACHY_IDLE_LIFE=1` (or
+`{"cmd": "life", "enabled": true}`, or `custom/reachy/config {"idle_life":
+true}`) keeps a small amount of motion going: breathing on a 4.3s cycle, a slow
+weight shift on 11.3s, gaze that settles somewhere for a few seconds and then
+moves, and an occasional asymmetric antenna flick. The three periods do not
+divide into each other, so the sum never visibly repeats. Off by default.
+
+It cannot take the robot away from you, because it never names an absolute
+target. Every offset is added to the pose your last command established, so a
+`pose` moves the base and ambient motion breathes around the new one. It also
+stands down completely while any command is in flight (`busy`), while Reachy is
+speaking, and while he is asleep. Scale it with
+`{"cmd": "life", "amplitude": 0.5}` or `REACHY_IDLE_LIFE_AMPLITUDE` — 1.0 is the
+tuned default and 1.5 the maximum, and the hard ceilings in the code apply on
+top of whatever you set.
+
+A commanded pose is **held and then released**. It stays put for about three and
+a half seconds, then eases back toward neutral over another two and a half. A
+pose is transient intent, not a new resting posture: without this, aiming his
+head down for a `describe` left him breathing politely at the floor until
+something else moved him. The direction he is *facing* is never relaxed away —
+turn him toward the room and he stays turned. Set `REACHY_IDLE_RELAX=0` or
+`{"cmd": "life", "relax": false}` to pin a pose exactly where you put it.
+
+After `look_at`, `look_pixel` or an `emotion` clip the head pose has no name in
+pose space, so ambient motion leaves the head alone and keeps only the antennas
+alive. He holds that gaze for the same few seconds, then makes one smooth
+interpolated move back to neutral and resumes — a pause, never a dead end.
+
+### Attract beats
+
+Breathing stops him reading as switched off. It does not make anyone cross a
+room. Every 18-45 seconds, when nothing else is happening, Reachy plays one
+larger move drawn at random without immediate repeats: `scan` (a slow sweep of
+the room), `perk` (head cock, antennas up), `double_take` (glance away, snap
+back), `stretch`, `muse`. Each runs as a real trajectory under the motion lock
+with `busy` set, so it yields to your commands exactly as ambient motion does,
+and ends at neutral.
+
+They are suppressed while Reachy is mid-turn in a conversation — a big move
+while someone is being listened to reads as not paying attention. A session that
+is merely open and waiting is fine. Turn them off with `REACHY_ATTRACT=0` or
+`{"cmd": "life", "attract": false}`, retime with `REACHY_ATTRACT_MIN_GAP` /
+`REACHY_ATTRACT_MAX_GAP`, or fire one on demand to check it reads from where the
+audience will stand:
+
+```json
+{"cmd": "life", "beat": "perk"}
+```
+
+When ambient motion is on, spoken replies are animated against their own word
+timings: edge-tts reports the offset and duration of every word it synthesises,
+so accents land on the words rather than on a timer that would drift against the
+sentence within a couple of seconds. A small lift at the start of an utterance
+and a settle at the end give it a beginning and an end. Opt out for one line
+with `{"cmd": "say", "text": "...", "speech_motion": false}`.
+
+Emoji never reach the synthesiser. edge-tts does not skip them — it reads their
+Unicode names aloud, so a cheerful reply ended with Reachy solemnly announcing
+"smiling face with smiling eyes". They are stripped at synthesis, so every path
+is covered: a direct `say`, a spoken vision description, or a reply the planner
+wrote. Dashes, curly quotes and ellipsis are deliberately kept; they belong in
+speech.
 
 Audio is intentionally plainer than the dashboard response. Emoji, Markdown
 role-play directions such as `*waves*`, links, and raw Home Assistant service/entity
@@ -391,25 +746,35 @@ start fields include `silence_s`, `max_utterance_s`, `min_speech_s`, `pre_roll_s
 `flush_s`, `vad_mode`, `vad_min_rms`, `cooldown_s`, `barge_in`, `barge_guard_s`,
 `barge_onset_s`, `barge_silence_s`, `barge_min_speech_s`, `barge_flush_s`,
 `barge_min_rms`, `barge_verify_min_speech_s`, `voice_friendly`,
-`state_motion`, `idle_motion`, `stt_language`, `stt_hotwords`,
+`state_motion`, `idle_motion`, `stt_language`, `stt_streaming`, `stt_stream_language`,
+`stt_endpointing_ms`, `stt_utterance_end_ms`, `stt_finalize_timeout_s`, `stt_hotwords`,
 `stt_min_confidence`, `stt_max_no_speech`, and `max_turns`. Barge-in defaults to
 false and is enabled only by an explicit `barge_in:true`; all physical conversation
 motion defaults to false.
 
-Set `state_motion:true` for subtle listening/speaking antenna cues. These use
+Set `state_motion:true` (or `REACHY_CONVERSATION_STATE_MOTION=1`) for subtle
+listening/speaking antenna cues. These use
 antenna-only `set_target` calls and do not command or reset the head. Conversation
 states are published on `custom/reachy/events`; events also report `session_id`,
-`turn_index`, `transcript`, `response`, `raw_response`, `spoken_response`, `interrupted`,
+`turn_index`, `interim_transcript`, `transcript`, `response`, `raw_response`,
+`spoken_response`, `interrupted`,
 timings, `stop_reason`, `ok`, `error`, and `ts`.
 
-Physical idle motion defaults to `false` because Reachy's antenna servos are audible to
-its live microphone and can become convincing Whisper hallucinations. The robot stays
+Physical listening motion defaults to `false` because Reachy's antenna servos are audible to
+its live microphone and can become convincing transcription false positives. The robot stays
 mechanically still while recording; personality remains in deliberate response
-gestures. Set `idle_motion:true` only to experiment on hardware with quiet servos. The
+gestures and the ambient-life layer. Set `idle_motion:true` or
+`REACHY_CONVERSATION_IDLE_MOTION=1` only to experiment on hardware with quiet servos. The
 opt-in motion uses small, eased antenna sweeps, stops when voice activity is confirmed,
 and never moves the head. Short mechanical bursts that trip VAD are rejected before
-Whisper and do not consume a turn or error budget, but keeping motors still is the
+the recognizer and do not consume a turn or error budget, but keeping motors still is the
 reliable default.
+
+For bilingual English/Greek use, set both `REACHY_STT_LANGUAGE=multi` and
+`REACHY_STT_STREAM_LANGUAGE=multi` with Nova-3. When local VAD closes a turn, the streaming
+client sends Deepgram `Finalize` and waits briefly for the final transcript before falling back
+to a prerecorded request using the same captured audio. This avoids closing the WebSocket while
+its final result is still in flight.
 
 Embodied requests stay on the robot. "Turn left" and "turn right" rotate the body
 45 degrees relative to its current heading; an explicit angle such as "turn left
@@ -432,10 +797,21 @@ cancellation.
 
 ## Structured commands
 
+Request all help or one help topic without an LLM call or robot connection:
+
+```json
+{"cmd": "help"}
+```
+
+```json
+{"cmd": "help", "topic": "camera"}
+```
+
 For direct control, send a dict with `cmd`:
 
 | Command | Purpose |
 |---------|---------|
+| `help` | All help or one topic: movement, voice, camera, connection, volume, home |
 | `wake`, `sleep`, `stop` | Basic robot state |
 | `pose` | Head yaw, pitch, roll, x/y/z |
 | `antennas` | Left and right antenna angles |
@@ -453,6 +829,7 @@ For direct control, send a dict with `cmd`:
 | `doa` | Report the mic array's current direction of arrival, no recording |
 | `emotion`, `list_emotions` | Recorded gesture clips |
 | `say`, `volume` | Speech and speaker volume |
+| `life` | Ambient idle motion on/off, and its amplitude |
 | `ha` | Home Assistant request |
 | `bind`, `unbind` | Persistent reaction to an MQTT/HA event |
 
@@ -533,10 +910,3 @@ Ask a specific question about the view, or get the text without speaking it:
 
 This needs the same video-capable media backend as `camera`, plus a configured LLM
 provider (the model must support images).
-
-## Troubleshooting
-
-- If Wireless does not connect, check that the robot and Wactorz host are on the same LAN.
-- If discovery fails, pin `robot_host` with `custom/reachy/config`.
-- If motion commands do nothing, check that another app is not already controlling the robot.
-- For Lite, restart `reachy-mini-daemon`, then restart `reachy-mini`.

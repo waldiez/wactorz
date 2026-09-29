@@ -78,6 +78,8 @@ class _BaseHost(SpawnMixin):
         self.published = []  # mqtt dashboard echoes
         self.state = ActorState.RUNNING
         self.detached: list[asyncio.Task] = []  # background work the host was handed
+        self.install_result: dict = {"message": "installed ok"}  # what the installer answers
+        self.told: list[str] = []  # chat notices
 
     async def spawn(self, actor_class, **kwargs):
         self.spawn_calls.append((actor_class, kwargs))
@@ -90,7 +92,10 @@ class _BaseHost(SpawnMixin):
         # Resolve the install future immediately, standing in for the installer.
         fut = self._result_futures.get(payload.get("_task_id"))
         if fut is not None and not fut.done():
-            fut.set_result({"message": "installed ok"})
+            fut.set_result(self.install_result)
+
+    async def notify_user(self, text, **_extra):
+        self.told.append(text)
 
     async def _mqtt_publish(self, topic, payload, **_kw):
         self.published.append((topic, payload))
@@ -313,6 +318,52 @@ def test_blocking_install(main_host):
     assert not isinstance(actor, SpawnPlaceholder)
     assert main_host.sent and main_host.sent[0]["action"] == "install"
     assert main_host.spawn_calls
+
+
+def test_a_failed_install_is_reported_and_not_spawned(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    main_host.install_result = {
+        "failed": ["totally_missing_pkg_zzz"],
+        "results": {"totally_missing_pkg_zzz": "failed: ERROR: no matching distribution"},
+    }
+    actor = run(
+        main_host._spawn_local_from_config(
+            {"name": "d6", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=True,
+        )
+    )
+    assert actor is None
+    assert main_host.spawn_calls == []
+    assert main_host.registered == []
+    (told,) = main_host.told
+    assert "totally_missing_pkg_zzz: ERROR: no matching distribution" in told
+
+
+def test_an_install_needing_a_restart_keeps_the_agent_for_after_it(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    main_host.install_result = {"failed": [], "restart_required": ["websockets 17.1 -> 15.0.1"]}
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d7", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=False,
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+    assert main_host.spawn_calls == []
+    # Kept (the real registry is keyed by name), so the restart brings it up.
+    assert {cfg["name"] for cfg in main_host.registered} == {"d7"}
+    (told,) = main_host.told
+    assert "restart Wactorz" in told
+
+
+def test_the_install_request_asks_for_chat_progress(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d8"))
+    (request,) = main_host.sent
+    assert request["notify"] is True
+    assert request["for_agent"] == "d8"
 
 
 def test_background_install_returns_placeholder(main_host):
@@ -585,3 +636,29 @@ def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
 
     run(scenario())
     assert main_host.spawn_calls == []
+
+
+def test_no_packages_means_nothing_to_install(main_host):
+    outcome = run(main_host._install_packages([], agent_name="d9"))
+    assert outcome.ok
+    assert main_host.sent == []
+
+
+def test_without_an_installer_the_install_is_reported_unavailable(main_host):
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d10"))
+    assert outcome.unavailable
+
+
+def test_an_installer_that_never_answers_times_out(main_host, monkeypatch):
+    from wactorz.agents.mixins import spawning
+
+    main_host._registry.add(FakeActor("installer"))
+    monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 0.05)
+
+    async def silent_send(target_id, msg_type, payload):
+        main_host.sent.append(payload)  # taken in, never answered
+
+    main_host.send = silent_send
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d11"))
+    assert outcome.timed_out
+    assert main_host._result_futures == {}

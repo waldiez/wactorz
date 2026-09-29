@@ -6,6 +6,9 @@ ENV DEBIAN_FRONTEND="noninteractive"
 ENV DEBCONF_NONINTERACTIVE_SEEN=true
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
+# Unpinned on purpose: a pinned Debian version stops resolving once a security
+# update replaces it.
+# hadolint ignore=DL3008
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git jq gcc linux-libc-dev libffi-dev libssl-dev python3-pip python3-dev python3-venv locales \
     pkg-config libcairo2-dev libgirepository1.0-dev \
@@ -31,6 +34,9 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
+# A layer of its own so its large download is cached apart from wactorz. The
+# version is the one `wactorz[all,ml]` below accepts, which that install enforces.
+# hadolint ignore=DL3013
 RUN pip3 install --no-cache-dir ultralytics
 # Git ref of wactorz to install.
 ARG WACTORZ_REF=main

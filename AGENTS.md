@@ -33,7 +33,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 | Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) |
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |
 | Frontend lint | `make lint` (typecheck + prettier + eslint + markdownlint) |
-| Workflows + shell scripts | `make lint-ci` (zizmor + shellcheck, pinned images; needs Docker, online with `GH_TOKEN`) |
+| Workflows, shell scripts, Dockerfiles | `make lint-ci` (zizmor + shellcheck + hadolint, pinned images; needs Docker, online with `GH_TOKEN`) |
+| App image checks | `make image` then `make image-smoke` (beside a broker: probes, no root, no set-id) and `make image-scan` (Trivy; accepted findings in `.trivyignore.yaml`); `IMAGE=` picks another image |
 | Build everything | `make build` · local CI: `make ci` |
 
 ## Branches & pull requests

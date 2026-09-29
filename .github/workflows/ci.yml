@@ -176,6 +176,41 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: make lint-ci
 
+  image:
+    # The app image, built and checked on every push and pull request, so a
+    # change that breaks it fails here rather than in a release. It is started
+    # beside a broker and must answer /health and /ready on both servers, drop
+    # root and carry no set-id binaries; then any fixable CRITICAL or HIGH
+    # finding fails the job (accepted ones: .trivyignore.yaml, with expiry
+    # dates). Nothing is pushed.
+    name: Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          tags: wactorz:ci
+          load: true
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Debian's security updates of the day, never a cached copy (see the
+          # Dockerfile's `runtime` stage).
+          no-cache-filters: runtime
+
+      - name: Smoke test
+        run: make image-smoke IMAGE=wactorz:ci
+
+      - name: Scan
+        run: make image-scan IMAGE=wactorz:ci
+
   test-frontend:
     name: Frontend
     runs-on: ubuntu-latest

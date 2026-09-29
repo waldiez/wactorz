@@ -1,5 +1,5 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
-		check fmt fmt-py lint lint-py lint-ci tool-image format clean \
+		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan format clean \
         up down logs shell mqtt-certs \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
@@ -144,21 +144,63 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 	@echo "── gated: basedpyright (basic) ──"
 	$(PYTHON) -m basedpyright
 
+# The pinned image of a CI tool, read from its FROM line in .github/tools/Dockerfile.
+# A function rather than a nested `$(MAKE) tool-image`: a recipe line naming
+# $(MAKE) runs even under `make -n`, so a dry run would start the containers.
+tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' .github/tools/Dockerfile)
+
 # The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
 # shebang, which shellcheck cannot place, so they are named as bash.
-SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh
+SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh scripts/image-smoke.sh
 ADDON_SCRIPTS := ha-addon/wactorz/run.sh ha-addon/wactorz-ultra/run.sh
 
-lint-ci: ## Lint the GitHub workflows (zizmor) and the shell scripts (shellcheck), with the pinned tool images
+# The docker calls below name paths inside containers (`-w /src`, the docker
+# socket). Git Bash on Windows would rewrite them into Windows paths first;
+# this keeps them as written, and does nothing anywhere else.
+lint-ci image-smoke image-scan: export MSYS_NO_PATHCONV := 1
+lint-ci image-smoke image-scan: export MSYS2_ARG_CONV_EXCL := *
+
+lint-ci: ## Lint the GitHub workflows (zizmor), shell scripts (shellcheck) and Dockerfiles (hadolint), with the pinned tool images
 	@# Online when GH_TOKEN is set, as in CI: the online audits check that a
 	@# pinned sha belongs to its action and that no pinned version has an advisory.
 	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(if $(GH_TOKEN),-e GH_TOKEN,) \
-		$$($(MAKE) -s tool-image NAME=zizmor) $(if $(GH_TOKEN),,--offline) .
-	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $$($(MAKE) -s tool-image NAME=shellcheck) $(SHELL_SCRIPTS)
-	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $$($(MAKE) -s tool-image NAME=shellcheck) --shell=bash $(ADDON_SCRIPTS)
+		$(call tool-image,zizmor) $(if $(GH_TOKEN),,--offline) .
+	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $(call tool-image,shellcheck) $(SHELL_SCRIPTS)
+	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $(call tool-image,shellcheck) --shell=bash $(ADDON_SCRIPTS)
+	@for f in Dockerfile ha-addon/*/Dockerfile; do \
+		echo "hadolint $$f"; docker run --rm -i $(call tool-image,hadolint) < "$$f" || exit 1; \
+	done
 
-tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck (.github/tools/Dockerfile)
-	@sed -n 's/^FROM \(.*\) AS $(NAME)$$/\1/p' .github/tools/Dockerfile
+# The app image the checks below look at. `make image` builds it under this name;
+# CI and the release workflows pass their own.
+IMAGE ?= wactorz:local
+
+# Refuses early, naming the image and how to get it, instead of letting docker or
+# Trivy fail on a reference that is not there.
+define require-image
+	@docker image inspect "$(IMAGE)" > /dev/null 2>&1 \
+		|| { echo "No image $(IMAGE): build it with 'make image', or pass IMAGE=<an image you have>."; exit 1; }
+endef
+
+image: ## Build the app image as CI does (the Debian upgrade stage never cached), tagged IMAGE (default wactorz:local)
+	docker build --no-cache-filter runtime -t "$(IMAGE)" .
+
+image-smoke: ## Smoke-test IMAGE beside a broker: /health and /ready on both servers, no root, no set-id
+	$(require-image)
+	scripts/image-smoke.sh "$(IMAGE)" "$(call tool-image,mosquitto)"
+
+# Fixable CRITICAL and HIGH findings fail. One that cannot be fixed here yet, such
+# as a new Debian fix the pinned base has not picked up, is accepted in
+# .trivyignore.yaml with a statement and an expiry date, never left to fail every push.
+image-scan: ## Scan IMAGE for fixable CRITICAL/HIGH vulnerabilities (accepted ones: .trivyignore.yaml)
+	$(require-image)
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+		-v "$(CURDIR)/.trivyignore.yaml:/trivyignore.yaml:ro" $(call tool-image,trivy) \
+		image --quiet --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+		--ignorefile /trivyignore.yaml --table-mode detailed --show-suppressed --exit-code 1 "$(IMAGE)"
+
+tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint|mosquitto (.github/tools/Dockerfile)
+	@echo "$(call tool-image,$(NAME))"
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 

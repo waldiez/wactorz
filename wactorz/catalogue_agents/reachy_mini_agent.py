@@ -2204,6 +2204,8 @@ async def handle_task(agent, payload):
                     "start a conversation",
                     "conversation mode",
                     "begin conversation",
+                    # What the ready message tells people to say.
+                    "start listening",
                 ):
                     payload = {"cmd": "conversation_start"}
                 elif low in _CONVERSATION_STOP_COMMANDS:
@@ -3542,7 +3544,7 @@ async def _wake(agent):
             agent.state["busy"] = False
     # wake_up ends at the neutral pose, which is a base ambient life can name.
     _note_base_pose(agent, **_life_neutral_base(), antennas=(0.0, 0.0))
-    return {}
+    return {"result": "I'm awake."}
 
 
 async def _ensure_motors_enabled(agent):
@@ -7758,7 +7760,7 @@ async def _conversation_stop(agent, payload=None):
             "state": "stopped",
             "stop_reason": reason,
             "stopped": True,
-            "result": f"Conversation stopped ({reason}).",
+            "result": "Conversation stopped.",
         }
     )
     return result

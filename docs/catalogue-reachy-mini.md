@@ -68,7 +68,8 @@ run `pip install` yourself. This is what you will see in chat:
 
 1. Straight away, a reply saying which packages it is installing. The whole install takes
    a few minutes, longer on a Home Assistant box or a slow connection.
-2. One line per package as it installs, for example `Installing reachy-mini==1.8.4 (1/4)`.
+2. One line per package as it installs, for example
+   `Installing reachy-mini==1.8.4 (1/6) for reachy-mini…`.
 3. Then one of these:
    - **"reachy-mini spawned and running"**: go on to step 3.
    - **"…restart Wactorz once to finish; reachy-mini will start by itself after the
@@ -130,8 +131,8 @@ sent to it.
    ```
 
    `listen and ask Wactorz` records five seconds, then answers out loud.
-   `start conversation` keeps listening until you say "goodbye" or send
-   `@reachy-mini stop conversation`.
+   `start conversation` (or `start listening`) keeps listening until you say
+   "goodbye" or send `@reachy-mini stop conversation`.
 
 To keep audio on your own computer instead, use the local recognizer described in
 [Push-to-talk voice input](#push-to-talk-voice-input).
@@ -159,6 +160,7 @@ To keep audio on your own computer instead, use the local recognizer described i
 | Reachy talks but does not move | Close the Reachy Mini control app, then send `@reachy-mini reconnect`. |
 | Reachy's voice is quiet | Install ffmpeg, see [make Reachy's voice louder](#optional-make-reachys-voice-louder-with-ffmpeg), or say `presenter mode`. |
 | Voice input says `DEEPGRAM_API_KEY` is required | Do [step 5](#5-optional-talk-to-reachy). |
+| The Wactorz log shows `ERROR … No Reachy Mini Audio USB device found!` at startup | Harmless on Reachy Mini Wireless: the robot SDK first looks for the Lite's USB audio. |
 | Reachy stops talking in the middle of a sentence | Check the Wactorz log at that moment for `Reachy motor link is down`, and report it with the lines around it. |
 
 ## If Reachy does not connect

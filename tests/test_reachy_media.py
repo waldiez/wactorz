@@ -808,8 +808,23 @@ class MotorsCommandTest(unittest.TestCase):
         mini.wake_up = lambda *a, **k: order.append("wake")
         agent.state["motion_lock"] = asyncio.Lock()
         agent.state["busy"] = False
-        _run(NS["_dispatch"](agent, "wake", {}, return_result=True))
+        result = _run(NS["_dispatch"](agent, "wake", {}, return_result=True))
         self.assertEqual(order, ["enable", "wake"])  # torque on, THEN move
+        # Chat shows this; without it the reply was the raw result dict.
+        self.assertEqual(result["result"], "I'm awake.")
+
+    def test_the_phrase_the_ready_message_suggests_starts_a_conversation(self):
+        agent = self._agent()
+        dispatched = []
+
+        async def capture(_agent, cmd, payload, return_result=False):
+            dispatched.append(cmd)
+            return {"ok": True, "cmd": cmd}
+
+        with mock.patch.dict(NS, {"_dispatch": capture}):
+            _run(NS["handle_task"](agent, {"text": "start listening"}))
+
+        self.assertEqual(dispatched, ["conversation_start"])
 
 
 class ShutupTest(unittest.TestCase):

@@ -674,6 +674,11 @@ class Supervisor:
     async def _restart_one(self, name: str, spec: SupervisedSpec, crashed: bool = True):
         """Restart one actor, after a delay that grows while it keeps crashing.
 
+        The old actor is stopped before the wait, not after it. A FAILED actor
+        has ended its message loop, but its subscriptions, stream windows and
+        command listener run on until it is stopped, and a delay in slow retry
+        is long enough for them to go on acting on whatever arrives.
+
         A failed respawn leaves the spec without an actor, which the watch loop
         reads as a crash on its next poll: it waits out the next, longer delay
         rather than retrying at the poll's pace.
@@ -690,6 +695,12 @@ class Supervisor:
                     severity="critical",
                 )
 
+        # Stopped before the wait, so that nothing of it keeps running through
+        # the delay; the spec holds the restart task, which is what tells the
+        # watch loop that an entry with no actor is being seen to.
+        if spec.actor:
+            await self._stop_actor(name, spec)
+
         delay = self._restart_delay(spec, crashed)
         if delay > 0:
             logger.info("[Supervisor] Restarting '%s' in %.0fs.", name, delay)
@@ -703,10 +714,6 @@ class Supervisor:
             return
 
         logger.info("[Supervisor] Restarting '%s' (crash %s in a row).", name, spec.crash_streak)
-
-        # Stop the old actor cleanly if possible
-        if spec.actor:
-            await self._stop_actor(name, spec)
 
         # Spawn a fresh one. A failure leaves the spec with no actor, which the
         # watch loop reads as another crash and retries after a longer delay.

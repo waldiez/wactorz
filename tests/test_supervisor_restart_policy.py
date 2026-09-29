@@ -330,6 +330,28 @@ class TestAStrategyHoldsItsGroup:
         assert supervisor._specs["b"].crash_streak == 0
 
 
+class TestTheCrashedActorIsStoppedFirst:
+    async def test_it_is_stopped_before_the_wait_not_after_it(self, supervisor: Supervisor) -> None:
+        # A FAILED actor's subscriptions, windows and command listener run on
+        # until it is stopped, and a wait in slow retry is minutes to an hour.
+        spec = _spec(supervisor, restart_delay=30)
+        _crashed(spec)
+        old = spec.actor
+        assert old is not None
+        await supervisor._registry.register(old)
+
+        _watch(supervisor)
+        try:
+            # Cleared last, once the actor is stopped and unregistered.
+            await _until(lambda: spec.actor is None)
+
+            assert old.state == ActorState.STOPPED
+            assert supervisor._registry.find_by_name("w") is None
+            assert spec.restarting is True  # still waiting out its delay
+        finally:
+            await supervisor.stop()
+
+
 class TestRestartsRunOnTheirOwn:
     async def test_a_long_delay_does_not_hold_up_the_others(self, supervisor: Supervisor) -> None:
         waiting = _spec(supervisor, "waiting", restart_delay=30)

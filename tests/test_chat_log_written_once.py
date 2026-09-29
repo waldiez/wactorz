@@ -142,7 +142,9 @@ class TestAStreamedTurn:
     async def test_is_recorded_like_a_whole_one(self, db: WactorzDB, tmp_path: Path) -> None:
         await _stream_turn(_agent(_Streams(), tmp_path), "hello")
 
-        rows = sorted(db.query_chat_log(), key=lambda row: row["ts"])
+        # By id, not timestamp: two rows written within one tick of a coarse
+        # clock share a `ts`, and the query returns newest first.
+        rows = sorted(db.query_chat_log(), key=lambda row: row["id"])
         assert [(row["role"], row["content"]) for row in rows] == [
             ("user", "hello"),
             ("assistant", "ab"),

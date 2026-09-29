@@ -38,11 +38,10 @@ Outside wactorz:
 
     NO HF App may be running on the robot — Apps take exclusive control.
 
-    ffmpeg (OPTIONAL system binary) — only used to boost the TTS loudness
-           (~3-4x). If it is missing or fails, `say` still works: it just plays
-           the raw, quieter edge-tts audio and says so once. Install it on the
-           host if room/audience-level speech is too quiet; the Home Assistant
-           add-on image does not carry it.
+    ffmpeg (OPTIONAL system binary) — only used to boost the TTS loudness.
+           Without it `say` still works, a little quieter, and Reachy explains
+           once in chat how to install it on the host running Wactorz. The Home
+           Assistant add-on image does not carry it.
 
 SPAWN
 ─────
@@ -182,6 +181,7 @@ import random
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -677,6 +677,11 @@ async def _health(agent, payload=None) -> dict[str, Any]:
         parts.append(
             "This wireless connection cannot provide live motor-fault warnings"
         )
+    boost = bool(_ffmpeg_path())
+    if not boost:
+        parts.append(
+            "My voice boost is off because ffmpeg isn't installed on the computer running Wactorz"
+        )
     # Said plainly rather than left to be inferred from an absent number.
     parts.append("Reachy Mini doesn't provide a battery reading")
 
@@ -690,6 +695,7 @@ async def _health(agent, payload=None) -> dict[str, Any]:
         "watching_faults": watching,
         "fault_watch_configured": watch_configured,
         "battery": None,
+        "loudness_boost": boost,
         "result": ". ".join(parts) + ".",
     }
 
@@ -5199,12 +5205,13 @@ def _speech_duration_seconds(text, speech_ticks):
     return max(0.6, words / 2.6, len(value) / 15.0)
 
 
-def _edge_tts_communicate(edge_tts, text, voice):
+def _edge_tts_communicate(edge_tts, text, voice, volume=None):
     """Request word timing when supported, retaining older edge-tts support."""
+    extra = {"volume": volume} if volume else {}
     try:
-        return edge_tts.Communicate(text, voice, boundary="WordBoundary")
+        return edge_tts.Communicate(text, voice, boundary="WordBoundary", **extra)
     except TypeError:
-        return edge_tts.Communicate(text, voice)
+        return edge_tts.Communicate(text, voice, **extra)
 
 
 async def _wait_for_barge_guard(cancel, seconds):
@@ -5439,7 +5446,12 @@ async def _prepare_speech(agent, text: str, payload: dict[str, Any]) -> dict[str
         raise RuntimeError("edge-tts not installed — pip install edge-tts") from error
 
     raw_path = os.path.join(tempfile.gettempdir(), f"reachy_say_{uuid.uuid4().hex}.mp3")
-    communicate = _edge_tts_communicate(edge_tts, text, voice)
+    # Without ffmpeg there is no boost after synthesis, so ask edge-tts for
+    # the loudest clean speech it can make itself.
+    louder = bool(payload.get("loud", True)) and not _ffmpeg_path()
+    communicate = _edge_tts_communicate(
+        edge_tts, text, voice, volume=_TTS_VOLUME_WITHOUT_BOOST if louder else None
+    )
     # Stream (what .save() does internally) so we can capture the total speech
     # duration from the WordBoundary offsets for free — used to wait out
     # playback so sequential says don't cut each other off.
@@ -5710,29 +5722,67 @@ async def _say(agent, payload):
     }
 
 
+#: How much louder edge-tts makes speech itself when ffmpeg cannot boost it.
+#: Synthesis stops at the loudest clean peak, so a larger value changes nothing;
+#: the ffmpeg boost goes further by compressing the quiet parts.
+_TTS_VOLUME_WITHOUT_BOOST = "+50%"
+
+
+def _ffmpeg_path():
+    """Where the ffmpeg binary is on this host, or None."""
+    return shutil.which("ffmpeg")
+
+
+def _quiet_voice_advice():
+    """What to do about speech without the loudness boost, on this host."""
+    if os.environ.get("SUPERVISOR_TOKEN"):
+        # Set by the Home Assistant Supervisor for every add-on.
+        return (
+            "The Home Assistant add-on can't install ffmpeg, so turn Reachy up "
+            'instead: say "presenter mode" or "speak louder".'
+        )
+    if sys.platform == "win32":
+        command = "winget install ffmpeg"
+    elif sys.platform == "darwin":
+        command = "brew install ffmpeg"
+    else:
+        command = "sudo apt install ffmpeg"
+    return (
+        f"To turn the boost on, run `{command}` on the computer running Wactorz "
+        "(not on the robot), then restart Wactorz. Or turn Reachy up: say "
+        '"presenter mode" or "speak louder".'
+    )
+
+
+async def _explain_quiet_voice(agent):
+    """Say once per session, in chat, why Reachy is quieter and what fixes it."""
+    if agent.state.get("_ffmpeg_missing_logged"):
+        return
+    agent.state["_ffmpeg_missing_logged"] = True
+    text = (
+        "Reachy's voice is a little quieter than it can be: the loudness boost "
+        "needs ffmpeg, which isn't installed on the computer running Wactorz. "
+        "Speech works without it. " + _quiet_voice_advice()
+    )
+    await agent.log(text, level="info")
+    notify = getattr(agent, "notify_user", None)
+    if notify is not None:
+        await notify(text)
+
+
 async def _boost_audio(agent, src_path, attenuation_db=0.0):
     """Compress + limit speech to the loudest clean level via ffmpeg.
 
     Returns the path to a new boosted MP3, or None if ffmpeg is unavailable or
-    fails (caller falls back to the raw file). Raw edge-tts is ~-22 dB mean;
-    the chain brings it to ~-11 dB at the digital ceiling (roughly 3-4x
-    perceived loudness) — that's the maximum. attenuation_db (<=0) dials the
-    final level DOWN from there for quieter playback.
+    fails (caller falls back to the raw file). The chain brings speech to the
+    digital ceiling, which is as loud as the file can be; attenuation_db (<=0)
+    dials the final level DOWN from there for quieter playback.
     """
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _ffmpeg_path()
     if not ffmpeg:
-        # Not an error: speech already synthesized fine and WILL play — ffmpeg only
-        # makes it louder. Say so clearly, and only once per session so a tester
-        # isn't spooked by a warning on every single utterance.
-        if not agent.state.get("_ffmpeg_missing_logged"):
-            agent.state["_ffmpeg_missing_logged"] = True
-            await agent.log(
-                "ffmpeg not installed — Reachy will still speak, just at a lower "
-                "volume (the optional loudness boost is skipped). Install ffmpeg on "
-                "this host if the speech is too quiet for the room. This is the only "
-                "time this notice will be logged.",
-                level="info",
-            )
+        # Not an error: speech already synthesized fine and WILL play, just
+        # quieter. Explained once, in chat, where the person who can fix it is.
+        await _explain_quiet_voice(agent)
         return None
     af = "acompressor=threshold=-20dB:ratio=9:attack=5:release=50:makeup=10,alimiter=limit=0.97"
     attenuation_db = min(0.0, float(attenuation_db))

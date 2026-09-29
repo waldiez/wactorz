@@ -180,9 +180,13 @@ voice setup is optional and comes later.</p>
 <div class="highlight"><pre><span></span><code>@catalog spawn reachy-mini
 </code></pre></div>
 
-<p>The first launch may pause while Wactorz installs the robot and voice packages. Wait for
-the dashboard to say that Reachy Mini started and then report whether the robot connection
-is ready. You do not need to run <code>pip install</code> yourself for the normal setup.</p>
+<p>The first launch installs the robot and voice packages, which takes a few minutes (about
+3 on a fast connection, longer on a Home Assistant box). The chat says so straight away and
+names each package as it installs; you do not need to run <code>pip install</code> yourself.</p>
+<p>The robot SDK needs an older <code>websockets</code> than the one Wactorz starts with, and Python
+cannot swap a loaded package while it runs. So on a first install the chat will usually
+ask you to <strong>restart Wactorz once</strong>. Reachy Mini starts by itself after that restart, and
+later spawns skip the install.</p>
 <h3 id="3-check-the-connection">3. Check the connection</h3>
 <p>Send:</p>
 <div class="highlight"><pre><span></span><code>@reachy-mini health
@@ -253,9 +257,38 @@ the environment yourself, install them with:</p>
 
 <p><code>edge-tts</code> enables speech. Deepgram is used only for voice input and needs an API key;
 text control and speech output do not need one.</p>
-<p>Optional: install the <code>ffmpeg</code> system binary on the Wactorz host if synthesized speech is
-too quiet. Without it, speech still works, but plays at its original, quieter level. The
-Home Assistant add-on image does not include <code>ffmpeg</code>.</p>
+<h3 id="optional-make-reachys-voice-louder-with-ffmpeg">Optional: make Reachy's voice louder with ffmpeg</h3>
+<p>Reachy speaks without <code>ffmpeg</code>. With it, speech gets a loudness boost that makes it
+clearly louder, which helps in a noisy room or in front of an audience. Without it, Reachy
+asks the speech service for its loudest clean voice instead, which is louder than plain
+speech but not as loud as the boost.</p>
+<p>If <code>ffmpeg</code> is missing, Reachy says so once in chat, the first time it speaks, with the
+command for your system. <code>@reachy-mini health</code> also says whether the boost is on.</p>
+<p>Install it on the <strong>computer running Wactorz</strong>, not on the robot, then restart Wactorz:</p>
+<table>
+<thead>
+<tr>
+<th>System</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows</td>
+<td><code>winget install ffmpeg</code></td>
+</tr>
+<tr>
+<td>macOS</td>
+<td><code>brew install ffmpeg</code></td>
+</tr>
+<tr>
+<td>Debian, Ubuntu, Raspberry Pi OS</td>
+<td><code>sudo apt install ffmpeg</code></td>
+</tr>
+</tbody>
+</table>
+<p>The Home Assistant add-on cannot install <code>ffmpeg</code>. There, turn Reachy up instead: say
+<code>presenter mode</code> or <code>speak louder</code>.</p>
 <h2 id="hardware-warnings-and-what-reachy-can-tell-you-about-itself">Hardware warnings and what Reachy can tell you about itself</h2>
 <p>Say <code>are you overheating</code> (or <code>health</code>, <code>how are you feeling</code>, <code>battery</code>) for what the
 robot reports about its own condition.</p>

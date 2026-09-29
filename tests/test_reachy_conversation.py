@@ -1019,13 +1019,27 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
 
         agent.state["motor_fault_watch_connected"] = True
 
-        result = await NS["_health"](agent)
+        with mock.patch.dict(NS, {"_ffmpeg_path": lambda: "/usr/bin/ffmpeg"}):
+            result = await NS["_health"](agent)
 
         self.assertEqual(
             result["result"],
             "I'm connected to my body. My live motor-fault monitor has not seen a fault. "
             "Reachy Mini doesn't provide a battery reading.",
         )
+
+    async def test_health_says_when_the_voice_boost_is_off(self):
+        agent = FakeAgent()
+        agent.state["mini"] = types.SimpleNamespace(
+            media=types.SimpleNamespace(audio=types.SimpleNamespace(daemon_url="")),
+            get_imu_data=dict,
+        )
+
+        with mock.patch.dict(NS, {"_ffmpeg_path": lambda: None}):
+            result = await NS["_health"](agent)
+
+        self.assertFalse(result["loudness_boost"])
+        self.assertIn("voice boost is off because ffmpeg isn't installed", result["result"])
 
     async def test_health_does_not_call_an_unread_fault_monitor_all_clear(self):
         agent = FakeAgent()
@@ -1036,7 +1050,8 @@ class ConversationTest(unittest.IsolatedAsyncioTestCase):
             get_imu_data=dict,
         )
 
-        result = await NS["_health"](agent)
+        with mock.patch.dict(NS, {"_ffmpeg_path": lambda: "/usr/bin/ffmpeg"}):
+            result = await NS["_health"](agent)
 
         self.assertIn("I cannot currently read the live motor-fault monitor", result["result"])
         self.assertNotIn("has not seen a fault", result["result"])

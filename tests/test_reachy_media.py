@@ -20,6 +20,7 @@ import asyncio
 import base64
 import io
 import math
+import os
 import sys
 import types
 import unittest
@@ -114,6 +115,7 @@ class FakeAgent:
     calls: list[str]
     sent: list[tuple[Any, ...]]
     send_to: Callable[..., Awaitable[Any]]
+    notify_user: Callable[..., Awaitable[None]]
 
     def __init__(self, media):
         self.state = {
@@ -593,6 +595,108 @@ class SayPlaybackPadTest(unittest.TestCase):
 
         self.assertEqual(result, "legacy")
         self.assertEqual(calls, [{"boundary": "WordBoundary"}, {}])
+
+
+class QuietVoiceTest(unittest.TestCase):
+    """Speech without ffmpeg: a little quieter, louder synthesis, explained once."""
+
+    @staticmethod
+    def _agent():
+        agent = FakeAgent(FakeMedia())
+        told: list[str] = []
+
+        async def notify(text, **_extra):
+            told.append(text)
+
+        agent.notify_user = notify
+        return agent, told
+
+    def test_the_missing_boost_is_explained_once_in_chat(self):
+        agent, told = self._agent()
+
+        with mock.patch.dict(NS, {"_ffmpeg_path": lambda: None}):
+            first = _run(NS["_boost_audio"](agent, "/tmp/first.mp3"))
+            _run(NS["_boost_audio"](agent, "/tmp/second.mp3"))
+
+        self.assertIsNone(first)
+        (notice,) = told
+        self.assertIn("isn't installed on the computer running Wactorz", notice)
+        self.assertIn("Speech works without it", notice)
+
+    def test_the_advice_names_this_platforms_install_command(self):
+        cases = (
+            ("win32", "winget install ffmpeg"),
+            ("darwin", "brew install ffmpeg"),
+            ("linux", "sudo apt install ffmpeg"),
+        )
+        for platform, command in cases:
+            with (
+                self.subTest(platform=platform),
+                mock.patch.object(sys, "platform", platform),
+                mock.patch.dict(os.environ),
+            ):
+                os.environ.pop("SUPERVISOR_TOKEN", None)
+                advice = NS["_quiet_voice_advice"]()
+
+                self.assertIn(command, advice)
+                self.assertIn("restart Wactorz", advice)
+
+    def test_the_add_on_is_told_to_turn_reachy_up_instead(self):
+        # Nobody can install a system package inside the add-on's image.
+        with mock.patch.dict(os.environ, {"SUPERVISOR_TOKEN": "token"}):
+            advice = NS["_quiet_voice_advice"]()
+
+        self.assertIn("add-on can't install ffmpeg", advice)
+        self.assertIn("presenter mode", advice)
+        self.assertNotIn("apt", advice)
+
+    def _synthesized_volumes(self, ffmpeg):
+        volumes = []
+
+        class _Communicate:
+            async def stream(self):
+                yield {"type": "audio", "data": b"\x00"}
+
+        def communicate(_edge_tts, _text, _voice, volume=None):
+            volumes.append(volume)
+            return _Communicate()
+
+        async def no_boost(_agent, _path, _trim=0.0):
+            return None
+
+        agent, _told = self._agent()
+        with (
+            mock.patch.dict(sys.modules, {"edge_tts": types.SimpleNamespace()}),
+            mock.patch.dict(
+                NS,
+                {
+                    "_edge_tts_communicate": communicate,
+                    "_ffmpeg_path": lambda: ffmpeg,
+                    "_boost_audio": no_boost,
+                },
+            ),
+        ):
+            prepared = _run(NS["_prepare_speech"](agent, "Hello there.", {}))
+        os.unlink(prepared["play_path"])
+        return volumes
+
+    def test_without_ffmpeg_synthesis_asks_for_louder_speech(self):
+        self.assertEqual(self._synthesized_volumes(None), [NS["_TTS_VOLUME_WITHOUT_BOOST"]])
+
+    def test_with_ffmpeg_synthesis_is_left_to_the_boost(self):
+        self.assertEqual(self._synthesized_volumes("/usr/bin/ffmpeg"), [None])
+
+    def test_edge_tts_is_asked_for_the_volume_alongside_word_timing(self):
+        calls = []
+
+        def communicate(text, voice, **kwargs):
+            calls.append(kwargs)
+            return "communicate"
+
+        edge_tts = types.SimpleNamespace(Communicate=communicate)
+        NS["_edge_tts_communicate"](edge_tts, "Hello", "voice", volume="+50%")
+
+        self.assertEqual(calls, [{"boundary": "WordBoundary", "volume": "+50%"}])
 
 
 class ConnectionModeTest(unittest.TestCase):

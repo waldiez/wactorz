@@ -146,9 +146,26 @@ pip install "reachy-mini==1.8.4" numpy edge-tts pillow webrtcvad-wheels "deepgra
 `edge-tts` enables speech. Deepgram is used only for voice input and needs an API key;
 text control and speech output do not need one.
 
-Optional: install the `ffmpeg` system binary on the Wactorz host if synthesized speech is
-too quiet. Without it, speech still works, but plays at its original, quieter level. The
-Home Assistant add-on image does not include `ffmpeg`.
+### Optional: make Reachy's voice louder with ffmpeg
+
+Reachy speaks without `ffmpeg`. With it, speech gets a loudness boost that makes it
+clearly louder, which helps in a noisy room or in front of an audience. Without it, Reachy
+asks the speech service for its loudest clean voice instead, which is louder than plain
+speech but not as loud as the boost.
+
+If `ffmpeg` is missing, Reachy says so once in chat, the first time it speaks, with the
+command for your system. `@reachy-mini health` also says whether the boost is on.
+
+Install it on the **computer running Wactorz**, not on the robot, then restart Wactorz:
+
+| System | Command |
+|---|---|
+| Windows | `winget install ffmpeg` |
+| macOS | `brew install ffmpeg` |
+| Debian, Ubuntu, Raspberry Pi OS | `sudo apt install ffmpeg` |
+
+The Home Assistant add-on cannot install `ffmpeg`. There, turn Reachy up instead: say
+`presenter mode` or `speak louder`.
 
 ## Hardware warnings and what Reachy can tell you about itself
 

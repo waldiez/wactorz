@@ -41,7 +41,12 @@ _shutting_down = threading.Event()
 
 
 async def _start_web_ui(
-    port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None
+    port: int,
+    mqtt_broker: str,
+    mqtt_port: int,
+    actor_registry=None,
+    persistence_db=None,
+    system: "ActorSystem | None" = None,
 ) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
     from wactorz.web.app import main as run_server
@@ -53,6 +58,8 @@ async def _start_web_ui(
     # Wire the registry in so chat is routed directly
     if actor_registry is not None:
         runtime.set_registry(actor_registry)
+    if system is not None:
+        runtime.set_system(system)
     if persistence_db is not None:
         runtime.set_db(persistence_db)
 
@@ -375,6 +382,7 @@ async def build_system(
             mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
             actor_registry=system.registry,
             persistence_db=_db,
+            system=system,
         )
 
     # After the stores exist and before the agents that write to them: the
@@ -561,7 +569,7 @@ async def app(args: argparse.Namespace):
                 await asyncio.gather(system.run_forever(), *_run_all(companions))
         elif interface == "rest":
             port = args.port or CONFIG.port
-            iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
+            iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key, system=system)
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "discord":
             discord_token = args.discord_token or CONFIG.discord_token

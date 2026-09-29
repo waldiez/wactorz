@@ -30,6 +30,7 @@ from . import (
     login,
     mqtt,
     origins,
+    probes,
     runtime,
     sessions,
     static_site,
@@ -75,8 +76,12 @@ def build_app() -> web.Application:
         In middleware rather than per route: nearly every path below is
         registered twice, under `/api/x` and a bare `/x`, and a per-route
         decorator would guard whichever alias its author remembered.
+
+        The probes are left alone: they change nothing and say only whether the
+        process is up, and a load balancer or an orchestrator asks under a name
+        of its own.
         """
-        refusal = origins.refuse(request)
+        refusal = None if request.path in probes.PROBE_PATHS else origins.refuse(request)
         if refusal is not None:
             return refusal
 
@@ -102,7 +107,10 @@ def build_app() -> web.Application:
     app[contract.ACTOR_REGISTRY] = runtime.registry
 
     app.router.add_get("/", static_site.index_handler)
-    app.router.add_get("/health", api_system.health_handler)
+    for path in sorted(probes.LIVENESS_PATHS):
+        app.router.add_get(path, probes.liveness_handler)
+    for path in sorted(probes.READINESS_PATHS):
+        app.router.add_get(path, api_system.readiness_handler)
     # Sign-in. Exempt from the key check and from nothing else — `POST /login`
     # stays inside the origin gate, which is what stands in for a CSRF token.
     app.router.add_get("/login", login.login_page_handler)

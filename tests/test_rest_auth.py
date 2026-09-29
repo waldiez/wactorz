@@ -16,7 +16,7 @@ from wactorz.interfaces.chat.rest import RESTInterface
 
 API_KEY = "secret-key"
 
-# Every route the interface serves, minus /health. Kept explicit so a route
+# Every route the interface serves, minus the probes. Kept explicit so a route
 # added without a matching guard shows up as a failure here.
 GUARDED_GET_PATHS = [
     "/metrics",

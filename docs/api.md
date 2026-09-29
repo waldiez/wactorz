@@ -17,9 +17,37 @@ Both publish to the same MQTT broker, so external clients can mix and match.
 
 Base URL: `http://localhost:8888/`. Most endpoints accept both `/api/<path>` and `/<path>`; `/api/tts` and `/api/reset` are `/api/`-only.
 
-### `GET /health`
+### `GET /health` · `/healthz` · `/livez`
 
-Liveness probe. Returns `200 OK` with `{"status": "ok"}`.
+Liveness probe. Returns `200 OK` with `{"status": "ok"}` whenever the process can
+answer. It depends on nothing outside the process, so a broker or Home Assistant
+outage never fails it: acting on a liveness failure means restarting, and a restart
+would not bring the broker back.
+
+### `GET /ready` · `/readyz`
+
+Readiness probe. Returns `200 OK` once this process should be sent traffic, and
+`503 Service Unavailable` until then, naming each check:
+
+```json
+{"status": "not ready", "checks": {"supervisor": "ok", "main": "ok", "broker": "disconnected", "database": "ok"}}
+```
+
+| Check | Passes when |
+|---|---|
+| `supervisor` | The supervision tree has started and shutdown has not begun (`not started`, `stopping`) |
+| `main` | The `main` agent is running (`missing`, or its state: `failed`, `idle`, `stopped`) |
+| `broker` | The connection to the MQTT broker is up (`disconnected`) |
+| `database` | SQLite answers a query within 2 seconds (`not open`, `unavailable`) |
+
+A monitor started on its own, with no agents in its process, reports only
+`broker`, for the connection it listens on. Agents that depend on Home Assistant
+or a device are not checked: the supervisor restarts them, and chat keeps working
+while it does.
+
+Every probe path is reachable without a key and under any host name, and is sent
+with `Cache-Control: no-store`. The `z` spellings follow the Kubernetes
+convention.
 
 ---
 
@@ -226,7 +254,8 @@ Started with `wactorz --interface rest --port 8000`. Endpoints are at bare paths
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | `{"status": "ok"}` |
+| `GET` | `/health`, `/healthz`, `/livez` | Liveness: `{"status": "ok"}` |
+| `GET` | `/ready`, `/readyz` | Readiness: `200` or `503`, same body as the monitor's |
 | `GET` | `/metrics` | Prometheus format |
 | `GET` | `/ha-map` | HA map snapshot |
 | `GET` | `/actors` | List actors |
@@ -246,7 +275,7 @@ Started with `wactorz --interface rest --port 8000`. Endpoints are at bare paths
 
 #### Authentication
 
-Set `API_KEY` in `.env` to require a key on **every** route except `/health`. Both
+Set `API_KEY` in `.env` to require a key on **every** route except the probes. Both
 `X-API-Key` and `Authorization: Bearer` are accepted. With no key set the API is
 open, which is why the default bind is loopback:
 

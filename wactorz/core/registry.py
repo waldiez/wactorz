@@ -845,6 +845,15 @@ class Supervisor:
 
     # ── Introspection ─────────────────────────────────────────────────────────
 
+    @property
+    def running(self) -> bool:
+        """Whether the supervised actors have started and are being watched.
+
+        False before :meth:`start` has finished and from the moment :meth:`stop`
+        begins, which is what a readiness probe needs to know.
+        """
+        return self._watch_task is not None and not self._watch_task.done()
+
     def status(self) -> list[dict]:
         """Return a snapshot of all supervised actors for dashboard/CLI."""
         result = []
@@ -916,6 +925,8 @@ class ActorSystem:
         self._mqtt_port = mqtt_port
         self._mqtt_client = None
         self._running = False
+        #: Set as shutdown begins and never cleared: a system is not started twice.
+        self.stopping = False
         self._supervisor: Supervisor | None = None
         self._state_dir = resolve_state_dir(state_dir)
         # Created in start(), which is the first point an MQTT client exists to
@@ -987,6 +998,7 @@ class ActorSystem:
     async def stop_all(self):
         """Shut everything down in reverse: supervisor, actors, then MQTT."""
         self._running = False
+        self.stopping = True
         # Stop supervisor first so it doesn't try to restart actors we're about to stop
         if self._supervisor:
             await self._supervisor.stop()

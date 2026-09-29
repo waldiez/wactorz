@@ -16,16 +16,17 @@ from aiohttp.web_response import Response
 from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...core.actor import forbidden
 from ...monitoring import PrometheusMonitor
-from ...web import origins
+from ...web import origins, probes
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
     from ...core.actor import Actor
+    from ...core.registry import ActorSystem
 
 logger = logging.getLogger(__name__)
 
 # Reachable without a key so container and uptime probes keep working.
-UNGUARDED_PATHS = frozenset({"/health"})
+UNGUARDED_PATHS = probes.PROBE_PATHS
 
 
 async def _json_object(request: Request) -> dict[str, Any] | None:
@@ -47,11 +48,18 @@ class RESTInterface:
     """
 
     def __init__(
-        self, main_actor: "MainActor", port: int = 8000, api_key: str | None = None
+        self,
+        main_actor: "MainActor",
+        port: int = 8000,
+        api_key: str | None = None,
+        system: "ActorSystem | None" = None,
     ) -> None:
         self.agent = main_actor
         self.port = port
         self.api_key = api_key
+        #: What the readiness probe reports on. Without one, this interface was
+        #: built outside a running system and is never ready.
+        self.system = system
         self._monitor = PrometheusMonitor(lambda: getattr(self.agent, "_registry", None))
 
     def _authorized(self, request: Request) -> bool:
@@ -244,8 +252,10 @@ class RESTInterface:
                 return web.Response(status=404, text="actor not found")
             return web.json_response(self._metrics_payload(actor))
 
-        async def health_endpoint(request: Request) -> Response:
-            return web.json_response({"status": "ok"})
+        async def readiness_endpoint(request: Request) -> Response:
+            if self.system is None:
+                return probes.readiness_response({"supervisor": "not started"})
+            return probes.readiness_response(await probes.readiness(self.system))
 
         async def prometheus_metrics_endpoint(request: Request) -> Response:
             return self._monitor.metrics_response()
@@ -292,7 +302,10 @@ class RESTInterface:
             middlewares=[self._monitor.middleware, origin_middleware, auth_middleware],
             client_max_size=MAX_REQUEST_BYTES,
         )
-        app.router.add_get("/health", health_endpoint)
+        for path in sorted(probes.LIVENESS_PATHS):
+            app.router.add_get(path, probes.liveness_handler)
+        for path in sorted(probes.READINESS_PATHS):
+            app.router.add_get(path, readiness_endpoint)
         app.router.add_get("/metrics", prometheus_metrics_endpoint)
         app.router.add_get("/ha-map", ha_map_latest_endpoint)
         app.router.add_get("/actors", agents_endpoint)

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     import aiomqtt
 
     from wactorz.core.persistence import WactorzDB
-    from wactorz.core.registry import ActorRegistry
+    from wactorz.core.registry import ActorRegistry, ActorSystem
 
 # ── Injected config (app.py overwrites these at boot from CLI/env) ───────────
 MQTT_BROKER = "localhost"
@@ -37,6 +37,10 @@ IO_GATEWAY_ID = "io-gateway"
 # None  → no registry wired; the dashboard renders MQTT-reported state only
 # <registry> → direct mode (Option B)
 registry: "ActorRegistry | None" = None
+
+# The actor system this monitor serves, for the readiness probe. None when the
+# monitor runs on its own, with no actors in its process.
+system: "ActorSystem | None" = None
 
 # Used to query historical cost data for deleted agents.
 db: "WactorzDB | None" = None
@@ -113,6 +117,12 @@ def set_registry(value) -> None:
     """Inject the actor registry (direct mode)."""
     global registry
     registry = value
+
+
+def set_system(value) -> None:
+    """Inject the actor system, whose state the readiness probe reports."""
+    global system
+    system = value
 
 
 def set_db(value) -> None:

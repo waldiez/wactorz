@@ -71,7 +71,8 @@ wactorz --interface rest --port 8000
 |--------|------|-------------|
 | `POST` | `/chat` | Send a message. Body: `{"message": "..."}`. Returns a buffered JSON response. |
 | `GET` | `/agents` | List all registered agents with their status. |
-| `GET` | `/health` | System health check. |
+| `GET` | `/health`, `/healthz`, `/livez` | Liveness: 200 whenever the process can answer. |
+| `GET` | `/ready`, `/readyz` | Readiness: 200 once agents, broker and database are up, 503 naming what is not. |
 | `GET` | `/metrics` | Prometheus-format HTTP and actor metrics. |
 | `GET` | `/ha-map` | Latest Home Assistant map snapshot, if available. |
 | `GET` | `/actors` | Alias for `/agents`. |

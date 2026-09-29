@@ -53,7 +53,7 @@ This is availability monitoring, not deep service-specific exporter telemetry.
 ## Authentication
 
 `/metrics` is served by the API on port 8000, and once `API_KEY` is set every
-route there except `/health` requires it. An unauthenticated scrape gets `401`
+route there except the health probes requires it. An unauthenticated scrape gets `401`
 and the target goes down with nothing written to the log, so a keyed install
 loses its metrics silently unless the scrape carries the key.
 

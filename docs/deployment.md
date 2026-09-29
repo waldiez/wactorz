@@ -63,6 +63,33 @@ docker compose --profile python up -d
 # Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)
 ```
 
+### Health probes
+
+Both servers answer the same probes, with no key:
+
+- `/health` (also `/healthz`, `/livez`) is **liveness**. It fails only when the
+  process cannot answer, which is what the compose files and the image's
+  `HEALTHCHECK` restart on.
+- `/ready` (also `/readyz`) is **readiness**. It answers `503` while the agents
+  start or stop, and while the broker or the database is unreachable.
+
+On Kubernetes, point each probe at its own path, and give liveness a start
+period that covers startup:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /livez, port: 8888 }
+  initialDelaySeconds: 60
+  periodSeconds: 30
+readinessProbe:
+  httpGet: { path: /readyz, port: 8888 }
+  periodSeconds: 10
+```
+
+Never use `/ready` for liveness. A broker outage would then restart every
+replica in a loop, and restarting fixes nothing the broker's return would not.
+See [the API reference](api.md) for what each check means.
+
 ---
 
 ## Home Assistant add-on

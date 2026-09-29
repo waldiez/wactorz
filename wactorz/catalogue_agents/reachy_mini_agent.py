@@ -1484,9 +1484,26 @@ def _is_invented_say_plan(cmds, original_text):
     return cmd == "say" and not _is_explicit_speech_request(original_text)
 
 
+#: Whole utterances that start one-shot voice input. They name Wactorz, so the
+#: routing checks below exclude them by name; otherwise they would reach main as
+#: typed text instead of opening the microphone.
+_PUSH_TO_TALK_PHRASES = frozenset(
+    {
+        "listen and ask wactorz",
+        "listen then ask wactorz",
+        "ask wactorz by voice",
+        "voice ask wactorz",
+        "push to talk",
+        "push-to-talk",
+    }
+)
+
+
 def _explicit_interface_request(text):
     """Return text after an explicit request to route through Wactorz main."""
     raw = (text or "").strip()
+    if raw.lower().rstrip("!.?") in _PUSH_TO_TALK_PHRASES:
+        return None
     patterns = (
         r"^(?:please\s+)?ask\s+wactorz(?:\s+to)?[:,]?\s+(.+)$",
         r"^wactorz[:,]\s*(.+)$",
@@ -1502,6 +1519,8 @@ def _explicit_interface_request(text):
 def _is_wactorz_orchestration_request(text):
     """Keep framework questions away from robot and smart-home planners."""
     low = str(text or "").lower()
+    if low.strip().rstrip("!.?") in _PUSH_TO_TALK_PHRASES:
+        return False
     if "wactorz" in low:
         return True
     if not re.search(r"\bagents?\b", low):
@@ -2179,14 +2198,7 @@ async def handle_task(agent, payload):
                     payload = {"cmd": "conversation_start"}
                 elif low in _CONVERSATION_STOP_COMMANDS:
                     payload = {"cmd": "conversation_stop"}
-                elif low in (
-                    "listen and ask wactorz",
-                    "listen then ask wactorz",
-                    "ask wactorz by voice",
-                    "voice ask wactorz",
-                    "push to talk",
-                    "push-to-talk",
-                ):
+                elif low in _PUSH_TO_TALK_PHRASES:
                     payload = {"cmd": "ask_voice"}
                 elif low in (
                     "listen",

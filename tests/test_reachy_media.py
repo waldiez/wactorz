@@ -1356,6 +1356,25 @@ class AskVoiceCommandTest(unittest.TestCase):
         self.assertEqual(res["cmd"], "ask_voice")
         self.assertEqual(res["response_text"], "Done")
 
+    def test_every_push_to_talk_phrase_opens_the_microphone(self):
+        """They name Wactorz, and must not be sent to main as typed text."""
+
+        async def fake_ask(_agent, _payload):
+            return {"response_text": "Done", "result": "Done", "spoke": True}
+
+        async def must_not_bridge(_agent, text, _task_id, **_kwargs):
+            self.fail(f"push-to-talk phrase was bridged to main as text: {text!r}")
+
+        for phrase in sorted(NS["_PUSH_TO_TALK_PHRASES"]):
+            with self.subTest(phrase=phrase):
+                agent = FakeAgent(FakeMedia())
+                with mock.patch.dict(
+                    NS, {"_ask_voice": fake_ask, "_bridge_to_main": must_not_bridge}
+                ):
+                    res = _run(NS["handle_task"](agent, {"text": phrase.title() + "."}))
+
+                self.assertEqual(res["cmd"], "ask_voice")
+
 
 if __name__ == "__main__":
     unittest.main()

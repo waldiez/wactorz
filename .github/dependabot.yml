@@ -1,0 +1,40 @@
+# Proposes new releases of what CI and the images pin. Python dependencies are
+# ranges in pyproject.toml and are not listed here until a lockfile exists.
+#
+# `cooldown` holds each release back for a week: a compromised release is
+# usually found and pulled within days, and should not be proposed the day it
+# appears. `groups` makes each ecosystem one pull request a week, not one per
+# package.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The app image's base, and the tool images CI runs (.github/tools/Dockerfile).
+  # The add-on images take their base as a build argument, which this cannot read.
+  - package-ecosystem: docker
+    directories: ["/", "/.github/tools"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      images:
+        patterns: ["*"]
+
+  - package-ecosystem: bun
+    directory: /frontend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      frontend:
+        patterns: ["*"]

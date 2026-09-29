@@ -1,4 +1,5 @@
-.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt fmt-py lint lint-py format clean \
+.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
+		check fmt fmt-py lint lint-py lint-ci tool-image format clean \
         up down logs shell mqtt-certs \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
@@ -142,6 +143,22 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 	-$(PYTHON) -m ruff check wactorz --extend-select TRY,C90,PTH,T20 --ignore PTH123 --statistics
 	@echo "── gated: basedpyright (basic) ──"
 	$(PYTHON) -m basedpyright
+
+# The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
+# shebang, which shellcheck cannot place, so they are named as bash.
+SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh
+ADDON_SCRIPTS := ha-addon/wactorz/run.sh ha-addon/wactorz-ultra/run.sh
+
+lint-ci: ## Lint the GitHub workflows (zizmor) and the shell scripts (shellcheck), with the pinned tool images
+	@# Online when GH_TOKEN is set, as in CI: the online audits check that a
+	@# pinned sha belongs to its action and that no pinned version has an advisory.
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(if $(GH_TOKEN),-e GH_TOKEN,) \
+		$$($(MAKE) -s tool-image NAME=zizmor) $(if $(GH_TOKEN),,--offline) .
+	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $$($(MAKE) -s tool-image NAME=shellcheck) $(SHELL_SCRIPTS)
+	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $$($(MAKE) -s tool-image NAME=shellcheck) --shell=bash $(ADDON_SCRIPTS)
+
+tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck (.github/tools/Dockerfile)
+	@sed -n 's/^FROM \(.*\) AS $(NAME)$$/\1/p' .github/tools/Dockerfile
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 

@@ -23,17 +23,17 @@ Or via main (natural language):
 
 import asyncio
 import importlib
-import importlib.metadata
 import importlib.util
 import logging
 import pathlib
-import re
 import time
-import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
+from ..core.pip import missing_requirements
+from .dependency_install import InstallOutcome, install_for_agent
+from .dynamic import DynamicAgent
 from .lookup import find_main_actor
 
 if TYPE_CHECKING:
@@ -48,42 +48,6 @@ BETA_WARNING = (
 
 _REACHY_MINI_SDK_VERSION = "1.8.4"
 _REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
-
-_IMPORT_NAME_MAP = {
-    "scikit-learn": "sklearn",
-    "stable-baselines3": "stable_baselines3",
-    "pillow": "PIL",
-    "pyyaml": "yaml",
-    "pymupdf": "fitz",
-    "beautifulsoup4": "bs4",
-    "python-dateutil": "dateutil",
-    "typing-extensions": "typing_extensions",
-    "opencv-python": "cv2",
-    "scikit-image": "skimage",
-    "webrtcvad-wheels": "webrtcvad",
-    "deepgram-sdk": "deepgram",
-}
-
-
-def _dependency_is_satisfied(requirement: str) -> bool:
-    """Return whether a recipe dependency, including an exact pin, is installed."""
-    pip_name = re.split(r"[<>=!~;]", requirement, maxsplit=1)[0]
-    pip_name = pip_name.split("[", 1)[0].strip().lower()
-    import_name = _IMPORT_NAME_MAP.get(pip_name) or pip_name.replace("-", "_")
-    try:
-        importlib.import_module(import_name)
-    except ImportError:
-        return False
-
-    exact_version = re.search(r"(?<![<>=!~])==\s*([^,;\s]+)", requirement)
-    if exact_version is None:
-        return True
-    try:
-        installed_version = importlib.metadata.version(pip_name)
-    except importlib.metadata.PackageNotFoundError:
-        return False
-    return installed_version == exact_version.group(1)
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # RECIPE IMPORTS
@@ -634,6 +598,9 @@ class CatalogAgent(Actor):
         super().__init__(**kwargs)
         self.protected = True
         self._catalog = _build_catalog()
+        #: Recipes whose packages are being installed right now, so a second
+        #: request during a minutes-long install does not start another one.
+        self._installing: set[str] = set()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -728,11 +695,13 @@ class CatalogAgent(Actor):
             if action == "info":
                 return self._action_info(payload.get("agent", ""))
             if action == "spawn":
-                return await self._action_spawn(payload.get("agent", ""), payload)
+                return await self._action_spawn(
+                    payload.get("agent", ""), payload, background_install=True
+                )
             return {"ok": False, "message": f"Unknown action '{action}'. Use: spawn | list | info"}
 
         if isinstance(payload, dict) and "spawn" in payload and isinstance(payload["spawn"], str):
-            return await self._action_spawn(payload["spawn"], payload)
+            return await self._action_spawn(payload["spawn"], payload, background_install=True)
 
         if isinstance(payload, str):
             text = payload.strip()
@@ -752,9 +721,9 @@ class CatalogAgent(Actor):
             if cmd == "info":
                 return self._action_info(arg)
             if cmd == "spawn":
-                return await self._action_spawn(arg, {})
+                return await self._action_spawn(arg, {}, background_install=True)
             if self._resolve_name(cmd):
-                return await self._action_spawn(cmd, {})
+                return await self._action_spawn(cmd, {}, background_install=True)
 
         return self._action_list()
 
@@ -843,7 +812,19 @@ class CatalogAgent(Actor):
             )
         return {"ok": True, "message": message, "recipe": safe}
 
-    async def _action_spawn(self, name: str, payload: dict) -> dict:
+    async def _action_spawn(
+        self, name: str, payload: dict, *, background_install: bool = False
+    ) -> dict:
+        """Spawn the recipe `name`, installing its packages first when needed.
+
+        A first install can take minutes, so it is announced in chat before it
+        starts. With `background_install` (a request typed at the catalog) the
+        reply returns straight after that announcement and the outcome follows
+        in chat: the caller's own reply deadline is shorter than an install can
+        be, and a reply that outlasts it reads as the catalog not responding.
+        Callers that need the running agent back leave it off and wait for the
+        real answer.
+        """
         if not name:
             return {"ok": False, "message": "Provide 'agent' name to spawn"}
 
@@ -914,94 +895,116 @@ class CatalogAgent(Actor):
                     return {"ok": True, "message": msg, "agent": resolved}
                 return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
-            from .dynamic import DynamicAgent
-
-            install = recipe.get("install", [])
-            if install:
-                # Fast-path: check which packages are already importable.
-                # Avoids a 120s installer wait when deps were installed in a
-                # previous session — same logic as main._spawn_dynamic_agent.
-                needed = [pkg for pkg in install if not _dependency_is_satisfied(pkg)]
-
-                if needed:
-                    installer = self._registry.find_by_name("installer") if self._registry else None
-                    if installer:
-                        logger.info(
-                            "[%s] Installing missing deps for '%s': %s", self.name, name, needed
-                        )
-                        task_id = f"cat_install_{uuid.uuid4().hex[:8]}"
-                        future = asyncio.get_running_loop().create_future()
-                        main = find_main_actor(self._registry)
-                        if main:
-                            main._result_futures[task_id] = future
-                        # Send with reply_to=main.actor_id so the installer's RESULT goes
-                        # directly to main where the future is registered.
-                        install_msg = Message(
-                            type=MessageType.TASK,
-                            sender_id=self.actor_id,
-                            reply_to=main.actor_id if main else self.actor_id,
-                            payload={
-                                "action": "install",
-                                "packages": needed,
-                                "task": task_id,
-                                "_task_id": task_id,
-                            },
-                        )
-                        await installer.receive(install_msg)
-                        try:
-                            await asyncio.wait_for(future, timeout=120.0)
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                "[%s] Install timeout for '%s' — proceeding anyway", self.name, name
-                            )
-                    else:
-                        logger.warning(
-                            "[%s] installer not found — skipping dep install for '%s'",
-                            self.name,
-                            name,
-                        )
-                else:
-                    logger.info(
-                        "[%s] All deps for '%s' already installed — skipping installer",
-                        self.name,
-                        resolved,
+            if resolved in self._installing:
+                return {
+                    "ok": True,
+                    "installing": True,
+                    "agent": resolved,
+                    "message": f"{resolved} is still installing; I'll post here when it's ready.",
+                }
+            needed = missing_requirements(recipe.get("install", []))
+            if needed:
+                heads_up = self._install_heads_up(resolved, needed)
+                if background_install:
+                    # The reply is the notice here; sending it to chat as well
+                    # would show it twice.
+                    self._installing.add(resolved)
+                    self.run_detached(
+                        self._install_then_spawn(resolved, recipe, needed, beta_warning),
+                        name=f"install-{resolved}",
                     )
+                    return {"ok": True, "installing": True, "agent": resolved, "message": heads_up}
+                await self.notify_user(heads_up)
+                self._installing.add(resolved)
+                try:
+                    outcome = await install_for_agent(self, main, needed, resolved)
+                finally:
+                    self._installing.discard(resolved)
+                if not outcome.ok:
+                    return self._install_failed(resolved, recipe, outcome)
+            else:
+                logger.info("[%s] All deps for '%s' already installed", self.name, resolved)
 
-            actor = await self.spawn(
-                DynamicAgent,
-                name=resolved,
-                code=recipe["code"],
-                poll_interval=float(recipe.get("poll_interval", 3600)),
-                description=recipe.get("description", ""),
-                input_schema=recipe.get("input_schema", {}),
-                output_schema=recipe.get("output_schema", {}),
-                llm_provider=llm_provider,
-                persistence_dir=persistence_dir,
-                trusted=True,  # catalog agents are pre-built — skip safety validator
-            )
-
-            if actor:
-                if main:
-                    # Mark as trusted so it bypasses safety validator on restore
-                    save_config = dict(recipe)
-                    save_config["trusted"] = True
-                    main._save_to_spawn_registry(save_config)
-
-                msg = _chat_message_with_beta_warning(
-                    f"'{resolved}' spawned and running", beta_warning
-                )
-                logger.info("[%s] %s", self.name, msg)
-                await self._mqtt_publish(
-                    f"agents/{self.actor_id}/logs",
-                    {"type": "log", "message": msg, "timestamp": time.time()},
-                )
-                return {"ok": True, "message": msg, "agent": resolved}
-            return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
+            return await self._spawn_dynamic(resolved, recipe, beta_warning)
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
             logger.exception("[%s] %s", self.name, msg)
             return {"ok": False, "message": msg}
+
+    @staticmethod
+    def _install_heads_up(name: str, needed: list[str]) -> str:
+        """The chat notice sent before a recipe's packages are installed."""
+        return (
+            f"Installing {len(needed)} package(s) for {name} first: {', '.join(needed)}. "
+            "A first install can take a few minutes; I'll post here when "
+            f"{name} is ready."
+        )
+
+    def _install_failed(self, name: str, recipe: dict, outcome: InstallOutcome) -> dict:
+        """The result for a recipe whose packages did not leave it ready to run.
+
+        When only a restart stands in the way, the recipe is recorded now, so the
+        restart the message asks for brings it up without being asked again.
+        """
+        if outcome.restart_required:
+            main = find_main_actor(self._registry)
+            if main:
+                main._save_to_spawn_registry({**recipe, "trusted": True})
+        return {
+            "ok": False,
+            "agent": name,
+            "restart_required": bool(outcome.restart_required),
+            "message": outcome.problem(name),
+        }
+
+    async def _install_then_spawn(
+        self, name: str, recipe: dict, needed: list[str], beta_warning: str
+    ) -> None:
+        """Install a recipe's packages, spawn it, and say how that went in chat."""
+        try:
+            main = find_main_actor(self._registry)
+            outcome = await install_for_agent(self, main, needed, name)
+            if not outcome.ok:
+                result = self._install_failed(name, recipe, outcome)
+            elif self._registry and self._registry.find_by_name(name):
+                result = {"ok": True, "message": f"'{name}' is already running"}
+            else:
+                result = await self._spawn_dynamic(name, recipe, beta_warning)
+        except Exception as e:
+            logger.exception("[%s] Background install+spawn failed for '%s'", self.name, name)
+            result = {"ok": False, "message": f"Failed to spawn '{name}': {e}"}
+        finally:
+            self._installing.discard(name)
+        await self.notify_user(result["message"])
+
+    async def _spawn_dynamic(self, name: str, recipe: dict, beta_warning: str) -> dict:
+        """Start a dynamic recipe whose packages are in place, and record it."""
+        main = find_main_actor(self._registry)
+        actor = await self.spawn(
+            DynamicAgent,
+            name=name,
+            code=recipe["code"],
+            poll_interval=float(recipe.get("poll_interval", 3600)),
+            description=recipe.get("description", ""),
+            input_schema=recipe.get("input_schema", {}),
+            output_schema=recipe.get("output_schema", {}),
+            llm_provider=main.llm if main else None,
+            persistence_dir=str(main._persistence_dir.parent) if main else resolve_state_dir(),
+            trusted=True,  # catalog agents are pre-built — skip safety validator
+        )
+        if not actor:
+            return {"ok": False, "message": f"Spawn returned no actor for '{name}'"}
+        if main:
+            # Mark as trusted so it bypasses safety validator on restore
+            main._save_to_spawn_registry({**recipe, "trusted": True})
+        msg = _chat_message_with_beta_warning(f"'{name}' spawned and running", beta_warning)
+        logger.info("[%s] %s", self.name, msg)
+        await self._mqtt_publish(
+            f"agents/{self.actor_id}/logs",
+            {"type": "log", "message": msg, "timestamp": time.time()},
+        )
+        return {"ok": True, "message": msg, "agent": name}
 
     # Public API ─────────────────────────────────────────────────────────────
 

@@ -43,9 +43,14 @@ Open the Wactorz dashboard at `http://localhost:8888`, enter this in chat, and s
 @catalog spawn reachy-mini
 ```
 
-The first launch may pause while Wactorz installs the robot and voice packages. Wait for
-the dashboard to say that Reachy Mini started and then report whether the robot connection
-is ready. You do not need to run `pip install` yourself for the normal setup.
+The first launch installs the robot and voice packages, which takes a few minutes (about
+3 on a fast connection, longer on a Home Assistant box). The chat says so straight away and
+names each package as it installs; you do not need to run `pip install` yourself.
+
+The robot SDK needs an older `websockets` than the one Wactorz starts with, and Python
+cannot swap a loaded package while it runs. So on a first install the chat will usually
+ask you to **restart Wactorz once**. Reachy Mini starts by itself after that restart, and
+later spawns skip the install.
 
 ### 3. Check the connection
 

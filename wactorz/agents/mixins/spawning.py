@@ -32,7 +32,6 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 
 import asyncio
 import hashlib
-import importlib
 import logging
 import pickle
 import time
@@ -41,7 +40,9 @@ from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, ActorState, MessageType
 from ...core.paths import agent_state_dir
+from ...core.pip import install_wait_s, missing_requirements
 from ...core.topics import topic_name_error
+from ..dependency_install import InstallOutcome, outcome_from_result
 from ..lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
@@ -359,7 +360,10 @@ class SpawnMixin(_Host):
         if blocking_install:
             # Pipeline path: the next step may depend on this agent being live.
             logger.info("[%s] Installing %s for '%s' (blocking)…", self.name, needed, name)
-            await self._install_packages(needed, agent_name=name)
+            outcome = await self._install_packages(needed, agent_name=name)
+            if not outcome.ok:
+                await self._report_install_problem(config, name, outcome)
+                return None
             return await self._do_spawn_dynamic(config, name, code)
 
         # Default path: don't block the response — install + spawn in background.
@@ -389,11 +393,16 @@ class SpawnMixin(_Host):
                         "timestamp": time.time(),
                     },
                 )
-            await self._install_packages(packages, agent_name=name)
+            outcome = await self._install_packages(packages, agent_name=name)
             if self.state == ActorState.STOPPED:
                 # An install can outlast the stop meant to cancel it. Spawning
                 # now would register an agent into a system that has shut down.
                 logger.info("[%s] Not spawning '%s': stopped during its install", self.name, name)
+                return
+            if not outcome.ok:
+                # Spawning now starts the agent against packages that are
+                # missing or that this process cannot load until it restarts.
+                await self._report_install_problem(config, name, outcome)
                 return
             actor = await self._do_spawn_dynamic(config, name, code)
             if actor is not None:
@@ -459,43 +468,41 @@ class SpawnMixin(_Host):
 
     @staticmethod
     def _packages_needing_install(packages: list[str]) -> list[str]:
-        """Subset of ``packages`` not already importable in this process. The
-        import name often differs from the pip name (opencv-python → cv2), so
-        this is a heuristic; re-installing an present package is a cheap no-op.
-        """
-        needed = []
-        for pkg in packages:
-            import_name = pkg.replace("-", "_").split("[")[0]
-            try:
-                importlib.import_module(import_name)
-            except ImportError:
-                needed.append(pkg)
-        return needed
+        """Subset of ``packages`` not installed yet, version specifiers included.
 
-    async def _install_packages(self, packages: list[str], agent_name: str = "?") -> None:
-        """Install packages by delegating to the 'installer' agent and blocking
-        until it replies (or a 120s timeout). No-op when nothing is needed or
-        the registry/installer is unavailable.
+        Asks installed metadata rather than guessing an import name from the
+        pip name: a pinned ``name==1.2`` is no module name at all, and ``pillow``
+        installs the module ``PIL``. A wrong guess sends an installed package to
+        pip on every spawn and restore.
+        """
+        return missing_requirements(packages)
+
+    async def _install_packages(self, packages: list[str], agent_name: str = "?") -> InstallOutcome:
+        """Install packages through the 'installer' agent and report the outcome.
+
+        Waits as long as the installer is allowed to take: a package with
+        native libraries can take minutes, and giving up sooner spawns the agent
+        against a half-finished install.
         """
         if not packages or not self._registry:
-            return
+            return InstallOutcome()
 
         needed = self._packages_needing_install(packages)
         if not needed:
             logger.info(
                 "[%s] All packages for '%s' already available: %s", self.name, agent_name, packages
             )
-            return
+            return InstallOutcome()
 
         installer = self._registry.find_by_name("installer")
         if not installer:
             logger.warning(
-                "[%s] installer agent not found — cannot install %s for '%s'. Agent may crash on import.",
+                "[%s] installer agent not found — cannot install %s for '%s'.",
                 self.name,
                 needed,
                 agent_name,
             )
-            return
+            return InstallOutcome(unavailable=True)
 
         task_id = f"install_{uuid.uuid4().hex[:8]}"
         future = asyncio.get_event_loop().create_future()
@@ -508,35 +515,46 @@ class SpawnMixin(_Host):
                 {
                     "action": "install",
                     "packages": needed,
+                    "for_agent": agent_name,
+                    "notify": True,
                     "task": task_id,
                     "_task_id": task_id,
                     "reply_to": self.actor_id,
                 },
             )
             try:
-                result = await asyncio.wait_for(future, timeout=120.0)
-                logger.info(
-                    "[%s] Install result for '%s': %s",
-                    self.name,
-                    agent_name,
-                    result.get("message", result),
-                )
-                if result.get("failed"):
-                    logger.warning(
-                        "[%s] Failed to install: %s — '%s' may not work correctly",
-                        self.name,
-                        result["failed"],
-                        agent_name,
-                    )
+                result = await asyncio.wait_for(future, timeout=install_wait_s(len(needed)))
             except asyncio.TimeoutError:
                 logger.warning(
-                    "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
-                    self.name,
-                    needed,
-                    agent_name,
+                    "[%s] Install timed out for %s ('%s')", self.name, needed, agent_name
                 )
+                return InstallOutcome(timed_out=True)
         finally:
             self._result_futures.pop(task_id, None)
+        outcome = outcome_from_result(result)
+        logger.info(
+            "[%s] Install result for '%s': %s",
+            self.name,
+            agent_name,
+            result.get("message", result) if isinstance(result, dict) else result,
+        )
+        return outcome
+
+    async def _report_install_problem(
+        self, config: dict, name: str, outcome: InstallOutcome
+    ) -> None:
+        """Tell the user why `name` was not started, keeping it for a restart if that is all.
+
+        When a restart is the only thing missing the agent is recorded now, so
+        the restart the message asks for brings it up by itself.
+        """
+        problem = outcome.problem(name)
+        logger.warning("[%s] %s", self.name, problem)
+        if outcome.restart_required:
+            self._register_spawn(config)
+        notify = getattr(self, "notify_user", None)
+        if notify is not None:
+            await notify(problem)
 
     # ── Migrated state ─────────────────────────────────────────────────────
 

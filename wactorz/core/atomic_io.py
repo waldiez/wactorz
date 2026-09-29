@@ -9,27 +9,39 @@ Imports nothing from ``wactorz``, so modules loaded during ``core`` package
 initialisation can use it at file scope.
 """
 
+import json
 import os
 import pickle
 import time
+import uuid
 from pathlib import Path
 from typing import Any
+
+
+def _temporary(path: Path) -> Path:
+    """A temporary beside ``path``, unique to this write.
+
+    Beside it so the rename stays within one filesystem, which is what makes it
+    atomic. Unique per write, not per process: an agent's blocking work runs on
+    threads, two of which can save the same file at once, and sharing one
+    temporary lets one write's rename carry the other's half-written bytes.
+    """
+    return path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
 
 
 def write_pickle(path: Path, obj: Any) -> None:
     """Pickle ``obj`` into ``path``, replacing it in one step.
 
-    The temporary sits beside the target so the rename stays within one
-    filesystem, which is what makes it atomic; the pid keeps two processes
-    writing the same agent from colliding on it. On any failure the temporary is
-    removed and the previous contents are still there.
+    Written to a temporary first (see :func:`_temporary`) and renamed over the
+    target. On any failure the temporary is removed and the previous contents
+    are still there.
 
     Raises whatever the write raised — callers decide whether a lost save is
     worth reporting. On Windows the replace itself can fail, because it refuses
     to overwrite a file another handle has open; the previous contents survive
     that, which is the whole point.
     """
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = _temporary(path)
     try:
         with open(tmp, "wb") as f:
             pickle.dump(obj, f)
@@ -42,6 +54,57 @@ def write_pickle(path: Path, obj: Any) -> None:
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Write ``text`` into ``path``, replacing it in one step.
+
+    The text twin of :func:`write_pickle`, for the files that are read by
+    something other than the process that wrote them — a node's agent state
+    travels to another machine on a migration, so it is JSON rather than a
+    pickle, and it wants the same guarantee.
+
+    Encode before calling: a serialiser that fails half way through has already
+    written half a file, and doing it here would only move that truncation from
+    the target to the temporary.
+    """
+    tmp = _temporary(path)
+    try:
+        with open(tmp, "w", encoding=encoding) as f:
+            f.write(text)
+            # The rename is atomic, but only orders against data the filesystem
+            # has actually been handed. Without this, a power loss can leave the
+            # rename applied over contents that never landed — and these run on
+            # boards that lose power for a living.
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def write_private_json(path: Path, data: dict[str, Any]) -> None:
+    """Write JSON to `path` so only this user can read it back.
+
+    Created at 0600 rather than chmod-ed afterwards: creating it at the umask's
+    permissions and narrowing them after leaves a window in which the secrets
+    are readable by anyone on the machine, and leaves them that way for good if
+    the chmod fails. Replaced rather than written in place, so a crash mid-write
+    leaves the previous file whole instead of a truncated one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Unique to this write and created exclusively: two writers cannot land on
+    # the same temp file, and O_EXCL refuses a path that already exists — so a
+    # symlink planted there is an error rather than somewhere the secrets go.
+    tmp = _temporary(path)
+    try:
+        fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def quarantine_unreadable(path: Path) -> Path | None:

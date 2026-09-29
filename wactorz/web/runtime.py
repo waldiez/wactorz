@@ -10,6 +10,7 @@ would not be seen. The in-place-mutated containers (``state``, ``ws_clients``)
 are the only names safe to alias-import.
 """
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
     import aiomqtt
 
     from wactorz.core.persistence import WactorzDB
-    from wactorz.core.registry import ActorRegistry
+    from wactorz.core.registry import ActorRegistry, ActorSystem
 
 # ── Injected config (app.py overwrites these at boot from CLI/env) ───────────
 MQTT_BROKER = "localhost"
@@ -37,6 +38,10 @@ IO_GATEWAY_ID = "io-gateway"
 # <registry> → direct mode (Option B)
 registry: "ActorRegistry | None" = None
 
+# The actor system this monitor serves, for the readiness probe. None when the
+# monitor runs on its own, with no actors in its process.
+system: "ActorSystem | None" = None
+
 # Used to query historical cost data for deleted agents.
 db: "WactorzDB | None" = None
 
@@ -45,6 +50,11 @@ mqtt_client_ref: "aiomqtt.Client | None" = None
 # Server↔broker link state. Shared: mqtt sets it, ws reports it to browsers, so
 # it lives here rather than in either module (mqtt already depends on ws).
 mqtt_connected: bool = False
+
+# The monitor server's own task, set by whoever starts it so shutdown can stop it.
+# Nothing else holds it, and a task left for asyncio.run to cancel on the way out
+# is asked once, which is not always enough.
+server_task: "asyncio.Task[None] | None" = None
 
 # ── Live snapshot (mutated in place — never rebound) ─────────────────────────
 state = {
@@ -107,6 +117,12 @@ def set_registry(value) -> None:
     """Inject the actor registry (direct mode)."""
     global registry
     registry = value
+
+
+def set_system(value) -> None:
+    """Inject the actor system, whose state the readiness probe reports."""
+    global system
+    system = value
 
 
 def set_db(value) -> None:

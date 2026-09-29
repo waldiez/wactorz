@@ -10,13 +10,20 @@ Run with ``pytest`` (or ``make test-py``). Async mixin methods are driven throug
 """
 
 import asyncio
+import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+from wactorz.agents.catalog_agent import _build_native_catalog, get_native_factory
+from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
+from wactorz.agents.main.spawns import SpawnService
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
+from wactorz.core.actor import ActorState
 
 
 def run(coro):
@@ -60,18 +67,22 @@ class _BaseHost(SpawnMixin):
     def __init__(self, registry, name):
         self.name = name
         self.actor_id = f"id-{name}"
-        self.llm = object()
+        # What the mixin hands the agents it creates; never called here.
+        self.llm = cast(LLMProvider, object())
         self._registry = registry
+        self.registry: FakeRegistry = registry
         self._result_futures = {}
         self._persistence_dir = Path(tempfile.mkdtemp()) / name  # .parent is the base
         self.spawn_calls = []  # (cls, kwargs)
         self.sent = []  # installer payloads
         self.published = []  # mqtt dashboard echoes
+        self.state = ActorState.RUNNING
+        self.detached: list[asyncio.Task] = []  # background work the host was handed
 
     async def spawn(self, actor_class, **kwargs):
         self.spawn_calls.append((actor_class, kwargs))
         actor = FakeActor(kwargs.get("name", "anon"))
-        self._registry.add(actor)
+        self.registry.add(actor)
         return actor
 
     async def send(self, target_id, msg_type, payload):
@@ -83,6 +94,17 @@ class _BaseHost(SpawnMixin):
 
     async def _mqtt_publish(self, topic, payload, **_kw):
         self.published.append((topic, payload))
+
+    def persist(self, key, value):
+        pass
+
+    def recall(self, key, default=None):
+        return default
+
+    def run_detached(self, coro, *, name=None):
+        task = asyncio.create_task(coro, name=name)
+        self.detached.append(task)
+        return task
 
 
 class MainHost(_BaseHost):
@@ -390,9 +412,9 @@ def test_peer_resolves_timezone_from_main(peer_setup):
 
 
 def test_get_native_factory_resolves_and_misses():
-    from wactorz.agents.catalog_agent import get_native_factory
-
-    assert get_native_factory("weather-agent").__name__ == "WeatherAgent"
+    factory = get_native_factory("weather-agent")
+    assert factory is not None
+    assert factory.__name__ == "WeatherAgent"
     assert get_native_factory("not-a-catalog-name") is None
 
 
@@ -400,10 +422,6 @@ def test_native_recipes_are_json_safe_without_factory():
     # CatalogAgent persists each native recipe minus its 'factory' class object;
     # that descriptor must be JSON-serializable for every native recipe so the
     # spawn registry (SQLite/JSON) can store and later restore it.
-    import json
-
-    from wactorz.agents.catalog_agent import _build_native_catalog
-
     native = _build_native_catalog()
     assert native, "expected at least one native catalog recipe (weather-agent)"
     for recipe in native.values():
@@ -508,3 +526,62 @@ def test_an_agent_main_never_registered_earns_nothing(tmp_path: Path) -> None:
     main = MainActor(llm_provider=None, name="main", persistence_dir=str(tmp_path))
 
     assert main._restore_earned_trust("never-seen", {"name": "never-seen"}) is False
+
+
+# ── A name every topic of the agent would carry ──────────────────────────────
+
+
+def test_a_name_that_cannot_be_a_topic_level_is_refused_locally(main_host):
+    # "c++ monitor" is an ordinary thing to ask for; its topics would all carry
+    # a wildcard, and a message to it once stalled every message behind it.
+    assert run(main_host._spawn_local_from_config({"name": "c++ monitor"})) is None
+    assert main_host.spawn_calls == []
+
+
+def test_a_name_that_cannot_be_a_topic_level_is_not_sent_to_a_node():
+    published: list[str] = []
+
+    async def _publish(topic, payload, **_kw):
+        published.append(topic)
+
+    host = SimpleNamespace(name="main", _mqtt_publish=_publish)
+    run(SpawnService(host)._spawn_remote({"name": "all#"}, "rpi", save=True))  # pyright: ignore[reportArgumentType]
+
+    assert published == []
+
+
+def test_a_background_install_is_owned_by_the_host(main_host):
+    # Kept by the host, so its stop cancels the install rather than leaving it
+    # running against a system that has shut down.
+    main_host._registry.add(FakeActor("installer"))
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d4", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=False,
+        )
+        assert [task.get_name() for task in main_host.detached] == ["install-d4"]
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+
+
+def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
+    main_host._registry.add(FakeActor("installer"))
+    real_install = main_host._install_packages
+
+    async def install_then_stop(packages, agent_name):
+        await real_install(packages, agent_name=agent_name)
+        main_host.state = ActorState.STOPPED
+
+    main_host._install_packages = install_then_stop
+
+    async def scenario():
+        await main_host._spawn_local_from_config(
+            {"name": "d5", "type": "dynamic", "code": "x", "install": ["totally_missing_pkg_zzz"]},
+            blocking_install=False,
+        )
+        await asyncio.gather(*main_host.detached)
+
+    run(scenario())
+    assert main_host.spawn_calls == []

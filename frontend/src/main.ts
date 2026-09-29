@@ -469,8 +469,8 @@ const _liveActorsTimer = window.setInterval(() => {
 // it would leave the very first 401 unhandled and the page waiting on a poll
 // half a minute away.
 installSessionExpiry(window, () => {
-    // A revoked ingress route cannot recover in this page, so stop its socket
-    // and periodic requests while the user is directed to reopen Wactorz.
+    // The socket is the one thing that would keep trying: it reconnects on a
+    // timer, and every attempt goes to the same revoked prefix.
     ws.disconnect();
     window.clearInterval(_liveActorsTimer);
 });

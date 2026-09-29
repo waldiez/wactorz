@@ -9,6 +9,7 @@
  */
 import type { Attachment } from "../../types/agent";
 import { isImage } from "./uploads";
+import { button, el } from "../dom";
 
 /** Render the pending-attachment chips into the iobar tray; `×` routes back through `onRemove`. */
 export function renderAttachTray(
@@ -22,14 +23,9 @@ export function renderAttachTray(
     }
     tray.innerHTML = "";
     attachments.forEach((att, i) => {
-        const chip = document.createElement("span");
-        chip.className = "af-attach-chip";
-        const label = document.createElement("span");
-        label.className = "af-attach-chip-label";
-        label.textContent = isImage(att) ? `Image #${i + 1}` : att.name;
-        const remove = document.createElement("button");
-        remove.className = "af-attach-chip-x";
-        remove.textContent = "×";
+        const chip = el("span", "af-attach-chip");
+        const label = el("span", "af-attach-chip-label", isImage(att) ? `Image #${i + 1}` : att.name);
+        const remove = button("af-attach-chip-x", "×");
         remove.title = "Remove attachment";
         remove.addEventListener("click", () => onRemove(att));
         chip.append(label, remove);

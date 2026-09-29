@@ -119,6 +119,9 @@ USER REQUEST: {task}
 AVAILABLE HA ENTITIES:
 {ha_section}
 
+LIVE MQTT DATA FLOWS (what running agents publish — a trigger or data source can come from here instead of Home Assistant):
+{topic_section}
+
 Return JSON only:
 {{"feasible": true/false, "reason": "<one sentence if not feasible>", "relevant_entities": ["entity_id", ...]}}
 
@@ -132,7 +135,8 @@ Rules — be PERMISSIVE, default to feasible=true:
 - relevant_entities should list the matching entity_ids you'd use.
 - Camera/webcam/Discord/notification requests: always feasible=true.
 - Pure logging / observability tasks (no HA target): always feasible=true. Examples: 'log a heartbeat every hour', 'write a warning when X', 'print uptime'.
-- Time-based triggers without HA action (just logging or publishing): always feasible=true."""
+- Time-based triggers without HA action (just logging or publishing): always feasible=true.
+- A trigger or data source that matches a LIVE MQTT DATA FLOW — by agent name, its 'about' line, or a topic — is available even though no HA entity matches it. A button, sensor or device that an agent publishes is NOT missing because Home Assistant does not list it. Judge only the Home Assistant targets against AVAILABLE HA ENTITIES."""
 
 
 #: Asks for duplicates and contradictions between a new rule and the active ones.
@@ -182,6 +186,15 @@ TYPE 1 — "ha_actuator"
     "conditions": []
     "detection_filter": {"<top-level-key>": <value>} or null
     "cooldown_seconds": <number>
+  DYNAMIC service_data — any string value of the form "$payload.<key>" (dotted paths and
+  list indices allowed, e.g. "$payload.color.rgb", "$payload.rgb.0") is replaced at trigger
+  time with that field from the incoming MQTT payload. Use this whenever the value is
+  computed upstream (a detected color, a measured temperature, a chosen scene):
+    upstream publishes {"detected": true, "rgb": [200, 30, 40]}
+    action: {"domain": "light", "service": "turn_on", "entity_id": "light.wiz_...",
+             "service_data": {"rgb_color": "$payload.rgb", "brightness": 200}}
+  The upstream agent MUST publish plain JSON types (cast numpy values with int()/float()).
+  If a referenced key is missing from the payload, the action is skipped and logged.
 
 TYPE 2 — "scheduled"
   Purpose: fire an event at a SPECIFIC time or interval. THE ONLY correct way
@@ -288,7 +301,16 @@ PATTERN 3 — Webcam/camera object detection triggers HA action:
       and REQUIRE the HA token as a Bearer header. Before calling cv2.VideoCapture, set:
         import os
         os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = f"headers;Authorization: Bearer {os.environ['HA_TOKEN']}\\r\\n"
-      Then load YOLO model and open the stream with cv2.VideoCapture(<url>)
+      VISION MODELS — use Ultralytics for ALL camera tasks. Exact filenames (no "v"):
+          object detection        YOLO('yolo26n.pt')
+          pose / keypoints /      YOLO('yolo26n-pose.pt')   — 17 COCO keypoints; results[0].keypoints.xy
+            gestures / fall
+          segmentation / masks    YOLO('yolo26n-seg.pt')
+          classification          YOLO('yolo26n-cls.pt')
+          depth / distance        YOLO('yolo26n-depth.pt')
+          NEVER use mediapipe, opencv-dnn, or yolov5/yolov8/yolo11.
+          Install: ultralytics, opencv-python — nothing else for vision.
+      Then load selected YOLO model and open the stream with cv2.VideoCapture(<url>)
       using the EXACT URL from CAMERA STREAM URLS below — never /dev/video0 or a guessed proxy path
       IMPORTANT: read the token from os.environ['HA_TOKEN'] — NEVER hardcode the token value.
     process(agent): capture frame, run inference, determine if target object is detected,
@@ -372,7 +394,7 @@ PATTERN 7 — One-shot camera snapshot (e.g. 'take a snapshot of the office came
         async with httpx.AsyncClient() as client:
             resp = await client.get('<snapshot-url-from-CAMERA-SNAPSHOT-URLS>', headers=headers)
             image_bytes = resp.content
-        # ... process image_bytes (e.g. run YOLO on it once, save to disk, etc.)
+        # ... process image_bytes (e.g. run YOLOv26 on it once, save to disk, etc.)
   IMPORTANT: read the token from os.environ['HA_TOKEN'] — NEVER hardcode the token value.
   If the result feeds an HA action (e.g. 'if there is a desk, turn on the light'),
   publish the detection result to a topic and pair with an ha_actuator (see PATTERN 3 agent 2).

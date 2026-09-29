@@ -127,6 +127,7 @@
       <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="active">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
     </details>
     <details class="sidebar-group">
       <summary class="sidebar-label">Catalogue agents</summary>
@@ -187,7 +188,7 @@
 <p>This is availability monitoring, not deep service-specific exporter telemetry.</p>
 <h2 id="authentication">Authentication</h2>
 <p><code>/metrics</code> is served by the API on port 8000, and once <code>API_KEY</code> is set every
-route there except <code>/health</code> requires it. An unauthenticated scrape gets <code>401</code>
+route there except the health probes requires it. An unauthenticated scrape gets <code>401</code>
 and the target goes down with nothing written to the log, so a keyed install
 loses its metrics silently unless the scrape carries the key.</p>
 <p>The endpoint accepts either <code>X-API-Key</code> or <code>Authorization: Bearer</code>.</p>

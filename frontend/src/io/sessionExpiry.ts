@@ -43,23 +43,62 @@ function isSessionGone(response: Response): boolean {
     return response.status === 401;
 }
 
+/**
+ * How many consecutive 503s stop looking like bad luck.
+ *
+ * Concurrent polls fail together, so three can arrive inside a second — which is
+ * why a count alone decides nothing, and {@link REVOKED_AFTER_MS} is what the
+ * conclusion actually rests on.
+ */
 const REVOKED_AFTER_TRIES = 3;
+
+/**
+ * How long a run of 503s must last before the token is presumed gone.
+ *
+ * Everything else that answers 503 recovers: the Supervisor serves a restart in
+ * well under a minute, and the app answers "registry not available" only until
+ * its registry exists — which, since the UI now binds before the agents start,
+ * is a window every restart passes through. A revoked token never recovers, so
+ * duration is the only honest discriminator. The margin over an observed boot is
+ * deliberately generous: showing this overlay on a healthy install is worse than
+ * showing it a minute late on a dead one.
+ */
 const REVOKED_AFTER_MS = 60_000;
 
-/** Return whether this page was served through a Home Assistant ingress URL. */
+/** The ingress prefix this page was served under, empty when it was not. */
 function ingressPath(target: Window): string {
+    // Injected on every page, ingress or not, so an empty value is the standalone
+    // case rather than a missing one. Truthiness, not `!== undefined`: the latter
+    // reads as "under ingress" on a deployment that has no sidebar to send anyone
+    // back to.
     return target.__WACTORZ_INGRESS_PATH ?? "";
 }
 
-/** Track a sustained ingress failure without mistaking an add-on restart for one. */
+/**
+ * Whether a 503 under ingress has gone on long enough to mean the token is gone.
+ *
+ * A 503 alone says nothing. The Supervisor forwards the app's own status
+ * verbatim, so under a live token the app's own 503s -- a command that could not
+ * be delivered while the broker is down, a registry that does not exist yet --
+ * are the same status as the Supervisor's "I do not know this token". What
+ * separates them is that only one of them ever stops.
+ *
+ * Kept apart from `isSessionGone` because the answers differ. A 401 is fixed by
+ * signing in again, and the sign-in page sits under the same working prefix. A
+ * revoked token has no working prefix, so sending someone to `/login` under it
+ * lands on another 503.
+ */
 function sessionRevokedTracker(target: Window): (response: Response) => boolean {
     let failures = 0;
     let since = 0;
+
     return (response: Response): boolean => {
         if (!ingressPath(target)) {
             return false;
         }
         if (response.status !== 503) {
+            // Any answer at all proves the prefix still reaches something, so a
+            // run of 503s around it was the app being unwell, not the token.
             failures = 0;
             return false;
         }
@@ -72,7 +111,12 @@ function sessionRevokedTracker(target: Window): (response: Response) => boolean 
 }
 
 /**
- * Replace `fetch` with one that redirects to sign-in on a 401.
+ * Replace `fetch` with one that redirects to sign-in on a 401, and says so when
+ * an ingress session has been revoked.
+ *
+ * `onRevoked` is called once, for a caller that holds things this module does
+ * not -- the socket, chiefly, which would otherwise go on reconnecting to a
+ * prefix that cannot answer.
  *
  * Returns a function that puts the original back, for tests and for a teardown
  * that wants the global left as it found it.

@@ -797,7 +797,7 @@ TELEGRAM_ALLOWED_USER_IDS=123456789
 
 ### WhatsApp
 
-Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` and `WHATSAPP_ALLOWED_NUMBERS`, then start with `--interface whatsapp`. Wactorz runs an aiohttp webhook server that receives incoming messages from Twilio.
+Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER` and `WHATSAPP_ALLOWED_NUMBERS`, then start with `--interface whatsapp`. Wactorz runs an aiohttp webhook server that receives incoming messages from Twilio.
 
 The webhook is a public HTTP endpoint, so the allow-list is required: without it the interface refuses to start, and messages from numbers outside it are dropped without ever reaching the LLM. Numbers are matched with or without the `whatsapp:` prefix Twilio adds.
 
@@ -920,7 +920,7 @@ Bridges every Home Assistant `state_changed` event to MQTT. Used as the trigger 
 
 Key options:
 - `HA_STATE_BRIDGE_DOMAINS` — comma-separated allow-list (e.g. `light,switch,sensor`); empty = all domains
-- `HA_STATE_BRIDGE_PER_ENTITY` — `1` (default) splits into per-entity sub-topics; `0` sends everything to one topic
+- `HA_STATE_BRIDGE_PER_ENTITY` — `1` splits into per-entity sub-topics; `0` (default) sends everything to one topic
 
 **Task commands**: `status`
 
@@ -1057,27 +1057,29 @@ Slides that received a real PDF image skip NIM generation. Slides without one fa
 
 ## 17. Remote Nodes & Edge Deployment
 
-Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. The edge node only needs a single file and one pip package.
+Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. An edge node runs the same package, started in a different role.
 
 ### How It Works
 
 ```
 [Main machine]                        [Raspberry Pi / Edge node]
-main_actor ──MQTT──► nodes/{name}/spawn ──► remote_runner.py
+main_actor ──MQTT──► nodes/{name}/spawn ──► wactorz-node --node {name}
                                                │  compiles + runs agent
                                                │  heartbeats every 10s
 dashboard  ◄──MQTT── agents/{id}/heartbeat ◄───┘
 ```
 
-The `remote_runner.py` is fully self-contained — it reimplements the DynamicAgent contract inline without importing anything from the wactorz package. Remote agents appear in the dashboard and respond to MQTT commands exactly like local agents.
+A node runs the real `DynamicAgent`, compiled from the same code against the same `agent` API and supervised by the same OTP supervisor — so an agent behaves the same whether it was spawned here or there. Agents on a node appear in the dashboard and respond to MQTT commands exactly like local ones.
 
 ### Edge Node Requirements
 
 ```bash
-# That's it — one package, one file
-pip install aiomqtt --break-system-packages
-python3 remote_runner.py --broker 192.168.1.10 --name rpi-kitchen
+python3 -m venv ~/wactorz/venv
+~/wactorz/venv/bin/pip install wactorz     # the same version main runs
+~/wactorz/venv/bin/wactorz-node --node rpi-kitchen --mqtt-broker 192.168.1.10
 ```
+
+No extra is needed — everything a node uses is a core dependency. Anything an agent itself imports goes in its spawn config's `install` list.
 
 The broker address must be reachable **from the Pi** (your main machine's LAN IP, not `localhost`).
 
@@ -1105,10 +1107,11 @@ DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
 
 1. Use the configured host (or resolve `rpi-kitchen.local` over mDNS if no host is set)
 2. Verify the SSH host key, recording it on first contact
-3. Upload `remote_runner.py` via SFTP
-4. Install `aiomqtt` into a venv on the Pi
-5. Start the runner in the background
-6. The node appears in `/nodes` within ~15 seconds
+3. Check from the Pi that the broker's port answers, and from the server that the broker accepts the account the Pi will use
+4. Write the node's environment (broker, credentials, signing key) to `~/wactorz/.env`
+5. Install `wactorz`, at main's own version, into a venv on the Pi
+6. Start it under a systemd unit, so it survives a reboot
+7. Wait for the node's first heartbeat; a node that sends none fails the deploy with the last lines of its log
 
 **From the chat:**
 
@@ -1271,7 +1274,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `HA_MAP_AGENT_TARGET_ACTOR` | Route map updates to a named actor instead of MQTT |
 | `HA_STATE_BRIDGE_OUTPUT_TOPIC` | Base MQTT topic for `HomeAssistantStateBridgeAgent` (default: `homeassistant/state_changes`) |
 | `HA_STATE_BRIDGE_DOMAINS` | Comma-separated domain allow-list for state bridge (e.g. `light,switch,sensor`; empty = all) |
-| `HA_STATE_BRIDGE_PER_ENTITY` | `1` (default) = per-entity sub-topics; `0` = single shared topic |
+| `HA_STATE_BRIDGE_PER_ENTITY` | `1` = per-entity sub-topics; `0` (default) = single shared topic |
 | `DISCORD_BOT_TOKEN` | Discord bot token (for `--interface discord`, or to run it alongside another interface) |
 | `DISCORD_ALLOWED_USER_IDS` | **Required with the token** — comma-separated Discord user IDs allowed to talk to the bot |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather (for `--interface telegram`, or alongside another interface) |
@@ -1280,7 +1283,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `SOCIAL_RATE_LIMIT_PER_MIN` | Max messages per minute per sender on social channels (default `12`; `0` disables) |
 | `TWILIO_ACCOUNT_SID` | Twilio account SID (for `--interface whatsapp`) |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sender number |
+| `TWILIO_WHATSAPP_NUMBER` | Twilio WhatsApp sender number |
 | `WHATSAPP_ALLOWED_NUMBERS` | **Required with WhatsApp** — comma-separated numbers allowed to message the webhook |
 | `WACTORZ_URL` | Wactorz REST base URL used by the MCP server (default `http://localhost:8000`) |
 | `WACTORZ_API_KEY` | Optional MCP-to-REST API key; should match `API_KEY` when REST auth is enabled |
@@ -1342,7 +1345,8 @@ wactorz/
 ├── __main__.py                                Entry point — runs `cli.app()` via `python -m wactorz`
 ├── cli.py                                     argparse, supervision tree wiring, interface dispatch
 ├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, …)
-├── remote_runner.py                           Self-contained edge node runner — deploy to any Pi or machine
+├── node/                                      Edge node runtime — `wactorz-node --node <name>`
+├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
 │
 ├── core/

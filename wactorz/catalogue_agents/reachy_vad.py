@@ -6,8 +6,6 @@ It is deliberately blocking: callers run it in an executor so SDK/GStreamer
 pulls never block the actor event loop.
 """
 
-from __future__ import annotations
-
 import math
 import time
 from collections import deque
@@ -207,7 +205,7 @@ def capture_utterance(
     finally:
         try:
             media.stop_recording()
-        except Exception:
+        except Exception:  # noqa: S110  # release in a finally; the error is the caller's
             pass
 
     if _cancelled(cancel_event):

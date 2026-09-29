@@ -176,7 +176,7 @@ class OllamaProvider(LLMProvider):
                         continue
                     try:
                         data = json.loads(raw)
-                    except Exception:
+                    except Exception:  # noqa: S112  # one unparsable frame in a stream, not the stream
                         continue
                     delta = (data.get("message") or {}).get("content", "")
                     if delta:

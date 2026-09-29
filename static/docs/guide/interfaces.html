@@ -127,6 +127,7 @@
       <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
     </details>
     <details class="sidebar-group">
       <summary class="sidebar-label">Catalogue agents</summary>
@@ -295,8 +296,13 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 </tr>
 <tr>
 <td><code>GET</code></td>
-<td><code>/health</code></td>
-<td>System health check.</td>
+<td><code>/health</code>, <code>/healthz</code>, <code>/livez</code></td>
+<td>Liveness: 200 whenever the process can answer.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/ready</code>, <code>/readyz</code></td>
+<td>Readiness: 200 once agents, broker and database are up, 503 naming what is not.</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
@@ -414,7 +420,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </tr>
 <tr>
 <td><code>ask_agent(agent_name, message)</code></td>
-<td>Send a message through <code>/chat</code> with <code>agent_name</code> included in the payload.</td>
+<td>Send a message to one agent through <code>/chat</code>: main hands it over as an <code>@&lt;name&gt;</code> mention and returns that agent's reply.</td>
 </tr>
 <tr>
 <td><code>list_agents()</code></td>
@@ -572,11 +578,13 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;i
 </ol>
 <h4 id="configuration_2">Configuration</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">TWILIO_ACCOUNT_SID</span><span class="o">=</span>ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-<span class="nv">TWILIO_AUTH_TOKEN</span><span class="o">=</span>your_auth_token
+<span class="nv">TWILIO_AUTH_TOKEN</span><span class="o">=</span>your_auth_token<span class="w">               </span><span class="c1"># required — the webhook checks Twilio&#39;s signature with it</span>
 <span class="nv">TWILIO_WHATSAPP_NUMBER</span><span class="o">=</span>whatsapp:+14155238886
 <span class="nv">WHATSAPP_ALLOWED_NUMBERS</span><span class="o">=</span>+306912345678<span class="w">        </span><span class="c1"># required — comma-separate for several people</span>
 </code></pre></div>
 
+<p>The webhook will not start without both. It answers Twilio at once and replies
+to the message when the model has, so a slow answer is never delivered twice.</p>
 <blockquote>
 <p><strong>The allow-list is required.</strong> The webhook is a public HTTP endpoint, so without it the interface refuses to start. Messages from other numbers are dropped before reaching the LLM.</p>
 </blockquote>

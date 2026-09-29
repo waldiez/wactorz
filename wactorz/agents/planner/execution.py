@@ -4,8 +4,6 @@ Steps marked parallel run together; the rest wait on what they depend on. The
 final synthesis is always handed back to main rather than a domain agent.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import uuid

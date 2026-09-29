@@ -77,6 +77,24 @@ _URL_USERINFO = re.compile(
     r"(?i)\b([a-z][a-z0-9+.\-]{0,20}://)([^:/@\s]{1,128})(:)([^@/\s]{1,256})(@)",
 )
 
+# Tokens that carry no key name to find them by, recognised by their own shape.
+# Each is a fixed prefix and one bounded run, so a pass stays linear, and none can
+# match `[redacted]`, so a second pass leaves the first one's work alone.
+#
+# A Telegram bot token inside the Bot API's URLs, which the HTTP client logs on
+# every request: `https://api.telegram.org/bot123456:AA…/getUpdates`.
+_TELEGRAM_BOT_TOKEN = re.compile(r"(/bot)(\d{3,15}:[A-Za-z0-9_\-]{20,128})")
+# A JSON web token: three base64url parts, the first two starting `eyJ` (`{"`).
+# Home Assistant's long-lived access tokens take this form.
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_\-]{5,2048}\.eyJ[A-Za-z0-9_\-]{5,4096}\.[A-Za-z0-9_\-]{5,1024}")
+# API keys whose prefix says what they are: OpenAI and Anthropic (`sk-`), GitHub
+# (`ghp_`, `gho_`, `ghs_`, `github_pat_`) and Slack (`xoxb-` and its siblings).
+_PREFIXED_KEY = re.compile(
+    r"\b(?:sk-[A-Za-z0-9_\-]{20,256}|gh[pousr]_[A-Za-z0-9]{30,255}"
+    r"|github_pat_[A-Za-z0-9_]{30,255}|xox[abprs]-[A-Za-z0-9\-]{10,255})"
+)
+
+
 # A complete PEM block, then anything from a BEGIN marker to the end of the
 # record. The second pattern is what stops a truncated key from leaking its body
 # for want of an END marker; it must run after the first.
@@ -110,6 +128,9 @@ def redact(text: str) -> str:
     text = _PEM_BLOCK.sub(_PEM_PLACEHOLDER, text)
     text = _PEM_TRAILING.sub(_PEM_PLACEHOLDER, text)
     text = _URL_USERINFO.sub(rf"\1\2\3{REDACTED}\5", text)
+    text = _TELEGRAM_BOT_TOKEN.sub(rf"\1{REDACTED}", text)
+    text = _JWT.sub(REDACTED, text)
+    text = _PREFIXED_KEY.sub(REDACTED, text)
     text = _DICT_ITEM.sub(rf"\1\2{REDACTED}\4", text)
     text = _DICT_ITEM_OPEN.sub(rf"\1\2{REDACTED}", text)
     text = _AUTH_SCHEME.sub(rf"\1\2{REDACTED}", text)

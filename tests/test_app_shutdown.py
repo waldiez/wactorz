@@ -5,8 +5,6 @@ mid-write: cancelling the app task is what runs the shutdown `finally`, and
 without a handler SIGTERM does nothing at all when the process is PID 1.
 """
 
-from __future__ import annotations
-
 import asyncio
 import signal
 from typing import Any

@@ -28,7 +28,7 @@ class DynamicHandleTaskMailboxTest(unittest.IsolatedAsyncioTestCase):
             replied.set()
 
         actor._fn_handle_task = handle_task
-        actor.send = send
+        actor.send = send  # pyright: ignore[reportAttributeAccessIssue]
         msg = Message(type=MessageType.TASK, sender_id="caller", payload={})
 
         await asyncio.wait_for(actor.handle_message(msg), timeout=0.1)
@@ -59,8 +59,8 @@ class MainInterfaceBridgeTest(unittest.IsolatedAsyncioTestCase):
             replied.set()
 
         actor.process_user_input = AsyncMock(side_effect=process)
-        actor.send = send
-        actor._registry = types.SimpleNamespace(
+        actor.send = send  # pyright: ignore[reportAttributeAccessIssue]
+        actor._registry = types.SimpleNamespace(  # pyright: ignore[reportAttributeAccessIssue]
             all_actors=lambda: [
                 types.SimpleNamespace(name="reachy-mini"),
                 types.SimpleNamespace(name="weather-agent"),

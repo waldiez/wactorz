@@ -127,6 +127,7 @@
       <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
     </details>
     <details class="sidebar-group" open>
       <summary class="sidebar-label">Catalogue agents</summary>
@@ -180,8 +181,15 @@ what does error E18 mean?
 <td><code>question</code></td>
 <td>question about the loaded manual (for <code>ask</code>)</td>
 </tr>
+<tr>
+<td><code>url</code></td>
+<td>the manual's address, to skip the search (for <code>load_manual</code>)</td>
+</tr>
 </tbody>
 </table>
+<p>The agent fetches only public web addresses — a search result, a link in a page,
+or a <code>url</code> you give it — and checks every redirect the same way, so a manual on
+your own network cannot be loaded by URL. A download stops at 50 MB.</p>
 <p>Returns <code>success</code>, <code>device</code>, <code>url</code> (the PDF), <code>pages</code>, <code>chars</code>, a <code>preview</code>, and the LLM
 <code>answer</code>.</p>
   </main>

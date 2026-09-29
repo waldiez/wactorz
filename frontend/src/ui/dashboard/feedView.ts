@@ -24,6 +24,7 @@ import { SYSTEM_AGENT_NAMES } from "./agentState";
 import { nameFromWid, displayName } from "../../agents/naming";
 import { iconMarkup, type IconName } from "./icons";
 import { timeLabel } from "../../time";
+import { button, el, option } from "../dom";
 
 const TYPE_CLASS: Record<string, string> = {
     spawn: "af-feed-spawn",
@@ -76,8 +77,7 @@ function isUserTurn(item: FeedItem): boolean {
  *  the resolved agent name. Chat turns are persisted under the agent's name, so
  *  without the role check every line would read as the agent. */
 function buildAgentSpan(item: FeedItem): HTMLElement {
-    const agent = document.createElement("span");
-    agent.className = "af-feed-agent";
+    const agent = el("span", "af-feed-agent");
     if (isUserTurn(item)) {
         agent.textContent = "you";
         agent.classList.add("af-feed-agent-user");
@@ -100,31 +100,30 @@ function splitMention(item: FeedItem): { mention: string | null; body: string } 
     return m ? { mention: m[1]!, body: m[2]! } : { mention: null, body: raw };
 }
 
+/** The line a row shows collapsed: the first line of `text`, cut at `TRUNCATE_AT`. */
+function summaryLine(text: string): string {
+    const firstLine = text.split("\n", 1)[0] ?? "";
+    return firstLine.length > TRUNCATE_AT ? firstLine.slice(0, TRUNCATE_AT) + "…" : firstLine;
+}
+
+/** Whether `text` has more to show than its summary line. */
+function needsExpanding(text: string): boolean {
+    return text.includes("\n") || (text.split("\n", 1)[0] ?? "").length > TRUNCATE_AT;
+}
+
 /** The message span: the `@agent` mention (if any) as a styled token, then the
- *  body text, truncated at 120 chars with the full text kept as a tooltip. */
-function buildTextSpan(item: FeedItem): HTMLElement {
-    const text = document.createElement("span");
-    text.className = "af-feed-text";
-    const { mention, body } = splitMention(item);
+ *  body's summary line. The rest is in the row's expander, not a tooltip. */
+function buildTextSpan(mention: string | null, body: string): HTMLElement {
+    const text = el("span", "af-feed-text");
     if (mention) {
-        const men = document.createElement("span");
-        men.className = "af-feed-mention";
-        men.textContent = mention;
-        text.append(men, document.createTextNode(" "));
+        text.append(el("span", "af-feed-mention", mention), document.createTextNode(" "));
     }
-    const shown = body.length > TRUNCATE_AT ? body.slice(0, TRUNCATE_AT) + "…" : body;
-    text.appendChild(document.createTextNode(shown));
-    if (body.length > TRUNCATE_AT) {
-        text.title = body;
-    }
+    text.appendChild(document.createTextNode(summaryLine(body)));
     return text;
 }
 
 function timeSpan(ms: number): HTMLElement {
-    const time = document.createElement("span");
-    time.className = "af-feed-time";
-    time.textContent = timeLabel(ms, { seconds: true });
-    return time;
+    return el("span", "af-feed-time", timeLabel(ms, { seconds: true }));
 }
 
 /**
@@ -137,21 +136,29 @@ export function shortOrigin(origin: string): string {
     return parts.length <= 2 ? origin : parts.slice(-2).join(".");
 }
 
-/** Append a single agent-activity row to `container`. */
+/**
+ * Append a single agent-activity row to `container`.
+ *
+ * A long or multi-line message — an agent's reply, an error it reports — shows
+ * its first line and opens in place, like a log record. A tooltip showed it only
+ * to a mouse, never to a touchscreen or the keyboard, and flattened its lines.
+ */
 export function feedItemEl(container: HTMLElement, item: FeedItem): void {
-    const row = document.createElement("div");
-    row.className = `af-feed-item ${TYPE_CLASS[item.type] ?? ""}`.trim();
+    const row = el("div", `af-feed-item ${TYPE_CLASS[item.type] ?? ""}`.trim());
     row.dataset["source"] = "agent";
     // Recorded rather than read back from the class: a class says how a row
     // looks, and more than one kind of row can be made to look the same.
     row.dataset["type"] = item.type;
 
-    const icon = document.createElement("span");
-    icon.className = "af-feed-icon";
+    const icon = el("span", "af-feed-icon");
     const iconName = TYPE_ICON[item.type];
     icon.innerHTML = iconName ? iconMarkup(iconName, 14) : "·";
 
-    row.append(icon, timeSpan(item.timestamp), buildAgentSpan(item), buildTextSpan(item));
+    const { mention, body } = splitMention(item);
+    row.append(icon, timeSpan(item.timestamp), buildAgentSpan(item), buildTextSpan(mention, body));
+    if (needsExpanding(body)) {
+        attachExpander(row, mention ? `${mention} ${body}` : body, "af-feed-full-prose");
+    }
     container.appendChild(row);
 }
 
@@ -163,52 +170,41 @@ export function feedItemEl(container: HTMLElement, item: FeedItem): void {
  * clicked, rather than truncating it away or growing the list unpredictably.
  */
 export function appLogItemEl(container: HTMLElement, item: AppLogItem): void {
-    const row = document.createElement("div");
-    row.className = `af-feed-item af-feed-app ${LEVEL_CLASS[item.level] ?? ""}`.trim();
+    const row = el("div", `af-feed-item af-feed-app ${LEVEL_CLASS[item.level] ?? ""}`.trim());
     row.dataset["source"] = "app";
     row.dataset["level"] = item.level;
 
-    const icon = document.createElement("span");
-    icon.className = "af-feed-icon";
-    icon.textContent = "·";
+    const icon = el("span", "af-feed-icon", "·");
 
-    const origin = document.createElement("span");
-    origin.className = "af-feed-agent";
-    origin.textContent = shortOrigin(item.origin);
+    const origin = el("span", "af-feed-agent", shortOrigin(item.origin));
     origin.title = item.origin;
 
-    const firstLine = item.text.split("\n", 1)[0] ?? "";
-    const expandable = item.text.includes("\n") || firstLine.length > TRUNCATE_AT;
-
-    const text = document.createElement("span");
-    text.className = "af-feed-text af-feed-log-text";
-    text.textContent = firstLine.length > TRUNCATE_AT ? firstLine.slice(0, TRUNCATE_AT) + "…" : firstLine;
+    const text = el("span", "af-feed-text af-feed-log-text", summaryLine(item.text));
 
     row.append(icon, timeSpan(item.ts * 1000), origin, text);
 
-    if (expandable) {
+    if (needsExpanding(item.text)) {
         attachExpander(row, item.text);
     }
     container.appendChild(row);
 }
 
 /**
- * Make a row reveal its whole record in place.
+ * Make a row reveal its whole text in place.
  *
- * `textContent`, never `innerHTML`. This is the one place the *entire*
- * untrusted record is rendered, and a traceback is exactly the string an agent
- * can be induced to emit — the reach for `innerHTML` here is stored XSS in the
+ * `textContent`, never `innerHTML`. This is where the *entire* untrusted text
+ * is rendered — a traceback, an agent's reply — which is exactly what an agent
+ * can be induced to emit; the reach for `innerHTML` here is stored XSS in the
  * feature whose purpose is displaying attacker-influenceable strings.
+ * `extraClass` styles the expanded text, such as prose rather than a log record.
  */
-function attachExpander(row: HTMLElement, fullText: string): void {
+function attachExpander(row: HTMLElement, fullText: string, extraClass = ""): void {
     row.classList.add("af-feed-expandable");
     row.tabIndex = 0;
     row.setAttribute("role", "button");
     row.setAttribute("aria-expanded", "false");
 
-    const full = document.createElement("pre");
-    full.className = "af-feed-full";
-    full.textContent = fullText;
+    const full = el("pre", `af-feed-full ${extraClass}`.trim(), fullText);
     full.hidden = true;
     row.appendChild(full);
 
@@ -372,19 +368,9 @@ export function applyFilters(feed: HTMLElement, filters: FeedFilters): void {
 }
 
 function labelled(text: string, control: HTMLElement): HTMLElement {
-    const wrap = document.createElement("label");
-    wrap.className = "af-feed-filter";
-    const span = document.createElement("span");
-    span.textContent = text;
-    wrap.append(span, control);
+    const wrap = el("label", "af-feed-filter");
+    wrap.append(el("span", "", text), control);
     return wrap;
-}
-
-function option(value: string, text: string): HTMLOptionElement {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = text;
-    return opt;
 }
 
 /** A `<select>` bound to one filter field, rebuilt into `filters` on change. */
@@ -394,8 +380,7 @@ function filterSelect(
     label: (v: string) => string,
     onPick: (value: string) => void,
 ): HTMLSelectElement {
-    const select = document.createElement("select");
-    select.className = "af-feed-select";
+    const select = el("select", "af-feed-select");
     values.forEach(v => select.appendChild(option(v, label(v))));
     select.value = current;
     select.addEventListener("change", () => onPick(select.value));
@@ -405,7 +390,7 @@ function filterSelect(
 /** The heartbeat toggle — a level filter in disguise, kept as its own control
  *  because that is the shape people already know it by. */
 function heartbeatButton(filters: FeedFilters, changed: () => void): HTMLButtonElement {
-    const btn = document.createElement("button");
+    const btn = button();
     const paint = () => {
         btn.innerHTML = `${iconMarkup("heart", 12)} heartbeats: ${filters.hideHeartbeats ? "off" : "on"}`;
         btn.className = `af-mini-btn${filters.hideHeartbeats ? "" : " active"}`;
@@ -455,19 +440,15 @@ function syncControlRelevance(
  * rather than for how it currently works.
  */
 function refreshButton(onRefresh: () => void): HTMLButtonElement {
-    const refresh = document.createElement("button");
-    refresh.className = "af-mini-btn af-feed-refresh";
-    refresh.type = "button";
+    const refresh = button("af-mini-btn af-feed-refresh", "refresh");
     refresh.title = "Fetch the application log again";
-    refresh.textContent = "refresh";
     refresh.addEventListener("click", () => onRefresh());
     return refresh;
 }
 
 function followButton(starting: boolean, onChange: (following: boolean) => void): HTMLButtonElement {
     let following = starting;
-    const follow = document.createElement("button");
-    follow.type = "button";
+    const follow = button();
     follow.title = "Keep fetching new records";
     const paint = () => {
         follow.textContent = `follow: ${following ? "on" : "off"}`;
@@ -522,8 +503,7 @@ function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
         },
     );
 
-    const search = document.createElement("input");
-    search.className = "af-feed-search";
+    const search = el("input", "af-feed-search");
     search.type = "search";
     search.placeholder = "search…";
     search.value = filters.search;
@@ -532,8 +512,7 @@ function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
         changed();
     });
 
-    const toolbar = document.createElement("div");
-    toolbar.className = "af-feed-toolbar";
+    const toolbar = el("div", "af-feed-toolbar");
     toolbar.append(
         labelled("show", source),
         labelled("level", level),
@@ -547,9 +526,7 @@ function buildToolbar(feed: HTMLElement, opts: FeedViewOptions): HTMLElement {
 
 function populateFeed(feed: HTMLElement, items: ActivityItem[], filters: FeedFilters): void {
     const rows = dedupeAndSortFeed(items).filter(i => !isHidden(i, filters.hideHeartbeats));
-    const empty = document.createElement("div");
-    empty.className = "af-feed-empty";
-    empty.textContent = "No events yet.";
+    const empty = el("div", "af-feed-empty", "No events yet.");
     empty.hidden = rows.length > 0;
     feed.appendChild(empty);
     rows.forEach(item => activityItemEl(feed, item));
@@ -559,11 +536,9 @@ function populateFeed(feed: HTMLElement, items: ActivityItem[], filters: FeedFil
 
 /** Build the activity view (toolbar + list) for the given entries. */
 export function buildFeedView(items: ActivityItem[], opts: FeedViewOptions): HTMLElement {
-    const wrap = document.createElement("div");
-    wrap.className = "af-feed-wrap";
+    const wrap = el("div", "af-feed-wrap");
 
-    const feed = document.createElement("div");
-    feed.className = "af-feed";
+    const feed = el("div", "af-feed");
     feed.id = "af-feed-view";
     // Append-only activity log — announce new rows to screen readers as they arrive.
     feed.setAttribute("role", "log");

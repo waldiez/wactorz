@@ -100,7 +100,7 @@ class TestWhichAddressWins:
             "wactorz.agents.planner.pipeline.find_main_actor",
             lambda _registry: FakeMain({"discord": STORED}),
         )
-        pipeline._registry = object()
+        pipeline._registry = object()  # pyright: ignore[reportAttributeAccessIssue]
 
         text = section(pipeline)
 
@@ -115,7 +115,7 @@ class TestWhichAddressWins:
             "wactorz.agents.planner.pipeline.find_main_actor",
             lambda _registry: FakeMain({"telegram": "https://api.telegram.org/bot9/x"}),
         )
-        pipeline._registry = object()
+        pipeline._registry = object()  # pyright: ignore[reportAttributeAccessIssue]
 
         text = section(pipeline)
 
@@ -127,8 +127,8 @@ class TestWhichAddressWins:
 class FakeActor:
     """Only the two calls the command makes of it."""
 
-    def __init__(self, urls: dict[str, str] | None = None) -> None:
-        self.stored = dict(urls or {})
+    def __init__(self, stored: dict[str, Any] | None = None) -> None:
+        self.stored = dict(stored or {})
 
     def recall(self, key: str) -> Any:
         return self.stored.get(key)

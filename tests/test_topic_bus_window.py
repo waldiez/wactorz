@@ -5,8 +5,6 @@ Ageing is driven here by writing `_ts` directly instead of sleeping — a window
 measured in minutes cannot be waited out.
 """
 
-from __future__ import annotations
-
 import time
 
 import pytest
@@ -87,6 +85,39 @@ class TestStatistics:
         window.push({"value": 1, "humidity": 55})
         window.push({"value": 2, "humidity": 60})
         assert window.values("humidity") == [55, 60]
+
+
+class TestLatest:
+    """Both spellings are in use in generated code, so the argument chooses."""
+
+    def test_without_a_key_it_is_the_whole_entry(self, window: StreamWindow) -> None:
+        window.push({"value": 1, "humidity": 55})
+
+        latest = window.latest()
+
+        assert latest is not None
+        assert latest["humidity"] == 55
+        assert "_ts" in latest
+
+    def test_with_a_key_it_is_that_field(self, window: StreamWindow) -> None:
+        window.push({"value": 1})
+        window.push({"value": 2})
+
+        assert window.latest("value") == 2
+
+    def test_it_looks_back_for_the_newest_entry_carrying_the_key(
+        self, window: StreamWindow
+    ) -> None:
+        # A stream where only some messages report a field still answers.
+        window.push({"value": 1, "humidity": 55})
+        window.push({"value": 2})
+
+        assert window.latest("humidity") == 55
+
+    def test_a_key_nothing_carries_is_none(self, window: StreamWindow) -> None:
+        window.push({"value": 1})
+
+        assert window.latest("humidity") is None
 
 
 class TestTrendPredicates:

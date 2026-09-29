@@ -39,13 +39,19 @@ docker compose --profile python up -d
 
 Open `http://localhost:8888` (monitor UI) or `http://localhost:8000` (REST API).
 
+Both ask for the API key. With `API_KEY` blank in `.env`, the stack generates one
+on first start and keeps it in a volume. Read it with
+`docker compose exec wactorz-python cat /run/wactorz/api_key`, or follow the
+one-time sign-in link in `docker compose logs wactorz-python`. Set `API_KEY` in
+`.env` to choose your own.
+
 ### Services
 
 Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring up more services.
 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
-| _(all)_ | mosquitto | `mosquitto:1883` | `:1883` |
+| _(all)_ | mosquitto | `mosquitto:1883` | `127.0.0.1:1883`, and `:8883` (TLS) |
 | `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
 | `python` | monitor UI | `wactorz-python:8888` | `:8888` |
 | `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
@@ -56,6 +62,33 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 docker compose --profile python up -d
 # Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)
 ```
+
+### Health probes
+
+Both servers answer the same probes, with no key:
+
+- `/health` (also `/healthz`, `/livez`) is **liveness**. It fails only when the
+  process cannot answer, which is what the compose files and the image's
+  `HEALTHCHECK` restart on.
+- `/ready` (also `/readyz`) is **readiness**. It answers `503` while the agents
+  start or stop, and while the broker or the database is unreachable.
+
+On Kubernetes, point each probe at its own path, and give liveness a start
+period that covers startup:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /livez, port: 8888 }
+  initialDelaySeconds: 60
+  periodSeconds: 30
+readinessProbe:
+  httpGet: { path: /readyz, port: 8888 }
+  periodSeconds: 10
+```
+
+Never use `/ready` for liveness. A broker outage would then restart every
+replica in a loop, and restarting fixes nothing the broker's return would not.
+See [the API reference](api.md) for what each check means.
 
 ---
 
@@ -89,6 +122,9 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
 | `WACTORZ_STATE_DIR` | `./state` | Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins `/data/state`. `wactorz-reset` reads the same variable, so a wipe targets whatever the app is using |
 | `WACTORZ_TZ` | _(unset)_ | Override the timezone used in agents' date/time context (e.g. `Europe/Athens`). Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` > host local zone. Blank or unknown values fall through to the next candidate |
+| `WACTORZ_RETENTION_CHAT_DAYS` | `365` | Days chat history is kept; `0` keeps it for ever. An attached file goes with the last message that refers to it, or a day after upload if it was never sent |
+| `WACTORZ_RETENTION_TIMESERIES_DAYS` | `365` | Days sensor readings, detections, Home Assistant state changes and actuations are kept; `0` keeps them for ever. The time-series collector agent's own `retention_days` applies too, and the shorter window holds |
+| `WACTORZ_RETENTION_OUTBOX_DAYS` | `7` | Days an MQTT message the broker never accepted stays in the outbox; `0` keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under `nodes/` or `agents/by-name/`, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained `desired_state` follows this setting |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |

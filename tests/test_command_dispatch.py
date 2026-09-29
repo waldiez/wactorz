@@ -12,7 +12,7 @@ later — the delete path reached that state by calling ``stop()`` directly.
 """
 
 import json
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from aiohttp import web
@@ -57,10 +57,14 @@ class _Recorder(Actor):
 class _Supervisor:
     def __init__(self) -> None:
         self.released: list[str] = []
+        self.forgotten: list[str] = []
         self.resupervised: list[str] = []
 
     def release(self, name: str) -> None:
         self.released.append(name)
+
+    def drop_supervised(self, name: str) -> None:
+        self.forgotten.append(name)
 
     def resupervise(self, name: str, _actor: Actor) -> None:
         self.resupervised.append(name)
@@ -105,9 +109,11 @@ def _attach(actor: Actor, registry: "_Registry") -> "_Registry":
 class _Broker:
     def __init__(self) -> None:
         self.published: list[tuple[str, str]] = []
+        self.qos: list[int] = []
 
-    async def publish(self, topic: str, payload: str) -> None:
+    async def publish(self, topic: str, payload: str, qos: int = 0, **_kwargs: Any) -> None:
         self.published.append((topic, payload))
+        self.qos.append(qos)
 
 
 class _Request:
@@ -145,13 +151,17 @@ class TestApplyCommand:
         assert registry.supervisor.released == ["worker"]
         assert actor.calls == ["stop"]
 
-    async def test_delete_releases_unregisters_and_stops(self) -> None:
+    async def test_delete_forgets_unregisters_and_stops(self) -> None:
+        # Forgotten rather than released: a deleted actor does not come back,
+        # and a released entry would keep its factory for as long as the
+        # process runs.
         actor = _Recorder()
         registry = _attach(actor, _Registry(actor))
 
         assert await actor.apply_command("delete") is True
 
-        assert registry.supervisor.released == ["worker"]
+        assert registry.supervisor.forgotten == ["worker"]
+        assert registry.supervisor.released == []
         assert registry.unregistered == [actor.actor_id]
         assert actor.calls == ["stop"]
 
@@ -190,6 +200,24 @@ class TestApplyCommand:
 
         assert await actor.apply_command("restart") is False
         assert actor.calls == []
+
+
+class TestCommandDelivery:
+    """A command to a remote agent is at-least-once.
+
+    It goes out on the monitor's own client, which applies none of
+    MQTTPublisher's topic classification, so the QoS has to be asked for. At
+    QoS 0 a stop issued while the agent was reconnecting was simply gone -- the
+    dashboard reported it stopped and it kept running.
+    """
+
+    async def test_it_is_published_at_least_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        broker = _Broker()
+        monkeypatch.setattr(lifecycle.runtime, "mqtt_client_ref", broker)
+
+        await lifecycle.dispatch_command("remote-1", "stop", sender="test")
+
+        assert broker.qos == [1]
 
 
 class TestDispatchCommand:

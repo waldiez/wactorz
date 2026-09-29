@@ -1,0 +1,23 @@
+# Findings `make image-scan` accepts, each with the reason and an expiry date.
+# An entry stops applying on its date, and the finding fails the scan again until
+# someone looks at it anew. The same mechanism is the way out when a new fix is
+# published before the pinned base image picks it up: add the ID here with a
+# short expiry rather than leave every push red.
+vulnerabilities:
+  # Both are copies pip vendors, listed in pip/_vendor/vendor.txt, and the newest
+  # pip still ships them. pip stays in the image: agents install packages at
+  # runtime through it.
+  - id: GHSA-6v7p-g79w-8964
+    purls:
+      - pkg:pypi/msgpack@1.1.2
+    statement: >-
+      pip's vendored msgpack, used only to read pip's own HTTP cache. The flaw
+      needs an Unpacker reused after a caught error, which pip does not do.
+    expired_at: 2027-03-31
+  - id: CVE-2025-47273
+    purls:
+      - pkg:pypi/setuptools@70.3.0
+    statement: >-
+      pip's vendored setuptools. The flaw is in PackageIndex, the easy_install
+      downloader, which pip does not use.
+    expired_at: 2027-03-31

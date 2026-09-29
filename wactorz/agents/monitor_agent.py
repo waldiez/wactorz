@@ -77,11 +77,11 @@ class MonitorActor(Actor):
             # inside a try — it can fail, and this agent reads it every cycle.
             try:
                 self._proc.cpu_percent(interval=None)
-            except Exception:
+            except Exception:  # noqa: S110  # priming a CPU baseline; telemetry only
                 pass
 
         self._tasks.append(asyncio.create_task(self._monitor_loop()))
-        logger.info(f"[{self.name}] Monitor started. check_interval={self.check_interval}s")
+        logger.info("[%s] Monitor started. check_interval=%ss", self.name, self.check_interval)
 
     # ── Message handling ───────────────────────────────────────────────────
 
@@ -90,7 +90,7 @@ class MonitorActor(Actor):
         if msg.sender_id and msg.sender_id != self.actor_id:
             self._last_seen[msg.sender_id] = time.time()
             if self._alert_state.get(msg.sender_id):
-                logger.info(f"[{self.name}] Actor {msg.sender_id[:8]} recovered.")
+                logger.info("[%s] Actor %s recovered.", self.name, msg.sender_id[:8])
                 self._alert_state[msg.sender_id] = False
 
         # Structured error event forwarded from agents/{id}/errors
@@ -115,8 +115,8 @@ class MonitorActor(Actor):
                 await self._publish_host_stats()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"[{self.name}] Monitor loop error: {e}")
+            except Exception:
+                logger.exception("[%s] Monitor loop error", self.name)
 
     async def _ping_all_actors(self):
         if not self._registry:
@@ -126,7 +126,7 @@ class MonitorActor(Actor):
                 try:
                     await self.send(actor.actor_id, MessageType.STATUS_REQUEST, None)
                 except Exception:
-                    pass
+                    logger.debug("[%s] Could not reach %s", self.name, actor.name)
 
     async def _check_all_actors(self):
         if not self._registry:
@@ -180,8 +180,12 @@ class MonitorActor(Actor):
         self._error_registry[actor_id] = event
 
         logger.warning(
-            f"[{self.name}] Error event from '{name}': "
-            f"phase={phase} severity={severity} consecutive={consec}"
+            "[%s] Error event from '%s': phase=%s severity=%s consecutive=%s",
+            self.name,
+            name,
+            phase,
+            severity,
+            consec,
         )
 
         # Always fire low-level MQTT alert for dashboards
@@ -284,9 +288,9 @@ class MonitorActor(Actor):
                     "timestamp": now,
                 },
             )
-            logger.info(f"[{self.name}] Notified main about '{agent_name}': {message[:80]}")
-        except Exception as e:
-            logger.error(f"[{self.name}] Failed to notify main: {e}")
+            logger.info("[%s] Notified main about '%s': %s", self.name, agent_name, message[:80])
+        except Exception:
+            logger.exception("[%s] Failed to notify main", self.name)
 
     # ── Alerting ───────────────────────────────────────────────────────────
 
@@ -299,7 +303,7 @@ class MonitorActor(Actor):
             "timestamp": time.time(),
             "severity": "warning" if gap < 120 else "critical",
         }
-        logger.warning(f"[{self.name}] ALERT: {actor.name} unresponsive for {gap:.0f}s")
+        logger.warning("[%s] ALERT: %s unresponsive for %.0fs", self.name, actor.name, gap)
         await self._mqtt_publish(f"agents/{actor.actor_id}/alert", alert)
 
         _infra = {
@@ -374,7 +378,12 @@ class MonitorActor(Actor):
             # reporting is unaffected, so this is a skip rather than a failure.
             return
         try:
-            cpu_pct = proc.cpu_percent(interval=None)
+            # psutil reports process CPU per core, the way `top` does, so a
+            # process using two cores reads 200%. The dashboard draws this as a
+            # share of the machine, so divide by the core count and publish a
+            # figure that fits the meter it is drawn in. cpu_count returns None
+            # when it cannot tell, which leaves the reading as psutil gave it.
+            cpu_pct = proc.cpu_percent(interval=None) / (psutil.cpu_count() or 1)
             mem_info = proc.memory_info()
             mem_used_mb = mem_info.rss / 1024 / 1024
             mem_total_mb = psutil.virtual_memory().total / 1024 / 1024
@@ -386,4 +395,4 @@ class MonitorActor(Actor):
             }
             await self._mqtt_publish("system/host", stats)
         except Exception as e:
-            logger.debug(f"[{self.name}] host stats error: {e}")
+            logger.debug("[%s] host stats error: %s", self.name, e)

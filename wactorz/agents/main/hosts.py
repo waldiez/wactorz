@@ -39,12 +39,16 @@ class ListenerHost(Protocol):
 
 
 class ManifestHost(ListenerHost, Protocol):
-    """The manifest registry needs only a connection.
+    """The manifest registry needs a connection, and somewhere to report a loss.
 
-    It owns its own tables and answers from them, which is why this adds
-    nothing — worth stating rather than leaving to be inferred from a larger
-    protocol it happens to satisfy.
+    It owns its own tables and answers from them, so this stays at one method.
+    A withdrawn manifest is the wire's way of saying an agent is gone, and the
+    registry is the only thing listening — but removing an agent belongs to the
+    lifecycle, not to a table of capabilities, so it hands the name over rather
+    than growing the reach to act on it.
     """
+
+    async def agent_withdrew(self, actor_id: str, name: str = ...) -> None: ...
 
 
 class SpawnHost(Protocol):
@@ -74,6 +78,8 @@ class SpawnHost(Protocol):
         """Read-only here: consulted for a node's address before an install."""
         ...
 
+    def _node_version_mismatch(self, node_name: str) -> str | None: ...
+
     def recall(self, key: str) -> Any: ...
 
     def persist(self, key: str, value: Any) -> None: ...
@@ -88,7 +94,9 @@ class SpawnHost(Protocol):
         self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
     ) -> None: ...
 
-    async def _update_node_desired_state(self, node: str, new_config: dict[str, Any]) -> None: ...
+    async def _update_node_desired_state(
+        self, node: str, new_config: dict[str, Any] | None = ..., remove_name: str | None = ...
+    ) -> None: ...
 
     async def _spawn_local_from_config(
         self, config: dict[str, Any], *, register: bool = ..., from_registry: bool = ...
@@ -137,7 +145,7 @@ class DelegationHost(Protocol):
     def _is_interface_source(self, agent_name: str) -> bool: ...
 
 
-class NodeHost(ListenerHost, Protocol):
+class NodeHost(ManifestHost, Protocol):
     """What the node collaborator needs beyond a connection.
 
     All of it serves one job: an agent that stops appearing in a node's
@@ -155,7 +163,15 @@ class NodeHost(ListenerHost, Protocol):
 
     def _queue_notification(self, notice: dict[str, Any]) -> None: ...
 
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
     async def _clear_agent_manifest(self, name: str, actor_id: str | None = ...) -> None: ...
+
+    async def _update_node_desired_state(
+        self, node: str, new_config: dict[str, Any] | None = ..., remove_name: str | None = ...
+    ) -> None: ...
 
 
 class LifecycleHost(Protocol):
@@ -198,6 +214,24 @@ class LifecycleHost(Protocol):
     ) -> None: ...
 
 
+class CodeRefreshHost(ListenerHost, Protocol):
+    """What filing a node's repaired program needs from the actor.
+
+    Narrow on purpose. This writes one field of one registry entry and asks one
+    question over the broker, so it reaches the registry, the connection, and
+    nothing else — the reach is the trust boundary, and it is worth being able
+    to read it in four lines.
+    """
+
+    def _get_spawn_registry(self) -> dict[str, dict[str, Any]]: ...
+
+    def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
+
+    async def _mqtt_publish(
+        self, topic: str, payload: Any, retain: bool = ..., qos: int = ...
+    ) -> None: ...
+
+
 class NodeReaders(Protocol):
     """The live node view a migration consults.
 
@@ -233,7 +267,15 @@ class MigrationHost(NodeHost, Protocol):
 
     def _node_is_online(self, node_name: str) -> bool: ...
 
+    def _node_version_mismatch(self, node_name: str) -> str | None: ...
+
     def _online_node_names(self) -> list[str]: ...
+
+    # The migrations in flight are written down, so a restart does not drop the
+    # token and leave both the ack and the rollback with nothing to match.
+    def recall(self, key: str) -> Any: ...
+
+    def persist(self, key: str, value: Any) -> None: ...
 
     def _save_to_spawn_registry(self, config: dict[str, Any]) -> None: ...
 

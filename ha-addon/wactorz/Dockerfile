@@ -1,6 +1,9 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20
 FROM $BUILD_FROM
 
+# Unpinned on purpose: an Alpine package version pinned here stops resolving once
+# the base image's repository moves on, which breaks the build on its own.
+# hadolint ignore=DL3018
 RUN apk add --no-cache \
     curl git jq gcc musl-dev linux-headers libffi-dev openssl-dev \
     mosquitto mosquitto-clients

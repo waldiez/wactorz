@@ -63,6 +63,53 @@ def parse_mention(content: str) -> tuple[str, str]:
     return MAIN_ACTOR_NAME, content
 
 
+#: How long since a node last reported before its agents stop counting as
+#: reachable. Heartbeats arrive far more often than this.
+NODE_FRESH_SECONDS = 30
+
+
+def remote_node_for(name: str) -> str | None:
+    """The node running ``name``, or None if no node recently said it has it."""
+    main_actor = find_main_actor(runtime.registry)
+    if not main_actor:
+        return None
+    for node_name, nd in main_actor._known_nodes.items():
+        if time.time() - nd.get("last_seen", 0) < NODE_FRESH_SECONDS and name in nd.get(
+            "agents", []
+        ):
+            return node_name
+    return None
+
+
+def routable(name: str) -> bool:
+    """Whether a message addressed to ``name`` has somewhere to go."""
+    if not name:
+        return False
+    if runtime.registry is not None and runtime.registry.find_by_name(name):
+        return True
+    return remote_node_for(name) is not None
+
+
+def turn_attribution(content: str, declared: str = "") -> str:
+    """Which agent a turn belongs to — its reply frames and its ``chat_log`` rows.
+
+    The mention when it can be routed to, so a reply is filed with the agent that
+    answers it. Otherwise the thread the sender says it is in: a mention that
+    resolves to nothing is answered by the transport, and that answer belongs
+    where the user is looking rather than in a thread for an agent that does not
+    exist, which no view would ever show. ``declared`` is not checked against the
+    running agents on purpose — a node that has gone quiet leaves the dashboard
+    offering a thread this process will not route to, and that thread is still
+    where the exchange belongs.
+    """
+    if content.startswith("/"):
+        return MAIN_ACTOR_NAME
+    mentioned, _ = parse_mention(content)
+    if routable(mentioned):
+        return mentioned
+    return declared or MAIN_ACTOR_NAME
+
+
 # ── Catalog / experimental-agent presentation ──────────────────────────────
 
 
@@ -435,13 +482,7 @@ async def route_chat(
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
         if main_actor:
-            remote_node = None
-            for node_name, nd in main_actor._known_nodes.items():
-                if time.time() - nd.get("last_seen", 0) < 30 and target_name in nd.get(
-                    "agents", []
-                ):
-                    remote_node = node_name
-                    break
+            remote_node = remote_node_for(target_name)
 
             if remote_node:
                 if blocks:
@@ -500,7 +541,10 @@ async def route_chat(
                     await _end_fn()
                     return
 
+        # A turn nothing answered still ends: the caller waits on the ending
+        # rather than on the reply, and holds its composer until one arrives.
         await reply_fn(f"Agent @{target_name} not found.")
+        await _end_fn()
         return
 
     # Every path below reaches into the agent directly rather than through its

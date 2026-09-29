@@ -148,7 +148,7 @@ MQTT_PASSWORD=
 #### Web dashboard
 
 ```env
-WS_PORT=8888   # dashboard port, default 8888
+MONITOR_PORT=8888   # dashboard port, default 8888; WS_PORT is read only when this is unset
 ```
 
 ---

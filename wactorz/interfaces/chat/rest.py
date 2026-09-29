@@ -7,6 +7,7 @@ remaining routes expose actor listing, lifecycle and metrics.
 import asyncio
 import hmac
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -16,15 +17,48 @@ from aiohttp.web_response import Response
 from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...core.actor import forbidden
 from ...monitoring import PrometheusMonitor
+from ...web import origins, probes
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
     from ...core.actor import Actor
+    from ...core.registry import ActorSystem
 
 logger = logging.getLogger(__name__)
 
 # Reachable without a key so container and uptime probes keep working.
-UNGUARDED_PATHS = frozenset({"/health"})
+UNGUARDED_PATHS = probes.PROBE_PATHS
+
+#: What `/chat` accepts as `agent_name`. One token with no whitespace: the name
+#: becomes the first word of an `@name` mention, and a space in it would move
+#: the rest of the name into the message.
+AGENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def _chat_request(body: dict[str, Any]) -> tuple[str, str] | str:
+    """The agent a chat is for and its message, or what is wrong with the request."""
+    message = body.get("message", "")
+    # Only absent or empty means main: any other value is a name, or is refused as one.
+    agent_name = body.get("agent_name")
+    if agent_name in (None, ""):
+        agent_name = "main"
+    if not message:
+        return "No message provided"
+    if not isinstance(agent_name, str) or not AGENT_NAME.fullmatch(agent_name):
+        return "agent_name is not an agent name"
+    return agent_name, message
+
+
+def addressed_to(agent_name: str, message: str) -> str:
+    """The message main is given for a chat addressed to ``agent_name``.
+
+    Anything other than main is reached through main's `@name` mention, the same
+    route a user typing it takes: main finds the agent here, spawns it from the
+    catalogue, or asks the node it runs on, and answers with its reply.
+    """
+    if agent_name == "main":
+        return message
+    return f"@{agent_name} {message}"
 
 
 async def _json_object(request: Request) -> dict[str, Any] | None:
@@ -46,11 +80,18 @@ class RESTInterface:
     """
 
     def __init__(
-        self, main_actor: "MainActor", port: int = 8000, api_key: str | None = None
+        self,
+        main_actor: "MainActor",
+        port: int = 8000,
+        api_key: str | None = None,
+        system: "ActorSystem | None" = None,
     ) -> None:
         self.agent = main_actor
         self.port = port
         self.api_key = api_key
+        #: What the readiness probe reports on. Without one, this interface was
+        #: built outside a running system and is never ready.
+        self.system = system
         self._monitor = PrometheusMonitor(lambda: getattr(self.agent, "_registry", None))
 
     def _authorized(self, request: Request) -> bool:
@@ -128,12 +169,12 @@ class RESTInterface:
             body = await _json_object(request)
             if body is None:
                 return web.json_response({"error": "Expected a JSON object"}, status=400)
-            message = body.get("message", "")
-            agent_name = body.get("agent_name") or "main"
-            if not message:
-                return web.json_response({"error": "No message provided"}, status=400)
+            parsed = _chat_request(body)
+            if isinstance(parsed, str):
+                return web.json_response({"error": parsed}, status=400)
+            agent_name, message = parsed
 
-            response = await self.agent.process_user_input(message)
+            response = await self.agent.process_user_input(addressed_to(agent_name, message))
             return web.json_response(
                 {
                     "status": "sent",
@@ -243,8 +284,10 @@ class RESTInterface:
                 return web.Response(status=404, text="actor not found")
             return web.json_response(self._metrics_payload(actor))
 
-        async def health_endpoint(request: Request) -> Response:
-            return web.json_response({"status": "ok"})
+        async def readiness_endpoint(request: Request) -> Response:
+            if self.system is None:
+                return probes.readiness_response({"supervisor": "not started"})
+            return probes.readiness_response(await probes.readiness(self.system))
 
         async def prometheus_metrics_endpoint(request: Request) -> Response:
             return self._monitor.metrics_response()
@@ -256,6 +299,24 @@ class RESTInterface:
                     {"error": "Home Assistant map snapshot not available"}, status=404
                 )
             return web.json_response(payload)
+
+        @web.middleware
+        async def origin_middleware(request: Request, handler: Any) -> Response:
+            """With no key, refuse a host or origin that is not this machine's own.
+
+            Without a key the API is open, and these checks are all that keeps a
+            web page out of it: one that rebinds its own name to this address, or
+            posts to it from another site. With a key they add nothing, since
+            neither kind of page can present the key, and the host check would
+            refuse the name a scraper on the container network uses. The probe
+            endpoints are left alone either way: they change nothing and say only
+            that the process is up, and a load balancer asks under its own name.
+            """
+            if not self.api_key and request.path not in UNGUARDED_PATHS:
+                refusal = origins.refuse(request)
+                if refusal is not None:
+                    return refusal
+            return await handler(request)
 
         @web.middleware
         async def auth_middleware(request: Request, handler: Any) -> Response:
@@ -270,10 +331,13 @@ class RESTInterface:
             return await handler(request)
 
         app = web.Application(
-            middlewares=[self._monitor.middleware, auth_middleware],
+            middlewares=[self._monitor.middleware, origin_middleware, auth_middleware],
             client_max_size=MAX_REQUEST_BYTES,
         )
-        app.router.add_get("/health", health_endpoint)
+        for path in sorted(probes.LIVENESS_PATHS):
+            app.router.add_get(path, probes.liveness_handler)
+        for path in sorted(probes.READINESS_PATHS):
+            app.router.add_get(path, readiness_endpoint)
         app.router.add_get("/metrics", prometheus_metrics_endpoint)
         app.router.add_get("/ha-map", ha_map_latest_endpoint)
         app.router.add_get("/actors", agents_endpoint)

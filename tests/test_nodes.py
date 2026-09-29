@@ -63,6 +63,8 @@ class TestWhatTheNodeListingReports:
             "last_seen",
             "online",
             "pid",
+            "version",
+            "runtime",
             "uptime_s",
             "cpu_pct",
             "mem_used_mb",

@@ -22,7 +22,6 @@ the monitor all purge, so a delete completes even when one of them is down.
 """
 
 import json
-import uuid
 from typing import Any
 
 import pytest
@@ -32,13 +31,14 @@ from wactorz.agents.main.lifecycle import LifecycleService
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core.actor import derive_actor_id
 
 _STORE_LOCKED = "database is locked"
 
 
 #: The scheme every side derives an agent's id from, so all three agree.
 def actor_id_for(name: str) -> str:
-    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+    return derive_actor_id(name)
 
 
 class _Persistence:
@@ -63,17 +63,27 @@ class _Agent:
         self.stopped = 0
         self._persistence_api = persistence
         self._persistence_dir = pdir
+        #: What happened to it, in order: "traces" for its own clean-up, "stop".
+        self.calls: list[str] = []
+
+    async def delete_own_traces(self) -> None:
+        self.calls.append("traces")
 
     async def stop(self) -> None:
         self.stopped += 1
+        self.calls.append("stop")
 
 
 class _Supervisor:
     def __init__(self) -> None:
         self.released: list[str] = []
+        self.forgotten: list[str] = []
 
     def release(self, name: str) -> None:
         self.released.append(name)
+
+    def drop_supervised(self, name: str) -> None:
+        self.forgotten.append(name)
 
 
 class _Registry:
@@ -221,6 +231,16 @@ class TestLeavingNothingBehind:
 
         assert main.removed_from_registry == ["sensor"]
 
+    async def test_a_local_agent_removes_its_own_traces_before_it_stops(self) -> None:
+        # Its own files and retained topics are its to clear, and stopping
+        # would otherwise publish the last word on them.
+        agent = _Agent("collector")
+        main = _Main(local={"collector": agent})
+
+        await main.delete("collector")
+
+        assert agent.calls == ["traces", "stop"]
+
     async def test_a_local_agents_persistence_is_purged(self) -> None:
         store = _Persistence()
         main = _Main(local={"collector": _Agent("collector", store)})
@@ -230,13 +250,15 @@ class TestLeavingNothingBehind:
         assert store.purged == 1
 
     async def test_the_supervisor_stops_holding_it(self) -> None:
-        # Still held, its factory brings the agent back at the next restart.
+        # Still held, its factory brings the agent back at the next restart; and
+        # held as a retired entry, it stays in memory for as long as main runs.
         supervisor = _Supervisor()
         main = _Main(local={"collector": _Agent("collector")}, supervisor=supervisor)
 
         await main.delete("collector")
 
-        assert supervisor.released == ["collector"]
+        assert supervisor.forgotten == ["collector"]
+        assert supervisor.released == []
 
     async def test_the_manifest_stops_being_reported(self) -> None:
         main = _Main(
@@ -476,3 +498,18 @@ class TestDeleteBlocksTheModelWrote:
 
         assert "<delete>" not in clean
         assert "Removing that." in clean
+
+
+def test_the_runner_derives_the_same_id_as_the_server() -> None:
+    """A node and main must agree about which agent is which.
+
+    They derive the id from one function now, so this pins the formula rather
+    than holding two copies to each other: the id keys a held broker session
+    and every registry entry, so a change to it strands both.
+    """
+    import uuid
+
+    name = "kitchen-collector"
+    node_copy = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"wactorz.actor.{name}"))
+
+    assert node_copy == derive_actor_id(name)

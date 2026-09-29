@@ -12,6 +12,7 @@
 import { toast } from "./ToastManager";
 import { isAccepted, humanSize, MAX_BYTES, uploadFile } from "./dashboard/uploads";
 import { emit } from "../events";
+import { el } from "./dom";
 
 export class DropZone {
     private overlay: HTMLElement;
@@ -38,8 +39,7 @@ export class DropZone {
     }
 
     private _buildOverlay(): HTMLElement {
-        const overlay = document.createElement("div");
-        overlay.className = "af-drop-overlay";
+        const overlay = el("div", "af-drop-overlay");
         overlay.innerHTML = `
       <div class="af-drop-card">
         <div class="af-drop-icon">⬆</div>

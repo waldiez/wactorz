@@ -51,10 +51,12 @@ Recipe-style module: state lives in `agent.state`, the framework injects
 
 import asyncio
 import io
+import ipaddress
 import json
 import logging
 import random
 import re
+import socket
 import time
 import urllib.parse
 from collections.abc import Callable
@@ -483,8 +485,9 @@ async def _load_manual_async(agent, device: str, explicit_url: str | None = None
     notify_user() when it's ready.
 
     Falls back to a synchronous load when the runtime has no background-task
-    support (e.g. a remote-runner API without run_in_background), so behaviour is
-    safe everywhere.
+    support, so behaviour is safe everywhere. Every current runtime offers it --
+    a node runs the same agent API main does -- but this program is also run by
+    hand and pasted into older installs.
     """
     if hasattr(agent, "run_in_background"):
         agent.run_in_background(_load_manual_bg(agent, device, explicit_url))
@@ -1043,6 +1046,63 @@ def _rank_manual_urls(results, get_url_fn: Callable[[str], str]) -> list[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+#: The most a download may weigh. A manual runs to tens of megabytes at most; a
+#: response still streaming past this is not one, and would otherwise be held in
+#: memory whole.
+MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+
+#: How many redirects a download follows before giving up.
+MAX_REDIRECTS = 5
+
+
+def _public_address(url: str) -> bool:
+    """Whether ``url`` is http(s) and every address its host resolves to is public.
+
+    The URLs come from search results and from links inside fetched pages, and
+    the machine running this agent sits on a private network. Without the check
+    a result -- or a redirect from one -- could point it at a router's admin page
+    or a cloud metadata address. Blocking: resolves the host, so call it off the
+    event loop.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parsed.hostname, parsed.port or None)
+    except (OSError, UnicodeError):
+        return False
+    addresses = {info[4][0] for info in infos}
+    return bool(addresses) and all(
+        ipaddress.ip_address(address.split("%", 1)[0]).is_global for address in addresses
+    )
+
+
+async def _fetch_public(agent, client, url: str) -> tuple[int, str, bytes] | None:
+    """GET ``url`` as (status, content type, body), or None if it may not be fetched.
+
+    Redirects are followed here rather than by the client, so every hop is
+    checked by :func:`_public_address` before it is requested. The body is read
+    as a stream and abandoned past ``MAX_DOWNLOAD_BYTES``.
+    """
+    for _hop in range(MAX_REDIRECTS + 1):
+        if not await asyncio.to_thread(_public_address, url):
+            await agent.log(f"Not fetching {url}: not a public web address")
+            return None
+        async with client.stream("GET", url) as resp:
+            if resp.is_redirect:
+                url = urllib.parse.urljoin(url, resp.headers.get("location", ""))
+                continue
+            body = bytearray()
+            async for chunk in resp.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > MAX_DOWNLOAD_BYTES:
+                    await agent.log(f"Not fetching {url}: larger than {MAX_DOWNLOAD_BYTES} bytes")
+                    return None
+            return resp.status_code, resp.headers.get("content-type", ""), bytes(body)
+    await agent.log(f"Not fetching {url}: more than {MAX_REDIRECTS} redirects")
+    return None
+
+
 async def _download_pdf(agent, url: str) -> bytes | None:
     try:
         import httpx
@@ -1054,19 +1114,22 @@ async def _download_pdf(agent, url: str) -> bytes | None:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
     }
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60, headers=headers) as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=60, headers=headers) as client:
+            fetched = await _fetch_public(agent, client, url)
+            if fetched is None:
                 return None
-            ct = resp.headers.get("content-type", "")
-            if "pdf" in ct or resp.content[:4] == b"%PDF":
-                return resp.content
+            status, ct, body = fetched
+            if status != 200:
+                return None
+            if "pdf" in ct or body[:4] == b"%PDF":
+                return body
             # Hunt for embedded PDF link in HTML
-            links = re.findall(r'https?://[^\s"\'<>]+\.pdf', resp.text, re.IGNORECASE)
+            text = body.decode("utf-8", errors="replace")
+            links = re.findall(r'https?://[^\s"\'<>]+\.pdf', text, re.IGNORECASE)
             if links:
-                r2 = await client.get(links[0])
-                if r2.status_code == 200 and r2.content[:4] == b"%PDF":
-                    return r2.content
+                linked = await _fetch_public(agent, client, links[0])
+                if linked and linked[0] == 200 and linked[2][:4] == b"%PDF":
+                    return linked[2]
     except Exception as e:
         await agent.log(f"Download failed for {url}: {e}")
     return None

@@ -127,6 +127,7 @@
       <a href="../guide/security.html" class="">Security</a>
       <a href="../guide/prometheus.html" class="">Prometheus</a>
       <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
     </details>
     <details class="sidebar-group">
       <summary class="sidebar-label">Catalogue agents</summary>
@@ -1035,7 +1036,7 @@ LLM_COST_LIMIT_PERIOD=daily   # daily | weekly | monthly | total
 
 <p>The limit can also be updated at runtime from the dashboard Settings tab or via <code>POST /api/cost/limit</code> — the runtime value persists in SQLite and takes priority over the env var. Spend resets automatically at period boundaries (midnight UTC for daily, Monday for weekly, first of the month for monthly). To reset manually, call <code>POST /api/cost/reset</code>.</p>
 <p>The dashboard COST tile shows a progress bar: yellow at 80% of the limit, red at 100%.</p>
-<p>See <a href="api.md#cost-management">API reference</a> for the full endpoint spec.</p>
+<p>See <a href="https://github.com/waldiez/wactorz/blob/main/docs/api.md#cost-management">API reference</a> for the full endpoint spec.</p>
 <hr />
 <h2 id="catalog-recipes">Catalog recipes</h2>
 <p>Recipes live in <code>wactorz/catalogue_agents/</code> as plain Python files exporting an <code>AGENT_CODE</code> string. They are loaded by <code>CatalogAgent</code> at startup and spawned on demand as DynamicAgents with <code>trusted=True</code> (safety validator bypassed).</p>

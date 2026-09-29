@@ -25,7 +25,7 @@ from ..prompts.planner_prompts import (
     PIPELINE_DESIGN_PROMPT,
     RULE_CONFLICT_PROMPT,
 )
-from .parsing import extract_json_array, extract_json_object
+from .parsing import extract_json_array, extract_json_object, loads_lenient
 
 if TYPE_CHECKING:
     from .hosts import PipelineHost
@@ -149,7 +149,9 @@ class PipelineMixin(_Host):
         # Agents wait for MQTT changes, but if the entity is already in the
         # target state before they spawned they would never receive a trigger.
         if spawned:
-            asyncio.create_task(self._bootstrap_ha_entity_states(task, plan))
+            self.run_detached(
+                self._bootstrap_ha_entity_states(task, plan), name="bootstrap-ha-states"
+            )
 
         if rule_agents:
             self._persist_pipeline_rule(task, rule_agents)
@@ -275,7 +277,7 @@ class PipelineMixin(_Host):
                 max_tokens=400,
             )
             self._accrue_usage(_usage)
-            data = json.loads(extract_json_object(response))
+            data = loads_lenient(extract_json_object(response))
         except Exception as e:
             logger.debug("[%s] Rule-conflict check failed: %s", self.name, e)
             return ""
@@ -318,7 +320,7 @@ class PipelineMixin(_Host):
         notif_section = await self._gather_notification_urls(task)
 
         if ha_available and ha_entities_text and not skips_ha_feasibility(task):
-            verdict = await self._check_ha_feasibility(task, ha_section)
+            verdict = await self._check_ha_feasibility(task, ha_section, topic_bus_section)
             if verdict is not None:
                 return verdict
 
@@ -372,7 +374,7 @@ class PipelineMixin(_Host):
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
-            plan = json.loads(extract_json_array(response))
+            plan = loads_lenient(extract_json_array(response))
             if isinstance(plan, list):
                 # Validate generated code — catch common LLM mistakes
                 plan = self._validate_pipeline_code(plan)
@@ -692,13 +694,17 @@ class PipelineMixin(_Host):
                     camera_snapshot_urls[eid] = snap_url
 
     async def _check_ha_feasibility(
-        self, task: str, ha_section: str
+        self, task: str, ha_section: str, topic_section: str = ""
     ) -> list[dict[str, Any]] | None:
         """Ask whether the request is buildable from the entities that exist.
 
         Returns a one-item plan carrying the refusal when it is not, and None
         when planning should continue -- including when the check itself fails,
         because an unavailable checker must not block a workable request.
+
+        `topic_section` is what the running agents publish. A trigger can come
+        from one of them rather than from Home Assistant -- a Flic button, say
+        -- and a checker shown only entities refuses it as missing.
         """
         if not self.llm:
             return None
@@ -707,7 +713,11 @@ class PipelineMixin(_Host):
                 messages=[
                     {
                         "role": "user",
-                        "content": HA_FEASIBILITY_PROMPT.format(task=task, ha_section=ha_section),
+                        "content": HA_FEASIBILITY_PROMPT.format(
+                            task=task,
+                            ha_section=ha_section,
+                            topic_section=topic_section or "none",
+                        ),
                     }
                 ],
                 system=self._now_context() + "\nOutput only valid JSON. No markdown.",

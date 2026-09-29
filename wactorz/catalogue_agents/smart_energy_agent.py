@@ -246,7 +246,7 @@ async def _safe_turn_off(agent, plug: dict[str, Any], reason: str) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _period_keys(now: float) -> dict[str, Any]:
-    dt = datetime.datetime.fromtimestamp(now)
+    dt = datetime.datetime.fromtimestamp(now)  # noqa: DTZ006  # local calendar periods, as a bill counts them
     iso = dt.isocalendar()
     return {
         "day":   dt.strftime("%Y-%m-%d"),

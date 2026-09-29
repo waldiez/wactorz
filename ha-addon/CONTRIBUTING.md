@@ -77,7 +77,7 @@ bugs) — follow the **[local add-on workflow](LOCAL_TESTING.md)**.
 
 ## Schema validation gotchas
 
-- `str?` means the field is optional; an absent key is valid. Use it for tokens/credentials that might be blank.
+- `str?` means the field is optional; an absent key is valid. For tokens and credentials that might be blank use `password?`, which is optional the same way and masked in the Supervisor's UI.
 - `url` type requires a valid URL scheme; don't use it for hostnames-only values (use `str` instead).
 - `list(a|b|c)` is an enum — the Supervisor rejects any value not in the list.
 - `port` is a shorthand for `int` with port-range validation (1–65535).

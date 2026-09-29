@@ -1,0 +1,141 @@
+/* typedoc theme for the JS API reference — the docs site's look.
+ *
+ * The --wz-* values are the guide pages' own (the :root block in
+ * scripts/build_docs.py TEMPLATE), and tests/test_docs_api_theme.py keeps them
+ * equal. typedoc has a light and a dark palette and picks one from the reader's
+ * system or its own theme menu; both are the site's here, so every reader gets
+ * the same page. Loaded after typedoc's stylesheet, so these win.
+ */
+@import url("https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap");
+
+:root {
+    --wz-bg: #05080e;
+    --wz-bg2: #080d1a;
+    --wz-bg3: #0d1426;
+    --wz-border: #1a2140;
+    --wz-border-hi: #2a3560;
+    --wz-blue: #4f8ef7;
+    --wz-cyan: #00d4ff;
+    --wz-text: #dde3f0;
+    --wz-muted: #5a6890;
+    --wz-muted-hi: #8899bb;
+    --wz-mono: 'JetBrains Mono', monospace;
+    --wz-display: 'Chakra Petch', sans-serif;
+
+    /* Both palettes: the site's colours. */
+    --light-color-background: var(--wz-bg);
+    --dark-color-background: var(--wz-bg);
+    --light-color-background-secondary: var(--wz-bg2);
+    --dark-color-background-secondary: var(--wz-bg2);
+    --light-color-background-active: var(--wz-bg3);
+    --dark-color-background-active: var(--wz-bg3);
+    --light-color-accent: var(--wz-border);
+    --dark-color-accent: var(--wz-border);
+    --light-color-active-menu-item: var(--wz-bg3);
+    --dark-color-active-menu-item: var(--wz-bg3);
+    --light-color-text: var(--wz-text);
+    --dark-color-text: var(--wz-text);
+    --light-color-text-aside: var(--wz-muted-hi);
+    --dark-color-text-aside: var(--wz-muted-hi);
+    --light-color-link: var(--wz-blue);
+    --dark-color-link: var(--wz-blue);
+    --light-color-focus-outline: var(--wz-cyan);
+    --dark-color-focus-outline: var(--wz-cyan);
+    --light-color-icon-background: var(--wz-bg2);
+    --dark-color-icon-background: var(--wz-bg2);
+    --light-color-contrast-text: var(--wz-text);
+    --dark-color-contrast-text: var(--wz-text);
+    --light-color-scheme: dark;
+    --dark-color-scheme: dark;
+
+    /* Everything else typedoc colours, the light palette takes from the dark. */
+    --light-color-alert-caution: var(--dark-color-alert-caution);
+    --light-color-alert-important: var(--dark-color-alert-important);
+    --light-color-alert-note: var(--dark-color-alert-note);
+    --light-color-alert-tip: var(--dark-color-alert-tip);
+    --light-color-alert-warning: var(--dark-color-alert-warning);
+    --light-color-background-warning: var(--dark-color-background-warning);
+    --light-color-comment-tag: var(--dark-color-comment-tag);
+    --light-color-comment-tag-text: var(--dark-color-comment-tag-text);
+    --light-color-document: var(--dark-color-document);
+    --light-color-icon-text: var(--dark-color-icon-text);
+    --light-color-ts-accessor: var(--dark-color-ts-accessor);
+    --light-color-ts-call-signature: var(--dark-color-ts-call-signature);
+    --light-color-ts-class: var(--dark-color-ts-class);
+    --light-color-ts-constructor: var(--dark-color-ts-constructor);
+    --light-color-ts-constructor-signature: var(--dark-color-ts-constructor-signature);
+    --light-color-ts-enum: var(--dark-color-ts-enum);
+    --light-color-ts-enum-member: var(--dark-color-ts-enum-member);
+    --light-color-ts-function: var(--dark-color-ts-function);
+    --light-color-ts-get-signature: var(--dark-color-ts-get-signature);
+    --light-color-ts-index-signature: var(--dark-color-ts-index-signature);
+    --light-color-ts-interface: var(--dark-color-ts-interface);
+    --light-color-ts-keyword: var(--dark-color-ts-keyword);
+    --light-color-ts-method: var(--dark-color-ts-method);
+    --light-color-ts-module: var(--dark-color-ts-module);
+    --light-color-ts-namespace: var(--dark-color-ts-namespace);
+    --light-color-ts-parameter: var(--dark-color-ts-parameter);
+    --light-color-ts-project: var(--dark-color-ts-project);
+    --light-color-ts-property: var(--dark-color-ts-property);
+    --light-color-ts-reference: var(--dark-color-ts-reference);
+    --light-color-ts-set-signature: var(--dark-color-ts-set-signature);
+    --light-color-ts-type-alias: var(--dark-color-ts-type-alias);
+    --light-color-ts-type-parameter: var(--dark-color-ts-type-parameter);
+    --light-color-ts-variable: var(--dark-color-ts-variable);
+    --light-color-warning-text: var(--dark-color-warning-text);
+    --light-external-icon: var(--dark-external-icon);
+}
+
+body {
+    font-family: var(--wz-mono);
+    font-size: 0.9rem;
+    line-height: 1.75;
+}
+
+code,
+pre,
+.tsd-signature,
+.tsd-kind-icon {
+    font-family: var(--wz-mono);
+}
+
+h1,
+h2,
+h3,
+h4,
+.tsd-toolbar-contents > .title {
+    font-family: var(--wz-display);
+    letter-spacing: 0.02em;
+}
+
+pre,
+code {
+    background: var(--wz-bg3);
+    border: 1px solid var(--wz-border);
+    border-radius: 4px;
+}
+
+pre code {
+    border: none;
+}
+
+/* The top bar, as the guide pages draw theirs. */
+.tsd-page-toolbar {
+    background: rgba(5, 8, 14, 0.88);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--wz-border);
+}
+
+.tsd-toolbar-contents > .title {
+    font-weight: 600;
+    color: #fff;
+}
+
+#tsd-toolbar-links a {
+    font-size: 0.75rem;
+    color: var(--wz-muted-hi);
+}
+
+#tsd-toolbar-links a:hover {
+    color: var(--wz-text);
+}

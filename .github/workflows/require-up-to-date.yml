@@ -5,6 +5,9 @@ on:
     branches:
       - dev
 
+# It only echoes; the token needs no access at all.
+permissions: {}
+
 jobs:
   noop:
     name: Branch freshness gate

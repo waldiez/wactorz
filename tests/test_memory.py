@@ -9,6 +9,7 @@ Run with ``pytest`` (or ``make test-py``). Async methods are driven through
 """
 
 import asyncio
+from collections.abc import Callable
 
 from wactorz.agents.main.memory import MemoryMixin
 
@@ -47,6 +48,9 @@ class FakeLLM:
 
 
 class MemoryHost(MemoryMixin):
+    # An interface-aware host has this; memory treats a host without it as text.
+    _current_interface_is_voice: Callable[[], bool]
+
     def __init__(self, registry=None, llm=None):
         self.name = "main"
         self._store = {}
@@ -72,7 +76,8 @@ class MemoryHost(MemoryMixin):
 
 def host(registry_actors=None, llm=None):
     reg = FakeRegistry(registry_actors) if registry_actors is not None else None
-    return MemoryHost(registry=reg, llm=llm)
+    # Partial on purpose: the members these tests reach, not the whole host.
+    return MemoryHost(registry=reg, llm=llm)  # pyright: ignore[reportAbstractUsage]
 
 
 # ── User facts ───────────────────────────────────────────────────────────────

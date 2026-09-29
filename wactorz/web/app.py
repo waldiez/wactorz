@@ -30,6 +30,7 @@ from . import (
     login,
     mqtt,
     origins,
+    probes,
     runtime,
     sessions,
     static_site,
@@ -56,7 +57,8 @@ async def check_ws_port() -> bool:
         await server.wait_closed()
         return True
     except OSError as exc:
-        logger.error("[startup] Port %d already in use — %s", runtime.WS_PORT, exc)
+        # The message is the whole story; a bind traceback adds nothing actionable.
+        logger.error("[startup] Port %d already in use — %s", runtime.WS_PORT, exc)  # noqa: TRY400, RUF100  # the message is the whole story; a bind traceback adds nothing
         return False
 
 
@@ -74,8 +76,12 @@ def build_app() -> web.Application:
         In middleware rather than per route: nearly every path below is
         registered twice, under `/api/x` and a bare `/x`, and a per-route
         decorator would guard whichever alias its author remembered.
+
+        The probes are left alone: they change nothing and say only whether the
+        process is up, and a load balancer or an orchestrator asks under a name
+        of its own.
         """
-        refusal = origins.refuse(request)
+        refusal = None if request.path in probes.PROBE_PATHS else origins.refuse(request)
         if refusal is not None:
             return refusal
 
@@ -86,7 +92,7 @@ def build_app() -> web.Application:
         try:
             response.headers.update(origins.cors_headers(origin))
         except Exception:
-            pass
+            logger.debug("[cors] Could not set headers for %s", origin, exc_info=True)
         return response
 
     app = web.Application(
@@ -101,7 +107,10 @@ def build_app() -> web.Application:
     app[contract.ACTOR_REGISTRY] = runtime.registry
 
     app.router.add_get("/", static_site.index_handler)
-    app.router.add_get("/health", api_system.health_handler)
+    for path in sorted(probes.LIVENESS_PATHS):
+        app.router.add_get(path, probes.liveness_handler)
+    for path in sorted(probes.READINESS_PATHS):
+        app.router.add_get(path, api_system.readiness_handler)
     # Sign-in. Exempt from the key check and from nothing else — `POST /login`
     # stays inside the origin gate, which is what stands in for a CSRF token.
     app.router.add_get("/login", login.login_page_handler)
@@ -235,6 +244,7 @@ async def main(exit_on_failure: bool = False) -> None:
     sessions.store.bind(ensure_state_dir(), CONFIG.api_key)
 
     origins.log_mode()
+    origins.warn_loopback_proxies()
     app = build_app()
 
     runner = web.AppRunner(app)
@@ -300,13 +310,13 @@ def cli_main() -> None:
                 pending = asyncio.all_tasks(loop)
                 if pending:
                     loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception:
+            except Exception:  # noqa: S110  # sealing the loop; nothing left to report to
                 pass
             # Brief sleep lets paho's internal socket-close callback fire
             # before we seal the loop for good.
             try:
                 loop.run_until_complete(asyncio.sleep(0.25))
-            except Exception:
+            except Exception:  # noqa: S110  # sealing the loop; nothing left to report to
                 pass
             loop.close()
             if exit_exc is not None:

@@ -109,7 +109,9 @@
   }
 }
 
-/* ── Home Assistant ingress session expired ──────────────────────────────── */
+/* ── Revoked ingress session ──────────────────────────────────────────────── */
+/* Above everything and swallowing clicks: the page behind it is inert, and a
+   control that looks live but answers nothing is what this exists to stop. */
 .af-dead-session {
   position: fixed;
   inset: 0;

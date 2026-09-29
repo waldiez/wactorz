@@ -106,7 +106,7 @@ class _Main:
 
         m.list_capabilities = _capabilities
 
-        async def _record(text: str, reply: str) -> None:
+        async def _record(text: str, reply: str, *, ts_user: float) -> None:
             self.calls["recorded"].append((text, reply))
 
         m._record_external_exchange = _record  # pyright: ignore[reportAttributeAccessIssue]

@@ -40,7 +40,7 @@ class _Client:
         self._on_drained = on_drained
         self.subscribed: list[str] = []
 
-    async def subscribe(self, topic: str) -> None:
+    async def subscribe(self, topic: str, qos: int = 0, **_kwargs: Any) -> None:
         self.subscribed.append(topic)
 
     @property
@@ -62,7 +62,7 @@ class _Broker:
         self.client = _Client(messages, on_drained)
         self.connections = 0
 
-    def __call__(self, _host: str, _port: int) -> "_Broker":
+    def __call__(self, _host: str, _port: int, **_kwargs: Any) -> "_Broker":
         self.connections += 1
         return self
 
@@ -208,6 +208,21 @@ class TestMirroringIntoTheTopicBus:
         await run_listener(monkeypatch, [message("weather")], bus=bus)
 
         assert bus.contracts["weather"].publishes == ["sensors/weather"]
+
+    async def test_the_description_reaches_the_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The planner reads contracts, not manifests: an agent's own account of
+        # its topics has to be carried across or the planner never sees it.
+        bus = _Bus()
+
+        await run_listener(
+            monkeypatch,
+            [message("flic", description="Buttons: 'Desk' is custom/flic/bh16-f58317.")],
+            bus=bus,
+        )
+
+        assert bus.contracts["flic"].description == "Buttons: 'Desk' is custom/flic/bh16-f58317."
 
     async def test_observed_field_names_win_over_the_declared_schema(
         self, monkeypatch: pytest.MonkeyPatch

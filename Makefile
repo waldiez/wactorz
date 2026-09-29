@@ -1,5 +1,6 @@
-.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py check fmt fmt-py lint lint-py format clean \
-        up down logs shell \
+.PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
+		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan format clean \
+        up down logs shell mqtt-certs \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
@@ -139,18 +140,75 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 	$(PYTHON) -m ruff check wactorz tests scripts
 	$(PYTHON) -m ruff format --check wactorz tests scripts
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
-	-$(PYTHON) -m ruff check wactorz --extend-select G,LOG,TRY,C90,PTH,S,T20,DTZ --statistics
+	-$(PYTHON) -m ruff check wactorz --extend-select TRY,C90,PTH,T20 --ignore PTH123 --statistics
 	@echo "── gated: basedpyright (basic) ──"
-	@if command -v basedpyright >/dev/null 2>&1; then \
-		basedpyright wactorz; \
-	else \
-		echo "(basedpyright not installed — run 'make install-dev')"; \
-	fi
+	$(PYTHON) -m basedpyright
+
+# The pinned image of a CI tool, read from its FROM line in .github/tools/Dockerfile.
+# A function rather than a nested `$(MAKE) tool-image`: a recipe line naming
+# $(MAKE) runs even under `make -n`, so a dry run would start the containers.
+tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' .github/tools/Dockerfile)
+
+# The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
+# shebang, which shellcheck cannot place, so they are named as bash.
+SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh scripts/image-smoke.sh
+ADDON_SCRIPTS := ha-addon/wactorz/run.sh ha-addon/wactorz-ultra/run.sh
+
+# The docker calls below name paths inside containers (`-w /src`, the docker
+# socket). Git Bash on Windows would rewrite them into Windows paths first;
+# this keeps them as written, and does nothing anywhere else.
+lint-ci image-smoke image-scan: export MSYS_NO_PATHCONV := 1
+lint-ci image-smoke image-scan: export MSYS2_ARG_CONV_EXCL := *
+
+lint-ci: ## Lint the GitHub workflows (zizmor), shell scripts (shellcheck) and Dockerfiles (hadolint), with the pinned tool images
+	@# Online when GH_TOKEN is set, as in CI: the online audits check that a
+	@# pinned sha belongs to its action and that no pinned version has an advisory.
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(if $(GH_TOKEN),-e GH_TOKEN,) \
+		$(call tool-image,zizmor) $(if $(GH_TOKEN),,--offline) .
+	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $(call tool-image,shellcheck) $(SHELL_SCRIPTS)
+	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $(call tool-image,shellcheck) --shell=bash $(ADDON_SCRIPTS)
+	@for f in Dockerfile ha-addon/*/Dockerfile; do \
+		echo "hadolint $$f"; docker run --rm -i $(call tool-image,hadolint) < "$$f" || exit 1; \
+	done
+
+# The app image the checks below look at. `make image` builds it under this name;
+# CI and the release workflows pass their own.
+IMAGE ?= wactorz:local
+
+# Refuses early, naming the image and how to get it, instead of letting docker or
+# Trivy fail on a reference that is not there.
+define require-image
+	@docker image inspect "$(IMAGE)" > /dev/null 2>&1 \
+		|| { echo "No image $(IMAGE): build it with 'make image', or pass IMAGE=<an image you have>."; exit 1; }
+endef
+
+image: ## Build the app image as CI does (the Debian upgrade stage never cached), tagged IMAGE (default wactorz:local)
+	docker build --no-cache-filter runtime -t "$(IMAGE)" .
+
+image-smoke: ## Smoke-test IMAGE beside a broker: /health and /ready on both servers, no root, no set-id
+	$(require-image)
+	scripts/image-smoke.sh "$(IMAGE)" "$(call tool-image,mosquitto)"
+
+# Fixable CRITICAL and HIGH findings fail. One that cannot be fixed here yet, such
+# as a new Debian fix the pinned base has not picked up, is accepted in
+# .trivyignore.yaml with a statement and an expiry date, never left to fail every push.
+image-scan: ## Scan IMAGE for fixable CRITICAL/HIGH vulnerabilities (accepted ones: .trivyignore.yaml)
+	$(require-image)
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+		-v "$(CURDIR)/.trivyignore.yaml:/trivyignore.yaml:ro" $(call tool-image,trivy) \
+		image --quiet --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
+		--ignorefile /trivyignore.yaml --table-mode detailed --show-suppressed --exit-code 1 "$(IMAGE)"
+
+tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint|mosquitto (.github/tools/Dockerfile)
+	@echo "$(call tool-image,$(NAME))"
 
 # ── Docker stack ────────────────────────────────────────────────────────────
 
 up: ## Start full stack (build if needed)
 	$(COMPOSE) up --build -d
+
+mqtt-certs: ## Issue the compose broker's TLS certificate from this host, then: docker compose restart mosquitto
+	$(PYTHON) -m wactorz.broker_certificates --export infra/mosquitto/generated
 
 down: ## Stop full stack
 	$(COMPOSE) down
@@ -186,34 +244,35 @@ install-dev: ## Install everything including dev/docs deps
 install-frontend: ## Install frontend dependencies
 	cd $(FRONTEND_DIR) && $(PKG_MGR) install
 
-precommit-install: ## Install the git pre-commit hook
-	pre-commit install
+precommit-install: ## Install the git pre-commit hook (prek)
+	prek install
 
-precommit-run: ## Run all configured pre-commit hooks across the repo
-	pre-commit run --all-files
+precommit-run: ## Run all configured hooks across the repo (prek)
+	prek run --all-files
 
 test: test-py test-frontend ## Run all tests (Python + frontend)
 
-test-py: ## Run Python tests (pytest) + the remote runner's own self-test
+test-py: ## Run Python tests (pytest)
 	@# -n auto here and not in pyproject's addopts: parallel wins on the whole
 	@# suite and loses on a single file, where worker start-up costs more than
 	@# the tests. A focused run should stay serial without having to opt out.
 	$(PYTHON) -m pytest tests -n auto
-	@# remote_runner.py ships to nodes without pytest or the wactorz package, so
-	@# it carries its own tests. Nothing ran them and they had rotted silently.
-	$(PYTHON) wactorz/remote_runner.py --test
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test
 
 coverage: coverage-py coverage-frontend ## Generate coverage (Python + frontend)
 
-coverage-py: ## Generate Python coverage XML + terminal report
+coverage-py: ## Generate Python coverage (XML + lcov) + terminal report
 	@# pytest-cov rather than `coverage run -m pytest`: the latter measures only
 	@# the parent process, so under -n auto it reports a fraction of the truth
 	@# with every test still passing. pytest-cov collects from the workers.
 	mkdir -p coverage
 	$(PYTHON) -m pytest tests -n auto --cov --cov-report=xml:coverage/python-coverage.xml --cov-report=term
+	@# lcov as well, because it is the one format both halves of this repo can
+	@# speak: the frontend's vitest writes it too, so one service can add them
+	@# up into a single number for the badge.
+	$(PYTHON) -m coverage lcov -o coverage/python-coverage.lcov
 
 coverage-frontend: ## Generate frontend coverage (gated vitest v8 — fails below the floor)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run coverage

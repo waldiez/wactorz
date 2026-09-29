@@ -49,10 +49,12 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 
 ## Code Style
 
-- **Python**: `make lint-py` — ruff format + lint gate (advisory typing via basedpyright)
+- **Python**: `make lint-py` — ruff format + lint gate, and basedpyright over the package, tests and scripts
 - **TypeScript**: `make lint` — Prettier, ESLint and `tsc` typecheck
 
-Install pre-commit hooks to run these on commit: `pre-commit install`
+Install the commit hooks to run these on every commit: `make precommit-install`. They run
+through [prek](https://github.com/j178/prek), a faster drop-in for pre-commit that reads the
+same `.pre-commit-config.yaml`; it comes with `make install-dev`.
 
 ## Commit Messages
 

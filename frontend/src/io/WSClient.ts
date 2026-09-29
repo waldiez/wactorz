@@ -78,18 +78,37 @@ export class WSClient {
     private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     /** Debounces "dropped" so a brief close/reopen doesn't flip the UI to demo. */
     private _disconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    /** Checks that an open socket is still receiving traffic. */
-    private _watchdogTimer: ReturnType<typeof setInterval> | null = null;
-    /** Time at which the current socket most recently received a frame. */
-    private _lastFrameAt = 0;
     private _reconnectDelay = 1_000;
+    /** Fires the liveness check; null whenever no socket is being watched. */
+    private _watchdogTimer: ReturnType<typeof setInterval> | null = null;
+    /** When this socket last carried anything at all, parseable or not. */
+    private _lastFrameAt = 0;
     private _url = "";
     private _closed = false;
     /** The agent the last chat was addressed to — used to attribute replies,
      *  which the server stamps with the generic transport id "io-gateway". */
     private _lastAgentName = MAIN_AGENT;
 
+    /**
+     * How often to ask the server to say something.
+     *
+     * A healthy connection usually carries the periodic totals patch anyway, so
+     * this is not the only inbound traffic there is. It is the only traffic this
+     * check owns: resting on another feature's broadcasts staying unconditional
+     * would make liveness quietly wrong the day that changes. Asking costs one
+     * frame, and it is the only thing here that proves the outbound direction.
+     */
     private static readonly PING_EVERY_MS = 30_000;
+
+    /**
+     * How long a socket may carry nothing before it is presumed dead.
+     *
+     * Two and a half missed rounds. The server pings on its own every 30 s, but
+     * the browser answers those in its protocol handling and never tells us, so
+     * an open socket proves nothing about the far end. Under a proxy the near
+     * leg can outlive the far one: `send()` then succeeds into nowhere, `close`
+     * never fires, and nothing reconnects.
+     */
     private static readonly SILENT_FOR_MS = 75_000;
 
     /** True while the WebSocket is open. */
@@ -223,8 +242,9 @@ export class WSClient {
         });
 
         this.ws.addEventListener("message", (ev: MessageEvent) => {
-            // Any received bytes prove the connection is alive, even if the
-            // frame is not one the dashboard understands.
+            // Stamped before parsing: the bytes arriving is the whole question,
+            // and judging on parseable frames alone would close a socket that is
+            // plainly still connected.
             this._lastFrameAt = Date.now();
             let data: Record<string, unknown>;
             try {
@@ -256,14 +276,15 @@ export class WSClient {
         });
     }
 
-    /** Start a fresh liveness clock for the socket that has just opened. */
+    /** Watch the socket that just opened, from a clean slate. */
     private _startWatching(): void {
         this._stopWatching();
+        // Reset rather than carried over: keeping the old stamp would close the
+        // fresh socket at once, which is a reconnect loop rather than a recovery.
         this._lastFrameAt = Date.now();
         this._watchdogTimer = setInterval(() => this._checkAlive(), WSClient.PING_EVERY_MS);
     }
 
-    /** Stop the liveness timer when its socket is no longer relevant. */
     private _stopWatching(): void {
         if (this._watchdogTimer !== null) {
             clearInterval(this._watchdogTimer);
@@ -271,7 +292,7 @@ export class WSClient {
         }
     }
 
-    /** Ping a quiet socket, or close one that has been silent too long. */
+    /** Give up on a socket that has carried nothing, or ask it to speak. */
     private _checkAlive(): void {
         if (!this.connected) {
             this._stopWatching();
@@ -279,6 +300,8 @@ export class WSClient {
         }
         if (Date.now() - this._lastFrameAt >= WSClient.SILENT_FOR_MS) {
             log.warn("[WS] silent too long — closing so it can reconnect");
+            // Closed rather than reopened here: closing is what the reconnect
+            // path already listens for, so there is one way back and not two.
             this.ws?.close();
             return;
         }

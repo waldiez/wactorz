@@ -4,11 +4,14 @@ Topic patterns decide which agent receives which message, so a matching bug is
 silent: the wrong agent is wired, or none is, and nothing raises.
 """
 
-from __future__ import annotations
-
 import pytest
 
-from wactorz.core.topic_bus import TopicContract, TopicRegistry, _topic_matches
+from wactorz.core.topic_bus import (
+    PLANNER_DESCRIPTION_CHARS,
+    TopicContract,
+    TopicRegistry,
+    topic_matches,
+)
 
 
 class TestTopicMatching:
@@ -19,7 +22,7 @@ class TestTopicMatching:
         ["sensors/kitchen/temp", "sensors/+/temp", "sensors/#", "#", "sensors/kitchen/#"],
     )
     def test_patterns_that_match(self, pattern: str) -> None:
-        assert _topic_matches(pattern, "sensors/kitchen/temp")
+        assert topic_matches(pattern, "sensors/kitchen/temp")
 
     @pytest.mark.parametrize(
         "pattern",
@@ -32,28 +35,28 @@ class TestTopicMatching:
         ],
     )
     def test_patterns_that_do_not(self, pattern: str) -> None:
-        assert not _topic_matches(pattern, "sensors/kitchen/temp")
+        assert not topic_matches(pattern, "sensors/kitchen/temp")
 
     def test_plus_matches_exactly_one_level_not_zero(self) -> None:
-        assert not _topic_matches("sensors/+/temp", "sensors/temp")
+        assert not topic_matches("sensors/+/temp", "sensors/temp")
 
     def test_plus_matches_one_level_not_several(self) -> None:
-        assert not _topic_matches("sensors/+", "sensors/kitchen/temp")
+        assert not topic_matches("sensors/+", "sensors/kitchen/temp")
 
     def test_hash_matches_the_remainder_including_none_of_it(self) -> None:
-        assert _topic_matches("sensors/#", "sensors")
+        assert topic_matches("sensors/#", "sensors")
 
     def test_a_plus_in_the_last_position_still_needs_a_level(self) -> None:
-        assert _topic_matches("sensors/+", "sensors/kitchen")
-        assert not _topic_matches("sensors/+", "sensors")
+        assert topic_matches("sensors/+", "sensors/kitchen")
+        assert not topic_matches("sensors/+", "sensors")
 
     def test_an_exact_string_matches_before_any_splitting(self) -> None:
-        assert _topic_matches("a/b/c", "a/b/c")
+        assert topic_matches("a/b/c", "a/b/c")
 
     def test_matching_is_directional(self) -> None:
         """The pattern holds the wildcards; a wildcard in the topic is literal."""
-        assert _topic_matches("sensors/#", "sensors/kitchen")
-        assert not _topic_matches("sensors/kitchen", "sensors/#")
+        assert topic_matches("sensors/#", "sensors/kitchen")
+        assert not topic_matches("sensors/kitchen", "sensors/#")
 
 
 class TestContractNormalisation:
@@ -196,3 +199,33 @@ class TestRegistry:
         context = registry.to_planner_context()
         assert "thermo" in context
         assert "sensors/kitchen/temp" in context
+
+    def test_planner_context_carries_what_an_agent_says_about_itself(self) -> None:
+        # Two buttons publish the same gestures under different serials; the
+        # description is the only place that says which is which.
+        registry = TopicRegistry()
+        registry.register(
+            TopicContract(
+                name="flic",
+                publishes=["custom/flic/bh16-f58317/click", "custom/flic/bh16-f58211/click"],
+                description="Buttons: 'Desk' is custom/flic/bh16-f58317; 'Lamp' is custom/flic/bh16-f58211.",
+            )
+        )
+
+        context = registry.to_planner_context()
+
+        assert "about     : Buttons: 'Desk' is custom/flic/bh16-f58317" in context
+
+    def test_a_long_description_is_cut_for_the_planner(self) -> None:
+        registry = TopicRegistry()
+        registry.register(TopicContract(name="chatty", description="word " * 1000))
+
+        line = next(row for row in registry.to_planner_context().splitlines() if "about" in row)
+
+        assert line.endswith("…")
+        assert len(line) < PLANNER_DESCRIPTION_CHARS + 50
+
+    def test_the_description_survives_a_round_trip(self) -> None:
+        contract = TopicContract(name="flic", description="Buttons: 'Desk'.")
+
+        assert TopicContract.from_dict(contract.to_dict()).description == "Buttons: 'Desk'."

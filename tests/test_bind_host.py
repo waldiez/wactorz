@@ -145,6 +145,7 @@ class TestTheWhatsappWebhook:
         interface: Any = whatsapp.WhatsAppInterface.__new__(whatsapp.WhatsAppInterface)
         interface.port = 8080
         interface.allowed_numbers = ["+306900000000"]  # else run() refuses to start
+        interface.auth_token = "twilio-auth-token"  # so does an empty token
         with (
             patch.object(whatsapp.WhatsAppInterface, "build_app", MagicMock()),
             patch.object(whatsapp, "CONFIG", _cfg("127.0.0.1")),

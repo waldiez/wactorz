@@ -14,7 +14,7 @@ Expected output (in order):
     [PASS] Test 4 — Intentional stop NOT restarted
     [PASS] Test 5 — Intentional delete NOT restarted
     [PASS] Test 5b — release() unlinks even a FAILED actor
-    [PASS] Test 6 — Budget exhaustion retires the spec (no infinite loop)
+    [PASS] Test 6 — Repeated crashes slow restarts down (no tight loop, no giving up)
 
 Each test is isolated and prints a clear PASS / FAIL line.
 """
@@ -376,12 +376,12 @@ async def test5b_release_alone_unlinks() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test 6 — Budget exhaustion retires the spec (no infinite loop)
+# Test 6 — Repeated crashes slow restarts down (no tight loop, no giving up)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-async def test6_budget_exhaustion() -> None:
-    print("\nTest 6 — Budget exhaustion retires spec (no infinite loop)")
+async def test6_repeated_crashes() -> None:
+    print("\nTest 6 — Repeated crashes slow restarts down (no tight loop, no giving up)")
 
     spawn_count = {"n": 0}
 
@@ -407,26 +407,27 @@ async def test6_budget_exhaustion() -> None:
     )
     await sup.start()
 
-    # Wait for retirement rather than guessing how long the budget takes to burn.
-    await wait_until(lambda: getattr(sup._specs.get("always-crash-6"), "retired", False))
+    # Wait for the slow-down rather than guessing how long the quick restarts take.
+    await wait_until(lambda: getattr(sup._specs.get("always-crash-6"), "slow", False))
 
     spec = sup._specs.get("always-crash-6")
-    retired = spec.retired if spec else False
+    slow = spec.slow if spec else False
+    retired = spec.retired if spec else True
 
-    # After budget is gone, watch loop must not keep calling restart
-    count_at_retirement = spawn_count["n"]
-    await settle(sup)  # more cycles — the count must not grow
+    # The next restart waits minutes, so the count must not grow meanwhile.
+    count_at_slowdown = spawn_count["n"]
+    await settle(sup)
     count_after_pause = spawn_count["n"]
 
     await sup.stop()
 
     result(
-        f"Spec retired after {MAX} restarts (spawned={count_at_retirement})",
-        retired and count_at_retirement <= MAX + 1,  # initial + MAX restarts
+        f"Restarts slowed after {MAX} quick ones (spawned={count_at_slowdown})",
+        slow and not retired and count_at_slowdown <= MAX + 1,  # initial + MAX restarts
     )
     result(
-        "No further spawns after retirement",
-        count_after_pause == count_at_retirement,
+        "No quick spawns once slowed",
+        count_after_pause == count_at_slowdown,
     )
 
 
@@ -447,7 +448,7 @@ async def main() -> None:
         test4_intentional_stop,
         test5_intentional_delete,
         test5b_release_alone_unlinks,
-        test6_budget_exhaustion,
+        test6_repeated_crashes,
     ):
         # result() asserts now, so catch here to keep this runner's documented
         # "run them all, report at the end" behaviour. pytest isolates them itself.

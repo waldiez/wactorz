@@ -1,7 +1,5 @@
 """Google Calendar MCP integration client (hosted MCP + REST fallback)."""
 
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote
@@ -30,7 +28,7 @@ CALENDAR_CONFIG = GoogleMcpConfig(
     default_mcp_url=GOOGLE_CALENDAR_MCP_URL,
     api_base=GOOGLE_CALENDAR_API_URL,
     default_scopes=DEFAULT_CALENDAR_MCP_SCOPES,
-    token_filename="calendar_mcp_token.json",
+    token_filename="calendar_mcp_token.json",  # noqa: S106  # a filename, not a token
     login_tool="list_calendars",
     client_name="Wactorz Calendar MCP",
 )

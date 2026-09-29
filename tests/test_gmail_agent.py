@@ -26,7 +26,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         result = await agent._process({"text": "any unread email?"})
 
         self.assertIn("Bob", result["result"])
-        tool, args = agent.client.call_tool.await_args.args
+        tool, args = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool, "search_threads")
         self.assertEqual(args["query"], "is:unread")
 
@@ -36,7 +36,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
 
         await agent._process({"text": "emails from stripe@stripe.com"})
 
-        tool, args = agent.client.call_tool.await_args.args
+        tool, args = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool, "search_threads")
         self.assertIn("from:stripe@stripe.com", args["query"])
 
@@ -47,7 +47,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         result = await agent._process({"text": "list my labels"})
 
         self.assertIn("INBOX", result["result"])
-        tool, _ = agent.client.call_tool.await_args.args
+        tool, _ = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool, "list_labels")
 
     async def test_help_is_user_friendly(self):
@@ -67,7 +67,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         second = await agent._process({"text": "to sam@x.com saying running 10 min late"})
 
         self.assertIn("created", second["result"])
-        tool, args = agent.client.call_tool.await_args.args
+        tool, args = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool, "create_draft")
         self.assertEqual(args["to"], "sam@x.com")
         self.assertIn("running 10 min late", args["body"])
@@ -85,7 +85,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         second = await agent._process({"text": "Bloop"})
 
         self.assertIn("created", second["result"])
-        tool, args = agent.client.call_tool.await_args.args
+        tool, args = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool, "create_draft")
         self.assertEqual(args["to"], "sam@x.com")
         self.assertEqual(args["body"], "Bloop")
@@ -97,7 +97,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
         result = await agent._process({"text": "what does the trello one say?"})
 
         self.assertIn("body text", result["result"])
-        tool, args = agent.client.call_tool.await_args.args
+        tool, args = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool, "read_email")
         self.assertEqual(args["query"], "trello")
 
@@ -107,7 +107,7 @@ class GmailAgentTest(unittest.IsolatedAsyncioTestCase):
 
         await agent._process({"operation": "search", "query": "subject:invoice", "count": 5})
 
-        tool, args = agent.client.call_tool.await_args.args
+        tool, args = agent.client.call_tool.await_args_list[-1].args
         self.assertEqual(tool, "search_threads")
         self.assertEqual(args["query"], "subject:invoice")
         self.assertEqual(args["pageSize"], 5)

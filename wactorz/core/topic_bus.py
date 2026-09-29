@@ -62,6 +62,20 @@ logger = logging.getLogger(__name__)
 # ── Topic Contract ─────────────────────────────────────────────────────────────
 
 
+#: How much of an agent's description the planner is shown. Enough for what an
+#: agent says about its topics; a description written as an essay is cut, so
+#: one agent cannot crowd the others out of the prompt.
+PLANNER_DESCRIPTION_CHARS = 600
+
+
+def planner_description(text: str) -> str:
+    """A description as one line for the planner, cut at `PLANNER_DESCRIPTION_CHARS`."""
+    line = " ".join(text.split())
+    if len(line) > PLANNER_DESCRIPTION_CHARS:
+        return line[:PLANNER_DESCRIPTION_CHARS].rstrip() + "…"
+    return line
+
+
 @dataclass
 class TopicContract:
     """Declares what an agent produces and consumes via MQTT topics.
@@ -108,6 +122,12 @@ class TopicContract:
     #       "example": {"temp": 30.5, "humidity": 47.7}
     #   }}
     observed_samples: dict = field(default_factory=dict)
+    #: What the agent says about itself in its manifest. Topics alone can be
+    #: indistinguishable — two buttons publish the same gestures under
+    #: different serials — and the description is where an agent says which
+    #: is which. Not stored with the contract: the retained manifest brings it
+    #: back after a restart.
+    description: str = ""
 
     def __post_init__(self):
         """Guard against LLM mistakes:
@@ -140,12 +160,12 @@ class TopicContract:
 
     def matches_topic(self, topic: str) -> bool:
         """Check if this agent subscribes to a given topic (supports # and + wildcards)."""
-        return any(_topic_matches(pattern, topic) for pattern in self.subscribes)
+        return any(topic_matches(pattern, topic) for pattern in self.subscribes)
 
     def produces_topic(self, topic: str) -> bool:
         """Check if this agent publishes to a given topic pattern."""
         for pattern in self.publishes:
-            if _topic_matches(pattern, topic) or _topic_matches(topic, pattern):
+            if topic_matches(pattern, topic) or topic_matches(topic, pattern):
                 return True
         return False
 
@@ -177,6 +197,7 @@ class TopicContract:
             "actor_id": self.actor_id,
             "timestamp": self.timestamp,
             "observed_samples": self.observed_samples,
+            "description": self.description,
         }
 
     @classmethod
@@ -192,6 +213,7 @@ class TopicContract:
             actor_id=d.get("actor_id"),
             timestamp=d.get("timestamp", time.time()),
             observed_samples=d.get("observed_samples", {}),
+            description=d.get("description", "") or "",
         )
 
     @classmethod
@@ -211,7 +233,7 @@ class TopicContract:
 # ── MQTT wildcard matching ──────────────────────────────────────────────────────
 
 
-def _topic_matches(pattern: str, topic: str) -> bool:
+def topic_matches(pattern: str, topic: str) -> bool:
     """Match an MQTT topic against a pattern with # and + wildcards.
     # matches any number of levels. + matches exactly one level.
     """
@@ -261,16 +283,20 @@ class TopicRegistry:
     def register(self, contract: TopicContract):
         self._contracts[contract.name] = contract
         logger.debug(
-            f"[TopicRegistry] Registered '{contract.name}' | "
-            f"pub={contract.publishes} sub={contract.subscribes}"
+            "[TopicRegistry] Registered '%s' | pub=%s sub=%s",
+            contract.name,
+            contract.publishes,
+            contract.subscribes,
         )
 
     def unregister(self, name: str):
         removed = self._contracts.pop(name, None)
         if removed:
             logger.info(
-                f"[TopicRegistry] Unregistered '{name}' | "
-                f"pub={removed.publishes} sub={removed.subscribes}"
+                "[TopicRegistry] Unregistered '%s' | pub=%s sub=%s",
+                name,
+                removed.publishes,
+                removed.subscribes,
             )
 
     def prune_stale(self, live_agent_names: set[str]) -> list[str]:
@@ -289,7 +315,7 @@ class TopicRegistry:
         for name in stale:
             self.unregister(name)
         if stale:
-            logger.info(f"[TopicRegistry] Pruned {len(stale)} stale contract(s): {stale}")
+            logger.info("[TopicRegistry] Pruned %s stale contract(s): %s", len(stale), stale)
         return stale
 
     def get(self, name: str) -> TopicContract | None:
@@ -352,6 +378,8 @@ class TopicRegistry:
         lines = ["LIVE DATA FLOWS (topic contracts):"]
         for c in sorted(self._contracts.values(), key=lambda x: x.name):
             lines.append(f"\n  [{c.name}]" + (f" on {c.node}" if c.node else ""))
+            if c.description:
+                lines.append(f"    about     : {planner_description(c.description)}")
             if c.publishes:
                 lines.append(f"    publishes : {', '.join(c.publishes)}")
             if c.subscribes:
@@ -407,9 +435,7 @@ class SharedStateHub:
         """Publish to a shared state topic (retained by default)."""
         self._cache[topic] = data
         if self._mqtt:
-            import json as _json
-
-            payload = _json.dumps(data) if not isinstance(data, (str, bytes)) else data
+            payload = json.dumps(data) if not isinstance(data, (str, bytes)) else data
             await self._mqtt.publish(topic, payload, retain=retain, qos=1)
 
     async def publish_presence(
@@ -515,10 +541,22 @@ class StreamWindow:
         self._trim()
         return [e[key] for e in self._buffer if key in e]
 
-    def latest(self) -> dict | None:
-        """Return the most recent entry."""
+    def latest(self, key: str | None = None) -> Any:
+        """The most recent entry, or the newest value of one field in it.
+
+        Both spellings are in use in generated code — ``w.latest()`` for the
+        whole entry, ``w.latest('value')`` for one field — so the argument
+        chooses, rather than there being two windows with two meanings. Asking
+        for a field searches backwards for the newest entry that carries it: a
+        stream where only some messages report a key still answers.
+        """
         self._trim()
-        return self._buffer[-1] if self._buffer else None
+        if key is None:
+            return self._buffer[-1] if self._buffer else None
+        for entry in reversed(self._buffer):
+            if key in entry:
+                return entry[key]
+        return None
 
     def mean(self, key: str = "value") -> float | None:
         """Compute mean of a numeric field over the window."""
@@ -581,16 +619,17 @@ class StreamWindow:
         return count
 
     def start(self, mqtt_broker: str, mqtt_port: int):
-        """Start the background MQTT listener for this window."""
-        self._task = asyncio.create_task(self._listen(mqtt_broker, mqtt_port))
+        """Start the background MQTT listener for this window, once.
+
+        Idempotent: generated code calls `agent.window(...)` from a process loop
+        as readily as from setup, and a second listener would hold a second
+        broker connection and push every message into the buffer twice.
+        """
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._listen(mqtt_broker, mqtt_port))
         return self
 
     async def _listen(self, broker: str, port: int):
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.error("[StreamWindow] aiomqtt not installed")
-            return
         from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
 
         while True:
@@ -656,16 +695,20 @@ class TopicBus:
             for consumer in consumers:
                 if consumer.name != new_contract.name:
                     logger.info(
-                        f"[TopicBus] Auto-wiring opportunity: "
-                        f"{new_contract.name} → {consumer.name} via {pub_topic}"
+                        "[TopicBus] Auto-wiring opportunity: %s → %s via %s",
+                        new_contract.name,
+                        consumer.name,
+                        pub_topic,
                     )
         for sub_topic in new_contract.subscribes:
             producers = self.registry.producers_of(sub_topic)
             for producer in producers:
                 if producer.name != new_contract.name:
                     logger.info(
-                        f"[TopicBus] Auto-wiring opportunity: "
-                        f"{producer.name} → {new_contract.name} via {sub_topic}"
+                        "[TopicBus] Auto-wiring opportunity: %s → %s via %s",
+                        producer.name,
+                        new_contract.name,
+                        sub_topic,
                     )
 
     def summary(self) -> dict:

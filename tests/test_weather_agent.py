@@ -292,7 +292,7 @@ class ConversationContextTest(unittest.IsolatedAsyncioTestCase):
                 label = "Athens, Attica, Greece" if "athens" in location.lower() else location
                 # Use tomorrow relative to today so the agent labels it "tomorrow"
                 # (the agent anchors to the real current date; a fixed date rots).
-                tomorrow = (date.today() + timedelta(days=1)).isoformat()
+                tomorrow = (date.today() + timedelta(days=1)).isoformat()  # noqa: DTZ011  # the agent's own anchor
                 return {
                     "kind": "forecast",
                     "location": label,

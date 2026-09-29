@@ -160,7 +160,7 @@ class TestDurability:
         second._load_pending_from_db()
 
         assert second.queue_depth == 1
-        topic, payload, _retain, qos, row_id = second._queue.get_nowait()
+        topic, payload, _retain, qos, row_id, _properties = second._queue.get_nowait()
         assert (topic, payload, qos) == ("nodes/alpha/spawn", "payload", 1)
         assert row_id > 0
 
@@ -254,10 +254,13 @@ class TestDelivery:
             await pub.publish("nodes/alpha/spawn", "payload", qos=1)
             await _settle(pub, broker._client)
 
-            # A fixed identifier and clean_session=False are what let the broker
-            # hold QoS 1 messages for us across a disconnect.
-            assert broker.kwargs["clean_session"] is False
-            assert broker.kwargs["identifier"] == pub._client_id
+            # A fixed identifier and a session the broker is asked to keep are
+            # what let it hold QoS 1 messages for us across a disconnect. The
+            # session names a lifetime: v3.1.1 offers none, so an install that
+            # goes away would cost broker state for ever.
+            assert broker.kwargs["clean_start"] is False
+            assert broker.kwargs["properties"].SessionExpiryInterval > 0
+            assert broker.kwargs["identifier"] == pub.client_id
         finally:
             await pub.disconnect()
 
@@ -285,7 +288,7 @@ class TestWithoutABroker:
         assert pub.queue_depth == 0
         assert not (tmp_path / "outbox.db").exists()
 
-    async def test_create_survives_an_outbox_it_cannot_open(
+    async def test_an_outbox_it_cannot_open_costs_durability_not_delivery(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def _explode(self) -> None:
@@ -293,11 +296,18 @@ class TestWithoutABroker:
 
         monkeypatch.setattr(MQTTPublisher, "_init_db", _explode)
         pub = await MQTTPublisher.create("localhost", 1883, db_path=str(tmp_path / "o.db"))
-
-        # A publisher that cannot start must not take the actor system with it.
-        assert pub._available is False
-        await pub.publish("nodes/alpha/spawn", "payload", qos=1)
-        assert pub.queue_depth == 0
+        try:
+            # Heartbeats, commands and chat still go out, held in memory until
+            # they do, rather than nothing being sent for the life of the process.
+            assert pub._available is True
+            assert pub._memory_only is True
+            await pub.publish("nodes/alpha/spawn", "payload", qos=1)
+            assert pub.queue_depth == 1
+            assert pub._queue.get_nowait()[4] == -1
+            # Kept running: it is what tries the outbox again.
+            assert pub._checkpoint_task is not None
+        finally:
+            await pub.disconnect()
 
     async def test_disconnect_is_safe_before_create(self, tmp_path: Path) -> None:
         await MQTTPublisher(db_path=str(tmp_path / "o.db")).disconnect()

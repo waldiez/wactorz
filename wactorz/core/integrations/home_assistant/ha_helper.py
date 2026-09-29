@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import base64
 import csv
 import hashlib
 import io
@@ -518,21 +517,6 @@ async def get_devices(ws_url: str, token: str) -> list[dict[str, Any]]:
         return devices or []
 
 
-async def get_devices_simple(ws_url: str, token: str) -> list[dict[str, Any]]:
-    ws_url = normalize_ha_ws_url(ws_url)
-    devices = await get_devices(ws_url, token)
-    return [
-        {
-            "device_id": d["id"],
-            "name": d.get("name_by_user") or d.get("name"),
-            "swid": d.get("swid", ""),
-            "manufacturer": d.get("manufacturer"),
-            "model": d.get("model"),
-        }
-        for d in (devices or [])
-    ]
-
-
 async def get_entities(ws_url: str, token: str) -> list[dict[str, Any]]:
     """Fetch the full entity registry and return the list as-is from Home Assistant.
 
@@ -607,21 +591,6 @@ async def get_exposed_entities(ws_url: str, token: str) -> dict[str, Any]:
         return entities or {}
 
 
-async def get_entities_simple(ws_url: str, token: str) -> list[dict[str, Any]]:
-    ws_url = normalize_ha_ws_url(ws_url)
-    entities = await get_entities(ws_url, token)
-    return [
-        {
-            "entity_id": e.get("entity_id"),
-            "unique_id": e.get("unique_id"),
-            "platform": e.get("platform"),
-            "original_name": e.get("original_name"),
-            "name": e.get("name"),
-        }
-        for e in (entities or [])
-    ]
-
-
 async def get_states(ws_url: str, token: str) -> list[dict[str, Any]]:
     """Fetch all current entity states and return the list as-is from Home Assistant.
 
@@ -664,8 +633,6 @@ async def get_camera_snapshot(rest_base: str, token: str, camera_entity_id: str)
     Returns {"image_base64": str, "content_type": str, "entity_id": str}
     or {"error": str, "status": int, "detail": str, "entity_id": str} on failure.
     """
-    import base64
-
     headers = {"Authorization": f"Bearer {token}"}
     url = f"{rest_base}/api/camera_proxy/{camera_entity_id}"
     logger.debug("Camera snapshot request: %s", url)
@@ -677,7 +644,7 @@ async def get_camera_snapshot(rest_base: str, token: str, camera_entity_id: str)
                     detail = ""
                     try:
                         detail = await resp.text()
-                    except Exception:
+                    except Exception:  # noqa: S110  # enriching an error message that stands without it
                         pass
                     logger.warning(
                         "Camera snapshot failed for %s: HTTP %s — %s",
@@ -1032,7 +999,7 @@ async def get_entity_history(
                     detail = ""
                     try:
                         detail = await resp.text()
-                    except Exception:
+                    except Exception:  # noqa: S110  # enriching an error message that stands without it
                         pass
                     logger.warning(
                         "Entity history failed: HTTP %s — %s",

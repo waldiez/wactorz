@@ -18,6 +18,7 @@ Three properties, each load-bearing:
 
 import json
 import re
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import unquote
@@ -173,6 +174,38 @@ def read_bytes(file_id: str, state_dir: str | None = None) -> bytes | None:
         return None
 
 
+class RefusedUpload(ValueError):
+    """Bytes the upload rules refuse: an empty file, or one over the size limit."""
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+        reason = "empty file" if size == 0 else f"larger than {config.UPLOAD_MAX_BYTES} bytes"
+        super().__init__(reason)
+
+
+def store(data: bytes, name: str, state_dir: str | None = None) -> dict[str, object]:
+    """Store `data` as an attachment and return its record.
+
+    For a caller that already holds the bytes, such as the terminal UI attaching
+    a file from disk, rather than one reading a request body. The endpoint's
+    rules hold here as well: the stored name is generated, the type is sniffed
+    from the bytes, and the blob is written under a temporary name first, so an
+    interrupted write never leaves a file the id would resolve to.
+
+    Raises :class:`RefusedUpload` for the two files the endpoint refuses.
+    """
+    if not data or len(data) > config.UPLOAD_MAX_BYTES:
+        raise RefusedUpload(len(data))
+    directory = upload_dir(state_dir)
+    file_id = new_id()
+    staging = directory / f".{file_id}.part"
+    staging.write_bytes(data)
+    staging.replace(directory / file_id)
+    record = {"name": safe_name(name), "mime": sniff(data[:SNIFF_BYTES]), "size": len(data)}
+    (directory / f"{file_id}.json").write_text(json.dumps(record), encoding="utf-8")
+    return {"id": file_id, **record}
+
+
 def resolve(ids: object, state_dir: str | None = None) -> list[dict[str, object]]:
     """The stored records for `ids`, dropping anything unknown.
 
@@ -184,3 +217,51 @@ def resolve(ids: object, state_dir: str | None = None) -> list[dict[str, object]
         return []
     found = [metadata(str(i), state_dir) for i in ids[:MAX_PER_MESSAGE]]
     return [m for m in found if m is not None]
+
+
+#: How long a stored file may go unreferenced before the sweep takes it: room for
+#: the gap between uploading a file and sending the message that carries it. A
+#: file attached and then left unsent for longer is gone by the time it is sent;
+#: the message still names it, and the model is told nothing was attached.
+UNSENT_GRACE_S = 24 * 3600
+
+
+def sweep(keep: set[str], now: float | None = None, state_dir: str | None = None) -> int:
+    """Delete stored files no kept chat turn refers to. Returns how many ids went.
+
+    A file is its bytes (`{id}`) and its record (`{id}.json`), and both go; so does
+    the staging file an interrupted upload leaves behind (`.{id}.part`). Anything
+    older than the grace period and absent from `keep` is removed. A name that is
+    not one of ours is never touched.
+
+    History survives this: a chat row stores what was attached, so its chip still
+    names the file once the file itself is gone. Deleting one frees its space at
+    once, unlike a database row.
+    """
+    root = Path(resolve_state_dir(state_dir)) / UPLOADS_DIRNAME
+    if not root.is_dir():
+        return 0
+    cutoff = (time.time() if now is None else now) - UNSENT_GRACE_S
+    removed: set[str] = set()
+    for entry in root.iterdir():
+        file_id = _stored_id(entry.name)
+        if file_id is None or file_id in keep:
+            continue
+        try:
+            if entry.stat().st_mtime >= cutoff:
+                continue
+            entry.unlink(missing_ok=True)
+        except OSError:
+            continue
+        removed.add(file_id)
+    return len(removed)
+
+
+def _stored_id(name: str) -> str | None:
+    """The upload id a directory entry belongs to, or None if it is not ours."""
+    for prefix, suffix in (("", ""), ("", ".json"), (".", ".part")):
+        if name.startswith(prefix) and name.endswith(suffix):
+            candidate = name[len(prefix) : len(name) - len(suffix)]
+            if is_id(candidate):
+                return candidate
+    return None

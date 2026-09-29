@@ -21,7 +21,6 @@ import json
 import logging
 import os
 import secrets
-import stat
 import sys
 import webbrowser
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -32,6 +31,8 @@ from urllib.parse import urlencode, urlparse
 
 import aiohttp
 from aiohttp import web
+
+from ..atomic_io import write_private_json
 
 # mcp is optional, so every name it provides has a stand-in for the case where
 # it is absent. Those stand-ins describe nothing, and several of these names are
@@ -64,7 +65,7 @@ else:
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105  # an endpoint URL, not a credential
 
 
 @dataclass(frozen=True)
@@ -192,12 +193,7 @@ class _GoogleTokenStorage(TokenStorage):
             return {}
 
     def _write(self, data: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        try:
-            self.path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-        except Exception:
-            pass
+        write_private_json(self.path, data)
 
     async def get_tokens(self) -> OAuthToken | None:
         raw = self._read().get("tokens")
@@ -224,7 +220,7 @@ class _GoogleTokenStorage(TokenStorage):
             return OAuthClientInformationFull(
                 client_id=client_id,
                 client_secret=client_secret,
-                token_endpoint_auth_method="client_secret_post",
+                token_endpoint_auth_method="client_secret_post",  # noqa: S106  # an RFC 7591 method name
                 redirect_uris=cast("list[AnyUrl]", [self.config.redirect_uri()]),
             )
         raw = self._read().get("client_info")
@@ -246,7 +242,7 @@ def _make_redirect_handler(config: GoogleMcpConfig):
         )
         try:
             webbrowser.open(url)
-        except Exception:
+        except Exception:  # noqa: S110  # the URL was printed first; opening it is a courtesy
             pass
 
     return _open_oauth_browser
@@ -311,7 +307,7 @@ def build_auth(config: GoogleMcpConfig, interactive: bool = False):
         return None
     metadata = OAuthClientMetadata(
         redirect_uris=cast("list[AnyUrl]", [config.redirect_uri()]),
-        token_endpoint_auth_method="client_secret_post",
+        token_endpoint_auth_method="client_secret_post",  # noqa: S106  # an RFC 7591 method name
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
         scope=config.scopes(),
@@ -425,9 +421,7 @@ class GoogleMcpClient:
         tokens["token_type"] = td.get("token_type", "Bearer")
         data["tokens"] = tokens
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
+            write_private_json(path, data)
         except Exception:
             logger.debug("Could not store %s token", self.config.label)
 
@@ -549,8 +543,10 @@ class GoogleMcpClient:
             data = {}
         data.setdefault("tokens", {})["access_token"] = access_token
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            # The same private, whole-file write as the token response: a
+            # refresh can be the first write, and must not create the file
+            # readable by other users or truncate it mid-write.
+            write_private_json(path, data)
         except Exception:
             logger.debug("Could not persist refreshed %s token", self.config.label)
 

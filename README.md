@@ -21,6 +21,7 @@
 
 <p align="center">
 <a href="https://github.com/waldiez/wactorz/actions/workflows/ci.yml"><img src="https://github.com/waldiez/wactorz/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+<a href="https://coveralls.io/github/waldiez/wactorz"><img src="https://coveralls.io/repos/github/waldiez/wactorz/badge.svg" alt="Coverage"/></a>
 <a href="https://pypi.org/project/wactorz/"><img src="https://img.shields.io/pypi/v/wactorz.svg" alt="PyPI"/></a>
 <a href="https://github.com/waldiez/wactorz/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
 <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python"/></a>
@@ -50,6 +51,8 @@ to the hardware.
 Bring a hosted model from Anthropic, OpenAI, Gemini, or NVIDIA NIM, or keep model
 inference local with Ollama. The runtime, agent state, dashboard, and MQTT control
 plane remain on hardware you control.
+
+https://github.com/user-attachments/assets/e832eed9-ba61-4872-8c20-5d0e8cfe14d5
 
 ---
 
@@ -184,7 +187,8 @@ with every hosted provider, or you can use its provider-specific variable.
 Wactorz logs the resolved provider and model at startup. Advanced setups can
 [route different jobs to different models](https://docs.waldiez.io/wactorz/guide/architecture.html#per-call-site-overrides)
 and use the [evaluation harness](https://github.com/waldiez/wactorz/blob/main/docs/evaluation.md)
-before choosing them.
+before choosing them. Optional `LLM_TEMPERATURE`, `LLM_MAX_RETRIES`, and
+`LLM_TIMEOUT_S` settings are documented in `.env.template`.
 
 ---
 
@@ -199,8 +203,9 @@ before choosing them.
   handshake, the Prometheus scrape, and the login flow are authenticated — constant-time
   comparison, session cookies that survive a restart, and sign-in throttling.
 - **The server binds to `127.0.0.1`.** Reaching it from the network is deliberate: set
-  `WACTORZ_BIND_HOST` *and* `WACTORZ_EXPOSED_OK=1`. Startup warns if it is exposed
-  without a key, or with a guessable one.
+  `WACTORZ_BIND_HOST`, and startup refuses unless `API_KEY` is set too, or
+  `WACTORZ_EXPOSED_OK=1` says the only way in is already authenticated. A key short
+  enough to guess is warned about.
 - **The broker requires credentials.** Anonymous MQTT is off, and remote nodes are given
   credentials rather than connecting openly.
 - Origin and Host allow-lists guard the HTTP surface and the WebSocket handshake against

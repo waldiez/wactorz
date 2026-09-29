@@ -1,0 +1,24 @@
+{#
+    pdoc's frame with the docs site's fonts and top bar.
+
+    "@docs/" stands for the docs site's root. The pages sit at different depths
+    and pdoc does not make a link relative to the page it lands on, so
+    scripts/build_docs.py replaces it with the right "../" in each file.
+#}
+{% extends "default/frame.html.jinja2" %}
+{% block head %}
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+{% endblock %}
+{% block body %}
+{# Divs, not header and nav: pdoc's layout pads every <header> and fixes every <nav> in place. #}
+<div class="wz-topbar" role="banner">
+    <a href="@docs/index.html" class="wz-topbar-logo">Wactorz</a>
+    <div class="wz-topbar-links">
+        <a href="@docs/api/js/index.html">JS API</a>
+        <a href="https://github.com/waldiez/wactorz">GitHub</a>
+        <a href="https://pypi.org/project/wactorz/">PyPI</a>
+    </div>
+</div>
+{{ super() }}
+{% endblock %}

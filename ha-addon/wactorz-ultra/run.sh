@@ -73,6 +73,10 @@ MQTT_USERNAME=$(get_config_safe 'mqtt_username' '')
 export MQTT_USERNAME="${MQTT_USERNAME}"
 MQTT_PASSWORD=$(get_config_safe 'mqtt_password' '')
 export MQTT_PASSWORD="${MQTT_PASSWORD}"
+# The CA a node is given by /deploy to verify the broker's TLS certificate: blank
+# for the one generated below, a path for your own, or `system`.
+MQTT_TLS_CA=$(get_config_safe 'mqtt_tls_ca' '')
+export MQTT_TLS_CA="${MQTT_TLS_CA}"
 
 # Home Assistant Config
 HA_URL=$(get_config_safe 'ha_url' '')
@@ -136,9 +140,33 @@ case "$ha_probe" in
     *)       bashio::log.warning "HA probe returned ${ha_probe} — mode=${HA_MODE} url=${HA_URL}.";;
 esac
 
-# Other Integrations
+# ── API key ───────────────────────────────────────────────────────────────────
+# The panel never needs one: a request through ingress is recognised as the
+# Supervisor's and let through. Everything else does. Another add-on on the Home
+# Assistant network reaches both ports whether or not a host port is published,
+# and an open API lets it spawn agents, which run code. So a key is always set:
+# yours if you gave one, otherwise a random one generated once and kept in /data,
+# which survives restarts and updates, and signed-in sessions with it. It is
+# never logged; set api_key to choose one you can use.
 API_KEY=$(get_config_safe 'api_key' '')
+if [ -z "$API_KEY" ]; then
+    api_key_file="${API_KEY_FILE:-/data/api_key}"
+    if [ ! -s "$api_key_file" ]; then
+        if (umask 077 && head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$api_key_file") 2>/dev/null; then
+            bashio::log.info "No api_key set: generated one for connections that do not come through the panel."
+        fi
+    fi
+    API_KEY=$(cat "$api_key_file" 2>/dev/null || true)
+    if [ -z "$API_KEY" ]; then
+        # A key for this start alone still closes the ports. What it costs is
+        # that dashboard sessions end at the next restart.
+        API_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        bashio::log.warning "Could not keep a generated api_key in ${api_key_file}; using one for this start only."
+    fi
+fi
 export API_KEY="${API_KEY}"
+
+# Other Integrations
 
 DISCORD_BOT_TOKEN=$(get_config_safe 'discord_bot_token' '')
 export DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN}"
@@ -152,6 +180,20 @@ TELEGRAM_ALLOWED_USER_ID=$(get_config_safe 'telegram_allowed_user_id' '0')
 export TELEGRAM_ALLOWED_USER_ID="${TELEGRAM_ALLOWED_USER_ID}"
 SOCIAL_RATE_LIMIT_PER_MIN=$(get_config_safe 'social_rate_limit_per_min' '12')
 export SOCIAL_RATE_LIMIT_PER_MIN="${SOCIAL_RATE_LIMIT_PER_MIN}"
+
+# Data retention: days before old entries are deleted, 0 keeps them for ever.
+# The fallbacks must match the config.yaml defaults. Chat is exported as 0 rather
+# than left unset, because unset means Wactorz's own default, which deletes.
+WACTORZ_RETENTION_CHAT_DAYS=$(get_config_safe 'retention_chat_days' '0')
+export WACTORZ_RETENTION_CHAT_DAYS="${WACTORZ_RETENTION_CHAT_DAYS}"
+WACTORZ_RETENTION_TIMESERIES_DAYS=$(get_config_safe 'retention_timeseries_days' '365')
+export WACTORZ_RETENTION_TIMESERIES_DAYS="${WACTORZ_RETENTION_TIMESERIES_DAYS}"
+WACTORZ_RETENTION_OUTBOX_DAYS=$(get_config_safe 'retention_outbox_days' '7')
+export WACTORZ_RETENTION_OUTBOX_DAYS="${WACTORZ_RETENTION_OUTBOX_DAYS}"
+
+# What a deployed node does with a control message not signed for it: warn or enforce.
+WACTORZ_NODE_SIGNING=$(get_config_safe 'node_signing' 'enforce')
+export WACTORZ_NODE_SIGNING="${WACTORZ_NODE_SIGNING}"
 
 # ── Remote deploy targets ─────────────────────────────────────────────────────
 # A list of objects in options.json, flattened into the DEPLOY_TARGETS +
@@ -173,7 +215,7 @@ if [ -f "$options_file" ]; then
             # of non-alphanumerics becomes a single underscore.
             deploy_slug=$(echo "$deploy_name" | tr '[:lower:]' '[:upper:]' \
                 | sed -e 's/[^A-Z0-9]\+/_/g' -e 's/^_//' -e 's/_$//')
-            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password; do
+            for deploy_field in host user key password broker broker_port ssh_port broker_user broker_password broker_tls broker_tls_port; do
                 deploy_value=$(jq -r ".deploy_targets[$deploy_i].$deploy_field // \"\"" "$options_file")
                 if [ -n "$deploy_value" ]; then
                     deploy_var="DEPLOY_${deploy_slug}_$(echo "$deploy_field" | tr '[:lower:]' '[:upper:]')"
@@ -208,11 +250,9 @@ export PORT=8000
 # every interface. No port is published (see config.yaml), so this is not a
 # route in from outside Home Assistant.
 export WACTORZ_BIND_HOST=0.0.0.0
-# The wide bind above is required for ingress, and the add-on sets no API key.
-# Without this the fail-closed rule refuses to start. It is honest here: the
-# add-on publishes no ports, so ingress is the only way in, and Home Assistant
-# authenticates the user before proxying.
-export WACTORZ_EXPOSED_OK=1
+# No WACTORZ_EXPOSED_OK: an API key is always set above, so the wide bind passes
+# the fail-closed check on its own. Were that ever to stop being true, the add-on
+# would refuse to start rather than serve an open API to the network.
 # This deployment sits behind Home Assistant's ingress, which signs the user in
 # before proxying — so a request it forwards is allowed to skip the origin and
 # host checks. Nothing else may claim that: a plain Docker or bare install never
@@ -244,6 +284,61 @@ if [ -z "$LLM_PROVIDER" ] || [ "$LLM_PROVIDER" == "null" ]; then
     export LLM_PROVIDER="anthropic"
 fi
 
+# ── Node broker accounts ──────────────────────────────────────────────────────
+# A deployed node authenticates as itself rather than as this add-on. Only where
+# the broker has those accounts: the embedded broker below is generated here, so
+# it turns this on for itself. With the official Mosquitto add-on, or any broker
+# of your own, you add the accounts there -- a logins: block is written to /share
+# when this option is on -- and nothing changes until you do.
+WACTORZ_NODE_ACCOUNTS=$(get_config_safe 'node_accounts' 'false')
+if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
+    # On before the accounts are generated below, because that is what generates
+    # them -- and off again further down if they did not appear, so a deploy never
+    # hands a node an account its broker has never heard of.
+    WACTORZ_NODE_ACCOUNTS=true
+fi
+export WACTORZ_NODE_ACCOUNTS
+
+# ── Broker TLS certificate ────────────────────────────────────────────────────
+# Issued from a CA generated once and kept in the state directory, which /deploy
+# hands to a node so it can reach the broker over TLS. The certificate is issued
+# again only when it nears expiry or stops naming the broker's addresses; the CA
+# stays, so deployed nodes keep trusting it. Never fatal: without a certificate
+# every broker serves plain MQTT on 1883, as before.
+MQTT_BROKER_FILES=/tmp/mosquitto-tls
+mqtt_tls_ready=false
+if mqtt_tls_log=$(python3 -m wactorz.broker_certificates --export "$MQTT_BROKER_FILES" 2>&1); then
+    mqtt_tls_ready=true
+    bashio::log.info "Broker TLS certificate ready (CA: ${WACTORZ_STATE_DIR}/mqtt_tls/ca.crt)."
+else
+    bashio::log.warning "Could not issue the broker TLS certificate; brokers serve plain MQTT only. ${mqtt_tls_log}"
+fi
+
+# For the official Mosquitto add-on, which serves TLS on 8883 once its certfile
+# and keyfile name files in /ssl. Written under names of Wactorz's own:
+# fullchain.pem and privkey.pem are that add-on's defaults, and what a Let's
+# Encrypt certificate is usually called, so those are never touched.
+if [ "$mqtt_tls_ready" = true ] && [ "$MOSQUITTO_EMBEDDED" != "true" ] && [ -d /ssl ] && [ -w /ssl ]; then
+    if install -m 0644 "$MQTT_BROKER_FILES/broker.crt" /ssl/wactorz-mqtt.crt \
+        && install -m 0600 "$MQTT_BROKER_FILES/broker.key" /ssl/wactorz-mqtt.key; then
+        bashio::log.info "Wrote /ssl/wactorz-mqtt.crt and /ssl/wactorz-mqtt.key. For TLS from the Mosquitto add-on, set its certfile to wactorz-mqtt.crt and keyfile to wactorz-mqtt.key, then restart it."
+    else
+        bashio::log.warning "Could not write the broker TLS certificate to /ssl."
+    fi
+fi
+
+# For the official Mosquitto add-on, and any other broker you run: its accounts
+# are its own, and no add-on may edit another's configuration, so they are written
+# where you can paste them. Accounts only -- that add-on's authentication plugin
+# answers before any access list Wactorz could provide, so it cannot pen a node in.
+if [ "$WACTORZ_NODE_ACCOUNTS" = "true" ] && [ "$MOSQUITTO_EMBEDDED" != "true" ] && [ -d /share ] && [ -w /share ]; then
+    if logins_log=$(python3 -m wactorz.broker_certificates --logins /share/wactorz/mosquitto-logins.yaml 2>&1); then
+        bashio::log.info "Wrote /share/wactorz/mosquitto-logins.yaml. Paste its logins: entries into the Mosquitto add-on's configuration, keeping any already there, and restart it."
+    else
+        bashio::log.warning "Could not write the node accounts for the Mosquitto add-on. ${logins_log}"
+    fi
+fi
+
 # ── Embedded Mosquitto ────────────────────────────────────────────────────────
 if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     bashio::log.info "Starting embedded Mosquitto MQTT broker..."
@@ -271,6 +366,20 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     # The broker reads this file after dropping privileges, so it must be
     # readable by the mosquitto user and by nobody else.
     mosquitto_passwd -b -c /tmp/mosquitto.passwd wactorz "$MQTT_PW"
+    # The node accounts go in here, before the file changes hands: /tmp is sticky
+    # and world-writable, where a kernel with fs.protected_regular set refuses even
+    # root a write to a file owned by someone else.
+    if [ -s "$MQTT_BROKER_FILES/node_passwd" ]; then
+        cat "$MQTT_BROKER_FILES/node_passwd" >> /tmp/mosquitto.passwd
+        bashio::log.info "Embedded Mosquitto: node accounts loaded."
+    elif [ "$WACTORZ_NODE_ACCOUNTS" = "true" ]; then
+        # None were generated -- the step above says why. This broker knows no such
+        # account, so a node deployed with one could not connect and nothing would
+        # say why. Back to the shared account until a start generates them.
+        WACTORZ_NODE_ACCOUNTS=false
+        export WACTORZ_NODE_ACCOUNTS
+        bashio::log.warning "No node accounts were generated; deployed nodes will use this add-on's own broker account."
+    fi
     chown mosquitto:mosquitto /tmp/mosquitto.passwd
     chmod 600 /tmp/mosquitto.passwd
 
@@ -284,14 +393,42 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
 # Home Assistant network — which is exactly who this keeps out.
 allow_anonymous false
 password_file /tmp/mosquitto.passwd
+MQTTEOF
+
+    # The access list that pens each node into its own topics, generated beside
+    # the certificate above. A setting for the broker as a whole, so it goes in
+    # before any listener. (The accounts themselves were appended further up,
+    # while the password file was still this script's to write.)
+    if [ -s "$MQTT_BROKER_FILES/acl" ]; then
+        chown mosquitto:mosquitto "$MQTT_BROKER_FILES/acl"
+        echo "acl_file ${MQTT_BROKER_FILES}/acl" >> /tmp/mosquitto.conf
+        bashio::log.info "Embedded Mosquitto: node access list loaded."
+    fi
+
+    cat >> /tmp/mosquitto.conf << 'MQTTEOF'
 
 # TCP listener only.
 listener 1883
 
 persistence true
-persistence_location /data/mosquitto/
-autosave_interval 30
+persistence_location /data/mosquitto
+# On a clean stop s6 signals every process and mosquitto saves as it exits, so this
+# interval only bounds what a crash or a power cut loses. Each save rewrites the
+# whole database and logs a line, which is why it is not shorter.
+autosave_interval 300
 MQTTEOF
+
+    # A TLS listener beside it, for remote nodes, when the certificate above was
+    # issued. Same accounts. Unpublished like 1883 until you assign it a port.
+    if [ "$mqtt_tls_ready" = true ]; then
+        chown -R mosquitto:mosquitto "$MQTT_BROKER_FILES"
+        cat >> /tmp/mosquitto.conf << MQTTTLSEOF
+
+listener 8883
+certfile ${MQTT_BROKER_FILES}/broker.crt
+keyfile ${MQTT_BROKER_FILES}/broker.key
+MQTTTLSEOF
+    fi
 
     mosquitto -c /tmp/mosquitto.conf &
 
@@ -314,6 +451,14 @@ MQTTEOF
         i=$((i+1))
     done
     bashio::log.info "Embedded Mosquitto ready on 1883 (authenticated)"
+    if [ "$mqtt_tls_ready" = true ]; then
+        if mosquitto_pub -h localhost -p 8883 --cafile "${WACTORZ_STATE_DIR}/mqtt_tls/ca.crt" \
+            -u "wactorz" -P "$MQTT_PW" -t "wactorz/probe" -m "" -q 0 2>/dev/null; then
+            bashio::log.info "Embedded Mosquitto serving TLS on 8883 (publish 8883 under Network settings for remote nodes)"
+        else
+            bashio::log.warning "Embedded Mosquitto did not answer TLS on 8883; nodes will be deployed on plain MQTT."
+        fi
+    fi
 fi
 
 # ── External broker readiness (non-embedded) ─────────────────────────────────

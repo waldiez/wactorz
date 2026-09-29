@@ -13,7 +13,7 @@ only on the turn it arrived.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -45,6 +45,11 @@ class RecordingProvider(LLMProvider):
         return self.sent[-1]["content"]
 
 
+def _recording(agent: LLMAgent) -> RecordingProvider:
+    """The provider every agent here is built with."""
+    return cast(RecordingProvider, agent.llm)
+
+
 @pytest.fixture(name="agent")
 def agent_fixture(tmp_path: Path) -> LLMAgent:
     return LLMAgent(
@@ -63,20 +68,20 @@ class TestReachingTheModel:
     async def test_the_blocks_arrive_with_the_turn(self, agent: LLMAgent) -> None:
         await agent.chat("what is this?", _blocks())
 
-        content = agent.llm.last_user_content  # pyright: ignore[reportAttributeAccessIssue]
+        content = _recording(agent).last_user_content
         assert [b["type"] for b in content] == ["text", "image", "text"]
 
     async def test_the_question_comes_after_the_files(self, agent: LLMAgent) -> None:
         # The turn should read as being about the files, not the other way round.
         await agent.chat("what is this?", _blocks())
 
-        content = agent.llm.last_user_content  # pyright: ignore[reportAttributeAccessIssue]
+        content = _recording(agent).last_user_content
         assert content[-1] == {"type": "text", "text": "what is this?"}
 
     async def test_a_turn_without_attachments_is_unchanged(self, agent: LLMAgent) -> None:
         await agent.chat("plain question")
 
-        assert agent.llm.last_user_content == "plain question"  # pyright: ignore[reportAttributeAccessIssue]
+        assert _recording(agent).last_user_content == "plain question"
 
 
 class TestAProviderThatCannotTakeBlocks:
@@ -91,12 +96,12 @@ class TestAProviderThatCannotTakeBlocks:
     async def test_it_is_sent_text_not_a_list(self, text_only: LLMAgent) -> None:
         await text_only.chat("what is this?", _blocks())
 
-        assert isinstance(text_only.llm.last_user_content, str)  # pyright: ignore[reportAttributeAccessIssue]
+        assert isinstance(_recording(text_only).last_user_content, str)
 
     async def test_the_file_is_named_rather_than_dropped(self, text_only: LLMAgent) -> None:
         await text_only.chat("what is this?", _blocks(name="holiday.png"))
 
-        content = text_only.llm.last_user_content  # pyright: ignore[reportAttributeAccessIssue]
+        content = _recording(text_only).last_user_content
         assert "holiday.png" in content
         assert "what is this?" in content
 
@@ -105,14 +110,14 @@ class TestAProviderThatCannotTakeBlocks:
         # flattens with `str()` would inline the whole base64 string.
         await text_only.chat("what is this?", _blocks(data=PNG * 200))
 
-        assert "iVBOR" not in text_only.llm.last_user_content  # pyright: ignore[reportAttributeAccessIssue]
+        assert "iVBOR" not in _recording(text_only).last_user_content
 
     async def test_a_text_file_is_still_readable(self, text_only: LLMAgent) -> None:
         blocks = _blocks(name="sales.csv", data=b"a,b\n1,2\n", mime="text/csv")
 
         await text_only.chat("summarise", blocks)
 
-        assert "a,b" in text_only.llm.last_user_content  # pyright: ignore[reportAttributeAccessIssue]
+        assert "a,b" in _recording(text_only).last_user_content
 
 
 class TestWhatHistoryKeeps:
@@ -134,7 +139,7 @@ class TestWhatHistoryKeeps:
 
         await agent.chat("what was it called again?")
 
-        first_user = agent.llm.sent[0]  # pyright: ignore[reportAttributeAccessIssue]
+        first_user = _recording(agent).sent[0]
         assert "receipt.png" in first_user["content"]
 
     async def test_the_later_turn_carries_no_blocks(self, agent: LLMAgent) -> None:
@@ -142,4 +147,4 @@ class TestWhatHistoryKeeps:
 
         await agent.chat("and now?")
 
-        assert all(isinstance(m["content"], str) for m in agent.llm.sent)  # pyright: ignore[reportAttributeAccessIssue]
+        assert all(isinstance(m["content"], str) for m in _recording(agent).sent)

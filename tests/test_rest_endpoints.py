@@ -31,6 +31,9 @@ class _Metrics:
 
 
 class _Actor:
+    # Set by the tests about essential actors; the API reads it when present.
+    essential: bool
+
     def __init__(self, name: str = "worker", protected: bool = False) -> None:
         self.actor_id = "a1"
         self.name = name
@@ -142,6 +145,29 @@ class TestChat:
     async def test_the_agent_name_defaults_to_main(self, client: TestClient) -> None:
         resp = await client.post("/chat", json={"message": "hi"})
         assert (await resp.json())["agent"] == "main"
+
+    async def test_main_named_explicitly_is_asked_directly(self, client: TestClient) -> None:
+        resp = await client.post("/chat", json={"message": "hi", "agent_name": "main"})
+
+        assert (await resp.json())["response"] == "echo:hi"
+
+    async def test_another_agent_is_reached_through_mains_mention(self, client: TestClient) -> None:
+        # The route a user typing "@weather ..." takes, so the agent is found,
+        # spawned from the catalogue, or asked on its node the same way.
+        resp = await client.post(
+            "/chat", json={"message": "rain today?", "agent_name": "weather-agent"}
+        )
+
+        body = await resp.json()
+        assert body["response"] == "echo:@weather-agent rain today?"
+        assert body["agent"] == "weather-agent"
+
+    @pytest.mark.parametrize("name", ["two words", "@weather", " main", ["main"], 7, 0, False, []])
+    async def test_a_name_that_is_not_one_is_refused(self, client: TestClient, name: Any) -> None:
+        # A space would move part of the name into the message.
+        resp = await client.post("/chat", json={"message": "hi", "agent_name": name})
+
+        assert resp.status == 400
 
 
 class TestCommands:

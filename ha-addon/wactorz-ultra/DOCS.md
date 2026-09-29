@@ -18,7 +18,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `api_key` | *(blank)* | Only consulted if you publish a port (see below). The Wactorz panel does not use it. |
+| `api_key` | *(blank)* | The key for everything except the panel. Blank generates a private one; set your own before publishing a port (see below). The Wactorz panel does not use it. |
 | `llm_provider` | `anthropic` | LLM backend: `anthropic`, `openai`, `gemini`, `ollama`, `nim` |
 | `llm_model` | `claude-sonnet-4-6` | Model name for the chosen provider |
 | `llm_api_key` | *(blank)* | API key for the chosen provider |
@@ -30,6 +30,7 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `mqtt_port` | `1883` | MQTT broker port |
 | `mqtt_username` | *(blank)* | Broker username (optional). Leave blank for an anonymous broker; **required for the official Mosquitto addon** (it disables anonymous access). |
 | `mqtt_password` | *(blank)* | Broker password (optional). |
+| `mqtt_tls_ca` | *(blank)* | The CA a remote node verifies the broker's TLS certificate with. Blank uses the one this addon generates; a path uses your own; `system` uses public CAs. See [Encrypted connections to nodes](#encrypted-connections-to-nodes-tls). |
 | `mosquitto_embedded` | `false` | Start a bundled Mosquitto broker inside the addon (no external addon needed) |
 | `ha_connection` | `auto` | `auto`: use the Supervisor proxy when `ha_token` is blank, your `ha_url` otherwise. `supervisor`/`custom`: force a mode explicitly. |
 | `ha_url` | `http://homeassistant.local:8123` | Home Assistant base URL seen from inside the addon container (only used in `custom` mode) |
@@ -40,7 +41,12 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `telegram_allowed_user_ids` | *(blank)* | **Required with the token** — comma-separated Telegram user IDs. Without it the bot only answers `/start` with your user ID, so you can fill this in and restart. |
 | `telegram_allowed_user_id` | `0` | Older single-ID form of the above; still honoured. `0` means unset. |
 | `social_rate_limit_per_min` | `12` | Max messages per minute per sender on the bots. `0` disables the limit. |
+| `retention_chat_days` | `0` | Days chat history is kept; `0` keeps it for ever. An attached file is deleted with the last message that refers to it. Off by default in the add-on so updating never deletes a conversation; set a number such as `365` to stop the history growing without limit. |
+| `retention_timeseries_days` | `365` | Days sensor readings, detections and Home Assistant state history are kept; `0` keeps them for ever. |
+| `retention_outbox_days` | `7` | Days a message the MQTT broker never accepted is kept and retried before it is dropped; `0` keeps retrying for ever. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
+| `node_accounts` | `false` | Give each deployed node its own broker account instead of sharing this addon's. On automatically with `mosquitto_embedded`; with the official Mosquitto addon it writes a `logins:` block for you to paste. See [An account per node](#an-account-per-node). |
+| `node_signing` | `enforce` | What a deployed node does with a command that is not signed for it: `enforce` refuses it, `warn` acts on it and tells you in chat. Applies to a node from its next `/deploy` — see [Signed commands](#signed-commands). |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
 > default: the panel reaches Wactorz through ingress, where Home Assistant has
@@ -48,15 +54,15 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 > Supervisor. On that path the key is never consulted, which is why setting one
 > changes nothing for panel users.
 >
-> It matters in one case. If you assign a host port to `8000` or `8888` under
-> the add-on's **Network** settings, the API and dashboard land on your network
-> directly, and anything that can reach them can delete agents, read the chat
-> log and spend your LLM budget. Outside the add-on, Wactorz refuses to start in
-> that configuration — but the add-on declares its exposure already handled,
-> which is true right up until you publish a port, and that declaration switches
-> the refusal off. **Set `api_key` before publishing a port**, and reach the API
-> with `X-API-Key: <your key>` or `Authorization: Bearer <your key>`. Something
-> like `openssl rand -hex 32` gives a key nobody has to remember.
+> Everything else needs it. Other add-ons on the Home Assistant network can reach
+> ports `8000` and `8888` even when no host port is published, and a host port
+> puts them on your network too — and anything that can reach them unguarded can
+> spawn agents, which run code, read the chat log and spend your LLM budget. So
+> the add-on always has a key: yours if you set one, otherwise a random one it
+> generates once, keeps under `/data`, and never shows. **Set `api_key` before
+> publishing a port**, and reach the API with `X-API-Key: <your key>` or
+> `Authorization: Bearer <your key>`. Something like `openssl rand -hex 32` gives
+> a key nobody has to remember.
 >
 > **The bots are capability-restricted.** Discord and Telegram allow conversation, Home Assistant
 > questions, and everyday device control (lights, switches, climate, covers, media players). They
@@ -83,7 +89,7 @@ deploy_targets:
     broker: 192.168.1.10
 ```
 
-Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`), `broker_user`, `broker_password` and `ssh_port` (default `22`).
+Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over mDNS), plus optional `user` (default `pi`), `key`, `password`, `broker`, `broker_port` (default `1883`), `broker_user`, `broker_password`, `broker_tls` (`auto`, `on` or `off`; see [Encrypted connections to nodes](#encrypted-connections-to-nodes-tls)), `broker_tls_port` (default `8883`) and `ssh_port` (default `22`).
 
 `user`, `key` and `password` are the **SSH** login. `broker_user` and
 `broker_password` are the node's **broker** account, and are separate on
@@ -103,7 +109,7 @@ and **connect to**, and not every setup provides one:
 
 | `mqtt_host` setting | Remote nodes |
 | --- | --- |
-| `mosquitto_embedded: true` | **Supported, but only if you publish port `1883`.** The broker runs inside the addon container, so nothing outside can reach it until you assign a host port under the addon's **Network** settings. It requires a password, which is generated once, kept across restarts and updates, and delivered to each node by `/deploy`. |
+| `mosquitto_embedded: true` | **Supported, but only if you publish port `1883`, or `8883` for TLS.** The broker runs inside the addon container, so nothing outside can reach it until you assign a host port under the addon's **Network** settings. It requires a password, which is generated once, kept across restarts and updates, and delivered to each node by `/deploy`. |
 | `core-mosquitto` (official Mosquitto addon) | **Supported.** Set `mqtt_username` and `mqtt_password` to an account that addon accepts; `/deploy` delivers them to the node. |
 | An external broker on your network | **Supported**, with or without credentials. Set `mqtt_host` to its address, and set each target's `broker` to the address the *node* should use to reach it. |
 
@@ -130,10 +136,31 @@ deploy_targets:
 ```
 
 The account has to exist on the broker already — this sets what the node
-presents, it does not create anything. With the **official Mosquitto addon**,
-add it as a Home Assistant user. With **`mosquitto_embedded`** you cannot yet:
-the addon generates a single `wactorz` account and rewrites its password file on
-every start, so an account added by hand does not survive a restart.
+presents, it does not create anything. Or let Wactorz issue one per node:
+
+### An account per node
+
+Set `node_accounts: true` and every deployed node authenticates as itself, with
+a password derived for it rather than stored anywhere.
+
+- **`mosquitto_embedded: true`** — on automatically, since that broker is
+  configured here. It also loads an access list: a node may publish and read its
+  own `nodes/<name>/...` and the shared agent traffic, and is refused every other
+  node's topics, `agents/+/commands` and `system/`. Two warnings in the log when
+  that list loads — `ACL pattern '#' does not contain '%c' or '%u'` and the same
+  for `$SYS/#` — are expected: those are the lines that leave every other account
+  on the broker, Home Assistant's included, working as before.
+- **Official Mosquitto addon** — Wactorz writes
+  `/share/wactorz/mosquitto-logins.yaml`. Paste its `logins:` entries into that
+  addon's configuration, keeping any already there, and restart it. Accounts
+  only: that addon's authentication plugin answers before any access list Wactorz
+  could provide, so it cannot keep one node out of another's topics. Signed
+  commands and TLS still apply there.
+
+A node takes its account at its next `/deploy` and keeps the shared one until
+then, so nothing changes for a node you have not redeployed. Once they all have,
+change the addon's own `mqtt_password` (and the account on your broker) so the
+one they shared no longer opens anything.
 
 If your broker accepts anonymous connections, nothing is sent and nothing needs
 to be. If you only need agents on the machine running Home Assistant, leave
@@ -142,6 +169,54 @@ to be. If you only need agents on the machine running Home Assistant, leave
 > **Credentials never go through chat.** `/deploy` takes a node name and nothing else, and the installer ignores credentials supplied in a task payload. Anything typed into chat is written to the conversation history and the chat log, where it stays long after the deploy finished.
 
 SSH host keys are verified. A machine that has not been connected to before has its key recorded on first contact (stored under `/data/state/known_hosts`, which survives addon updates); a later change to that key fails the connection instead of being accepted silently.
+
+### Signed commands
+
+Every command the addon sends a node — spawn an agent, stop it, restart the node —
+is signed with a key made for that node, which `/deploy` writes to the node with its
+broker credentials. With `node_signing: enforce` (the default) a node refuses a
+command that is not signed for it: the addon signs everything it sends, so an
+unsigned command came from something else on the broker. With
+`node_signing: warn` the node still acts on it, and Wactorz tells you in chat when
+one arrives — the way to find out what sends unsigned commands before refusing
+them. A node takes the mode at its next `/deploy`, and one deployed before signing
+holds no key and checks nothing until then. After updating, redeploy your nodes.
+
+The keys are derived from a secret kept under `/data/state`, which survives addon
+updates. Signing works whichever broker you use, the official Mosquitto addon
+included.
+
+### Encrypted connections to nodes (TLS)
+
+The addon creates a private certificate authority under `/data/state` the first
+time it starts, and issues a broker certificate from it. There is nothing to buy
+or renew: the certificate is issued again before it expires, and the authority
+stays, so deployed nodes keep trusting it.
+
+- **`mosquitto_embedded: true`** serves TLS on port `8883` beside `1883`. Publish
+  `8883` under **Network** for nodes to reach it.
+- **Official Mosquitto addon:** on every start Wactorz writes `wactorz-mqtt.crt`
+  and `wactorz-mqtt.key` into Home Assistant's `/ssl` folder, and touches nothing
+  else there. In the Mosquitto addon's configuration set
+  `certfile: wactorz-mqtt.crt` and `keyfile: wactorz-mqtt.key`, then restart it;
+  it serves TLS on `8883` from then on. If it already uses a certificate of your
+  own (`fullchain.pem`, by default), keep it and set `mqtt_tls_ca` instead — see
+  below.
+
+`/deploy` copies the authority to the node and tries a TLS connection to the
+broker on `8883` from the node itself. If that works, the node uses TLS from then
+on; if not, it stays on plain MQTT and the deploy log says why. Per target,
+`broker_tls: on` uses TLS even when the check fails, `off` never does, and
+`broker_tls_port` changes the port. A node deployed before this update keeps
+plain MQTT until you deploy it again.
+
+With a certificate of your own — a Let's Encrypt one, say — set `mqtt_tls_ca` to
+`system`, or to the path of the CA that signed it, and give each target a
+`broker` name the certificate carries: the host name is then checked, which it is
+not with the addon's own authority.
+
+Wactorz's own connection to the broker stays plain: it does not cross your
+network.
 
 ## MQTT
 
@@ -157,7 +232,7 @@ Setting `mosquitto_embedded` to `true` bundles a Mosquitto broker inside the Wac
 
 | Option | Port | Data path |
 | --- | --- | --- |
-| `mosquitto_embedded: true` | `1883` TCP (exposed as addon port) | `/data/mosquitto` |
+| `mosquitto_embedded: true` | `1883` TCP and `8883` TLS (exposed as addon ports) | `/data/mosquitto` |
 
 ## Home Assistant integration
 

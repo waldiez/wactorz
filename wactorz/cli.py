@@ -6,6 +6,7 @@ System assembly and the run loop live in :mod:`wactorz.app`; the dev reloader in
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 
@@ -56,6 +57,31 @@ def get_args() -> argparse.Namespace:
         action="store_true",
         help="Watch wactorz/ for changes and auto-restart (dev mode)",
     )
+    # ── Edge node ────────────────────────────────────────────────────────────
+    # `--node <name>` runs this process as an edge node instead of as the
+    # server: it connects to the broker, listens on nodes/<name>/… and runs the
+    # agents main sends it. The same package either way, which is what a node
+    # gets installed now — see wactorz/node/.
+    parser.add_argument(
+        "--node",
+        metavar="NAME",
+        # Optional value: `--node` alone takes the name from WACTORZ_NODE, which
+        # `/deploy` writes into every node's `.env`. The flag is still what
+        # chooses the role, though — a bare environment variable must not turn a
+        # server into a node, and one can reach a server's environment.
+        nargs="?",
+        const="",
+        help=(
+            "Run as an edge node under this name instead of starting the server. "
+            "With no name, $WACTORZ_NODE is used."
+        ),
+    )
+    # The spellings the single-file runner took. Kept working, and hidden: a
+    # node deployed before the package was installed there has a systemd unit
+    # with these in its ExecStart, and it should survive the upgrade.
+    parser.add_argument("--name", help=argparse.SUPPRESS)
+    parser.add_argument("--broker", help=argparse.SUPPRESS)
+    parser.add_argument("--loglevel", default="INFO", help=argparse.SUPPRESS)
     args, _ = parser.parse_known_args()
     _warn_about_tokens_on_the_command_line(args)
 
@@ -87,12 +113,39 @@ def _warn_about_tokens_on_the_command_line(args: argparse.Namespace) -> None:
         )
 
 
+def _run_as_node(args: argparse.Namespace) -> None:
+    """Run as an edge node, with logging a node's operator can read.
+
+    ``basicConfig`` rather than the server's log setup: a node writes to its
+    journal or to `~/wactorz/<name>.log`, has no monitor to forward to, and
+    should say something the moment it starts rather than after the app's
+    startup sequence would have configured logging.
+    """
+    # Imported here rather than at the top, for the same reason `main` imports
+    # `wactorz.app` here: both pull in the whole framework, and `--help` should
+    # not have to wait for it.
+    from wactorz.node import cli as node_cli
+
+    logging.basicConfig(
+        level=getattr(logging, str(args.loglevel).upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    node_cli.run(args)
+
+
 def main() -> None:
-    """Start the app."""
+    """Start the app, or this process's node runner when ``--node`` names one."""
+    args = get_args()
+    # `is not None`, so a bare `--node` counts: it means node mode with the name
+    # taken from the environment.
+    if args.node is not None or args.name:
+        _run_as_node(args)
+        return
+
     from wactorz.app import app
 
     try:
-        asyncio.run(app(get_args()))
+        asyncio.run(app(args))
     except (KeyboardInterrupt, asyncio.CancelledError):
         # A signal shuts down by cancelling the app task, which unwinds through
         # its own `finally` — the actors are already stopped by the time the

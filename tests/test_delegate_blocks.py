@@ -24,6 +24,7 @@ from wactorz.agents.main.actor import MainActor, _response_delegates_to
 from wactorz.agents.main.delegation import (
     RESTRICTED_DELEGATION_ALLOW,
     DelegationManager,
+    _readable,
 )
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.nodes import NodeManager
@@ -429,3 +430,20 @@ class TestReportingWhatCameBack:
 
         assert "error" in answer
         assert _MAILBOX_CLOSED in answer
+
+
+class TestShowingADirectReply:
+    """What `@agent …` shows in chat: the answer, not the dict it came in."""
+
+    def test_a_message_field_is_shown_as_the_answer(self) -> None:
+        # The catalog answers in `message`; the chat showed the whole dict.
+        reply = {"ok": True, "installing": True, "message": "Installing 6 package(s)"}
+
+        assert _readable(reply) == "Installing 6 package(s)"
+
+    def test_result_and_response_come_before_message(self) -> None:
+        assert _readable({"result": "done", "message": "working"}) == "done"
+        assert _readable({"response": "hi", "message": "working"}) == "hi"
+
+    def test_a_reply_with_no_known_field_is_shown_whole(self) -> None:
+        assert _readable({"ok": True}) == "{'ok': True}"

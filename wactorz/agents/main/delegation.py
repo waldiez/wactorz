@@ -93,7 +93,12 @@ def _readable(result: Any) -> str:
     answered in an unexpected shape still answered.
     """
     if isinstance(result, dict):
-        return str(result.get("result") or result.get("response") or result)
+        # The dashboard reads the same fields in the same order (`reply_text` in
+        # web/chat.py), so an agent reads alike whichever way it was asked.
+        for field in ("result", "response", "reply", "text", "message", "content"):
+            value = result.get(field)
+            if value:
+                return str(value)
     return str(result)
 
 

@@ -54,6 +54,20 @@ _REACHY_MINI_REQUIREMENT = f"reachy-mini=={_REACHY_MINI_SDK_VERSION}"
 # ──────────────────────────────────────────────────────────────────────────────
 
 
+def _list_message(agents: list[dict], include_experimental: bool) -> str:
+    """The catalog listing as text, for a chat that shows only a reply's text.
+
+    The dashboard renders the `agents` field itself; every other chat reaches
+    the catalog through main, which shows the message and nothing else.
+    """
+    shown = [a["name"] for a in agents if include_experimental or not a["experimental"]]
+    hidden = len(agents) - len(shown)
+    message = f"{len(agents)} agent(s) available in catalog: {', '.join(shown)}"
+    if hidden:
+        message += f". {hidden} experimental agent(s) hidden; say `list experimental` to show them"
+    return message
+
+
 def _chat_message_with_beta_warning(message: str, beta_warning: str) -> str:
     if not beta_warning:
         return message
@@ -812,7 +826,7 @@ class CatalogAgent(Actor):
             )
         return {
             "ok": True,
-            "message": f"{len(agents)} agent(s) available in catalog",
+            "message": _list_message(agents, include_experimental),
             "agents": agents,
             "show_experimental": include_experimental,
         }
@@ -831,6 +845,12 @@ class CatalogAgent(Actor):
             message += (
                 f" ({recipe.get('stability', 'beta')}: {recipe.get('warning', BETA_WARNING)})"
             )
+        # The text is all a chat through main shows, so it carries what a person
+        # asked `info` for: what the agent does and how to set it up.
+        if recipe.get("description"):
+            message += f": {recipe['description']}"
+        if recipe.get("docs"):
+            message += "\n\n" + str(recipe["docs"])
         return {"ok": True, "message": message, "recipe": safe}
 
     async def _action_spawn(

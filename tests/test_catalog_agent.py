@@ -185,21 +185,33 @@ class TestRequestShapes:
     async def test_these_all_list_the_catalog(self, catalog: CatalogAgent, payload: Any) -> None:
         result = await catalog._handle(payload)
 
-        assert result["message"].endswith("agent(s) available in catalog")
+        assert "agent(s) available in catalog: weather-agent" in result["message"]
+        # Beta agents stay out of the text unless asked for, as in the dashboard.
+        assert "reachy-mini" not in result["message"]
+        assert "say `list experimental`" in result["message"]
         assert result["show_experimental"] is False
 
     @pytest.mark.parametrize("payload", [{"action": "list", "filter": "beta"}, "list all"])
     async def test_a_list_can_ask_for_experimental_agents(
         self, catalog: CatalogAgent, payload: Any
     ) -> None:
-        assert (await catalog._handle(payload))["show_experimental"] is True
+        result = await catalog._handle(payload)
+
+        assert result["show_experimental"] is True
+        assert "reachy-mini" in result["message"]
 
     @pytest.mark.parametrize("payload", [{"action": "info", "agent": "weather"}, "info weather"])
     async def test_info_by_action_or_text(self, catalog: CatalogAgent, payload: Any) -> None:
         result = await catalog._handle(payload)
 
         assert result["ok"] is True
-        assert result["message"] == "Recipe for 'weather-agent'"
+        assert result["message"].startswith("Recipe for 'weather-agent': Natural-language weather")
+
+    async def test_info_carries_the_setup_guide(self, catalog: CatalogAgent) -> None:
+        result = await catalog._handle("info reachy-mini")
+
+        assert "Setup:" in result["message"]
+        assert "@catalog spawn reachy-mini" in result["message"]
 
     async def test_an_unknown_action_is_refused(self, catalog: CatalogAgent) -> None:
         result = await catalog._handle({"action": "delete"})

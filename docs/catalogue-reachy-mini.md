@@ -7,10 +7,30 @@ control Home Assistant devices.
 > **Beta:** Reachy Mini is an experimental agent. Use it for supervised trials, not
 > unattended production workflows. Keep the robot within reach while testing motion.
 
+## Before you start
+
+You need:
+
+- **Wactorz running**, with its dashboard open and an LLM provider set up. If you have not
+  done that yet, follow the [README quick start](https://github.com/waldiez/wactorz#readme)
+  first.
+- **Internet access** on the computer running Wactorz. The first spawn downloads the robot
+  packages, and Reachy's voice comes from an online speech service.
+- **A Reachy Mini**, Wireless or Lite.
+
+How you run Wactorz changes two things later on, how to restart it and how Reachy is
+found:
+
+| You run Wactorz… | To restart it | Finding the robot |
+|---|---|---|
+| On your computer (`pip install`) | Stop it with `Ctrl+C`, then start it again | Automatic |
+| With Docker Compose | `docker compose restart wactorz-python` | Set the robot's address, see [Set a Wireless address](#set-a-wireless-address) |
+| As the Home Assistant add-on | **Settings → Add-ons → Wactorz → Restart** | Set the robot's address, see [Set a Wireless address](#set-a-wireless-address) |
+
 ## Quick start
 
 This path gets the robot moving from the Wactorz dashboard. Start with text commands;
-voice setup is optional and comes later.
+voice comes last and is optional.
 
 ### 1. Prepare the robot
 
@@ -37,20 +57,29 @@ Leave that terminal open while using Reachy.
 
 ### 2. Add Reachy to Wactorz
 
-Open the Wactorz dashboard at `http://localhost:8888`, enter this in chat, and send it:
+In the dashboard chat, send:
 
 ```text
 @catalog spawn reachy-mini
 ```
 
-The first launch installs the robot and voice packages, which takes a few minutes (about
-3 on a fast connection, longer on a Home Assistant box). The chat says so straight away and
-names each package as it installs; you do not need to run `pip install` yourself.
+The first time, Wactorz installs Reachy's packages before starting it. You do not need to
+run `pip install` yourself. This is what you will see in chat:
 
-The robot SDK needs an older `websockets` than the one Wactorz starts with, and Python
-cannot swap a loaded package while it runs. So on a first install the chat will usually
-ask you to **restart Wactorz once**. Reachy Mini starts by itself after that restart, and
-later spawns skip the install.
+1. Straight away, a reply saying which packages it is installing. The whole install takes
+   a few minutes, longer on a Home Assistant box or a slow connection.
+2. One line per package as it installs, for example `Installing reachy-mini==1.8.4 (1/4)`.
+3. Then one of these:
+   - **"reachy-mini spawned and running"**: go on to step 3.
+   - **"…restart Wactorz once to finish; reachy-mini will start by itself after the
+     restart"**: this is normal on a first install. The robot packages need an older
+     version of a library Wactorz had already loaded, and Python cannot swap it while it
+     runs. Restart Wactorz (see the table above) and Reachy comes back on its own.
+   - **"…was not started because some of its packages failed to install"**: the message
+     names each package and pip's error. Fix the cause it names, usually the network, then
+     send `@catalog spawn reachy-mini` again. Packages that did install are kept.
+
+Later spawns and restarts skip the install.
 
 ### 3. Check the connection
 
@@ -60,7 +89,7 @@ Send:
 @reachy-mini health
 ```
 
-A successful reply describes the live robot connection. If it says Reachy is not
+A good reply starts with **"I'm connected to my body"**. If it says Reachy is not
 connected, jump to [If Reachy does not connect](#if-reachy-does-not-connect).
 
 ### 4. Try the first commands
@@ -77,13 +106,60 @@ Send these one at a time:
 Reachy should move for the first three commands and speak for the last one. The dashboard
 also shows the result, so an audio or motor problem does not look like a successful command.
 
+If Reachy's voice is quiet, see
+[make Reachy's voice louder with ffmpeg](#optional-make-reachys-voice-louder-with-ffmpeg).
+
+### 5. Optional: talk to Reachy
+
+Text commands and Reachy's speech need nothing more. To **talk to** Reachy, Wactorz needs
+a speech recognition service. The default is Deepgram, a hosted service; voice audio is
+sent to it.
+
+1. Sign up at [console.deepgram.com](https://console.deepgram.com) and create an API key.
+2. Put it in the `.env` file Wactorz reads, then restart Wactorz:
+
+   ```dotenv
+   DEEPGRAM_API_KEY=your-key-here
+   ```
+
+3. Try one question, then a conversation:
+
+   ```text
+   @reachy-mini listen and ask Wactorz
+   @reachy-mini start conversation
+   ```
+
+   `listen and ask Wactorz` records five seconds, then answers out loud.
+   `start conversation` keeps listening until you say "goodbye" or send
+   `@reachy-mini stop conversation`.
+
+To keep audio on your own computer instead, use the local recognizer described in
+[Push-to-talk voice input](#push-to-talk-voice-input).
+
+> **Home Assistant add-on:** the add-on has no setting for `DEEPGRAM_API_KEY` yet, so
+> voice input is not available there. Text commands and Reachy's speech work.
+
 ### Where to go next
 
-- To talk with Reachy, continue to [Push-to-talk voice input](#push-to-talk-voice-input).
-- For an ongoing voice session, see [Opt-in conversation mode](#opt-in-conversation-mode).
+- If something is not working, see [Common problems](#common-problems).
 - To use Wactorz and Home Assistant through Reachy, see
   [Use Reachy as the Wactorz interface](#use-reachy-as-the-wactorz-interface).
+- For everything Reachy can do, send `@reachy-mini help`.
 - For MQTT or code-driven control, see [Structured commands](#structured-commands).
+
+## Common problems
+
+| What you see | What to do |
+|---|---|
+| The spawn reply says it is installing, and nothing else happens for a few minutes | Normal on a first install. Each package is announced as it starts. |
+| "…restart Wactorz once to finish…" | Normal on a first install. Restart Wactorz; Reachy starts by itself. |
+| "…some of its packages failed to install" | Fix what pip's error names, usually the network, then spawn again. |
+| "reachy-mini could not start: the Python module '…' is not installed" | Send `@catalog spawn reachy-mini` again to install what is missing. |
+| "reachy not connected" | See [If Reachy does not connect](#if-reachy-does-not-connect). |
+| Reachy talks but does not move | Close the Reachy Mini control app, then send `@reachy-mini reconnect`. |
+| Reachy's voice is quiet | Install ffmpeg, see [make Reachy's voice louder](#optional-make-reachys-voice-louder-with-ffmpeg), or say `presenter mode`. |
+| Voice input says `DEEPGRAM_API_KEY` is required | Do [step 5](#5-optional-talk-to-reachy). |
+| Reachy stops talking in the middle of a sentence | Check the Wactorz log at that moment for `Reachy motor link is down`, and report it with the lines around it. |
 
 ## If Reachy does not connect
 
@@ -95,8 +171,8 @@ Work through these checks in order:
 3. For Wireless, close the Reachy Mini control app. For Lite, confirm the daemon terminal
    is still running and shows no connection error.
 4. Ask the already-running agent to try again with `@reachy-mini reconnect`.
-5. If Wireless discovery still fails, set the robot address explicitly as described in
-   [Set a Wireless address](#set-a-wireless-address).
+5. If Wireless discovery still fails, or you run Wactorz in Docker or the add-on, set the robot address
+   explicitly as described in [Set a Wireless address](#set-a-wireless-address).
 
 Use `@reachy-mini reconnect force` when the dashboard claims the link is alive but the
 robot does not respond. Reinstalling or respawning should not be the first troubleshooting
@@ -106,33 +182,39 @@ step.
 
 ### Set a Wireless address
 
-Automatic discovery is easiest when it works. If it is unreliable, add the robot's IP
-address or hostname to your local `.env` file:
+Automatic discovery is easiest when it works. It does not work from Docker or the Home
+Assistant add-on, whose containers cannot see the robot's announcements on your network,
+and it can be unreliable elsewhere. Then tell Wactorz the robot's address yourself.
+
+Find the address in your router's list of connected devices, or try the name
+`reachy-mini.local`. The examples below use `192.168.1.42`; replace it with yours.
+
+**On your computer or in Docker:** add these lines to the `.env` file Wactorz reads:
 
 ```dotenv
 REACHY_CONNECTION_MODE=network
 REACHY_ROBOT_HOST=192.168.1.42
 ```
 
-Replace the example address, save the file, then restart the agent:
+`.env` is read when Wactorz starts, so restarting only the agent is not enough. Restart
+Wactorz. In Docker, run `docker compose up -d` rather than `restart`, because only `up`
+applies a changed `.env`.
 
-```text
-/agents restart reachy-mini
-```
-
-For runtime configuration without editing `.env`, publish the address and reconnect:
+**On the Home Assistant add-on, or without restarting:** publish the address over MQTT,
+then reconnect. In Home Assistant, open **Settings → Devices & services → MQTT →
+Configure → Publish a packet**:
 
 ```text
 topic: custom/reachy/config
-payload: {"robot_host": "192.168.1.42"}
+payload: {"robot_host": "192.168.1.42", "connection_mode": "network"}
 ```
 
 ```text
 @reachy-mini reconnect
 ```
 
-The active address is published in `custom/reachy/state` as `robot_host`. Runtime
-configuration takes effect on reconnect; `.env` values are read when the agent starts.
+An address set this way is remembered, and it overrides the one in `.env`. The address in
+use is published in `custom/reachy/state` as `robot_host`.
 
 ### Install dependencies manually
 
@@ -321,8 +403,8 @@ payload: {"duration": 5}
 
 `ask_voice` remains one-shot. There is deliberately no always-on microphone or wake
 word.
-The default backend on this test branch is hosted Deepgram Nova-3. It needs an API
-key. `ask_voice` uploads one bounded WAV clip; conversation mode streams Reachy's
+The default backend is hosted Deepgram Nova-3. It needs an API key, see
+[step 5](#5-optional-talk-to-reachy). `ask_voice` uploads one bounded WAV clip; conversation mode streams Reachy's
 WebRTC microphone as mono PCM while the user speaks:
 
 ~~~bash
@@ -421,9 +503,9 @@ Execution receipts such as `ran 4 of 4` are also hidden by default; say
 after an agent restart. Punctuation-only recognition noise is ignored.
 
 Prerecorded conversation turns auto-detect the spoken language. Streaming uses
-`stt_stream_language` (or `REACHY_STT_STREAM_LANGUAGE`) and defaults to English because
-Deepgram streaming language detection is unavailable. Set it to `el` for a Greek session,
-or disable streaming when automatic per-turn English/Greek selection matters. Common names
+`stt_stream_language` (or `REACHY_STT_STREAM_LANGUAGE`), which defaults to `multi`: English
+and Greek in the same conversation. Set it to `en` or `el` to keep a session to one
+language. Common names
 and device terms are supplied as hotwords; override them with `stt_hotwords` or
 `REACHY_STT_HOTWORDS`. Common mishearings such as "Richie", "Riti", "Ritzy", and
 "Lizzy" are corrected to "Reachy" when used as the robot's name. Main is explicitly
@@ -460,10 +542,10 @@ audience already in front of the robot. A preset sets all of them at once:
 
 | Preset | What it looks like |
 | --- | --- |
-| `off` | Completely still. Motors stay live and every command still works — this is stillness, not sleep. |
+| `off` | **The default.** Completely still. Motors stay live and every command still works — this is stillness, not sleep. |
 | `calm` | Barely moving, and *slower* as well as smaller. Breathing that is only shallower reads as a robot turned down; breathing that is also slower reads as something at rest. |
 | `antennas` | Antennas alive, head and body held absolutely still. For a plinth where a sweeping head is a hazard, or when he should look like he is listening rather than performing. |
-| `alive` | **The default.** Breathing, gaze drift, an attract beat every half minute or so. |
+| `alive` | **What you get when you turn ambient motion on without naming a preset.** Breathing, gaze drift, an attract beat every half minute or so. |
 | `showtime` | Bigger and quicker, with beats two to three times as often. Too much for a quiet room, and meant to be. |
 
 Set it whichever way is nearest to hand:

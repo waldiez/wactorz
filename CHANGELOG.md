@@ -43,7 +43,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,
   first-run installation, connection checks, first commands, and recovery steps are presented
-  before the advanced MQTT, media, and motion reference.
+  before the advanced MQTT, media, and motion reference. It says what to expect before
+  starting, what the chat shows during a first install and what each outcome means, how to
+  restart on a computer, in Docker and on the Home Assistant add-on, how to add voice input,
+  and what to do about the common problems. It also corrects three claims: an edited `.env`
+  needs Wactorz restarted, not just the agent; Docker and the add-on cannot find the robot on
+  their own; and streaming voice input handles English and Greek together by default. Voice
+  input is not yet available on the add-on, which has no setting for the Deepgram key.
 - **The Reachy template now includes its Deepgram setup.** A copied `.env` names the required
   API-key variable, Nova-3 bilingual English/Greek settings, streaming controls, and a local
   faster-whisper alternative without including any credential.

@@ -153,9 +153,47 @@ control Home Assistant devices.</p>
 <p><strong>Beta:</strong> Reachy Mini is an experimental agent. Use it for supervised trials, not
 unattended production workflows. Keep the robot within reach while testing motion.</p>
 </blockquote>
+<h2 id="before-you-start">Before you start</h2>
+<p>You need:</p>
+<ul>
+<li><strong>Wactorz running</strong>, with its dashboard open and an LLM provider set up. If you have not
+  done that yet, follow the <a href="https://github.com/waldiez/wactorz#readme">README quick start</a>
+  first.</li>
+<li><strong>Internet access</strong> on the computer running Wactorz. The first spawn downloads the robot
+  packages, and Reachy's voice comes from an online speech service.</li>
+<li><strong>A Reachy Mini</strong>, Wireless or Lite.</li>
+</ul>
+<p>How you run Wactorz changes two things later on, how to restart it and how Reachy is
+found:</p>
+<table>
+<thead>
+<tr>
+<th>You run Wactorz…</th>
+<th>To restart it</th>
+<th>Finding the robot</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>On your computer (<code>pip install</code>)</td>
+<td>Stop it with <code>Ctrl+C</code>, then start it again</td>
+<td>Automatic</td>
+</tr>
+<tr>
+<td>With Docker Compose</td>
+<td><code>docker compose restart wactorz-python</code></td>
+<td>Set the robot's address, see <a href="#set-a-wireless-address">Set a Wireless address</a></td>
+</tr>
+<tr>
+<td>As the Home Assistant add-on</td>
+<td><strong>Settings → Add-ons → Wactorz → Restart</strong></td>
+<td>Set the robot's address, see <a href="#set-a-wireless-address">Set a Wireless address</a></td>
+</tr>
+</tbody>
+</table>
 <h2 id="quick-start">Quick start</h2>
 <p>This path gets the robot moving from the Wactorz dashboard. Start with text commands;
-voice setup is optional and comes later.</p>
+voice comes last and is optional.</p>
 <h3 id="1-prepare-the-robot">1. Prepare the robot</h3>
 <p>Choose the model you have:</p>
 <p><strong>Reachy Mini Wireless</strong></p>
@@ -176,23 +214,33 @@ voice setup is optional and comes later.</p>
 
 <p>Leave that terminal open while using Reachy.</p>
 <h3 id="2-add-reachy-to-wactorz">2. Add Reachy to Wactorz</h3>
-<p>Open the Wactorz dashboard at <code>http://localhost:8888</code>, enter this in chat, and send it:</p>
+<p>In the dashboard chat, send:</p>
 <div class="highlight"><pre><span></span><code>@catalog spawn reachy-mini
 </code></pre></div>
 
-<p>The first launch installs the robot and voice packages, which takes a few minutes (about
-3 on a fast connection, longer on a Home Assistant box). The chat says so straight away and
-names each package as it installs; you do not need to run <code>pip install</code> yourself.</p>
-<p>The robot SDK needs an older <code>websockets</code> than the one Wactorz starts with, and Python
-cannot swap a loaded package while it runs. So on a first install the chat will usually
-ask you to <strong>restart Wactorz once</strong>. Reachy Mini starts by itself after that restart, and
-later spawns skip the install.</p>
+<p>The first time, Wactorz installs Reachy's packages before starting it. You do not need to
+run <code>pip install</code> yourself. This is what you will see in chat:</p>
+<ol>
+<li>Straight away, a reply saying which packages it is installing. The whole install takes
+   a few minutes, longer on a Home Assistant box or a slow connection.</li>
+<li>One line per package as it installs, for example <code>Installing reachy-mini==1.8.4 (1/4)</code>.</li>
+<li>Then one of these:</li>
+<li><strong>"reachy-mini spawned and running"</strong>: go on to step 3.</li>
+<li><strong>"…restart Wactorz once to finish; reachy-mini will start by itself after the
+     restart"</strong>: this is normal on a first install. The robot packages need an older
+     version of a library Wactorz had already loaded, and Python cannot swap it while it
+     runs. Restart Wactorz (see the table above) and Reachy comes back on its own.</li>
+<li><strong>"…was not started because some of its packages failed to install"</strong>: the message
+     names each package and pip's error. Fix the cause it names, usually the network, then
+     send <code>@catalog spawn reachy-mini</code> again. Packages that did install are kept.</li>
+</ol>
+<p>Later spawns and restarts skip the install.</p>
 <h3 id="3-check-the-connection">3. Check the connection</h3>
 <p>Send:</p>
 <div class="highlight"><pre><span></span><code>@reachy-mini health
 </code></pre></div>
 
-<p>A successful reply describes the live robot connection. If it says Reachy is not
+<p>A good reply starts with <strong>"I'm connected to my body"</strong>. If it says Reachy is not
 connected, jump to <a href="#if-reachy-does-not-connect">If Reachy does not connect</a>.</p>
 <h3 id="4-try-the-first-commands">4. Try the first commands</h3>
 <p>Send these one at a time:</p>
@@ -204,14 +252,88 @@ connected, jump to <a href="#if-reachy-does-not-connect">If Reachy does not conn
 
 <p>Reachy should move for the first three commands and speak for the last one. The dashboard
 also shows the result, so an audio or motor problem does not look like a successful command.</p>
+<p>If Reachy's voice is quiet, see
+<a href="#optional-make-reachys-voice-louder-with-ffmpeg">make Reachy's voice louder with ffmpeg</a>.</p>
+<h3 id="5-optional-talk-to-reachy">5. Optional: talk to Reachy</h3>
+<p>Text commands and Reachy's speech need nothing more. To <strong>talk to</strong> Reachy, Wactorz needs
+a speech recognition service. The default is Deepgram, a hosted service; voice audio is
+sent to it.</p>
+<ol>
+<li>Sign up at <a href="https://console.deepgram.com">console.deepgram.com</a> and create an API key.</li>
+<li>Put it in the <code>.env</code> file Wactorz reads, then restart Wactorz:</li>
+</ol>
+<p><code>dotenv
+   DEEPGRAM_API_KEY=your-key-here</code></p>
+<ol>
+<li>Try one question, then a conversation:</li>
+</ol>
+<p><code>text
+   @reachy-mini listen and ask Wactorz
+   @reachy-mini start conversation</code></p>
+<p><code>listen and ask Wactorz</code> records five seconds, then answers out loud.
+   <code>start conversation</code> keeps listening until you say "goodbye" or send
+   <code>@reachy-mini stop conversation</code>.</p>
+<p>To keep audio on your own computer instead, use the local recognizer described in
+<a href="#push-to-talk-voice-input">Push-to-talk voice input</a>.</p>
+<blockquote>
+<p><strong>Home Assistant add-on:</strong> the add-on has no setting for <code>DEEPGRAM_API_KEY</code> yet, so
+voice input is not available there. Text commands and Reachy's speech work.</p>
+</blockquote>
 <h3 id="where-to-go-next">Where to go next</h3>
 <ul>
-<li>To talk with Reachy, continue to <a href="#push-to-talk-voice-input">Push-to-talk voice input</a>.</li>
-<li>For an ongoing voice session, see <a href="#opt-in-conversation-mode">Opt-in conversation mode</a>.</li>
+<li>If something is not working, see <a href="#common-problems">Common problems</a>.</li>
 <li>To use Wactorz and Home Assistant through Reachy, see
   <a href="#use-reachy-as-the-wactorz-interface">Use Reachy as the Wactorz interface</a>.</li>
+<li>For everything Reachy can do, send <code>@reachy-mini help</code>.</li>
 <li>For MQTT or code-driven control, see <a href="#structured-commands">Structured commands</a>.</li>
 </ul>
+<h2 id="common-problems">Common problems</h2>
+<table>
+<thead>
+<tr>
+<th>What you see</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The spawn reply says it is installing, and nothing else happens for a few minutes</td>
+<td>Normal on a first install. Each package is announced as it starts.</td>
+</tr>
+<tr>
+<td>"…restart Wactorz once to finish…"</td>
+<td>Normal on a first install. Restart Wactorz; Reachy starts by itself.</td>
+</tr>
+<tr>
+<td>"…some of its packages failed to install"</td>
+<td>Fix what pip's error names, usually the network, then spawn again.</td>
+</tr>
+<tr>
+<td>"reachy-mini could not start: the Python module '…' is not installed"</td>
+<td>Send <code>@catalog spawn reachy-mini</code> again to install what is missing.</td>
+</tr>
+<tr>
+<td>"reachy not connected"</td>
+<td>See <a href="#if-reachy-does-not-connect">If Reachy does not connect</a>.</td>
+</tr>
+<tr>
+<td>Reachy talks but does not move</td>
+<td>Close the Reachy Mini control app, then send <code>@reachy-mini reconnect</code>.</td>
+</tr>
+<tr>
+<td>Reachy's voice is quiet</td>
+<td>Install ffmpeg, see <a href="#optional-make-reachys-voice-louder-with-ffmpeg">make Reachy's voice louder</a>, or say <code>presenter mode</code>.</td>
+</tr>
+<tr>
+<td>Voice input says <code>DEEPGRAM_API_KEY</code> is required</td>
+<td>Do <a href="#5-optional-talk-to-reachy">step 5</a>.</td>
+</tr>
+<tr>
+<td>Reachy stops talking in the middle of a sentence</td>
+<td>Check the Wactorz log at that moment for <code>Reachy motor link is down</code>, and report it with the lines around it.</td>
+</tr>
+</tbody>
+</table>
 <h2 id="if-reachy-does-not-connect">If Reachy does not connect</h2>
 <p>Work through these checks in order:</p>
 <ol>
@@ -221,34 +343,39 @@ also shows the result, so an audio or motor problem does not look like a success
 <li>For Wireless, close the Reachy Mini control app. For Lite, confirm the daemon terminal
    is still running and shows no connection error.</li>
 <li>Ask the already-running agent to try again with <code>@reachy-mini reconnect</code>.</li>
-<li>If Wireless discovery still fails, set the robot address explicitly as described in
-   <a href="#set-a-wireless-address">Set a Wireless address</a>.</li>
+<li>If Wireless discovery still fails, or you run Wactorz in Docker or the add-on, set the robot address
+   explicitly as described in <a href="#set-a-wireless-address">Set a Wireless address</a>.</li>
 </ol>
 <p>Use <code>@reachy-mini reconnect force</code> when the dashboard claims the link is alive but the
 robot does not respond. Reinstalling or respawning should not be the first troubleshooting
 step.</p>
 <h2 id="detailed-setup">Detailed setup</h2>
 <h3 id="set-a-wireless-address">Set a Wireless address</h3>
-<p>Automatic discovery is easiest when it works. If it is unreliable, add the robot's IP
-address or hostname to your local <code>.env</code> file:</p>
+<p>Automatic discovery is easiest when it works. It does not work from Docker or the Home
+Assistant add-on, whose containers cannot see the robot's announcements on your network,
+and it can be unreliable elsewhere. Then tell Wactorz the robot's address yourself.</p>
+<p>Find the address in your router's list of connected devices, or try the name
+<code>reachy-mini.local</code>. The examples below use <code>192.168.1.42</code>; replace it with yours.</p>
+<p><strong>On your computer or in Docker:</strong> add these lines to the <code>.env</code> file Wactorz reads:</p>
 <div class="highlight"><pre><span></span><code>REACHY_CONNECTION_MODE=network
 REACHY_ROBOT_HOST=192.168.1.42
 </code></pre></div>
 
-<p>Replace the example address, save the file, then restart the agent:</p>
-<div class="highlight"><pre><span></span><code>/agents restart reachy-mini
-</code></pre></div>
-
-<p>For runtime configuration without editing <code>.env</code>, publish the address and reconnect:</p>
+<p><code>.env</code> is read when Wactorz starts, so restarting only the agent is not enough. Restart
+Wactorz. In Docker, run <code>docker compose up -d</code> rather than <code>restart</code>, because only <code>up</code>
+applies a changed <code>.env</code>.</p>
+<p><strong>On the Home Assistant add-on, or without restarting:</strong> publish the address over MQTT,
+then reconnect. In Home Assistant, open <strong>Settings → Devices &amp; services → MQTT →
+Configure → Publish a packet</strong>:</p>
 <div class="highlight"><pre><span></span><code>topic: custom/reachy/config
-payload: {&quot;robot_host&quot;: &quot;192.168.1.42&quot;}
+payload: {&quot;robot_host&quot;: &quot;192.168.1.42&quot;, &quot;connection_mode&quot;: &quot;network&quot;}
 </code></pre></div>
 
 <div class="highlight"><pre><span></span><code>@reachy-mini reconnect
 </code></pre></div>
 
-<p>The active address is published in <code>custom/reachy/state</code> as <code>robot_host</code>. Runtime
-configuration takes effect on reconnect; <code>.env</code> values are read when the agent starts.</p>
+<p>An address set this way is remembered, and it overrides the one in <code>.env</code>. The address in
+use is published in <code>custom/reachy/state</code> as <code>robot_host</code>.</p>
 <h3 id="install-dependencies-manually">Install dependencies manually</h3>
 <p>The catalogue installer handles these dependencies during the first spawn. If you manage
 the environment yourself, install them with:</p>
@@ -409,8 +536,8 @@ returns the answer to chat, and speaks it through Reachy:</p>
 
 <p><code>ask_voice</code> remains one-shot. There is deliberately no always-on microphone or wake
 word.
-The default backend on this test branch is hosted Deepgram Nova-3. It needs an API
-key. <code>ask_voice</code> uploads one bounded WAV clip; conversation mode streams Reachy's
+The default backend is hosted Deepgram Nova-3. It needs an API key, see
+<a href="#5-optional-talk-to-reachy">step 5</a>. <code>ask_voice</code> uploads one bounded WAV clip; conversation mode streams Reachy's
 WebRTC microphone as mono PCM while the user speaks:</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Hosted default</span>
 pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;deepgram-sdk&gt;=3,&lt;4&#39;</span>
@@ -495,9 +622,9 @@ Execution receipts such as <code>ran 4 of 4</code> are also hidden by default; s
 <code>disable debug</code> to return to the normal user-facing view. Debug always starts off
 after an agent restart. Punctuation-only recognition noise is ignored.</p>
 <p>Prerecorded conversation turns auto-detect the spoken language. Streaming uses
-<code>stt_stream_language</code> (or <code>REACHY_STT_STREAM_LANGUAGE</code>) and defaults to English because
-Deepgram streaming language detection is unavailable. Set it to <code>el</code> for a Greek session,
-or disable streaming when automatic per-turn English/Greek selection matters. Common names
+<code>stt_stream_language</code> (or <code>REACHY_STT_STREAM_LANGUAGE</code>), which defaults to <code>multi</code>: English
+and Greek in the same conversation. Set it to <code>en</code> or <code>el</code> to keep a session to one
+language. Common names
 and device terms are supplied as hotwords; override them with <code>stt_hotwords</code> or
 <code>REACHY_STT_HOTWORDS</code>. Common mishearings such as "Richie", "Riti", "Ritzy", and
 "Lizzy" are corrected to "Reachy" when used as the robot's name. Main is explicitly
@@ -536,7 +663,7 @@ audience already in front of the robot. A preset sets all of them at once:</p>
 <tbody>
 <tr>
 <td><code>off</code></td>
-<td>Completely still. Motors stay live and every command still works — this is stillness, not sleep.</td>
+<td><strong>The default.</strong> Completely still. Motors stay live and every command still works — this is stillness, not sleep.</td>
 </tr>
 <tr>
 <td><code>calm</code></td>
@@ -548,7 +675,7 @@ audience already in front of the robot. A preset sets all of them at once:</p>
 </tr>
 <tr>
 <td><code>alive</code></td>
-<td><strong>The default.</strong> Breathing, gaze drift, an attract beat every half minute or so.</td>
+<td><strong>What you get when you turn ambient motion on without naming a preset.</strong> Breathing, gaze drift, an attract beat every half minute or so.</td>
 </tr>
 <tr>
 <td><code>showtime</code></td>

@@ -432,18 +432,18 @@ def _build_catalog() -> dict:
             ),
             "docs": (
                 "Setup:\n"
-                "1. Install the recipe dependencies when prompted, or preinstall: "
-                f"pip install {_REACHY_MINI_REQUIREMENT} numpy edge-tts pillow "
-                "webrtcvad-wheels 'deepgram-sdk>=3,<4'. Set DEEPGRAM_API_KEY "
-                "before using voice input.\n"
-                "2. For Reachy Mini Wireless, put the robot and Wactorz host on the "
+                "1. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
-                "3. For Reachy Mini Lite, start the local daemon first: "
+                "2. For Reachy Mini Lite, start the local daemon first: "
                 "reachy-mini-daemon -p <serial_port>.\n"
-                "4. Spawn the agent: @catalog spawn reachy-mini.\n"
-                "5. If discovery is flaky, pin the Wireless host by publishing "
-                '{"robot_host": "192.168.1.42"} to custom/reachy/config, then restart '
-                "the agent.\n"
+                "3. Spawn the agent: @catalog spawn reachy-mini. The first spawn "
+                "installs its packages, which takes a few minutes, and usually asks "
+                "for one restart of Wactorz; Reachy starts by itself after it.\n"
+                "4. If Reachy is not found (always the case from Docker or the Home "
+                'Assistant add-on), publish {"robot_host": "192.168.1.42", '
+                '"connection_mode": "network"} to custom/reachy/config, then say '
+                "reconnect.\n"
+                "5. Optional voice input: set DEEPGRAM_API_KEY and restart Wactorz.\n"
                 "\n"
                 "Try:\n"
                 "- help\n"

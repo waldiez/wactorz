@@ -375,6 +375,10 @@ async def _open_robot(agent):
 
     mini = None
     last_err = None
+    # Only the attempts that reached the robot and then failed on the media
+    # link: a later attempt can fail differently (discovery, say) and must not
+    # hide that the robot itself was there.
+    media_failed = []
     for kwargs in attempts:
         attempted_mode = _normalize_connection_mode(kwargs.get("connection_mode") or "")
         if attempted_mode:
@@ -390,11 +394,62 @@ async def _open_robot(agent):
             continue
         except Exception as e:
             last_err = e
+            if _media_cannot_start(e):
+                media_failed.append((kwargs, e))
             continue
+
+    agent.state.pop("media_unavailable", None)
+    if mini is None and media_failed:
+        # The robot is reachable; this computer cannot build the WebRTC media
+        # link. Motion and speech do not need it, so connect without media
+        # rather than not at all, and remember why for the commands that do.
+        for kwargs, media_err in media_failed:
+            try:
+                mini = await loop.run_in_executor(
+                    None, _open_sync, {**kwargs, "media_backend": "no_media"}
+                )
+            except Exception:
+                continue
+            agent.state["media_unavailable"] = str(media_err)
+            await agent.log(_MEDIA_UNAVAILABLE_NOTICE, level="warning")
+            break
 
     tried = ", ".join(_describe_attempt(kw) for kw in attempts) or "autodetect"
     agent.state["last_connect_error"] = str(last_err) if mini is None else None
     return mini, last_err, tried
+
+
+#: What an SDK error says when this computer cannot create the WebRTC media link:
+#: GStreamer's Rust WebRTC plugin (gst-plugins-rs) is not installed. Linux
+#: distributions do not package it; the pip bundle on Windows and macOS carries it.
+_MEDIA_CANNOT_START_MARKERS = ("webrtcsrc", "webrtc rust plugin")
+
+_MEDIA_UNAVAILABLE_NOTICE = (
+    "Reachy is connected without its camera and microphone: this computer is missing "
+    "GStreamer's WebRTC plugin (gst-plugins-rs), which Linux distributions do not "
+    "package. Movement and speech work; listening, conversation and the camera do not."
+)
+
+
+#: Commands that need the camera or microphone, refused without a media link.
+_MEDIA_COMMANDS = frozenset(
+    {
+        "camera",
+        "describe",
+        "look_behind",
+        "look_around",
+        "listen",
+        "ask_voice",
+        "conversation_start",
+        "doa",
+    }
+)
+
+
+def _media_cannot_start(error):
+    """Whether a failed connection was the media link and not the robot."""
+    text = str(error or "").lower()
+    return any(marker in text for marker in _MEDIA_CANNOT_START_MARKERS)
 
 
 async def _bring_up_robot(agent, *, require_motion=False, quiet=False):
@@ -411,7 +466,10 @@ async def _bring_up_robot(agent, *, require_motion=False, quiet=False):
     # robot speaker (play_sound -> daemon). LOCAL/gstreamer plays on this host.
     try:
         _audio = getattr(getattr(mini, "media", None), "audio", None)
-        _on_robot = bool(getattr(_audio, "daemon_url", None))
+        # Without media, speech goes to the daemon directly: still the robot.
+        _on_robot = bool(agent.state.get("media_unavailable")) or bool(
+            getattr(_audio, "daemon_url", None)
+        )
         agent.state["audio_on_robot"] = _on_robot
         if not _on_robot:
             await agent.log(
@@ -425,7 +483,9 @@ async def _bring_up_robot(agent, *, require_motion=False, quiet=False):
     # Tune the XVF3800 before conversation playback begins. Wireless clients use
     # the daemon REST endpoint because the USB audio board lives on the robot;
     # Lite/local clients can configure the board through the SDK directly.
-    await _configure_conversation_audio(agent)
+    # Without media there is no microphone to tune for.
+    if not agent.state.get("media_unavailable"):
+        await _configure_conversation_audio(agent)
 
     # The daemon persists its own volume, so sync FROM it (a GET, no test sound)
     # rather than re-applying ours. Caller has already seeded the persisted value.
@@ -444,7 +504,7 @@ async def _bring_up_robot(agent, *, require_motion=False, quiet=False):
         if quiet:
             await _wake_quietly(agent)
         else:
-            await _do(mini.wake_up)
+            await _wake_up(agent)
         agent.state["awake"] = True
         await agent.publish("custom/reachy/events", {"type": "wake", "ts": time.time()})
     except Exception as e:
@@ -1166,10 +1226,12 @@ async def setup(agent):
     connection = "Wi-Fi" if connection_mode == "network" else "the local control app"
     speaker = "the robot speaker" if agent.state.get("audio_on_robot") else "this computer"
     life = " Ambient motion is on." if agent.state.get("life_enabled") else ""
-    await agent.log(
-        f"Reachy is ready via {connection}; speech uses {speaker}.{life} "
-        'Say "start listening" to talk by voice.'
-    )
+    if agent.state.get("media_unavailable"):
+        speaker = "the robot speaker"
+        voice = " Listening and the camera are off on this computer."
+    else:
+        voice = ' Say "start listening" to talk by voice.'
+    await agent.log(f"Reachy is ready via {connection}; speech uses {speaker}.{life}{voice}")
 
 
 async def process(agent):
@@ -2460,7 +2522,11 @@ async def handle_task(agent, payload):
                             _natural_actuation_speech(str(step.get("result")), stripped)
                             or str(step.get("result")).strip()
                             for step in steps
-                            if isinstance(step, dict) and step.get("result")
+                            if isinstance(step, dict)
+                            and step.get("result")
+                            # Waking readies the robot for the rest of a plan;
+                            # it is not the answer to a plan that does more.
+                            and not (step.get("cmd") == "wake" and len(steps) > 1)
                         ]
                         natural_results = list(dict.fromkeys(natural_results))
                         result_msg = " ".join(natural_results) if natural_results else "Done."
@@ -3404,6 +3470,10 @@ async def _dispatch(agent, cmd, payload, return_result=False):
     started = time.time()
 
     try:
+        if cmd in _MEDIA_COMMANDS and agent.state.get("media_unavailable"):
+            # Said before anything starts: a conversation opened here would
+            # announce itself and then end at its first attempt to listen.
+            raise RuntimeError(_MEDIA_UNAVAILABLE_NOTICE)
         if cmd == "help":
             result = _help(agent, payload)
         elif cmd == "capability":
@@ -3482,6 +3552,8 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         ack = {"ok": True, "cmd": cmd, "duration_s": round(time.time() - started, 3)}
         if isinstance(result, dict):
             ack.update(result)
+        # Chat shows `result`; a command that sets none reached it as a raw dict.
+        ack.setdefault("result", "Done.")
         if cmd in _MOTION_COMMANDS:
             agent.state.pop("motion_link_error", None)
         # Per-command result — correlation id if provided
@@ -3505,15 +3577,16 @@ async def _dispatch(agent, cmd, payload, return_result=False):
                 "ok": False,
                 "cmd": cmd,
                 "error": (
-                    "Motor command did not finish although audio is still connected. "
-                    'Say "reconnect" and try again. '
-                    f"({e})"
+                    "My motor link dropped and I'm reconnecting on my own; "
+                    f"try again in a few seconds. ({e})"
                     if _is_motion_link_error(e)
                     else str(e)
                 ),
                 "duration_s": round(time.time() - started, 3),
             }
         )
+        # Chat shows `result`; without one a failure reached it as a raw dict.
+        err.setdefault("result", f"I couldn't do that: {err['error']}")
         rid = payload.get("id")
         if rid:
             await agent.publish(f"custom/reachy/cmd_result/{rid}", err)
@@ -3531,14 +3604,13 @@ async def _dispatch(agent, cmd, payload, return_result=False):
 
 
 async def _wake(agent):
-    mini = agent.state["mini"]
     # Torque must be ON or wake_up plays its sound but the head/antennas don't
     # move. Re-enable every wake in case motors were disabled meanwhile.
     await _ensure_motors_enabled(agent)
     async with agent.state["motion_lock"]:
         agent.state["busy"] = True
         try:
-            await _do(mini.wake_up)
+            await _wake_up(agent)
             agent.state["awake"] = True
         finally:
             agent.state["busy"] = False
@@ -3693,7 +3765,7 @@ async def _sleep(agent):
             agent.state["awake"] = False
         finally:
             agent.state["busy"] = False
-    return {"animated": True}
+    return {"animated": True, "result": 'Going to sleep. Say "wake up" when you need me.'}
 
 
 async def _pose(agent, payload):
@@ -5558,10 +5630,11 @@ async def _say(agent, payload):
 
     # The media manager only has a live audio backend when media_backend != "no_media".
     media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
-    if media is None:
+    via_daemon = bool(agent.state.get("media_unavailable"))
+    if media is None and not via_daemon:
         raise RuntimeError("reachy SDK exposes no media manager (mini.media)")
     audio = getattr(media, "audio", None)
-    if audio is None:
+    if audio is None and not via_daemon:
         raise RuntimeError(
             "reachy audio backend is not initialized — media_backend is "
             f"'{agent.state.get('media_backend') or 'default'}'. Publish "
@@ -5573,7 +5646,7 @@ async def _say(agent, payload):
     # /api/media/play_sound). The LOCAL/gstreamer backend plays on THIS host's
     # speakers. Detect via the daemon_url the WebRTC client carries.
     daemon_url = getattr(audio, "daemon_url", None) or getattr(media, "_daemon_url", None)
-    plays_on_robot = bool(daemon_url)
+    plays_on_robot = via_daemon or bool(daemon_url)
     if not plays_on_robot:
         await agent.log(
             "say will play on the HOST machine, not the robot — this backend "
@@ -5600,9 +5673,13 @@ async def _say(agent, payload):
 
     # -- Play through the robot's speaker (non-blocking GStreamer playbin) --
     try:
-        await _do(media.play_sound, play_path)
+        if via_daemon:
+            await _play_via_daemon(agent, play_path)
+        else:
+            await _do(media.play_sound, play_path)
     except Exception as exc:
-        if not await _recover_media_link(agent, exc):
+        # Through the daemon there is no media link to rebuild; the error stands.
+        if via_daemon or not await _recover_media_link(agent, exc):
             raise
         recovered = agent.state.get("mini")
         media = getattr(recovered, "media", None) or getattr(recovered, "media_manager", None)
@@ -5867,15 +5944,84 @@ def _db_to_level(db):
 
 
 def _daemon_url(agent):
-    """Base URL of the robot daemon's HTTP API, if reachable (WebRTC backend only)."""
+    """Base URL of the robot daemon's HTTP API, if reachable.
+
+    The WebRTC media backend carries it. Without media — connected with
+    `media_unavailable` — the control connection's own host and port are the
+    same daemon, so the address comes from there instead.
+    """
     mini = agent.state.get("mini")
     media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
     audio = getattr(media, "audio", None)
-    return (
+    found = (
         getattr(audio, "daemon_url", None)
         or getattr(media, "_daemon_url", None)
         or getattr(mini, "_daemon_http_url", None)
     )
+    if found or not agent.state.get("media_unavailable"):
+        return found
+    client = getattr(mini, "client", None)
+    host, port = getattr(client, "host", None), getattr(client, "port", None)
+    return f"http://{host}:{port}" if host and port else None
+
+
+async def _wake_up(agent):
+    """`mini.wake_up()`, with its chime even when there is no media link.
+
+    The SDK plays the chime through the media backend, so without one the
+    robot wakes in silence and the SDK logs a warning for the missing audio.
+    Without media the same sequence runs here — home, chime, a small head
+    tilt, home — with the chime from the daemon, which has the sound itself.
+    """
+    mini = agent.state["mini"]
+    if not agent.state.get("media_unavailable"):
+        await _do(mini.wake_up)
+        return
+    create_head_pose = agent.state["create_head_pose"]
+    await _do(
+        mini.goto_target, head=create_head_pose(), antennas=list(_REST_ANTENNAS_RAD), duration=2.0
+    )
+    try:
+        await _play_daemon_sound(agent, "wake_up.wav")
+    except Exception as e:
+        await agent.log(f"wake chime not played: {e}", level="warning")
+    await _do(mini.goto_target, head=create_head_pose(roll=20, degrees=True), duration=0.2)
+    await _do(mini.goto_target, head=create_head_pose(), duration=0.2)
+
+
+async def _play_daemon_sound(agent, sound):
+    """Ask the daemon to play `sound`: a built-in name or a path it was sent."""
+    import aiohttp
+
+    base = str(_daemon_url(agent) or "").rstrip("/")
+    if not base:
+        raise RuntimeError("reachy speaker is unreachable: no daemon address")
+    timeout = aiohttp.ClientTimeout(total=10.0)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(f"{base}/api/media/play_sound", json={"file": sound}) as response:
+            response.raise_for_status()
+
+
+async def _play_via_daemon(agent, path):
+    """Play a sound file on the robot speaker through the daemon's HTTP API.
+
+    The same two calls the SDK's WebRTC backend makes for play_sound — upload,
+    then play — for a connection that has no media backend to make them.
+    """
+    import aiohttp
+
+    base = str(_daemon_url(agent) or "").rstrip("/")
+    if not base:
+        raise RuntimeError("reachy speaker is unreachable: no daemon address")
+    timeout = aiohttp.ClientTimeout(total=30.0)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        form = aiohttp.FormData()
+        with open(path, "rb") as sound:
+            form.add_field("file", sound.read(), filename=os.path.basename(path))
+        async with session.post(f"{base}/api/media/sounds/upload", data=form) as response:
+            response.raise_for_status()
+            remote = (await response.json())["path"]
+    await _play_daemon_sound(agent, remote)
 
 
 async def _get_daemon_volume(agent):
@@ -6222,6 +6368,8 @@ def _media(agent):
     mini = agent.state.get("mini")
     if mini is None:
         raise RuntimeError("reachy not connected")
+    if agent.state.get("media_unavailable"):
+        raise RuntimeError(_MEDIA_UNAVAILABLE_NOTICE)
     media = getattr(mini, "media", None) or getattr(mini, "media_manager", None)
     if media is None:
         raise RuntimeError("reachy SDK exposes no media manager (mini.media)")

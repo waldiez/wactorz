@@ -446,6 +446,9 @@ def _build_catalog() -> dict:
             ),
             "docs": (
                 "Setup:\n"
+                "0. Run Wactorz on Windows or macOS for everything; on Linux (Python "
+                "3.13 or older, build tools and GStreamer first) movement and speech "
+                "work. Docker and the Home Assistant add-on are not supported yet.\n"
                 "1. For Reachy Mini Wireless, put the robot and Wactorz host on the "
                 "same WiFi network. Stop any Hugging Face app running on the robot.\n"
                 "2. For Reachy Mini Lite, start the local daemon first: "
@@ -453,8 +456,8 @@ def _build_catalog() -> dict:
                 "3. Spawn the agent: @catalog spawn reachy-mini. The first spawn "
                 "installs its packages, which takes a few minutes, and usually asks "
                 "for one restart of Wactorz; Reachy starts by itself after it.\n"
-                "4. If Reachy is not found (always the case from Docker or the Home "
-                'Assistant add-on), publish {"robot_host": "192.168.1.42", '
+                "4. If Reachy is not found (always the case from WSL or a virtual "
+                'machine), publish {"robot_host": "192.168.1.42", '
                 '"connection_mode": "network"} to custom/reachy/config, then say '
                 "reconnect.\n"
                 "5. Optional voice input: set DEEPGRAM_API_KEY and restart Wactorz.\n"

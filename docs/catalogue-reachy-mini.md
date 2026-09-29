@@ -17,15 +17,47 @@ You need:
 - **Internet access** on the computer running Wactorz. The first spawn downloads the robot
   packages, and Reachy's voice comes from an online speech service.
 - **A Reachy Mini**, Wireless or Lite.
+- **Wactorz running on a computer**, installed with `pip`. Where it runs decides what
+  Reachy can do:
 
-How you run Wactorz changes two things later on, how to restart it and how Reachy is
-found:
+| Wactorz runs on… | What works |
+|---|---|
+| Windows or macOS | Everything. The robot SDK brings the media libraries it needs. |
+| Linux | Movement and speech, after the preparation in [Linux](#linux). Listening, conversation and the camera also need GStreamer's WebRTC plugin, which Linux distributions do not package. |
+| Docker, or the Home Assistant add-on | **Not supported yet.** Their images cannot install the robot SDK. |
 
-| You run Wactorz… | To restart it | Finding the robot |
-|---|---|---|
-| On your computer (`pip install`) | Stop it with `Ctrl+C`, then start it again | Automatic |
-| With Docker Compose | `docker compose restart wactorz-python` | Set the robot's address, see [Set a Wireless address](#set-a-wireless-address) |
-| As the Home Assistant add-on | **Settings → Add-ons → Wactorz → Restart** | Set the robot's address, see [Set a Wireless address](#set-a-wireless-address) |
+To restart Wactorz, which a first install asks for once, stop it with `Ctrl+C` and start
+it again.
+
+### Linux
+
+The robot SDK compiles part of itself on Linux, so install the build tools and GStreamer
+first. On Debian or Ubuntu:
+
+```bash
+sudo apt install python3-venv python3-dev build-essential pkg-config \
+  libcairo2-dev libgirepository1.0-dev \
+  gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-nice gstreamer1.0-libav \
+  gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0
+```
+
+Run Wactorz with **Python 3.13 or older**. The SDK needs a version of PyGObject that
+does not work on Python 3.14, which is the default on Ubuntu 26.04; there, create the
+virtual environment with an older Python and with pip in it, for example:
+
+```bash
+uv venv --seed -p 3.13 venv
+```
+
+Without `--seed` the environment has no pip; Wactorz then installs packages with `uv`, as
+long as `uv` is on the `PATH` of the shell that starts Wactorz.
+
+Wactorz then connects without Reachy's camera and microphone, and says so. Movement and
+speech work; listening, conversation and the camera stay off until GStreamer's WebRTC
+plugin (gst-plugins-rs) is installed, which means building it from source.
+
+This was tested on Ubuntu 26.04 with Python 3.13 and a Reachy Mini Wireless.
 
 ## Quick start
 
@@ -75,12 +107,13 @@ run `pip install` yourself. This is what you will see in chat:
    - **"…restart Wactorz once to finish; reachy-mini will start by itself after the
      restart"**: this is normal on a first install. The robot packages need an older
      version of a library Wactorz had already loaded, and Python cannot swap it while it
-     runs. Restart Wactorz (see the table above) and Reachy comes back on its own.
+     runs. Restart Wactorz (`Ctrl+C`, then start it again) and Reachy comes back on its own.
    - **"…was not started because some of its packages failed to install"**: the message
      names each package and pip's error. Fix the cause it names, usually the network, then
      send `@catalog spawn reachy-mini` again. Packages that did install are kept.
 
-Later spawns and restarts skip the install.
+Later spawns and restarts skip the install. The first start after it takes up to a
+minute longer while the robot SDK downloads Reachy's gesture library, once.
 
 ### 3. Check the connection
 
@@ -137,9 +170,6 @@ sent to it.
 To keep audio on your own computer instead, use the local recognizer described in
 [Push-to-talk voice input](#push-to-talk-voice-input).
 
-> **Home Assistant add-on:** the add-on has no setting for `DEEPGRAM_API_KEY` yet, so
-> voice input is not available there. Text commands and Reachy's speech work.
-
 ### Where to go next
 
 - If something is not working, see [Common problems](#common-problems).
@@ -155,11 +185,13 @@ To keep audio on your own computer instead, use the local recognizer described i
 | The spawn reply says it is installing, and nothing else happens for a few minutes | Normal on a first install. Each package is announced as it starts. |
 | "…restart Wactorz once to finish…" | Normal on a first install. Restart Wactorz; Reachy starts by itself. |
 | "…some of its packages failed to install" | Fix what pip's error names, usually the network, then spawn again. |
+| "This Python environment … has no pip" | Add pip with `python -m ensurepip --upgrade`, or put `uv` on the `PATH`, then spawn again. |
 | "reachy-mini could not start: the Python module '…' is not installed" | Send `@catalog spawn reachy-mini` again to install what is missing. |
 | "reachy not connected" | See [If Reachy does not connect](#if-reachy-does-not-connect). |
 | Reachy talks but does not move | Close the Reachy Mini control app, then send `@reachy-mini reconnect`. |
 | Reachy's voice is quiet | Install ffmpeg, see [make Reachy's voice louder](#optional-make-reachys-voice-louder-with-ffmpeg), or say `presenter mode`. |
 | Voice input says `DEEPGRAM_API_KEY` is required | Do [step 5](#5-optional-talk-to-reachy). |
+| "Reachy is connected without its camera and microphone…" | Expected on Linux: movement and speech work. See [Linux](#linux). |
 | The Wactorz log shows `ERROR … No Reachy Mini Audio USB device found!` at startup | Harmless on Reachy Mini Wireless: the robot SDK first looks for the Lite's USB audio. |
 | Reachy stops talking in the middle of a sentence | Check the Wactorz log at that moment for `Reachy motor link is down`, and report it with the lines around it. |
 
@@ -173,7 +205,7 @@ Work through these checks in order:
 3. For Wireless, close the Reachy Mini control app. For Lite, confirm the daemon terminal
    is still running and shows no connection error.
 4. Ask the already-running agent to try again with `@reachy-mini reconnect`.
-5. If Wireless discovery still fails, or you run Wactorz in Docker or the add-on, set the robot address
+5. If Wireless discovery still fails, or Wactorz runs inside WSL or a virtual machine, set the robot address
    explicitly as described in [Set a Wireless address](#set-a-wireless-address).
 
 Use `@reachy-mini reconnect force` when the dashboard claims the link is alive but the
@@ -184,14 +216,14 @@ step.
 
 ### Set a Wireless address
 
-Automatic discovery is easiest when it works. It does not work from Docker or the Home
-Assistant add-on, whose containers cannot see the robot's announcements on your network,
-and it can be unreliable elsewhere. Then tell Wactorz the robot's address yourself.
+Automatic discovery is easiest when it works. It does not reach the robot from inside
+WSL or a virtual machine, which see the network through their host, and it can be
+unreliable elsewhere. Then tell Wactorz the robot's address yourself.
 
 Find the address in your router's list of connected devices, or try the name
 `reachy-mini.local`. The examples below use `192.168.1.42`; replace it with yours.
 
-**On your computer or in Docker:** add these lines to the `.env` file Wactorz reads:
+Add these lines to the `.env` file Wactorz reads:
 
 ```dotenv
 REACHY_CONNECTION_MODE=network
@@ -199,12 +231,11 @@ REACHY_ROBOT_HOST=192.168.1.42
 ```
 
 `.env` is read when Wactorz starts, so restarting only the agent is not enough. Restart
-Wactorz. In Docker, run `docker compose up -d` rather than `restart`, because only `up`
-applies a changed `.env`.
+Wactorz.
 
-**On the Home Assistant add-on, or without restarting:** publish the address over MQTT,
-then reconnect. In Home Assistant, open **Settings → Devices & services → MQTT →
-Configure → Publish a packet**:
+**Without restarting:** publish the address to Wactorz's MQTT broker, then reconnect. Use
+`mosquitto_pub`, or Home Assistant's **Settings → Devices & services → MQTT → Configure →
+Publish a packet** when it shares the broker:
 
 ```text
 topic: custom/reachy/config
@@ -248,8 +279,7 @@ Install it on the **computer running Wactorz**, not on the robot, then restart W
 | macOS | `brew install ffmpeg` |
 | Debian, Ubuntu, Raspberry Pi OS | `sudo apt install ffmpeg` |
 
-The Home Assistant add-on cannot install `ffmpeg`. There, turn Reachy up instead: say
-`presenter mode` or `speak louder`.
+Or turn Reachy up instead: say `presenter mode` or `speak louder`.
 
 ## Hardware warnings and what Reachy can tell you about itself
 

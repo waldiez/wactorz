@@ -44,12 +44,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,
   first-run installation, connection checks, first commands, and recovery steps are presented
   before the advanced MQTT, media, and motion reference. It says what to expect before
-  starting, what the chat shows during a first install and what each outcome means, how to
-  restart on a computer, in Docker and on the Home Assistant add-on, how to add voice input,
-  and what to do about the common problems. It also corrects three claims: an edited `.env`
-  needs Wactorz restarted, not just the agent; Docker and the add-on cannot find the robot on
-  their own; and streaming voice input handles English and Greek together by default. Voice
-  input is not yet available on the add-on, which has no setting for the Deepgram key.
+  starting, which systems Reachy works on and what each supports, how to prepare Linux,
+  what the chat shows during a first install and what each outcome means, how to add voice
+  input, and what to do about the common problems. It also corrects two claims: an edited
+  `.env` needs Wactorz restarted, not just the agent; and streaming voice input handles
+  English and Greek together by default. Reachy is not supported in the Docker image or the
+  Home Assistant add-ons, whose images cannot install the robot SDK.
 - **The Reachy template now includes its Deepgram setup.** A copied `.env` names the required
   API-key variable, Nova-3 bilingual English/Greek settings, streaming controls, and a local
   faster-whisper alternative without including any credential.
@@ -105,6 +105,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Fix Reachy Mini presenter deployments getting stuck after a transient motor-link failure: failed animations now trigger continuous automatic reconnection with backoff, use a fast motion-only recovery while preserving live WebRTC media, health no longer reports a stale motor connection as live, and common presenter-volume phrasing is handled locally.
+
+- **Reachy moves and speaks when Wactorz runs on Linux.** The robot SDK streams Reachy's camera and microphone over WebRTC through a GStreamer plugin that Linux distributions do not package, so on Linux every connection attempt failed and Reachy did nothing at all. The agent now connects without the camera and microphone when that plugin is what is missing, says so once, and speaks through the robot daemon's own HTTP API, which needs no GStreamer. Movement, speech, volume and health work, and waking plays its chime through the daemon too; listening, conversation and the camera are refused up front with what is missing, rather than a conversation that announces itself and then ends. Tested end to end on Ubuntu 26.04 with Python 3.13 against a Reachy Mini Wireless: first spawn, install, restart, and commands from chat. The SDK itself needs Python 3.13 or older on Linux.
+
+- **Every Reachy command answers in a sentence.** Commands that returned no text, `go to sleep` among them, reached chat as a raw dictionary, and so did any command that failed. A dropped motor link now says Reachy is already reconnecting instead of asking for a reconnect, and a planned move that wakes the robot first no longer answers "I'm awake."
 
 - **Agents can install packages into an environment made by `uv venv`.** Such an environment has no pip, so every install an agent asked for failed, once per package, with pip's own error. Wactorz now installs with `uv` when the environment has no pip and `uv` is on the `PATH`; with neither, it says once how to add pip.
 

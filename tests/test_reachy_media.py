@@ -1475,6 +1475,32 @@ class AskVoiceCommandTest(unittest.TestCase):
         self.assertEqual(res["cmd"], "ask_voice")
         self.assertEqual(res["response_text"], "Done")
 
+    def test_waking_is_not_the_answer_to_a_plan_that_does_more(self):
+        """A planned "look left" wakes first; the reply is about looking, not waking."""
+        agent = FakeAgent(FakeMedia())
+        agent.state["mini"] = types.SimpleNamespace(connected=True)
+
+        async def plan(_agent, _text):
+            return [{"cmd": "wake"}, {"cmd": "pose", "yaw": 30}]
+
+        async def run(_agent, cmd, payload, return_result=False):
+            if cmd == "wake":
+                return {"ok": True, "cmd": "wake", "result": "I'm awake."}
+            return {"ok": True, "cmd": cmd}
+
+        with mock.patch.dict(
+            NS,
+            {
+                "_nl_to_commands": plan,
+                "_dispatch": run,
+                "_is_connected": lambda _agent: (True, None),
+                "_embodied_command_for_text": lambda _text: None,
+            },
+        ):
+            res = _run(NS["handle_task"](agent, {"text": "glance over to the window please"}))
+
+        self.assertNotIn("awake", res["result"])
+
     def test_every_push_to_talk_phrase_opens_the_microphone(self):
         """They name Wactorz, and must not be sent to main as typed text."""
 

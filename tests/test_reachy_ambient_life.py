@@ -902,7 +902,7 @@ class TestItIsAliveFromSpawnWithNoCommands:
         start = source.index("async def _bring_up_robot")
         block = source[start : source.index("\ndef ", start)]
         motors = block.index("_ensure_motors_enabled")
-        wake = block.index("mini.wake_up")
+        wake = block.index("_wake_up(agent)")
 
         assert motors < wake
 

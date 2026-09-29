@@ -81,7 +81,6 @@ class TestTheDashboardServer:
             patch.object(app.web, "TCPSite", site),
             patch.object(app.web, "AppRunner", MagicMock(return_value=AsyncMock())),
             patch.object(app, "build_app", MagicMock()),
-            patch.object(app.mqtt, "check_mqtt", AsyncMock(return_value=True)),
             patch.object(app, "check_ws_port", AsyncMock(return_value=True)),
             patch.object(app.mqtt, "mqtt_listener", AsyncMock()),
             patch.object(app.ws, "totals_broadcaster", AsyncMock()),

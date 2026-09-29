@@ -337,30 +337,3 @@ class TestListener:
             False,
             True,
         ]
-
-
-class TestBrokerCheck:
-    async def test_a_listening_broker_is_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def _accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-            writer.close()
-
-        server = await asyncio.start_server(_accept, "127.0.0.1", 0)
-        port = server.sockets[0].getsockname()[1]
-        monkeypatch.setattr(runtime, "MQTT_BROKER", "127.0.0.1")
-        monkeypatch.setattr(runtime, "MQTT_PORT", port)
-        try:
-            assert await mqtt.check_mqtt(attempts=1) is True
-        finally:
-            server.close()
-            await server.wait_closed()
-
-    async def test_a_silent_port_is_unreachable_after_every_attempt(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        async def _refuse(*_args: Any) -> Any:
-            raise ConnectionRefusedError("nothing listening")
-
-        monkeypatch.setattr(mqtt.asyncio, "open_connection", _refuse)
-
-        assert await mqtt.check_mqtt(attempts=2, delay=0) is False
-        assert "unreachable after 2 tries" in caplog.text

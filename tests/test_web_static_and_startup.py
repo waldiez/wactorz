@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from aiohttp import web
+from aiohttp import ClientSession, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from wactorz import config
@@ -185,7 +185,6 @@ def startup_fixture(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _forever() -> None:
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(mqtt, "check_mqtt", _ok)
     monkeypatch.setattr(web_app, "check_ws_port", _ok)
     monkeypatch.setattr(mqtt, "mqtt_listener", _listen)
     monkeypatch.setattr(web_app.ws, "totals_broadcaster", _forever)
@@ -203,7 +202,7 @@ class TestStartup:
         with socket.socket() as again:
             again.bind(("127.0.0.1", runtime.WS_PORT))  # released: the bind succeeds
 
-    async def test_failed_preconditions_stop_the_start(
+    async def test_a_port_in_use_stops_the_start(
         self,
         startup: dict[str, Any],
         monkeypatch: pytest.MonkeyPatch,
@@ -212,15 +211,42 @@ class TestStartup:
         async def _no() -> bool:
             return False
 
-        monkeypatch.setattr(mqtt, "check_mqtt", _no)
         monkeypatch.setattr(web_app, "check_ws_port", _no)
 
         await web_app.main()
         with pytest.raises(SystemExit):
             await web_app.main(exit_on_failure=True)
 
-        assert "MQTT broker unreachable" in caplog.text and "already in use" in caplog.text
+        assert "already in use" in caplog.text
         assert startup["listened"] == 0
+
+    async def test_an_absent_broker_does_not_stop_the_start(
+        self, startup: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Nothing listens on the broker's port. The dashboard is served anyway,
+        # alive and saying why it is not ready, while the listener keeps trying;
+        # a broker that starts later is picked up when it arrives.
+        monkeypatch.setattr(runtime, "MQTT_BROKER", "127.0.0.1")
+        monkeypatch.setattr(runtime, "MQTT_PORT", _free_port())
+        monkeypatch.setattr(runtime, "system", None)
+        monkeypatch.setattr(runtime, "mqtt_connected", False)
+        seen: dict[str, tuple[int, Any]] = {}
+
+        async def _probe_while_the_broker_is_away() -> None:
+            async with ClientSession() as session:
+                for path in ("/health", "/ready"):
+                    async with session.get(f"http://127.0.0.1:{runtime.WS_PORT}{path}") as resp:
+                        seen[path] = (resp.status, await resp.json())
+
+        monkeypatch.setattr(mqtt, "mqtt_listener", _probe_while_the_broker_is_away)
+
+        await web_app.main()
+
+        assert seen["/health"] == (200, {"status": "ok"})
+        assert seen["/ready"] == (
+            503,
+            {"status": "not ready", "checks": {"broker": "disconnected"}},
+        )
 
     async def test_an_exposed_server_without_a_key_refuses_to_start(
         self,

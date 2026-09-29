@@ -555,6 +555,49 @@ class TestDynamicSpawn:
         assert len(spawner.calls) == 1
         assert told == ["'anomaly-detector' spawned and running"]
 
+    async def test_an_agent_that_appeared_during_the_install_is_not_spawned_twice(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        running = _Actor("anomaly-detector")
+        catalog._registry = _Registry(_Installer(main), running)  # pyright: ignore[reportAttributeAccessIssue]
+        spawner = _spawner(catalog, monkeypatch)
+        told: list[str] = []
+
+        async def _notify(text: str, **_extra: Any) -> None:
+            told.append(text)
+
+        monkeypatch.setattr(catalog, "notify_user", _notify)
+
+        await catalog._install_then_spawn(
+            "anomaly-detector", catalog._catalog["anomaly-detector"], ["numpy"], ""
+        )
+
+        assert spawner.calls == []
+        assert told == ["'anomaly-detector' is already running"]
+
+    async def test_a_background_install_that_breaks_is_reported_in_chat(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry(_Installer(main))  # pyright: ignore[reportAttributeAccessIssue]
+        catalog._installing.add("anomaly-detector")
+        told: list[str] = []
+
+        async def _notify(text: str, **_extra: Any) -> None:
+            told.append(text)
+
+        async def _broken(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(catalog, "notify_user", _notify)
+        monkeypatch.setattr(catalog_agent, "install_for_agent", _broken)
+
+        await catalog._install_then_spawn(
+            "anomaly-detector", catalog._catalog["anomaly-detector"], ["numpy"], ""
+        )
+
+        assert told == ["Failed to spawn 'anomaly-detector': disk full"]
+        assert "anomaly-detector" not in catalog._installing
+
     async def test_a_second_request_during_an_install_does_not_start_another(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:

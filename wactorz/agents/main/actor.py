@@ -114,6 +114,30 @@ def _response_delegates_to(response: str, agent_name: str) -> bool:
     )
 
 
+def _strip_delegate_blocks(history: list[dict[str, Any]]) -> bool:
+    """Take executable blocks out of stored assistant turns; return whether any were.
+
+    Executable blocks are transport syntax, not conversation. One left in
+    stored history reads to the model as an example to follow, and it replays a
+    completed or failed action on later, unrelated turns. A turn that asked Home
+    Assistant to act is replaced outright, because its surrounding words still
+    describe the action as if it will happen.
+    """
+    changed = False
+    for item in history:
+        if item.get("role") != "assistant":
+            continue
+        content = str(item.get("content") or "")
+        if not _DELEGATE_BLOCK_RE.search(content):
+            continue
+        if _response_delegates_to(content, "home-assistant-agent"):
+            item["content"] = "I couldn't safely complete that request."
+        else:
+            item["content"] = _DELEGATE_BLOCK_RE.sub("", content).strip()
+        changed = True
+    return changed
+
+
 #: Openings that mean the planner, whatever the intent classifier would say.
 #:
 #: Checked before classification rather than after: someone who writes
@@ -262,23 +286,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
     async def on_start(self) -> None:
         await super().on_start()
-        # Executable blocks are transport syntax, not conversation. One left in
-        # stored history reads to the model as an example to follow, and it
-        # replays a completed or failed action on later, unrelated turns.
-        history_changed = False
-        for item in self._conversation_history:
-            if item.get("role") != "assistant":
-                continue
-            content = str(item.get("content") or "")
-            if not _DELEGATE_BLOCK_RE.search(content):
-                continue
-            if _response_delegates_to(content, "home-assistant-agent"):
-                cleaned = "I couldn't safely complete that request."
-            else:
-                cleaned = _DELEGATE_BLOCK_RE.sub("", content).strip()
-            item["content"] = cleaned
-            history_changed = True
-        if history_changed:
+        if _strip_delegate_blocks(self._conversation_history):
             self.persist("conversation_history", self._conversation_history)
         await self._restore_spawned_agents()
         # Listen for remote node heartbeats so we know what's online

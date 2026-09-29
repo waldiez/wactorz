@@ -20,7 +20,7 @@ delegation. That is enforced on the name before anything is resolved.
 import json
 from typing import Any
 
-from wactorz.agents.main.actor import MainActor, _response_delegates_to
+from wactorz.agents.main.actor import MainActor, _response_delegates_to, _strip_delegate_blocks
 from wactorz.agents.main.delegation import (
     RESTRICTED_DELEGATION_ALLOW,
     DelegationManager,
@@ -447,3 +447,45 @@ class TestShowingADirectReply:
 
     def test_a_reply_with_no_known_field_is_shown_whole(self) -> None:
         assert _readable({"ok": True}) == "{'ok': True}"
+
+
+def test_a_malformed_or_non_object_block_names_no_agent() -> None:
+    assert not _response_delegates_to("<delegate>{not json</delegate>", "home-assistant-agent")
+    assert not _response_delegates_to('<delegate>["a", "b"]</delegate>', "home-assistant-agent")
+
+
+class TestStoredHistoryLosesItsBlocks:
+    """A block left in history reads to the model as an example to repeat."""
+
+    def test_a_home_assistant_action_is_replaced_outright(self) -> None:
+        history = [
+            {"role": "user", "content": "lights off"},
+            {
+                "role": "assistant",
+                "content": 'Turning them off. <delegate>{"agent": "home-assistant-agent"}</delegate>',
+            },
+        ]
+
+        assert _strip_delegate_blocks(history) is True
+        assert history[1]["content"] == "I couldn't safely complete that request."
+        assert history[0]["content"] == "lights off"
+
+    def test_another_agents_block_is_cut_and_the_words_kept(self) -> None:
+        history = [
+            {
+                "role": "assistant",
+                "content": 'Asking the weather. <delegate>{"agent": "weather"}</delegate>',
+            }
+        ]
+
+        assert _strip_delegate_blocks(history) is True
+        assert history[0]["content"] == "Asking the weather."
+
+    def test_history_without_blocks_is_left_alone(self) -> None:
+        history = [
+            {"role": "user", "content": '<delegate>{"agent": "x"}</delegate>'},
+            {"role": "assistant", "content": "Just words."},
+        ]
+
+        assert _strip_delegate_blocks(history) is False
+        assert history[1]["content"] == "Just words."

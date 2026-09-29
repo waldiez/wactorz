@@ -538,3 +538,23 @@ class TestNotificationsRideAlong:
         assert reply("/start", notification="[alert] disk full\n") == (
             "[alert] disk full\nUsage: /start <agent-name>"
         )
+
+
+def test_a_streamed_voice_turn_cannot_replay_a_home_assistant_delegation() -> None:
+    """The streaming path holds to the same rule as the one-shot path above."""
+    main = _Main(agents=("home-assistant-agent",))
+    setattr(main.actor, "_current_interface_is_voice", lambda: True)
+
+    async def stale_stream(_text: str, attachments: Any = None) -> Any:
+        yield "Let me turn off the lights. "
+        yield '<delegate>{"agent":"home-assistant-agent","task":"turn off all lights"}</delegate>'
+
+    main.actor.chat_stream = stale_stream  # pyright: ignore[reportAttributeAccessIssue]
+
+    async def collect() -> list[Any]:
+        return [chunk async for chunk in main.actor.process_user_input_stream("see the photo")]
+
+    chunks = asyncio.run(collect())
+
+    assert chunks[-2] == "\nI may have misheard that. Please repeat the device command."
+    assert chunks[-1] == {"done": True, "spawned": [], "system_msg": ""}

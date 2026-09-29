@@ -222,3 +222,11 @@ class TestInstallerCommand:
 
         assert pip.installer_command() is None
         assert "ensurepip" in pip.NO_INSTALLER_MESSAGE
+
+
+def test_a_specifier_that_cannot_be_read_is_not_met() -> None:
+    assert pip._version_matches("1.0", "=>1") is False
+
+
+def test_an_empty_requirement_is_never_met() -> None:
+    assert requirement_is_satisfied("") is False

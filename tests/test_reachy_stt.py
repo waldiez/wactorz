@@ -6,6 +6,7 @@ import sys
 import threading
 import types
 import unittest
+from typing import Any
 from unittest import mock
 
 import numpy as np
@@ -582,3 +583,215 @@ class ProviderAbstractionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _Events:
+    Transcript = "transcript"
+    UtteranceEnd = "utterance_end"
+    Error = "error"
+
+
+def _result(text, *, final, speech_final=False):
+    """One Deepgram live result, as the SDK hands it to a Transcript callback."""
+    return types.SimpleNamespace(
+        is_final=final,
+        speech_final=speech_final,
+        channel=types.SimpleNamespace(
+            detected_language="en",
+            language_confidence=0.9,
+            alternatives=[types.SimpleNamespace(transcript=text, confidence=0.9)],
+        ),
+    )
+
+
+class _ScriptedConnection:
+    """A live connection that plays `script[n]` after the n-th frame it is sent."""
+
+    def __init__(self, script=None, *, send_fails_at=None, finalize=None, finish_fails=False):
+        self.callbacks = {}
+        self.script = script or {}
+        self.sent = 0
+        self.send_fails_at = send_fails_at
+        self.finish_fails = finish_fails
+        if finalize is not None:
+            self.finalize = finalize
+
+    def on(self, event, callback):
+        self.callbacks[event] = callback
+
+    def start(self, _options):
+        return True
+
+    def send(self, _frame):
+        self.sent += 1
+        if self.sent == self.send_fails_at:
+            raise OSError("socket lost while sending")
+        for event, argument in self.script.get(self.sent, []):
+            self.callbacks[event](argument)
+
+    def finish(self):
+        if self.finish_fails:
+            raise OSError("close failed")
+
+
+class _SpeakingMedia:
+    """A microphone that hears speech for `frames` frames, then silence."""
+
+    def __init__(self, frames=20):
+        self.samples = [np.full((480, 2), 0.3, np.float32)] * frames
+        self.silence = np.zeros((480, 2), np.float32)
+
+    def start_recording(self):
+        pass
+
+    def stop_recording(self):
+        pass
+
+    def get_audio_sample(self):
+        return self.samples.pop(0) if self.samples else self.silence
+
+    def get_input_audio_samplerate(self):
+        return 16000
+
+    def get_input_channels(self):
+        return 2
+
+
+class _LoudIsSpeech:
+    """Speech is any frame with sound in it, so the turn ends when the audio does."""
+
+    def __init__(self, _mode):
+        pass
+
+    def is_speech(self, pcm, _samplerate):
+        return any(pcm)
+
+
+def _stream(connection, *, env=None, payload=None, on_interim=None, deepgram=True):
+    """Run one streaming turn against `connection` with Reachy's capture path."""
+    module = types.SimpleNamespace(
+        DeepgramClient=mock.Mock(
+            return_value=types.SimpleNamespace(
+                listen=types.SimpleNamespace(
+                    websocket=types.SimpleNamespace(v=mock.Mock(return_value=connection))
+                )
+            )
+        ),
+        LiveOptions=lambda **kwargs: kwargs,
+        LiveTranscriptionEvents=_Events,
+    )
+    modules: dict[str, Any] = {"webrtcvad": types.SimpleNamespace(Vad=_LoudIsSpeech)}
+    modules["deepgram"] = module if deepgram else None  # None makes the import fail
+    with (
+        mock.patch.dict(os.environ, env if env is not None else {"DEEPGRAM_API_KEY": "test-only"}),
+        mock.patch.dict(sys.modules, modules),
+    ):
+        return reachy_stt.capture_deepgram_turn(
+            _SpeakingMedia(),
+            threading.Event(),
+            VADConfig(flush_s=0, min_speech_s=0.03, pre_roll_s=0, silence_s=0.2, max_utterance_s=2),
+            {
+                "stt_backend": "deepgram",
+                "stt_language": "en",
+                "stt_finalize_timeout_s": 0.5,
+                **(payload or {}),
+            },
+            on_interim=on_interim,
+        )
+
+
+class StreamingEdgesTest(unittest.TestCase):
+    """What a streamed turn does when Deepgram is slow, silent, or breaks."""
+
+    def test_interim_text_is_passed_on_once_per_change(self):
+        heard = []
+        script = {
+            1: [(_Events.Transcript, _result("hel", final=False))],
+            2: [(_Events.Transcript, _result("hel", final=False))],
+            3: [(_Events.Transcript, _result("", final=False))],
+            4: [(_Events.Transcript, _result("hello", final=True, speech_final=True))],
+        }
+
+        turn = _stream(_ScriptedConnection(script), on_interim=heard.append)
+
+        self.assertEqual(heard, ["hel"])
+        assert turn.transcription is not None
+        self.assertEqual(turn.transcription.text, "hello")
+
+    def test_utterance_end_closes_a_turn_that_has_text(self):
+        script = {
+            2: [(_Events.Transcript, _result("hi there", final=True))],
+            3: [(_Events.UtteranceEnd, None)],
+        }
+
+        turn = _stream(_ScriptedConnection(script))
+
+        assert turn.transcription is not None
+        self.assertEqual(turn.transcription.text, "hi there")
+
+    def test_a_result_without_a_channel_is_ignored(self):
+        script = {1: [(_Events.Transcript, types.SimpleNamespace())]}
+
+        turn = _stream(_ScriptedConnection(script))
+
+        self.assertIsNone(turn.transcription)
+        self.assertIn("no final transcript", turn.error or "")
+
+    def test_a_stream_error_keeps_the_capture(self):
+        script = {2: [(_Events.Error, "server hung up")]}
+
+        turn = _stream(_ScriptedConnection(script))
+
+        self.assertEqual(turn.error, "server hung up")
+        self.assertGreater(turn.capture.audio.size, 0)
+
+    def test_a_failed_send_is_reported_and_sending_stops(self):
+        connection = _ScriptedConnection(send_fails_at=2)
+
+        turn = _stream(connection)
+
+        self.assertEqual(turn.error, "socket lost while sending")
+        self.assertEqual(connection.sent, 2)
+
+    def test_a_finalize_that_fails_is_reported(self):
+        turn = _stream(_ScriptedConnection(finalize=lambda: False))
+
+        self.assertEqual(turn.error, "Deepgram streaming finalize failed")
+
+    def test_a_finalize_that_raises_is_reported(self):
+        def finalize():
+            raise OSError("finalize broke")
+
+        turn = _stream(_ScriptedConnection(finalize=finalize))
+
+        self.assertEqual(turn.error, "finalize broke")
+
+    def test_a_close_that_fails_is_reported_when_nothing_else_was(self):
+        script = {1: [(_Events.Transcript, _result("ok", final=True, speech_final=True))]}
+
+        turn = _stream(_ScriptedConnection(script, finish_fails=True))
+
+        self.assertEqual(turn.error, "close failed")
+        assert turn.transcription is not None
+
+    def test_streaming_needs_the_deepgram_backend(self):
+        with self.assertRaises(ValueError):
+            _stream(_ScriptedConnection(), payload={"stt_backend": "whisper"})
+
+    def test_streaming_needs_a_key(self):
+        with self.assertRaisesRegex(RuntimeError, "DEEPGRAM_API_KEY"):
+            _stream(_ScriptedConnection(), env={"DEEPGRAM_API_KEY": ""})
+
+    def test_streaming_says_how_to_install_the_sdk(self):
+        with self.assertRaisesRegex(RuntimeError, "pip install 'deepgram-sdk"):
+            _stream(_ScriptedConnection(), deepgram=False)
+
+
+class BoolSettingTest(unittest.TestCase):
+    def test_unset_takes_the_default_and_words_mean_what_they_say(self):
+        as_bool = reachy_stt._as_bool
+
+        self.assertTrue(as_bool(None, True))
+        self.assertFalse(as_bool(" Off ", True))
+        self.assertTrue(as_bool("yes", False))
+        self.assertFalse(as_bool(0, True))

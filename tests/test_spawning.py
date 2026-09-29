@@ -636,3 +636,29 @@ def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
 
     run(scenario())
     assert main_host.spawn_calls == []
+
+
+def test_no_packages_means_nothing_to_install(main_host):
+    outcome = run(main_host._install_packages([], agent_name="d9"))
+    assert outcome.ok
+    assert main_host.sent == []
+
+
+def test_without_an_installer_the_install_is_reported_unavailable(main_host):
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d10"))
+    assert outcome.unavailable
+
+
+def test_an_installer_that_never_answers_times_out(main_host, monkeypatch):
+    from wactorz.agents.mixins import spawning
+
+    main_host._registry.add(FakeActor("installer"))
+    monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 0.05)
+
+    async def silent_send(target_id, msg_type, payload):
+        main_host.sent.append(payload)  # taken in, never answered
+
+    main_host.send = silent_send
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d11"))
+    assert outcome.timed_out
+    assert main_host._result_futures == {}

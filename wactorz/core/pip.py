@@ -10,6 +10,7 @@ import importlib
 import importlib.metadata
 import os
 import re
+import site
 import sys
 from collections.abc import Sequence
 
@@ -138,13 +139,36 @@ def requirement_is_satisfied(requirement: str) -> bool:
 
 
 def installed_versions() -> dict[str, str]:
-    """Every installed distribution and its version, keyed by normalised name."""
+    """The version `import` would load of every installed distribution.
+
+    A name can be installed twice — in the system site-packages and in the
+    user site a container points pip at — and the copy earlier on `sys.path`
+    is the one imported, so that is the one kept.
+    """
     versions: dict[str, str] = {}
     for dist in importlib.metadata.distributions():
         name = dist.metadata["Name"]
         if name:
-            versions[requirement_name(name)] = dist.version
+            versions.setdefault(requirement_name(name), dist.version)
     return versions
+
+
+def make_user_site_importable() -> bool:
+    """Put the user site-packages on `sys.path` if an install just created it.
+
+    Python adds that directory at startup only if it already exists. Where pip
+    is pointed at it (`PIP_USER`, as the Docker image does), the first package
+    an agent installs creates it, and without this nothing installed there can
+    be imported until the process restarts. Returns whether it was added.
+    """
+    if not site.ENABLE_USER_SITE:
+        return False
+    user_site = site.getusersitepackages()
+    if not os.path.isdir(user_site) or user_site in sys.path:
+        return False
+    site.addsitedir(user_site)
+    importlib.invalidate_caches()
+    return True
 
 
 def stale_loaded_distributions(before: dict[str, str], after: dict[str, str]) -> list[str]:

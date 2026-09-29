@@ -350,6 +350,39 @@ class TestLocalInstall:
             "requests",
         ]
 
+    async def test_a_successful_install_is_made_importable_at_once(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # In the Docker image pip writes to a user site that did not exist when
+        # the process started, so Python never put it on the path.
+        calls: list[str] = []
+
+        def _run(_cmd: list[str], **_kwargs: Any) -> Any:
+            return SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        monkeypatch.setattr(
+            installer_agent, "make_user_site_importable", lambda: calls.append("added") or True
+        )
+
+        await installer._pip_install("requests")
+
+        assert calls == ["added"]
+
+    async def test_a_failed_install_changes_nothing_on_the_path(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _run(_cmd: list[str], **_kwargs: Any) -> Any:
+            return SimpleNamespace(returncode=1, stdout=b"", stderr=b"ERROR")
+
+        def _unexpected() -> bool:
+            raise AssertionError("nothing was installed")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        monkeypatch.setattr(installer_agent, "make_user_site_importable", _unexpected)
+
+        assert (await installer._pip_install("requests"))[0] is False
+
     @pytest.mark.parametrize(
         ("error", "message"),
         [

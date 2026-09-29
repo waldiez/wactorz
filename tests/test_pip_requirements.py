@@ -9,14 +9,18 @@ is reported, because nothing but a restart makes the new version usable.
 """
 
 import importlib.metadata
+import site
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
 from wactorz.core import pip
 from wactorz.core.pip import (
     install_wait_s,
+    installed_versions,
+    make_user_site_importable,
     missing_requirements,
     requirement_is_satisfied,
     requirement_name,
@@ -135,3 +139,56 @@ class TestStaleLoadedDistributions:
         after = {"fakews": "17.1", "brand-new": "1.0"}
 
         assert stale_loaded_distributions(before, after) == []
+
+
+class _Dist:
+    def __init__(self, name: str, version: str) -> None:
+        self.metadata = {"Name": name}
+        self.version = version
+
+
+def test_the_copy_import_would_load_is_the_version_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A user-site copy earlier on sys.path shadows the system one.
+    dists = [_Dist("websockets", "15.0.1"), _Dist("websockets", "17.1")]
+    monkeypatch.setattr(importlib.metadata, "distributions", lambda: iter(dists))
+
+    assert installed_versions() == {"websockets": "15.0.1"}
+
+
+class TestMakeUserSiteImportable:
+    """Python adds the user site at startup only if it already exists."""
+
+    @pytest.fixture(autouse=True)
+    def _own_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "path", list(sys.path))
+        monkeypatch.setattr(site, "ENABLE_USER_SITE", True)
+
+    def test_a_user_site_created_by_an_install_is_added(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(site, "getusersitepackages", lambda: str(tmp_path))
+
+        assert make_user_site_importable() is True
+        assert str(tmp_path) in sys.path
+        assert make_user_site_importable() is False  # already there
+
+    def test_a_user_site_that_does_not_exist_is_left_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        missing = tmp_path / "not-yet"
+        monkeypatch.setattr(site, "getusersitepackages", lambda: str(missing))
+
+        assert make_user_site_importable() is False
+        assert str(missing) not in sys.path
+
+    def test_nothing_changes_where_user_sites_are_off(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A virtualenv turns them off; its own site-packages is already on the path.
+        monkeypatch.setattr(site, "ENABLE_USER_SITE", False)
+        monkeypatch.setattr(site, "getusersitepackages", lambda: str(tmp_path))
+
+        assert make_user_site_importable() is False
+        assert str(tmp_path) not in sys.path

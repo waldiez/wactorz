@@ -38,6 +38,7 @@ from ..core.pip import (
     PIP_INSTALL_TIMEOUT_S,
     installed_versions,
     is_installable_name,
+    make_user_site_importable,
     requirement_is_satisfied,
     stale_loaded_distributions,
 )
@@ -535,6 +536,7 @@ class InstallerAgent(Actor):
 
             if success:
                 # Refresh import machinery so the new package is visible immediately
+                make_user_site_importable()
                 importlib.invalidate_caches()
 
             return success, output

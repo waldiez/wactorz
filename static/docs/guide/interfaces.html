@@ -296,8 +296,13 @@ wactorz<span class="w"> </span>--interface<span class="w"> </span>cli<span class
 </tr>
 <tr>
 <td><code>GET</code></td>
-<td><code>/health</code></td>
-<td>System health check.</td>
+<td><code>/health</code>, <code>/healthz</code>, <code>/livez</code></td>
+<td>Liveness: 200 whenever the process can answer.</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/ready</code>, <code>/readyz</code></td>
+<td>Readiness: 200 once agents, broker and database are up, 503 naming what is not.</td>
 </tr>
 <tr>
 <td><code>GET</code></td>

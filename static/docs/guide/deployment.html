@@ -245,6 +245,29 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <span class="c1"># Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)</span>
 </code></pre></div>
 
+<h3 id="health-probes">Health probes</h3>
+<p>Both servers answer the same probes, with no key:</p>
+<ul>
+<li><code>/health</code> (also <code>/healthz</code>, <code>/livez</code>) is <strong>liveness</strong>. It fails only when the
+  process cannot answer, which is what the compose files and the image's
+  <code>HEALTHCHECK</code> restart on.</li>
+<li><code>/ready</code> (also <code>/readyz</code>) is <strong>readiness</strong>. It answers <code>503</code> while the agents
+  start or stop, and while the broker or the database is unreachable.</li>
+</ul>
+<p>On Kubernetes, point each probe at its own path, and give liveness a start
+period that covers startup:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">livenessProbe</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> path</span><span class="p">:</span><span class="w"> </span><span class="nv">/livez</span><span class="p p-Indicator">,</span><span class="nt"> port</span><span class="p">:</span><span class="w"> </span><span class="nv">8888</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span>
+<span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span>
+<span class="nt">readinessProbe</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> path</span><span class="p">:</span><span class="w"> </span><span class="nv">/readyz</span><span class="p p-Indicator">,</span><span class="nt"> port</span><span class="p">:</span><span class="w"> </span><span class="nv">8888</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</code></pre></div>
+
+<p>Never use <code>/ready</code> for liveness. A broker outage would then restart every
+replica in a loop, and restarting fixes nothing the broker's return would not.
+See <a href="https://github.com/waldiez/wactorz/blob/main/docs/api.md">the API reference</a> for what each check means.</p>
 <hr />
 <h2 id="home-assistant-add-on">Home Assistant add-on</h2>
 <p>Use the add-on when Wactorz should run inside Home Assistant OS or a Supervised

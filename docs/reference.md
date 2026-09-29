@@ -797,7 +797,7 @@ TELEGRAM_ALLOWED_USER_IDS=123456789
 
 ### WhatsApp
 
-Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` and `WHATSAPP_ALLOWED_NUMBERS`, then start with `--interface whatsapp`. Wactorz runs an aiohttp webhook server that receives incoming messages from Twilio.
+Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER` and `WHATSAPP_ALLOWED_NUMBERS`, then start with `--interface whatsapp`. Wactorz runs an aiohttp webhook server that receives incoming messages from Twilio.
 
 The webhook is a public HTTP endpoint, so the allow-list is required: without it the interface refuses to start, and messages from numbers outside it are dropped without ever reaching the LLM. Numbers are matched with or without the `whatsapp:` prefix Twilio adds.
 
@@ -920,7 +920,7 @@ Bridges every Home Assistant `state_changed` event to MQTT. Used as the trigger 
 
 Key options:
 - `HA_STATE_BRIDGE_DOMAINS` — comma-separated allow-list (e.g. `light,switch,sensor`); empty = all domains
-- `HA_STATE_BRIDGE_PER_ENTITY` — `1` (default) splits into per-entity sub-topics; `0` sends everything to one topic
+- `HA_STATE_BRIDGE_PER_ENTITY` — `1` splits into per-entity sub-topics; `0` (default) sends everything to one topic
 
 **Task commands**: `status`
 
@@ -1274,7 +1274,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `HA_MAP_AGENT_TARGET_ACTOR` | Route map updates to a named actor instead of MQTT |
 | `HA_STATE_BRIDGE_OUTPUT_TOPIC` | Base MQTT topic for `HomeAssistantStateBridgeAgent` (default: `homeassistant/state_changes`) |
 | `HA_STATE_BRIDGE_DOMAINS` | Comma-separated domain allow-list for state bridge (e.g. `light,switch,sensor`; empty = all) |
-| `HA_STATE_BRIDGE_PER_ENTITY` | `1` (default) = per-entity sub-topics; `0` = single shared topic |
+| `HA_STATE_BRIDGE_PER_ENTITY` | `1` = per-entity sub-topics; `0` (default) = single shared topic |
 | `DISCORD_BOT_TOKEN` | Discord bot token (for `--interface discord`, or to run it alongside another interface) |
 | `DISCORD_ALLOWED_USER_IDS` | **Required with the token** — comma-separated Discord user IDs allowed to talk to the bot |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather (for `--interface telegram`, or alongside another interface) |
@@ -1283,7 +1283,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `SOCIAL_RATE_LIMIT_PER_MIN` | Max messages per minute per sender on social channels (default `12`; `0` disables) |
 | `TWILIO_ACCOUNT_SID` | Twilio account SID (for `--interface whatsapp`) |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sender number |
+| `TWILIO_WHATSAPP_NUMBER` | Twilio WhatsApp sender number |
 | `WHATSAPP_ALLOWED_NUMBERS` | **Required with WhatsApp** — comma-separated numbers allowed to message the webhook |
 | `WACTORZ_URL` | Wactorz REST base URL used by the MCP server (default `http://localhost:8000`) |
 | `WACTORZ_API_KEY` | Optional MCP-to-REST API key; should match `API_KEY` when REST auth is enabled |

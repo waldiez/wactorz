@@ -101,7 +101,7 @@ Dashboard: `http://localhost:8888`.
 
 > [!IMPORTANT]
 > Wactorz binds to `127.0.0.1` by default and its agents execute code. **Set `API_KEY`
-> before exposing it beyond loopback** — it warns at startup if you expose it without
+> before exposing it beyond loopback** — it refuses to start if you expose it without
 > one. See [Security](#security) before deploying anywhere shared.
 
 If you'd rather skip the clone, [pull the image from Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html). To run without an API key, use Ollama:
@@ -245,8 +245,9 @@ See [docs/evaluation.md](docs/evaluation.md) for the benchmark format and metric
   handshake, the Prometheus scrape, and the login flow are authenticated — constant-time
   comparison, session cookies that survive a restart, and sign-in throttling.
 - **The server binds to `127.0.0.1`.** Reaching it from the network is deliberate: set
-  `WACTORZ_BIND_HOST` *and* `WACTORZ_EXPOSED_OK=1`. Startup warns if it is exposed
-  without a key, or with a guessable one.
+  `WACTORZ_BIND_HOST`, and startup refuses unless `API_KEY` is set too, or
+  `WACTORZ_EXPOSED_OK=1` says the only way in is already authenticated. A key short
+  enough to guess is warned about.
 - **The broker requires credentials.** Anonymous MQTT is off, and remote nodes are given
   credentials rather than connecting openly.
 - Origin and Host allow-lists guard the HTTP surface and the WebSocket handshake against

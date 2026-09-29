@@ -120,6 +120,32 @@ class TestPublishing:
         assert _parse_domains(" Light,,SWITCH ") == {"light", "switch"}
 
 
+class TestPerEntityTopics:
+    """The bridge reads the flag the way CONFIG does, so both agree on every value."""
+
+    def test_off_when_unset(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The documented default: changing it would move every install's topics.
+        assert not _bridge(tmp_path, monkeypatch)._per_entity_topics
+
+    @pytest.mark.parametrize("value", ["", "maybe", "0", "no", "off"])
+    def test_off_for_anything_config_reads_as_false(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        bridge = _bridge(tmp_path, monkeypatch, HA_STATE_BRIDGE_PER_ENTITY=value)
+
+        assert not bridge._per_entity_topics
+        assert not config._env_truthy("HA_STATE_BRIDGE_PER_ENTITY")
+
+    @pytest.mark.parametrize("value", ["1", "true", "Yes", " on "])
+    def test_on_for_anything_config_reads_as_true(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        bridge = _bridge(tmp_path, monkeypatch, HA_STATE_BRIDGE_PER_ENTITY=value)
+
+        assert bridge._per_entity_topics
+        assert config._env_truthy("HA_STATE_BRIDGE_PER_ENTITY")
+
+
 class TestStatus:
     async def test_status_is_answered_in_words_and_fields(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

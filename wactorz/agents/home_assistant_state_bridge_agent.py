@@ -4,7 +4,7 @@ import os
 import time
 from typing import Any
 
-from ..config import CONFIG
+from ..config import CONFIG, _env_truthy
 from ..core.actor import Actor, ActorState, Message, MessageType
 from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
@@ -29,9 +29,10 @@ class HomeAssistantStateBridgeAgent(Actor):
         HA_STATE_BRIDGE_OUTPUT_TOPIC         — Base MQTT topic (default: homeassistant/state_changes)
         HA_STATE_BRIDGE_DOMAINS              — Comma-separated domain allow-list
                                                (e.g. "light,switch,sensor"). Empty = all domains.
-        HA_STATE_BRIDGE_PER_ENTITY           — "1" (default) publishes to
+        HA_STATE_BRIDGE_PER_ENTITY           — "1" publishes to
                                                {base_topic}/{domain}/{entity_id};
-                                               "0" sends all events to {base_topic}.
+                                               unset or "0" (the default) sends all
+                                               events to {base_topic}.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -52,10 +53,11 @@ class HomeAssistantStateBridgeAgent(Actor):
         _raw_domains = os.getenv("HA_STATE_BRIDGE_DOMAINS") or CONFIG.ha_state_bridge_domains or ""
         self._domain_filter: set[str] = _parse_domains(_raw_domains)
 
-        _per_entity_raw = os.getenv("HA_STATE_BRIDGE_PER_ENTITY")
+        # Read the way CONFIG reads it, so the same value means the same thing
+        # whichever of the two answers.
         self._per_entity_topics: bool = (
-            _per_entity_raw.strip() not in ("0", "false", "no")
-            if _per_entity_raw is not None
+            _env_truthy("HA_STATE_BRIDGE_PER_ENTITY")
+            if os.getenv("HA_STATE_BRIDGE_PER_ENTITY") is not None
             else CONFIG.ha_state_bridge_per_entity
         )
 

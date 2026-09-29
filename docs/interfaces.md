@@ -140,7 +140,7 @@ HA_TOKEN=                     # optional; enables direct HA tools
 | Tool | Description |
 |---|---|
 | `ask_wactorz(message)` | Send a message to the main orchestrator through `/chat`. |
-| `ask_agent(agent_name, message)` | Send a message through `/chat` with `agent_name` included in the payload. |
+| `ask_agent(agent_name, message)` | Send a message to one agent through `/chat`: main hands it over as an `@<name>` mention and returns that agent's reply. |
 | `list_agents()` | List currently registered agents from `/agents`. |
 | `list_capabilities(keyword)` | Ask main for the running and spawnable capability catalog. |
 | `stop_agent(agent_id)` | Stop an actor via REST, leaving it registered so it can be started again. Refused for an essential actor. |

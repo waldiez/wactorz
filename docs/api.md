@@ -273,6 +273,11 @@ Started with `wactorz --interface rest --port 8000`. Endpoints are at bare paths
 { "status": "sent", "agent": "main", "response": "..." }
 ```
 
+`agent_name` is optional and defaults to `main`. Any other name reaches that agent
+the way typing `@<name> <message>` in chat does: main finds it running, spawns it
+from the catalogue, or asks the node it runs on, and `response` is that agent's
+reply. A name that is not a single word is refused with `400`.
+
 #### Authentication
 
 Set `API_KEY` in `.env` to require a key on **every** route except the probes. Both
@@ -382,7 +387,7 @@ python -m wactorz.interfaces.mcp_server
 | Tool | Backend |
 |---|---|
 | `ask_wactorz(message)` | `POST /chat` |
-| `ask_agent(agent_name, message)` | `POST /chat` with `agent_name` |
+| `ask_agent(agent_name, message)` | `POST /chat` with `agent_name`: main hands it to that agent |
 | `list_agents()` | `GET /agents` |
 | `list_capabilities(keyword)` | `POST /chat` with `/capabilities` |
 | `stop_agent(agent_id)` | `DELETE /actors/{agent_id}` |

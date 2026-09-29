@@ -810,7 +810,7 @@ class MotorsCommandTest(unittest.TestCase):
         agent.state["busy"] = False
         result = _run(NS["_dispatch"](agent, "wake", {}, return_result=True))
         self.assertEqual(order, ["enable", "wake"])  # torque on, THEN move
-        # Chat shows this; without it the reply was the raw result dict.
+        # The sentence chat shows.
         self.assertEqual(result["result"], "I'm awake.")
 
     def test_the_phrase_the_ready_message_suggests_starts_a_conversation(self):

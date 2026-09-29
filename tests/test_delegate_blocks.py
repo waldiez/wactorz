@@ -436,7 +436,7 @@ class TestShowingADirectReply:
     """What `@agent …` shows in chat: the answer, not the dict it came in."""
 
     def test_a_message_field_is_shown_as_the_answer(self) -> None:
-        # The catalog answers in `message`; the chat showed the whole dict.
+        # The catalog answers in `message`.
         reply = {"ok": True, "installing": True, "message": "Installing 6 package(s)"}
 
         assert _readable(reply) == "Installing 6 package(s)"

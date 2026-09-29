@@ -190,6 +190,8 @@ import wave
 from collections import deque
 from typing import Any
 
+import aiohttp
+
 
 async def _do(fn, *args: Any, **kwargs: Any) -> Any:
     """Run a blocking SDK call in the default executor so the actor loop stays free."""
@@ -644,7 +646,6 @@ async def _watch_motor_faults(agent, reconnect_s=20.0) -> None:
     Reconnects rather than giving up: the stream ends whenever the daemon
     restarts, which is exactly when a fault is most likely to appear next.
     """
-    import aiohttp
 
     agent.state["motor_fault_watch_connected"] = False
     while True:
@@ -3552,7 +3553,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
         ack = {"ok": True, "cmd": cmd, "duration_s": round(time.time() - started, 3)}
         if isinstance(result, dict):
             ack.update(result)
-        # Chat shows `result`; a command that sets none reached it as a raw dict.
+        # Chat shows `result`, so every command answers with a sentence.
         ack.setdefault("result", "Done.")
         if cmd in _MOTION_COMMANDS:
             agent.state.pop("motion_link_error", None)
@@ -3585,7 +3586,7 @@ async def _dispatch(agent, cmd, payload, return_result=False):
                 "duration_s": round(time.time() - started, 3),
             }
         )
-        # Chat shows `result`; without one a failure reached it as a raw dict.
+        # Chat shows `result`, so a failure answers with a sentence too.
         err.setdefault("result", f"I couldn't do that: {err['error']}")
         rid = payload.get("id")
         if rid:
@@ -4222,7 +4223,6 @@ async def _stop_daemon_sound(agent):
     url = _daemon_url(agent)
     if not url:
         return False
-    import aiohttp
 
     try:
         timeout = aiohttp.ClientTimeout(total=2.0)
@@ -5991,7 +5991,6 @@ async def _wake_up(agent):
 
 async def _play_daemon_sound(agent, sound):
     """Ask the daemon to play `sound`: a built-in name or a path it was sent."""
-    import aiohttp
 
     base = str(_daemon_url(agent) or "").rstrip("/")
     if not base:
@@ -6008,7 +6007,6 @@ async def _play_via_daemon(agent, path):
     The same two calls the SDK's WebRTC backend makes for play_sound — upload,
     then play — for a connection that has no media backend to make them.
     """
-    import aiohttp
 
     base = str(_daemon_url(agent) or "").rstrip("/")
     if not base:
@@ -6026,7 +6024,6 @@ async def _play_via_daemon(agent, path):
 
 async def _get_daemon_volume(agent):
     """GET the robot speaker volume (0-100) from the daemon, or None if unavailable."""
-    import aiohttp
 
     url = _daemon_url(agent)
     if not url:
@@ -6052,7 +6049,6 @@ async def _apply_volume(agent, level):
     dashboard slider uses; controls the "Reachy Mini Audio" device). Falls back
     to POST /api/audio/gain {"gain_db": ...} for daemons that ship PR #1187.
     """
-    import aiohttp
 
     url = _daemon_url(agent)
     if not url:
@@ -6411,7 +6407,6 @@ def _require_mic(agent, *, record=False, doa=False):
 
 async def _read_daemon_doa(agent):
     """Read onboard DoA from the robot daemon for network/WebRTC clients."""
-    import aiohttp
 
     url = _daemon_url(agent)
     if not url:

@@ -264,6 +264,12 @@ class Supervisor:
             restart_window=restart_window,
             restart_delay=restart_delay,
         )
+        # A restart still waiting on the entry being replaced would find it gone
+        # and do nothing, but only after its delay -- and once the entry is
+        # replaced, stop() cannot reach it to cancel it.
+        replaced = self._specs.get(name)
+        if replaced is not None:
+            self._cancel_own_restart(replaced)
         self._specs[name] = spec
         if name not in self._order:
             self._order.append(name)
@@ -410,10 +416,23 @@ class Supervisor:
         # A restart waiting out its delay would find the spec gone and do
         # nothing, but only after the delay -- and once the spec is out of
         # _specs, stop() cannot reach it to cancel it.
-        task = spec._restart_task
-        if task is not None and not task.done() and task is not asyncio.current_task():
-            task.cancel()
+        self._cancel_own_restart(spec)
         logger.info("[Supervisor] Forgot '%s'.", name)
+
+    def _cancel_own_restart(self, spec: SupervisedSpec) -> None:
+        """Cancel a restart waiting on ``spec``, unless entries still here share it.
+
+        A group strategy (ONE_FOR_ALL, REST_FOR_ONE) restarts its members in one
+        task; cancelling it for one of them would abort the others' restarts as
+        well. A shared one is left to run, and skips this entry when it reaches
+        it, since the entry is no longer the live one for its name.
+        """
+        task = spec._restart_task
+        if task is None or task.done() or task is asyncio.current_task():
+            return
+        if any(other is not spec and other._restart_task is task for other in self._specs.values()):
+            return
+        task.cancel()
 
     # ── Startup ───────────────────────────────────────────────────────────────
 

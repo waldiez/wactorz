@@ -44,10 +44,21 @@ class FakeActor:
         self.stopped = True
 
 
+class FakeSupervisor:
+    """Records the entries it is told to forget, and when, against the actors' stops."""
+
+    def __init__(self, log: list[str]) -> None:
+        self._specs: dict = {}
+        self._log = log
+
+    def drop_supervised(self, name: str) -> None:
+        self._log.append(f"forget {name}")
+
+
 class FakeRegistry:
     def __init__(self):
         self._by_name = {}
-        self._supervisor_ref = None
+        self._supervisor_ref: FakeSupervisor | None = None
 
     def add(self, actor):
         self._by_name[actor.name] = actor
@@ -287,6 +298,30 @@ def test_existing_with_replace(main_host):
     )
     assert pre.stopped
     assert main_host.spawn_calls and actor is not pre
+
+
+def test_a_replaced_agent_leaves_supervision_before_it_stops(main_host):
+    # The replacement takes a fresh entry when it is spawned. If that spawn
+    # fails, an entry left holding the stopped agent would be stopped again at
+    # shutdown; and forgetting it first keeps the watch loop off the agent while
+    # it stops.
+    log: list[str] = []
+    main_host._registry._supervisor_ref = FakeSupervisor(log)
+    pre = FakeActor("dup")
+
+    async def _stop() -> None:
+        log.append("stop dup")
+
+    pre.stop = _stop  # pyright: ignore[reportAttributeAccessIssue]  # records the order
+    main_host._registry.add(pre)
+
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "dup", "type": "dynamic", "code": "x", "replace": True}
+        )
+    )
+
+    assert log == ["forget dup", "stop dup"]
 
 
 # ── Install models ───────────────────────────────────────────────────────────

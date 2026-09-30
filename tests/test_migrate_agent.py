@@ -26,11 +26,22 @@ from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
 
 
+class _Supervisor:
+    """Records the entries it is told to forget."""
+
+    def __init__(self) -> None:
+        self.dropped: list[str] = []
+
+    def drop_supervised(self, name: str) -> None:
+        self.dropped.append(name)
+
+
 class _Registry:
     """The actor registry, holding whichever agents are alive locally."""
 
     def __init__(self, names: tuple[str, ...] = ()) -> None:
         self._by = {n: _LocalAgent(n) for n in names}
+        self._supervisor_ref: _Supervisor | None = None
 
     def find_by_name(self, name: str) -> "_LocalAgent | None":
         return self._by.get(name)
@@ -416,6 +427,18 @@ class TestGoingOut:
         await main.migrate("collector", "nuc")
 
         assert agent is not None and agent.stopped
+
+    async def test_the_local_instance_leaves_supervision(self) -> None:
+        # Stopped but still in its entry, it would be stopped a second time at
+        # shutdown, running its on_stop and saves again. A rollback spawns it
+        # afresh, which gives it an entry of its own.
+        main = self._main()
+        supervisor = _Supervisor()
+        main.registry._supervisor_ref = supervisor
+
+        await main.migrate("collector", "nuc")
+
+        assert supervisor.dropped == ["collector"]
 
     async def test_the_migration_is_recorded_so_it_can_be_rolled_back(self) -> None:
         _main, _token, pending = await self._migrated()

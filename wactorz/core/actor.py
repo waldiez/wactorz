@@ -256,6 +256,9 @@ class Actor(ABC):
 
         # Background tasks
         self._tasks: list[asyncio.Task] = []
+        #: Resolved once this run's stop has finished; see stop(). Created by the
+        #: first stop, not here, and cleared by start().
+        self._stopped: asyncio.Future[None] | None = None
 
         # Cached process handle for heartbeat metrics — one per actor so each
         # has an independent cpu_percent baseline (interval=None, non-blocking).
@@ -272,6 +275,7 @@ class Actor(ABC):
 
     async def start(self):
         """Start the actor's event loop."""
+        self._stopped = None
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
         await self._load_persistent_state()
@@ -292,7 +296,27 @@ class Actor(ABC):
         logger.info("[%s] Actor started.", self.name)
 
     async def stop(self):
-        """Gracefully stop the actor."""
+        """Gracefully stop the actor, once per run however many ask.
+
+        A second stop -- a replace or a migration that reaches an actor the
+        supervisor also stops, or shutdown meeting a delete -- would run
+        ``on_stop`` and the state saves again. It waits for the first to finish
+        instead, and returns: a caller that goes on to act on the stopped actor,
+        such as a delete purging its state, then acts after the stop and not
+        during it. ``start()`` begins a new run.
+        """
+        if self._stopped is not None:
+            await asyncio.shield(self._stopped)
+            return
+        self._stopped = asyncio.get_running_loop().create_future()
+        try:
+            await self._stop_once()
+        finally:
+            if not self._stopped.done():
+                self._stopped.set_result(None)
+
+    async def _stop_once(self):
+        """What stopping does: wind down, clean up, save, and say so."""
         self.state = ActorState.STOPPED
         await self._wind_down_tasks()
         # Shield cleanup from CancelledError — chat tasks run as fire-and-forget

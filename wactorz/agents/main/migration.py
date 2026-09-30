@@ -932,6 +932,13 @@ class Migration:
             local = self.host._registry.find_by_name(agent_name)
             if local:
                 try:
+                    # Forgotten by the supervisor first, as main's delete does:
+                    # an entry left holding the stopped instance would stop it
+                    # again at shutdown, running its on_stop and saves twice. A
+                    # rollback spawns it afresh, which gives it a new entry.
+                    supervisor = getattr(self.host._registry, "_supervisor_ref", None)
+                    if supervisor is not None:
+                        supervisor.drop_supervised(agent_name)
                     await self.host._registry.unregister(local.actor_id)
                     await local.stop()
                     self.host._agent_manifests.pop(agent_name, None)

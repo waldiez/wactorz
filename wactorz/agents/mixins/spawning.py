@@ -629,6 +629,12 @@ class SpawnMixin(_Host):
         logger.info("[%s] Replacing '%s' with updated code…", self.name, name)
         try:
             if self._registry:
+                # Forgotten before the stop: the replacement takes a fresh entry
+                # when it is spawned, and if that spawn fails, an entry left
+                # holding the stopped agent would stop it again at shutdown.
+                supervisor = getattr(self._registry, "_supervisor_ref", None)
+                if supervisor is not None:
+                    supervisor.drop_supervised(name)
                 await self._registry.unregister(existing.actor_id)
             await existing.stop()
             # Drop the cached manifest so a list query in the brief window before

@@ -16,8 +16,11 @@ First off — thank you. Wactorz is built in the open and every contribution mat
 git clone https://github.com/waldiez/wactorz
 cd wactorz
 
-# Python (editable install with all extras and dev tooling)
-pip install -e ".[all,docs,dev]"
+# Python (editable install with all extras and dev tooling). With uv on PATH
+# this installs the versions pinned in uv.lock into .venv; without it, pip
+# installs from the ranges in pyproject.toml. Either way the other make targets
+# use .venv. USE_UV=0 forces pip.
+make install-dev
 
 # Frontend
 cd frontend && bun install && bun run build && cd ..
@@ -27,6 +30,14 @@ cd frontend && bun install && bun run build && cd ..
 # API reference docs (JS/Python) are not committed; they are built
 # by CI and published to https://waldiez.github.io/wactorz/api/
 ```
+
+**Dependencies.** `pyproject.toml` keeps ranges, because Wactorz is installed as
+a library too. `uv.lock` pins them for development and CI: after changing a
+dependency, run `make lock` and commit `uv.lock` (CI refuses one that does not
+match), and `make audit` checks the locked versions for known vulnerabilities.
+One CI job still installs with plain pip and no lockfile, as users do. The
+packages agents install while running, locally and on edge nodes, go through
+pip on purpose: it is on every machine Wactorz runs on, and uv is not.
 
 Run the tests and linters:
 

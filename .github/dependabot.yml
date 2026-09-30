@@ -1,5 +1,5 @@
-# Proposes new releases of what CI and the images pin. Python dependencies are
-# ranges in pyproject.toml and are not listed here until a lockfile exists.
+# Proposes new releases of what CI and the images pin, and of the Python
+# dependencies locked in uv.lock.
 #
 # `cooldown` holds each release back for a week: a compromised release is
 # usually found and pulled within days, and should not be proposed the day it
@@ -39,3 +39,20 @@ updates:
     groups:
       frontend:
         patterns: ["*"]
+
+  # uv.lock, and pyproject.toml where a range must widen for a new release.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]
+    ignore:
+      # Pinned exactly in the docs extra so the committed static/docs is
+      # reproducible: a bump changes the generated HTML, so it is made by hand
+      # together with `make docs-build`.
+      - dependency-name: "markdown"
+      - dependency-name: "pygments"

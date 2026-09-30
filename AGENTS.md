@@ -28,7 +28,7 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 | Task | Command |
 | ---- | ------- |
-| Install dev deps | `make install-dev` |
+| Install dev deps | `make install-dev` (uv from `uv.lock` if uv is on PATH, else pip; `USE_UV=0` forces pip) · after changing deps: `make lock` · `make audit` |
 | Run backend | `make run` · full dev stack: `make dev-full` |
 | Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) |
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |

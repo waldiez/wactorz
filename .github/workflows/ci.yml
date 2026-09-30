@@ -29,6 +29,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # The uv every job installs with. Bumped by hand: Dependabot updates the
+  # setup-uv action, not the uv it is told to install.
+  UV_VERSION: "0.12.21"
+
 jobs:
   test-python:
     name: Python ${{ matrix.python-version }}
@@ -43,12 +48,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
+          activate-environment: true
+          enable-cache: false
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Test
         run: python -m pytest tests -n auto
@@ -74,12 +85,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: '3.13'
+          activate-environment: true
+          enable-cache: false
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Test
         run: python -m pytest tests -n auto
@@ -92,12 +109,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: '3.12'
+          activate-environment: true
+          enable-cache: false
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Coverage
         run: make coverage-py
@@ -128,15 +151,30 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          version: ${{ env.UV_VERSION }}
           python-version: '3.12'
+          activate-environment: true
+          enable-cache: false
 
       - name: Install
         # vision as well: the type checker gates on this job, and the camera
         # shim imports cv2, which it cannot resolve unless OpenCV is present.
         # It stays out of [all] because it is large and the shim does without.
-        run: pip install -e ".[all,dev,vision]"
+        run: uv sync --locked --extra all --extra dev --extra vision
+
+      # The lockfile says what pyproject.toml says, and nothing in it has a
+      # known vulnerability. The weekly run is what catches one published
+      # against a version already locked.
+      - name: uv.lock is current
+        run: uv lock --check
+
+      - name: Known vulnerabilities in the locked dependencies
+        run: make audit
 
       - name: Lint
         run: make lint-py
@@ -148,7 +186,7 @@ jobs:
       # asked for them, so this needs no typedoc or pdoc and costs under a
       # second. docs.yml builds those two for the published site.
       - name: Build docs
-        run: python3 scripts/build_docs.py
+        run: python scripts/build_docs.py
 
       - name: static/docs matches the documentation source
         run: |
@@ -158,6 +196,28 @@ jobs:
             exit 1
           fi
           echo "static/docs is up to date."
+
+  test-pip:
+    # The lockfile is for development and CI. People install Wactorz with pip,
+    # against the ranges in pyproject.toml, and this job does the same, so a
+    # dependency release that breaks those installs shows up here -- on a push,
+    # or in the weekly run -- rather than in someone's install.
+    name: Python 3.13 (pip, no lockfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Test
+        run: python -m pytest tests -n auto
 
   lint-ci:
     # The workflows themselves (zizmor) and the shell scripts the images and

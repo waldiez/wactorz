@@ -1,5 +1,5 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
-		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan format clean \
+		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit format clean \
         up down logs shell mqtt-certs \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
@@ -54,6 +54,18 @@ else
   SYSTEM_PYTHON := python3
 endif
 PYTHON := $(if $(wildcard $(VENV_PYTHON)),$(VENV_PYTHON),$(SYSTEM_PYTHON))
+
+# uv, when it is on PATH, installs the dev environment from uv.lock into .venv;
+# without it the install targets run pip, as they always have. Every other
+# target runs $(PYTHON), so nothing else cares which one made the environment.
+# USE_UV=0 uses pip even where uv is installed.
+UV := $(if $(filter 0,$(USE_UV)),,$(shell command -v uv 2>/dev/null))
+
+# The targets that only make sense with uv say so, instead of failing on a
+# command that is not there.
+define require-uv
+	@command -v uv > /dev/null 2>&1 || { echo "This needs uv: https://docs.astral.sh/uv/getting-started/installation/"; exit 1; }
+endef
 
 COMPOSE      := docker compose
 COMPOSE_DEV  := $(COMPOSE) -f compose.dev.yaml
@@ -252,14 +264,40 @@ clean: ## Remove frontend dist
 
 install: install-py install-frontend ## Install everything (Python + frontend)
 
-install-py: ## Install Python package in editable mode with all extras
+# With uv, each install puts what it names at the versions uv.lock pins, and
+# removes nothing -- as the pip commands they stand in for do -- so extras or
+# tools installed by hand (ml, flic, a notebook kernel) survive it. CI installs
+# exactly what the lockfile says instead, with `uv sync --locked`.
+# `vision` is in install-dev because the type checker reads the camera shim,
+# which imports cv2; CI's lint job installs it for the same reason.
+install-py: ## Install Python package in editable mode with all extras (uv from uv.lock if present, else pip)
+ifneq ($(UV),)
+	uv sync --locked --inexact --extra all
+else
 	$(PYTHON) -m pip install -e ".[all]"
+endif
 
-install-docs: ## Install docs dependencies (markdown + pygments + pdoc)
+install-docs: ## Install docs dependencies (markdown + pygments + pdoc) (uv if present, else pip)
+ifneq ($(UV),)
+	uv sync --locked --inexact --extra docs
+else
 	$(PYTHON) -m pip install -e ".[docs]"
+endif
 
-install-dev: ## Install everything including dev/docs deps
-	$(PYTHON) -m pip install -e ".[all,docs,dev]"
+install-dev: ## Install everything including dev/docs deps (uv from uv.lock if present, else pip)
+ifneq ($(UV),)
+	uv sync --locked --inexact --extra all --extra docs --extra dev --extra vision
+else
+	$(PYTHON) -m pip install -e ".[all,docs,dev,vision]"
+endif
+
+lock: ## Re-resolve uv.lock after changing dependencies in pyproject.toml (needs uv)
+	$(require-uv)
+	uv lock
+
+audit: ## Known vulnerabilities in the locked dependencies (needs uv)
+	$(require-uv)
+	uv audit --locked --preview-features audit-command
 
 install-frontend: ## Install frontend dependencies
 	cd $(FRONTEND_DIR) && $(PKG_MGR) install

@@ -43,6 +43,10 @@ dependencies = [
     # The MQTT broker's CA and certificate
     "cryptography>=48.0.1",
     "tzdata>=2026.3; sys_platform == 'win32'",
+    # Agents install the packages they need at runtime with `python -m pip`, in
+    # whatever environment runs Wactorz. An environment pip made has it anyway;
+    # one made by uv has none unless it is listed, and `uv sync` removes what is not.
+    "pip",
 ]
 
 [project.optional-dependencies]
@@ -54,9 +58,7 @@ telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
-tts       = [
-    "edge-tts>=6.1.9",
-]
+tts       = ["edge-tts>=6.1.9"]
 cron      = ["croniter>=2.0.0"]
 # Bluetooth for Flic buttons. Out of `all`: it needs 3.12, and a host with
 # no Bluetooth adapter has nothing to install it for.

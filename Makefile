@@ -1,5 +1,5 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
-		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit format clean \
+		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions format clean \
         up down logs shell mqtt-certs \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
@@ -315,6 +315,20 @@ test-py: ## Run Python tests (pytest)
 	@# suite and loses on a single file, where worker start-up costs more than
 	@# the tests. A focused run should stay serial without having to opt out.
 	$(PYTHON) -m pytest tests -n auto
+
+# The Python versions `test-py-versions` runs on: those pyproject.toml supports,
+# as CI's matrix. Narrow it for a quicker look, e.g. PYTHONS="3.10 3.11", the two
+# whose asyncio differs most. Opt-in only: nothing else runs it, since each
+# version takes about as long as `make test-py`.
+PYTHONS ?= 3.10 3.11 3.12 3.13 3.14
+
+test-py-versions: ## Run the Python tests on each supported version (PYTHONS=...), in throwaway uv environments (needs uv)
+	$(require-uv)
+	@for v in $(PYTHONS); do \
+		echo "── Python $$v"; \
+		uv run --isolated --locked --python $$v --extra all --extra dev \
+			python -m pytest tests -q -n auto -p no:cacheprovider || { echo "Failed on Python $$v."; exit 1; }; \
+	done
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test

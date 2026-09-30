@@ -712,6 +712,13 @@ class Supervisor:
         if not self._still_supervised(name, spec):
             logger.info("[Supervisor] Not restarting '%s': it left supervision meanwhile.", name)
             return
+        if spec.actor is not None:
+            # The old actor was stopped before the wait, so this one was started
+            # by someone else meanwhile -- a start from the dashboard or a
+            # command puts it back through resupervise(). Spawning another would
+            # stop it, since both answer to the same actor id.
+            logger.info("[Supervisor] Not restarting '%s': it was started again meanwhile.", name)
+            return
 
         logger.info("[Supervisor] Restarting '%s' (crash %s in a row).", name, spec.crash_streak)
 

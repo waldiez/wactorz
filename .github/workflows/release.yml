@@ -87,6 +87,17 @@ jobs:
       - name: Validate
         run: twine check dist/*
 
+      # What a user gets from `pip install wactorz`: the wheel on its own, in a
+      # clean environment, importing at the tag's version and starting its CLI.
+      - name: The wheel installs and imports
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-check"
+          "$RUNNER_TEMP/wheel-check/bin/pip" install --quiet dist/*.whl
+          installed=$("$RUNNER_TEMP/wheel-check/bin/python" -c "import wactorz; print(wactorz.__version__)")
+          [ "$installed" = "${GITHUB_REF_NAME#v}" ] \
+            || { echo "::error::the wheel installs as $installed, not ${GITHUB_REF_NAME#v}"; exit 1; }
+          "$RUNNER_TEMP/wheel-check/bin/wactorz" --help > /dev/null
+
       # Only this version's section — the whole CHANGELOG makes the release
       # page an endless scroll of every past version.
       - name: Extract release notes for this tag
@@ -129,3 +140,29 @@ jobs:
             gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
               --title "$GITHUB_REF_NAME" --notes-file release-notes.md
           fi
+
+  # The images, once the package they carry is published. Each workflow builds
+  # once, pushes by digest, checks that digest and only then tags it; see there.
+  image:
+    name: App image
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      tag: ${{ github.ref_name }}
+    # By name rather than `secrets: inherit`: the workflow gets the two it uses.
+    secrets:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+
+  addon-image:
+    name: Add-on images
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/addon-image.yml
+    with:
+      tag: ${{ github.ref_name }}

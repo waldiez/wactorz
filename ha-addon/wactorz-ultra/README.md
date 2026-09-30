@@ -9,8 +9,8 @@ Home Assistant addon that packages Wactorz as a supervised addon for Home Assist
 ```
 ha-addon/
 ├── config.yaml   # Addon manifest: name, version, image:, ports, options schema
-├── build.yaml    # Per-arch base images + WACTORZ_REF build arg (CI + Supervisor)
-├── Dockerfile    # Alpine + Mosquitto + wactorz[all]
+├── build.yaml    # Per-arch base images + WACTORZ_REF build arg (Supervisor source builds)
+├── Dockerfile    # Debian + Mosquitto + wactorz[all,ml] in a virtualenv
 ├── run.sh        # Entrypoint: reads options.json, exports env vars, starts services
 ├── DOCS.md       # User-facing install/options reference (rendered in HA UI)
 ├── icon.png      # 144×144 addon icon
@@ -19,7 +19,7 @@ ha-addon/
 
 ## How it works
 
-1. **HA Supervisor** **pulls** the prebuilt multi-arch image named by `image:` in `config.yaml` (`ghcr.io/waldiez/wactorz-addon-{arch}`, built + pushed by `.github/workflows/addon-image.yml`) and runs it as a container — so updates download with a progress bar instead of building on-device. For local source testing you can drop the `image:` key to make Supervisor build from `Dockerfile` instead (see `LOCAL_TESTING.md`).
+1. **HA Supervisor** **pulls** the prebuilt multi-arch image named by `image:` in `config.yaml` (`ghcr.io/waldiez/wactorz-ultra-addon-{arch}`, built + pushed by `.github/workflows/addon-image.yml`) and runs it as a container — so updates download with a progress bar instead of building on-device. For local source testing you can drop the `image:` key to make Supervisor build from `Dockerfile` instead (see `LOCAL_TESTING.md`).
 2. **`/data/options.json`** — Supervisor writes user-configured values (from config.yaml `options:`) here at boot time.
 3. **`run.sh`** reads `options.json` via `jq`, exports env vars (`WACTORZ_*`, `MQTT_*`, etc.), and then:
    - Optionally starts embedded Mosquitto (if `mosquitto_embedded: true`).
@@ -34,9 +34,10 @@ ha-addon/
 
 | Layer | What it installs |
 |---|---|
-| Base image | `ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20` (or amd64 variant) |
-| `apk add` | curl, git, jq, gcc, musl-dev, linux-headers, libffi-dev, openssl-dev, Mosquitto |
-| Wactorz | `pip3 install 'wactorz[all] @ git+…@${WACTORZ_REF}'` (ref defaults to `main`; set via `build.yaml`) |
+| Base image | `ghcr.io/home-assistant/aarch64-base-debian:trixie-…` (or amd64 variant), pinned by digest in `ha-addon/bases/Dockerfile` |
+| `apt-get upgrade`, `apt-get install` | Debian's pending updates, then build tools, Python headers and venv, Mosquitto, and the libraries OpenCV and GStreamer bindings need |
+| Ultralytics | `pip3 install ultralytics`, in `/opt/venv`, a layer of its own |
+| Wactorz | `pip3 install 'wactorz[all,ml] @ git+…@${WACTORZ_REF}'` (no default ref: a release passes its tag, `build.yaml` names the same one) |
 | Entrypoint | `run.sh` copied to `/run.sh` |
 
 `BUILD_VERSION` ARG is passed by the Supervisor on each build — it busts the pip install layer cache when the addon version in `config.yaml` is bumped.
@@ -45,8 +46,8 @@ ha-addon/
 
 | Port | Purpose | Exposed by default |
 |---|---|---|
-| 8000/tcp | Wactorz REST + WebSocket API | Yes |
-| 8888/tcp | Wactorz Monitor UI (ingress) | Yes |
+| 8000/tcp | Wactorz REST + WebSocket API | No (mapped to `null`; needs `api_key` once published) |
+| 8888/tcp | Wactorz Monitor UI (ingress) | No (reached through the panel; needs `api_key` once published) |
 | 1883/tcp | MQTT TCP (embedded only) | No (mapped to `null`) |
 
 ## Embedded services
@@ -106,4 +107,4 @@ not the embedded ingress view.
 
 ## Versioning
 
-The addon version lives in `config.yaml` (`version: "x.y.z"`) and must match the **published image tag** — Supervisor pulls `{image}:{version}` (e.g. `ghcr.io/waldiez/wactorz-addon-{arch}:0.4.4`). Bumping it is what triggers Supervisor to offer users an update. On a release, push a `vX.Y.Z` tag: `addon-image.yml` builds + pushes the matching per-arch image (stripping the `v`), and `scripts/sync_versions.py` keeps all version sources in lockstep. (For a local source build with no `image:`, bumping `version` instead busts the Dockerfile's pip layer cache via `BUILD_VERSION`.)
+The addon version lives in `config.yaml` (`version: "x.y.z"`) and must match the **published image tag** — Supervisor pulls `{image}:{version}` (e.g. `ghcr.io/waldiez/wactorz-ultra-addon-{arch}:0.4.4`). Bumping it is what triggers Supervisor to offer users an update. On a release, pushing a `vX.Y.Z` tag runs `release.yml`, which, once its tests pass, has `addon-image.yml` build the matching per-arch image (stripping the `v`), scan it, and only then tag it; `scripts/sync_versions.py` keeps all version sources in lockstep. (For a local source build with no `image:`, bumping `version` instead busts the Dockerfile's pip layer cache via `BUILD_VERSION`.)

@@ -16,6 +16,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -90,3 +91,21 @@ class TestTheArgumentIsChecked:
 
     def test_no_argument_is_refused(self) -> None:
         assert self._run().returncode == 1
+
+
+class TestTheAddOnBuildRef:
+    """build.yaml's WACTORZ_REF is what a source build of the add-on installs."""
+
+    def test_it_follows_the_library_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        build = tmp_path / "ha-addon" / "wactorz" / "build.yaml"
+        build.parent.mkdir(parents=True)
+        build.write_text("build_from:\n  amd64: base:1\nargs:\n  WACTORZ_REF: v0.5.3\nlabels: {}\n")
+        monkeypatch.setattr(sync_versions, "ROOT_DIR", tmp_path)
+
+        sync_versions.update_ha_addon_build_ref("0.5.4")
+
+        assert build.read_text() == (
+            "build_from:\n  amd64: base:1\nargs:\n  WACTORZ_REF: v0.5.4\nlabels: {}\n"
+        )

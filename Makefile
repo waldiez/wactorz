@@ -175,11 +175,23 @@ lint-ci: ## Lint the GitHub workflows (zizmor), shell scripts (shellcheck) and D
 # CI and the release workflows pass their own.
 IMAGE ?= wactorz:local
 
+# Extra Trivy arguments for `image-scan`: the release workflows pass `--platform`
+# for each architecture, and the add-ons skip a binary of Home Assistant's own.
+SCAN_ARGS ?=
+
+# Trivy's vulnerability database lives in this docker volume, so it is fetched
+# once and reused rather than downloaded by every scan. It is fetched on its own,
+# with retries, because the download is what fails transiently -- a mirror
+# answering 404 for a moment -- and a scan should not go red for that.
+TRIVY_CACHE := wactorz-trivy-cache
+TRIVY_DB_REPOSITORIES := mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2
+
 # Refuses early, naming the image and how to get it, instead of letting docker or
-# Trivy fail on a reference that is not there.
+# Trivy fail on a reference that is not there. A registry digest (`…@sha256:…`,
+# what the release workflows check) is fetched instead, so it is let through.
 define require-image
-	@docker image inspect "$(IMAGE)" > /dev/null 2>&1 \
-		|| { echo "No image $(IMAGE): build it with 'make image', or pass IMAGE=<an image you have>."; exit 1; }
+	@case "$(IMAGE)" in *@sha256:*) ;; *) docker image inspect "$(IMAGE)" > /dev/null 2>&1 \
+		|| { echo "No image $(IMAGE): build it with 'make image', or pass IMAGE=<an image you have>."; exit 1; } ;; esac
 endef
 
 image: ## Build the app image as CI does (the Debian upgrade stage never cached), tagged IMAGE (default wactorz:local)
@@ -194,10 +206,18 @@ image-smoke: ## Smoke-test IMAGE beside a broker: /health and /ready on both ser
 # .trivyignore.yaml with a statement and an expiry date, never left to fail every push.
 image-scan: ## Scan IMAGE for fixable CRITICAL/HIGH vulnerabilities (accepted ones: .trivyignore.yaml)
 	$(require-image)
-	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+	@for attempt in 1 2 3; do \
+		docker run --rm -v $(TRIVY_CACHE):/root/.cache $(call tool-image,trivy) image --quiet \
+			--download-db-only --db-repository $(TRIVY_DB_REPOSITORIES) && exit 0; \
+		echo "Fetching Trivy's database failed ($$attempt of 3)."; sleep 10; \
+	done; exit 1
+	@# TRIVY_USERNAME/TRIVY_PASSWORD, when set, reach a registry that needs them.
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(TRIVY_CACHE):/root/.cache \
+		$(if $(TRIVY_PASSWORD),-e TRIVY_USERNAME -e TRIVY_PASSWORD,) \
 		-v "$(CURDIR)/.trivyignore.yaml:/trivyignore.yaml:ro" $(call tool-image,trivy) \
 		image --quiet --scanners vuln --severity CRITICAL,HIGH --ignore-unfixed \
-		--ignorefile /trivyignore.yaml --table-mode detailed --show-suppressed --exit-code 1 "$(IMAGE)"
+		--skip-db-update --ignorefile /trivyignore.yaml --table-mode detailed --show-suppressed --exit-code 1 \
+		$(SCAN_ARGS) "$(IMAGE)"
 
 tool-image: ## Print the pinned image of a CI tool, NAME=zizmor|shellcheck|trivy|hadolint|mosquitto (.github/tools/Dockerfile)
 	@echo "$(call tool-image,$(NAME))"

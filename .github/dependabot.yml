@@ -17,10 +17,11 @@ updates:
       actions:
         patterns: ["*"]
 
-  # The app image's base, and the tool images CI runs (.github/tools/Dockerfile).
-  # The add-on images take their base as a build argument, which this cannot read.
+  # The app image's base, the tool images CI runs (.github/tools/Dockerfile), and
+  # the add-ons' bases (ha-addon/bases/Dockerfile). A base bump there must reach
+  # each add-on's build.yaml and Dockerfile default too; a test says which.
   - package-ecosystem: docker
-    directories: ["/", "/.github/tools"]
+    directories: ["/", "/.github/tools", "/ha-addon/bases"]
     schedule:
       interval: weekly
     cooldown:

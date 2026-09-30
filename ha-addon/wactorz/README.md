@@ -9,7 +9,7 @@ Home Assistant addon that packages Wactorz as a supervised addon for Home Assist
 ```
 ha-addon/
 ├── config.yaml   # Addon manifest: name, version, image:, ports, options schema
-├── build.yaml    # Per-arch base images + WACTORZ_REF build arg (CI + Supervisor)
+├── build.yaml    # Per-arch base images + WACTORZ_REF build arg (Supervisor source builds)
 ├── Dockerfile    # Alpine + Mosquitto + wactorz[all]
 ├── run.sh        # Entrypoint: reads options.json, exports env vars, starts services
 ├── DOCS.md       # User-facing install/options reference (rendered in HA UI)
@@ -34,9 +34,9 @@ ha-addon/
 
 | Layer | What it installs |
 |---|---|
-| Base image | `ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.20` (or amd64 variant) |
-| `apk add` | curl, git, jq, gcc, musl-dev, linux-headers, libffi-dev, openssl-dev, Mosquitto |
-| Wactorz | `pip3 install 'wactorz[all] @ git+…@${WACTORZ_REF}'` (ref defaults to `main`; set via `build.yaml`) |
+| Base image | `ghcr.io/home-assistant/aarch64-base-python:3.14-alpine3.24-…` (or amd64 variant), pinned by digest in `ha-addon/bases/Dockerfile` |
+| `apk upgrade`, `apk add` | Alpine's pending updates, then curl, git, jq, gcc, musl-dev, linux-headers, libffi-dev, openssl-dev, Mosquitto |
+| Wactorz | `pip3 install 'wactorz[all] @ git+…@${WACTORZ_REF}'` (no default ref: a release passes its tag, `build.yaml` names the same one) |
 | Entrypoint | `run.sh` copied to `/run.sh` |
 
 `BUILD_VERSION` ARG is passed by the Supervisor on each build — it busts the pip install layer cache when the addon version in `config.yaml` is bumped.
@@ -45,8 +45,8 @@ ha-addon/
 
 | Port | Purpose | Exposed by default |
 |---|---|---|
-| 8000/tcp | Wactorz REST + WebSocket API | Yes |
-| 8888/tcp | Wactorz Monitor UI (ingress) | Yes |
+| 8000/tcp | Wactorz REST + WebSocket API | No (mapped to `null`; needs `api_key` once published) |
+| 8888/tcp | Wactorz Monitor UI (ingress) | No (reached through the panel; needs `api_key` once published) |
 | 1883/tcp | MQTT TCP (embedded only) | No (mapped to `null`) |
 
 ## Embedded services
@@ -106,4 +106,4 @@ not the embedded ingress view.
 
 ## Versioning
 
-The addon version lives in `config.yaml` (`version: "x.y.z"`) and must match the **published image tag** — Supervisor pulls `{image}:{version}` (e.g. `ghcr.io/waldiez/wactorz-addon-{arch}:0.4.4`). Bumping it is what triggers Supervisor to offer users an update. On a release, push a `vX.Y.Z` tag: `addon-image.yml` builds + pushes the matching per-arch image (stripping the `v`), and `scripts/sync_versions.py` keeps all version sources in lockstep. (For a local source build with no `image:`, bumping `version` instead busts the Dockerfile's pip layer cache via `BUILD_VERSION`.)
+The addon version lives in `config.yaml` (`version: "x.y.z"`) and must match the **published image tag** — Supervisor pulls `{image}:{version}` (e.g. `ghcr.io/waldiez/wactorz-addon-{arch}:0.4.4`). Bumping it is what triggers Supervisor to offer users an update. On a release, pushing a `vX.Y.Z` tag runs `release.yml`, which, once its tests pass, has `addon-image.yml` build the matching per-arch image (stripping the `v`), scan it, and only then tag it; `scripts/sync_versions.py` keeps all version sources in lockstep. (For a local source build with no `image:`, bumping `version` instead busts the Dockerfile's pip layer cache via `BUILD_VERSION`.)

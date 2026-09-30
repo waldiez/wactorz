@@ -1,3 +1,8 @@
+# uv, at build time only: it turns uv.lock into the list the install below
+# checks every package against, and is never copied into the image. Pinned by
+# digest like the base; a test keeps it on the uv version CI installs.
+FROM ghcr.io/astral-sh/uv:0.12.21@sha256:a7aed3216253ee804de3e2d8afa5073baa1a177335345d43845cd4165e43b711 AS uv
+
 # The base is pinned by digest in a literal FROM line, so Dependabot proposes its
 # updates (.github/dependabot.yml) and every build starts from the same bytes.
 FROM python:3.14-slim@sha256:51dafde81dbdb6ebde285137a295cf18a47ca95234fe388a343719cb97305b3d AS app
@@ -11,21 +16,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
-COPY README.md .
+COPY pyproject.toml README.md uv.lock ./
 COPY wactorz/ ./wactorz/
 COPY static/ ./static/
 COPY scripts/ ./scripts/
 
+# The dependencies are the versions uv.lock pins, each checked against its hash,
+# so the image holds what CI tested and a package altered on its way here fails
+# the build. uv only writes that list; pip installs it, and stays in the image
+# for the packages agents install at runtime. Wactorz itself goes in last, with
+# nothing left to resolve.
+#
 # Installed into the root-owned system site-packages on purpose: the runtime user
 # must not be able to rewrite the code it is running. The build inputs are removed
 # in the same layer, or they stay in the image as a second, shadowing copy of the
-# package (~22MB) that `python` picks up ahead of the installed one.
-# This checkout is what is installed, and its dependencies are the ranges in
-# pyproject.toml, which a library must keep; there is nothing here to pin.
+# package that `python` picks up ahead of the installed one.
+# `.` is this checkout, and its dependencies are pinned by hash the line before.
 # hadolint ignore=DL3013
-RUN pip install --no-cache-dir ".[all]" \
-    && rm -rf /app/wactorz /app/static /app/scripts /app/pyproject.toml /app/README.md
+RUN --mount=from=uv,source=/uv,target=/bin/uv \
+    uv export --quiet --frozen --no-emit-project --extra all --format requirements.txt \
+        --output-file /tmp/requirements.txt \
+    && pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+    && pip install --no-cache-dir --no-deps . \
+    && rm -rf /tmp/requirements.txt /app/wactorz /app/static /app/scripts \
+        /app/pyproject.toml /app/README.md /app/uv.lock
 
 # Unprivileged runtime user. The entrypoint chowns the state directory before
 # dropping to it — see docker-entrypoint.sh for why that cannot happen here.

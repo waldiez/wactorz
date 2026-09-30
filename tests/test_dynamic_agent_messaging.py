@@ -384,6 +384,48 @@ class TestSendToRemote:
         assert task["_reply_topic"].startswith("agents/by-name/probe/reply/")
         assert api._actor._result_futures == {}
 
+    async def test_it_subscribes_to_the_reply_before_it_publishes_the_task(
+        self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The broker drops a reply nobody is subscribed to yet, so a node that
+        # answers at once would answer into nothing, and the caller would wait
+        # out its whole timeout for work that succeeded. Recording the order
+        # proves this every time, where a race would only sometimes lose.
+        self._on_node(monkeypatch, agents=["camera"])
+        order: list[str] = []
+        client = _ReplyClient(b'{"frames": 3}')
+        subscribe, publish = client.subscribe, broker.publish
+
+        async def _subscribing(topic: str, **kwargs: Any) -> None:
+            order.append("subscribe")
+            await subscribe(topic, **kwargs)
+
+        async def _publishing(topic: str, payload: Any, retain: bool = False, qos: int = 0) -> None:
+            order.append(f"publish {topic}")
+            await publish(topic, payload, retain, qos)
+
+        monkeypatch.setattr(client, "subscribe", _subscribing)
+        monkeypatch.setattr(broker, "publish", _publishing)
+        monkeypatch.setattr(messaging, "mqtt_client", lambda _host, _port, **_kw: client)
+
+        assert await api.send_to("camera", "snap", timeout=5) == {"frames": 3}
+        assert order == ["subscribe", "publish agents/by-name/camera/task"]
+
+    async def test_a_reply_channel_that_cannot_connect_is_an_error_not_an_exception(
+        self, api: AgentAPI, broker: _Broker, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The suite-wide fixture refuses every broker connection. The task is
+        # still sent -- its work is usually what the caller wanted -- and the
+        # caller is told the reply cannot come, as it is told about a timeout.
+        self._on_node(monkeypatch, agents=["camera"])
+
+        result = await api.send_to("camera", "snap", timeout=5)
+
+        assert isinstance(result, dict)
+        assert "camera" in result["error"]
+        assert len(broker.on("agents/by-name/camera/task")) == 1
+        assert api._actor._result_futures == {}
+
     async def test_a_silent_node_times_out_with_an_error(
         self, api: AgentAPI, monkeypatch: pytest.MonkeyPatch
     ) -> None:

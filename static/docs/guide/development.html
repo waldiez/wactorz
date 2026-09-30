@@ -576,12 +576,19 @@ MQTT_HOST=mosquitto         # container name, not localhost
 <h3 id="editable-install">Editable install</h3>
 <div class="highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/waldiez/wactorz.git
 <span class="nb">cd</span><span class="w"> </span>wactorz
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[all]&quot;</span>
+make<span class="w"> </span>install-dev
 
 <span class="c1"># Start with hot-reload (restarts on .py/.yaml file changes)</span>
-wactorz<span class="w"> </span>--reload
+.venv/bin/wactorz<span class="w"> </span>--reload
 </code></pre></div>
 
+<p><code>make install-dev</code> uses <a href="https://docs.astral.sh/uv/">uv</a> when it is installed,
+putting the versions pinned in <code>uv.lock</code> into <code>.venv</code>; without it, pip installs
+from the ranges in <code>pyproject.toml</code>. It never removes what is already there, so
+extras installed by hand survive it. <code>USE_UV=0</code> forces pip. After changing a
+dependency, <code>make lock</code> re-resolves <code>uv.lock</code>, and <code>make audit</code> checks it for
+known vulnerabilities. What agents install at runtime, here and on edge nodes,
+always goes through pip.</p>
 <h3 id="adding-a-catalog-recipe">Adding a catalog recipe</h3>
 <div class="highlight"><pre><span></span><code><span class="c1"># 1. Create the recipe file</span>
 <span class="c1">#    Must export AGENT_CODE = r&#39;&#39;&#39;...&#39;&#39;&#39;</span>
@@ -598,8 +605,8 @@ touch<span class="w"> </span>wactorz/catalogue_agents/my_agent.py
 </code></pre></div>
 
 <h3 id="running-tests">Running tests</h3>
-<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[dev]&quot;</span>
-make<span class="w"> </span>test-py<span class="w">          </span><span class="c1"># or: python -m pytest tests</span>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>install-dev
+make<span class="w"> </span>test-py<span class="w">          </span><span class="c1"># or: .venv/bin/python -m pytest tests</span>
 </code></pre></div>
 
 <hr />

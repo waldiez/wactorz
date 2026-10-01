@@ -193,9 +193,15 @@ def no_systemd_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(name="systemd")
 def systemd_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """A socket standing in for systemd's, which the process is told about."""
+    """A socket standing in for systemd's, which the process is told about.
+
+    Named by a path relative to the test's own directory. A socket's path has a
+    short limit, shorter on macOS than the temporary directory a test is given
+    there, so the full path cannot be bound at all.
+    """
+    monkeypatch.chdir(tmp_path)
+    path = "notify"
     listening = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-    path = str(tmp_path / "notify")
     listening.bind(path)
     listening.settimeout(5)
     monkeypatch.setenv("NOTIFY_SOCKET", path)

@@ -19,6 +19,7 @@ hand, which is what a test can see.
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -177,7 +178,13 @@ def _probe(addon: str) -> str:
     return script[start:end]
 
 
-@pytest.mark.skipif(shutil.which("bash") is None, reason="runs the probe through bash")
+# Windows has a `bash` on its path that is only the launcher for a Linux
+# subsystem, and fails when none is installed: finding the command says nothing
+# there. The script it is a fragment of never runs on Windows either.
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="runs the probe through bash, which Windows lacks",
+)
 @pytest.mark.parametrize("addon", ADDONS)
 class TestSayingWhetherHomeAssistantAnswered:
     """curl prints `000` for no answer and also fails, so a fallback doubled it."""

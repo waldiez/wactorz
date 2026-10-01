@@ -165,6 +165,11 @@ asyncio_mode = "auto"
 # hangs. pytest-randomly prints the seed on every run; pass it back with
 # `-p randomly --randomly-seed=<n>` to replay an ordering that failed.
 timeout = 60
+# Shorter than the timeout above, so a test on its way to it first says where
+# every thread is. On Windows the timeout ends the worker process outright, and
+# all that is reported is that the worker died: with this, the log also holds
+# the line each thread was on. It only prints; the timeout still decides.
+faulthandler_timeout = 45
 # `mcp.server.fastmcp`'s own settings model declares `lifespan` with a forward
 # reference it never resolves, so newer pydantic-settings warns once per run
 # about a model that is not ours and a value we never set from the environment.

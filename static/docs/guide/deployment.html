@@ -233,6 +233,12 @@ one-time sign-in link in <code>docker compose logs wactorz-python</code>. Set <c
 <td><code>127.0.0.1:9090</code></td>
 </tr>
 <tr>
+<td><code>python</code></td>
+<td>alertmanager</td>
+<td><code>alertmanager:9093</code></td>
+<td><code>127.0.0.1:9093</code></td>
+</tr>
+<tr>
 <td><code>full</code></td>
 <td>home-assistant</td>
 <td><code>homeassistant:8123</code></td>
@@ -386,6 +392,21 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
 <td><code>9090</code></td>
 <td>Prometheus host port</td>
+</tr>
+<tr>
+<td><code>ALERTMANAGER_EXTERNAL_PORT</code></td>
+<td><code>9093</code></td>
+<td>Alertmanager host port</td>
+</tr>
+<tr>
+<td><code>ALERT_WEBHOOK_URL</code></td>
+<td><em>(none)</em></td>
+<td>Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See <code>prometheus.md</code></td>
+</tr>
+<tr>
+<td><code>ALERT_WEBHOOK_TOKEN</code></td>
+<td><em>(none)</em></td>
+<td>Compose only: sent to that webhook as a bearer token</td>
 </tr>
 <tr>
 <td><code>HA_EXTERNAL_BIND</code> / <code>HA_EXTERNAL_PORT</code></td>

@@ -153,7 +153,7 @@
 <li>Python REST API metrics at <code>/metrics</code></li>
 <li>actor health and runtime metrics from the Python registry</li>
 <li>process/runtime metrics from the Python process</li>
-<li>Prometheus in Docker Compose</li>
+<li>Prometheus in Docker Compose, and Alertmanager to deliver its alerts</li>
 <li>optional Mosquitto availability probe controlled by <code>.env</code></li>
 </ul>
 <h2 id="what-is-monitored">What Is Monitored</h2>
@@ -292,13 +292,17 @@ REST_EXTERNAL_PORT=8000
 </ul>
 <h2 id="docker-compose">Docker Compose</h2>
 <h3 id="main-stack">Main stack</h3>
-<p>Use the Python profiles:</p>
+<p>Prometheus, Alertmanager and the Blackbox Exporter belong to the <code>python</code> profile:</p>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>The <code>full</code> profile adds Home Assistant and does not start them; give both profiles to have both:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <h3 id="development-stack">Development stack</h3>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d
+<p>There they belong to the <code>app</code> profile:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>--profile<span class="w"> </span>app<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <p>Prometheus is available at:</p>
@@ -312,7 +316,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Then run:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>prometheus<span class="w"> </span>blackbox-exporter<span class="w"> </span>wactorz-python
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>prometheus<span class="w"> </span>alertmanager<span class="w"> </span>blackbox-exporter<span class="w"> </span>wactorz-python
 </code></pre></div>
 
 <h3 id="2-wactorz-from-terminal-prometheus-in-compose">2. Wactorz from terminal, Prometheus in Compose</h3>
@@ -321,7 +325,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Start Wactorz locally in REST mode, then run:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-deps<span class="w"> </span>prometheus<span class="w"> </span>blackbox-exporter
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-deps<span class="w"> </span>prometheus<span class="w"> </span>alertmanager<span class="w"> </span>blackbox-exporter
 </code></pre></div>
 
 <p>This starts only the monitoring containers and points Prometheus at the Wactorz process running on your host.</p>
@@ -360,7 +364,22 @@ curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </spa
 <li>more than half the requests to an LLM provider failing for 10 minutes</li>
 <li>optional dependency probe failing</li>
 </ul>
-<p>They live in <code>infra/prometheus/alerts.yml</code>. Prometheus evaluates them and shows them on its <strong>Alerts</strong> page; nothing routes them anywhere yet.</p>
+<p>They live in <code>infra/prometheus/alerts.yml</code>. Prometheus evaluates them and hands the ones that fire to Alertmanager, which the compose stack starts beside it.</p>
+<h2 id="where-alerts-go">Where Alerts Go</h2>
+<p>Nowhere, until you say. Out of the box Alertmanager lists what is firing on its own page and delivers nothing:</p>
+<div class="highlight"><pre><span></span><code>http://localhost:${ALERTMANAGER_EXTERNAL_PORT:-9093}
+</code></pre></div>
+
+<p>To be told about an alert, name a webhook in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>ALERT_WEBHOOK_URL=https://example.org/hooks/wactorz
+<span class="gh">#</span> Optional. Sent as &quot;Authorization: Bearer &lt;token&gt;&quot;.
+ALERT_WEBHOOK_TOKEN=
+</code></pre></div>
+
+<p>and restart the service (<code>docker compose --profile python up -d alertmanager</code>). Every alert, and its resolution, is then sent there as an HTTP <code>POST</code> carrying <a href="https://prometheus.io/docs/alerting/latest/configuration/#webhook_config">Alertmanager's JSON</a>. The method and the body are Alertmanager's and are not settings; the token is the one credential it sends. Alerts with the same name are grouped into one notification, sent 30 seconds after the first fires and repeated every 4 hours while it lasts.</p>
+<p>The address and the token are written to files inside the container, in memory, and the configuration names those files, so neither shows on Alertmanager's status page.</p>
+<p>For anything a single webhook cannot express, such as email, Slack, several receivers, custom headers or routing by severity, write your own configuration to <code>infra/alertmanager/alertmanager.yml</code>. It is used exactly as written, the two settings above are then not read, and the file is ignored by git because it usually holds a credential. The <a href="https://prometheus.io/docs/alerting/latest/configuration/">Alertmanager documentation</a> describes the format.</p>
+<p>Alertmanager's page has no login and can silence an alert, so it is published to this host only, like Prometheus.</p>
   </main>
 </div>
 

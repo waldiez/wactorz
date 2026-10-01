@@ -359,32 +359,69 @@ key, and <code>/deploy</code> writes it into the node's <code>~/wactorz/.env</co
 <code>DEPLOY_&lt;NODE&gt;_BROKER_USER</code> / <code>_BROKER_PASSWORD</code> you set still wins.</p>
 <p>For the broker Wactorz configures — compose's, and the add-on's embedded one —
 it also writes an access list into <code>MQTT_BROKER_DIR</code>, beside the TLS
-certificate. With it, a node may:</p>
+certificate. The list names what a node may use, and a topic it does not name is
+refused. A node may:</p>
 <ul>
-<li>publish and read its own <code>nodes/&lt;name&gt;/...</code>, and the shared agent traffic
-  (<code>agents/#</code>, <code>sensors/#</code>, <code>homeassistant/#</code>, whatever your agents use);</li>
+<li>publish and read its own <code>nodes/&lt;name&gt;/...</code>;</li>
+<li>publish and read the agent traffic every host shares, <code>agents/#</code> — except
+  <code>agents/+/commands</code>, which stops agents on the server;</li>
+<li>write, and not read, <code>main/llm_request</code> and <code>main/reply/#</code>: it asks main's
+  model and answers main's tasks, without seeing what another node asks or
+  answers;</li>
+<li>publish and read the data topics agents use by convention — <code>custom/#</code>,
+  <code>sensors/#</code>, <code>home/#</code>, <code>schedule/#</code> — and read
+  <code>homeassistant/state_changes/#</code>.</li>
 </ul>
-<p>and may not:</p>
-<ul>
-<li>touch another node's <code>nodes/&lt;other&gt;/...</code>, in either direction — so it can
-  neither drive, impersonate nor watch another node;</li>
-<li>write <code>agents/+/commands</code>, which stops agents on the server;</li>
-<li>write anything under <code>system/</code>.</li>
-</ul>
+<p>Everything else is closed to it: another node's <code>nodes/&lt;other&gt;/...</code> in either
+direction, so it can neither drive, impersonate nor watch another node;
+<code>system/</code>; and whatever else shares the broker, such as <code>zigbee2mqtt/</code> or Home
+Assistant's discovery topics.</p>
+<p>Two settings shape the list, both read by whatever writes it (the server, and
+compose's <code>mqtt-certs</code>; the add-ons offer them as <code>node_topics</code> and
+<code>broker_accounts</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WACTORZ_NODE_TOPICS</code></td>
+<td>More data topics for every node, comma-separated: <code>zigbee2mqtt/#, read:weather/#</code>. A filter prefixed <code>read:</code> may be read and not written. One under <code>nodes/</code>, <code>agents/</code>, <code>main/</code>, <code>system/</code> or <code>$</code> is refused, with a message, because it would open for every node what the list exists to close.</td>
+</tr>
+<tr>
+<td><code>WACTORZ_BROKER_ACCOUNTS</code></td>
+<td>Other accounts on this broker that keep all of it, comma-separated: <code>homeassistant, zigbee2mqtt</code>. The server's own account (<code>MQTT_USERNAME</code>) is always one of them.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>An agent on a node that uses a topic outside the list gets no error.</strong> The
+broker drops the publish and delivers nothing to the subscription, which is how
+MQTT refuses, so the agent looks idle rather than broken. If an agent that works
+on the server goes quiet on a node, add its topic prefix to
+<code>WACTORZ_NODE_TOPICS</code>.</p>
+<p><strong>List every other account once a node is deployed.</strong> Mosquitto gives an account
+the list does not mention no access at all, so with a node deployed, Home
+Assistant's or zigbee2mqtt's account on this broker stops working until it is in
+<code>WACTORZ_BROKER_ACCOUNTS</code>. The server names the accounts that keep the whole
+broker in its log whenever it writes the list. With no node deployed nothing is
+closed: the list gives every account the whole broker.</p>
 <p>The compose broker picks up a new node's account on its own: it watches that
 folder, reloads for a new account, and restarts itself if the access list or the
 certificate appeared for the first time, since mosquitto reads those only at
 startup.</p>
-<p>Two lines in the broker log when that list loads are expected:</p>
+<p>Before any node is deployed, two lines in the broker log are expected:</p>
 <div class="highlight"><pre><span></span><code>Warning: ACL pattern &#39;#&#39; does not contain &#39;%c&#39; or &#39;%u&#39;.
 Warning: ACL pattern &#39;$SYS/#&#39; does not contain &#39;%c&#39; or &#39;%u&#39;.
 </code></pre></div>
 
-<p>They are the two lines that give every account the commons, the server's own and
-Home Assistant's included. Mosquitto notes that neither names a client, which is
-the point — "everything" is not something <code>%u</code> can spell — and the alternative
-spelling (<code>topic</code> instead of <code>pattern</code>) applies to anonymous clients only, which
-would leave every named account with no access at all.</p>
+<p>They are the two lines that give every account the whole broker while there is
+no node to keep out of anything. Mosquitto notes that neither names a client,
+which is the point — "everything" is not something <code>%u</code> can spell — and the
+alternative spelling (<code>topic</code> instead of <code>pattern</code>) applies to anonymous clients
+only, which would leave every named account with no access at all.</p>
 <p><strong>Only turn this on where the broker has those accounts.</strong> On a broker you run
 yourself, create them there first (or keep using <code>DEPLOY_&lt;NODE&gt;_BROKER_USER</code>).
 A node presenting an account its broker has never heard of is simply refused.</p>

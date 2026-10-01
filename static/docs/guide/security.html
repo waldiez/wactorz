@@ -286,12 +286,17 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
   unless told otherwise, so a stolen node holds full broker access.
   <code>WACTORZ_NODE_ACCOUNTS=1</code> — the default in the compose files and the add-ons'
   embedded broker — gives each node an account of its own instead, and on the
-  brokers Wactorz configures an access list that
-  keeps a node to its own <code>nodes/&lt;name&gt;/...</code> and the shared agent traffic, out of
-  every other node's, out of <code>agents/+/commands</code> and out of <code>system/</code>. It takes
-  effect for a node at its next <code>/deploy</code>, so rotate the shared password once the
-  last one has moved. A node's agents share its account: the boundary is the
-  machine, not the agent.</li>
+  brokers Wactorz configures an access list that names what a node may use: its
+  own <code>nodes/&lt;name&gt;/...</code>, the shared agent traffic, and the data topics agents
+  publish under by convention. Every other node's topics, <code>agents/+/commands</code>,
+  <code>system/</code> and anything else on the broker — <code>zigbee2mqtt/</code>, Home Assistant's
+  discovery — are closed to it. <code>WACTORZ_NODE_TOPICS</code> opens more data topics to
+  every node. Once a node is deployed, an account the list does not name has no
+  access, so list any other system that shares the broker in
+  <code>WACTORZ_BROKER_ACCOUNTS</code>. It takes effect for a node at its next <code>/deploy</code>,
+  so rotate the shared password once the last one has moved. A node's agents
+  share its account: the boundary is the machine, not the agent. See "An account
+  per node" in <code>remote-nodes.md</code>.</li>
 <li><strong><code>/deploy</code> trusts a node's SSH host key the first time it connects.</strong> The key is
   recorded in <code>&lt;WACTORZ_STATE_DIR&gt;/known_hosts</code>, or wherever <code>DEPLOY_KNOWN_HOSTS</code>
   points, and a later change fails the connection. The first connection is the
@@ -352,7 +357,8 @@ the broker. Anything that can publish to it can drive Wactorz.</p>
 <li>Give each edge node its own broker account: the compose files and the add-ons'
    embedded broker do by default; elsewhere set <code>WACTORZ_NODE_ACCOUNTS=1</code> once the
    broker has the accounts. Deploy every node again, then rotate the account they
-   shared.</li>
+   shared. Where another system shares that broker, name its account in
+   <code>WACTORZ_BROKER_ACCOUNTS</code>.</li>
 <li>Deploy every edge node again after upgrading, so it holds a signing key and
    refuses unsigned commands (<code>WACTORZ_NODE_SIGNING=enforce</code>, the default).
    Publish the broker's <code>8883</code> where nodes can reach it first, so the deploy puts

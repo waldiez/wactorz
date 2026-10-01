@@ -422,6 +422,21 @@ class TestLiveTopicSampling:
 
         assert topics == [(f"a/{i}", "a") for i in range(5)] + [(f"b/{i}", "b") for i in range(5)]
 
+    def test_the_total_holds_when_the_agents_do_not_divide_it_evenly(self) -> None:
+        # The limit is on the list, not on the agents: checked only between
+        # agents, the last one in adds its whole share and overshoots.
+        bus = self._bus(
+            TopicContract(name="a", publishes=[f"a/{i}" for i in range(3)]),
+            TopicContract(name="b", publishes=[f"b/{i}" for i in range(3)]),
+            TopicContract(name="c", publishes=[f"c/{i}" for i in range(3)]),
+            TopicContract(name="d", publishes=[f"d/{i}" for i in range(5)]),
+        )
+
+        topics = topics_worth_sampling(bus)
+
+        assert len(topics) == 10
+        assert topics[-1] == ("d/0", "d")
+
     def test_a_topic_published_by_two_agents_is_sampled_once(self) -> None:
         bus = self._bus(
             TopicContract(name="a", publishes=["shared"]),

@@ -55,6 +55,7 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | `python` | wactorz-python | `wactorz-python:8000` | `127.0.0.1:8000` (REST API) |
 | `python` | monitor UI | `wactorz-python:8888` | `127.0.0.1:8888` |
 | `python` | prometheus | `wactorz-prometheus:9090` | `127.0.0.1:9090` |
+| `python` | alertmanager | `alertmanager:9093` | `127.0.0.1:9093` |
 | `full` | home-assistant | `homeassistant:8123` | `127.0.0.1:8123` |
 
 Every port except the broker's TLS one is published to this host only. Reach the
@@ -139,6 +140,9 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `WACTORZ_RETENTION_TIMESERIES_DAYS` | `365` | Days sensor readings, detections, Home Assistant state changes and actuations are kept; `0` keeps them for ever. The time-series collector agent's own `retention_days` applies too, and the shorter window holds |
 | `WACTORZ_RETENTION_OUTBOX_DAYS` | `7` | Days an MQTT message the broker never accepted stays in the outbox; `0` keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under `nodes/` or `agents/by-name/`, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained `desired_state` follows this setting |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
+| `ALERTMANAGER_EXTERNAL_PORT` | `9093` | Alertmanager host port |
+| `ALERT_WEBHOOK_URL` | _(none)_ | Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See `prometheus.md` |
+| `ALERT_WEBHOOK_TOKEN` | _(none)_ | Compose only: sent to that webhook as a bearer token |
 | `HA_EXTERNAL_BIND` / `HA_EXTERNAL_PORT` | `127.0.0.1` / `8123` | Where compose publishes Home Assistant (profile `full`). `0.0.0.0` opens it to the network |
 | `WACTORZ_MEM_LIMIT` | `8g` | Compose only: the app container's memory ceiling |
 | `WACTORZ_PIDS_LIMIT` | `4096` | Compose only: the app container's ceiling on processes and threads |

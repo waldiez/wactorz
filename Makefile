@@ -163,7 +163,7 @@ tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' .github/tools/Docker
 
 # The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
 # shebang, which shellcheck cannot place, so they are named as bash.
-SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh scripts/image-smoke.sh scripts/test-broker.sh
+SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh infra/alertmanager/render-config.sh scripts/image-smoke.sh scripts/test-broker.sh
 ADDON_SCRIPTS := ha-addon/wactorz/run.sh ha-addon/wactorz-ultra/run.sh
 
 # The docker calls below name paths inside containers (`-w /src`, the docker

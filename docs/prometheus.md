@@ -9,7 +9,7 @@ Included:
 - Python REST API metrics at `/metrics`
 - actor health and runtime metrics from the Python registry
 - process/runtime metrics from the Python process
-- Prometheus in Docker Compose
+- Prometheus in Docker Compose, and Alertmanager to deliver its alerts
 - optional Mosquitto availability probe controlled by `.env`
 
 ## What Is Monitored
@@ -125,17 +125,24 @@ Notes:
 
 ### Main stack
 
-Use the Python profiles:
+Prometheus, Alertmanager and the Blackbox Exporter belong to the `python` profile:
 
 ```bash
 docker compose --profile python up -d
-docker compose --profile full up -d
+```
+
+The `full` profile adds Home Assistant and does not start them; give both profiles to have both:
+
+```bash
+docker compose --profile python --profile full up -d
 ```
 
 ### Development stack
 
+There they belong to the `app` profile:
+
 ```bash
-docker compose -f compose.dev.yaml up -d
+docker compose -f compose.dev.yaml --profile app up -d
 ```
 
 Prometheus is available at:
@@ -157,7 +164,7 @@ PROMETHEUS_PYTHON_TARGET=wactorz-python
 Then run:
 
 ```bash
-docker compose --profile python up -d prometheus blackbox-exporter wactorz-python
+docker compose --profile python up -d prometheus alertmanager blackbox-exporter wactorz-python
 ```
 
 ### 2. Wactorz from terminal, Prometheus in Compose
@@ -171,7 +178,7 @@ PROMETHEUS_PYTHON_TARGET=host.docker.internal
 Start Wactorz locally in REST mode, then run:
 
 ```bash
-docker compose --profile python up -d --no-deps prometheus blackbox-exporter
+docker compose --profile python up -d --no-deps prometheus alertmanager blackbox-exporter
 ```
 
 This starts only the monitoring containers and points Prometheus at the Wactorz process running on your host.
@@ -222,4 +229,28 @@ Basic Prometheus alert rules are included for:
 - more than half the requests to an LLM provider failing for 10 minutes
 - optional dependency probe failing
 
-They live in `infra/prometheus/alerts.yml`. Prometheus evaluates them and shows them on its **Alerts** page; nothing routes them anywhere yet.
+They live in `infra/prometheus/alerts.yml`. Prometheus evaluates them and hands the ones that fire to Alertmanager, which the compose stack starts beside it.
+
+## Where Alerts Go
+
+Nowhere, until you say. Out of the box Alertmanager lists what is firing on its own page and delivers nothing:
+
+```text
+http://localhost:${ALERTMANAGER_EXTERNAL_PORT:-9093}
+```
+
+To be told about an alert, name a webhook in `.env`:
+
+```env
+ALERT_WEBHOOK_URL=https://example.org/hooks/wactorz
+# Optional. Sent as "Authorization: Bearer <token>".
+ALERT_WEBHOOK_TOKEN=
+```
+
+and restart the service (`docker compose --profile python up -d alertmanager`). Every alert, and its resolution, is then sent there as an HTTP `POST` carrying [Alertmanager's JSON](https://prometheus.io/docs/alerting/latest/configuration/#webhook_config). The method and the body are Alertmanager's and are not settings; the token is the one credential it sends. Alerts with the same name are grouped into one notification, sent 30 seconds after the first fires and repeated every 4 hours while it lasts.
+
+The address and the token are written to files inside the container, in memory, and the configuration names those files, so neither shows on Alertmanager's status page.
+
+For anything a single webhook cannot express, such as email, Slack, several receivers, custom headers or routing by severity, write your own configuration to `infra/alertmanager/alertmanager.yml`. It is used exactly as written, the two settings above are then not read, and the file is ignored by git because it usually holds a credential. The [Alertmanager documentation](https://prometheus.io/docs/alerting/latest/configuration/) describes the format.
+
+Alertmanager's page has no login and can silence an alert, so it is published to this host only, like Prometheus.

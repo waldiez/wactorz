@@ -175,6 +175,70 @@
 <li>LLM cost in USD</li>
 <li>process/runtime metrics exported by <code>prometheus_client</code></li>
 </ul>
+<p>And, for what the dashboard does not show:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>What it says</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wactorz_mqtt_connected</code></td>
+<td><code>1</code> while the server's broker connection is up</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_queued</code></td>
+<td>Messages in memory waiting to be sent to the broker</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_backlog</code></td>
+<td>Stored messages waiting on disk for room in that queue</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_publish_failures_total</code></td>
+<td>Publishes that failed on a live connection and were held to retry</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_dropped_total</code></td>
+<td>Messages discarded because the outbox was full</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_discarded_total</code></td>
+<td>Messages given up on: unsendable, expired undelivered, or failing every try</td>
+</tr>
+<tr>
+<td><code>wactorz_nodes{state}</code></td>
+<td>Edge nodes that are <code>up</code> and <code>down</code></td>
+</tr>
+<tr>
+<td><code>wactorz_node_up{node}</code></td>
+<td><code>1</code> while a node's heartbeat is recent</td>
+</tr>
+<tr>
+<td><code>wactorz_node_heartbeat_age_seconds{node}</code></td>
+<td>Seconds since a node's last heartbeat</td>
+</tr>
+<tr>
+<td><code>wactorz_node_agents{node}</code></td>
+<td>Agents a node reported running</td>
+</tr>
+<tr>
+<td><code>wactorz_node_info{node,version,runtime}</code></td>
+<td>The version and runtime a node reported</td>
+</tr>
+<tr>
+<td><code>wactorz_llm_requests_total{provider,outcome}</code></td>
+<td>LLM requests by how they ended: <code>ok</code>, <code>unavailable</code> (the provider kept failing through every retry) or <code>error</code> (anything else: a rejected request, a bad key)</td>
+</tr>
+<tr>
+<td><code>wactorz_llm_request_duration_seconds{provider}</code></td>
+<td>Time from a request to its answer or failure, retries included; for a streamed answer, to its last chunk</td>
+</tr>
+</tbody>
+</table>
+<p>A request counts once however many attempts it took, and one the caller cancelled is not counted. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.</p>
 <p>The app exposes these at:</p>
 <div class="highlight"><pre><span></span><code>GET /metrics
 </code></pre></div>
@@ -289,8 +353,14 @@ curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </spa
 <ul>
 <li>Python app down</li>
 <li>actor heartbeat stale</li>
+<li>the broker connection lost for 2 minutes</li>
+<li>more than 100 outgoing messages waiting for 10 minutes</li>
+<li>outgoing messages dropped or given up on</li>
+<li>an edge node down for 5 minutes</li>
+<li>more than half the requests to an LLM provider failing for 10 minutes</li>
 <li>optional dependency probe failing</li>
 </ul>
+<p>They live in <code>infra/prometheus/alerts.yml</code>. Prometheus evaluates them and shows them on its <strong>Alerts</strong> page; nothing routes them anywhere yet.</p>
   </main>
 </div>
 

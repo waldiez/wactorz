@@ -23,6 +23,12 @@ RUN pip3 install --no-cache-dir \
     && python3 -c "import wactorz" \
     && echo "wactorz addon ${BUILD_VERSION} (ref ${WACTORZ_REF}) installed"
 
+# The user Wactorz runs as. run.sh starts as root, for what needs it, and hands
+# over to this one. It owns nothing in the image: the code it runs is not its
+# to rewrite, and what agents install at runtime goes under /data.
+RUN addgroup -S -g 1000 wactorz \
+    && adduser -S -D -H -u 1000 -G wactorz -h /data/state/home -s /sbin/nologin wactorz
+
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

@@ -73,6 +73,17 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 > allow-lists are required because a bot that answers strangers would let them control your home
 > and spend your LLM budget.
 
+## What the addon can reach
+
+Wactorz runs code that a model wrote, so the addon keeps it to its own data.
+
+- **It runs as an ordinary user, not root.** The start script does what needs root — reading your options, starting the embedded broker, writing the broker certificate into `/ssl` — and then hands over to an unprivileged user that cannot regain it.
+- **Home Assistant's configuration folder is mapped read-only**, at `/config`. Agents can read `configuration.yaml`; they cannot change anything there, and files Home Assistant keeps private to root, such as its login storage, cannot be read at all.
+- **`/share` and `/ssl` are written by the start script only**: `/share/wactorz/mosquitto-logins.yaml`, and `wactorz-mqtt.crt` / `wactorz-mqtt.key` in `/ssl`. Wactorz itself can write neither folder.
+- **Everything Wactorz keeps is under `/data`**, which is private to the addon and survives updates: its state, its home directory, and the Python packages agents install at runtime.
+
+An agent that used to write into `/config` or `/share` — a snapshot into `/config/www`, say — can no longer do so. Have it keep the file in its own state instead, or publish it over MQTT.
+
 ## Remote edge nodes
 
 Wactorz can bootstrap a Raspberry Pi or other machine as an edge node over SSH, running agents there that appear in the dashboard alongside local ones. The machines it may connect to are listed in `deploy_targets`, and each entry carries its own credentials:
@@ -97,7 +108,7 @@ Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over 
 `broker_password` are the node's **broker** account, and are separate on
 purpose — see below.
 
-Private keys go under `/config` or `/share` — both are mapped into the addon — and the path is given as the addon sees it, e.g. `/config/ssh/rpi_kitchen`. Then, from the chat:
+Private keys go under `/config` or `/share` — both are mapped into the addon — and the path is given as the addon sees it, e.g. `/config/ssh/rpi_kitchen`. Keep the key private to root, as Home Assistant leaves it: Wactorz runs as an ordinary user inside the addon and is handed a copy of each key at start, so the original never has to be readable by it. Then, from the chat:
 
 ```text
 /deploy rpi-kitchen

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
-from wactorz import retention
+from wactorz import config, retention
 from wactorz.agents.lookup import find_main_actor
 from wactorz.broker_certificates import prepare_broker_files
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS
@@ -137,15 +137,24 @@ def _print_ready_banner(port: int) -> None:
     act on, and when the login ceremony lands it gains a one-time link — which
     must reach the terminal without also being written to the unrotated log file
     or shipped onward by a metrics exporter.
+
+    Behind Home Assistant's ingress there is no terminal. What is printed goes
+    into the add-on's log, which Home Assistant keeps and shows, and
+    ``localhost`` there is the inside of a container nobody browses to. So the
+    banner points at the panel, which signs the user in itself, and no sign-in
+    link is made at all.
     """
     from wactorz.web import login, static_site
 
-    lines = [f"Dashboard   http://localhost:{port}/"]
-    if static_site.DOCS_SITE.is_dir():
-        lines.append(f"Docs        http://localhost:{port}/docs/")
-    sign_in = login.sign_in_line(port)
-    if sign_in is not None:
-        lines.append(sign_in)
+    if config.INGRESS_ENABLED:
+        lines = ["Open Wactorz from the Home Assistant sidebar."]
+    else:
+        lines = [f"Dashboard   http://localhost:{port}/"]
+        if static_site.DOCS_SITE.is_dir():
+            lines.append(f"Docs        http://localhost:{port}/docs/")
+        sign_in = login.sign_in_line(port)
+        if sign_in is not None:
+            lines.append(sign_in)
     width = max(len(line) for line in lines) + 4
     print("\n    ┌" + "─" * width + "┐")
     for line in lines:

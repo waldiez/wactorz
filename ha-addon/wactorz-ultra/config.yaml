@@ -45,12 +45,22 @@ ports_description:
 
 # ── Persistent state ───────────────────────────────────────────────────────────
 map:
-  - config:rw
-  - share:rw
-  # Home Assistant's certificate folder. Wactorz writes wactorz-mqtt.crt and
-  # wactorz-mqtt.key there, for the official Mosquitto add-on to serve TLS with,
-  # and touches nothing else in it.
-  - ssl:rw
+  # Home Assistant's own configuration folder, to read and never to write: SSH
+  # keys for deploy targets are kept under it. Mounted at /config, which is
+  # where option values that name a file there already point.
+  - type: homeassistant_config
+    read_only: true
+    path: /config
+  # Writable for the start script alone, which runs as root and writes
+  # /share/wactorz/mosquitto-logins.yaml. Wactorz itself runs as an ordinary
+  # user and can write neither this folder nor the next.
+  - type: share
+    read_only: false
+  # Home Assistant's certificate folder. The start script writes
+  # wactorz-mqtt.crt and wactorz-mqtt.key there, for the official Mosquitto
+  # add-on to serve TLS with, and touches nothing else in it.
+  - type: ssl
+    read_only: false
 
 # ── User-configurable options ──────────────────────────────────────────────────
 options:

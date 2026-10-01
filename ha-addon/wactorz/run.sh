@@ -131,8 +131,11 @@ export HOME_ASSISTANT_TOKEN="$HA_TOKEN"
 
 # Startup auth probe: one deterministic line stating mode + URL + auth result.
 # Non-fatal — HA may still be booting, and the agents already no-op on bad config.
+# curl prints 000 itself when it gets no answer, and also exits non-zero: the
+# status is taken from what it printed, and a fallback is only for no output.
 ha_probe=$(curl -s -o /dev/null -m 5 -w '%{http_code}' \
-    -H "Authorization: Bearer ${HA_TOKEN}" "${HA_URL}/api/" 2>/dev/null || echo 000)
+    -H "Authorization: Bearer ${HA_TOKEN}" "${HA_URL}/api/" 2>/dev/null) || true
+ha_probe="${ha_probe:-000}"
 case "$ha_probe" in
     200)     bashio::log.info "HA connection OK — mode=${HA_MODE} url=${HA_URL} (auth 200)";;
     401|403) bashio::log.warning "HA auth FAILED (${ha_probe}) — mode=${HA_MODE} url=${HA_URL}. Check ha_token: long-lived token for a custom URL, empty for supervisor mode.";;
@@ -387,7 +390,11 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
         # say why. Back to the shared account until a start generates them.
         WACTORZ_NODE_ACCOUNTS=false
         export WACTORZ_NODE_ACCOUNTS
-        bashio::log.warning "No node accounts were generated; deployed nodes will use this add-on's own broker account."
+        # Worth saying only where there is a node to deploy: with none
+        # configured there was nothing to generate, and nothing went wrong.
+        if [ -n "$DEPLOY_TARGETS" ]; then
+            bashio::log.warning "No node accounts were generated; deployed nodes will use this add-on's own broker account."
+        fi
     fi
     chown mosquitto:mosquitto /tmp/mosquitto.passwd
     chmod 600 /tmp/mosquitto.passwd
@@ -497,7 +504,80 @@ if [ "$MOSQUITTO_EMBEDDED" != "true" ]; then
     fi
 fi
 
+# ── Run as an unprivileged user ───────────────────────────────────────────────
+# Everything above needed root: reading the options, writing the broker's
+# certificate where the Mosquitto add-on reads it, starting the embedded broker.
+# Wactorz itself does not, and it runs code an LLM wrote. As root in this
+# container that code could rewrite anything mapped in and read every secret
+# file beside it; as an ordinary user it is held to the add-on's own data.
+run_as=""
+if [ "$(id -u)" = "0" ] && id wactorz > /dev/null 2>&1; then
+    run_as=wactorz
+
+    # A home under the state directory: the one place this user may write that
+    # also survives an update. What agents install at runtime goes there too.
+    export HOME="${WACTORZ_STATE_DIR}/home"
+    export PYTHONUSERBASE="${WACTORZ_STATE_DIR}/.python"
+    export PIP_CACHE_DIR=/tmp/pip-cache
+    mkdir -p "$HOME"
+    # Made now, so the interpreter puts it on its path at start: a directory
+    # that first appears with the first install is not looked in until a restart.
+    user_site=$(python3 -c 'import site; print(site.getusersitepackages())' 2> /dev/null || true)
+    if [ -n "$user_site" ]; then
+        mkdir -p "$user_site"
+    fi
+
+    # A deploy target's SSH key is a file under /config or /share, which belong
+    # to root and are private to it, as a key should be. The unprivileged user
+    # is given a copy of its own, outside anything mapped in or backed up, and
+    # the target is pointed at the copy.
+    install -d -m 0700 -o wactorz -g wactorz /run/wactorz /run/wactorz/keys
+    for key_var in $(compgen -e | grep -E '^DEPLOY_[A-Z0-9_]+_KEY$' || true); do
+        key_file="${!key_var}"
+        if [ -f "$key_file" ]; then
+            if install -m 0600 -o wactorz -g wactorz "$key_file" "/run/wactorz/keys/${key_var}"; then
+                export "${key_var}=/run/wactorz/keys/${key_var}"
+            else
+                bashio::log.warning "Could not make the SSH key ${key_file} readable to Wactorz; that deploy target will fail to authenticate."
+            fi
+        fi
+    done
+    # The same for a CA of your own that the unprivileged user cannot read.
+    if [ -f "${MQTT_TLS_CA:-}" ] && ! s6-setuidgid wactorz test -r "$MQTT_TLS_CA"; then
+        if install -m 0644 -o wactorz -g wactorz "$MQTT_TLS_CA" /run/wactorz/mqtt-ca.crt; then
+            export MQTT_TLS_CA=/run/wactorz/mqtt-ca.crt
+        else
+            bashio::log.warning "Could not make the CA ${MQTT_TLS_CA} readable to Wactorz; the broker's certificate cannot be verified."
+        fi
+    fi
+
+    # The add-on's data becomes this user's, where it is not already: an install
+    # that ran as root left it root's. Three things stay as they are. The options
+    # and the generated API key hold secrets the app is handed through its
+    # environment and has no reason to read back; the broker's directory belongs
+    # to the broker's own user.
+    chown wactorz:wactorz /data 2> /dev/null || true
+    for entry in /data/* /data/.[!.]*; do
+        case "$entry" in
+            /data/options.json | /data/api_key | /data/mosquitto) continue ;;
+        esac
+        if [ -e "$entry" ]; then
+            find "$entry" \( ! -user wactorz -o ! -group wactorz \) -exec chown -h wactorz:wactorz {} + 2> /dev/null \
+                || bashio::log.warning "Could not hand ${entry} to the wactorz user."
+        fi
+    done
+fi
+
 if [ -d /data ]; then
     cd /data || exit 1
 fi
+if [ -n "$run_as" ]; then
+    bashio::log.info "Starting Wactorz as the unprivileged user '${run_as}'."
+    # No new privileges first, so nothing it starts can regain them through a
+    # set-id program; then the user.
+    exec setpriv --no-new-privs s6-setuidgid "$run_as" wactorz
+fi
+# Not root already, or an image without the user: a local run of this script
+# outside Home Assistant. Started as whoever this is.
+bashio::log.warning "Not dropping privileges: running as $(id -un 2> /dev/null || id -u)."
 exec wactorz

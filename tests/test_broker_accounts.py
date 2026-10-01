@@ -23,7 +23,7 @@ import pytest
 
 from wactorz import broker_certificates, config
 from wactorz.config import DeployTarget
-from wactorz.core import broker_accounts, node_signing
+from wactorz.core import broker_accounts, broker_tls, node_signing
 
 NODES = ("rpi-garage", "rpi-kitchen")
 
@@ -327,6 +327,26 @@ class TestAtStartup:
             assert "topic readwrite #" in _block(text, account)
         assert "topic readwrite plant/#" in _block(text, "rpi")
 
+    def test_a_node_whose_name_cannot_be_an_account_costs_only_its_own(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A space is allowed in a node's name and not in a broker account's.
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(directory),
+            deploy_targets=(DeployTarget(name="rpi kitchen"), DeployTarget(name="rpi-garage")),
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            assert broker_certificates.prepare_broker_files() == ""
+
+        accounts = (directory / broker_accounts.PASSWORD_FILE).read_text(encoding="utf-8")
+        assert [line.split(":")[0] for line in accounts.splitlines()] == ["rpi-garage"]
+        assert "'rpi kitchen' contains ' '" in caplog.text
+        assert "has no broker account" in caplog.text
+
     def test_a_setting_that_cannot_be_used_is_reported_and_writes_nothing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -377,3 +397,78 @@ class TestAtStartup:
             assert broker_certificates.prepare_broker_files() == ""
 
         assert any("Could not write" in record.getMessage() for record in caplog.records)
+
+
+class TestExportingForABrokerOfOurs:
+    """`python -m wactorz.broker_certificates --export`, as compose and the add-ons run it.
+
+    Whoever runs it reads a failure as there being no certificate, and serves
+    plain MQTT only. So a problem with the accounts beside the certificate must
+    not be reported as one.
+    """
+
+    @staticmethod
+    def _configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **changes: Any) -> None:
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setattr(node_signing, "_secret", None)
+        patched = replace(config.CONFIG, **changes)
+        monkeypatch.setattr(config, "CONFIG", patched)
+        monkeypatch.setattr(broker_certificates, "CONFIG", patched)
+
+    def test_a_node_that_cannot_have_an_account_does_not_cost_the_certificate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = tmp_path / "out"
+        self._configure(
+            monkeypatch,
+            tmp_path,
+            node_accounts=True,
+            deploy_targets=(DeployTarget(name="rpi kitchen"), DeployTarget(name="rpi-garage")),
+        )
+
+        status = broker_certificates.main(["--dir", str(tmp_path / "tls"), "--export", str(out)])
+
+        assert status == 0
+        assert (out / broker_tls.BROKER_CERT_FILE).exists()
+        accounts = (out / broker_accounts.PASSWORD_FILE).read_text(encoding="utf-8")
+        assert [line.split(":")[0] for line in accounts.splitlines()] == ["rpi-garage"]
+
+    def test_a_data_topic_that_cannot_be_used_does_not_cost_it_either(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        out = tmp_path / "out"
+        self._configure(
+            monkeypatch,
+            tmp_path,
+            node_accounts=True,
+            node_topics="nodes/#",
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            status = broker_certificates.main(
+                ["--dir", str(tmp_path / "tls"), "--export", str(out)]
+            )
+
+        assert status == 0
+        assert (out / broker_tls.BROKER_CERT_FILE).exists()
+        assert not (out / broker_accounts.ACL_FILE).exists()
+        assert "The node accounts were not written" in caplog.text
+
+    def test_the_logins_for_the_mosquitto_add_on_leave_that_node_out(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        logins = tmp_path / "share" / "mosquitto-logins.yaml"
+        self._configure(
+            monkeypatch,
+            tmp_path,
+            node_accounts=True,
+            deploy_targets=(DeployTarget(name="rpi kitchen"), DeployTarget(name="rpi-garage")),
+        )
+
+        status = broker_certificates.main(["--dir", str(tmp_path / "tls"), "--logins", str(logins)])
+
+        assert status == 0
+        written = logins.read_text(encoding="utf-8")
+        assert "username: rpi-garage" in written
+        assert "rpi kitchen" not in written

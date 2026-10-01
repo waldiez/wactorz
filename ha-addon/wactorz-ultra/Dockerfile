@@ -32,7 +32,23 @@ ENV LANG=en_US.UTF-8 \
 # that needs a newer version of one fails. It is first on PATH, so `wactorz`,
 # `python3` and `pip3` (the installer agent's `sys.executable -m pip` too) all
 # resolve here.
+# The user Wactorz runs as. run.sh starts as root, for what needs it, and hands
+# over to this one.
+RUN groupadd --system --gid 1000 wactorz \
+    && useradd --system --uid 1000 --gid wactorz --no-create-home \
+        --home-dir /data/state/home --shell /usr/sbin/nologin wactorz
+
+# The virtualenv is that user's, built by it from the start: agents install
+# packages into it at runtime, and a virtualenv has no per-user directory to
+# send those to instead. Built as the user rather than handed over afterwards,
+# which would store every file in it a second time.
 ENV VIRTUAL_ENV=/opt/venv
+RUN install -d -o wactorz -g wactorz "$VIRTUAL_ENV"
+# The wactorz user, by number: a name is only as good as the passwd file of
+# whoever reads this line.
+USER 1000:1000
+# The user's home is under /data, which does not exist while the image is built.
+ENV HOME=/tmp
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
@@ -53,6 +69,13 @@ RUN pip3 install --no-cache-dir \
     && test "$(command -v wactorz)" = "$VIRTUAL_ENV/bin/wactorz" \
     && python3 -c "import wactorz" \
     && echo "wactorz addon ${BUILD_VERSION} (ref ${WACTORZ_REF}) installed"
+
+# Back to root for the start script, which reads the options, starts the
+# embedded broker and then drops to the user above. Deliberate, and the reason
+# the image does not end as that user.
+# hadolint ignore=DL3002
+USER 0:0
+ENV HOME=/root
 
 COPY run.sh /run.sh
 RUN chmod +x /run.sh

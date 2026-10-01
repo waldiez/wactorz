@@ -171,7 +171,9 @@ def test_both_compose_files_start_the_broker_the_same_way() -> None:
 @pytest.mark.parametrize("addon", ADDONS)
 class TestTheAddons:
     def test_the_ssl_folder_is_mapped(self, addon: str) -> None:
-        assert "ssl:rw" in _addon_config(addon)["map"]
+        # Writable: the start script puts the broker's certificate there.
+        ssl = next(entry for entry in _addon_config(addon)["map"] if entry["type"] == "ssl")
+        assert ssl["read_only"] is False
 
     def test_the_tls_port_is_offered_but_not_published(self, addon: str) -> None:
         assert _addon_config(addon)["ports"]["8883/tcp"] is None

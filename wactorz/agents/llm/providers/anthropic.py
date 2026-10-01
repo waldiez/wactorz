@@ -240,7 +240,9 @@ class AnthropicProvider(LLMProvider):
     def __init__(self, model: str = "claude-sonnet-4-6", api_key: str | None = None):
         import anthropic
 
-        self.client = anthropic.AsyncAnthropic(api_key=api_key)
+        # No retries of the SDK's own: `LLMProvider` retries, with one policy
+        # for every provider, and the two would multiply.
+        self.client = anthropic.AsyncAnthropic(api_key=api_key, max_retries=0)
         self.model = model
 
     @classmethod

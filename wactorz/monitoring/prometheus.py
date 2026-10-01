@@ -94,6 +94,16 @@ class ActorMetricsCollector:
             "Tasks failed by each actor.",
             labels=["actor_name"],
         )
+        actor_messages_refused = CounterMetricFamily(
+            "wactorz_actor_messages_refused",
+            "Messages an actor's mailbox had no room for: notifications dropped, others refused.",
+            labels=["actor_name"],
+        )
+        actor_mailbox_depth = GaugeMetricFamily(
+            "wactorz_actor_mailbox_depth",
+            "Messages waiting in each actor's mailbox.",
+            labels=["actor_name"],
+        )
         actor_restarts = GaugeMetricFamily(
             "wactorz_actor_restart_count",
             "Supervisor restart count for each actor.",
@@ -151,6 +161,12 @@ class ActorMetricsCollector:
             actor_errors.add_metric([actor_name], errors)
             actor_tasks_completed.add_metric([actor_name], tasks_completed)
             actor_tasks_failed.add_metric([actor_name], tasks_failed)
+            actor_messages_refused.add_metric(
+                [actor_name], float(getattr(metrics, "messages_refused", 0))
+            )
+            mailbox = getattr(actor, "_mailbox", None)
+            if mailbox is not None:
+                actor_mailbox_depth.add_metric([actor_name], float(mailbox.qsize()))
             actor_restarts.add_metric([actor_name], restart_count)
             actor_uptime.add_metric([actor_name], uptime)
             actor_heartbeat_age.add_metric([actor_name], heartbeat_age)
@@ -175,6 +191,8 @@ class ActorMetricsCollector:
         yield actor_errors
         yield actor_tasks_completed
         yield actor_tasks_failed
+        yield actor_messages_refused
+        yield actor_mailbox_depth
         yield actor_restarts
         yield actor_uptime
         yield actor_heartbeat_age

@@ -17,6 +17,7 @@ class _FakeMetrics:
         self.tasks_completed = 5
         self.tasks_failed = 1
         self.restart_count = 3
+        self.messages_refused = 4
         self.start_time = time.time() - 42
         self.last_heartbeat = time.time() - 15
 
@@ -35,6 +36,7 @@ class _FakeActor:
         self.total_input_tokens = 11
         self.total_output_tokens = 13
         self.total_cost_usd = 0.42
+        self._mailbox = types.SimpleNamespace(qsize=lambda: 6)
 
 
 class _FakeRegistry:
@@ -57,6 +59,8 @@ class PrometheusMetricsTest(unittest.TestCase):
         self.assertIn('wactorz_actor_messages_processed_total{actor_name="main"} 7.0', payload)
         self.assertIn('wactorz_actor_tasks_failed_total{actor_name="main"} 1.0', payload)
         self.assertIn('wactorz_llm_cost_usd_total{actor_name="main"} 0.42', payload)
+        self.assertIn('wactorz_actor_messages_refused_total{actor_name="main"} 4.0', payload)
+        self.assertIn('wactorz_actor_mailbox_depth{actor_name="main"} 6.0', payload)
         self.assertIn("wactorz_http_requests_total", payload)
 
     def test_render_handles_missing_registry(self):

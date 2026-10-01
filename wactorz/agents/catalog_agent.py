@@ -41,6 +41,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: How long a spawn waits for the installer to finish a recipe's missing
+#: packages before it goes ahead without them.
+INSTALL_WAIT_S = 120.0
+
 BETA_WARNING = (
     "Experimental/Beta agent: behavior may change, fail, or be removed. "
     "Use it for trials, not unattended production workflows."
@@ -909,7 +913,7 @@ class CatalogAgent(Actor):
             install = recipe.get("install", [])
             if install:
                 # Fast-path: check which packages are already importable.
-                # Avoids a 120s installer wait when deps were installed in a
+                # Avoids the installer wait when deps were installed in a
                 # previous session — same logic as main._spawn_dynamic_agent.
                 needed = [pkg for pkg in install if not _dependency_is_satisfied(pkg)]
 
@@ -937,13 +941,26 @@ class CatalogAgent(Actor):
                                 "_task_id": task_id,
                             },
                         )
-                        await installer.receive(install_msg)
                         try:
-                            await asyncio.wait_for(future, timeout=120.0)
+                            if await installer.receive(install_msg) is False:
+                                # Its mailbox had no room, so no result is
+                                # coming to wait for.
+                                logger.warning(
+                                    "[%s] installer is not taking messages — skipping dep "
+                                    "install for '%s'",
+                                    self.name,
+                                    name,
+                                )
+                            else:
+                                await asyncio.wait_for(future, timeout=INSTALL_WAIT_S)
                         except asyncio.TimeoutError:
                             logger.warning(
                                 "[%s] Install timeout for '%s' — proceeding anyway", self.name, name
                             )
+                        finally:
+                            # Answered or not, nothing waits on it any more.
+                            if main:
+                                main._result_futures.pop(task_id, None)
                     else:
                         logger.warning(
                             "[%s] installer not found — skipping dep install for '%s'",

@@ -31,10 +31,12 @@ class OpenAIProvider(LLMProvider):
         # unknown keys means a type checker cannot tell which parameter each
         # value lands on, so it reports the conflict against every one of them
         # — eight errors for a line that was always correct.
+        # No retries of the SDK's own: `LLMProvider` retries, with one policy
+        # for every provider, and the two would multiply.
         self.client = (
-            openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+            openai.AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0)
             if base_url
-            else openai.AsyncOpenAI(api_key=api_key)
+            else openai.AsyncOpenAI(api_key=api_key, max_retries=0)
         )
         self.model = model
         self.base_url = base_url or None

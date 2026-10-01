@@ -12,6 +12,7 @@ import inspect
 import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -160,20 +161,23 @@ class ActorRegistry:
                 logger.info("[Registry] Unregistered %s", actor_id[:8])
 
     async def deliver(self, target_id: str, msg: Message) -> bool:
-        """Put a message in one actor's mailbox. False if no such actor."""
+        """Put a message in one actor's mailbox. False if no such actor, or no room in it."""
         actor = self._actors.get(target_id)
         if actor is None:
             logger.warning("[Registry] Unknown target: %s", target_id[:8])
             return False
-        await actor.receive(msg)
-        return True
+        return await actor.receive(msg)
 
     async def broadcast(self, sender_id: str, msg_type: MessageType, payload: Any = None) -> None:
-        """Send a message to every registered actor except the sender."""
+        """Send a message to every registered actor except the sender.
+
+        Each actor is given the wait a single delivery gets, all at once rather
+        than one after another: an actor whose mailbox is full then costs the
+        broadcast that wait once, however many of them there are.
+        """
         msg = Message(type=msg_type, sender_id=sender_id, payload=payload)
-        for actor_id, actor in list(self._actors.items()):
-            if actor_id != sender_id:
-                await actor.receive(msg)
+        others = [actor for actor_id, actor in list(self._actors.items()) if actor_id != sender_id]
+        await asyncio.gather(*(actor.receive(msg) for actor in others))
 
     def get(self, actor_id: str) -> Actor | None:
         """The actor with this id, or None."""
@@ -202,6 +206,10 @@ class ActorRegistry:
         would neither register its first child nor put it under supervision.
         """
         return True
+
+
+#: How many reports for main the supervisor keeps while main has no room for them.
+HELD_REPORTS = 100
 
 
 class Supervisor:
@@ -240,6 +248,11 @@ class Supervisor:
         self._order: list[str] = []  # insertion order for REST_FOR_ONE
         self._watch_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        #: Reports main's mailbox had no room for, oldest first, handed over
+        #: again at each check. Bounded: a main that never reads must not be a
+        #: way to grow this without limit, and the newest reports are the ones
+        #: worth keeping.
+        self._held_reports: deque[Message] = deque(maxlen=HELD_REPORTS)
 
     # ── Registration ──────────────────────────────────────────────────────────
 
@@ -474,6 +487,7 @@ class Supervisor:
         while True:
             try:
                 await asyncio.sleep(self._poll_interval)
+                self._hand_over_held_reports()
                 failures, recovered = await self._detect_failures()
                 for name in recovered:
                     await self._notify_main(
@@ -821,6 +835,25 @@ class Supervisor:
             pass
         spec.actor = None
 
+    def _hold_report(self, msg: Message) -> None:
+        """Keep a report for a later check, saying so when an older one is pushed out."""
+        if len(self._held_reports) == self._held_reports.maxlen:
+            logger.warning(
+                "[Supervisor] main has taken no report for a while; dropping the oldest of %d held",
+                len(self._held_reports),
+            )
+        self._held_reports.append(msg)
+
+    def _hand_over_held_reports(self) -> None:
+        """Give main the reports it had no room for, in the order they were made."""
+        if not self._held_reports or not self._registry:
+            return
+        main = self._registry.find_by_name("main")
+        if main is None:
+            return
+        while self._held_reports and main.offer(self._held_reports[0]):
+            self._held_reports.popleft()
+
     async def _notify_main(self, message: str, severity: str = "critical"):
         """Send a supervision event to MainActor via the actor message queue.
 
@@ -861,7 +894,11 @@ class Supervisor:
                     },
                     message_id=str(uuid.uuid4()),
                 )
-                await main.receive(msg)
+                # Offered, never waited on: this runs between a failure and its
+                # restart. A main too busy to take the report gets it at a
+                # later check, with the time it was made.
+                if self._held_reports or not main.offer(msg):
+                    self._hold_report(msg)
             else:
                 # No running actor to send from — fall back to direct append
                 if hasattr(main, "_pending_notifications"):

@@ -39,16 +39,26 @@ class _Actor:
 
 
 class _Installer(_Actor):
-    """Answers every install request straight away, through main's future."""
+    """Answers every install request straight away, through main's future.
 
-    def __init__(self, main: "_Main") -> None:
+    Or, when told to, behaves as an installer does otherwise: takes the request
+    and never answers, or has no room for it in its mailbox.
+    """
+
+    def __init__(self, main: "_Main", answers: bool = True, takes: bool = True) -> None:
         super().__init__("installer")
         self._main = main
+        self._answers = answers
+        self._takes = takes
         self.requests: list[Message] = []
 
-    async def receive(self, msg: Message) -> None:
+    async def receive(self, msg: Message) -> bool:
+        if not self._takes:
+            return False
         self.requests.append(msg)
-        self._main._result_futures[msg.payload["_task_id"]].set_result({"ok": True})
+        if self._answers:
+            self._main._result_futures[msg.payload["_task_id"]].set_result({"ok": True})
+        return True
 
 
 class _Registry:
@@ -447,6 +457,49 @@ class TestDynamicSpawn:
         (request,) = installer.requests
         assert request.payload["packages"] == ["numpy"]
         assert request.reply_to == main.actor_id
+        assert main._result_futures == {}
+        assert result["ok"] is True
+        assert len(spawner.calls) == 1
+
+    async def test_an_installer_with_no_room_is_not_waited_for(
+        self,
+        catalog: CatalogAgent,
+        main: _Main,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Its mailbox refused the request, so no result can come: waiting the
+        # install timeout out would only delay a spawn that goes ahead anyway.
+        installer = _Installer(main, takes=False)
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda req: req != "numpy")
+        monkeypatch.setattr(catalog_agent, "INSTALL_WAIT_S", 600.0)
+        spawner = _spawner(catalog, monkeypatch)
+
+        result = await asyncio.wait_for(catalog._action_spawn("anomaly-detector", {}), timeout=5)
+
+        assert "installer is not taking messages" in caplog.text
+        assert main._result_futures == {}
+        assert result["ok"] is True
+        assert len(spawner.calls) == 1
+
+    async def test_an_installer_that_never_answers_leaves_nothing_waiting(
+        self,
+        catalog: CatalogAgent,
+        main: _Main,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        installer = _Installer(main, answers=False)
+        catalog._registry = _Registry(installer)  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "_dependency_is_satisfied", lambda req: req != "numpy")
+        monkeypatch.setattr(catalog_agent, "INSTALL_WAIT_S", 0.05)
+        spawner = _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("anomaly-detector", {})
+
+        assert "Install timeout" in caplog.text
+        assert main._result_futures == {}, "the request it gave up on is not kept"
         assert result["ok"] is True
         assert len(spawner.calls) == 1
 

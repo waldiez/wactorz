@@ -55,9 +55,12 @@ class NIMProvider(LLMProvider):
 
         self.model = model
         self.base_url = base_url
+        # No retries of the SDK's own: `LLMProvider` retries, with one policy
+        # for every provider, and the two would multiply.
         self.client = openai.AsyncOpenAI(
             api_key=api_key or "dummy",  # NIM free tier may not require a key locally
             base_url=base_url,
+            max_retries=0,
         )
 
     @classmethod

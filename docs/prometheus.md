@@ -43,6 +43,8 @@ And, for what the dashboard does not show:
 | `wactorz_mqtt_publish_failures_total` | Publishes that failed on a live connection and were held to retry |
 | `wactorz_mqtt_outbox_dropped_total` | Messages discarded because the outbox was full |
 | `wactorz_mqtt_outbox_discarded_total` | Messages given up on: unsendable, expired undelivered, or failing every try |
+| `wactorz_actor_mailbox_depth{actor_name}` | Messages waiting in an actor's mailbox |
+| `wactorz_actor_messages_refused_total{actor_name}` | Messages a full mailbox had no room for: notifications dropped, anything else refused after a wait |
 | `wactorz_nodes{state}` | Edge nodes that are `up` and `down` |
 | `wactorz_node_up{node}` | `1` while a node's heartbeat is recent |
 | `wactorz_node_heartbeat_age_seconds{node}` | Seconds since a node's last heartbeat |

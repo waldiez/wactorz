@@ -246,8 +246,13 @@ class MessagingMixin(_Host):
             payload = dict(payload)
             payload["_task_id"] = task_id
             payload["_reply_to"] = self._actor.actor_id
-            await self._actor.send(target.actor_id, MessageType.TASK, payload)
             try:
+                taken = await self._actor.send(target.actor_id, MessageType.TASK, payload)
+                if taken is False:
+                    # Its mailbox had no room, so no answer is coming. Only an
+                    # explicit False: a `send` put in its place to observe the
+                    # traffic may return nothing.
+                    return {"error": f"'{agent_name}' is not taking messages: its mailbox is full"}
                 return await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:
                 logger.warning(

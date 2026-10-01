@@ -127,6 +127,27 @@ class MessageType(str, Enum):
     STATUS_RESPONSE = "status_response"
 
 
+#: How long a sender waits for room in a full mailbox before its message is
+#: refused. Long enough to outlast a burst the recipient is working through,
+#: and bounded so that one actor which has stopped reading cannot hold every
+#: actor that writes to it.
+MAILBOX_WAIT_S = 30.0
+
+#: How often a waiting sender looks again for room.
+_MAILBOX_POLL_S = 0.05
+
+#: Message types that only report: losing one loses nothing a later one will
+#: not say again.
+_REPORT_TYPES = frozenset(
+    {
+        MessageType.HEARTBEAT,
+        MessageType.TICK,
+        MessageType.STATUS_REQUEST,
+        MessageType.STATUS_RESPONSE,
+    }
+)
+
+
 @dataclass
 class Message:
     """One unit of communication between actors."""
@@ -137,6 +158,22 @@ class Message:
     reply_to: str | None = None
     message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: float = field(default_factory=time.time)
+
+    @property
+    def is_notification(self) -> bool:
+        """Whether this only reports something, and asks nothing of its recipient.
+
+        A heartbeat, a status exchange, or an alert for main's notification
+        list. A full mailbox drops these at once: the sender is a supervisor or
+        a monitor, which must not be held up by the actor it is reporting to.
+        """
+        if self.type in _REPORT_TYPES:
+            return True
+        return (
+            self.type == MessageType.TASK
+            and isinstance(self.payload, dict)
+            and bool(self.payload.get("_monitor_notification"))
+        )
 
     def to_dict(self) -> dict:
         """A JSON-serialisable form, for MQTT and the dashboard."""
@@ -167,6 +204,8 @@ class ActorMetrics:
     tasks_failed: int = 0
     restart_count: int = 0  # incremented by Supervisor on each restart
     heartbeats: int = 0
+    #: Messages this actor's mailbox had no room for and did not take.
+    messages_refused: int = 0
 
     @property
     def uptime(self) -> float:
@@ -821,9 +860,52 @@ class Actor(ABC):
         if self._registry:
             await self._registry.broadcast(self.actor_id, msg_type, payload)
 
-    async def receive(self, msg: Message):
-        """External entry point - put message in mailbox."""
-        await self._mailbox.put(msg)
+    async def receive(self, msg: Message) -> bool:
+        """Put a message in this actor's mailbox. False if there was no room for it.
+
+        A mailbox with room takes the message at once. A full one means this
+        actor is not keeping up, and the sender is usually another actor in the
+        middle of handling a message of its own, so how long it may be held is
+        bounded: a notification is dropped on the spot, and anything else waits
+        ``MAILBOX_WAIT_S`` for room and is then refused. Either way the sender
+        is told, and can report that rather than hang.
+        """
+        if self.offer(msg):
+            return True
+        if msg.is_notification:
+            self._note_refused(msg, "dropped a notification")
+            return False
+        deadline = time.monotonic() + MAILBOX_WAIT_S
+        while time.monotonic() < deadline:
+            await asyncio.sleep(_MAILBOX_POLL_S)
+            if self.offer(msg):
+                return True
+        self._note_refused(msg, f"refused a message after waiting {MAILBOX_WAIT_S:g}s")
+        return False
+
+    def offer(self, msg: Message) -> bool:
+        """Put a message in the mailbox if it has room, without waiting. True if it did."""
+        try:
+            self._mailbox.put_nowait(msg)
+        except asyncio.QueueFull:
+            return False
+        return True
+
+    def _note_refused(self, msg: Message, what: str) -> None:
+        """Count a message the mailbox had no room for, and say so at a rate a log can carry."""
+        self.metrics.messages_refused += 1
+        refused = self.metrics.messages_refused
+        if refused == 1 or refused % 100 == 0:
+            logger.warning(
+                "[%s] Mailbox full at %d: %s (%s from %s; %d refused so far). The actor is "
+                "not keeping up with what it is sent, or is stuck on one message.",
+                self.name,
+                self._mailbox.maxsize,
+                what,
+                msg.type.value,
+                msg.sender_id[:8],
+                refused,
+            )
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 

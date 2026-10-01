@@ -22,6 +22,7 @@ import pytest
 from wactorz.agents.dynamic import messaging
 from wactorz.agents.dynamic.agent import DynamicAgent
 from wactorz.agents.dynamic.api import AgentAPI
+from wactorz.core import actor as actor_module
 from wactorz.core import topic_bus
 from wactorz.core.actor import Actor, Message, MessageType
 from wactorz.core.registry import ActorRegistry
@@ -310,6 +311,22 @@ class TestSendToLocal:
 
         assert payload == {"x": 1}
         assert result == {"error": "Timeout waiting for 'echo'"}
+        assert api._actor._result_futures == {}
+
+    async def test_an_agent_with_no_room_for_the_task_is_an_error_at_once(
+        self, api: AgentAPI, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No answer can come for a task that was never taken, so the caller is
+        # told now rather than left to wait its whole timeout out.
+        monkeypatch.setattr(actor_module, "MAILBOX_WAIT_S", 0.05)
+        target = _Worker(name="echo", persistence_dir=str(tmp_path), mailbox_size=1)
+        assert await target.receive(Message(type=MessageType.TASK, sender_id="s"))
+        assert api._actor._registry is not None
+        await api._actor._registry.register(target)
+
+        result = await asyncio.wait_for(api.send_to("echo", {"x": 1}, timeout=600), timeout=5)
+
+        assert result == {"error": "'echo' is not taking messages: its mailbox is full"}
         assert api._actor._result_futures == {}
 
     async def test_delegate_is_send_to(

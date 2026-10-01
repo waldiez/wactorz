@@ -90,9 +90,12 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/wactorz
 EnvironmentFile=/home/pi/wactorz/.env
-ExecStart=/home/pi/wactorz/venv/bin/wactorz --mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}
+ExecStart=/home/pi/wactorz/venv/bin/wactorz-node --mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}
 Restart=on-failure
 RestartSec=5
+WatchdogSec=300
+NotifyAccess=main
+WatchdogSignal=SIGKILL
 RestartPreventExitStatus=2
 
 [Install]
@@ -102,11 +105,19 @@ WantedBy=multi-user.target
 A user unit is the same minus `User=`, with `WantedBy=default.target`, and lives
 at `~/.config/systemd/user/wactorz-node.service`.
 
-Three details worth knowing if you write one by hand:
+Four details worth knowing if you write one by hand:
 
 - **`Restart=on-failure`, not `always`.** `/nodes shutdown` exits cleanly on
   purpose. Under `Restart=always` that command restarts the node instead of
   stopping it.
+- **`WatchdogSec=300`.** The node tells systemd, from its event loop, that
+  the loop is running, and systemd restarts it when it has not heard for five
+  minutes. Without it a node frozen in blocking code is a process that exists
+  and does nothing, which `Restart=` never sees. `WatchdogSignal=SIGKILL`
+  because systemd's default aborts the process and writes a core dump each
+  time. Before it gets that far the node's own log says where the loop is
+  stuck, in a line starting `[loop]`. A node not started by systemd sends
+  nothing.
 - **`RestartPreventExitStatus=2`.** Exit 2 means a node name that can never
   work — it contains an MQTT wildcard — or a malformed `ExecStart`. Neither
   succeeds on retry, so restarting is just noise.

@@ -26,6 +26,7 @@ from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
 from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_setup import setup_logging
+from wactorz.monitoring.loop_lag import LoopLagMonitor
 from wactorz.web import runtime
 from wactorz.web.auth import exposure_refusal
 
@@ -38,6 +39,10 @@ logger = logging.getLogger(__name__)
 #: task to stop once it is stopping. A threading.Event rather than an asyncio one:
 #: the Windows fallback runs the handler between bytecodes, outside the loop.
 _shutting_down = threading.Event()
+
+#: Watches the event loop from a thread, and says in the log where it is when it
+#: stops running.
+_loop_lag = LoopLagMonitor()
 
 
 async def _start_web_ui(
@@ -497,6 +502,7 @@ async def _shut_down(system: "ActorSystem | None") -> None:
     # outlive them. Closing checkpoints the WAL rather than leaving -wal/-shm
     # behind for the next start to recover.
     close_persistence()
+    _loop_lag.stop()
     # Last, rather than left to asyncio.run: see _stop_leftover_tasks.
     await _stop_leftover_tasks()
 
@@ -507,6 +513,8 @@ async def app(args: argparse.Namespace):
     # unfiltered console or log file.
     setup_logging()
     install_log_buffer()
+    # From the start, so a startup step that blocks the loop is named too.
+    _loop_lag.start()
 
     # Before anything binds, and at the *process* root rather than in one
     # server's startup. Three servers read `CONFIG.bind_host` — the monitor, the

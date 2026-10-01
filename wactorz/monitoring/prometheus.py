@@ -16,7 +16,7 @@ from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.platform_collector import PlatformCollector
 from prometheus_client.process_collector import ProcessCollector
 
-from . import llm_metrics
+from . import llm_metrics, loop_lag
 
 RegistryProvider = Callable[[], Any | None]
 
@@ -104,6 +104,11 @@ class ActorMetricsCollector:
             "Messages waiting in each actor's mailbox.",
             labels=["actor_name"],
         )
+        actor_handling = GaugeMetricFamily(
+            "wactorz_actor_handling_seconds",
+            "How long each actor has been on the message it is handling; 0 when idle.",
+            labels=["actor_name"],
+        )
         actor_restarts = GaugeMetricFamily(
             "wactorz_actor_restart_count",
             "Supervisor restart count for each actor.",
@@ -164,6 +169,7 @@ class ActorMetricsCollector:
             actor_messages_refused.add_metric(
                 [actor_name], float(getattr(metrics, "messages_refused", 0))
             )
+            actor_handling.add_metric([actor_name], float(getattr(actor, "handling_seconds", 0.0)))
             mailbox = getattr(actor, "_mailbox", None)
             if mailbox is not None:
                 actor_mailbox_depth.add_metric([actor_name], float(mailbox.qsize()))
@@ -193,6 +199,7 @@ class ActorMetricsCollector:
         yield actor_tasks_failed
         yield actor_messages_refused
         yield actor_mailbox_depth
+        yield actor_handling
         yield actor_restarts
         yield actor_uptime
         yield actor_heartbeat_age
@@ -360,7 +367,7 @@ class PrometheusMonitor:
         self._registry.register(self._actor_collector)
         self._registry.register(BrokerMetricsCollector(publisher_provider))
         self._registry.register(NodeMetricsCollector(nodes_provider, expected_nodes_provider))
-        for collector in llm_metrics.COLLECTORS:
+        for collector in (*llm_metrics.COLLECTORS, *loop_lag.COLLECTORS):
             self._registry.register(collector)
         ProcessCollector(registry=self._registry)
         PlatformCollector(registry=self._registry)

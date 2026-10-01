@@ -238,6 +238,9 @@ class Actor(ABC):
 
         # Async mailbox (inbox)
         self._mailbox: asyncio.Queue = asyncio.Queue(maxsize=mailbox_size)
+        #: When the message being handled was taken up, on the monotonic clock;
+        #: None between messages.
+        self._handling_since: float | None = None
         self._outbox: dict[str, asyncio.Queue] = {}  # actor_id -> queue ref
 
         # Registry reference (set by ActorSystem)
@@ -542,7 +545,11 @@ class Actor(ABC):
                 }
                 if msg.type not in _noise:
                     self.metrics.messages_processed += 1
-                await self._dispatch(msg)
+                self._handling_since = time.monotonic()
+                try:
+                    await self._dispatch(msg)
+                finally:
+                    self._handling_since = None
                 self._mailbox.task_done()
 
             except asyncio.TimeoutError:
@@ -859,6 +866,17 @@ class Actor(ABC):
         """Broadcast to all registered actors."""
         if self._registry:
             await self._registry.broadcast(self.actor_id, msg_type, payload)
+
+    @property
+    def handling_seconds(self) -> float:
+        """How long this actor has been on the message it is handling; 0 when idle.
+
+        The heartbeat is a task of its own and carries on whatever the message
+        loop is doing, so an actor waiting for ever on one message still looks
+        alive. This is what tells the two apart.
+        """
+        since = self._handling_since
+        return 0.0 if since is None else time.monotonic() - since
 
     async def receive(self, msg: Message) -> bool:
         """Put a message in this actor's mailbox. False if there was no room for it.

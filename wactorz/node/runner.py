@@ -35,6 +35,8 @@ from ..core.mqtt_tls import tls_enabled
 from ..core.node_signing import CONTROL_LEAVES
 from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
+from ..core.sd_notify import watchdog_loop
+from ..monitoring.loop_lag import LoopLagMonitor
 from .agent import NodeAgent
 from .publishing import NodePublisher
 from .signing import (
@@ -94,6 +96,7 @@ class NodeRunner:
         self._commands: set[asyncio.Task] = set()
         #: The long-running loops `run` owns, so a shutdown can end them.
         self._loops: list[asyncio.Task] = []
+        self._loop_lag = LoopLagMonitor()
         self.registry = ActorRegistry()
         self.supervisor = Supervisor(self.registry, self._inject)
         # The back-reference `ActorSystem` gives the registry on main. Without
@@ -788,9 +791,14 @@ class NodeRunner:
             "[runner] Starting node '%s' → broker %s:%s", self.node_name, self.broker, self.port
         )
         publisher_ready = asyncio.Event()
+        # Says in this node's log where the event loop is when an agent's code
+        # holds it, which nothing running on the loop could.
+        self._loop_lag.start()
         tasks = self._loops = [
             asyncio.create_task(self.publisher.run(publisher_ready)),
             asyncio.create_task(self._node_heartbeat_loop()),
+            # Returns at once unless this node's service has a watchdog set.
+            asyncio.create_task(watchdog_loop()),
         ]
         # The queue has to exist before anything publishes into it, and it is
         # created inside the publisher's own task so it belongs to this loop.
@@ -815,6 +823,7 @@ class NodeRunner:
             # register a fresh agent into a node that is shutting down -- and
             # the loop is not left pending at exit.
             await self.supervisor.stop()
+            self._loop_lag.stop()
             self._configs.clear()
             self.publisher.stop()
             for t in tasks:

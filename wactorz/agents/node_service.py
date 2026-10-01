@@ -22,6 +22,9 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 UNIT_NAME = "wactorz-node.service"
+
+#: How long systemd waits to hear from a node before it restarts it, in seconds.
+WATCHDOG_S = 300
 SYSTEM_UNIT_PATH = f"/etc/systemd/system/{UNIT_NAME}"
 
 #: `systemctl --user` talks to the user manager over a bus named by
@@ -86,6 +89,17 @@ def unit_file(home: str, user: str, *, system: bool) -> str:
         # `always` would turn that command into a restart.
         "Restart=on-failure",
         "RestartSec=5",
+        # The node tells systemd its event loop is running, and is restarted
+        # when it stops saying so: a node frozen in blocking code is otherwise
+        # a process that exists and does nothing, which no restart policy sees.
+        # Minutes rather than seconds, since a slow board under load must not
+        # be mistaken for a frozen one.
+        f"WatchdogSec={WATCHDOG_S}",
+        "NotifyAccess=main",
+        # Killed outright. systemd's default is to abort the process, which
+        # writes a core dump of it each time, onto storage a node has little
+        # of; and a frozen event loop would not act on a politer signal.
+        "WatchdogSignal=SIGKILL",
         # Exit 2 is a node name containing an MQTT wildcard, which can never
         # succeed on retry. It is also argparse's error code, so a malformed
         # ExecStart fails once instead of hammering.

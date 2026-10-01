@@ -37,6 +37,7 @@ class _FakeActor:
         self.total_output_tokens = 13
         self.total_cost_usd = 0.42
         self._mailbox = types.SimpleNamespace(qsize=lambda: 6)
+        self.handling_seconds = 12.5
 
 
 class _FakeRegistry:
@@ -61,6 +62,7 @@ class PrometheusMetricsTest(unittest.TestCase):
         self.assertIn('wactorz_llm_cost_usd_total{actor_name="main"} 0.42', payload)
         self.assertIn('wactorz_actor_messages_refused_total{actor_name="main"} 4.0', payload)
         self.assertIn('wactorz_actor_mailbox_depth{actor_name="main"} 6.0', payload)
+        self.assertIn('wactorz_actor_handling_seconds{actor_name="main"} 12.5', payload)
         self.assertIn("wactorz_http_requests_total", payload)
 
     def test_render_handles_missing_registry(self):

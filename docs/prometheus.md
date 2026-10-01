@@ -45,6 +45,8 @@ And, for what the dashboard does not show:
 | `wactorz_mqtt_outbox_discarded_total` | Messages given up on: unsendable, expired undelivered, or failing every try |
 | `wactorz_actor_mailbox_depth{actor_name}` | Messages waiting in an actor's mailbox |
 | `wactorz_actor_messages_refused_total{actor_name}` | Messages a full mailbox had no room for: notifications dropped, anything else refused after a wait |
+| `wactorz_actor_handling_seconds{actor_name}` | How long an actor has been on the message it is handling; `0` when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck |
+| `wactorz_event_loop_lag_seconds` | Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting |
 | `wactorz_nodes{state}` | Edge nodes that are `up` and `down` |
 | `wactorz_node_up{node}` | `1` while a node's heartbeat is recent |
 | `wactorz_node_heartbeat_age_seconds{node}` | Seconds since a node's last heartbeat |
@@ -224,6 +226,8 @@ Basic Prometheus alert rules are included for:
 
 - Python app down
 - actor heartbeat stale
+- an actor on one message for over 30 minutes
+- the event loop blocked for more than 5 seconds
 - the broker connection lost for 2 minutes
 - more than 100 outgoing messages waiting for 10 minutes
 - outgoing messages dropped or given up on

@@ -19,6 +19,23 @@ groups:
           summary: Wactorz actor heartbeat is stale
           description: Actor {{ $labels.actor_name }} has not emitted a heartbeat for more than 60 seconds.
 
+      - alert: WactorzActorStuck
+        expr: wactorz_actor_handling_seconds > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Wactorz actor has been on one message for a long time
+          description: Actor {{ $labels.actor_name }} has been handling the same message for over 30 minutes. Its heartbeat carries on regardless, so it looks alive, but nothing else in its mailbox is being read.
+
+      - alert: WactorzEventLoopBlocked
+        expr: (increase(wactorz_event_loop_lag_seconds_count[10m]) - increase(wactorz_event_loop_lag_seconds_bucket{le="5.0"}[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: The Wactorz event loop was blocked
+          description: The event loop took more than 5 seconds to run a callback at least once in the last 10 minutes. Every agent in the process waits while that lasts. The server log names the code that held it, under "[loop]".
+
       - alert: WactorzBrokerDisconnected
         expr: wactorz_mqtt_connected == 0
         for: 2m

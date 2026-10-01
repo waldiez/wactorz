@@ -373,6 +373,8 @@ class TestTheAlertRules:
             "wactorz_mqtt_outbox_dropped_total",
             "wactorz_node_up",
             "wactorz_llm_requests_total",
+            "wactorz_actor_handling_seconds",
+            "wactorz_event_loop_lag_seconds",
         ],
     )
     def test_what_this_file_adds_to_metrics_has_a_rule(self, metric: str) -> None:

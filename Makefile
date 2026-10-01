@@ -1,5 +1,5 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
-		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions format clean \
+		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker format clean \
         up down logs shell mqtt-certs \
         run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
@@ -163,7 +163,7 @@ tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' .github/tools/Docker
 
 # The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
 # shebang, which shellcheck cannot place, so they are named as bash.
-SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh scripts/image-smoke.sh
+SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh scripts/image-smoke.sh scripts/test-broker.sh
 ADDON_SCRIPTS := ha-addon/wactorz/run.sh ha-addon/wactorz-ultra/run.sh
 
 # The docker calls below name paths inside containers (`-w /src`, the docker
@@ -329,6 +329,12 @@ test-py-versions: ## Run the Python tests on each supported version (PYTHONS=...
 		uv run --isolated --locked --python $$v --extra all --extra dev \
 			python -m pytest tests -q -n auto -p no:cacheprovider || { echo "Failed on Python $$v."; exit 1; }; \
 	done
+
+# A real main and a real node, in one process, joined only by a real mosquitto
+# started for the run: the contract between them, exercised rather than pinned.
+# The ordinary suite refuses every broker connection, so these are skipped there.
+test-broker: ## Run the main-and-node tests over a real mosquitto, started for the run (needs Docker)
+	scripts/test-broker.sh "$(call tool-image,mosquitto)" "$(PYTHON)" -q
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test

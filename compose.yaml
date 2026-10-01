@@ -35,6 +35,10 @@ services:
     security_opt: [no-new-privileges:true]
     container_name: wactorz-mosquitto
     restart: unless-stopped
+    # Ceilings on memory and process ids, far above what the service uses, so
+    # one that misbehaves is restarted instead of taking the host with it.
+    mem_limit: 512m
+    pids_limit: 256
     hostname: mosquitto
     depends_on:
       # Issues the broker's TLS certificate first. Not started under the default
@@ -196,6 +200,8 @@ services:
     image: wactorz-python:latest
     container_name: wactorz-api-key
     restart: "no"
+    mem_limit: 256m
+    pids_limit: 128
     environment:
       API_KEY: "${API_KEY:-}"
     entrypoint: ["/bin/sh", "-c"]
@@ -236,6 +242,8 @@ services:
     # certificate would be reissued -- and the broker restarted -- each time.
     hostname: mosquitto
     restart: "no"
+    mem_limit: 512m
+    pids_limit: 256
     env_file:
       - .env
     environment:
@@ -280,6 +288,14 @@ services:
     image: wactorz-python:latest
     container_name: wactorz-python
     restart: unless-stopped
+    # Ceilings, so a leak or a runaway agent ends with this container restarted
+    # rather than the host out of memory or process ids. Generous on purpose: an
+    # agent that loads a model, or pip unpacking a large package into /tmp
+    # (a tmpfs, so it counts as this container's memory), must fit. Threads
+    # count as process ids. WACTORZ_CPUS is a number of cores; 0 is no limit.
+    mem_limit: "${WACTORZ_MEM_LIMIT:-8g}"
+    pids_limit: ${WACTORZ_PIDS_LIMIT:-4096}
+    cpus: "${WACTORZ_CPUS:-0}"
     env_file:
       - .env
     environment:
@@ -357,6 +373,8 @@ services:
     security_opt: [no-new-privileges:true]
     container_name: wactorz-prometheus
     restart: unless-stopped
+    mem_limit: 1g
+    pids_limit: 512
     entrypoint:
       - /bin/sh
       - -ec
@@ -408,6 +426,8 @@ services:
     security_opt: [no-new-privileges:true]
     container_name: wactorz-blackbox
     restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 256
     command:
       - --config.file=/etc/blackbox_exporter/config.yml
     volumes:
@@ -433,8 +453,11 @@ services:
       TZ: "${TZ:-UTC}"
     volumes:
       - ./infra/homeassistant:/config
+    # Published to this host only: Wactorz reaches Home Assistant over the
+    # compose network. HA_EXTERNAL_BIND=0.0.0.0 in .env opens it to the network,
+    # for a phone or another machine.
     ports:
-      - "8123:8123"
+      - "${HA_EXTERNAL_BIND:-127.0.0.1}:${HA_EXTERNAL_PORT:-8123}:8123"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8123"]
       interval: 30s

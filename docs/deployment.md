@@ -52,10 +52,23 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
 | _(all)_ | mosquitto | `mosquitto:1883` | `127.0.0.1:1883`, and `:8883` (TLS) |
-| `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
-| `python` | monitor UI | `wactorz-python:8888` | `:8888` |
-| `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
-| `full` | home-assistant | `homeassistant:8123` | `:8123` |
+| `python` | wactorz-python | `wactorz-python:8000` | `127.0.0.1:8000` (REST API) |
+| `python` | monitor UI | `wactorz-python:8888` | `127.0.0.1:8888` |
+| `python` | prometheus | `wactorz-prometheus:9090` | `127.0.0.1:9090` |
+| `full` | home-assistant | `homeassistant:8123` | `127.0.0.1:8123` |
+
+Every port except the broker's TLS one is published to this host only. Reach the
+dashboard and the API from elsewhere through a TLS proxy; `HA_EXTERNAL_BIND=0.0.0.0`
+opens Home Assistant to the network, and `MQTT_EXTERNAL_BIND=0.0.0.0` the plain
+broker port.
+
+Each container has a ceiling on memory and on process ids, so one that leaks is
+restarted instead of exhausting the host. The app's are settings, because what
+an agent loads varies: `WACTORZ_MEM_LIMIT` (default `8g`), `WACTORZ_PIDS_LIMIT`
+(`4096`, threads included) and `WACTORZ_CPUS` (cores; `0`, the default, is no
+limit). An app container that restarts under a heavy agent, with `OOMKilled` in
+`docker inspect`, needs `WACTORZ_MEM_LIMIT` raised. Home Assistant's container
+has none.
 
 ```bash
 # Python stack (most common)
@@ -126,6 +139,10 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `WACTORZ_RETENTION_TIMESERIES_DAYS` | `365` | Days sensor readings, detections, Home Assistant state changes and actuations are kept; `0` keeps them for ever. The time-series collector agent's own `retention_days` applies too, and the shorter window holds |
 | `WACTORZ_RETENTION_OUTBOX_DAYS` | `7` | Days an MQTT message the broker never accepted stays in the outbox; `0` keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under `nodes/` or `agents/by-name/`, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained `desired_state` follows this setting |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
+| `HA_EXTERNAL_BIND` / `HA_EXTERNAL_PORT` | `127.0.0.1` / `8123` | Where compose publishes Home Assistant (profile `full`). `0.0.0.0` opens it to the network |
+| `WACTORZ_MEM_LIMIT` | `8g` | Compose only: the app container's memory ceiling |
+| `WACTORZ_PIDS_LIMIT` | `4096` | Compose only: the app container's ceiling on processes and threads |
+| `WACTORZ_CPUS` | `0` | Compose only: cores the app container may use; `0` is no limit |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
 | `DEPLOY_TARGETS` | _(unset)_ | Comma-separated remote node names `/deploy` may bootstrap; each needs a `DEPLOY_<NODE>_*` block — see [Remote nodes](remote-nodes.md) |

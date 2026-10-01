@@ -554,6 +554,49 @@ class TestNodeDeploy:
             "error": "sftp closed",
         }
 
+    async def test_a_node_without_the_venv_package_is_told_which_package(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Debian and what derives from it ship `venv` apart from Python. The
+        # step's failure was only logged, and the deploy went on to fail at the
+        # install with an error about pip.
+        self._target(monkeypatch, installer)
+        conn.answers = {
+            "cd ~ && pwd": (True, "/home/pi"),
+            "test -x /home/pi/wactorz/venv/bin/pip": (False, ""),
+            "python3 -m venv": (
+                False,
+                "The virtual environment was not created successfully because ensurepip is "
+                "not available. On Debian/Ubuntu systems, you need to install the "
+                "python3-venv package using the following command.\n\n"
+                "    apt install python3.13-venv\n",
+            ),
+        }
+        installed: list[str] = []
+
+        async def _tls(*_args: Any) -> NodeTls:
+            return NodeTls(enabled=False, port=1883, note="")
+
+        async def _env(*_args: Any) -> bool:
+            return False
+
+        async def _install(*_args: Any, **_kw: Any) -> bool:
+            installed.append("wactorz")
+            return True
+
+        monkeypatch.setattr(installer, "_decide_node_tls", _tls)
+        monkeypatch.setattr(installer, "_put_node_env", _env)
+        monkeypatch.setattr(installer, "_install_wactorz", _install)
+
+        result = await installer._node_deploy({"host": "10.0.0.5", "node_name": "rpi"})
+
+        assert result["success"] is False
+        assert "sudo apt install python3-venv" in result["error"]
+        assert "/deploy rpi" in result["error"]
+        # What the node itself said is kept: it names the exact package.
+        assert "python3.13-venv" in result["error"]
+        assert installed == [], "the install is not attempted into a venv that is not there"
+
     async def test_a_node_that_cannot_install_wactorz_is_reported_as_failed(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -910,3 +953,54 @@ class TestRememberedNodes:
         installer._scrub_persisted_credentials()
 
         assert installer.recall("_node_credentials") == {"rpi": {"host": "10.0.0.5", "user": "pi"}}
+
+
+class TestTheNodesVirtualenv:
+    """`/deploy` installs Wactorz into a virtualenv on the node, and needs one that works."""
+
+    async def test_one_with_pip_in_it_is_left_alone(self, installer: InstallerAgent) -> None:
+        conn = _Conn()
+
+        assert await installer._ensure_venv(conn, "rpi", "/home/pi") is None
+        assert conn.commands == ["test -x /home/pi/wactorz/venv/bin/pip"]
+
+    async def test_a_directory_with_no_pip_in_it_is_made_again(
+        self, installer: InstallerAgent
+    ) -> None:
+        # What a failed attempt leaves: the directory, and nothing that installs.
+        # Judged by the directory alone it counted as a virtualenv for ever.
+        conn = _Conn()
+        checks = iter([(False, ""), (True, "")])
+
+        async def _run(command: str, check: bool = False) -> Any:
+            conn.commands.append(command)
+            ok = next(checks)[0] if command.startswith("test -x") else True
+            return SimpleNamespace(exit_status=0 if ok else 1, stdout="", stderr="")
+
+        conn.run = _run  # type: ignore[method-assign]
+
+        assert await installer._ensure_venv(conn, "rpi", "/home/pi") is None
+        assert conn.commands[1] == "python3 -m venv --clear /home/pi/wactorz/venv 2>&1"
+
+    async def test_any_other_failure_is_reported_with_what_python_said(
+        self, installer: InstallerAgent
+    ) -> None:
+        conn = _Conn(
+            {
+                "test -x": (False, ""),
+                "python3 -m venv": (False, "sh: 1: python3: not found"),
+            }
+        )
+
+        why = await installer._ensure_venv(conn, "rpi", "/home/pi")
+
+        assert why is not None
+        assert "python3: not found" in why
+        assert "apt install" not in why
+
+    async def test_the_path_is_the_home_the_node_reported(self, installer: InstallerAgent) -> None:
+        conn = _Conn({"test -x": (False, "")})
+
+        await installer._ensure_venv(conn, "rpi", "/home/a user")
+
+        assert conn.commands[1] == "python3 -m venv --clear '/home/a user/wactorz/venv' 2>&1"

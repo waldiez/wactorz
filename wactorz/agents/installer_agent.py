@@ -882,6 +882,41 @@ class InstallerAgent(Actor):
         output = (result.stdout or "") + (result.stderr or "")
         return result.exit_status == 0, output.strip()
 
+    async def _ensure_venv(self, conn: Any, node_name: str, home: str) -> str | None:
+        """Make sure the node has a virtualenv with pip in it. Why it has none, or None.
+
+        Judged by the pip inside it rather than by the directory. Where Python's
+        `venv` module is packaged apart from Python -- Debian and what derives
+        from it -- `python3 -m venv` makes the directory and then fails for
+        want of `ensurepip`, leaving something that looks like a virtualenv and
+        cannot install anything. That one is made again, and when it cannot be
+        made the deploy stops here and names the package, rather than going on
+        to an install whose error is about pip.
+        """
+        venv = shlex.quote(f"{home}/wactorz/venv")
+        has_pip = f"test -x {venv}/bin/pip"
+        if (await self._ssh_run(conn, has_pip))[0]:
+            self._log_remote(f"[{node_name}] venv: exists")
+            return None
+        # --clear, so a directory left by an attempt that failed is replaced.
+        _, out = await self._ssh_run(conn, f"python3 -m venv --clear {venv} 2>&1")
+        if (await self._ssh_run(conn, has_pip))[0]:
+            self._log_remote(f"[{node_name}] venv: created")
+            return None
+        said = " ".join(out.split())[-300:] or "it printed nothing"
+        self._log_remote(f"[{node_name}] venv: could not be created ({said})")
+        if "ensurepip" in out or "No module named venv" in out:
+            return (
+                f"The node's Python cannot create a virtual environment: its `venv` module "
+                f"is not installed. On Debian, Ubuntu and Raspberry Pi OS it is a package of "
+                f"its own. On the node, run `sudo apt install python3-venv`, then "
+                f"`/deploy {node_name}` again. The node said: {said}"
+            )
+        return (
+            f"Could not create a virtual environment at ~/wactorz/venv on the node, which "
+            f"Wactorz is installed into. `python3 -m venv` said: {said}"
+        )
+
     async def _install_wactorz(self, conn: Any, node_name: str, home: str) -> bool:
         """Put this exact version of wactorz into the node's venv.
 
@@ -1212,11 +1247,14 @@ class InstallerAgent(Actor):
                     self._log_remote(f"[{node_name}] Broker credentials included.")
 
                 # 3. Create venv if it doesn't exist — avoids all --break-system-packages issues
-                _, out = await self._ssh_run(
-                    conn,
-                    "test -d ~/wactorz/venv && echo exists || python3 -m venv ~/wactorz/venv && echo created",
-                )
-                self._log_remote(f"[{node_name}] venv: {out.strip()}")
+                no_venv = await self._ensure_venv(conn, node_name, home_dir)
+                if no_venv:
+                    return {
+                        "success": False,
+                        "node_name": node_name,
+                        "host": host,
+                        "error": no_venv,
+                    }
 
                 # 4. Install wactorz itself into the venv. The node runs the
                 # package, not a copy of one file, so its agents are the same

@@ -176,6 +176,12 @@
 </code></pre></div>
 
 <p>Install the same version main is running, and at least the one these docs ship with — earlier releases have no node runtime. The two exchange spawn configs, manifests and signed control messages, and a node a release apart from main is the kind of mismatch that surfaces days later as an agent that will not start. A deploy from the dashboard pins the version for you.</p>
+<p>Both sides hold each other to it. Main and a node work together when they are on the same release series, the same major and minor number: <code>1.4.0</code> and <code>1.4.3</code> do, <code>1.4.3</code> and <code>1.5.0</code> do not, so a patch release of the server does not mean deploying every node again.</p>
+<ul>
+<li>Main reads the version in each node's heartbeat and refuses to spawn an agent on, or migrate one to, a node on another series. <code>/nodes</code> marks such a node.</li>
+<li>Main states its own version on every command it sends a node, and a node refuses a new agent from a server on another series, with an error in the dashboard's log. That covers the moments main's check cannot: it has not yet heard the node's version, or heard it before the node was installed again.</li>
+</ul>
+<p>Either way the message names the fix, <code>/deploy &lt;node&gt;</code>. The agents a node is already running are left alone, they come back after a reboot, and a stop is always obeyed.</p>
 <p>No extra is needed: everything a node uses — <code>aiomqtt</code>, <code>psutil</code>, <code>aiohttp</code> — is a core dependency. An agent that needs more says so in its spawn config's <code>install</code> list, and the node installs it on the spot.</p>
 <h4 id="2-start-it-as-a-node">2. Start it as a node</h4>
 <div class="highlight"><pre><span></span><code>~/wactorz/venv/bin/wactorz-node<span class="w"> </span>--node<span class="w"> </span>rpi-livingroom<span class="w"> </span>--mqtt-broker<span class="w"> </span><span class="m">192</span>.168.1.10

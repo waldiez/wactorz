@@ -28,7 +28,7 @@ from ..agents.dynamic.agent import DynamicAgent, _ProgramHalted
 from ..core.actor import forbidden
 from ..core.topic_bus import TopicContract
 from .llm import BridgeProvider, request_over_mqtt
-from .state import JsonState, state_path
+from .state import JsonState, flush_states, state_path
 
 if TYPE_CHECKING:
     from .runner import NodeRunner
@@ -115,7 +115,14 @@ class NodeAgent(DynamicAgent):
         """Already read in the constructor, from the node's JSON file."""
 
     async def _save_persistent_state(self) -> None:
+        """Called on stop: once it returns, the file holds what the agent remembers.
+
+        Not left to the moment a save otherwise waits. A migration ships the
+        state and keeps this file to roll back to, and a stop is rare enough
+        to wait for the disk.
+        """
         self._state_file.save(self._persistent_state)
+        flush_states()
 
     def persist(self, key: str, value: Any) -> None:
         self._persistent_state[key] = value

@@ -79,9 +79,7 @@ class PersistenceAPI:
             self.memory.set(f"{self.agent}:{key}", value)
         else:
             # Arbitrary Python object → pickle
-            state = self.pickle.load(self.agent)
-            state[key] = value
-            self.pickle.save(self.agent, state)
+            self.pickle.update(self.agent, key, value)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value from the relevant store."""
@@ -99,9 +97,7 @@ class PersistenceAPI:
         elif key in EPHEMERAL_KEYS:
             self.memory.delete(f"{self.agent}:{key}")
         else:
-            state = self.pickle.load(self.agent)
-            state.pop(key, None)
-            self.pickle.save(self.agent, state)
+            self.pickle.remove(self.agent, key)
 
     def all(self) -> dict[str, Any]:
         """Return all key-value pairs across all stores."""
@@ -193,6 +189,10 @@ class PersistenceAPI:
                 self.pickle.delete(self.agent)
         elif values:
             self.pickle.save(self.agent, {**self.pickle.load(self.agent), **values})
+
+    def flush(self) -> None:
+        """Write this process's pickled states that are still waiting to be written."""
+        self.pickle.flush()
 
     def _remove_all_but(self, keep: frozenset[str]) -> None:
         """Remove this agent's SQLite and in-memory values whose keys are not in ``keep``."""

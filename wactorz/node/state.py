@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..core.atomic_io import write_text
+from ..core.deferred_write import DeferredWriter
 
 logger = logging.getLogger(__name__)
 
@@ -40,28 +40,62 @@ def state_path(state_dir: Path | str, agent_name: str) -> Path:
     return Path(state_dir) / f"{safe}_state.json"
 
 
+#: Writes every agent's state file on this node, a moment after it changes and
+#: off the event loop. One for the process, so one call at shutdown covers all.
+_WRITER = DeferredWriter()
+
+
+def flush_states() -> None:
+    """Write every state file on this node that is waiting to be written."""
+    _WRITER.flush()
+
+
 class JsonState:
     """One agent's state file: read it, write it, and remove it for good."""
 
     def __init__(self, path: Path, agent_name: str) -> None:
         self.path = path
         self._name = agent_name
-        #: What was last written, so a save that would rewrite the same bytes
-        #: can be skipped. Agents persist a value every tick that changes far
-        #: less often -- `agent.persist("plugs", agent.state["plugs"])` -- and
-        #: the whole file is rewritten for any one key.
-        self._written: str | None = None
+        #: What the agent remembers, as last handed to :meth:`save`. The dict
+        #: itself, so the file is written from what it holds when it is written.
+        self._values: dict[str, Any] = {}
+        #: What the file was last written with, so a save that would rewrite
+        #: the same bytes can be skipped. Agents persist a value every tick
+        #: that changes far less often --
+        #: `agent.persist("plugs", agent.state["plugs"])` -- and the whole file
+        #: is rewritten for any one key. Set once the write has landed, not
+        #: when it is asked for: a write that failed must be tried again by the
+        #: next save, changed or not.
+        self._written: bytes | None = None
         #: Whether this agent has been told its state is big enough to hurt.
         self._warned_large = False
+        #: The values last reported as impossible to write, so each is named
+        #: when it appears rather than at every write.
+        self._reported_dropped: tuple[str, ...] = ()
 
     def save(self, values: dict[str, Any]) -> None:
-        """Write what the agent remembers, keeping what can be kept.
+        """Have the file hold what the agent remembers, shortly.
 
-        Encoded in full before anything is written, and written through
-        :func:`write_text`, for two failures that both ended with the agent's
-        memory gone rather than stale. Streaming into an opened file truncated
-        it first and then stopped at the first value that would not serialise,
-        leaving invalid JSON where a good file had been — so one
+        The agent's memory is ``values`` itself, in the process; the file is
+        what a restart reads, and it is written a moment later, off the event
+        loop. Saving on every tick therefore costs the loop nothing but this
+        call, and the ticks inside that moment become one write.
+        """
+        self._values = values
+        _WRITER.submit(self.path, self._content, self._landed)
+
+    def _landed(self, data: bytes) -> None:
+        """The file now holds ``data``."""
+        self._written = data
+
+    def _content(self) -> bytes | None:
+        """What the file should hold now, or None when it holds that already.
+
+        Encoded in full before anything is written, and written by replacing
+        the file, for two failures that both ended with the agent's memory gone
+        rather than stale. Streaming into an opened file truncated it first and
+        then stopped at the first value that would not serialise, leaving
+        invalid JSON where a good file had been — so one
         ``agent.persist('when', datetime.now())`` cost the agent every other key
         it held. And an interrupted write did the same on a board that lost
         power mid-save.
@@ -71,36 +105,34 @@ class JsonState:
         for the same reason — a counter or a calibration is worth keeping, and a
         capture object would not survive a restart either way.
         """
-        keepable, dropped = json_safe(values)
-        if dropped:
+        keepable, dropped = json_safe(self._values)
+        if dropped and tuple(dropped) != self._reported_dropped:
             logger.warning(
                 "[%s] Not persisting %s: nothing there can be written as JSON, which is "
                 "what a node keeps. The rest of this agent's state was saved.",
                 self._name,
                 ", ".join(dropped),
             )
+        self._reported_dropped = tuple(dropped)
         encoded = json.dumps(keepable)
-        if encoded == self._written and self.path.exists():
+        data = encoded.encode("utf-8")
+        if data == self._written and self.path.exists():
             # The file already says this. Writing it again costs the same as
-            # writing something new -- the whole file goes out and is fsynced --
-            # for no change at all.
-            return
+            # writing something new -- the whole file goes out and is forced
+            # to disk -- for no change at all.
+            return None
         self._note_if_large(encoded)
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            write_text(self.path, encoded)
-            self._written = encoded
-        except Exception as e:
-            logger.warning("[%s] State save failed: %s", self._name, e)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        return data
 
     def _note_if_large(self, encoded: str) -> None:
         """Say so once when this agent's state has grown expensive to write.
 
         Every key is written by rewriting the whole file, so what a save costs
         follows the size of everything the agent remembers, not the size of what
-        changed. On a Raspberry Pi 5's SD card that is about 5ms at 9KB, 14ms at
-        440KB and 110ms at 1.7MB -- and it is spent on the event loop, so at the
-        top of that range every other agent on the node waits for it.
+        changed. The write itself happens off the event loop, but encoding the
+        state does not, and takes milliseconds per megabyte on a small board:
+        every other agent on the node waits for that, once per write.
 
         A warning rather than a limit: what an agent should remember is its
         author's business, and an agent that has quietly grown a megabyte of
@@ -124,6 +156,9 @@ class JsonState:
         next save would write straight over it, so the only copy of whatever the
         agent remembered would be gone.
         """
+        # An agent started again under this name reads here what the one before
+        # it saved, which may still be waiting to be written.
+        _WRITER.flush()
         if not self.path.exists():
             return {}
         try:
@@ -148,6 +183,11 @@ class JsonState:
         it the next runner start would load the file back and the agent's whole
         memory would return after its registry entry was cleared.
         """
+        # Before the file goes: a save still waiting, or on its way out, would
+        # otherwise put it back.
+        _WRITER.discard(self.path)
+        self._values = {}
+        self._written = None
         try:
             if self.path.exists():
                 self.path.unlink()

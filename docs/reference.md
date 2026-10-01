@@ -336,13 +336,22 @@ If a worker agent returns an error during a planner step, the planner logs it an
 
 ## 7. Persistence & State
 
-Every actor has access to a simple key-value persistence API backed by pickle files in the `state/` directory. State is written to disk **immediately on every `persist()` call** — not just on graceful shutdown — so no state is ever lost on Ctrl+C or crashes.
+Every actor has access to a simple key-value persistence API. `persist()` and `recall()` are synchronous and cheap: an agent's state is held in memory, so a recall is a lookup, and a persist changes the copy in memory and returns.
 
 ```python
 # Inside any agent
-agent.persist('my_key', {'count': 42, 'data': [...]})   # write (immediate disk write)
+agent.persist('my_key', {'count': 42, 'data': [...]})   # write
 value = agent.recall('my_key', default={})               # read
 ```
+
+**When it reaches the disk.** The keys kept in SQLite (conversation history, user facts, the spawn registry and the like) are written as part of the call. Everything else — an agent's own keys, held in its `state.pkl`, or in its JSON file on a node — is written about a second later, from a worker thread, with the changes made in that second going out as one write. That keeps the disk off the event loop: forcing a file to an SD card takes tens of milliseconds, and done on every `persist()` it held every agent in the process each time.
+
+What that means in practice:
+
+- A stop, a restart of the agent, a migration and a clean shutdown (Ctrl+C included) all write what is waiting before they finish. Nothing is lost.
+- A process that is killed outright, or a machine that loses power, can lose what was persisted in the last second.
+- `recall()` returns the stored object itself, not a copy. Change it and call `persist()` again; do not rely on a recalled list or dict being private to the caller.
+- A value that cannot be pickled no longer fails the call. The agent keeps it in memory, and the log names the file that was not written.
 
 Used internally for:
 

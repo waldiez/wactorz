@@ -5,9 +5,17 @@ a migration ships it over MQTT to whichever machine the agent moves to, and the
 two need not be running the same Python.
 """
 
+import asyncio
 import json
 
+import pytest
+
+from wactorz.core import deferred_write
+from wactorz.node import state as node_state
 from wactorz.node.state import JsonState, json_safe, state_path
+
+#: The delay these tests give the node's writer, in place of the real one.
+DELAY_S = 0.1
 
 SAMPLE = {"note": "café ☕ — δοκιμή", "n": 1}
 
@@ -124,6 +132,27 @@ class TestWritingOnlyWhenThereIsSomethingToWrite:
 
         assert path.stat().st_mtime_ns == before
 
+    def test_a_write_that_failed_is_tried_again_by_the_next_save(self, tmp_path, monkeypatch):
+        # The state is marked as written when the write lands, not when it is
+        # asked for. Marked early, a disk that was full for one write would
+        # leave the file stale for as long as the state stayed the same.
+        path = tmp_path / "agent_state.json"
+        state = _state(path)
+        state.save({"n": 1})
+        real = deferred_write.write_bytes
+
+        def _full(target, data):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(deferred_write, "write_bytes", _full)
+        state.save({"n": 2})
+        assert json.loads(path.read_text(encoding="utf-8")) == {"n": 1}
+
+        monkeypatch.setattr(deferred_write, "write_bytes", real)
+        state.save({"n": 2})
+
+        assert json.loads(path.read_text(encoding="utf-8")) == {"n": 2}
+
     def test_a_change_is_written(self, tmp_path):
         path = tmp_path / "agent_state.json"
         state = _state(path)
@@ -181,3 +210,74 @@ class TestWhatCanTravel:
 
         assert kept == {"count": 3}
         assert dropped == ["capture"]
+
+
+class TestWritingOffTheEventLoop:
+    """Under a running loop the file follows a moment after the save.
+
+    A node is the machine with the slow storage, and an agent there saves a
+    value on every tick. Forcing each save to disk on the event loop held every
+    other agent on the node for as long as the disk took.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _short_delay(self, monkeypatch):
+        monkeypatch.setattr(node_state._WRITER, "_delay", DELAY_S)
+
+    async def test_a_save_returns_before_the_file_is_written(self, tmp_path):
+        path = tmp_path / "agent_state.json"
+
+        _state(path).save({"n": 1})
+
+        assert not path.exists()
+        await asyncio.sleep(DELAY_S * 4)
+        assert json.loads(path.read_text(encoding="utf-8")) == {"n": 1}
+
+    async def test_a_value_saved_every_tick_is_written_once_as_it_ended(
+        self, tmp_path, monkeypatch
+    ):
+        written = []
+        real = deferred_write.write_bytes
+
+        def _counting(target, data):
+            written.append(target)
+            real(target, data)
+
+        monkeypatch.setattr(deferred_write, "write_bytes", _counting)
+        path = tmp_path / "agent_state.json"
+        state, values = _state(path), {"n": 0}
+
+        for tick in range(200):
+            values["n"] = tick
+            state.save(values)
+        await asyncio.sleep(DELAY_S * 4)
+
+        assert written == [path]
+        assert json.loads(path.read_text(encoding="utf-8")) == {"n": 199}
+
+    async def test_an_agent_started_again_reads_what_the_last_one_saved(self, tmp_path):
+        # A supervisor restart builds a new agent under the same name straight
+        # away, before the one it replaces has had its last save written.
+        path = tmp_path / "agent_state.json"
+        _state(path).save({"n": 7})
+
+        assert _state(path).load() == {"n": 7}
+
+    async def test_a_deleted_state_does_not_come_back(self, tmp_path):
+        path = tmp_path / "agent_state.json"
+        state = _state(path)
+        state.save({"n": 1})
+
+        state.delete()
+        await asyncio.sleep(DELAY_S * 4)
+
+        assert not path.exists()
+
+    async def test_flushing_writes_what_is_waiting(self, tmp_path):
+        # What a node does as it shuts down, and what an agent's stop does.
+        path = tmp_path / "agent_state.json"
+        _state(path).save({"n": 1})
+
+        node_state.flush_states()
+
+        assert json.loads(path.read_text(encoding="utf-8")) == {"n": 1}

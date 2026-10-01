@@ -1045,8 +1045,10 @@ class Actor(ABC):
     async def _save_persistent_state(self):
         """Save state to disk. Called on stop() after on_stop()."""
         if self._persistence_api is not None:
-            # New path: state is written per-key via persist(), nothing to batch-save.
-            # But keep pickle save for agent.state (arbitrary objects) backward compat.
+            # State is kept per key as persist() is called, and its file is
+            # written a moment later. A stop does not leave that to the moment:
+            # once it returns, the file holds what the agent last persisted.
+            self._persistence_api.flush()
             return
         # Legacy pickle path
         try:

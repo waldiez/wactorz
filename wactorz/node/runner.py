@@ -44,7 +44,7 @@ from .signing import (
     server_mismatch,
     user_properties,
 )
-from .state import json_safe
+from .state import flush_states, json_safe
 
 logger = logging.getLogger(__name__)
 
@@ -850,6 +850,9 @@ class NodeRunner:
         )
         # Let the queue drain before the process image is replaced.
         await asyncio.sleep(0.5)
+        # Agent state is written a moment after it changes, and replacing the
+        # process image would take what is still waiting with it.
+        flush_states()
         os.execv(sys.executable, [sys.executable, *sys.argv])
 
     async def shutdown(self) -> None:
@@ -866,6 +869,9 @@ class NodeRunner:
         """
         self._running = False
         await self.stop_all()
+        # Agent state is written a moment after it changes; what is still
+        # waiting goes out now, since nothing will write it later.
+        flush_states()
         await self.publish(
             f"nodes/{self.node_name}/heartbeat",
             {**self._node_identity(), "status": "offline", "timestamp": time.time()},

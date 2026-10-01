@@ -374,6 +374,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Override the timezone used in agents' date/time context (e.g. <code>Europe/Athens</code>). Precedence: a user's <code>pref_timezone</code> fact &gt; <code>WACTORZ_TZ</code> &gt; standard <code>TZ</code> &gt; host local zone. Blank or unknown values fall through to the next candidate</td>
 </tr>
 <tr>
+<td><code>WACTORZ_LOG_FORMAT</code></td>
+<td><code>text</code></td>
+<td><code>json</code> writes each log record as one JSON object on one line (JSON Lines), to the console and to <code>wactorz.log</code>, for a collector that parses logs: fields <code>ts</code> (UTC), <code>level</code>, <code>logger</code>, <code>message</code>, and <code>exception</code> holding the whole traceback. Redaction applies as in text. The dashboard's log view is unaffected. A node reads the setting from its own environment</td>
+</tr>
+<tr>
 <td><code>WACTORZ_RETENTION_CHAT_DAYS</code></td>
 <td><code>365</code></td>
 <td>Days chat history is kept; <code>0</code> keeps it for ever. An attached file goes with the last message that refers to it, or a day after upload if it was never sent</td>

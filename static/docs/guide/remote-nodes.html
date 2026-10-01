@@ -240,9 +240,12 @@ none of them. The deploy result says which it got, so a node reported as
 <span class="na">User</span><span class="o">=</span><span class="s">pi</span>
 <span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/home/pi/wactorz</span>
 <span class="na">EnvironmentFile</span><span class="o">=</span><span class="s">/home/pi/wactorz/.env</span>
-<span class="na">ExecStart</span><span class="o">=</span><span class="s">/home/pi/wactorz/venv/bin/wactorz --mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">/home/pi/wactorz/venv/bin/wactorz-node --mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}</span>
 <span class="na">Restart</span><span class="o">=</span><span class="s">on-failure</span>
 <span class="na">RestartSec</span><span class="o">=</span><span class="s">5</span>
+<span class="na">WatchdogSec</span><span class="o">=</span><span class="s">300</span>
+<span class="na">NotifyAccess</span><span class="o">=</span><span class="s">main</span>
+<span class="na">WatchdogSignal</span><span class="o">=</span><span class="s">SIGKILL</span>
 <span class="na">RestartPreventExitStatus</span><span class="o">=</span><span class="s">2</span>
 
 <span class="k">[Install]</span>
@@ -251,11 +254,19 @@ none of them. The deploy result says which it got, so a node reported as
 
 <p>A user unit is the same minus <code>User=</code>, with <code>WantedBy=default.target</code>, and lives
 at <code>~/.config/systemd/user/wactorz-node.service</code>.</p>
-<p>Three details worth knowing if you write one by hand:</p>
+<p>Four details worth knowing if you write one by hand:</p>
 <ul>
 <li><strong><code>Restart=on-failure</code>, not <code>always</code>.</strong> <code>/nodes shutdown</code> exits cleanly on
   purpose. Under <code>Restart=always</code> that command restarts the node instead of
   stopping it.</li>
+<li><strong><code>WatchdogSec=300</code>.</strong> The node tells systemd, from its event loop, that
+  the loop is running, and systemd restarts it when it has not heard for five
+  minutes. Without it a node frozen in blocking code is a process that exists
+  and does nothing, which <code>Restart=</code> never sees. <code>WatchdogSignal=SIGKILL</code>
+  because systemd's default aborts the process and writes a core dump each
+  time. Before it gets that far the node's own log says where the loop is
+  stuck, in a line starting <code>[loop]</code>. A node not started by systemd sends
+  nothing.</li>
 <li><strong><code>RestartPreventExitStatus=2</code>.</strong> Exit 2 means a node name that can never
   work — it contains an MQTT wildcard — or a malformed <code>ExecStart</code>. Neither
   succeeds on retry, so restarting is just noise.</li>

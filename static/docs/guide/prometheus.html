@@ -217,6 +217,14 @@
 <td>Messages a full mailbox had no room for: notifications dropped, anything else refused after a wait</td>
 </tr>
 <tr>
+<td><code>wactorz_actor_handling_seconds{actor_name}</code></td>
+<td>How long an actor has been on the message it is handling; <code>0</code> when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck</td>
+</tr>
+<tr>
+<td><code>wactorz_event_loop_lag_seconds</code></td>
+<td>Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting</td>
+</tr>
+<tr>
 <td><code>wactorz_nodes{state}</code></td>
 <td>Edge nodes that are <code>up</code> and <code>down</code></td>
 </tr>
@@ -365,6 +373,8 @@ curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </spa
 <ul>
 <li>Python app down</li>
 <li>actor heartbeat stale</li>
+<li>an actor on one message for over 30 minutes</li>
+<li>the event loop blocked for more than 5 seconds</li>
 <li>the broker connection lost for 2 minutes</li>
 <li>more than 100 outgoing messages waiting for 10 minutes</li>
 <li>outgoing messages dropped or given up on</li>

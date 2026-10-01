@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from tests.waiting import quiet
 from wactorz import reset
 from wactorz.core import deferred_write
 from wactorz.core.persistence import PersistenceAPI, WactorzDB, stores
@@ -49,8 +50,9 @@ def api_fixture(tmp_path: Path, store: PickleStore) -> PersistenceAPI:
     return PersistenceAPI(WactorzDB(tmp_path / "wactorz.db"), store, "worker")
 
 
-async def _after_the_delay() -> None:
-    await asyncio.sleep(DELAY_S * 4)
+async def _written(tmp_path: Path) -> None:
+    """Wait until the store over ``tmp_path`` has written everything asked of it."""
+    await quiet(PickleStore(str(tmp_path))._writer)
 
 
 class TestPersistingUnderARunningLoop:
@@ -61,7 +63,7 @@ class TestPersistingUnderARunningLoop:
 
         assert api.get("calibration") == {"offset": 3}
         assert not _file(tmp_path, "worker").exists()
-        await _after_the_delay()
+        await _written(tmp_path)
         assert _on_disk(tmp_path, "worker") == {"calibration": {"offset": 3}}
 
     async def test_a_value_persisted_every_tick_is_written_once(
@@ -78,7 +80,7 @@ class TestPersistingUnderARunningLoop:
 
         for tick in range(200):
             api.set("ticks", tick)
-        await _after_the_delay()
+        await _written(tmp_path)
 
         assert len(written) == 1
         assert _on_disk(tmp_path, "worker") == {"ticks": 199}
@@ -90,7 +92,7 @@ class TestPersistingUnderARunningLoop:
         api.set("drop", 2)
 
         api.delete("drop")
-        await _after_the_delay()
+        await _written(tmp_path)
 
         assert api.get("drop") is None
         assert _on_disk(tmp_path, "worker") == {"keep": 1}
@@ -100,7 +102,7 @@ class TestPersistingUnderARunningLoop:
         api.set("from_the_loop", 1)
 
         await asyncio.to_thread(api.set, "from_a_thread", 2)
-        await _after_the_delay()
+        await _written(tmp_path)
 
         assert _on_disk(tmp_path, "worker") == {"from_the_loop": 1, "from_a_thread": 2}
 
@@ -161,7 +163,7 @@ class TestDeleting:
         store.update("worker", "count", 1)
 
         store.delete("worker")
-        await _after_the_delay()
+        await _written(tmp_path)
 
         assert not _file(tmp_path, "worker").exists()
         assert store.load("worker") == {}
@@ -173,7 +175,7 @@ class TestDeleting:
         store.delete("worker")
 
         store.update("worker", "new", 2)
-        await _after_the_delay()
+        await _written(tmp_path)
 
         assert _on_disk(tmp_path, "worker") == {"new": 2}
 
@@ -189,7 +191,7 @@ class TestAResetInARunningServer:
 
         reset._strip_chat_from_pickles(None, str(tmp_path))
         store.update("main", "notes", 2)
-        await _after_the_delay()
+        await _written(tmp_path)
 
         assert _on_disk(tmp_path, "main") == {"notes": 2}
 
@@ -202,7 +204,7 @@ class TestAResetInARunningServer:
 
         reset._reset_all_pickles(str(tmp_path))
         store.update("worker", "count", 2)
-        await _after_the_delay()
+        await _written(tmp_path)
 
         assert not _file(tmp_path, "main").exists()
         assert _on_disk(tmp_path, "worker") == {"count": 2}

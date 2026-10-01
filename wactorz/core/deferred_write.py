@@ -118,6 +118,17 @@ class DeferredWriter:
         """Write everything that is waiting, now, on the calling thread."""
         self._write(self._take())
 
+    @property
+    def idle(self) -> bool:
+        """Whether nothing is waiting to be written and nothing is being written.
+
+        For something that needs to know the files are as they were asked to
+        be, without forcing them out itself: once this is true they are.
+        """
+        with self._lock:
+            waiting = bool(self._pending)
+        return not waiting and self._in_flight is None
+
     # ── On the event loop ─────────────────────────────────────────────────────
 
     def _adopt(self, loop: asyncio.AbstractEventLoop) -> None:

@@ -17,10 +17,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.waiting import quiet
 from wactorz.core import deferred_write
 from wactorz.core.deferred_write import DeferredWriter
 
-#: Short enough to wait out in a test, long enough to act inside.
+#: The delay these writers are given: short, so a test is not spent waiting on it.
+#: Nothing here depends on how long it is, only on what has happened by the
+#: time the writer has gone quiet.
 DELAY_S = 0.1
 
 
@@ -44,16 +47,13 @@ def writes_fixture(monkeypatch: pytest.MonkeyPatch) -> _Writes:
     return writes
 
 
-async def _after_the_delay() -> None:
-    await asyncio.sleep(DELAY_S * 4)
-
-
 class TestWithNoLoopRunning:
     def test_the_write_happens_at_once(self, tmp_path: Path, writes: _Writes) -> None:
         # Nothing is being kept waiting, and nothing would write it later.
         target = tmp_path / "state"
 
-        DeferredWriter(DELAY_S).submit(target, lambda: b"one")
+        writer = DeferredWriter(DELAY_S)
+        writer.submit(target, lambda: b"one")
 
         assert target.read_bytes() == b"one"
 
@@ -64,16 +64,18 @@ class TestUnderARunningLoop:
     ) -> None:
         target = tmp_path / "state"
 
-        DeferredWriter(DELAY_S).submit(target, lambda: b"one")
+        writer = DeferredWriter(DELAY_S)
+        writer.submit(target, lambda: b"one")
 
         assert not target.exists()
-        await _after_the_delay()
+        await quiet(writer)
         assert target.read_bytes() == b"one"
 
     async def test_the_write_runs_on_another_thread(self, tmp_path: Path, writes: _Writes) -> None:
-        DeferredWriter(DELAY_S).submit(tmp_path / "state", lambda: b"one")
+        writer = DeferredWriter(DELAY_S)
+        writer.submit(tmp_path / "state", lambda: b"one")
 
-        await _after_the_delay()
+        await quiet(writer)
 
         assert writes.threads
         assert threading.get_ident() not in writes.threads
@@ -86,7 +88,7 @@ class TestUnderARunningLoop:
 
         for number in range(50):
             writer.submit(target, lambda number=number: str(number).encode())
-        await _after_the_delay()
+        await quiet(writer)
 
         assert writes.paths == [target]
         assert target.read_bytes() == b"49"
@@ -99,9 +101,10 @@ class TestUnderARunningLoop:
         target = tmp_path / "state"
         state = {"value": "early"}
 
-        DeferredWriter(DELAY_S).submit(target, lambda: state["value"].encode())
+        writer = DeferredWriter(DELAY_S)
+        writer.submit(target, lambda: state["value"].encode())
         state["value"] = "late"
-        await _after_the_delay()
+        await quiet(writer)
 
         assert target.read_bytes() == b"late"
 
@@ -110,7 +113,7 @@ class TestUnderARunningLoop:
 
         writer.submit(tmp_path / "a", lambda: b"a")
         writer.submit(tmp_path / "b", lambda: b"b")
-        await _after_the_delay()
+        await quiet(writer)
 
         assert sorted(path.name for path in writes.paths) == ["a", "b"]
 
@@ -121,9 +124,9 @@ class TestUnderARunningLoop:
         writer = DeferredWriter(DELAY_S)
 
         writer.submit(target, lambda: b"one")
-        await _after_the_delay()
+        await quiet(writer)
         writer.submit(target, lambda: b"two")
-        await _after_the_delay()
+        await quiet(writer)
 
         assert writes.paths == [target, target]
         assert target.read_bytes() == b"two"
@@ -137,7 +140,7 @@ class TestUnderARunningLoop:
         writer.submit(tmp_path / "first", lambda: b"x")  # the loop is known from here on
 
         await asyncio.to_thread(writer.submit, target, lambda: b"from a thread")
-        await _after_the_delay()
+        await quiet(writer)
 
         assert target.read_bytes() == b"from a thread"
 
@@ -150,7 +153,7 @@ class TestUnderARunningLoop:
         writer = DeferredWriter(DELAY_S)
         writer.submit(tmp_path / "bad", _fails)
         writer.submit(tmp_path / "good", lambda: b"good")
-        await _after_the_delay()
+        await quiet(writer)
 
         assert (tmp_path / "good").read_bytes() == b"good"
         assert not (tmp_path / "bad").exists()
@@ -168,7 +171,7 @@ class TestFlushing:
         writer.flush()
 
         assert target.read_bytes() == b"one"
-        await _after_the_delay()
+        await quiet(writer)
         assert writes.paths == [target], "the delay finds nothing left to write"
 
     def test_with_nothing_waiting_it_does_nothing(self, writes: _Writes) -> None:
@@ -202,7 +205,7 @@ class TestWithdrawingAPath:
         writer.submit(target, lambda: b"one")
 
         writer.discard(target)
-        await _after_the_delay()
+        await quiet(writer)
 
         assert not target.exists()
         assert writes.paths == []
@@ -229,7 +232,7 @@ class TestWithdrawingAPath:
         writer.discard(target)
 
         writer.submit(target, lambda: b"two")
-        await _after_the_delay()
+        await quiet(writer)
 
         assert target.read_bytes() == b"two"
 
@@ -240,7 +243,8 @@ class TestSayingWhatAFileNowHolds:
     def test_it_is_told_the_bytes_once_they_are_written(self, tmp_path: Path) -> None:
         landed: list[bytes] = []
 
-        DeferredWriter(DELAY_S).submit(tmp_path / "state", lambda: b"one", landed.append)
+        writer = DeferredWriter(DELAY_S)
+        writer.submit(tmp_path / "state", lambda: b"one", landed.append)
 
         assert landed == [b"one"]
 
@@ -253,7 +257,8 @@ class TestSayingWhatAFileNowHolds:
         monkeypatch.setattr(deferred_write, "write_bytes", _full)
         landed: list[bytes] = []
 
-        DeferredWriter(DELAY_S).submit(tmp_path / "state", lambda: b"one", landed.append)
+        writer = DeferredWriter(DELAY_S)
+        writer.submit(tmp_path / "state", lambda: b"one", landed.append)
 
         assert landed == []
 
@@ -282,7 +287,7 @@ class TestAcrossEventLoops:
         async def _ask(name: str, wait: bool) -> None:
             writer.submit(tmp_path / name, name.encode)
             if wait:
-                await _after_the_delay()
+                await quiet(writer)
 
         asyncio.run(_ask("first", wait=False))
         asyncio.run(_ask("second", wait=True))
@@ -294,7 +299,8 @@ def test_the_real_write_replaces_the_file_whole(tmp_path: Path) -> None:
     target = tmp_path / "state"
     target.write_bytes(b"before")
 
-    DeferredWriter(DELAY_S).submit(target, lambda: b"after")
+    writer = DeferredWriter(DELAY_S)
+    writer.submit(target, lambda: b"after")
 
     assert target.read_bytes() == b"after"
     assert [path.name for path in tmp_path.iterdir()] == ["state"], "no temporary is left"

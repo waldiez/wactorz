@@ -5,11 +5,11 @@ a migration ships it over MQTT to whichever machine the agent moves to, and the
 two need not be running the same Python.
 """
 
-import asyncio
 import json
 
 import pytest
 
+from tests.waiting import quiet
 from wactorz.core import deferred_write
 from wactorz.node import state as node_state
 from wactorz.node.state import JsonState, json_safe, state_path
@@ -230,7 +230,7 @@ class TestWritingOffTheEventLoop:
         _state(path).save({"n": 1})
 
         assert not path.exists()
-        await asyncio.sleep(DELAY_S * 4)
+        await quiet(node_state._WRITER)
         assert json.loads(path.read_text(encoding="utf-8")) == {"n": 1}
 
     async def test_a_value_saved_every_tick_is_written_once_as_it_ended(
@@ -250,7 +250,7 @@ class TestWritingOffTheEventLoop:
         for tick in range(200):
             values["n"] = tick
             state.save(values)
-        await asyncio.sleep(DELAY_S * 4)
+        await quiet(node_state._WRITER)
 
         assert written == [path]
         assert json.loads(path.read_text(encoding="utf-8")) == {"n": 199}
@@ -269,7 +269,7 @@ class TestWritingOffTheEventLoop:
         state.save({"n": 1})
 
         state.delete()
-        await asyncio.sleep(DELAY_S * 4)
+        await quiet(node_state._WRITER)
 
         assert not path.exists()
 

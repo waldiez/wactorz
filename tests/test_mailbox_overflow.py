@@ -20,14 +20,18 @@ one message can hold an actor.
 
 import asyncio
 import time
-from typing import Any
+from collections.abc import Awaitable
+from typing import Any, TypeVar
 
 import pytest
 
+from tests.waiting import PATIENCE_S
 from wactorz.core import actor as actor_module
 from wactorz.core import registry as registry_module
 from wactorz.core.actor import Actor, Message, MessageType
 from wactorz.core.registry import ActorRegistry, Supervisor
+
+T = TypeVar("T")
 
 #: Long enough to tell a wait from no wait, short enough to run in a test.
 WAIT_S = 0.3
@@ -61,15 +65,29 @@ def _short_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(actor_module, "MAILBOX_WAIT_S", WAIT_S)
 
 
+@pytest.fixture(name="long_wait")
+def long_wait_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A wait far longer than a test is given.
+
+    For what must not wait at all: the call either returns well inside the
+    test's patience or is still waiting when that runs out. A short wait
+    measured against the clock would instead depend on how busy the machine is.
+    """
+    monkeypatch.setattr(actor_module, "MAILBOX_WAIT_S", PATIENCE_S * 10)
+
+
+async def _without_waiting(call: Awaitable[T]) -> T:
+    """The result of ``call``, which must not wait for room. Use with `long_wait`."""
+    return await asyncio.wait_for(call, timeout=PATIENCE_S)
+
+
 class TestAMailboxWithRoom:
-    async def test_it_takes_the_message_at_once(self) -> None:
+    async def test_it_takes_the_message_at_once(self, long_wait: None) -> None:
         actor = _Idle(name="idle", mailbox_size=2)
 
-        started = time.monotonic()
-        taken = await actor.receive(_task())
+        taken = await _without_waiting(actor.receive(_task()))
 
         assert taken is True
-        assert time.monotonic() - started < WAIT_S
         assert actor.metrics.messages_refused == 0
 
 
@@ -85,14 +103,14 @@ class TestAFullMailbox:
         ],
         ids=["heartbeat", "status request", "status response", "tick", "alert for main"],
     )
-    async def test_a_notification_is_dropped_without_waiting(self, message: Message) -> None:
+    async def test_a_notification_is_dropped_without_waiting(
+        self, message: Message, long_wait: None
+    ) -> None:
         actor = await _full()
 
-        started = time.monotonic()
-        taken = await actor.receive(message)
+        taken = await _without_waiting(actor.receive(message))
 
         assert taken is False
-        assert time.monotonic() - started < WAIT_S / 2
         assert actor.metrics.messages_refused == 1
 
     @pytest.mark.parametrize(
@@ -110,15 +128,17 @@ class TestAFullMailbox:
         assert actor.metrics.messages_refused == 1
         assert actor._mailbox.qsize() == 2, "nothing was pushed out to make room"
 
-    async def test_room_that_appears_during_the_wait_is_taken(self) -> None:
+    async def test_room_that_appears_during_the_wait_is_taken(self, long_wait: None) -> None:
+        # The wait is long, so the message is taken because room appeared and
+        # not because the reader happened to get there inside a short one.
         actor = await _full()
 
         async def _read_one() -> None:
-            await asyncio.sleep(WAIT_S / 3)
+            await asyncio.sleep(0.1)
             actor._mailbox.get_nowait()
 
         reading = asyncio.create_task(_read_one())
-        taken = await actor.receive(_task("the one that waited"))
+        taken = await _without_waiting(actor.receive(_task("the one that waited")))
         await reading
 
         assert taken is True
@@ -153,7 +173,12 @@ class TestTheSenderIsTold:
         assert await sender.send(busy.actor_id, MessageType.HEARTBEAT) is False
         assert await sender.send(sender.actor_id, MessageType.HEARTBEAT) is True
 
-    async def test_a_broadcast_waits_once_however_many_are_full(self) -> None:
+    async def test_a_broadcast_waits_once_however_many_are_full(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # One wait is a second here and four in a row would be four, so the
+        # difference is not something a busy machine can blur.
+        monkeypatch.setattr(actor_module, "MAILBOX_WAIT_S", 1.0)
         registry = ActorRegistry()
         crowd = [await _full(name=f"busy-{index}") for index in range(4)]
         listener = _Idle(name="listener")
@@ -163,7 +188,7 @@ class TestTheSenderIsTold:
         started = time.monotonic()
         await registry.broadcast("someone-else", MessageType.TASK, {"text": "all of you"})
 
-        assert time.monotonic() - started < WAIT_S * 2
+        assert time.monotonic() - started < 3.0
         assert listener._mailbox.qsize() == 1
         assert [actor.metrics.messages_refused for actor in crowd] == [1, 1, 1, 1]
 
@@ -193,14 +218,13 @@ def _reports(main: _Idle) -> list[str]:
 class TestTheSupervisorIsNotHeldUp:
     """Its reports to main follow a restart; held up there, it would stop supervising."""
 
-    async def test_reporting_to_a_main_that_is_full_returns_at_once(self) -> None:
+    async def test_reporting_to_a_main_that_is_full_returns_at_once(self, long_wait: None) -> None:
         main = await _full(name="main")
         supervisor = await _supervising(main)
 
-        started = time.monotonic()
-        await supervisor._notify_main("worker restarted")
+        await _without_waiting(supervisor._notify_main("worker restarted"))
 
-        assert time.monotonic() - started < WAIT_S / 2
+        assert len(supervisor._held_reports) == 1
 
     async def test_main_still_hears_of_it_once_it_has_room(self) -> None:
         # Not dropped like another notification: a restart main never hears of

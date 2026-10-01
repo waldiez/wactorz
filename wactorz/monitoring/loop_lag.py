@@ -53,11 +53,11 @@ class LoopLagMonitor:
     ) -> None:
         self._interval = interval
         self._report_after = report_after
-        self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: int | None = None
         self._thread: threading.Thread | None = None
-        self._stopping = threading.Event()
-        self._answered = threading.Event()
+        #: Set to end the thread watching now. One per thread, so a monitor
+        #: started again cannot bring an earlier thread back to life.
+        self._stopping: threading.Event | None = None
         #: The lag last measured, for a test or a log line; `/metrics` has them all.
         self.last = 0.0
 
@@ -65,48 +65,55 @@ class LoopLagMonitor:
         """Watch the running loop. Call from the loop's own thread; a second call does nothing."""
         if self._thread is not None:
             return
-        self._loop = asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
         self._loop_thread = threading.get_ident()
-        self._stopping.clear()
-        self._thread = threading.Thread(target=self._watch, name="loop-lag", daemon=True)
+        self._stopping = stopping = threading.Event()
+        self._thread = threading.Thread(
+            target=self._watch, args=(loop, stopping), name="loop-lag", daemon=True
+        )
         self._thread.start()
 
     def stop(self) -> None:
-        """Stop watching. Safe to call when not started."""
-        self._stopping.set()
-        self._answered.set()
-        thread, self._thread = self._thread, None
-        if thread is not None:
-            thread.join(timeout=self._interval + self._report_after)
+        """Stop watching. Safe to call when not started.
 
-    def _answer(self, asked_at: float) -> None:
+        Returns at once, without waiting for the thread to end. It is called
+        from the event loop, and the thread may be waiting for that same loop
+        to answer it: waiting here would hold the loop for as long as the
+        thread took to give up, and have it report the hold as a block.
+        """
+        if self._stopping is not None:
+            self._stopping.set()
+        self._thread = None
+        self._stopping = None
+
+    def _answer(self, asked_at: float, answered: threading.Event) -> None:
         """On the loop: record how long it took to get here."""
         self.last = time.monotonic() - asked_at
         LAG.observe(self.last)
-        self._answered.set()
+        answered.set()
 
-    def _watch(self) -> None:
-        loop = self._loop
-        if loop is None:
-            return
+    def _watch(self, loop: asyncio.AbstractEventLoop, stopping: threading.Event) -> None:
         # One question at a time: the next is not asked until this one has been
         # answered, however long that takes. So an answer always belongs to the
         # question being waited on, and never arrives during a later one.
-        while not self._stopping.wait(self._interval):
-            self._answered.clear()
+        while not stopping.wait(self._interval):
+            answered = threading.Event()
             asked_at = time.monotonic()
             try:
-                loop.call_soon_threadsafe(self._answer, asked_at)
+                loop.call_soon_threadsafe(self._answer, asked_at, answered)
             except RuntimeError:
                 # The loop has closed; there is nothing left to watch.
                 return
-            if self._answered.wait(self._report_after):
+            if answered.wait(self._report_after) or stopping.is_set():
                 continue
             self._report(time.monotonic() - asked_at)
             # Said once per block. The answer, when it comes, records how long
-            # the whole of it lasted.
-            self._answered.wait()
-            if not self._stopping.is_set():
+            # the whole of it lasted. Looked for in short waits, so a monitor
+            # stopped meanwhile, or a loop that closed, ends the thread too.
+            while not answered.wait(self._interval):
+                if stopping.is_set() or loop.is_closed():
+                    return
+            if not stopping.is_set():
                 logger.warning("[loop] The event loop is running again after %.1fs.", self.last)
 
     def _report(self, waited: float) -> None:

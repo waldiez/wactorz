@@ -15,16 +15,19 @@ running, to be restarted when it stops saying so.
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
 import socket
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from tests.waiting import PATIENCE_S, until
 from wactorz.agents import node_service
 from wactorz.core import sd_notify
 from wactorz.core.actor import Actor, Message, MessageType
@@ -57,13 +60,11 @@ class TestAnActorOnOneMessage:
         try:
             await actor.receive(Message(type=MessageType.TASK, sender_id="s", payload={}))
             await actor.started.wait()
-            await asyncio.sleep(0.2)
 
-            assert actor.handling_seconds >= 0.2
+            await until(lambda: actor.handling_seconds >= 0.2, "the time on the message growing")
 
             actor.release.set()
-            await asyncio.sleep(0.05)
-            assert actor.handling_seconds == 0.0
+            await until(lambda: actor.handling_seconds == 0.0, "the actor going idle again")
         finally:
             loop.cancel()
 
@@ -76,7 +77,7 @@ class TestAnActorOnOneMessage:
         loop = asyncio.create_task(actor._message_loop())
         try:
             await actor.receive(Message(type=MessageType.TASK, sender_id="s", payload={}))
-            await asyncio.sleep(0.1)
+            await until(lambda: actor.metrics.errors >= 1, "the handler having failed")
 
             assert actor.handling_seconds == 0.0
         finally:
@@ -110,58 +111,117 @@ def _observed() -> float:
     )
 
 
-def _holds_the_loop(seconds: float) -> None:
-    """Blocking work on the event loop, as a careless handler would do."""
-    time.sleep(seconds)
+def _holds_the_loop(until_true: Callable[[], bool], limit: float = PATIENCE_S) -> None:
+    """Blocking work on the event loop, as a careless handler would do.
+
+    Held until ``until_true`` says so rather than for a length of time, so the
+    test does not depend on how soon the watching thread gets to run.
+    """
+    deadline = time.monotonic() + limit
+    while not until_true() and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def _reported(caplog: pytest.LogCaptureFixture) -> bool:
+    return "The event loop has not run for" in caplog.text
 
 
 class TestTheEventLoop:
     async def test_a_loop_that_is_running_has_its_lag_recorded(self) -> None:
         before = _observed()
-        monitor = LoopLagMonitor(interval=0.05, report_after=5.0)
+        monitor = LoopLagMonitor(interval=0.05, report_after=PATIENCE_S)
         monitor.start()
         try:
-            await asyncio.sleep(0.4)
+            await until(lambda: _observed() > before, "a lag being recorded")
         finally:
             monitor.stop()
-
-        assert _observed() > before
-        assert monitor.last < 1.0
 
     async def test_a_blocked_loop_is_reported_with_the_code_holding_it(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         caplog.set_level(logging.WARNING, logger="wactorz.monitoring.loop_lag")
-        monitor = LoopLagMonitor(interval=0.05, report_after=0.2)
+        monitor = LoopLagMonitor(interval=0.05, report_after=0.3)
         monitor.start()
         try:
-            await asyncio.sleep(0.15)
-            _holds_the_loop(0.8)
-            await asyncio.sleep(0.2)
+            _holds_the_loop(lambda: _reported(caplog))
+            await until(lambda: "running again after" in caplog.text, "the loop being seen again")
         finally:
             monitor.stop()
 
-        assert "The event loop has not run for" in caplog.text
+        assert _reported(caplog)
         # The stack of the loop's own thread, taken while it was stuck.
         assert "_holds_the_loop" in caplog.text
-        assert "time.sleep(seconds)" in caplog.text
+        assert "time.sleep(0.01)" in caplog.text
         # And how long the whole of it lasted, once it was over.
         resumed = re.search(r"running again after (\d+\.\d)s", caplog.text)
         assert resumed is not None
-        assert float(resumed.group(1)) >= 0.5
+        assert float(resumed.group(1)) >= 0.3
 
     async def test_one_block_is_reported_once(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING, logger="wactorz.monitoring.loop_lag")
-        monitor = LoopLagMonitor(interval=0.05, report_after=0.1)
+        monitor = LoopLagMonitor(interval=0.05, report_after=0.2)
         monitor.start()
         try:
-            await asyncio.sleep(0.1)
-            _holds_the_loop(0.8)
-            await asyncio.sleep(0.2)
+            _holds_the_loop(lambda: _reported(caplog))
+            # Still held, for several times as long again as it took to report.
+            held_until = time.monotonic() + 1.0
+            _holds_the_loop(lambda: time.monotonic() >= held_until)
+            await until(lambda: "running again after" in caplog.text, "the loop being seen again")
         finally:
             monitor.stop()
+        await asyncio.sleep(0.5)
 
         assert caplog.text.count("The event loop has not run for") == 1
+
+    async def test_stopping_does_not_hold_the_loop(self, caplog: pytest.LogCaptureFixture) -> None:
+        # The thread is waiting for the loop to answer it. A stop that waited
+        # for the thread, from the loop, would hold the loop until the thread
+        # gave up -- and have it report that hold as a block.
+        caplog.set_level(logging.WARNING, logger="wactorz.monitoring.loop_lag")
+        monitor = LoopLagMonitor(interval=0.05, report_after=3.0)
+        monitor.start()
+        thread = monitor._thread
+        assert thread is not None
+        _holds_the_loop(lambda: _reported(caplog))
+
+        started = time.monotonic()
+        monitor.stop()
+        took = time.monotonic() - started
+
+        assert took < 1.5, "stop returned without waiting out the thread"
+        await until(lambda: not thread.is_alive(), "the watching thread ending")
+        assert caplog.text.count("The event loop has not run for") == 1
+
+    async def test_stopping_again_and_again_never_reports_a_block(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Whatever the thread is in the middle of when the stop arrives. The
+        # window that mattered was a narrow one, between two of its steps, so
+        # it is looked for by stopping many monitors rather than by timing one.
+        caplog.set_level(logging.WARNING, logger="wactorz.monitoring.loop_lag")
+
+        for _ in range(500):
+            monitor = LoopLagMonitor(interval=0.0005, report_after=0.05)
+            monitor.start()
+            await asyncio.sleep(0.002)
+            monitor.stop()
+        await asyncio.sleep(0.2)
+
+        assert not _reported(caplog)
+
+    async def test_a_monitor_started_again_watches_with_one_thread(self) -> None:
+        monitor = LoopLagMonitor(interval=0.05)
+        monitor.start()
+        first = monitor._thread
+        monitor.stop()
+
+        monitor.start()
+        try:
+            assert first is not None
+            await until(lambda: not first.is_alive(), "the first thread ending")
+            assert monitor._thread is not first
+        finally:
+            monitor.stop()
 
     async def test_starting_twice_and_stopping_twice_are_harmless(self) -> None:
         monitor = LoopLagMonitor(interval=0.05)
@@ -269,25 +329,28 @@ class TestHowOftenSystemdExpectsToHear:
 
 class TestAnsweringTheWatchdog:
     async def test_without_one_the_loop_returns_at_once(self, no_systemd: None) -> None:
-        await asyncio.wait_for(sd_notify.watchdog_loop(), timeout=1)
+        await asyncio.wait_for(sd_notify.watchdog_loop(), timeout=PATIENCE_S)
 
     @needs_unix_sockets
     async def test_it_answers_at_half_the_interval_for_as_long_as_it_runs(
         self, systemd: socket.socket, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("WATCHDOG_USEC", "200000")  # 0.2s, so answered every 0.1s
+        systemd.setblocking(False)
+        received: list[bytes] = []
+
+        def _heard_three_times() -> bool:
+            with contextlib.suppress(BlockingIOError):
+                while True:
+                    received.append(systemd.recv(64))
+            return len(received) >= 3
+
         answering = asyncio.create_task(sd_notify.watchdog_loop())
         try:
-            await asyncio.sleep(0.35)
+            await until(_heard_three_times, "systemd hearing from the loop three times")
         finally:
             answering.cancel()
 
-        systemd.settimeout(0.1)
-        received = []
-        with pytest.raises(TimeoutError):
-            while True:
-                received.append(systemd.recv(64))
-        assert len(received) >= 3
         assert set(received) == {b"WATCHDOG=1"}
 
 

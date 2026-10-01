@@ -22,8 +22,10 @@ from wactorz.agents.catalog_agent import _build_native_catalog, get_native_facto
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.agents.mixins import spawning
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
 from wactorz.core.actor import ActorState
+from wactorz.core.persistence import PickleStore, WactorzDB
 
 
 def run(coro):
@@ -620,3 +622,40 @@ def test_an_install_that_outlasts_a_stop_spawns_nothing(main_host):
 
     run(scenario())
     assert main_host.spawn_calls == []
+
+
+# ── A name the state directory refuses ───────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ["..", ".", "../outside", "..hidden"])
+def test_a_name_that_would_climb_out_of_the_state_directory_is_not_spawned(main_host, name, caplog):
+    # An agent's name is also the directory its state is kept in. Such a name
+    # was refused only when the agent was built, after a state shipped with a
+    # migration had been written under it -- and then quietly gone.
+    applied = []
+
+    async def _apply(agent_name, config):
+        applied.append(agent_name)
+
+    main_host._apply_initial_state = _apply
+    config = {"name": name, "type": "llm", "_initial_state": {"conversation_history": ["x"]}}
+
+    actor = run(main_host._spawn_local_from_config(config))
+
+    assert actor is None
+    assert main_host.spawn_calls == []
+    assert applied == [], "nothing is written for an agent that will not exist"
+    assert "unsafe agent name" in caplog.text
+
+
+def test_a_migrated_state_is_applied_through_the_stores(main_host, tmp_path, monkeypatch):
+    db, store = WactorzDB(tmp_path / "wactorz.db"), PickleStore(str(tmp_path))
+    monkeypatch.setattr(spawning, "get_db", lambda: db)
+    monkeypatch.setattr(spawning, "get_pickle_store", lambda: store)
+    config = {"name": "mover", "_initial_state": {"conversation_history": ["x"], "count": 3}}
+
+    run(main_host._apply_initial_state("mover", config))
+
+    assert "_initial_state" not in config, "the snapshot is not kept in the spawn registry"
+    assert db.kv_get("mover", "conversation_history") == ["x"]
+    assert store.load("mover") == {"count": 3}

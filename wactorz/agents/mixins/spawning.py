@@ -34,13 +34,13 @@ import asyncio
 import hashlib
 import importlib
 import logging
-import pickle
 import time
 import uuid
 from typing import TYPE_CHECKING
 
 from ...core.actor import Actor, ActorState, MessageType
 from ...core.paths import agent_state_dir
+from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.topics import topic_name_error
 from ..lookup import find_main_actor
 
@@ -112,6 +112,16 @@ class SpawnMixin(_Host):
             # built with it could never be reached — and a message to it that the
             # outbox cannot send used to stall every message behind it.
             logger.error("[%s] Cannot spawn %r: %s", self.name, name, problem)
+            return None
+        try:
+            agent_state_dir(self._persistence_dir.parent, str(name))
+        except ValueError as exc:
+            # The name is also where the agent's state is kept, and one that
+            # would climb out of the state directory is refused there. Refused
+            # here first, before anything is written under it: a state shipped
+            # with a migration would otherwise be half applied and then lost
+            # when the agent failed to start.
+            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
             return None
         return await self._spawn_local_named(
             config,
@@ -548,37 +558,6 @@ class SpawnMixin(_Host):
         """
         snapshot = config.pop("_initial_state", None)
         if not snapshot or not isinstance(snapshot, dict):
-            return
-
-        try:
-            from ...core.persistence import (
-                PersistenceAPI,
-                get_db,
-                get_pickle_store,
-            )
-        except Exception as e:
-            logger.debug(
-                "[%s] PersistenceAPI not importable — legacy state injection for '%s': %s",
-                self.name,
-                name,
-                e,
-            )
-            try:
-                pdir = agent_state_dir(self._persistence_dir.parent, name)
-                pdir.mkdir(parents=True, exist_ok=True)
-                with open(pdir / "state.pkl", "wb") as fh:
-                    pickle.dump(snapshot, fh)
-                logger.info(
-                    "[%s] Wrote %s migrated key(s) to %s for '%s' (legacy path)",
-                    self.name,
-                    len(snapshot),
-                    pdir / "state.pkl",
-                    name,
-                )
-            except Exception as e2:
-                logger.warning(
-                    "[%s] Legacy state injection failed for '%s': %s", self.name, name, e2
-                )
             return
 
         db, pkl = get_db(), get_pickle_store()

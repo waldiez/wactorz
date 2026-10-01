@@ -6,7 +6,6 @@ System assembly and the run loop live in :mod:`wactorz.app`; the dev reloader in
 
 import argparse
 import asyncio
-import logging
 import os
 import sys
 
@@ -116,7 +115,7 @@ def _warn_about_tokens_on_the_command_line(args: argparse.Namespace) -> None:
 def _run_as_node(args: argparse.Namespace) -> None:
     """Run as an edge node, with logging a node's operator can read.
 
-    ``basicConfig`` rather than the server's log setup: a node writes to its
+    The console alone rather than the server's log setup: a node writes to its
     journal or to `~/wactorz/<name>.log`, has no monitor to forward to, and
     should say something the moment it starts rather than after the app's
     startup sequence would have configured logging.
@@ -126,10 +125,7 @@ def _run_as_node(args: argparse.Namespace) -> None:
     # not have to wait for it.
     from wactorz.node import cli as node_cli
 
-    logging.basicConfig(
-        level=getattr(logging, str(args.loglevel).upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    node_cli.configure_logging(args)
     node_cli.run(args)
 
 

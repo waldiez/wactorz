@@ -274,6 +274,34 @@ def _node_signing_mode() -> str:
 
 NODE_SIGNING = _node_signing_mode()
 
+#: How a log line is written: ``text`` for a person reading it, ``json`` for a
+#: collector that parses it.
+LOG_FORMATS = ("text", "json")
+DEFAULT_LOG_FORMAT = "text"
+
+
+def log_format() -> str:
+    """The format ``WACTORZ_LOG_FORMAT`` asks for, or the default when unset or unrecognised.
+
+    Read when logging is set up rather than once at import, so it is in effect
+    for whichever process sets logging up: the server, or a node.
+    """
+    value = _unquote(os.getenv("WACTORZ_LOG_FORMAT", "") or "").strip().lower()
+    if not value:
+        return DEFAULT_LOG_FORMAT
+    if value not in LOG_FORMATS:
+        # Named rather than ignored: a collector expecting JSON would otherwise
+        # be handed text with nothing saying why.
+        warnings.warn(
+            f"WACTORZ_LOG_FORMAT={value!r} is not one of {', '.join(LOG_FORMATS)} "
+            f"— using {DEFAULT_LOG_FORMAT!r}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return DEFAULT_LOG_FORMAT
+    return value
+
+
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
 #: deployment with no Supervisor must never offer it. Inferring it from the peer's

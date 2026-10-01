@@ -9,14 +9,18 @@ where connection strings and credentials are most likely to be logged.
 gets two sets of handlers and every line is duplicated.
 """
 
+import argparse
+import json
 import logging
 import logging.handlers
 import sys
+from datetime import datetime, timedelta
 
 import pytest
 
 from wactorz.monitoring import log_setup
 from wactorz.monitoring.log_redaction import SecretRedactingFilter
+from wactorz.node import cli as node_cli
 
 
 @pytest.fixture(autouse=True)
@@ -174,3 +178,122 @@ class TestSetupLogging:
         handlers = logging.getLogger().handlers
         assert handlers
         assert not any(isinstance(h, logging.FileHandler) for h in handlers)
+
+
+def _record(msg: str, exc_info=None) -> logging.LogRecord:
+    return logging.LogRecord(
+        name="wactorz.test.setup",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg=msg,
+        args=None,
+        exc_info=exc_info,
+    )
+
+
+def _written_by_the_file_handler(tmp_path, record: logging.LogRecord) -> str:
+    """What `setup_logging`'s file handler writes for `record`, filters included."""
+    log_setup.setup_logging()
+    handler = next(h for h in logging.getLogger().handlers if isinstance(h, logging.FileHandler))
+    handler.handle(record)
+    handler.flush()
+    return (tmp_path / "wactorz.log").read_text(encoding="utf-8")
+
+
+class TestTheFormat:
+    """`WACTORZ_LOG_FORMAT=json` writes one JSON object per record.
+
+    For a collector that parses logs. Text stays the default, and what is
+    redacted in text is redacted in JSON: the filter runs before either
+    formatter sees the record.
+    """
+
+    def test_text_unless_asked_otherwise(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
+        monkeypatch.delenv("WACTORZ_LOG_FORMAT", raising=False)
+
+        written = _written_by_the_file_handler(tmp_path, _record("plain words"))
+
+        assert "[ERROR] wactorz.test.setup: plain words" in written
+
+    def test_json_is_one_object_per_line_with_fields_to_filter_on(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("WACTORZ_LOG_FORMAT", "json")
+
+        written = _written_by_the_file_handler(tmp_path, _record("two\nlines, and ünïcode"))
+
+        (line,) = written.splitlines()
+        entry = json.loads(line)
+        assert entry["level"] == "ERROR"
+        assert entry["logger"] == "wactorz.test.setup"
+        assert entry["message"] == "two\nlines, and ünïcode"
+        assert "ünïcode" in line, "written as it is, not as escapes"
+        # A time with its offset, so a server's and a node's lines sort together.
+        assert datetime.fromisoformat(entry["ts"]).utcoffset() == timedelta(0)
+
+    def test_a_traceback_stays_inside_its_record(self, tmp_path, monkeypatch) -> None:
+        # In text a traceback is a line per frame, which a collector reads as
+        # that many separate events.
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("WACTORZ_LOG_FORMAT", "json")
+        try:
+            raise ValueError("no such thing")
+        except ValueError:
+            record = _record("lookup failed", sys.exc_info())
+
+        written = _written_by_the_file_handler(tmp_path, record)
+
+        (line,) = written.splitlines()
+        entry = json.loads(line)
+        assert entry["message"] == "lookup failed"
+        assert entry["exception"].startswith("Traceback")
+        assert "ValueError: no such thing" in entry["exception"]
+
+    def test_json_is_redacted_like_text(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
+        monkeypatch.setenv("WACTORZ_LOG_FORMAT", "json")
+        try:
+            raise ValueError("auth failed for mqtt://u:s3cr3t@broker password=hunter2")
+        except ValueError:
+            record = _record("broker mqtt://u:s3cr3t@host", sys.exc_info())
+
+        written = _written_by_the_file_handler(tmp_path, record)
+
+        assert "s3cr3t" not in written
+        assert "hunter2" not in written
+        entry = json.loads(written)
+        assert "mqtt://u:" in entry["message"], "only the credential is removed"
+        assert "ValueError" in entry["exception"], "the traceback is redacted, not discarded"
+
+    @pytest.mark.parametrize("value", ["JSON", " json ", '"json"'])
+    def test_the_setting_is_read_forgivingly(self, monkeypatch, value: str) -> None:
+        monkeypatch.setenv("WACTORZ_LOG_FORMAT", value)
+
+        assert isinstance(log_setup.formatter(), log_setup.JsonFormatter)
+
+    def test_a_value_that_is_not_a_format_is_named_and_text_is_used(self, monkeypatch) -> None:
+        # A collector expecting JSON would otherwise get text with nothing saying why.
+        monkeypatch.setenv("WACTORZ_LOG_FORMAT", "yaml")
+
+        with pytest.warns(RuntimeWarning, match="WACTORZ_LOG_FORMAT='yaml'"):
+            chosen = log_setup.formatter()
+
+        assert not isinstance(chosen, log_setup.JsonFormatter)
+
+    def test_a_node_logs_to_its_console_in_the_same_format(self, monkeypatch) -> None:
+        # What it asks of `basicConfig` is what is checked: the test runner keeps
+        # handlers of its own on the root logger, and `basicConfig` leaves a
+        # root logger that has any alone.
+        monkeypatch.setenv("WACTORZ_LOG_FORMAT", "json")
+        asked: dict = {}
+        monkeypatch.setattr(logging, "basicConfig", lambda **kwargs: asked.update(kwargs))
+
+        node_cli.configure_logging(argparse.Namespace(loglevel="warning"))
+
+        (handler,) = asked["handlers"]
+        assert isinstance(handler, logging.StreamHandler)
+        assert isinstance(handler.formatter, log_setup.JsonFormatter)
+        assert asked["level"] == logging.WARNING

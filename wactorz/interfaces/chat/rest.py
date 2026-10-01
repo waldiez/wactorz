@@ -92,7 +92,17 @@ class RESTInterface:
         #: What the readiness probe reports on. Without one, this interface was
         #: built outside a running system and is never ready.
         self.system = system
-        self._monitor = PrometheusMonitor(lambda: getattr(self.agent, "_registry", None))
+        self._monitor = PrometheusMonitor(
+            lambda: getattr(self.agent, "_registry", None),
+            publisher_provider=lambda: getattr(self.system, "_mqtt_client", None),
+            nodes_provider=self._known_nodes,
+            expected_nodes_provider=lambda: [target.name for target in CONFIG.deploy_targets],
+        )
+
+    def _known_nodes(self) -> list[dict[str, Any]]:
+        """The nodes main knows, for `/metrics`; none when main has no node manager."""
+        nodes = getattr(self.agent, "nodes", None)
+        return nodes.list_nodes() if nodes is not None else []
 
     def _authorized(self, request: Request) -> bool:
         """Whether a request may proceed.

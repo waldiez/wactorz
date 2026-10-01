@@ -33,6 +33,26 @@ Prometheus scrapes the Python REST service and records:
 - LLM cost in USD
 - process/runtime metrics exported by `prometheus_client`
 
+And, for what the dashboard does not show:
+
+| Metric | What it says |
+|---|---|
+| `wactorz_mqtt_connected` | `1` while the server's broker connection is up |
+| `wactorz_mqtt_outbox_queued` | Messages in memory waiting to be sent to the broker |
+| `wactorz_mqtt_outbox_backlog` | Stored messages waiting on disk for room in that queue |
+| `wactorz_mqtt_publish_failures_total` | Publishes that failed on a live connection and were held to retry |
+| `wactorz_mqtt_outbox_dropped_total` | Messages discarded because the outbox was full |
+| `wactorz_mqtt_outbox_discarded_total` | Messages given up on: unsendable, expired undelivered, or failing every try |
+| `wactorz_nodes{state}` | Edge nodes that are `up` and `down` |
+| `wactorz_node_up{node}` | `1` while a node's heartbeat is recent |
+| `wactorz_node_heartbeat_age_seconds{node}` | Seconds since a node's last heartbeat |
+| `wactorz_node_agents{node}` | Agents a node reported running |
+| `wactorz_node_info{node,version,runtime}` | The version and runtime a node reported |
+| `wactorz_llm_requests_total{provider,outcome}` | LLM requests by how they ended: `ok`, `unavailable` (the provider kept failing through every retry) or `error` (anything else: a rejected request, a bad key) |
+| `wactorz_llm_request_duration_seconds{provider}` | Time from a request to its answer or failure, retries included; for a streamed answer, to its last chunk |
+
+A request counts once however many attempts it took, and one the caller cancelled is not counted. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.
+
 The app exposes these at:
 
 ```text
@@ -195,4 +215,11 @@ Basic Prometheus alert rules are included for:
 
 - Python app down
 - actor heartbeat stale
+- the broker connection lost for 2 minutes
+- more than 100 outgoing messages waiting for 10 minutes
+- outgoing messages dropped or given up on
+- an edge node down for 5 minutes
+- more than half the requests to an LLM provider failing for 10 minutes
 - optional dependency probe failing
+
+They live in `infra/prometheus/alerts.yml`. Prometheus evaluates them and shows them on its **Alerts** page; nothing routes them anywhere yet.

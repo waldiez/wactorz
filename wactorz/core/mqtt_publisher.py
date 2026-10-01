@@ -153,6 +153,15 @@ class MQTTPublisher:
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=self.MAX_QUEUED)
         #: How many messages the cap has discarded, for the log and for tests.
         self._dropped = 0
+        #: How many messages were given up on: unsendable, expired, or failing
+        #: every time they were tried.
+        self._discarded = 0
+        #: How many stored messages expired undelivered. Counted apart from
+        #: `_discarded` because expiry runs on a worker thread, and one counter
+        #: written from both sides would lose updates.
+        self._expired = 0
+        #: How many publishes failed on a live connection and were held to retry.
+        self._publish_failures = 0
         #: A message whose publish failed, retried before the queue is read again.
         self._retry: tuple | None = None
         #: How many times in a row `_retry` has failed. It counts that one
@@ -372,6 +381,7 @@ class MQTTPublisher:
             self._close_db()
             return False
         for topic, count, age in expired:
+            self._expired += count
             logger.warning(
                 "[MQTT] outbox: expired %d message(s) for %s, undelivered after %s;"
                 " not replayed after a restart",
@@ -643,6 +653,7 @@ class MQTTPublisher:
             self._queue.task_done()
         if row_id >= 0:
             self._delete_from_db(row_id)
+        self._discarded += 1
         logger.warning("[MQTT] outbox: dropped a message for %r — %s", topic, reason)
 
     def _hold_for_retry(self, item: tuple, from_queue: bool, error: Exception) -> None:
@@ -655,6 +666,7 @@ class MQTTPublisher:
         """
         if from_queue:
             self._queue.task_done()
+        self._publish_failures += 1
         failures = 1 if from_queue else self._retry_failures + 1
         if failures >= self.POISON_AFTER:
             self._discard(item, False, f"its publish failed {failures} times in a row: {error}")
@@ -774,6 +786,26 @@ class MQTTPublisher:
     def queue_depth(self) -> int:
         """How many messages are waiting to be sent."""
         return self._queue.qsize()
+
+    @property
+    def backlog_depth(self) -> int:
+        """How many stored messages are waiting on disk for room in the queue."""
+        return len(self._spilled)
+
+    @property
+    def dropped(self) -> int:
+        """How many messages were discarded because the queue was full."""
+        return self._dropped
+
+    @property
+    def discarded(self) -> int:
+        """How many messages were given up on as unsendable, expired or always failing."""
+        return self._discarded + self._expired
+
+    @property
+    def publish_failures(self) -> int:
+        """How many publishes failed on a live connection and were held to retry."""
+        return self._publish_failures
 
     # ── Background drain loop ──────────────────────────────────────────────
 

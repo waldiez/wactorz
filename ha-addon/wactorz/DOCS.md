@@ -46,6 +46,8 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `retention_outbox_days` | `7` | Days a message the MQTT broker never accepted is kept and retried before it is dropped; `0` keeps retrying for ever. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
 | `node_accounts` | `false` | Give each deployed node its own broker account instead of sharing this addon's. On automatically with `mosquitto_embedded`; with the official Mosquitto addon it writes a `logins:` block for you to paste. See [An account per node](#an-account-per-node). |
+| `node_topics` | *(empty)* | Extra data topics every node's agents may use on the embedded broker, beyond `custom/`, `sensors/`, `home/`, `schedule/` and reading `homeassistant/state_changes/`. Comma-separated topic filters; `read:` before one makes it read-only, e.g. `zigbee2mqtt/#, read:weather/#`. |
+| `broker_accounts` | *(empty)* | Other accounts on the embedded broker that keep all of it once a node is deployed, comma-separated. An account not named there, other than this addon's own, then has no access. |
 | `node_signing` | `enforce` | What a deployed node does with a command that is not signed for it: `enforce` refuses it, `warn` acts on it and tells you in chat. Applies to a node from its next `/deploy` — see [Signed commands](#signed-commands). |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
@@ -144,12 +146,17 @@ Set `node_accounts: true` and every deployed node authenticates as itself, with
 a password derived for it rather than stored anywhere.
 
 - **`mosquitto_embedded: true`** — on automatically, since that broker is
-  configured here. It also loads an access list: a node may publish and read its
-  own `nodes/<name>/...` and the shared agent traffic, and is refused every other
-  node's topics, `agents/+/commands` and `system/`. Two warnings in the log when
-  that list loads — `ACL pattern '#' does not contain '%c' or '%u'` and the same
-  for `$SYS/#` — are expected: those are the lines that leave every other account
-  on the broker, Home Assistant's included, working as before.
+  configured here. Once a node is deployed it also loads an access list. A node
+  may use its own `nodes/<name>/...`, the agent traffic every host shares, and
+  the data topics agents use by convention: `custom/`, `sensors/`, `home/`,
+  `schedule/`, and `homeassistant/state_changes/` to read. It may write to main's
+  request and reply topics and not read them, and everything else on the broker
+  is closed to it — another node's topics, `agents/+/commands`, and any other
+  system's, such as `zigbee2mqtt/`. An agent on a node that uses a topic outside
+  those is refused by the broker without an error: add the prefix to
+  `node_topics`. This addon's own account keeps the whole broker; **any other
+  account on the embedded broker has no access unless `broker_accounts` names
+  it.**
 - **Official Mosquitto addon** — Wactorz writes
   `/share/wactorz/mosquitto-logins.yaml`. Paste its `logins:` entries into that
   addon's configuration, keeping any already there, and restart it. Accounts

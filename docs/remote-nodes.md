@@ -236,35 +236,63 @@ key, and `/deploy` writes it into the node's `~/wactorz/.env` as before. A
 
 For the broker Wactorz configures — compose's, and the add-on's embedded one —
 it also writes an access list into `MQTT_BROKER_DIR`, beside the TLS
-certificate. With it, a node may:
+certificate. The list names what a node may use, and a topic it does not name is
+refused. A node may:
 
-- publish and read its own `nodes/<name>/...`, and the shared agent traffic
-  (`agents/#`, `sensors/#`, `homeassistant/#`, whatever your agents use);
+- publish and read its own `nodes/<name>/...`;
+- publish and read the agent traffic every host shares, `agents/#` — except
+  `agents/+/commands`, which stops agents on the server;
+- write, and not read, `main/llm_request` and `main/reply/#`: it asks main's
+  model and answers main's tasks, without seeing what another node asks or
+  answers;
+- publish and read the data topics agents use by convention — `custom/#`,
+  `sensors/#`, `home/#`, `schedule/#` — and read
+  `homeassistant/state_changes/#`.
 
-and may not:
+Everything else is closed to it: another node's `nodes/<other>/...` in either
+direction, so it can neither drive, impersonate nor watch another node;
+`system/`; and whatever else shares the broker, such as `zigbee2mqtt/` or Home
+Assistant's discovery topics.
 
-- touch another node's `nodes/<other>/...`, in either direction — so it can
-  neither drive, impersonate nor watch another node;
-- write `agents/+/commands`, which stops agents on the server;
-- write anything under `system/`.
+Two settings shape the list, both read by whatever writes it (the server, and
+compose's `mqtt-certs`; the add-ons offer them as `node_topics` and
+`broker_accounts`):
+
+| Setting | What it does |
+| ------- | ------------ |
+| `WACTORZ_NODE_TOPICS` | More data topics for every node, comma-separated: `zigbee2mqtt/#, read:weather/#`. A filter prefixed `read:` may be read and not written. One under `nodes/`, `agents/`, `main/`, `system/` or `$` is refused, with a message, because it would open for every node what the list exists to close. |
+| `WACTORZ_BROKER_ACCOUNTS` | Other accounts on this broker that keep all of it, comma-separated: `homeassistant, zigbee2mqtt`. The server's own account (`MQTT_USERNAME`) is always one of them. |
+
+**An agent on a node that uses a topic outside the list gets no error.** The
+broker drops the publish and delivers nothing to the subscription, which is how
+MQTT refuses, so the agent looks idle rather than broken. If an agent that works
+on the server goes quiet on a node, add its topic prefix to
+`WACTORZ_NODE_TOPICS`.
+
+**List every other account once a node is deployed.** Mosquitto gives an account
+the list does not mention no access at all, so with a node deployed, Home
+Assistant's or zigbee2mqtt's account on this broker stops working until it is in
+`WACTORZ_BROKER_ACCOUNTS`. The server names the accounts that keep the whole
+broker in its log whenever it writes the list. With no node deployed nothing is
+closed: the list gives every account the whole broker.
 
 The compose broker picks up a new node's account on its own: it watches that
 folder, reloads for a new account, and restarts itself if the access list or the
 certificate appeared for the first time, since mosquitto reads those only at
 startup.
 
-Two lines in the broker log when that list loads are expected:
+Before any node is deployed, two lines in the broker log are expected:
 
 ```
 Warning: ACL pattern '#' does not contain '%c' or '%u'.
 Warning: ACL pattern '$SYS/#' does not contain '%c' or '%u'.
 ```
 
-They are the two lines that give every account the commons, the server's own and
-Home Assistant's included. Mosquitto notes that neither names a client, which is
-the point — "everything" is not something `%u` can spell — and the alternative
-spelling (`topic` instead of `pattern`) applies to anonymous clients only, which
-would leave every named account with no access at all.
+They are the two lines that give every account the whole broker while there is
+no node to keep out of anything. Mosquitto notes that neither names a client,
+which is the point — "everything" is not something `%u` can spell — and the
+alternative spelling (`topic` instead of `pattern`) applies to anonymous clients
+only, which would leave every named account with no access at all.
 
 **Only turn this on where the broker has those accounts.** On a broker you run
 yourself, create them there first (or keep using `DEPLOY_<NODE>_BROKER_USER`).

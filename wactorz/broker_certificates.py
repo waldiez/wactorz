@@ -62,7 +62,8 @@ def _write_node_accounts() -> None:
     directory = Path(CONFIG.mqtt_broker_dir).expanduser()
     nodes = [target.name for target in CONFIG.deploy_targets]
     try:
-        changed = broker_accounts.write_files(directory, nodes)
+        full_access = full_access_accounts()
+        changed = broker_accounts.write_files(directory, nodes, full_access, node_data_topics())
     except (OSError, ValueError) as exc:
         logger.warning(
             "[mqtt-accounts] Could not write the node accounts to %s: %s", directory, exc
@@ -76,6 +77,27 @@ def _write_node_accounts() -> None:
             len(nodes),
             directory,
         )
+        if nodes:
+            logger.warning(
+                "[mqtt-accounts] On that broker, %s keep%s every topic, each node has its own "
+                "and the shared agent and data topics, and any other account has none. List "
+                "another system's account in WACTORZ_BROKER_ACCOUNTS, and a data topic a node's "
+                "agents use in WACTORZ_NODE_TOPICS.",
+                " and ".join(full_access) if full_access else "clients with no account",
+                "s" if len(full_access) == 1 else "",
+            )
+
+
+def full_access_accounts() -> list[str]:
+    """The accounts the access list gives the whole broker: this server's, and those listed."""
+    listed = broker_accounts.parse_accounts(CONFIG.broker_accounts)
+    own = [CONFIG.mqtt_username] if CONFIG.mqtt_username else []
+    return sorted({*own, *listed})
+
+
+def node_data_topics() -> list[tuple[str, str]]:
+    """The data topics a node may use: the conventional ones, and those the setting adds."""
+    return [*broker_accounts.NODE_TOPICS, *broker_accounts.parse_node_topics(CONFIG.node_topics)]
 
 
 def _prepare_server_tls() -> str:
@@ -201,7 +223,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         # everything it reads.
         if CONFIG.node_accounts:
             broker_accounts.write_files(
-                args.export, [target.name for target in CONFIG.deploy_targets]
+                args.export,
+                [target.name for target in CONFIG.deploy_targets],
+                full_access_accounts(),
+                node_data_topics(),
             )
     if args.logins is not None:
         nodes = [target.name for target in CONFIG.deploy_targets]

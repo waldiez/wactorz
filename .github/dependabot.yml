@@ -30,6 +30,18 @@ updates:
       images:
         patterns: ["*"]
 
+  # The images compose.yaml and compose.dev.yaml run: the broker, pinned by
+  # digest to the same release the broker tests use, and the rest by tag.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      compose:
+        patterns: ["*"]
+
   - package-ecosystem: bun
     directory: /frontend
     schedule:

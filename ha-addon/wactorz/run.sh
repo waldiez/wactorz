@@ -298,6 +298,12 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     WACTORZ_NODE_ACCOUNTS=true
 fi
 export WACTORZ_NODE_ACCOUNTS
+# What the embedded broker's access list adds for nodes, and the other accounts
+# that keep the whole broker. Empty leaves the list as generated.
+WACTORZ_NODE_TOPICS=$(get_config_safe 'node_topics' '')
+export WACTORZ_NODE_TOPICS
+WACTORZ_BROKER_ACCOUNTS=$(get_config_safe 'broker_accounts' '')
+export WACTORZ_BROKER_ACCOUNTS
 
 # ── Broker TLS certificate ────────────────────────────────────────────────────
 # Issued from a CA generated once and kept in the state directory, which /deploy
@@ -364,7 +370,10 @@ if [ "$MOSQUITTO_EMBEDDED" = "true" ]; then
     fi
     MQTT_PW=$(cat "$MQTT_CREDS")
     # The broker reads this file after dropping privileges, so it must be
-    # readable by the mosquitto user and by nobody else.
+    # readable by the mosquitto user and by nobody else. Removed first: it
+    # outlives a restart of the add-on, and mosquitto_passwd will not create a
+    # file that is already there.
+    rm -f /tmp/mosquitto.passwd
     mosquitto_passwd -b -c /tmp/mosquitto.passwd wactorz "$MQTT_PW"
     # The node accounts go in here, before the file changes hands: /tmp is sticky
     # and world-writable, where a kernel with fs.protected_regular set refuses even

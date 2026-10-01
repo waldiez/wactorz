@@ -6,8 +6,8 @@ password, two nodes never share one, and a leaked password file says nothing
 about the signing key derived from the same secret.
 
 The access list's shape is pinned here; that mosquitto reads it the way this
-assumes -- deny beating every allow, an unnamed account having no access -- is
-checked against a real broker outside the suite, which has no broker by design.
+assumes -- a deny beating the allow around it, write without read, an unnamed
+account having no access -- is asked of a real broker in `tests/broker`.
 """
 
 import base64
@@ -126,52 +126,114 @@ class TestTheLoginsForTheOfficialAddon:
             broker_accounts.home_assistant_logins(["a:b"])
 
 
+def _block(text: str, account: str) -> str:
+    """The rules under ``user <account>``, up to the next account."""
+    return text[text.index(f"user {account}\n") :].split("\nuser ")[0]
+
+
 class TestTheAccessList:
-    def test_it_opens_by_granting_every_account_the_commons(self) -> None:
-        # Without it, an account this file does not name -- the server's own, or
-        # one the user added -- would have no access at all.
-        text = broker_accounts.acl_text(NODES)
-        assert text.index("pattern readwrite #") < text.index("user ")
+    def test_a_node_may_use_its_own_tree_and_no_other_nodes(self) -> None:
+        text = broker_accounts.acl_text(NODES, ["wactorz"])
+        kitchen = _block(text, "rpi-kitchen")
 
-    def test_the_commons_is_a_pattern_and_not_a_topic(self) -> None:
-        # Mosquitto warns that this pattern names no client, and the obvious way
-        # to silence that warning -- `topic readwrite #` -- applies to anonymous
-        # clients only, leaving every named account, the server's own included,
-        # with no access at all. Measured against 2.0.22, not deduced.
-        text = broker_accounts.acl_text(NODES)
-        commons = text[: text.index("user ")]
-        assert "pattern readwrite #" in commons
-        assert "topic readwrite #" not in commons
+        assert "topic readwrite nodes/rpi-kitchen/#" in kitchen
+        assert "rpi-garage" not in kitchen
 
-    def test_a_node_is_denied_every_other_nodes_tree(self) -> None:
-        text = broker_accounts.acl_text(NODES)
-        kitchen = text[text.index("user rpi-kitchen") :]
-        assert "topic deny nodes/rpi-garage/#" in kitchen
-        assert "topic deny nodes/rpi-kitchen/#" not in kitchen
+    def test_a_node_shares_agent_traffic_but_not_the_servers_commands(self) -> None:
+        kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
 
-    def test_every_node_is_denied_the_servers_own_control_topics(self) -> None:
-        text = broker_accounts.acl_text(NODES)
+        assert "topic readwrite agents/#" in kitchen
+        assert "topic deny agents/+/commands" in kitchen
+
+    def test_a_node_writes_to_main_and_does_not_read_it(self) -> None:
+        # Read access would let it watch the other nodes' answers, and learn a
+        # reply topic to forge one into.
+        kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
+        about_main = [line for line in kitchen.splitlines() if " main/" in line]
+
+        assert about_main == ["topic write main/llm_request", "topic write main/reply/#"]
+
+    def test_a_node_gets_the_conventional_data_topics(self) -> None:
+        kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
+
+        for topic, access in broker_accounts.NODE_TOPICS:
+            assert f"topic {access} {topic}" in kitchen
+        assert "topic read homeassistant/state_changes/#" in kitchen
+
+    def test_added_data_topics_reach_every_node(self) -> None:
+        topics = [*broker_accounts.NODE_TOPICS, ("zigbee2mqtt/#", "readwrite")]
+        text = broker_accounts.acl_text(NODES, ["wactorz"], topics)
+
         for node in NODES:
-            block = text[text.index(f"user {node}") :]
-            for topic in broker_accounts.FIXED_DENIES:
-                assert f"topic deny {topic}" in block.split("\nuser ")[0]
+            assert "topic readwrite zigbee2mqtt/#" in _block(text, node)
 
-    def test_one_node_has_only_the_fixed_denies(self) -> None:
-        text = broker_accounts.acl_text(["rpi"])
-        assert text.count("topic deny") == len(broker_accounts.FIXED_DENIES)
+    def test_nothing_grants_a_node_everything(self) -> None:
+        text = broker_accounts.acl_text(NODES, ["wactorz"])
 
-    def test_broker_statistics_stay_readable_except_to_nodes(self) -> None:
-        # mosquitto keeps $SYS out of ordinary topic rules, and the compose broker's
-        # health check reads it: without this the broker starts but never goes
-        # healthy, and everything waiting on it refuses to start.
+        assert "pattern" not in text
+        for node in NODES:
+            assert "topic readwrite #" not in _block(text, node)
+
+    def test_the_servers_account_and_listed_ones_keep_the_whole_broker(self) -> None:
+        # mosquitto gives an account this file does not name no access at all, so
+        # these have to be named. $SYS is outside every ordinary rule, and the
+        # compose broker's health check reads it.
+        text = broker_accounts.acl_text(NODES, ["wactorz", "homeassistant"])
+
+        for account in ("wactorz", "homeassistant"):
+            block = _block(text, account)
+            assert "topic readwrite #" in block
+            assert "topic read $SYS/#" in block
+
+    def test_a_server_with_no_account_keeps_the_broker_as_an_anonymous_client(self) -> None:
+        # A `topic` line outside a `user` block reaches clients that give no account.
         text = broker_accounts.acl_text(NODES)
+        before_the_nodes = text[: text.index("user ")]
+
+        assert "topic readwrite #" in before_the_nodes
+
+    def test_a_node_named_like_a_listed_account_is_still_only_a_node(self) -> None:
+        text = broker_accounts.acl_text(["rpi"], ["wactorz", "rpi"])
+
+        assert text.count("user rpi\n") == 1
+        assert "topic readwrite #" not in _block(text, "rpi")
+
+    def test_with_no_node_every_account_keeps_everything(self) -> None:
+        # Nobody to pen in, so an install without nodes is not asked to list its
+        # other accounts. `pattern`, not `topic`: a `topic` line outside a `user`
+        # block reaches anonymous clients only.
+        text = broker_accounts.acl_text([], ["wactorz"])
+
+        assert "pattern readwrite #" in text
         assert "pattern read $SYS/#" in text
-        for node in NODES:
-            block = text[text.index(f"user {node}") :].split("\nuser ")[0]
-            assert "topic deny $SYS/#" in block
+        assert "user " not in text
 
     def test_it_says_it_is_generated(self) -> None:
         assert broker_accounts.acl_text(NODES).startswith("# Generated by Wactorz")
+
+
+class TestTheDataTopicsSetting:
+    def test_filters_are_read_and_written_unless_marked_read(self) -> None:
+        assert broker_accounts.parse_node_topics(" zigbee2mqtt/# , read:weather/# ,") == [
+            ("zigbee2mqtt/#", "readwrite"),
+            ("weather/#", "read"),
+        ]
+
+    def test_empty_means_nothing_added(self) -> None:
+        assert broker_accounts.parse_node_topics("") == []
+
+    @pytest.mark.parametrize(
+        "topic", ["#", "nodes/other/#", "agents/#", "main/reply/#", "system/#", "$SYS/#"]
+    )
+    def test_a_filter_that_would_take_a_fence_down_is_refused(self, topic: str) -> None:
+        with pytest.raises(ValueError, match="would give every node"):
+            broker_accounts.parse_node_topics(topic)
+
+    @pytest.mark.parametrize("topic", ["a b/#", "a/#/b", "a#", "x/\ntopic readwrite #"])
+    def test_a_filter_that_could_not_be_one_rule_is_refused(self, topic: str) -> None:
+        # It is written into the file as it is, one rule per line.
+        with pytest.raises(ValueError):
+            broker_accounts.parse_node_topics(topic)
 
 
 class TestNames:
@@ -243,6 +305,47 @@ class TestAtStartup:
         assert "user rpi-kitchen" in (directory / broker_accounts.ACL_FILE).read_text(
             encoding="utf-8"
         )
+
+    def test_the_settings_reach_the_access_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(directory),
+            mqtt_username="wactorz",
+            broker_accounts="homeassistant, zigbee2mqtt",
+            node_topics="plant/#",
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        assert broker_certificates.prepare_broker_files() == ""
+
+        text = (directory / broker_accounts.ACL_FILE).read_text(encoding="utf-8")
+        for account in ("wactorz", "homeassistant", "zigbee2mqtt"):
+            assert "topic readwrite #" in _block(text, account)
+        assert "topic readwrite plant/#" in _block(text, "rpi")
+
+    def test_a_setting_that_cannot_be_used_is_reported_and_writes_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Writing the list without it would deploy nodes that are then refused
+        # the topic the operator asked for, with nothing saying why.
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(directory),
+            node_topics="nodes/#",
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            assert broker_certificates.prepare_broker_files() == ""
+
+        assert "would give every node" in caplog.text
+        assert not (directory / broker_accounts.ACL_FILE).exists()
 
     def test_nothing_is_written_when_accounts_are_off(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

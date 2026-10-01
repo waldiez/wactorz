@@ -123,6 +123,16 @@ options:
   # its account up on its next /deploy.
   node_accounts: false
 
+  # With the embedded broker and at least one deployed node, a node's account may
+  # use its own topics, the agent traffic every host shares, and the data topics
+  # agents use by convention (custom/, sensors/, home/, schedule/, and reading
+  # homeassistant/state_changes/). node_topics adds more for every node: topic
+  # filters separated by commas, with `read:` before one to make it read-only,
+  # e.g. "zigbee2mqtt/#, read:weather/#". broker_accounts names other accounts
+  # on that broker that keep all of it; one not named has no access.
+  node_topics: ""
+  broker_accounts: ""
+
   # Home Assistant connection (used by HA agents inside Wactorz)
   # auto (default): supervisor proxy when ha_token is blank, custom URL otherwise.
   ha_connection: auto
@@ -194,6 +204,8 @@ schema:
   retention_outbox_days: int
   node_signing: list(warn|enforce)?
   node_accounts: bool?
+  node_topics: str?
+  broker_accounts: str?
   deploy_targets:
     - name: str
       host: str?

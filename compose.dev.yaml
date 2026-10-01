@@ -15,7 +15,7 @@ name: wactorz-dev
 services:
   # ── MQTT broker ─────────────────────────────────────────────────────────────
   mosquitto:
-    image: eclipse-mosquitto:2.0
+    image: eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
     container_name: wactorz-dev-mosquitto
     cap_drop: [ALL]
     # As in compose.yaml: KILL lets the reload watcher signal the broker, which
@@ -61,6 +61,9 @@ services:
       - |
         set -e
         umask 077
+        # Removed first: this file outlives a restart of the container, and
+        # mosquitto_passwd will not create a file that is already there.
+        rm -f /mosquitto/config/passwd
         mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
         chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
         # Everything Wactorz generates is optional and independent: with none of it
@@ -114,6 +117,7 @@ services:
             if [ "$$now" != "$$last" ]; then
               last=$$now
               umask 077
+              rm -f /mosquitto/config/passwd
               mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
               chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
               take_generated

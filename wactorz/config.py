@@ -457,6 +457,14 @@ class AppConfig:
     #: Whether a deployed node gets a broker account of its own, derived for it.
     #: Only for a broker Wactorz configures, which is where those accounts exist.
     node_accounts: bool
+    #: Data topics every node's agents may use, beyond the conventional ones the
+    #: access list already names. Comma-separated filters; `read:` before one
+    #: makes it read-only. See wactorz/core/broker_accounts.py.
+    node_topics: str
+    #: Other accounts on the same broker that keep all of it once nodes exist:
+    #: Home Assistant's, zigbee2mqtt's. Comma-separated; the server's own account
+    #: is always one of them.
+    broker_accounts: str
     ha_url: str
     ha_token: str
     ha_state_bridge_output_topic: str
@@ -525,6 +533,8 @@ CONFIG = AppConfig(
     mqtt_tls_port=_env_int("MQTT_TLS_PORT", 8883),
     mqtt_broker_dir=os.getenv("MQTT_BROKER_DIR", "").strip(),
     node_accounts=_env_truthy("WACTORZ_NODE_ACCOUNTS"),
+    node_topics=os.getenv("WACTORZ_NODE_TOPICS", "").strip(),
+    broker_accounts=os.getenv("WACTORZ_BROKER_ACCOUNTS", "").strip(),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_state_bridge_output_topic=os.getenv(

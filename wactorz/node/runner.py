@@ -37,7 +37,13 @@ from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
 from .agent import NodeAgent
 from .publishing import NodePublisher
-from .signing import CLEARABLE_LEAVES, ControlGuard, message_bytes
+from .signing import (
+    CLEARABLE_LEAVES,
+    ControlGuard,
+    message_bytes,
+    server_mismatch,
+    user_properties,
+)
 from .state import json_safe
 
 logger = logging.getLogger(__name__)
@@ -446,9 +452,7 @@ class NodeRunner:
         payload = message_bytes(msg.payload)
         if not payload and leaf in CLEARABLE_LEAVES:
             return True
-        pairs = getattr(getattr(msg, "properties", None), "UserProperty", None) or []
-        properties = {str(name): str(value) for name, value in pairs}
-        return self._control.admit(leaf, topic_str, payload, properties)
+        return self._control.admit(leaf, topic_str, payload, user_properties(msg))
 
     async def _dispatch_control(self, topic_str: str, data: Any, msg: Any) -> None:
         """Route one control message to the command it names.
@@ -477,13 +481,32 @@ class NodeRunner:
             await self._on_task(topic_str, data, msg)
 
     async def _on_desired_state(self, topic_str: str, data: Any, msg: Any) -> None:
-        """Start any agent named in the desired state that is not running."""
+        """Start any agent named in the desired state that is not running.
+
+        The copy the broker retained, handed over when this node subscribes, is
+        what brings a node's agents back after a reboot: those ran here before,
+        and are started whatever server last wrote the list. One that arrives
+        while the node is up is the server changing the list now, and an agent
+        it adds is a spawn by another route, refused from a server on another
+        release as a spawn is.
+        """
         if not msg.payload or not isinstance(data, dict):
             return
         desired = data.get("agents", [])
         if not desired:
             return
         logger.info("[runner] Reconciling desired state: %s", [a.get("name") for a in desired])
+
+        if not getattr(msg, "retain", False):
+            server = server_mismatch(user_properties(msg), __version__)
+            missing = [
+                str(config.get("name"))
+                for config in desired
+                if config.get("name") and self.get(config["name"]) is None
+            ]
+            if server is not None and missing:
+                await self._refuse_agents_from(server, missing)
+                return
 
         for agent_config in desired:
             aname = agent_config.get("name")
@@ -498,7 +521,35 @@ class NodeRunner:
     async def _on_spawn(self, topic_str: str, data: Any, msg: Any) -> None:
         if not msg.payload:  # empty = retain-clear message, ignore
             return
+        server = server_mismatch(user_properties(msg), __version__)
+        if server is not None:
+            name = data.get("name") if isinstance(data, dict) else None
+            await self._refuse_agents_from(server, [str(name or "an agent")])
+            return
         self._background(self.spawn_agent(data), "spawn_agent")
+
+    async def _refuse_agents_from(self, server: str, names: list[str]) -> None:
+        """Say why agents sent by a server on another release are not started.
+
+        The server makes the same check from this node's heartbeat before it
+        sends one. This is for when it could not: it has not heard this node's
+        version, or holds one from before the node was last installed. Only a
+        new agent is refused. Those already here keep running, and a stop is
+        obeyed whoever sends it, since that is how a node is brought level.
+        """
+        listed = ", ".join(f"'{name}'" for name in names)
+        logger.error(
+            "[runner] Not starting %s: the server runs version %s and this node %s.",
+            listed,
+            server,
+            __version__,
+        )
+        await self._log_to_dashboard(
+            "error",
+            f"Refused to start {listed}: the server runs version {server}, which does not work "
+            f"with this node's {__version__}. Redeploy it with `/deploy {self.node_name}` so "
+            "both run the same release.",
+        )
 
     async def _on_stop(self, topic_str: str, data: Any, msg: Any) -> None:
         """Stop a named agent.

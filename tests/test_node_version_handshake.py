@@ -1,12 +1,18 @@
-"""A node runs the same version as main, or it is not given agents.
+"""A node runs the same release series as main, or it is not given agents.
 
 A node runs the same package main does, and an agent sent to it is built from
 that code against the same contract. A node on another release may not know a
 field a spawn config carries today, and the failure is not loud: the agent is
 handed over, the node does what it can with it, and whatever went wrong shows
 up later, somewhere else. So main reads the version every heartbeat carries and
-refuses to spawn on, or migrate to, a node that reports a different one --
-saying which command brings the node level.
+refuses to spawn on, or migrate to, a node on another series -- saying which
+command brings the node level. Versions that differ in the patch number alone
+work together, so a fix to the server does not mean deploying every node again.
+
+The node checks too. Main states its version on every command it sends a node,
+and a node refuses a spawn from a server on another series: main's own check
+depends on a heartbeat it may not have heard, or heard before the node was
+installed again.
 
 The node's command line is part of the same guard. ``wactorz-node`` exists only
 in releases that carry the node runtime, so a unit that starts the node through
@@ -15,6 +21,7 @@ that install's *server* -- which is what ``wactorz --node`` did on a release
 whose parser had never heard of the flag and dropped it.
 """
 
+import asyncio
 import shlex
 import time
 from typing import Any
@@ -29,7 +36,59 @@ from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.core import compatibility, node_signing
 from wactorz.node import cli as node_cli
+from wactorz.node import signing as node_side
+from wactorz.node.runner import NodeRunner
+
+# ── Which versions work together ───────────────────────────────────────────────
+
+
+class TestWhichVersionsWorkTogether:
+    @pytest.mark.parametrize(
+        ("one", "other"),
+        [
+            ("1.4.2", "1.4.2"),
+            ("1.4.2", "1.4.9"),
+            ("1.4.0", "1.4.12.1"),
+            ("1.4", "1.4.3"),
+            ("1.4.0.dev3", "1.4.1"),
+            ("nightly", "nightly"),
+        ],
+    )
+    def test_the_same_series_does(self, one: str, other: str) -> None:
+        assert compatibility.compatible(one, other)
+        assert compatibility.compatible(other, one)
+
+    @pytest.mark.parametrize(
+        ("one", "other"),
+        [
+            ("1.4.2", "1.5.0"),
+            ("1.4.2", "2.4.2"),
+            # The minor number is read whole, not by its first digit.
+            ("1.4.0", "1.40.0"),
+            ("1.4.2", "nightly"),
+            ("nightly", "weekly"),
+            ("1.4.2", ""),
+        ],
+    )
+    def test_another_series_or_an_unreadable_version_does_not(self, one: str, other: str) -> None:
+        assert not compatibility.compatible(one, other)
+        assert not compatibility.compatible(other, one)
+
+
+def _same_series() -> str:
+    """Another version in this one's series."""
+    series = compatibility.series(__version__)
+    assert series is not None
+    return f"{series[0]}.{series[1]}.999"
+
+
+def _another_series() -> str:
+    series = compatibility.series(__version__)
+    assert series is not None
+    return f"{series[0]}.{series[1] + 1}.0"
+
 
 # ── The rule itself ────────────────────────────────────────────────────────────
 
@@ -58,6 +117,18 @@ class TestTheRule:
         assert "0.0.1" in why
         assert __version__ in why
         assert "/deploy rpi" in why
+
+    def test_a_node_a_patch_release_away_is_fine(self) -> None:
+        nodes = NodeManager()
+        nodes.known["rpi"] = _node(_same_series())
+
+        assert nodes.version_mismatch("rpi") is None
+
+    def test_a_node_on_the_next_series_is_refused(self) -> None:
+        nodes = NodeManager()
+        nodes.known["rpi"] = _node(_another_series())
+
+        assert nodes.version_mismatch("rpi") is not None
 
     def test_a_node_that_reports_no_version_is_not_judged_here(self) -> None:
         # A runtime older than the field. The signing and runtime handling read
@@ -244,3 +315,163 @@ class TestTheNodeCommand:
         assert shlex.split(command.split("nohup ", 1)[1].split(" >", 1)[0])[0].endswith(
             "wactorz-node"
         )
+
+
+# ── The node's own check ───────────────────────────────────────────────────────
+
+
+class _Command:
+    """A control message as the node receives it, with the properties main set."""
+
+    def __init__(
+        self, topic: str, payload: bytes, pairs: list[tuple[str, str]], retain: bool = False
+    ) -> None:
+        self.topic = topic
+        self.payload = payload
+        self.retain = retain
+        self.properties = type("Properties", (), {"UserProperty": pairs})()
+
+
+@pytest.fixture(name="runner")
+def runner_fixture(tmp_path: Any) -> tuple[NodeRunner, list[tuple[str, Any]], list[Any]]:
+    """A node, what it published, and the spawns it went on to start."""
+    runner = NodeRunner("localhost", 1883, "rpi", state_dir=str(tmp_path))
+    published: list[tuple[str, Any]] = []
+    spawned: list[Any] = []
+
+    async def _publish(topic: str, data: Any, retain: bool = False, **_kw: Any) -> None:
+        published.append((topic, data))
+
+    async def _spawn(config: Any) -> None:
+        spawned.append(config)
+
+    runner.publish = _publish  # type: ignore[method-assign]
+    runner.spawn_agent = _spawn  # type: ignore[method-assign]
+    return runner, published, spawned
+
+
+async def _spawn_from(runner: NodeRunner, pairs: list[tuple[str, str]]) -> None:
+    config = {"name": "collector"}
+    await runner._on_spawn("nodes/rpi/spawn", config, _Command("nodes/rpi/spawn", b"{}", pairs))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+
+async def _desired_from(runner: NodeRunner, pairs: list[tuple[str, str]], retained: bool) -> None:
+    topic = "nodes/rpi/desired_state"
+    desired = {"agents": [{"name": "collector"}]}
+    await runner._on_desired_state(topic, desired, _Command(topic, b"{}", pairs, retained))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+
+class TestMainStatesItsVersion:
+    def test_every_command_to_a_node_names_it(self, tmp_path: Any, monkeypatch: Any) -> None:
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path))
+        monkeypatch.setattr(node_signing, "_secret", None)
+        monkeypatch.setattr(node_signing, "_last_sequence", None)
+
+        pairs = node_signing.node_control_properties("nodes/rpi/spawn", b"{}")
+
+        assert pairs is not None
+        assert dict(pairs)[node_signing.VERSION_PROPERTY] == __version__
+
+    def test_what_is_not_a_command_names_nothing(self) -> None:
+        assert node_signing.node_control_properties("agents/x/logs", b"{}") is None
+
+
+class TestTheNodeChecksToo:
+    async def test_a_spawn_from_a_server_on_another_series_is_refused(
+        self, runner: tuple[NodeRunner, list[tuple[str, Any]], list[Any]]
+    ) -> None:
+        node, published, spawned = runner
+        server = _another_series()
+
+        await _spawn_from(node, [(node_signing.VERSION_PROPERTY, server)])
+
+        assert spawned == []
+        ((topic, said),) = published
+        assert topic == "agents/rpi/logs"
+        assert said["type"] == "error"
+        assert "collector" in said["message"]
+        assert server in said["message"]
+        assert __version__ in said["message"]
+        assert "/deploy rpi" in said["message"]
+
+    async def test_so_is_an_agent_it_adds_to_the_desired_state(
+        self, runner: tuple[NodeRunner, list[tuple[str, Any]], list[Any]]
+    ) -> None:
+        # Main writes the desired state right after a spawn, and a node starts
+        # what that names too: refusing the spawn alone would refuse nothing.
+        node, published, spawned = runner
+
+        await _desired_from(node, [(node_signing.VERSION_PROPERTY, _another_series())], False)
+
+        assert spawned == []
+        ((_topic, said),) = published
+        assert said["type"] == "error"
+        assert "collector" in said["message"]
+
+    async def test_the_agents_a_node_had_come_back_after_a_reboot_regardless(
+        self, runner: tuple[NodeRunner, list[tuple[str, Any]], list[Any]]
+    ) -> None:
+        # The retained copy, read when the node subscribes. A server upgraded
+        # since may have written it; the agents in it ran here before.
+        node, published, spawned = runner
+
+        await _desired_from(node, [(node_signing.VERSION_PROPERTY, _another_series())], True)
+
+        assert spawned == [{"name": "collector"}]
+        assert published == []
+
+    async def test_a_stop_is_obeyed_whoever_sends_it(
+        self, runner: tuple[NodeRunner, list[tuple[str, Any]], list[Any]]
+    ) -> None:
+        # Stopping is how a node is brought level, so it is not held to the check.
+        node, _published, _spawned = runner
+        stopped: list[Any] = []
+
+        async def _stop(name: str, delete: bool = False) -> None:
+            stopped.append(name)
+
+        node.stop_agent = _stop  # type: ignore[method-assign]
+        pairs = [(node_signing.VERSION_PROPERTY, _another_series())]
+
+        await node._on_stop(
+            "nodes/rpi/stop", {"name": "collector"}, _Command("nodes/rpi/stop", b"{}", pairs)
+        )
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        assert stopped == ["collector"]
+
+    @pytest.mark.parametrize("server", [__version__, _same_series()])
+    async def test_a_spawn_from_a_server_in_the_same_series_is_started(
+        self, runner: tuple[NodeRunner, list[tuple[str, Any]], list[Any]], server: str
+    ) -> None:
+        node, published, spawned = runner
+
+        await _spawn_from(node, [(node_signing.VERSION_PROPERTY, server)])
+
+        assert spawned == [{"name": "collector"}]
+        assert published == []
+
+    async def test_a_spawn_that_names_no_version_is_started(
+        self, runner: tuple[NodeRunner, list[tuple[str, Any]], list[Any]]
+    ) -> None:
+        # A server from before commands carried one. It judges this node by its
+        # heartbeat, and the node has nothing to judge it by.
+        node, _published, spawned = runner
+
+        await _spawn_from(node, [])
+
+        assert spawned == [{"name": "collector"}]
+
+    def test_only_a_stated_version_this_node_cannot_work_with_is_a_mismatch(self) -> None:
+        other = _another_series()
+
+        assert node_side.server_mismatch({node_signing.VERSION_PROPERTY: other}, __version__) == (
+            other
+        )
+        assert node_side.server_mismatch({}, __version__) is None
+        assert node_side.server_mismatch({node_signing.VERSION_PROPERTY: ""}, __version__) is None

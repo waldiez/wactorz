@@ -1,8 +1,8 @@
 """What main and a node agree on, exercised over a real broker.
 
 Each test is one thing a deployment depends on: the node is seen, a signed
-command is obeyed, an unsigned one is not, a task comes back answered, and a
-stop is carried out.
+command is obeyed, an unsigned one is not, a task comes back answered, a stop
+is carried out, and a node takes no new agent from a server on another release.
 """
 
 import asyncio
@@ -15,6 +15,7 @@ import pytest
 
 import wactorz
 from wactorz.agents.main.actor import MainActor
+from wactorz.core import compatibility, node_signing
 from wactorz.core.cancellation import cancel_until_done
 
 from .conftest import WAIT_S, FastNode, until
@@ -118,6 +119,79 @@ class TestANodeThatRestarts:
         # is the one place it can learn that from.
         await main._spawn_remote(_echo(), node.node_name, save=True)
         await until(lambda: node.get("echo") is not None, "the node running 'echo'")
+        await node.shutdown()
+        await until(lambda: not node._running, "the first node process stopping")
+
+        host, port = broker
+        again = FastNode(host, port, node.node_name, state_dir=str(tmp_path / "node-again"))
+        running = asyncio.create_task(again.run())
+        try:
+            await until(lambda: again.get("echo") is not None, "the restarted node running 'echo'")
+        finally:
+            await again.shutdown()
+            await cancel_until_done(running, timeout=WAIT_S)
+
+
+def _another_series() -> str:
+    series = compatibility.series(wactorz.__version__)
+    assert series is not None
+    return f"{series[0]}.{series[1] + 1}.0"
+
+
+class TestAServerOnAnotherRelease:
+    """Main states another version on its commands, as an upgraded server would.
+
+    Main's own check passes here, as it does when it has not heard the node's
+    version, so what is left is the node's.
+    """
+
+    async def test_the_node_starts_nothing_it_sends_and_says_why(
+        self,
+        broker: tuple[str, int],
+        main: MainActor,
+        node: FastNode,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        server = _another_series()
+        monkeypatch.setattr(node_signing, "__version__", server)
+        host, port = broker
+        refusals: list[str] = []
+
+        async def _listen(client: aiomqtt.Client) -> None:
+            async for message in client.messages:
+                said = json.loads(message.payload)  # pyright: ignore[reportArgumentType]
+                if said.get("type") == "error":
+                    refusals.append(said["message"])
+
+        async with aiomqtt.Client(host, port) as client:
+            await client.subscribe(f"agents/{node.node_name}/logs", qos=1)
+            listening = asyncio.create_task(_listen(client))
+            try:
+                # A spawn, and the desired state main writes after it: the node
+                # is told about the agent twice, and refuses it twice.
+                await main._spawn_remote(_echo("stranger"), node.node_name, save=True)
+                await until(lambda: len(refusals) >= 2, "the node refusing both")
+            finally:
+                await cancel_until_done(listening, timeout=WAIT_S)
+
+        assert node.get("stranger") is None
+        assert all("stranger" in said and server in said for said in refusals)
+
+    async def test_a_restarted_node_still_brings_back_what_it_ran(
+        self,
+        broker: tuple[str, int],
+        main: MainActor,
+        node: FastNode,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The server is upgraded after the agent was started, and writes the
+        # node's desired state again. The broker hands that copy to the node
+        # when it comes back, and the agent in it ran there before.
+        await main._spawn_remote(_echo(), node.node_name, save=True)
+        await until(lambda: node.get("echo") is not None, "the node running 'echo'")
+        monkeypatch.setattr(node_signing, "__version__", _another_series())
+        await main._update_node_desired_state(node.node_name, _echo())
         await node.shutdown()
         await until(lambda: not node._running, "the first node process stopping")
 

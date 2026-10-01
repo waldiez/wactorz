@@ -21,6 +21,7 @@ from typing import Any
 
 from ..._version import __version__
 from ...core.actor import derive_actor_id
+from ...core.compatibility import compatible
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -195,11 +196,12 @@ class NodeManager:
     def version_mismatch(self, node_name: str) -> str | None:
         """Why an agent must not be sent to `node_name`, or None when it may be.
 
-        A node runs the same package as main, at the same version: its agents are
-        built from the same code and speak the same contract, and a spawn config
-        main writes today may name something an older node has never heard of.
-        A node that reports a different version is refused, with the command
-        that brings it level.
+        A node runs the same package as main, from the same release series: its
+        agents are built from the same code and speak the same contract, and a
+        spawn config main writes today may name something an older node has
+        never heard of. A node on another series is refused, with the command
+        that brings it level; one that differs in the patch number alone is
+        not, so a fix to the server does not mean deploying every node again.
 
         A node that reports no version at all is not judged here. That is a
         runtime from before the field existed, and what to do about it is the
@@ -211,11 +213,12 @@ class NodeManager:
         if not info:
             return None
         reported = info.get("version")
-        if not reported or reported == __version__:
+        if not reported or compatible(__version__, str(reported)):
             return None
         return (
-            f"node '{node_name}' is running version {reported}, and this server is "
-            f"{__version__}. Redeploy it with `/deploy {node_name}` so both run the same code."
+            f"node '{node_name}' is running version {reported}, which does not work with "
+            f"this server's {__version__}. Redeploy it with `/deploy {node_name}` so both "
+            "run the same release."
         )
 
     def running_agent(self, name: str) -> str:

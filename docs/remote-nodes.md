@@ -39,6 +39,13 @@ python3 -m venv ~/wactorz/venv
 
 Install the same version main is running, and at least the one these docs ship with — earlier releases have no node runtime. The two exchange spawn configs, manifests and signed control messages, and a node a release apart from main is the kind of mismatch that surfaces days later as an agent that will not start. A deploy from the dashboard pins the version for you.
 
+Both sides hold each other to it. Main and a node work together when they are on the same release series, the same major and minor number: `1.4.0` and `1.4.3` do, `1.4.3` and `1.5.0` do not, so a patch release of the server does not mean deploying every node again.
+
+- Main reads the version in each node's heartbeat and refuses to spawn an agent on, or migrate one to, a node on another series. `/nodes` marks such a node.
+- Main states its own version on every command it sends a node, and a node refuses a new agent from a server on another series, with an error in the dashboard's log. That covers the moments main's check cannot: it has not yet heard the node's version, or heard it before the node was installed again.
+
+Either way the message names the fix, `/deploy <node>`. The agents a node is already running are left alone, they come back after a reboot, and a stop is always obeyed.
+
 No extra is needed: everything a node uses — `aiomqtt`, `psutil`, `aiohttp` — is a core dependency. An agent that needs more says so in its spawn config's `install` list, and the node installs it on the spot.
 
 #### 2. Start it as a node

@@ -9,7 +9,8 @@ description = "Actor-model multi-agent framework — spawn, coordinate and monit
 readme = "README.md"
 license = "Apache-2.0"
 license-files = [
-    "LICENSE"
+    "LICENSE",
+    "NOTICE.md",
 ]
 requires-python = ">=3.10"
 authors = [{ name = "Wactorz Contributors" }]
@@ -56,7 +57,10 @@ google    = ["google-genai>=1.0.0"]
 discord   = ["discord.py>=2.7.1"]
 telegram  = ["python-telegram-bot>=21.0"]
 whatsapp  = ["twilio>=9.10.4"]
-ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "numpy>=1.24.0"]
+# `torchvision` comes with `ultralytics` anyway. It is named so that the lockfile
+# can take it from the same place as `torch` (see `[tool.uv.sources]`, which
+# reaches only what is named here): the two are built against each other.
+ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "torchvision>=0.15.0", "numpy>=1.24.0"]
 mcp       = ["mcp>=1.0.0,<2"]
 tts       = ["edge-tts>=6.1.9"]
 cron      = ["croniter>=2.0.0"]
@@ -127,6 +131,25 @@ Homepage      = "https://docs.waldiez.io/wactorz/"
 Repository    = "https://github.com/waldiez/wactorz"
 Documentation = "https://docs.waldiez.io/wactorz/"
 "Bug Tracker" = "https://github.com/waldiez/wactorz/issues"
+
+# ── uv: what the lockfile resolves, for development, CI and the images ───────
+# None of this reaches someone installing Wactorz with pip, who gets the ranges
+# above and nothing else.
+#
+# On Linux the `torch` on PyPI is the CUDA build, and brings every NVIDIA
+# library with it: several gigabytes that a container with no GPU passed to it
+# cannot use. The lockfile takes PyTorch's own CPU build there instead, which
+# is what the `ultra` image installs. On macOS and Windows the PyPI build is
+# the CPU one already. A machine with a GPU installs with pip, or names the
+# CUDA index for itself.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 # ── Version ────────────────────────────────────────────────────────────────────
 [tool.hatch.version]

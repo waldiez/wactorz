@@ -31,6 +31,10 @@ from websockets.sync.client import connect
 from . import broker
 from .run import Run
 
+#: How often to ask for the node list while waiting on it. It reaches the
+#: dashboard over its socket and nowhere else, so each look opens one.
+NODE_POLL_S = 0.5
+
 
 class HttpError(AssertionError):
     """A response the caller expected to succeed and did not."""

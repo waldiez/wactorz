@@ -6,6 +6,7 @@ the node's settings and the process itself.
 """
 
 from harness import backend, broker, browser, node, waiting
+from harness.probe import NODE_POLL_S
 from harness.run import NODE_NAME, Run
 
 import wactorz
@@ -29,6 +30,7 @@ def test_a_deploy_from_the_chat_ends_with_the_node_online(
     waiting.until(
         lambda: NODE_NAME in app.rest.node_names(),
         what=f"the server to list node {NODE_NAME!r}",
+        interval=NODE_POLL_S,
     )
 
 

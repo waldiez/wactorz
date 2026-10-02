@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 from . import waiting
 
 if TYPE_CHECKING:
-    from playwright.sync_api import BrowserContext, ConsoleMessage, Page
+    from playwright.sync_api import BrowserContext, ConsoleMessage, Locator, Page
 
 WIDTH, HEIGHT = 1280, 800
 
@@ -54,6 +54,15 @@ MESSAGE_FROM = ".af-chat-msg-from"
 MESSAGE_BODY = ".af-chat-msg-bubble"
 WAITING_BODY = "af-chat-waiting"
 NODE_LIST = "#af-node-list"
+CARD_NAME = ".af-card-name"
+CARD_STATE = ".af-card-state-label"
+CARD_ACTION = "[data-action='{action}']"
+CARD_CHAT = ".af-chat-btn"
+CONFIRM = ".af-confirm"
+CONFIRM_TITLE = ".af-confirm-title"
+CONFIRM_MESSAGE = ".af-confirm-message"
+CONFIRM_OK = ".af-confirm-ok"
+CONFIRM_CANCEL = ".af-confirm-cancel"
 TOAST = ".wz-toast"
 
 #: How long an agent is given to say what a scenario expects of it.
@@ -152,6 +161,46 @@ class Dashboard:
             timeout=timeout,
             interval=0.25,
         )
+        return self
+
+    def _card(self, name: str) -> Locator:
+        """The card of the agent called exactly ``name``."""
+        named = self.page.locator(CARD_NAME).get_by_text(name, exact=True)
+        return self.page.locator(AGENT_CARD).filter(has=named)
+
+    def card_state(self, name: str) -> str:
+        """What the agent's card says its state is."""
+        self.show("overview")
+        return self._card(name).locator(CARD_STATE).inner_text().strip()
+
+    def card_actions(self, name: str) -> list[str]:
+        """The buttons the agent's card offers, by what each says."""
+        self.show("overview")
+        buttons = self._card(name).locator("button:visible").all_inner_texts()
+        return [text.strip() for text in buttons]
+
+    def press(self, name: str, action: str) -> Dashboard:
+        """Press ``action`` (start, stop or delete) on the agent's card."""
+        self.show("overview")
+        self._card(name).locator(CARD_ACTION.format(action=action)).click()
+        return self
+
+    # ── The question before something that cannot be undone ────────────────
+
+    def asked_to_confirm(self) -> tuple[str, str]:
+        """The title and the message of the dialog on screen."""
+        self.page.wait_for_selector(CONFIRM, state="visible")
+        title = self.page.locator(CONFIRM_TITLE).inner_text().strip()
+        return title, self.page.locator(CONFIRM_MESSAGE).inner_text().strip()
+
+    def confirm(self) -> Dashboard:
+        self.page.locator(CONFIRM_OK).click()
+        self.page.wait_for_selector(CONFIRM, state="detached")
+        return self
+
+    def cancel(self) -> Dashboard:
+        self.page.locator(CONFIRM_CANCEL).click()
+        self.page.wait_for_selector(CONFIRM, state="detached")
         return self
 
     def node_names(self) -> set[str]:

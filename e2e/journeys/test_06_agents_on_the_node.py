@@ -5,6 +5,7 @@ answer says whether its memory came with it.
 """
 
 from harness import backend, browser, waiting
+from harness.probe import NODE_POLL_S
 from harness.run import NODE_NAME
 
 
@@ -26,7 +27,11 @@ def test_main_starts_an_agent_on_the_node(
     dashboard.say("please start a counter on the node", to="main")
 
     dashboard.expect_like("main", r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>")
-    waiting.until(lambda: "counter" in _on_the_node(app), what="the node to be running 'counter'")
+    waiting.until(
+        lambda: "counter" in _on_the_node(app),
+        what="the node to be running 'counter'",
+        interval=NODE_POLL_S,
+    )
     assert "counter" not in _on_the_server(app)
 
 
@@ -45,7 +50,11 @@ def test_moved_home_it_remembers(dashboard: browser.Dashboard, app: backend.Back
         "(waiting for state from remote node).",
     )
     waiting.until(lambda: "counter" in _on_the_server(app), what="the server to be running it")
-    waiting.until(lambda: "counter" not in _on_the_node(app), what="the node to have let it go")
+    waiting.until(
+        lambda: "counter" not in _on_the_node(app),
+        what="the node to have let it go",
+        interval=NODE_POLL_S,
+    )
 
     dashboard.say("two", to="counter")
     dashboard.expect("counter", "counted 2")
@@ -65,7 +74,11 @@ def test_moved_out_again_it_still_remembers(
         rf"\[OK\] Migrating 'counter' from 'local' → '{NODE_NAME}' "
         r"\(waiting for it to confirm it started\)\.",
     )
-    waiting.until(lambda: "counter" in _on_the_node(app), what="the node to be running it again")
+    waiting.until(
+        lambda: "counter" in _on_the_node(app),
+        what="the node to be running it again",
+        interval=NODE_POLL_S,
+    )
     waiting.until(lambda: "counter" not in _on_the_server(app), what="the server to have let it go")
 
     dashboard.say("three", to="counter")
@@ -83,7 +96,11 @@ def test_an_agent_on_the_node_asks_the_model_through_the_server(
         rf"✅ System: Migration of 'counter' from 'local' → '{NODE_NAME}' complete\.\s+"
         r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>",
     )
-    waiting.until(lambda: "asker" in _on_the_node(app), what="the node to be running 'asker'")
+    waiting.until(
+        lambda: "asker" in _on_the_node(app),
+        what="the node to be running 'asker'",
+        interval=NODE_POLL_S,
+    )
 
     dashboard.say("how is the tide today?", to="asker")
 

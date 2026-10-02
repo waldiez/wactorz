@@ -172,7 +172,7 @@ ADDON_SCRIPTS := ha-addon/wactorz/run.sh ha-addon/wactorz-ultra/run.sh
 lint-ci image-smoke image-scan: export MSYS_NO_PATHCONV := 1
 lint-ci image-smoke image-scan: export MSYS2_ARG_CONV_EXCL := *
 
-lint-ci: ## Lint the GitHub workflows (zizmor), shell scripts (shellcheck) and Dockerfiles (hadolint), with the pinned tool images
+lint-ci: ## Lint the GitHub workflows (zizmor), shell scripts (shellcheck) and Dockerfiles (hadolint), and scan for secrets (gitleaks), with the pinned tool images
 	@# Online when GH_TOKEN is set, as in CI: the online audits check that a
 	@# pinned sha belongs to its action and that no pinned version has an advisory.
 	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(if $(GH_TOKEN),-e GH_TOKEN,) \
@@ -182,6 +182,12 @@ lint-ci: ## Lint the GitHub workflows (zizmor), shell scripts (shellcheck) and D
 	@for f in Dockerfile ha-addon/*/Dockerfile; do \
 		echo "hadolint $$f"; docker run --rm -i $(call tool-image,hadolint) < "$$f" || exit 1; \
 	done
+	@# The committed tree, handed over as an archive: what is in the commit and
+	@# nothing else. Scanning the folder would read a local .env and the state
+	@# directory, and scanning the history takes many minutes. The commit hook
+	@# scans each commit as it is made; this is for one made without the hook.
+	git archive HEAD | docker run --rm -i --entrypoint sh $(call tool-image,gitleaks) -c \
+		'mkdir /tmp/src && tar -x -C /tmp/src && cd /tmp/src && gitleaks dir . --no-banner --redact'
 
 # The app image the checks below look at. `make image` builds it under this name;
 # CI and the release workflows pass their own.

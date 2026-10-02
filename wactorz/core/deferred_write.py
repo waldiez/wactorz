@@ -70,8 +70,11 @@ class DeferredWriter:
         self._io_lock = threading.Lock()
         self._pending: dict[Path, tuple[Content, Written | None]] = {}
         self._sequence = 0
-        #: The number of the last write, or withdrawal, each path received.
+        #: The number of the last write, or withdrawal, each path received,
+        #: kept only while a batch taken earlier could still arrive after it.
         self._settled: dict[Path, int] = {}
+        #: The lowest number in each batch that has been taken and not written.
+        self._in_hand: set[int] = set()
         #: The loop whose timer and thread pool carry the writes.
         self._loop: asyncio.AbstractEventLoop | None = None
         self._timer: asyncio.TimerHandle | None = None
@@ -182,9 +185,33 @@ class DeferredWriter:
                 continue
             if data is not None:
                 batch.append((path, number, data, written))
+        if batch:
+            with self._lock:
+                self._in_hand.add(batch[0][1])
         return batch
 
     def _write(self, batch: list[tuple[Path, int, bytes, Written | None]]) -> None:
+        try:
+            self._write_each(batch)
+        finally:
+            if batch:
+                self._forget_what_is_settled(batch[0][1])
+
+    def _forget_what_is_settled(self, first: int) -> None:
+        """Drop the numbers no batch still in hand could be compared with.
+
+        A path's number only matters to a write taken before it. Once every
+        batch in hand starts later, nothing can arrive that it would turn away,
+        and keeping it would keep one entry for every file ever written or
+        withdrawn -- one for each agent ever deleted.
+        """
+        with self._lock:
+            self._in_hand.discard(first)
+            floor = min(self._in_hand, default=self._sequence + 1)
+            for path in [path for path, number in self._settled.items() if number < floor]:
+                del self._settled[path]
+
+    def _write_each(self, batch: list[tuple[Path, int, bytes, Written | None]]) -> None:
         for path, number, data, written in batch:
             with self._io_lock:
                 with self._lock:

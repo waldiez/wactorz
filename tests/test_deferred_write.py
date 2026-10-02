@@ -198,6 +198,43 @@ class TestWritesToOnePathStayInOrder:
         assert target.read_bytes() == b"newer"
 
 
+class TestWhatItRemembers:
+    """It numbers each path's last write to turn a late one away, and only for as long as one could come."""
+
+    def test_nothing_is_kept_for_files_written_or_withdrawn_once_no_write_is_in_hand(
+        self, tmp_path: Path, writes: _Writes
+    ) -> None:
+        # One entry kept for every path ever seen is one for every agent ever
+        # deleted, for as long as the process lives.
+        writer = DeferredWriter(DELAY_S)
+
+        for number in range(200):
+            target = tmp_path / f"agent-{number}"
+            writer.submit(target, lambda: b"state")
+            writer.discard(target)
+            writer.submit(tmp_path / "survivor", lambda: b"state")
+
+        assert len(writer._settled) <= 1
+        assert writer._in_hand == set()
+
+    async def test_a_number_is_kept_while_an_earlier_batch_is_still_in_hand(
+        self, tmp_path: Path, writes: _Writes
+    ) -> None:
+        target = tmp_path / "state"
+        writer = DeferredWriter(DELAY_S)
+        writer.submit(target, lambda: b"older")
+        late = writer._take()
+        writer.submit(target, lambda: b"newer")
+        writer.flush()
+
+        assert target in writer._settled, "the late batch must still be turned away"
+
+        writer._write(late)
+
+        assert target.read_bytes() == b"newer"
+        assert writer._settled == {}
+
+
 class TestWithdrawingAPath:
     async def test_a_write_still_waiting_is_not_made(self, tmp_path: Path, writes: _Writes) -> None:
         target = tmp_path / "state"

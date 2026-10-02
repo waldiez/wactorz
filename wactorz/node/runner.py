@@ -30,7 +30,13 @@ from .. import __version__
 from ..config import CONFIG
 from ..core.actor import Actor, SupervisorStrategy
 from ..core.cancellation import cancel_all_until_done
-from ..core.mqtt import SERVER_SESSION_EXPIRY_SECONDS, client_id, mqtt_client, session_kwargs
+from ..core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    mqtt_client,
+    reconnect_wait,
+    session_kwargs,
+)
 from ..core.mqtt_tls import tls_enabled
 from ..core.node_signing import CONTROL_LEAVES
 from ..core.pip import install_command, install_destination, is_installable_name
@@ -779,8 +785,10 @@ class NodeRunner:
                 break
             except Exception as e:
                 if self._running:
-                    logger.warning("[runner] Subscriber disconnected: %s. Reconnecting in 3s...", e)
-                    await asyncio.sleep(3)
+                    logger.warning(
+                        "[runner] Subscriber disconnected: %s. Reconnecting in about 3s...", e
+                    )
+                    await asyncio.sleep(reconnect_wait(3.0))
 
     # ── Main run loop ─────────────────────────────────────────────────────────
 

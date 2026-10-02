@@ -27,6 +27,7 @@ from ...core.mqtt import (
     client_id,
     install_id,
     mqtt_client,
+    reconnect_wait,
     session_kwargs,
 )
 from .hosts import NodeHost
@@ -308,7 +309,7 @@ class NodeManager:
                         "[main] Node heartbeat listener still unavailable — retrying in %ss…",
                         int(RECONNECT_DELAY_S),
                     )
-                await asyncio.sleep(RECONNECT_DELAY_S)
+                await asyncio.sleep(reconnect_wait(RECONNECT_DELAY_S))
 
     async def receive_node_message(self, topic: str, payload: bytes | None) -> None:
         """Route one message from a node to whichever half handles it."""

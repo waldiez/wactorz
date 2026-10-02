@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Coroutine
 from typing import Any
 
 from ..agents.lookup import find_main_actor
@@ -101,6 +102,26 @@ async def run_command(agent_id: str, command: str, sender: str) -> str:
         entry["state"] = _REPORTED_STATE.get(command, "running")
     await broadcast({"type": "patch", "state": events.snapshot()})
     return routed
+
+
+#: Work started here and not waited for, held until it ends. The event loop
+#: keeps only a weak reference to a task, so one nobody holds can be collected
+#: part-way through.
+_background: set["asyncio.Task[None]"] = set()
+
+
+def _in_background(work: Coroutine[Any, Any, None]) -> "asyncio.Task[None]":
+    """Run ``work`` without waiting for it, keeping hold of it and reporting a failure."""
+    task = asyncio.create_task(work)
+    _background.add(task)
+    task.add_done_callback(_finished)
+    return task
+
+
+def _finished(task: "asyncio.Task[None]") -> None:
+    _background.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("[lifecycle] Background work failed", exc_info=task.exception())
 
 
 async def purge_agent_retained(agent_id: str) -> None:
@@ -323,7 +344,9 @@ async def delete_agent(agent_id: str) -> str:
 
     # Always purge retained — even when main handled the delete, we want the
     # dashboard's view to clear immediately rather than wait for tombstones.
-    asyncio.create_task(purge_agent_retained(agent_id))
+    # Not waited for: each clear is acknowledged by the broker, and whoever asked
+    # for the delete should not wait on ten acknowledgements for its answer.
+    _in_background(purge_agent_retained(agent_id))
 
     logger.info("[delete] %r (id=%s, node=%s) %s", name, agent_id[:8], node or "local", routed)
     return routed

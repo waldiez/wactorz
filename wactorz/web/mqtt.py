@@ -18,6 +18,7 @@ from ..core.mqtt import (
     client_id,
     install_id,
     mqtt_client,
+    reconnect_wait,
     session_kwargs,
 )
 from ..monitoring.log_redaction import redact
@@ -159,8 +160,8 @@ async def mqtt_listener() -> None:
             except Exception as e:
                 runtime.mqtt_client_ref = None
                 await set_mqtt_status(False)
-                logger.warning("MQTT error: %s. Reconnecting in 5s...", e)
-                await asyncio.sleep(5)
+                logger.warning("MQTT error: %s. Reconnecting in about 5s...", e)
+                await asyncio.sleep(reconnect_wait(5.0))
     finally:
         # Drop ref and force GC while loop is still open so paho's __del__
         # doesn't fire after the event loop closes (avoids RuntimeError noise).

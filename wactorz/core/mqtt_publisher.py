@@ -832,7 +832,12 @@ class MQTTPublisher:
         - Messages are NOT dequeued until successfully published (no loss on disconnect)
         """
         # local: avoids core/__init__ import cycle
-        from .mqtt import SERVER_SESSION_EXPIRY_SECONDS, mqtt_client, session_kwargs
+        from .mqtt import (
+            SERVER_SESSION_EXPIRY_SECONDS,
+            mqtt_client,
+            reconnect_wait,
+            session_kwargs,
+        )
 
         backoff = 1.0
         _last_exc_str: str | None = None
@@ -910,17 +915,19 @@ class MQTTPublisher:
             except Exception as e:
                 self._connected = False
                 exc_str = str(e)
+                # Worked out once, so the log names the wait that is slept.
+                wait = reconnect_wait(backoff)
                 if exc_str != _last_exc_str:
                     logger.warning(
                         "[MQTT] Publisher disconnected: %s. "
                         "Reconnecting in %.1fs... "
                         "(queue depth: %d)",
                         e,
-                        backoff,
+                        wait,
                         self._queue.qsize(),
                     )
                     _last_exc_str = exc_str
                 else:
-                    logger.debug("[MQTT] Still disconnected — retrying in %.1fs", backoff)
-                await asyncio.sleep(backoff)
+                    logger.debug("[MQTT] Still disconnected — retrying in %.1fs", wait)
+                await asyncio.sleep(wait)
                 backoff = min(backoff * 2, 30.0)  # exponential backoff, cap at 30s

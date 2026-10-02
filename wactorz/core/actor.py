@@ -133,6 +133,9 @@ class MessageType(str, Enum):
 #: actor that writes to it.
 MAILBOX_WAIT_S = 30.0
 
+#: How long a listener waits before it tries the broker again.
+RECONNECT_DELAY_S = 5.0
+
 #: How often a waiting sender looks again for room.
 _MAILBOX_POLL_S = 0.05
 
@@ -373,18 +376,24 @@ class Actor(ABC):
         # already marked cancelling. So it is remembered, both steps still run,
         # and it is re-raised once cleanup is done.
         cancelled = False
+        # A failure in either is said and the stop goes on: the actor still has
+        # to come off the broker and out of the registry, and an agent's own
+        # `on_stop` is code nobody here wrote.
         try:
             await asyncio.shield(self.on_stop())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
-            pass
+        except Exception:
+            logger.exception("[%s] on_stop failed; stopping anyway", self.name)
         try:
             await asyncio.shield(self._save_persistent_state())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
-            pass
+        except Exception:
+            logger.exception(
+                "[%s] Could not save state while stopping; what it last persisted may be lost",
+                self.name,
+            )
 
         # ── Persist message count so overview survives restarts ──────────
         if self.metrics.messages_processed > 0:
@@ -806,7 +815,13 @@ class Actor(ABC):
         after the direct-dispatch change that means agents on remote nodes.
         """
         # local: avoids core/__init__ import cycle
-        from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client, session_kwargs
+        from .mqtt import (
+            AGENT_SESSION_EXPIRY_SECONDS,
+            client_id,
+            mqtt_client,
+            reconnect_wait,
+            session_kwargs,
+        )
 
         topic = f"agents/{self.actor_id}/commands"
         # Same rule the subscription hub follows: only an identity that
@@ -818,6 +833,9 @@ class Actor(ABC):
         # connects as `wactorz-agent-<actor id>`, and two connections sharing an
         # id kick each other off the broker for ever.
         identifier = client_id("agent", str(self.actor_id), "commands")
+        # Whether the connection is known to be down, so it is said when it
+        # goes and when it comes back, not at every attempt in between.
+        down = False
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 async with mqtt_client(
@@ -830,6 +848,9 @@ class Actor(ABC):
                 ) as client:
                     await client.subscribe(topic, qos=1 if durable else 0)
                     logger.debug("[%s] Subscribed to %s", self.name, topic)
+                    if down:
+                        down = False
+                        logger.info("[%s] Listening for commands again.", self.name)
                     async for message in client.messages:
                         try:
                             data = json.loads(message.payload.decode())
@@ -845,9 +866,19 @@ class Actor(ABC):
                             logger.exception("[%s] Command parse error", self.name)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as exc:
                 if self.state not in (ActorState.STOPPED, ActorState.FAILED):
-                    await asyncio.sleep(5)
+                    if not down:
+                        down = True
+                        logger.warning(
+                            "[%s] Lost the broker connection it takes commands on (%s). A stop "
+                            "or delete sent over the broker will not reach it until it is "
+                            "back; trying again every %gs or so.",
+                            self.name,
+                            exc,
+                            RECONNECT_DELAY_S,
+                        )
+                    await asyncio.sleep(reconnect_wait(RECONNECT_DELAY_S))
 
     def _current_task_description(self) -> str:
         return "idle"  # Override in subclasses

@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 
-from tests.waiting import PATIENCE_S
+from tests.waiting import PATIENCE_S, until
 from wactorz.core.mqtt_publisher import MQTTPublisher
 
 
@@ -92,12 +92,15 @@ def _outbox(db_path: str | Path) -> list[tuple[Any]]:
 
 
 async def _settle(pub: MQTTPublisher, client: _FakeClient, expected: int = 1) -> None:
-    """Wait for the drain loop to get through the queue."""
-    for _ in range(200):
-        if len(client.published) >= expected and pub.queue_depth == 0:
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError(f"drained {len(client.published)}, wanted {expected}")
+    """Wait for the drain loop to get through the queue.
+
+    For as long as it takes: a publish that failed is sent again only after the
+    publisher's reconnect wait, which is a second and a little more.
+    """
+    await until(
+        lambda: len(client.published) >= expected and pub.queue_depth == 0,
+        f"the publisher draining {expected} message(s)",
+    )
 
 
 class TestQoSRouting:
@@ -329,8 +332,12 @@ class TestWithoutABroker:
 
         pub = await MQTTPublisher.create("nowhere", 1883, db_path=str(tmp_path / "o.db"))
         try:
-            # Long enough for the first retry — the one that would repeat.
-            await asyncio.sleep(1.2)
+            # Until the first retry has failed too — the one that would repeat
+            # the warning, and is said at debug instead.
+            await until(
+                lambda: any(r.levelno == logging.DEBUG for r in caplog.records),
+                "the publisher retrying the broker",
+            )
         finally:
             await pub.disconnect()
 

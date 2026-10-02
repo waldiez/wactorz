@@ -13,7 +13,9 @@ def _running(app: backend.Backend) -> set[str]:
     return {str(a.get("name")) for a in app.rest.agents() if a.get("state") == "running"}
 
 
-def test_what_was_running_is_running_again(app: backend.Backend, unexpected: guard.Guard) -> None:
+def test_what_was_running_is_running_again(
+    app: backend.Backend, dashboard: browser.Dashboard, unexpected: guard.Guard
+) -> None:
     # While there is no server the page asks for it and is refused, which the
     # browser reports on its console.
     unexpected.allow_on_the_page(r"ERR_CONNECTION_REFUSED")
@@ -28,6 +30,13 @@ def test_what_was_running_is_running_again(app: backend.Backend, unexpected: gua
     )
     # What had been spent is not forgotten with the process that spent it.
     assert app.rest.capture("main", "cost_usd")["cost_usd"] >= spent
+    # The page is fed again before this ends, so that what it reports while it
+    # is refused is reported here, where it is expected.
+    waiting.until(
+        lambda: not dashboard.at_sign_in and dashboard.connection() == "● live",
+        what="the page to be fed again",
+        timeout=60.0,
+    )
 
 
 def test_the_open_tab_carries_on_without_signing_in_again(dashboard: browser.Dashboard) -> None:

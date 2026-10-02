@@ -61,7 +61,11 @@ CARD_ACTION = "[data-action='{action}']"
 CARD_CHAT = ".af-chat-btn"
 CONFIRM = ".af-confirm"
 RESET_MENU = "Clear stored state"
+RESET_MENU_OPEN = ".af-audio-popover.open"
 RESET_ENTRY = ".af-audio-popover.open button"
+#: Two presses clear something: one asks, one answers. More are allowed for a
+#: machine slow enough that the question lapsed in between.
+RESET_PRESSES_AT_MOST = 6
 CONFIRM_TITLE = ".af-confirm-title"
 CONFIRM_MESSAGE = ".af-confirm-message"
 CONFIRM_OK = ".af-confirm-ok"
@@ -219,11 +223,18 @@ class Dashboard:
         and the second answers it. Returns the question it asked.
         """
         self.page.get_by_role("button", name=RESET_MENU, exact=True).click()
+        menu = self.page.locator(RESET_MENU_OPEN)
         entry = self.page.locator(RESET_ENTRY).filter(has_text=what)
-        entry.click()
-        asked = entry.inner_text().strip()
-        entry.click()
-        return asked
+        asked = ""
+        # The question lapses a few seconds after it is asked, and a press that
+        # comes after that asks it again instead of answering. So: press until
+        # the menu has closed, which is what an answer does to it.
+        for _ in range(RESET_PRESSES_AT_MOST):
+            entry.click()
+            if menu.count() == 0:
+                return asked
+            asked = entry.inner_text().strip()
+        raise AssertionError(f"the menu never took an answer to {asked!r}")
 
     def notices(self) -> list[str]:
         """The toasts on screen now, each as its title and its message."""

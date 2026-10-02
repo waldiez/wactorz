@@ -136,7 +136,7 @@ class Backend:
         self.process = again.process
 
     def kill(self) -> None:
-        """Stop the process, whatever state it is in. For teardown, not scenarios."""
+        """Stop the process, whatever state it is in: an interrupt, and a kill if that is not enough."""
         if self.process.poll() is None:
             self.process.send_signal(signal.SIGINT)
             try:

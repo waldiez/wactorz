@@ -8,6 +8,10 @@ from harness import backend, browser, waiting
 from harness.probe import NODE_POLL_S
 from harness.run import NODE_NAME
 
+#: The two notices main gives of one move home.
+FROM_THE_NODE = rf"✅ System: Migration of 'counter' from '{NODE_NAME}' → local succeeded\."
+TO_LOCAL = r"✅ System: Migration of 'counter' to 'local' succeeded\."
+
 
 def _on_the_node(app: backend.Backend) -> set[str]:
     """The agents the node says it is running."""
@@ -70,8 +74,7 @@ def test_moved_out_again_it_still_remembers(
     # either order.
     dashboard.expect_like(
         "main",
-        rf"(?:✅ System: Migration of 'counter' (?:from '{NODE_NAME}' → local|to 'local') "
-        r"succeeded\.\s+){2}"
+        rf"(?:{FROM_THE_NODE}\s+{TO_LOCAL}|{TO_LOCAL}\s+{FROM_THE_NODE})\s+"
         rf"\[OK\] Migrating 'counter' from 'local' → '{NODE_NAME}' "
         r"\(waiting for it to confirm it started\)\.",
     )

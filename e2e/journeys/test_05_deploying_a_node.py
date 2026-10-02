@@ -22,7 +22,7 @@ def test_a_deploy_from_the_chat_ends_with_the_node_online(
     dashboard.expect_like(
         "main",
         rf"\[deploy\] Deploying to {node.USER}@127\.0\.0\.1 as node '{NODE_NAME}'\.\.\.\n"
-        r"\(This may take [^)]*\)"
+        r"\(This may take [^)]*\)\n"
         rf"\[OK\] Node '{NODE_NAME}' is live and its first heartbeat has arrived\.\n\n"
         r"Spawn agents on it:\n.*",
         timeout=240.0,

@@ -1,6 +1,6 @@
 """The broker stops and comes back: the page says so, and so does an agent it cannot reach."""
 
-from harness import backend, broker, browser, guard, waiting
+from harness import backend, broker, browser, waiting
 from harness.run import NODE_NAME, Run
 
 LIVE = "● live"
@@ -23,12 +23,11 @@ def test_main_still_answers_without_it(dashboard: browser.Dashboard) -> None:
 
 
 def test_an_agent_on_the_node_cannot_be_reached_and_the_user_is_told(
-    dashboard: browser.Dashboard, unexpected: guard.Guard
+    dashboard: browser.Dashboard,
 ) -> None:
     # The agent is on the node, which only the broker reaches. The answer is a
-    # refusal that says so, at once, and not a wait that ends in nothing.
-    # The server logs the failure it met, which is this journey's doing.
-    unexpected.allow(r"\[io-gateway\] Remote @counter routing failed")
+    # refusal that says so, at once, and not a wait that ends in nothing. The
+    # server logs it as it logs the rest of the outage: a warning.
     dashboard.say("four", to="counter")
 
     dashboard.expect_like("counter", rf"\[error\] Could not reach @counter on {NODE_NAME}: .+")

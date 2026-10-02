@@ -79,10 +79,13 @@ class Guard:
             new = handle.read()
         records: list[str] = []
         for line in new.splitlines():
-            if _STARTS_A_RECORD.match(line) or not records:
+            if _STARTS_A_RECORD.match(line):
                 records.append(line)
-            else:
+            elif records:
                 records[-1] += "\n" + line
+            # Else the rest of a record whose first line was written before
+            # this scenario began: the scenario before it read that line, and
+            # the level it is judged by is there.
         wrong = [record for record in records if _WRONG.search(record)]
         return [record for record in wrong if not any(ok.search(record) for ok in self._allowed)]
 

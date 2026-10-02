@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from tests.waiting import PATIENCE_S
 from wactorz.core.mqtt_publisher import MQTTPublisher
 
 
@@ -228,7 +229,9 @@ class TestDelivery:
         broker._client.fail_next = 10_000  # the broker never accepts anything
         pub = await MQTTPublisher.create("localhost", 1883, db_path=str(tmp_path / "o.db"))
         try:
-            await asyncio.wait_for(pub.publish("agents/a1/status", "{}"), timeout=0.5)
+            # A broker that never accepts would hold this for ever; any limit
+            # tells the two apart, so it is one a slow machine cannot reach.
+            await asyncio.wait_for(pub.publish("agents/a1/status", "{}"), timeout=PATIENCE_S)
         finally:
             await pub.disconnect()
 

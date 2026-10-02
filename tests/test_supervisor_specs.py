@@ -245,6 +245,11 @@ class TestReplacingAnEntryEndsItsRestart:
         await asyncio.gather(group, return_exceptions=True)
 
 
+#: A restart delay long enough that a test acting "during the delay" still is,
+#: on a machine that stalls for a moment, and short enough to wait out.
+DURING_THE_DELAY_S = 0.5
+
+
 class TestARestartDoesNotUndoARemoval:
     """The lock is released before a strategy runs, and a restart waits out its delay."""
 
@@ -259,7 +264,7 @@ class TestARestartDoesNotUndoARemoval:
         return actor, asyncio.create_task(supervisor._supervise_one("worker", spec))
 
     async def test_a_delete_during_the_delay_is_not_undone(self, supervisor: Supervisor) -> None:
-        _actor, restart = await self._crash(supervisor, delay=0.05)
+        _actor, restart = await self._crash(supervisor, delay=DURING_THE_DELAY_S)
         await asyncio.sleep(0.01)
 
         supervisor.drop_supervised("worker")
@@ -272,7 +277,7 @@ class TestARestartDoesNotUndoARemoval:
     async def test_a_deliberate_stop_during_the_delay_is_not_undone(
         self, supervisor: Supervisor
     ) -> None:
-        _actor, restart = await self._crash(supervisor, delay=0.05)
+        _actor, restart = await self._crash(supervisor, delay=DURING_THE_DELAY_S)
         await asyncio.sleep(0.01)
 
         supervisor.release("worker")

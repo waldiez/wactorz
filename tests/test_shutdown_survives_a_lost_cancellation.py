@@ -98,7 +98,8 @@ class TestCancelUntilDone:
         await asyncio.sleep(0)
         started = time.monotonic()
         assert await cancel_until_done(task, timeout=30.0, recancel_after=10.0)
-        assert time.monotonic() - started < 1.0
+        # Kept waiting, it would be for the ten seconds before the next cancel.
+        assert time.monotonic() - started < 5.0
 
     async def test_a_task_that_will_not_stop_is_given_up_on(self) -> None:
         give_up = asyncio.Event()

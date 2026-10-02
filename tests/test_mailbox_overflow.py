@@ -21,11 +21,13 @@ one message can hold an actor.
 import asyncio
 import time
 from collections.abc import Awaitable
+from dataclasses import replace
 from typing import Any, TypeVar
 
 import pytest
 
 from tests.waiting import PATIENCE_S
+from wactorz import config
 from wactorz.core import actor as actor_module
 from wactorz.core import registry as registry_module
 from wactorz.core.actor import Actor, Message, MessageType
@@ -269,28 +271,53 @@ class TestTheSupervisorIsNotHeldUp:
         assert "dropping the oldest" in caplog.text
 
 
-class TestTheSdkClientsDoNotRetryOnTheirOwn:
-    """`LLMProvider` retries, for every provider alike; the SDK's own would multiply it."""
-
-    def test_anthropic(self) -> None:
-        pytest.importorskip("anthropic")
+def _clients() -> list[Any]:
+    """One client of each SDK-backed provider, where its SDK is installed."""
+    clients: list[Any] = []
+    try:
         from wactorz.agents.llm.providers.anthropic import (
             AnthropicProvider,
         )  # an optional dependency
 
-        assert AnthropicProvider(api_key="test-key").client.max_retries == 0
-
-    @pytest.mark.parametrize("base_url", [None, "http://localhost:9/v1"])
-    def test_openai_with_and_without_a_base_url(self, base_url: str | None) -> None:
-        pytest.importorskip("openai")
+        clients.append(AnthropicProvider(api_key="test-key").client)
+    except ImportError:
+        pass
+    try:
+        from wactorz.agents.llm.providers.nim import NIMProvider  # an optional dependency
         from wactorz.agents.llm.providers.openai import OpenAIProvider  # an optional dependency
 
-        client: Any = OpenAIProvider(api_key="test-key", base_url=base_url).client
-        assert client.max_retries == 0
+        clients.append(OpenAIProvider(api_key="test-key").client)
+        clients.append(OpenAIProvider(api_key="test-key", base_url="http://localhost:9/v1").client)
+        clients.append(NIMProvider(api_key="test-key").client)
+    except ImportError:
+        pass
+    return clients
 
-    def test_nim(self) -> None:
-        pytest.importorskip("openai")
-        from wactorz.agents.llm.providers.nim import NIMProvider  # an optional dependency
 
-        client: Any = NIMProvider(api_key="test-key").client
-        assert client.max_retries == 0
+class TestTheSdkClientsLeaveThePolicyToWactorz:
+    """`LLMProvider` retries and bounds every provider alike; the SDK's own would differ."""
+
+    def test_none_retries_on_its_own(self) -> None:
+        clients = _clients()
+        if not clients:
+            pytest.skip("no SDK-backed provider is installed")
+
+        assert [client.max_retries for client in clients] == [0] * len(clients)
+
+    def test_each_is_given_the_configured_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, llm_timeout_s=123.0))
+        clients = _clients()
+        if not clients:
+            pytest.skip("no SDK-backed provider is installed")
+
+        assert [client.timeout for client in clients] == [123.0] * len(clients)
+
+    def test_no_limit_means_none_at_the_sdk_either(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Zero is how a model that thinks for longer than any limit is allowed
+        # to. Left to the SDK's default, it would still be cut off there.
+        monkeypatch.setattr(config, "CONFIG", replace(config.CONFIG, llm_timeout_s=0))
+        clients = _clients()
+        if not clients:
+            pytest.skip("no SDK-backed provider is installed")
+
+        assert [client.timeout for client in clients] == [None] * len(clients)

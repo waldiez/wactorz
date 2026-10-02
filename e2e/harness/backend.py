@@ -13,52 +13,40 @@ because `a01` asserts on the order of two lines in it.
 
 from __future__ import annotations
 
-import contextlib
 import ctypes
 import os
 import signal
-import socket
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import broker, waiting
 from .probe import Rest
+from .run import NODE_NAME, REPO_ROOT, Run
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+#: Settings a developer plausibly has in `.env` that would change what a
+#: scenario tests, and that this suite does not set itself.
+LEFT_EMPTY = (
+    "LLM_FAKE_INTENT",
+    "LLM_API_KEY",
+    "LLM_MODEL",
+    "WACTORZ_EXPOSED_OK",
+    "HA_URL",
+    "HA_TOKEN",
+    "HOME_ASSISTANT_URL",
+    "HOME_ASSISTANT_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "MQTT_TLS_CA",
+    "MQTT_TLS_CHECK_HOSTNAME",
+    "WACTORZ_LOG_FORMAT",
+)
 
 #: The line `_print_ready_banner` puts on stdout once everything is actually up.
 READY_BANNER = "Dashboard   http://localhost:"
-
-
-def free_ports(count: int) -> list[int]:
-    """`count` ports nothing is listening on, all different from each other.
-
-    Every socket is held open until the last one has been assigned, and that is
-    the whole point. Allocating them one at a time - bind, read the number, close
-    - lets the kernel hand back the port it just took back, so two calls in a row
-    return the same number surprisingly often. A backend given one port for its
-    API and its dashboard binds one, fails to bind the other, and stays up
-    without a dashboard: the process is alive, so nothing looks crashed, and the
-    run times out waiting for a health check that is never going to come.
-
-    Still racy against the rest of the machine - something else can take a port
-    between this returning and the child binding it - and that is accepted rather
-    than papered over, because the alternative is fixed ports that collide with
-    the developer's own running instance every time. That race is rare and says
-    what happened; this one was neither.
-    """
-    sockets = [socket.socket() for _ in range(count)]
-    try:
-        for sock in sockets:
-            sock.bind(("127.0.0.1", 0))
-        return [int(sock.getsockname()[1]) for sock in sockets]
-    finally:
-        for sock in sockets:
-            sock.close()
 
 
 def die_with_parent() -> Callable[[], None] | None:
@@ -145,124 +133,106 @@ class Backend:
 
 
 def environment(
-    *,
-    state_dir: Path,
-    port: int,
-    api_port: int,
-    llm: str,
-    script: str = "",
-    extra: Mapping[str, str] | None = None,
+    run: Run, *, script: str = "", extra: Mapping[str, str] | None = None
 ) -> dict[str, str]:
-    """The environment a backend is started under.
+    """The environment the backend of ``run`` is started under.
 
-    Built from a copy of the current one, then overridden. Copied so a machine's
-    own settings (a proxy, a locale, a CA bundle) still apply; overridden so
-    nothing the developer exported decides what a scenario tests. The overrides
-    are the whole configuration surface this suite uses - anything a scenario
-    needs to vary goes through `extra` and is visible in the scenario.
+    Built from a copy of the current one, so a machine's own settings (a proxy,
+    a locale, a CA bundle) still apply, then overridden with the whole
+    configuration this suite uses. It is the configuration of a real install
+    that deploys nodes: an API key, TLS to the broker, an account per node, and
+    one deploy target.
+
+    The application loads the repository's ``.env``, which fills in any variable
+    that is *absent*. So what a developer may have set there and this suite does
+    not use is set to nothing here, not removed: a variable that is present and
+    empty is left alone.
     """
     env = dict(os.environ)
+    for theirs in LEFT_EMPTY:
+        env[theirs] = ""
+    prefix = f"DEPLOY_{NODE_NAME.upper()}"
     env.update(
         {
-            "WACTORZ_STATE_DIR": str(state_dir),
-            # Both, and this is not belt-and-braces. `--monitor-port` defaults to
-            # MONITOR_PORT and falls back to WS_PORT, so setting only the latter
-            # leaves MONITOR_PORT free for `.env` to answer - which is how a run
-            # ends up on the developer's own 8888 instead of its allocated port.
-            "WS_PORT": str(port),
-            "MONITOR_PORT": str(port),
-            "PORT": str(api_port),
+            "WACTORZ_STATE_DIR": str(run.state),
+            # Both: `--monitor-port` reads MONITOR_PORT and falls back to WS_PORT.
+            "WS_PORT": str(run.ports.dashboard),
+            "MONITOR_PORT": str(run.ports.dashboard),
+            "PORT": str(run.ports.api),
             "INTERFACE": "rest",
             "WACTORZ_BIND_HOST": "127.0.0.1",
-            "LLM_PROVIDER": llm,
-            "MQTT_HOST": broker.HOST,
-            "MQTT_PORT": str(broker.PORT),
+            "API_KEY": run.api_key,
+            "LLM_PROVIDER": "fake",
+            "LLM_FAKE_SCRIPT": script,
+            "MQTT_HOST": "127.0.0.1",
+            "MQTT_PORT": str(run.ports.broker),
             "MQTT_USERNAME": broker.USERNAME,
-            "MQTT_PASSWORD": broker.PASSWORD,
-            # Ordering in the console capture is the assertion in `a01`, and a
-            # block-buffered child would deliver it in whatever order the flushes
-            # happened to land.
+            "MQTT_PASSWORD": run.broker_password,
+            "MQTT_TLS": "1",
+            "MQTT_TLS_PORT": str(run.ports.broker_tls),
+            "MQTT_BROKER_DIR": str(run.broker_files),
+            "WACTORZ_NODE_ACCOUNTS": "1",
+            "WACTORZ_NODE_SIGNING": "enforce",
+            "DEPLOY_TARGETS": NODE_NAME,
+            f"{prefix}_HOST": "127.0.0.1",
+            f"{prefix}_SSH_PORT": str(run.ports.node_ssh),
+            f"{prefix}_USER": "node",
+            f"{prefix}_KEY": str(run.ssh / "id_ed25519"),
+            # As the node sees the broker: by name, on the network they share.
+            f"{prefix}_BROKER": broker.NAME_FOR_NODES,
+            f"{prefix}_BROKER_PORT": "1883",
+            f"{prefix}_BROKER_TLS_PORT": "8883",
+            "DEPLOY_KNOWN_HOSTS": str(run.ssh / "known_hosts"),
+            "DEPLOY_STRICT_HOST_KEYS": "0",
+            # The console capture is read while the process runs.
             "PYTHONUNBUFFERED": "1",
         }
     )
-    # Emptied, not deleted, and that distinction is the whole point. The app
-    # loads the repository's `.env`, and `load_dotenv` fills in any variable that
-    # is *absent* from the environment - so a deleted API_KEY comes straight back
-    # from the developer's file and puts every scenario behind a sign-in page it
-    # never agreed to. A variable that is present and empty is left alone.
-    #
-    # Everything here is a setting a developer plausibly has in `.env` and that
-    # would change what a scenario tests. A scenario that wants one of them sets
-    # it through `extra`, where it is visible in the scenario.
-    for leaky in ("API_KEY", "LLM_FAKE_SCRIPT", "LLM_FAKE_INTENT", "WACTORZ_EXPOSED_OK"):
-        env.setdefault(leaky, "")
-        env[leaky] = ""
-    if script:
-        env["LLM_FAKE_SCRIPT"] = script
     if extra:
         env.update(extra)
     return env
 
 
 def start(
+    run: Run,
     *,
-    state_dir: Path,
-    console_log: Path,
-    llm: str = "fake",
     script: str = "",
     extra: Mapping[str, str] | None = None,
-    port: int | None = None,
-    api_port: int | None = None,
     wait_for_ready: bool = True,
 ) -> Backend:
-    """Launch the application and, by default, wait until it serves `/health`.
+    """Launch the application and, by default, wait until it serves ``/health``.
 
-    `wait_for_ready=False` is for the scenarios about starting badly - a refusal
-    to bind, a broker that is not there - where waiting for a health check that
-    is never going to pass would report the refusal as a timeout.
+    The console capture is appended to, so a backend started again in the same
+    run continues the file the first one wrote.
     """
-    state_dir.mkdir(parents=True, exist_ok=True)
-    console_log.parent.mkdir(parents=True, exist_ok=True)
-
-    if port is None or api_port is None:
-        allocated = free_ports(2)
-        port = port or allocated[0]
-        api_port = api_port or allocated[1]
-    env = environment(
-        state_dir=state_dir, port=port, api_port=api_port, llm=llm, script=script, extra=extra
-    )
-
-    handle = console_log.open("w", encoding="utf-8")
+    console_log = run.logs / "backend.log"
+    handle = console_log.open("a", encoding="utf-8")
     process = subprocess.Popen(
         [sys.executable, "-m", "wactorz"],
         cwd=REPO_ROOT,
-        env=env,
+        env=environment(run, script=script, extra=extra),
         stdin=subprocess.DEVNULL,
         stdout=handle,
         preexec_fn=die_with_parent(),
-        # Merged into stdout so the capture is one ordered stream. `a01` asserts
-        # the ready banner comes after the startup lines, and two files cannot
-        # answer that question at all.
+        # Merged into stdout so the capture is one ordered stream.
         stderr=subprocess.STDOUT,
         text=True,
     )
     backend = Backend(
         process=process,
-        port=port,
-        api_port=api_port,
-        state_dir=state_dir,
+        port=run.ports.dashboard,
+        api_port=run.ports.api,
+        state_dir=run.state,
         console_log=console_log,
-        rest=Rest(f"http://127.0.0.1:{port}"),
+        rest=Rest(f"http://127.0.0.1:{run.ports.dashboard}", api_key=run.api_key),
     )
     if wait_for_ready:
         try:
             wait_until_ready(backend)
+            wait_until_settled(backend)
         except BaseException:
-            # A backend that never became ready is still a backend that is
-            # running. Without this it outlives the run entirely: the failure
-            # propagates out of `start`, so the caller never gets the object it
-            # would have torn down, and the process sits there holding its port
-            # and its state directory until somebody notices it by hand.
+            # A backend that never became ready is still running, and the
+            # caller never gets the object it would have stopped it with.
             backend.kill()
             raise
     return backend
@@ -331,13 +301,3 @@ def wait_until_settled(backend: Backend, timeout: float = 120.0) -> None:
         timeout=timeout,
         interval=0.5,
     )
-
-
-@contextlib.contextmanager
-def running(**kwargs: object) -> Iterator[Backend]:
-    """A backend for the duration of a `with` block, stopped however it ends."""
-    instance = start(**kwargs)  # type: ignore[arg-type]
-    try:
-        yield instance
-    finally:
-        instance.kill()

@@ -47,8 +47,12 @@ def until(
     what: str,
     timeout: float = DEFAULT_TIMEOUT,
     interval: float = DEFAULT_INTERVAL,
+    giving_up_on: type[Exception] | tuple[type[Exception], ...] = (),
 ) -> T:
     """Poll until `condition` returns something truthy, and return it.
+
+    An exception of a type in ``giving_up_on`` ends the wait at once: it says the
+    answer is already known to be wrong, and waiting longer cannot change it.
 
     Returns the value rather than a bool so the wait and the read are one step:
     ``agent = until(lambda: api.agent("weather"), what="the weather agent to exist")``
@@ -70,6 +74,8 @@ def until(
                 return value
             last_error = None
         except Exception as exc:  # - re-raised below if it outlives the deadline
+            if giving_up_on and isinstance(exc, giving_up_on):
+                raise
             last_error = exc
         if time.monotonic() >= deadline:
             break
@@ -120,16 +126,3 @@ def becomes_and_stays(
     """
     until(condition, what=what, timeout=timeout, interval=interval)
     holds_for(condition, what=what, window=window, interval=interval)
-
-
-def dwell(seconds: float) -> None:
-    """Linger, for the camera.
-
-    The one place in this suite where waiting is not on a condition, and it is
-    reached only through a profile that returns a non-zero number - `test` maps
-    every dwell to 0.0, so this is a no-op under the profile that runs in CI.
-    Not for use as a wait: nothing after it may depend on it having been long
-    enough.
-    """
-    if seconds > 0:
-        time.sleep(seconds)

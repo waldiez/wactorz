@@ -48,16 +48,16 @@ make lint           # frontend lint gate
 ```
 
 There is also an end-to-end suite that runs the real thing — a broker, the app
-as a process, and a browser. It is not part of `make test` and is not a required
-check; run it when you have changed something it covers, and before a tag:
+as a process, a node deployed over SSH, and a browser. It starts all of it
+itself. It is not part of `make test` and is not a required check; run it when
+you have changed something it covers:
 
 ```bash
-make e2e-setup      # once: install the browser it drives
-make dev            # a broker on 1883, in another terminal
-make e2e            # the regression core + the demo scenarios
+make e2e-setup      # once: Playwright and the browser it drives
+make e2e            # needs Docker
 ```
 
-See `e2e/README.md` for what it covers and how to add a scenario.
+See `e2e/README.md` for what it covers and how to add a journey.
 
 ## Pull Request Process
 

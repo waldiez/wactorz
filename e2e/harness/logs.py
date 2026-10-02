@@ -15,33 +15,12 @@ was given that string and wrote it down.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
-from . import broker
+from .run import Run
 
-
-@dataclass(frozen=True)
-class Secret:
-    """A value the run was configured with, and what to call it in a failure."""
-
-    name: str
-    value: str
-
-
-def configured_secrets(*extra: Secret) -> list[Secret]:
-    """Everything this run handed the process that it must not write down.
-
-    Short values are dropped rather than checked. A three-character password
-    would match half the English in a log file and report a false failure on
-    every run, which trains people to ignore the check - a worse outcome than not
-    having it.
-    """
-    candidates = [
-        Secret("the broker password (MQTT_PASSWORD)", broker.PASSWORD),
-        *extra,
-    ]
-    return [s for s in candidates if len(s.value) >= 8]
+#: A value shorter than this would match ordinary words in a log.
+SHORTEST = 8
 
 
 def read(path: Path) -> str:
@@ -56,21 +35,21 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def assert_no_secrets(path: Path, *extra: Secret) -> None:
-    """Fail if any configured secret appears in this log, naming which.
+def assert_no_secrets(path: Path, run: Run) -> None:
+    """Fail if a secret this run made up appears in this log, naming which.
 
-    The failure quotes the line rather than the secret, so the report of a leak
-    is not itself a second copy of it.
+    The failure quotes the line and not the secret, so the report of a leak is
+    not a second copy of it.
     """
     contents = read(path)
-    if not contents:
-        return
     leaked: list[str] = []
-    for secret in configured_secrets(*extra):
+    for name, value in run.secrets.items():
+        if len(value) < SHORTEST:
+            continue
         for number, line in enumerate(contents.splitlines(), start=1):
-            if secret.value in line:
-                redacted = line.replace(secret.value, "<the value>")
-                leaked.append(f"{path.name}:{number} contains {secret.name}: {redacted.strip()}")
+            if value in line:
+                redacted = line.replace(value, "<the value>")
+                leaked.append(f"{path.name}:{number} contains {name}: {redacted.strip()}")
                 break
     if leaked:
         raise AssertionError("credentials reached the log file:\n  " + "\n  ".join(leaked))

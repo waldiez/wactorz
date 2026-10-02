@@ -2,7 +2,7 @@
 		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
         up down logs shell mqtt-certs \
         run run-py test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
-        e2e e2e-setup e2e-release e2e-rehearse e2e-demo e2e-demo-all e2e-clean \
+        e2e e2e-setup e2e-clean \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
 # ── Windows shell setup ──────────────────────────────────────────────────────
@@ -381,50 +381,24 @@ test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test
 
 # ── End-to-end ──────────────────────────────────────────────────────────────
-# Real processes, a real broker and a browser. Not part of `test`, and not a
-# required check: it has more ways to be non-deterministic than the unit suite,
-# so it runs on demand and before a tag. See e2e/README.md.
+# A real broker, the application as a process, a node deployed over SSH, and a
+# browser: what a person does with the product, done in order and read
+# strictly. Not part of `test`: it needs Docker and a browser, and takes
+# minutes. See e2e/README.md.
 #
-# Every target unsets WACTORZ_STATE_DIR. The suite mints a fresh state directory
-# per run, and a value exported for ordinary work would otherwise decide where a
-# run wrote — the leak the suite refuses at startup when it arrives by the other
-# door (a direct `pytest e2e/`).
-E2E := WACTORZ_STATE_DIR= $(PYTHON) -m pytest e2e
-
-e2e-setup: ## One-time: install the Playwright browser the e2e suite drives
-	@# The extra rather than a version repeated here — pyproject pins it, and a
-	@# second copy of the number is a second thing to forget to bump.
+# Run with its own pytest.ini, so it shares no setting with the unit suite. It
+# starts everything it uses, on ports and in a directory of its own, and reads
+# nothing of a developer's `.env` or state.
+e2e-setup: ## One-time: install Playwright and the browser the e2e suite drives
+	@# The extra, not a version repeated here: pyproject pins it.
 	$(PYTHON) -m pip install -e ".[e2e]"
 	$(PYTHON) -m playwright install chromium
 
-e2e: ## Run the e2e regression core + demo scenarios (headless, fake model)
-	@# release/ is excluded rather than listed the other way round: the core and
-	@# the demos are what must always pass, and release scenarios are a revolving
-	@# door that would otherwise make an ordinary run red for a feature in flight.
-	$(E2E) --ignore=e2e/scenarios/release
+e2e: ## Run the end-to-end journeys (needs Docker; `make e2e-setup` once)
+	$(PYTHON) -m pytest -c e2e/pytest.ini --rootdir e2e e2e/journeys
 
-e2e-release: ## Run everything before a tag: core + release/ + demo/
-	$(E2E)
-
-e2e-rehearse: ## Headed, paced, fake model — for iterating on demo pacing
-	@# Narrowed like e2e-demo below, and for the pacing half of the same reason.
-	$(E2E)/scenarios/demo --profile rehearse
-
-e2e-demo: ## Headed, paced, real model — for the take you keep
-	@# The demo stories only. A profile says how to run, not what: left wide this
-	@# spent a real completion on all fifty scenarios and opened a browser per
-	@# scenario that takes one, so "the take you keep" was fourteen recordings
-	@# with windows appearing and closing between them. One story is one take.
-	$(E2E)/scenarios/demo --profile demo
-
-e2e-demo-all: ## Every scenario against a real model — deliberate, and it costs
-	$(E2E) --profile demo
-
-e2e-clean: ## Delete every e2e artefact (state, logs, videos, traces)
-	@# Everything under out/ is evidence about a run, and a run keeps only what
-	@# it needs to explain a failure. A suite trims older runs itself; this is
-	@# for reclaiming the lot, including recordings worth keeping — so it says
-	@# what it removed rather than doing it silently.
+e2e-clean: ## Delete what failed e2e runs kept (logs, traces, state)
+	@# A run that passes removes its own directory; one that fails keeps it.
 	rm -rf e2e/out
 	@echo "removed e2e/out"
 

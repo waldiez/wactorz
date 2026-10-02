@@ -1,154 +1,125 @@
-"""Reaching the broker, and - when it is ours to touch - taking it away.
+"""The broker this suite starts, stops and takes away.
 
-Two different things live here and the difference is the whole point.
+It is the development stack's own mosquitto, taken as it is from
+``compose.dev.yaml`` (see ``e2e/stack/compose.yaml``): the image, the start
+script that takes what Wactorz generates for it, and the watcher that reloads a
+changed account. So a scenario about a node's account or the TLS listener is a
+scenario about the broker people run, and not one configured for the tests.
 
-*Reaching* it is a precondition: every scenario needs a broker, and a run without
-one checks nothing. That is enforced at the start of a run as an error.
-
-*Stopping* it is a capability, and only for the broker this repository starts.
-`a08` needs the broker gone to prove a local command still lands, and a suite
-that stops whatever happens to be on port 1883 would take out the broker running
-someone's house. So the controls below act on the named development container and
-nothing else; when the reachable broker is not that container, the scenario that
-needs it says so and skips - loudly, the way an absent node does.
+Only ever this run's container. The suite never looks at port 1883 or at a
+broker it did not start, so it cannot unplug a developer's, or someone's house.
 """
 
 from __future__ import annotations
 
 import os
-import shutil
 import socket
 import subprocess
-from pathlib import Path
+import sys
 
 from . import waiting
+from .run import E2E_ROOT, REPO_ROOT, Run
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+COMPOSE_FILE = E2E_ROOT / "stack" / "compose.yaml"
 
-#: Compose file and service. The restart has to reuse the same config, and the
-#: credentials have to be read the same way Compose reads them.
-_COMPOSE_FILE = REPO_ROOT / "compose.dev.yaml"
-_SERVICE = "mosquitto"
+#: The account the backend connects with: the broker's own, as in compose.
+USERNAME = "wactorz"
 
-#: The container `make dev` starts. Named, not discovered: this is the one
-#: broker the suite is allowed to stop.
-CONTAINER = "wactorz-dev-mosquitto"
+#: The name a node reaches the broker by, on the network the two share.
+NAME_FOR_NODES = "mosquitto"
 
 
-def _from_env_file(name: str) -> str:
-    """The value `.env` gives this variable, or "" - a very small reader.
+def _compose(run: Run, *args: str) -> subprocess.CompletedProcess[str]:
+    env = {
+        **os.environ,
+        "E2E_BROKER_PORT": str(run.ports.broker),
+        "E2E_BROKER_TLS_PORT": str(run.ports.broker_tls),
+        "E2E_BROKER_DIR": str(run.broker_files),
+        "E2E_BROKER_PASSWORD": run.broker_password,
+        "E2E_NODE_SSH_PORT": str(run.ports.node_ssh),
+        "E2E_NODE_KEYS": str(run.ssh),
+    }
+    done = subprocess.run(
+        ["docker", "compose", "-f", str(COMPOSE_FILE), *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise RuntimeError(
+            f"`docker compose {' '.join(args)}` failed ({done.returncode}):\n"
+            f"{done.stderr.strip() or done.stdout.strip()}"
+        )
+    return done
 
-    Not a general dotenv parser and not trying to be. `docker compose` reads
-    `.env` when it substitutes `${MQTT_PASSWORD}` into the broker's command, so
-    the broker's actual password is whatever is in that file - and a harness that
-    used the Compose *defaults* instead connects to a broker that refuses it,
-    reporting a working system as a broken one. This reads the same file for the
-    same two variables so the two agree.
+
+def issue_files(run: Run, environment: dict[str, str]) -> None:
+    """Have Wactorz write what the broker reads, before the broker starts.
+
+    The certificate, the node accounts and the access list, by the command the
+    compose stacks run for the same purpose and under the environment the
+    backend is about to be started with. Done first so the broker comes up
+    once, already configured, and the backend never meets one that is about to
+    restart to take a certificate.
     """
-    path = REPO_ROOT / ".env"
-    if not path.exists():
-        return ""
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        if key.strip() != name:
-            continue
-        # Trailing `# comment` and surrounding quotes, both of which .env uses.
-        return value.split(" #")[0].strip().strip("\"'")
-    return ""
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "wactorz.broker_certificates",
+            "--name",
+            NAME_FOR_NODES,
+            "--export",
+            str(run.broker_files),
+        ],
+        cwd=REPO_ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    (run.logs / "broker-files.log").write_text(done.stdout + done.stderr, encoding="utf-8")
+    if done.returncode != 0:
+        raise RuntimeError(f"issuing the broker's files failed:\n{done.stdout}{done.stderr}")
 
 
-def _setting(name: str, default: str) -> str:
-    """Environment, then `.env`, then the Compose default - Compose's own order."""
-    return os.getenv(name) or _from_env_file(name) or default
-
-
-HOST = _setting("MQTT_HOST", "localhost")
-PORT = int(_setting("MQTT_PORT", "1883"))
-USERNAME = _setting("MQTT_USERNAME", "wactorz")
-PASSWORD = _setting("MQTT_PASSWORD", "wactorz-dev")
-
-
-def reachable(host: str = HOST, port: int = PORT, timeout: float = 0.5) -> bool:
-    """Whether a TCP connection to the broker port completes.
-
-    Deliberately not an MQTT connect: this answers "is the port answering", which
-    is what both the precondition and the restart wait actually need. A broker
-    that accepts TCP and refuses the credentials is a configuration failure, and
-    it should surface as the backend failing to connect - with the broker's own
-    message - rather than as a connectivity check that quietly returns False.
-    """
+def reachable(port: int, timeout: float = 0.5) -> bool:
+    """Whether a TCP connection to this port of the broker completes."""
     try:
-        with socket.create_connection((host, port), timeout=timeout):
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
             return True
     except OSError:
         return False
 
 
-def wait_until_reachable(timeout: float = 30.0) -> None:
-    waiting.until(reachable, what=f"the broker on {HOST}:{PORT}", timeout=timeout, interval=0.2)
+def up(run: Run) -> None:
+    """Start the broker and wait until it answers on both listeners."""
+    _compose(run, "up", "-d", "--wait", "broker")
+    for port in (run.ports.broker, run.ports.broker_tls):
+        waiting.until(lambda p=port: reachable(p), what=f"the broker on port {port}")
 
 
-def wait_until_gone(timeout: float = 30.0) -> None:
+def stop(run: Run) -> None:
+    """Take the broker away, and wait until its ports stop answering."""
+    _compose(run, "stop", "broker")
     waiting.until(
-        lambda: not reachable(),
-        what=f"the broker on {HOST}:{PORT} to stop answering",
-        timeout=timeout,
-        interval=0.2,
+        lambda: not reachable(run.ports.broker) and not reachable(run.ports.broker_tls),
+        what="the broker to stop answering",
     )
 
 
-def controllable() -> bool:
-    """Whether the reachable broker is the development container we may stop.
-
-    False for a broker somebody else runs - a system mosquitto, one on another
-    machine, one belonging to a home. `a08` skips on this rather than failing,
-    because "we are not allowed to unplug this" is not a defect in the product.
-    """
-    if shutil.which("docker") is None:
-        return False
-    result = subprocess.run(
-        ["docker", "ps", "--filter", f"name=^{CONTAINER}$", "--format", "{{.Names}}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return CONTAINER in result.stdout
+def start(run: Run) -> None:
+    """Bring a stopped broker back."""
+    _compose(run, "start", "broker")
+    waiting.until(lambda: reachable(run.ports.broker_tls), what="the broker to answer again")
 
 
-def stop() -> None:
-    """Stop the development broker and wait until the port stops answering.
-
-    Waits rather than returning on the command's exit: `docker stop` returns when
-    the container is stopped, but a scenario asserting "with the broker down"
-    needs the socket to actually be refusing, and those are not the same instant.
-    """
-    _compose("stop", _SERVICE)
-    wait_until_gone()
+def log(run: Run) -> str:
+    """What the broker has written to its console."""
+    return _compose(run, "logs", "--no-color", "broker").stdout
 
 
-def start() -> None:
-    """Bring the development broker back and wait until it answers again."""
-    _compose("start", _SERVICE)
-    wait_until_reachable()
-
-
-def restart() -> None:
-    stop()
-    start()
-
-
-def _compose(*args: str) -> None:
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(_COMPOSE_FILE), *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"`docker compose {' '.join(args)}` failed ({result.returncode}): "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
+def down(run: Run) -> None:
+    """Remove everything the stack file started, and its network."""
+    _compose(run, "down", "--volumes", "--remove-orphans")

@@ -29,6 +29,7 @@ from paho.mqtt.enums import CallbackAPIVersion
 from websockets.sync.client import connect
 
 from . import broker
+from .run import Run
 
 
 class HttpError(AssertionError):
@@ -159,7 +160,7 @@ class Rest:
         the socket and nowhere else. A scenario asserting "the node is listed" is
         asserting about what the dashboard is told, so this is the honest source.
         """
-        return list(snapshot(self.base_url).get("nodes") or [])
+        return list(snapshot(self.base_url, api_key=self.api_key).get("nodes") or [])
 
     def node_names(self) -> set[str]:
         """Every node in the list, by the name the runner was started with."""
@@ -219,7 +220,7 @@ class Rest:
         With the broker up the next heartbeat papers over the difference; with the
         broker down nothing does, and the agent stays reported as running forever.
         """
-        with websocket(self.base_url) as sock:
+        with websocket(self.base_url, api_key=self.api_key) as sock:
             sock.send({"type": "command", "agent_id": self.actor_id(agent), "command": command})
             # Read until the server broadcasts the state it now believes in. This
             # is not a wait for the command to have taken effect - a refusal
@@ -304,25 +305,26 @@ class Socket:
         )
 
 
-def snapshot(base_url: str, *, timeout: float = 15.0) -> dict[str, Any]:
+def snapshot(base_url: str, *, api_key: str = "", timeout: float = 15.0) -> dict[str, Any]:
     """The dashboard's `full_snapshot` state, opened and closed in one call.
 
     The socket sends it unprompted on connect, so this is a read rather than a
     subscription - the right shape for a condition being polled, where holding a
     connection open across the poll would be a second thing that can fail.
     """
-    with websocket(base_url, timeout=timeout) as sock:
+    with websocket(base_url, api_key=api_key, timeout=timeout) as sock:
         frame = sock.next_of_type("full_snapshot", timeout=timeout)
     state = frame.get("state")
     return state if isinstance(state, dict) else {}
 
 
 @contextlib.contextmanager
-def websocket(base_url: str, *, timeout: float = 15.0) -> Generator[Socket]:
-    """Open the dashboard socket for the duration of a `with` block."""
+def websocket(base_url: str, *, api_key: str = "", timeout: float = 15.0) -> Generator[Socket]:
+    """Open the dashboard socket for the duration of a `with` block, with the key if given one."""
     url = base_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/") + "/ws"
     context = ssl.create_default_context() if url.startswith("wss://") else None
-    connection = connect(url, open_timeout=timeout, ssl=context)
+    headers = {"X-API-Key": api_key} if api_key else None
+    connection = connect(url, open_timeout=timeout, ssl=context, additional_headers=headers)
     try:
         yield Socket(connection)
     finally:
@@ -337,17 +339,18 @@ class Broker:
     the one that stayed true through a regression where nothing was published.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, run: Run) -> None:
+        self._port = run.ports.broker
         self._client = mqtt.Client(CallbackAPIVersion.VERSION2)
-        if broker.USERNAME:
-            self._client.username_pw_set(broker.USERNAME, broker.PASSWORD)
+        # The server's own account, which the access list lets read everything.
+        self._client.username_pw_set(broker.USERNAME, run.broker_password)
         self.messages: list[tuple[str, str]] = []
         self._client.on_message = lambda _c, _u, msg: self.messages.append(
             (msg.topic, msg.payload.decode("utf-8", errors="replace"))
         )
 
     def __enter__(self) -> Broker:
-        self._client.connect(broker.HOST, broker.PORT, keepalive=30)
+        self._client.connect("127.0.0.1", self._port, keepalive=30)
         self._client.loop_start()
         return self
 

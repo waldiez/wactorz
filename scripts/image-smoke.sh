@@ -7,6 +7,10 @@
 # binary is left in the image. The image binds wide, so it is started with an API
 # key, as it refuses to start without one.
 #
+# An `ultra` image says so in WACTORZ_IMAGE_FLAVOUR, and is also asked for what
+# it exists to carry: the vision packages imported, as the user the app runs as,
+# and a package with no wheel built against the system libraries.
+#
 # Usage: scripts/image-smoke.sh <image> <mosquitto-image>
 # `make image-smoke IMAGE=…` passes the broker image pinned in .github/tools/Dockerfile.
 set -eu
@@ -112,3 +116,46 @@ echo "smoke: the app runs as uid $uid"
 setid=$(docker exec "$run-app" find / -xdev -perm /6000 -type f 2> /dev/null || true)
 [ -z "$setid" ] || fail "set-id binaries in the image: $setid"
 echo "smoke: no set-id binaries"
+
+# What the image passes on, and under which terms: Wactorz's own license and
+# notice, in /app and in the installed package, and the list of everything else.
+docker exec "$run-app" sh -c '
+    test -s /app/LICENSE && test -s /app/NOTICE.md \
+    && grep -q "^aiohttp [0-9].*: " /app/THIRD_PARTY.txt \
+    && grep -q "^wactorz [0-9].*: Apache-2.0 (texts: LICENSE, NOTICE.md)$" /app/THIRD_PARTY.txt
+' || fail "the image does not carry its license, its notice and the list of what it bundles"
+echo "smoke: license, notice and $(docker exec "$run-app" sh -c 'wc -l < /app/THIRD_PARTY.txt') third-party packages listed"
+
+flavour=$(docker exec "$run-app" printenv WACTORZ_IMAGE_FLAVOUR 2> /dev/null || true)
+echo "smoke: the image says it is '${flavour:-default}'"
+[ "$flavour" = ultra ] || exit 0
+
+# As the app's user, which is who an agent's code runs as. Importing cv2 is what
+# fails without libGL; a model run on an empty picture is what fails when
+# PyTorch and Ultralytics disagree about each other.
+docker exec -u "$uid" "$run-app" python -c '
+import cv2, numpy, torch, torchvision, ultralytics
+assert not torch.cuda.is_available(), "the CPU build of PyTorch is the one locked"
+picture = numpy.zeros((64, 64, 3), dtype=numpy.uint8)
+assert cv2.cvtColor(picture, cv2.COLOR_BGR2GRAY).shape == (64, 64)
+assert torch.zeros(2, 2).sum().item() == 0
+print("torch", torch.__version__, "ultralytics", ultralytics.__version__, "cv2", cv2.__version__)
+' || fail "the ultra image cannot import what it carries"
+echo "smoke: the vision packages import"
+
+# What the Reachy Mini SDK needs at install time: PyGObject has no wheel, and is
+# built against GObject introspection and cairo. The range is the SDK's own,
+# since a later PyGObject wants a later introspection library than it does. Then
+# GStreamer through it.
+docker exec -u "$uid" "$run-app" sh -c '
+    pkg-config --exists gobject-introspection-1.0 cairo \
+    && pip install --quiet --no-cache-dir "PyGObject>=3.42.2,<=3.46.0" \
+    && python -c "
+import gi
+gi.require_version(\"Gst\", \"1.0\")
+from gi.repository import Gst
+Gst.init(None)
+assert Gst.ElementFactory.find(\"videotestsrc\") is not None
+print(\"gstreamer\", Gst.version_string())
+"' || fail "the ultra image cannot build PyGObject or reach GStreamer through it"
+echo "smoke: PyGObject builds and reaches GStreamer"

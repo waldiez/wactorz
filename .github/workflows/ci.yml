@@ -268,8 +268,15 @@ jobs:
     # root and carry no set-id binaries; then any fixable CRITICAL or HIGH
     # finding fails the job (accepted ones: .trivyignore.yaml, with expiry
     # dates). Nothing is pushed.
-    name: Image
+    #
+    # Both flavours of it (see the Dockerfile): the `ultra` one is also asked to
+    # import the vision packages it carries and to build PyGObject.
+    name: Image (${{ matrix.flavour }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: [default, ultra]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -281,11 +288,15 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          build-args: |
+            FLAVOUR=${{ matrix.flavour }}
           tags: wactorz:ci
           load: true
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A cache per flavour: sharing one, each run would evict the other's
+          # layers and build from nothing.
+          cache-from: type=gha,scope=image-${{ matrix.flavour }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.flavour }}
           # Debian's security updates of the day, never a cached copy (see the
           # Dockerfile's `runtime` stage).
           no-cache-filters: runtime

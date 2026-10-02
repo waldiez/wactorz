@@ -3,10 +3,14 @@ name: Image 🐳
 # once CI has passed on a release tag and the package is on PyPI; by hand it
 # runs as a dry run unless told otherwise.
 #
-# One build, of both architectures, pushed to GHCR by digest with no tag on it.
-# That digest is what is smoke-tested and scanned, and only once both pass do
-# the release tags point at it. So the published bits are the tested bits, and a
-# failed check leaves nothing tagged.
+# One build of each flavour, of both architectures, pushed to GHCR by digest
+# with no tag on it. That digest is what is smoke-tested and scanned, and only
+# once both pass do the release tags point at it. So the published bits are the
+# tested bits, and a failed check leaves nothing tagged.
+#
+# The two flavours are the Dockerfile's: `default` is `wactorz:<version>` and
+# `:latest`, `ultra` is `wactorz:<version>-ultra` and `:ultra`. Each is checked
+# and tagged on its own, so one failing does not hold back the other.
 # yamllint disable rule:truthy
 on:
   workflow_call:
@@ -48,11 +52,15 @@ env:
 
 jobs:
   publish:
-    name: Build, check and publish
+    name: Build, check and publish (${{ matrix.flavour }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write  # push to GHCR
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: [default, ultra]
     steps:
       # The tag's own tree, and its history: the tag list below decides whether
       # this build may move :latest.
@@ -68,20 +76,26 @@ jobs:
         id: tags
         env:
           TAG: ${{ inputs.tag }}
+          FLAVOUR: ${{ matrix.flavour }}
         run: |
           case "$TAG" in
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *) echo "::error::$TAG is not a release tag (vX.Y.Z)"; exit 1 ;;
           esac
-          tags="waldiez/wactorz:${TAG} ghcr.io/waldiez/wactorz:${TAG} quay.io/waldiez/wactorz:${TAG}"
-          # Only the newest version may be :latest. Releasing a fix on an older
-          # line would otherwise move the tag backwards for everyone who pulls
-          # without naming a version.
+          # The default image has the plain names; the other says which it is.
+          case "$FLAVOUR" in
+            default) versioned="$TAG"; moving="latest" ;;
+            *) versioned="${TAG}-${FLAVOUR}"; moving="$FLAVOUR" ;;
+          esac
+          tags="waldiez/wactorz:${versioned} ghcr.io/waldiez/wactorz:${versioned} quay.io/waldiez/wactorz:${versioned}"
+          # Only the newest version may be :latest (or :ultra). Releasing a fix
+          # on an older line would otherwise move the tag backwards for everyone
+          # who pulls without naming a version.
           newest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
           if [ "$TAG" = "$newest" ]; then
-            tags="$tags waldiez/wactorz:latest ghcr.io/waldiez/wactorz:latest quay.io/waldiez/wactorz:latest"
+            tags="$tags waldiez/wactorz:${moving} ghcr.io/waldiez/wactorz:${moving} quay.io/waldiez/wactorz:${moving}"
           else
-            echo "::notice::$TAG is not the newest ($newest) - leaving :latest alone"
+            echo "::notice::$TAG is not the newest ($newest) - leaving :${moving} alone"
           fi
           {
             echo "list=$tags"
@@ -122,12 +136,14 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            FLAVOUR=${{ matrix.flavour }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           no-cache: true
           provenance: mode=max
           sbom: true
           labels: |
-            org.opencontainers.image.title=Wactorz
+            org.opencontainers.image.title=Wactorz${{ matrix.flavour != 'default' && format(' ({0})', matrix.flavour) || '' }}
             org.opencontainers.image.source=https://github.com/waldiez/wactorz
             org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.version=${{ steps.tags.outputs.version }}

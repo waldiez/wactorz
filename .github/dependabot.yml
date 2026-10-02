@@ -29,6 +29,17 @@ updates:
     groups:
       images:
         patterns: ["*"]
+    ignore:
+      # A new digest of the same Python is proposed; a new Python is not. The
+      # app Dockerfile has two bases on two Python releases, and the `ultra` one
+      # stays where the Reachy Mini SDK's PyGObject still builds. Moving either
+      # is done by hand, with the CI matrix and the lockfile.
+      #
+      # By name, so it reaches only the official `python` image, which among
+      # these directories is the app Dockerfile's alone: the add-on bases are
+      # Home Assistant's images under other names, and are proposed as before.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   # The images compose.yaml and compose.dev.yaml run: the broker, pinned by
   # digest to the same release the broker tests use, and the rest by tag.

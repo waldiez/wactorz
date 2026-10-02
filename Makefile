@@ -193,6 +193,11 @@ lint-ci: ## Lint the GitHub workflows (zizmor), shell scripts (shellcheck) and D
 # CI and the release workflows pass their own.
 IMAGE ?= wactorz:local
 
+# Which of the two app images `make image` builds: `default`, or `ultra` with
+# PyTorch, Ultralytics, OpenCV and the system libraries they and the Reachy Mini
+# SDK need (see the Dockerfile). `image-smoke` asks the image which it is.
+FLAVOUR ?= default
+
 # Extra Trivy arguments for `image-scan`: the release workflows pass `--platform`
 # for each architecture, and the add-ons skip a binary of Home Assistant's own.
 SCAN_ARGS ?=
@@ -212,10 +217,10 @@ define require-image
 		|| { echo "No image $(IMAGE): build it with 'make image', or pass IMAGE=<an image you have>."; exit 1; } ;; esac
 endef
 
-image: ## Build the app image as CI does (the Debian upgrade stage never cached), tagged IMAGE (default wactorz:local)
-	docker build --no-cache-filter runtime -t "$(IMAGE)" .
+image: ## Build the app image as CI does (the Debian upgrade stage never cached), tagged IMAGE (default wactorz:local); FLAVOUR=ultra builds the larger one
+	docker build --build-arg FLAVOUR=$(FLAVOUR) --no-cache-filter runtime -t "$(IMAGE)" .
 
-image-smoke: ## Smoke-test IMAGE beside a broker: /health and /ready on both servers, no root, no set-id
+image-smoke: ## Smoke-test IMAGE beside a broker: /health and /ready on both servers, no root, no set-id; an ultra image also imports what it adds
 	$(require-image)
 	scripts/image-smoke.sh "$(IMAGE)" "$(call tool-image,mosquitto)"
 

@@ -163,6 +163,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        FLAVOUR: ${WACTORZ_FLAVOUR:-default}
     container_name: wactorz-dev-api-key
     restart: "no"
     mem_limit: 256m
@@ -200,6 +202,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        FLAVOUR: ${WACTORZ_FLAVOUR:-default}
     container_name: wactorz-dev-mqtt-certs
     # Fixed, because the certificate names the host it is generated on: left to
     # Docker that is the container's id, which changes on every run, and the
@@ -251,6 +255,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        FLAVOUR: ${WACTORZ_FLAVOUR:-default}
     container_name: wactorz-app
     restart: unless-stopped
     # Ceilings, so a leak or a runaway agent ends with this container restarted

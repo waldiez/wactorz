@@ -87,5 +87,17 @@ def test_the_test_hook_leaves_out_files_git_does_not_know() -> None:
     assert "--ignore=" in recipe
 
 
+def test_the_type_check_hook_leaves_them_out_too() -> None:
+    # It reads every file under the configured folders unless given the files,
+    # and an untracked one is then checked against code the hook has set aside.
+    assert shlex.split(_hooks()["basedpyright"]["entry"]) == ["make", "typecheck-tracked"]
+    recipe = _recipe("typecheck-tracked")
+
+    assert "$(PYTHON) -m basedpyright $$(git ls-files -- " in recipe
+    assert "--others" not in recipe
+    for folder in ("wactorz", "tests", "scripts"):
+        assert f"'{folder}/*.py'" in recipe
+
+
 def test_the_hooks_are_installed_with_the_projects_own_prek() -> None:
     assert _recipe("precommit-install").strip() == "$(PYTHON) -m prek install"

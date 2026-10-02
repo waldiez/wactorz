@@ -60,6 +60,9 @@ class LoopLagMonitor:
         self._stopping: threading.Event | None = None
         #: The lag last measured, for a test or a log line; `/metrics` has them all.
         self.last = 0.0
+        #: The longest measured since this was last set back to zero, for a
+        #: caller that looks now and then and must not miss what came between.
+        self.longest = 0.0
 
     def start(self) -> None:
         """Watch the running loop. Call from the loop's own thread; a second call does nothing."""
@@ -89,6 +92,7 @@ class LoopLagMonitor:
     def _answer(self, asked_at: float, answered: threading.Event) -> None:
         """On the loop: record how long it took to get here."""
         self.last = time.monotonic() - asked_at
+        self.longest = max(self.longest, self.last)
         LAG.observe(self.last)
         answered.set()
 

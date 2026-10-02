@@ -1,7 +1,7 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
-		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker format clean \
+		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker soak format clean \
         up down logs shell mqtt-certs \
-        run run-py test test-py test-py-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
+        run run-py test test-py test-py-tracked typecheck-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
 # ── Windows shell setup ──────────────────────────────────────────────────────
@@ -328,6 +328,12 @@ test-py-tracked: ## Run the Python tests git knows about, leaving out untracked 
 	$(PYTHON) -m pytest tests -n auto \
 		$$(git ls-files --others --exclude-standard -- 'tests/*.py' | sed 's/^/--ignore=/')
 
+# The same reason, for the type checker: it reads the whole configured tree, so
+# an untracked file is checked against code the hook has just set aside. Given
+# the files by name it reads those and what they import, and reports on no other.
+typecheck-tracked: ## Type-check the Python files git knows about, leaving out untracked files (the commit hook)
+	$(PYTHON) -m basedpyright $$(git ls-files -- 'wactorz/*.py' 'tests/*.py' 'scripts/*.py')
+
 test-py: ## Run Python tests (pytest)
 	@# -n auto here and not in pyproject's addopts: parallel wins on the whole
 	@# suite and loses on a single file, where worker start-up costs more than
@@ -353,6 +359,15 @@ test-py-versions: ## Run the Python tests on each supported version (PYTHONS=...
 # The ordinary suite refuses every broker connection, so these are skipped there.
 test-broker: ## Run the main-and-node tests over a real mosquitto, started for the run (needs Docker)
 	scripts/test-broker.sh "$(call tool-image,mosquitto)" "$(PYTHON)" -q
+
+# The same main and node, kept busy for DURATION seconds: agents spawned, asked
+# and deleted over and over, with what is left behind compared after every
+# round. A leak is a number that should come back and does not. SOAK_REPORT
+# names a file for the samples.
+DURATION ?= 300
+soak: ## Keep a main and a node busy over a real mosquitto for DURATION seconds and fail on anything that only grows (needs Docker)
+	WACTORZ_SOAK_SECONDS=$(DURATION) WACTORZ_SOAK_REPORT=$(SOAK_REPORT) \
+		scripts/test-broker.sh "$(call tool-image,mosquitto)" "$(PYTHON)" -q -s -k soak
 
 test-frontend: ## Run frontend tests (vitest)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run test

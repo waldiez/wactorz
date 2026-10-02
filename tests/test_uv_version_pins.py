@@ -33,3 +33,13 @@ def test_ci_installs_the_uv_the_image_is_built_with() -> None:
         "Dependabot moved one of them: set UV_VERSION in .github/workflows/ci.yml "
         "to the version in the Dockerfile's `AS uv` line"
     )
+
+
+def test_every_workflow_that_installs_uv_installs_that_one() -> None:
+    # A workflow of its own names the version again, and would drift from it.
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        env = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("env") or {}
+        if "UV_VERSION" in env:
+            assert str(env["UV_VERSION"]) == _ci_uv(), (
+                f"{path.name} installs another uv than ci.yml: set them to the same version"
+            )

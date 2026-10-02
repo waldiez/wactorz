@@ -157,6 +157,26 @@ class TestTheEventLoop:
         assert resumed is not None
         assert float(resumed.group(1)) >= 0.3
 
+    async def test_a_block_is_still_known_after_the_loop_has_answered_again(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Something that looks at the monitor now and then sees the last answer,
+        # which is a quick one a moment after any block has ended.
+        caplog.set_level(logging.WARNING, logger="wactorz.monitoring.loop_lag")
+        monitor = LoopLagMonitor(interval=0.05, report_after=0.2)
+        monitor.start()
+        try:
+            _holds_the_loop(lambda: _reported(caplog))
+            await until(lambda: 0 < monitor.last < 0.2, "the loop answering quickly again")
+
+            assert monitor.longest >= 0.2
+
+            monitor.longest = 0.0
+            await until(lambda: monitor.longest > 0, "a later answer being measured")
+            assert monitor.longest < 0.2, "set back, it holds only what came after"
+        finally:
+            monitor.stop()
+
     async def test_one_block_is_reported_once(self, caplog: pytest.LogCaptureFixture) -> None:
         caplog.set_level(logging.WARNING, logger="wactorz.monitoring.loop_lag")
         monitor = LoopLagMonitor(interval=0.05, report_after=0.2)

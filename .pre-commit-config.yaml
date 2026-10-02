@@ -27,11 +27,12 @@ repos:
         entry: bash -c '"$(make -s python-path)" -m ruff check --fix "$@"' --
         language: system
         types: [python]
-      # The whole configured tree, not the staged files: a changed signature in
-      # the package breaks the tests and scripts that call it, unstaged or not.
+      # Every file git knows about, not the staged ones: a changed signature in
+      # the package breaks the tests and scripts that call it, staged or not.
+      # Without the files git does not know about: see the target.
       - id: basedpyright
         name: basedpyright
-        entry: bash -c '"$(make -s python-path)" -m basedpyright'
+        entry: make typecheck-tracked
         language: system
         pass_filenames: false
         files: \.py$

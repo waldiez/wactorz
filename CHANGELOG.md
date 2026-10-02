@@ -51,6 +51,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Failures that were carried on from in silence are now logged.** An agent's stop swallowed whatever its `on_stop` or its state save raised, so an agent that lost its state at shutdown left no trace of why; both are now logged with the agent's name, and the stop still completes. An agent's command listener and a stream window retried a lost broker connection for ever without a word; each now says so once when the connection goes and once when it is back. The dashboard's clean-up after a delete ran as a task nothing held, which the event loop may drop part-way; it is now held until it ends, and a failure in it is logged.
+
+- **Broker reconnects are spread out.** Every agent holds a broker connection of its own, and all of them retried on the same fixed interval, so a broker that restarted was met by every agent at once, again at each retry. Each wait is now the same interval plus up to half as much again, differently for each connection: agents, stream windows, the publisher, the dashboard and the node runner.
+
+- **`LLM_TIMEOUT_S` is the timeout the provider SDKs use too.** The Anthropic and OpenAI clients kept their own default of ten minutes underneath it, so `LLM_TIMEOUT_S=0`, documented as no limit for a model that thinks for a long time, was still cut off there. The clients are now given the configured value, and none when it is `0`.
+
 - **A calendar event you were asked to finish is finished by your answer.** After "add an event called Gym" the calendar agent asks for a time. Answering "tomorrow 6pm to 7pm" listed tomorrow's events instead, because on its own that reads as a request to show a day, and the event stayed unfinished. An answer that supplies a time or a title now completes the event whichever day it names. The opposite mistake is fixed too: while an event was waiting, anything at all you typed was taken as its answer, so asking "what's on today?" only got the question repeated. A new request is now treated as one, and the waiting event can still be finished afterwards.
 
 - **The weather agent finds the place when the model says more than its name.** When it asks the model which place a question is about, it took the quotes off the whole reply before taking its first line. A reply of `"Paris"` followed by anything else left the closing quote on the name, and `Paris"` is not a place the geocoder knows.

@@ -16,6 +16,7 @@ import json
 
 import pytest
 
+from tests.waiting import PATIENCE_S
 from wactorz.web import runtime, ws
 
 
@@ -54,7 +55,9 @@ class TestASlowClientIsIsolated:
         channel = ws.Channel(slow)  # type: ignore[arg-type]
         runtime.ws_clients.add(channel)
         try:
-            await asyncio.wait_for(ws.broadcast({"type": "patch"}), timeout=0.5)
+            # The slow client is released only after this: waiting on it would
+            # be waiting for ever, so the limit can be a generous one.
+            await asyncio.wait_for(ws.broadcast({"type": "patch"}), timeout=PATIENCE_S)
         finally:
             slow.release.set()
             await channel.close()

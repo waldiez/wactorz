@@ -18,12 +18,20 @@ from typing import Any
 
 import pytest
 
+from wactorz.agents.main import llm_bridge
 from wactorz.agents.main.actor import MainActor
-from wactorz.agents.main.llm_bridge import LLMBridge
+from wactorz.agents.main.llm_bridge import REFUSED_UNSIGNED, LLMBridge, reply_topic_for
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
 from wactorz.agents.main.nodes import NodeManager
 from wactorz.core.actor import ActorState
+from wactorz.core.node_signing import (
+    REQUEST_SIGNATURE_FIELD,
+    node_key,
+    request_signed_for,
+    sign_request,
+)
+from wactorz.node.signing import ControlGuard
 
 
 class _Message:
@@ -96,6 +104,7 @@ class _Run:
         self.llm = llm
         self.published: list[tuple[str, Any]] = []
         self.persisted = 0
+        self.notices: list[dict[str, Any]] = []
 
     @property
     def replies(self) -> list[tuple[str, Any]]:
@@ -112,20 +121,24 @@ class _Run:
 PERSISTED = "<persisted>"
 
 
-def request(**over: Any) -> _Message:
+def request(*, signed: bool = True, **over: Any) -> _Message:
     """A bridge request as a remote agent publishes it.
 
     The reply topic is unique per call, as the runner makes it -- it mints a
-    fresh uuid for every request. Two requests sharing one would be a
-    redelivery of the same request, which the bridge deliberately ignores.
+    fresh uuid for every request -- and lies in the node's own reply space. Two
+    requests sharing one would be a redelivery of the same request, which the
+    bridge deliberately ignores. Signed with the key of the node it names, as a
+    deployed node signs, unless ``signed`` is false.
     """
     body: dict[str, Any] = {
-        "_reply_topic": f"nodes/rpi/reply/{uuid.uuid4().hex[:8]}",
+        "_reply_topic": f"nodes/rpi-kitchen/reply/{uuid.uuid4().hex[:8]}",
         "agent": "collector",
         "node": "rpi-kitchen",
         "prompt": "how warm is it?",
         **over,
     }
+    if signed:
+        body = sign_request(body, bytes.fromhex(node_key(str(body["node"]))))
     return _Message(json.dumps(body).encode())
 
 
@@ -157,6 +170,7 @@ async def run_bridge(
 
     setattr(main, "_mqtt_publish", _publish)
     setattr(main, "_persist_cost", lambda: run.published.append((PERSISTED, None)))
+    setattr(main, "_queue_notification", run.notices.append)
 
     def _stop() -> None:
         main.state = ActorState.STOPPED
@@ -174,11 +188,11 @@ class TestAnsweringARequest:
     async def test_the_reply_goes_to_the_topic_the_caller_named(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        named = request(_reply_topic="nodes/rpi/reply/chosen-by-the-caller")
+        named = request(_reply_topic="nodes/rpi-kitchen/reply/c0ffee42")
 
         run = await run_bridge(monkeypatch, [named], llm=_LLM())
 
-        assert run.replies[0][0] == "nodes/rpi/reply/chosen-by-the-caller"
+        assert run.replies[0][0] == "nodes/rpi-kitchen/reply/c0ffee42"
 
     async def test_the_reply_carries_the_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
         run = await run_bridge(monkeypatch, [request()], llm=_LLM(text="22 degrees"))
@@ -373,3 +387,149 @@ class TestWhatIsSaidAboutIt:
 
         assert "collector" in caplog.text
         assert "rpi-kitchen" in caplog.text
+
+
+class TestOnlyANodeItDeployedIsAnswered:
+    """Main answers with an account the broker lets write anywhere, on its own budget."""
+
+    @pytest.mark.parametrize(
+        "topic",
+        [
+            "agents/1234/commands",  # what a node's access list denies it
+            "system/shutdown",
+            "nodes/rpi-garage/reply/abcd1234",  # another node's reply space
+            "nodes/rpi-kitchen/spawn",  # its own control topic, not a reply
+            "nodes/rpi-kitchen/reply/not-hex",
+        ],
+    )
+    async def test_a_reply_topic_outside_the_node_s_reply_space_gets_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, topic: str
+    ) -> None:
+        # Otherwise a node denied a topic could have main publish there for it.
+        llm = _LLM()
+        run = await run_bridge(monkeypatch, [request(_reply_topic=topic)], llm=llm)
+
+        assert run.replies == []
+        assert llm.calls == []
+
+    async def test_a_signed_request_is_answered(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_bridge(monkeypatch, [request()], llm=_LLM("the answer"))
+
+        assert run.only_reply == {"text": "the answer"}
+
+    async def test_an_unsigned_request_is_refused_and_told_why(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Told, so the caller fails at once rather than after its whole timeout.
+        monkeypatch.setattr(llm_bridge, "NODE_SIGNING", "enforce")
+        llm = _LLM()
+        run = await run_bridge(monkeypatch, [request(signed=False)], llm=llm)
+
+        assert run.only_reply == {"text": REFUSED_UNSIGNED}
+        assert llm.calls == []
+
+    async def test_a_request_signed_by_another_node_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # One node cannot spend main's budget in another's name.
+        monkeypatch.setattr(llm_bridge, "NODE_SIGNING", "enforce")
+        body = {
+            "_reply_topic": "nodes/rpi-kitchen/reply/abcd1234",
+            "agent": "collector",
+            "node": "rpi-kitchen",
+            "prompt": "hi",
+        }
+        forged = sign_request(body, bytes.fromhex(node_key("rpi-garage")))
+        llm = _LLM()
+
+        run = await run_bridge(monkeypatch, [_Message(json.dumps(forged).encode())], llm=llm)
+
+        assert run.only_reply == {"text": REFUSED_UNSIGNED}
+        assert llm.calls == []
+
+    async def test_a_request_altered_after_signing_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(llm_bridge, "NODE_SIGNING", "enforce")
+        signed = json.loads(request().payload)
+        signed["prompt"] = "something else entirely"
+        llm = _LLM()
+
+        run = await run_bridge(monkeypatch, [_Message(json.dumps(signed).encode())], llm=llm)
+
+        assert run.only_reply == {"text": REFUSED_UNSIGNED}
+        assert llm.calls == []
+
+    async def test_warn_answers_it_and_says_so_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(llm_bridge, "NODE_SIGNING", "warn")
+        run = await run_bridge(
+            monkeypatch, [request(signed=False), request(signed=False)], llm=_LLM("ok")
+        )
+
+        assert [payload for _topic, payload in run.replies] == [{"text": "ok"}, {"text": "ok"}]
+        assert len(run.notices) == 1
+        assert "rpi-kitchen" in run.notices[0]["message"]
+
+    async def test_a_replayed_signed_request_is_answered_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The signature covers the reply topic, so a replay carries the same one.
+        captured = request()
+        llm = _LLM()
+
+        run = await run_bridge(monkeypatch, [captured, captured], llm=llm)
+
+        assert len(run.replies) == 1
+        assert len(llm.calls) == 1
+
+
+class TestWhatTheBridgeRemembersIsBounded:
+    async def test_invented_node_names_do_not_grow_it_without_end(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The node in a request is whatever its sender wrote.
+        monkeypatch.setattr(llm_bridge, "REPORTED_MEMORY", 8)
+        monkeypatch.setattr(llm_bridge, "NODE_SIGNING", "enforce")
+        forged = [
+            request(
+                signed=False, node=f"made-up-{i}", _reply_topic=f"nodes/made-up-{i}/reply/ab{i:02x}"
+            )
+            for i in range(50)
+        ]
+
+        run = await run_bridge(monkeypatch, forged, llm=_LLM())
+
+        assert len(run.main.llm_bridge._reported) == 8
+        assert len(run.replies) == 50  # each still told it was refused
+
+
+class TestTheNodeSignsWhatMainChecks:
+    async def test_a_request_from_a_node_s_runner_is_accepted(self, tmp_path: Any) -> None:
+        # Both halves share one canonical form; this is where they would drift.
+        guard = ControlGuard(node_key("rpi-kitchen"), "", "enforce", str(tmp_path))
+        body = {
+            "_reply_topic": "nodes/rpi-kitchen/reply/abcd1234",
+            "agent": "collector",
+            "node": "rpi-kitchen",
+            "messages": [{"role": "user", "content": "héllo"}],
+            "system": "",
+        }
+
+        signed = guard.sign_request(body)
+        # As main receives it: serialised by the node, parsed back on main.
+        received = json.loads(json.dumps(signed))
+
+        assert request_signed_for(received, "rpi-kitchen")
+
+    def test_a_node_without_a_key_sends_the_request_as_it_is(self, tmp_path: Any) -> None:
+        guard = ControlGuard("", "", "", str(tmp_path))
+        body = {"node": "rpi-kitchen"}
+
+        assert REQUEST_SIGNATURE_FIELD not in guard.sign_request(body)
+
+
+def test_the_reply_topic_rule() -> None:
+    assert reply_topic_for("nodes/rpi-kitchen/reply/abcd1234", "rpi-kitchen")
+    assert not reply_topic_for("nodes/rpi-kitchen/reply/abcd1234", "rpi-garage")
+    assert not reply_topic_for("nodes/rpi-kitchen/reply/abcd1234", "")
+    assert not reply_topic_for("nodes/rpi-kitchen/reply/ab/cd", "rpi-kitchen")

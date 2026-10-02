@@ -1,0 +1,474 @@
+"""Each node's broker account, and the access list that pens it in.
+
+The account's password is derived rather than stored, so these tests pin what
+that derivation promises: the same install and node always produce the same
+password, two nodes never share one, and a leaked password file says nothing
+about the signing key derived from the same secret.
+
+The access list's shape is pinned here; that mosquitto reads it the way this
+assumes -- a deny beating the allow around it, write without read, an unnamed
+account having no access -- is asked of a real broker in `tests/broker`.
+"""
+
+import base64
+import hashlib
+import logging
+import os
+import stat
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from wactorz import broker_certificates, config
+from wactorz.config import DeployTarget
+from wactorz.core import broker_accounts, broker_tls, node_signing
+
+NODES = ("rpi-garage", "rpi-kitchen")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Each test is an install of its own: its own state directory and secret."""
+    state = tmp_path / "state"
+    monkeypatch.setenv("WACTORZ_STATE_DIR", str(state))
+    monkeypatch.setattr(node_signing, "_secret", None)
+    return state
+
+
+def _new_install(monkeypatch: pytest.MonkeyPatch, state: Path) -> None:
+    """Point the module at a different install, as a second machine would be."""
+    monkeypatch.setenv("WACTORZ_STATE_DIR", str(state))
+    monkeypatch.setattr(node_signing, "_secret", None)
+
+
+class TestThePassword:
+    def test_it_is_the_same_every_time(self) -> None:
+        assert broker_accounts.password("rpi") == broker_accounts.password("rpi")
+
+    def test_each_node_gets_its_own(self) -> None:
+        assert broker_accounts.password("rpi") != broker_accounts.password("rpi2")
+
+    def test_another_install_derives_another_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        here = broker_accounts.password("rpi")
+        _new_install(monkeypatch, tmp_path / "elsewhere")
+        assert broker_accounts.password("rpi") != here
+
+    def test_it_says_nothing_about_the_signing_key(self) -> None:
+        # Same secret, different context: a leaked password file must not hand
+        # anyone the key that signs that node's commands.
+        assert broker_accounts.password("rpi") != node_signing.node_key("rpi")
+        assert node_signing.node_key("rpi") not in broker_accounts.password_line("rpi")
+
+    def test_it_carries_no_character_a_password_file_would_break_on(self) -> None:
+        secret = broker_accounts.password("rpi")
+        assert secret.isascii()
+        assert not set(secret) & set(":\n\r \t")
+
+
+class TestThePasswordFile:
+    def test_a_line_is_mosquittos_own_format(self) -> None:
+        node, algorithm, iterations, salt, hashed = broker_accounts.password_line("rpi").split("$")
+        assert node == "rpi:"
+        assert algorithm == "7"
+        recomputed = hashlib.pbkdf2_hmac(
+            "sha512",
+            broker_accounts.password("rpi").encode("ascii"),
+            base64.b64decode(salt),
+            int(iterations),
+            dklen=64,
+        )
+        assert base64.b64encode(recomputed).decode("ascii") == hashed
+
+    def test_writing_it_again_writes_the_same_bytes(self) -> None:
+        # A broker watches these files: a new salt every time would reload it for
+        # nothing, on every start.
+        assert broker_accounts.password_file_text(NODES) == broker_accounts.password_file_text(
+            NODES
+        )
+
+    def test_it_holds_one_line_per_node(self) -> None:
+        lines = broker_accounts.password_file_text(NODES).splitlines()
+        assert [line.split(":")[0] for line in lines] == sorted(NODES)
+
+
+class TestTheLoginsForTheOfficialAddon:
+    """The official Mosquitto add-on stores passwords in its plugin's own format."""
+
+    def test_a_login_is_go_auths_format(self) -> None:
+        algorithm, digest, iterations, salt, hashed = broker_accounts.home_assistant_login(
+            "rpi"
+        ).split("$")
+        assert (algorithm, digest) == ("PBKDF2", "sha512")
+        recomputed = hashlib.pbkdf2_hmac(
+            "sha512",
+            broker_accounts.password("rpi").encode("ascii"),
+            base64.b64decode(salt),
+            int(iterations),
+            dklen=len(base64.b64decode(hashed)),
+        )
+        assert base64.b64encode(recomputed).decode("ascii") == hashed
+
+    def test_the_block_names_every_node_and_says_the_passwords_are_hashed(self) -> None:
+        block = broker_accounts.home_assistant_logins(NODES)
+        assert block.count("password_pre_hashed: true") == len(NODES)
+        for node in NODES:
+            assert f"- username: {node}" in block
+
+    def test_it_says_it_is_generated(self) -> None:
+        assert broker_accounts.home_assistant_logins(NODES).startswith("# Generated by Wactorz")
+
+    def test_a_name_no_broker_could_carry_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="Node name"):
+            broker_accounts.home_assistant_logins(["a:b"])
+
+
+def _block(text: str, account: str) -> str:
+    """The rules under ``user <account>``, up to the next account."""
+    return text[text.index(f"user {account}\n") :].split("\nuser ")[0]
+
+
+class TestTheAccessList:
+    def test_a_node_may_use_its_own_tree_and_no_other_nodes(self) -> None:
+        text = broker_accounts.acl_text(NODES, ["wactorz"])
+        kitchen = _block(text, "rpi-kitchen")
+
+        assert "topic readwrite nodes/rpi-kitchen/#" in kitchen
+        assert "rpi-garage" not in kitchen
+
+    def test_a_node_shares_agent_traffic_but_not_the_servers_commands(self) -> None:
+        kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
+
+        assert "topic readwrite agents/#" in kitchen
+        assert "topic deny agents/+/commands" in kitchen
+
+    def test_a_node_writes_to_main_and_does_not_read_it(self) -> None:
+        # Read access would let it watch the other nodes' answers, and learn a
+        # reply topic to forge one into.
+        kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
+        about_main = [line for line in kitchen.splitlines() if " main/" in line]
+
+        assert about_main == ["topic write main/llm_request", "topic write main/reply/#"]
+
+    def test_a_node_gets_the_conventional_data_topics(self) -> None:
+        kitchen = _block(broker_accounts.acl_text(NODES, ["wactorz"]), "rpi-kitchen")
+
+        for topic, access in broker_accounts.NODE_TOPICS:
+            assert f"topic {access} {topic}" in kitchen
+        assert "topic read homeassistant/state_changes/#" in kitchen
+
+    def test_added_data_topics_reach_every_node(self) -> None:
+        topics = [*broker_accounts.NODE_TOPICS, ("zigbee2mqtt/#", "readwrite")]
+        text = broker_accounts.acl_text(NODES, ["wactorz"], topics)
+
+        for node in NODES:
+            assert "topic readwrite zigbee2mqtt/#" in _block(text, node)
+
+    def test_nothing_grants_a_node_everything(self) -> None:
+        text = broker_accounts.acl_text(NODES, ["wactorz"])
+
+        assert "pattern" not in text
+        for node in NODES:
+            assert "topic readwrite #" not in _block(text, node)
+
+    def test_the_servers_account_and_listed_ones_keep_the_whole_broker(self) -> None:
+        # mosquitto gives an account this file does not name no access at all, so
+        # these have to be named. $SYS is outside every ordinary rule, and the
+        # compose broker's health check reads it.
+        text = broker_accounts.acl_text(NODES, ["wactorz", "homeassistant"])
+
+        for account in ("wactorz", "homeassistant"):
+            block = _block(text, account)
+            assert "topic readwrite #" in block
+            assert "topic read $SYS/#" in block
+
+    def test_a_server_with_no_account_keeps_the_broker_as_an_anonymous_client(self) -> None:
+        # A `topic` line outside a `user` block reaches clients that give no account.
+        text = broker_accounts.acl_text(NODES)
+        before_the_nodes = text[: text.index("user ")]
+
+        assert "topic readwrite #" in before_the_nodes
+
+    def test_a_node_named_like_a_listed_account_is_still_only_a_node(self) -> None:
+        text = broker_accounts.acl_text(["rpi"], ["wactorz", "rpi"])
+
+        assert text.count("user rpi\n") == 1
+        assert "topic readwrite #" not in _block(text, "rpi")
+
+    def test_with_no_node_every_account_keeps_everything(self) -> None:
+        # Nobody to pen in, so an install without nodes is not asked to list its
+        # other accounts. `pattern`, not `topic`: a `topic` line outside a `user`
+        # block reaches anonymous clients only.
+        text = broker_accounts.acl_text([], ["wactorz"])
+
+        assert "pattern readwrite #" in text
+        assert "pattern read $SYS/#" in text
+        assert "user " not in text
+
+    def test_it_says_it_is_generated(self) -> None:
+        assert broker_accounts.acl_text(NODES).startswith("# Generated by Wactorz")
+
+
+class TestTheDataTopicsSetting:
+    def test_filters_are_read_and_written_unless_marked_read(self) -> None:
+        assert broker_accounts.parse_node_topics(" zigbee2mqtt/# , read:weather/# ,") == [
+            ("zigbee2mqtt/#", "readwrite"),
+            ("weather/#", "read"),
+        ]
+
+    def test_empty_means_nothing_added(self) -> None:
+        assert broker_accounts.parse_node_topics("") == []
+
+    @pytest.mark.parametrize(
+        "topic", ["#", "nodes/other/#", "agents/#", "main/reply/#", "system/#", "$SYS/#"]
+    )
+    def test_a_filter_that_would_take_a_fence_down_is_refused(self, topic: str) -> None:
+        with pytest.raises(ValueError, match="would give every node"):
+            broker_accounts.parse_node_topics(topic)
+
+    @pytest.mark.parametrize("topic", ["a b/#", "a/#/b", "a#", "x/\ntopic readwrite #"])
+    def test_a_filter_that_could_not_be_one_rule_is_refused(self, topic: str) -> None:
+        # It is written into the file as it is, one rule per line.
+        with pytest.raises(ValueError):
+            broker_accounts.parse_node_topics(topic)
+
+
+class TestNames:
+    @pytest.mark.parametrize("node", ["a+b", "a#b", "a/b", "a:b", "a b", "a\tb", "", " rpi"])
+    def test_a_name_no_broker_could_carry_is_refused(self, node: str) -> None:
+        assert broker_accounts.name_error(node)
+        with pytest.raises(ValueError, match="Node name"):
+            broker_accounts.acl_text([node])
+
+    @pytest.mark.parametrize("node", ["rpi", "rpi-kitchen", "rpi_2", "RPi.local"])
+    def test_an_ordinary_name_is_accepted(self, node: str) -> None:
+        assert broker_accounts.name_error(node) is None
+
+
+class TestWritingThem:
+    def test_both_files_are_written_readable_by_their_owner_only(self, tmp_path: Path) -> None:
+        # The password file is what a node authenticates with, and mosquitto
+        # refuses one that others can read.
+        directory = tmp_path / "broker"
+
+        assert broker_accounts.write_files(directory, NODES) is True
+
+        for name in (broker_accounts.PASSWORD_FILE, broker_accounts.ACL_FILE):
+            if os.name != "nt":
+                assert stat.S_IMODE((directory / name).stat().st_mode) == 0o600
+
+    def test_writing_the_same_nodes_again_changes_nothing(self, tmp_path: Path) -> None:
+        directory = tmp_path / "broker"
+        broker_accounts.write_files(directory, NODES)
+        written = (directory / broker_accounts.ACL_FILE).stat().st_mtime_ns
+
+        assert broker_accounts.write_files(directory, NODES) is False
+        assert (directory / broker_accounts.ACL_FILE).stat().st_mtime_ns == written
+
+    def test_a_new_node_rewrites_them(self, tmp_path: Path) -> None:
+        directory = tmp_path / "broker"
+        broker_accounts.write_files(directory, NODES)
+
+        assert broker_accounts.write_files(directory, [*NODES, "rpi-shed"]) is True
+        assert "user rpi-shed" in (directory / broker_accounts.ACL_FILE).read_text(encoding="utf-8")
+
+
+class TestAtStartup:
+    """The server writes these files where a broker of ours reads them."""
+
+    def _configure(self, monkeypatch: pytest.MonkeyPatch, **fields: Any) -> None:
+        patched = replace(config.CONFIG, **fields)
+        monkeypatch.setattr(config, "CONFIG", patched)
+        monkeypatch.setattr(broker_certificates, "CONFIG", patched)
+
+    def test_the_deploy_targets_get_accounts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(directory),
+            deploy_targets=(DeployTarget(name="rpi-kitchen"), DeployTarget(name="rpi-garage")),
+        )
+
+        assert broker_certificates.prepare_broker_files() == ""
+
+        accounts = (directory / broker_accounts.PASSWORD_FILE).read_text(encoding="utf-8")
+        assert sorted(line.split(":")[0] for line in accounts.splitlines()) == [
+            "rpi-garage",
+            "rpi-kitchen",
+        ]
+        assert "user rpi-kitchen" in (directory / broker_accounts.ACL_FILE).read_text(
+            encoding="utf-8"
+        )
+
+    def test_the_settings_reach_the_access_list(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(directory),
+            mqtt_username="wactorz",
+            broker_accounts="homeassistant, zigbee2mqtt",
+            node_topics="plant/#",
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        assert broker_certificates.prepare_broker_files() == ""
+
+        text = (directory / broker_accounts.ACL_FILE).read_text(encoding="utf-8")
+        for account in ("wactorz", "homeassistant", "zigbee2mqtt"):
+            assert "topic readwrite #" in _block(text, account)
+        assert "topic readwrite plant/#" in _block(text, "rpi")
+
+    def test_a_node_whose_name_cannot_be_an_account_costs_only_its_own(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A space is allowed in a node's name and not in a broker account's.
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(directory),
+            deploy_targets=(DeployTarget(name="rpi kitchen"), DeployTarget(name="rpi-garage")),
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            assert broker_certificates.prepare_broker_files() == ""
+
+        accounts = (directory / broker_accounts.PASSWORD_FILE).read_text(encoding="utf-8")
+        assert [line.split(":")[0] for line in accounts.splitlines()] == ["rpi-garage"]
+        assert "'rpi kitchen' contains ' '" in caplog.text
+        assert "has no broker account" in caplog.text
+
+    def test_a_setting_that_cannot_be_used_is_reported_and_writes_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Writing the list without it would deploy nodes that are then refused
+        # the topic the operator asked for, with nothing saying why.
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(directory),
+            node_topics="nodes/#",
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            assert broker_certificates.prepare_broker_files() == ""
+
+        assert "would give every node" in caplog.text
+        assert not (directory / broker_accounts.ACL_FILE).exists()
+
+    def test_nothing_is_written_when_accounts_are_off(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        directory = tmp_path / "broker"
+        self._configure(
+            monkeypatch,
+            node_accounts=False,
+            mqtt_broker_dir=str(directory),
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        assert broker_certificates.prepare_broker_files() == ""
+        assert not directory.exists()
+
+    def test_a_folder_that_cannot_be_written_does_not_stop_the_server(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        blocker = tmp_path / "a-file"
+        blocker.write_text("not a directory", encoding="utf-8")
+        self._configure(
+            monkeypatch,
+            node_accounts=True,
+            mqtt_broker_dir=str(blocker / "broker"),
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            assert broker_certificates.prepare_broker_files() == ""
+
+        assert any("Could not write" in record.getMessage() for record in caplog.records)
+
+
+class TestExportingForABrokerOfOurs:
+    """`python -m wactorz.broker_certificates --export`, as compose and the add-ons run it.
+
+    Whoever runs it reads a failure as there being no certificate, and serves
+    plain MQTT only. So a problem with the accounts beside the certificate must
+    not be reported as one.
+    """
+
+    @staticmethod
+    def _configure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **changes: Any) -> None:
+        monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setattr(node_signing, "_secret", None)
+        patched = replace(config.CONFIG, **changes)
+        monkeypatch.setattr(config, "CONFIG", patched)
+        monkeypatch.setattr(broker_certificates, "CONFIG", patched)
+
+    def test_a_node_that_cannot_have_an_account_does_not_cost_the_certificate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        out = tmp_path / "out"
+        self._configure(
+            monkeypatch,
+            tmp_path,
+            node_accounts=True,
+            deploy_targets=(DeployTarget(name="rpi kitchen"), DeployTarget(name="rpi-garage")),
+        )
+
+        status = broker_certificates.main(["--dir", str(tmp_path / "tls"), "--export", str(out)])
+
+        assert status == 0
+        assert (out / broker_tls.BROKER_CERT_FILE).exists()
+        accounts = (out / broker_accounts.PASSWORD_FILE).read_text(encoding="utf-8")
+        assert [line.split(":")[0] for line in accounts.splitlines()] == ["rpi-garage"]
+
+    def test_a_data_topic_that_cannot_be_used_does_not_cost_it_either(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        out = tmp_path / "out"
+        self._configure(
+            monkeypatch,
+            tmp_path,
+            node_accounts=True,
+            node_topics="nodes/#",
+            deploy_targets=(DeployTarget(name="rpi"),),
+        )
+
+        with caplog.at_level(logging.WARNING, logger=broker_certificates.__name__):
+            status = broker_certificates.main(
+                ["--dir", str(tmp_path / "tls"), "--export", str(out)]
+            )
+
+        assert status == 0
+        assert (out / broker_tls.BROKER_CERT_FILE).exists()
+        assert not (out / broker_accounts.ACL_FILE).exists()
+        assert "The node accounts were not written" in caplog.text
+
+    def test_the_logins_for_the_mosquitto_add_on_leave_that_node_out(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        logins = tmp_path / "share" / "mosquitto-logins.yaml"
+        self._configure(
+            monkeypatch,
+            tmp_path,
+            node_accounts=True,
+            deploy_targets=(DeployTarget(name="rpi kitchen"), DeployTarget(name="rpi-garage")),
+        )
+
+        status = broker_certificates.main(["--dir", str(tmp_path / "tls"), "--logins", str(logins)])
+
+        assert status == 0
+        written = logins.read_text(encoding="utf-8")
+        assert "username: rpi-garage" in written
+        assert "rpi kitchen" not in written

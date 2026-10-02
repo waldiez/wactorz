@@ -28,11 +28,13 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
 
 | Task | Command |
 | ---- | ------- |
-| Install dev deps | `make install-dev` |
+| Install dev deps | `make install-dev` (uv from `uv.lock` if uv is on PATH, else pip; `USE_UV=0` forces pip) · after changing deps: `make lock` · `make audit` |
 | Run backend | `make run` · full dev stack: `make dev-full` |
-| Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) |
+| Tests | `make test` (Python + frontend) · split: `make test-py` / `make test-frontend` · coverage: `make coverage` (or `-py` / `-frontend`) · every supported Python, opt-in: `make test-py-versions` (`PYTHONS="3.10 3.11"` to narrow) · main and a node over a real mosquitto: `make test-broker` (needs Docker) · the same two kept busy for a while, failing on anything that only grows: `make soak` (`DURATION=` seconds, default 300) |
 | Build frontend | `make build-frontend` (never raw `bun run build` — this also syncs the installed package) |
 | Frontend lint | `make lint` (typecheck + prettier + eslint + markdownlint) |
+| Workflows, shell scripts, Dockerfiles | `make lint-ci` (zizmor + shellcheck + hadolint, pinned images; needs Docker, online with `GH_TOKEN`) |
+| App image checks | `make image` then `make image-smoke` (beside a broker: probes, no root, no set-id) and `make image-scan` (Trivy; accepted findings in `.trivyignore.yaml`); `IMAGE=` picks another image, and `make image FLAVOUR=ultra` builds the larger of the two (PyTorch, Ultralytics, OpenCV, GStreamer) |
 | Build everything | `make build` · local CI: `make ci` |
 
 ## Branches & pull requests
@@ -87,8 +89,8 @@ REST + WebSocket API and serves a framework-free TypeScript dashboard (SPA).
   - **Superlatives.** "the largest", "the only", "the last remaining" — all of them decay
     silently.
 - Ruff is the gated linter and formatter (`pyproject.toml` `[tool.ruff]`). `make lint-py` runs it,
-  plus an advisory pass that reports but never blocks. Pre-commit and CI both enforce the gated
-  rules, so a push that skips them fails rather than merging.
+  plus an advisory pass that reports but never blocks. The commit hook (prek) and CI both enforce
+  the gated rules, so a push that skips them fails rather than merging.
 - basedpyright (basic mode) is gated too, over `wactorz`, `tests` and `scripts` alike. In a test,
   a fake declares the attributes tests set on it, and where one stands in for a real object it
   says so on that line: `cast()`, or `# pyright: ignore[rule]` naming the rule — never a bare

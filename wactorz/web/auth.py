@@ -18,8 +18,6 @@ for API-only installs; leave it unset — with the loopback default — for
 dashboard use.
 """
 
-from __future__ import annotations
-
 import hmac
 import logging
 from typing import Any, NoReturn
@@ -29,16 +27,17 @@ from aiohttp import web
 
 from ..config import _env_truthy
 from ..core.net import is_loopback
-from . import origins, sessions
+from . import origins, probes, sessions
 
 logger = logging.getLogger(__name__)
 
 #: Reachable without a key, whatever else is configured.
 #:
-#: `/health` is not a style choice. The container's `HEALTHCHECK` curls it
-#: unauthenticated, so guarding it makes every container report unhealthy — and
-#: anything acting on that restarts a perfectly healthy process, in a loop.
-#: Probes cannot carry a key. The path is exempt, not the method.
+#: The probes (`probes.PROBE_PATHS`) are not a style choice. The container's
+#: `HEALTHCHECK` curls `/health` unauthenticated, so guarding it makes every
+#: container report unhealthy — and anything acting on that restarts a perfectly
+#: healthy process, in a loop. Probes cannot always carry a key, and they answer
+#: with nothing a stranger could use. The paths are exempt, not the method.
 #: `/login` is exempt from *authentication* and from nothing else. It stays
 #: inside the origin gate, and that is deliberate: C-2 refuses a mismatched
 #: `Origin` on state-changing methods, and a browser always sends one on a
@@ -47,7 +46,7 @@ logger = logging.getLogger(__name__)
 #: `/favicon.svg` is the mark the sign-in page shows. Gating it would leave that
 #: page — the one a stranger is *meant* to reach — asking for a credential to
 #: render its own logo. It is a static brand asset, published with the docs.
-UNGUARDED_PATHS = frozenset({"/health", "/login", "/favicon.svg"})
+UNGUARDED_PATHS = probes.PROBE_PATHS | {"/login", "/favicon.svg"}
 
 #: Carries the session id. `HttpOnly` so script cannot read it — the point of
 #: keeping the key server-side is lost if the cookie is scriptable.

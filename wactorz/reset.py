@@ -16,8 +16,6 @@ Each function is safe to call while the system is down (offline reset) or
 while it is running (the next heartbeat / restart will repopulate from scratch).
 """
 
-from __future__ import annotations
-
 import argparse
 import logging
 import sys
@@ -330,9 +328,16 @@ def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = Non
 
 
 def _reset_all_pickles(state_dir: str | None = None) -> None:
+    """Delete every agent's state file.
+
+    Through the store, not by removing the files: a running server keeps each
+    state in memory and writes it back, so a file removed behind it returns
+    with the next thing that agent persists.
+    """
+    store = _pickle_store(state_dir)
     base = Path(state_dir or _DEFAULT_STATE)
-    for pkl in base.glob("*/state.pkl"):
-        pkl.unlink(missing_ok=True)
+    for pkl in sorted(base.glob("*/state.pkl")):
+        store.delete(pkl.parent.name)
         logger.info("[reset] deleted pickle: %s", pkl)
 
 

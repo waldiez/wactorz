@@ -19,6 +19,7 @@ from ...config import (
     deploy_target_names,
 )
 from ...core.actor import Actor, Message, MessageType
+from ...core.node_signing import node_control_properties
 from ...core.persistence import chat_turn_recorded
 from ..llm_agent import LLMAgent, LLMProvider
 from ..mixins import SpawnMixin, SpawnPlaceholder
@@ -26,6 +27,7 @@ from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
 from ..prompts.main_actor_prompts import (
     ORCHESTRATOR_PROMPT,
 )
+from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
 from .delegation import DelegationManager
@@ -146,6 +148,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.manifests = ManifestRegistry(self)
         self.nodes = NodeManager(self, self.manifests)
         self.migration = Migration(self, self.nodes)
+        self.code_refresh = CodeRefresh(self)
         self.llm_bridge = LLMBridge(self)
         self.spawns = SpawnService(self)
         self.delegation = DelegationManager(self)
@@ -256,6 +259,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.migration.restore()
         # Receive state + config from remote nodes during remote→local migration
         self._tasks.append(asyncio.create_task(self._state_return_listener()))
+        # Follow agents that repaired themselves on a node, so the registry
+        # holds the program they actually run
+        self._tasks.append(asyncio.create_task(self.code_refresh.listener()))
         # Put back agents whose migration stalled with them running nowhere
         self._tasks.append(asyncio.create_task(self._stalled_migration_watcher()))
         # Inject persisted user facts into system prompt
@@ -330,10 +336,8 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Route interface tasks through the full orchestrator without blocking replies."""
         payload = msg.payload if isinstance(msg.payload, dict) else {}
         if payload.get("_via_interface"):
-            task = asyncio.create_task(self._handle_interface_request(payload, msg))
-            self._tasks.append(task)
-            task.add_done_callback(
-                lambda done: self._tasks.remove(done) if done in self._tasks else None
+            self.run_detached(
+                self._handle_interface_request(payload, msg), name="interface-request"
             )
             return
         await super()._handle_task(msg)
@@ -411,7 +415,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         response = await super().chat(user_message, attachments)
         # Fire-and-forget fact extraction — strip auto-injected context first
         clean_msg = _strip_live_context(user_message)
-        asyncio.create_task(self._extract_and_save_facts(clean_msg, response))
+        self.run_detached(self._extract_and_save_facts(clean_msg, response), name="facts")
         return response
 
     async def chat_stream(
@@ -430,7 +434,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         # Skips early-exit cases like cost-limit errors so no extra LLM call is made.
         if full_response and got_usage:
             clean_msg = _strip_live_context(user_message)
-            asyncio.create_task(self._extract_and_save_facts(clean_msg, "".join(full_response)))
+            self.run_detached(
+                self._extract_and_save_facts(clean_msg, "".join(full_response)), name="facts"
+            )
 
     async def _record_external_exchange(
         self, user_message: str, assistant_response: str, *, ts_user: float
@@ -466,7 +472,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             logger.warning("[%s] Failed to record external exchange: %s", self.name, e)
         self._log_delivered_turn(user_message, str(assistant_response), ts_user=ts_user)
         # Fire-and-forget fact extraction — same as chat()
-        asyncio.create_task(self._extract_and_save_facts(user_message, str(assistant_response)))
+        self.run_detached(
+            self._extract_and_save_facts(user_message, str(assistant_response)), name="facts"
+        )
 
     def _log_chat_turn(self, user_msg: str, reply: str, ts_user: float, ts_reply: float) -> None:
         """Store nothing: main stores a turn at the exit it leaves by.
@@ -1003,6 +1011,17 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
         await self.spawns._spawn_remote(config, node, save)
 
+    def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
+        """Sign whatever main addresses to a node's control topics.
+
+        Here rather than in Actor, whose publish carries every agent's messages: an
+        agent that published to a node's spawn topic would be signed along with
+        main, and reach nodes as main does. Agent code runs in this process, so
+        this keeps a mistake or a model's code from being signed by accident; it
+        is not a boundary against code that sets out to read the key.
+        """
+        return node_control_properties(topic, encoded)
+
     async def _update_node_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
     ) -> None:
@@ -1069,6 +1088,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def _node_is_online(self, node_name: str) -> bool:
         """True if ``node_name`` sent a heartbeat inside the freshness window."""
         return self.nodes.is_online(node_name)
+
+    def _node_version_mismatch(self, node_name: str) -> str | None:
+        """Why ``node_name`` cannot take an agent from this server, or None."""
+        return self.nodes.version_mismatch(node_name)
 
     def _online_node_names(self) -> list[str]:
         """Names of all nodes currently considered online."""
@@ -1229,7 +1252,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         if result.get("success"):
             yield (
-                f"[OK] Node '{node_name}' is live! It will appear in /nodes within ~15 seconds.\n\n"
+                f"[OK] Node '{node_name}' is live and its first heartbeat has arrived.\n\n"
                 f"Spawn agents on it:\n"
                 f'  "spawn a CPU monitor agent on {node_name}"\n'
                 f'  "spawn a temperature sensor on {node_name}"'

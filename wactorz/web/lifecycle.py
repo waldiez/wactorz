@@ -9,8 +9,11 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Coroutine
+from typing import Any
 
 from ..agents.lookup import find_main_actor
+from ..core.node_signing import signed_publish_kwargs
 from . import events, runtime
 
 logger = logging.getLogger(__name__)
@@ -101,6 +104,26 @@ async def run_command(agent_id: str, command: str, sender: str) -> str:
     return routed
 
 
+#: Work started here and not waited for, held until it ends. The event loop
+#: keeps only a weak reference to a task, so one nobody holds can be collected
+#: part-way through.
+_background: set["asyncio.Task[None]"] = set()
+
+
+def _in_background(work: Coroutine[Any, Any, None]) -> "asyncio.Task[None]":
+    """Run ``work`` without waiting for it, keeping hold of it and reporting a failure."""
+    task = asyncio.create_task(work)
+    _background.add(task)
+    task.add_done_callback(_finished)
+    return task
+
+
+def _finished(task: "asyncio.Task[None]") -> None:
+    _background.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("[lifecycle] Background work failed", exc_info=task.exception())
+
+
 async def purge_agent_retained(agent_id: str) -> None:
     """Clear retained MQTT messages for a deleted agent so the broker stops
     re-delivering them after a monitor reconnect or a fresh subscribe.
@@ -149,6 +172,20 @@ async def purge_node_desired_state(node: str) -> None:
         logger.debug("[purge] Failed to clear retained %s: %s", topic, e)
 
 
+def _withdrawn_on_offline_nodes(
+    main_actor: Any, registry: dict[str, Any], agent: str | None
+) -> list[tuple[str, str]]:
+    """(agent, node) for each withdrawn agent whose node is not online right now."""
+    withdrawn: list[tuple[str, str]] = []
+    for name, cfg in registry.items():
+        if agent and name != agent:
+            continue
+        node = (cfg.get("node") or "").strip()
+        if node and not main_actor.nodes.is_online(node):
+            withdrawn.append((name, node))
+    return withdrawn
+
+
 async def purge_spawn_reconcile(agent: str | None = None) -> None:
     """Tear down the agent-respawn state behind a spawn-registry clear.
 
@@ -194,6 +231,20 @@ async def purge_spawn_reconcile(agent: str | None = None) -> None:
     else:
         await asyncio.gather(
             *[purge_node_desired_state(n) for n in node_names],
+            return_exceptions=True,
+        )
+
+    # A spawn published to a node that is away waits in its broker session and is
+    # delivered on its return, whatever the desired state says by then. A stop
+    # published after it waits behind it and undoes it, so each withdrawn agent on
+    # an offline node gets one. Online nodes are left alone: nothing is queued for
+    # them, and this reset does not stop the agents it forgets anywhere else.
+    if main_actor is not None:
+        await asyncio.gather(
+            *[
+                main_actor._mqtt_publish(f"nodes/{node}/stop", {"name": name}, qos=1)
+                for name, node in _withdrawn_on_offline_nodes(main_actor, reg, agent)
+            ],
             return_exceptions=True,
         )
 
@@ -268,10 +319,14 @@ async def delete_agent(agent_id: str) -> str:
         # MQTT-only mode (or main unavailable). Route by node if we have one.
         if node:
             try:
+                # Signed as main signs it: this is the path taken when main is
+                # not there to publish it.
+                stop_payload = json.dumps({"name": name})
                 await runtime.mqtt_client_ref.publish(
                     f"nodes/{node}/stop",
-                    json.dumps({"name": name}),
+                    stop_payload,
                     qos=1,
+                    **signed_publish_kwargs(f"nodes/{node}/stop", stop_payload),
                 )
                 routed = f"via nodes/{node}/stop"
             except Exception as e:
@@ -289,7 +344,9 @@ async def delete_agent(agent_id: str) -> str:
 
     # Always purge retained — even when main handled the delete, we want the
     # dashboard's view to clear immediately rather than wait for tombstones.
-    asyncio.create_task(purge_agent_retained(agent_id))
+    # Not waited for: each clear is acknowledged by the broker, and whoever asked
+    # for the delete should not wait on ten acknowledgements for its answer.
+    _in_background(purge_agent_retained(agent_id))
 
     logger.info("[delete] %r (id=%s, node=%s) %s", name, agent_id[:8], node or "local", routed)
     return routed

@@ -32,6 +32,7 @@ import { Heartbeats } from "./dashboard/heartbeats";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
 import type { AgentAction } from "./dashboard/cards";
+import { el } from "./dom";
 import { MetricsController } from "./dashboard/metrics";
 import { confirmDialog } from "./dashboard/confirmDialog";
 import { seedServerConfig } from "../config/serverConfig";
@@ -533,12 +534,10 @@ export class CardDashboard {
     }
 
     private buildRoot(): HTMLElement {
-        const root = document.createElement("div");
+        const root = el("div", "cd-root");
         root.id = "card-dashboard";
-        root.className = "cd-root";
 
-        const body = document.createElement("div");
-        body.className = "af-body";
+        const body = el("div", "af-body");
 
         // The iobar is owned by the chat controller and appended in the constructor.
         const onSetView = (v: View) => this._setView(v);

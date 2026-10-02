@@ -5,8 +5,6 @@ installs software on a machine over SSH. None of them is undone by running the
 opposite afterwards, which is why each says what it is about to affect.
 """
 
-from __future__ import annotations
-
 from .dispatch import CommandContext, command
 
 

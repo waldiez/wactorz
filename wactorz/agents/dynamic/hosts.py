@@ -33,5 +33,6 @@ class ApiHost(QueryHost, Protocol):
     actor_id: str
     _actor: DynamicAgent
     _published_topics: set[str]
+    _windows: dict[str, Any]
 
     async def _publish_manifest(self) -> None: ...

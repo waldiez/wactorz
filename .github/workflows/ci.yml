@@ -8,16 +8,31 @@ on:
   # Called by release.yml before it publishes, so a release runs the same
   # checks a pull request does rather than a second, drifting copy of them.
   workflow_call:
+  # Weekly, so a dependency release that breaks the unpinned install, or an
+  # advisory against a pinned action, surfaces without anyone pushing. GitHub
+  # runs a schedule on the default branch only.
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
 
 # Least privilege: nothing here writes to the repository, and the default
 # token grants more than that.
 #
-# Action pinning, across every workflow: first-party `actions/*` by version
-# tag, everything else by commit sha with the tag kept as a comment. A tag is
-# a moving reference — for a third party that means code can change after it
-# was reviewed. The exception is documented at its own use site.
+# Action pinning, across every workflow: every action by commit sha, with its
+# release kept as a comment. A tag is a moving reference, so code could change
+# after it was reviewed; a sha cannot. Dependabot proposes new releases a week
+# after they appear, and `make lint-ci` (zizmor) refuses anything unpinned.
+#
+# Every checkout sets `persist-credentials: false`: nothing here pushes, and a
+# token left in .git/config is readable by every later step and by anything
+# that uploads the workspace.
 permissions:
   contents: read
+
+env:
+  # The uv every job installs with. Bumped by hand: Dependabot updates the
+  # setup-uv action, not the uv it is told to install.
+  UV_VERSION: "0.12.21"
 
 jobs:
   test-python:
@@ -29,14 +44,22 @@ jobs:
         python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
 
     steps:
-      - uses: actions/checkout@v7.0.1
-
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
+          activate-environment: true
+          enable-cache: false
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Test
         run: python -m pytest tests -n auto
@@ -58,14 +81,22 @@ jobs:
         os: [windows-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v7.0.1
-
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
           python-version: '3.13'
+          activate-environment: true
+          enable-cache: false
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Test
         run: python -m pytest tests -n auto
@@ -74,39 +105,76 @@ jobs:
     name: Python coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
-
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
           python-version: '3.12'
+          activate-environment: true
+          enable-cache: false
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Coverage
         run: make coverage-py
 
       - name: Upload coverage
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: python-coverage
-          path: coverage/python-coverage.xml
+          path: |
+            coverage/python-coverage.xml
+            coverage/python-coverage.lcov
+
+      # Sent as one half of a parallel build, and added to the other half by
+      # the `coverage` job below. Both halves speak lcov, so the badge is one
+      # number over the whole repository rather than one language's.
+      - name: Send to Coveralls
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        with:
+          file: coverage/python-coverage.lcov
+          flag-name: python
+          parallel: true
 
   lint-python:
     name: Python lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
-
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
           python-version: '3.12'
+          activate-environment: true
+          enable-cache: false
 
       - name: Install
         # vision as well: the type checker gates on this job, and the camera
         # shim imports cv2, which it cannot resolve unless OpenCV is present.
         # It stays out of [all] because it is large and the shim does without.
-        run: pip install -e ".[all,dev,vision]"
+        run: uv sync --locked --extra all --extra dev --extra vision
+
+      # The lockfile says what pyproject.toml says, and nothing in it has a
+      # known vulnerability. The weekly run is what catches one published
+      # against a version already locked.
+      - name: uv.lock is current
+        run: uv lock --check
+
+      - name: Known vulnerabilities in the locked dependencies
+        run: make audit
 
       - name: Lint
         run: make lint-py
@@ -118,7 +186,7 @@ jobs:
       # asked for them, so this needs no typedoc or pdoc and costs under a
       # second. docs.yml builds those two for the published site.
       - name: Build docs
-        run: python3 scripts/build_docs.py
+        run: python scripts/build_docs.py
 
       - name: static/docs matches the documentation source
         run: |
@@ -129,17 +197,129 @@ jobs:
           fi
           echo "static/docs is up to date."
 
+  test-pip:
+    # The lockfile is for development and CI. People install Wactorz with pip,
+    # against the ranges in pyproject.toml, and this job does the same, so a
+    # dependency release that breaks those installs shows up here -- on a push,
+    # or in the weekly run -- rather than in someone's install.
+    name: Python 3.13 (pip, no lockfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Test
+        run: python -m pytest tests -n auto
+
+  test-broker:
+    # A real main and a real node, in one process, joined only by a real
+    # mosquitto. The other jobs refuse every broker connection, so this is where
+    # the two sides are shown to agree on topics, signatures, retained state and
+    # reply channels, rather than each being held to constants.
+    name: Broker (main and a node over mosquitto)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: '3.13'
+          activate-environment: true
+          enable-cache: false
+
+      - name: Install
+        run: uv sync --locked --extra all --extra dev
+
+      - name: Test
+        run: make test-broker
+
+  lint-ci:
+    # The workflows themselves (zizmor) and the shell scripts the images and
+    # the add-ons run (shellcheck), through the tool images pinned in
+    # .github/tools/Dockerfile. Online, so zizmor also checks that each pinned
+    # sha belongs to its action and that no pinned release has an advisory.
+    name: Workflows and shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Lint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make lint-ci
+
+  image:
+    # The app image, built and checked on every push and pull request, so a
+    # change that breaks it fails here rather than in a release. It is started
+    # beside a broker and must answer /health and /ready on both servers, drop
+    # root and carry no set-id binaries; then any fixable CRITICAL or HIGH
+    # finding fails the job (accepted ones: .trivyignore.yaml, with expiry
+    # dates). Nothing is pushed.
+    #
+    # Both flavours of it (see the Dockerfile): the `ultra` one is also asked to
+    # import the vision packages it carries and to build PyGObject.
+    name: Image (${{ matrix.flavour }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: [default, ultra]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          build-args: |
+            FLAVOUR=${{ matrix.flavour }}
+          tags: wactorz:ci
+          load: true
+          push: false
+          # A cache per flavour: sharing one, each run would evict the other's
+          # layers and build from nothing.
+          cache-from: type=gha,scope=image-${{ matrix.flavour }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.flavour }}
+          # Debian's security updates of the day, never a cached copy (see the
+          # Dockerfile's `runtime` stage).
+          no-cache-filters: runtime
+
+      - name: Smoke test
+        run: make image-smoke IMAGE=wactorz:ci
+
+      - name: Scan
+        run: make image-scan IMAGE=wactorz:ci
+
   test-frontend:
     name: Frontend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Pinned from package.json's "packageManager" so the build below is
       # byte-reproducible — the staleness check compares its output against
       # committed bytes, and an unpinned toolchain would fail PRs on a hash
       # that changed for no reason of theirs.
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: frontend/package.json
 
@@ -154,6 +334,17 @@ jobs:
       - name: Test + coverage (gated)
         working-directory: frontend
         run: bun run coverage
+
+      # `base-path`, because vitest writes paths relative to `frontend/` and
+      # the Python half writes them relative to the repository root. Without it
+      # every file here lands at a path that does not exist.
+      - name: Send to Coveralls
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        with:
+          file: frontend/coverage/lcov.info
+          base-path: frontend
+          flag-name: frontend
+          parallel: true
 
       - name: Build
         working-directory: frontend
@@ -172,3 +363,22 @@ jobs:
             exit 1
           fi
           echo "static/app is up to date."
+
+  # Both halves of the coverage above are sent as one parallel build; this
+  # closes it, which is what makes Coveralls add them together. Without it the
+  # build stays open and the badge keeps reporting whichever half arrived last.
+  #
+  # `always()`, so a red frontend still publishes the Python half rather than
+  # leaving the badge on a stale number with nothing saying why. `needs` covers
+  # both, so it runs after whatever they did.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    needs: [coverage-python, test-frontend]
+    if: always()
+    steps:
+      - name: Combine the two halves
+        uses: coverallsapp/github-action@8d6379e14d29928660c4ba802d8e85393440b329 # v2.3.8
+        with:
+          parallel-finished: true
+          carryforward: python,frontend

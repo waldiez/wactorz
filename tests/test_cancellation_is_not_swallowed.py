@@ -9,7 +9,9 @@ task that could never finish.
 
 ``asyncio.gather(task, return_exceptions=True)`` draws the distinction: the
 inner task's ``CancelledError`` comes back as a value, while one aimed at the
-awaiting task still propagates.
+awaiting task still propagates. The publisher's ``disconnect()`` waits through
+``cancel_until_done`` instead, which also asks again when a cancellation is lost,
+and lets one aimed at its caller through in the same way.
 
 **What is not tested here, and why.** That the *caller's* cancellation now
 survives is the point of the change, and it has no test: it needs the caller to

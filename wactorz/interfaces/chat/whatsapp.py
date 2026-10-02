@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
@@ -13,6 +14,9 @@ if TYPE_CHECKING:
     from ...agents.main import MainActor
 
 logger = logging.getLogger(__name__)
+
+#: How many message ids to remember, to recognise one Twilio delivers again.
+SEEN_MESSAGES = 1000
 
 
 class WhatsAppInterface:
@@ -42,6 +46,11 @@ class WhatsAppInterface:
             self._normalize_number(n) for n in (allowed_numbers or CONFIG.whatsapp_allowed_numbers)
         )
         self.limiter = SocialRateLimiter()
+        #: Replies still being worked out. The webhook answers Twilio before
+        #: the model does, so these are what keeps them alive until they finish.
+        self._replies: set[asyncio.Task[None]] = set()
+        #: Twilio message ids already taken in, newest last -- see `webhook`.
+        self._seen: OrderedDict[str, None] = OrderedDict()
 
     @staticmethod
     def _normalize_number(number: str) -> str:
@@ -87,6 +96,28 @@ class WhatsAppInterface:
             to=to,
         )
 
+    def _first_delivery(self, message_sid: str) -> bool:
+        """Whether ``message_sid`` is new, remembering it if so. A message with no id is."""
+        if not message_sid:
+            return True
+        if message_sid in self._seen:
+            return False
+        self._seen[message_sid] = None
+        while len(self._seen) > SEEN_MESSAGES:
+            self._seen.popitem(last=False)
+        return True
+
+    async def _reply(self, twilio: Any, message: str, to: str, sender: str) -> None:
+        """Answer one message, after the webhook has already acknowledged it."""
+        try:
+            # Restricted mode: same guarantees as the other social channels.
+            response_text = await self.agent.process_user_input_restricted(message)
+            await self._send_message(twilio, response_text, to)
+        except Exception:
+            logger.exception("[WhatsApp] Could not answer a message from %s", sender)
+        finally:
+            self.limiter.done(sender)
+
     def build_app(self) -> web.Application:
         """Assemble the webhook route, without binding a port."""
         from twilio.request_validator import RequestValidator
@@ -109,18 +140,22 @@ class WhatsAppInterface:
                 logger.warning("[WhatsApp] Rejected message from %s (not allow-listed)", sender)
                 return web.Response(text="OK")
 
+            # Twilio delivers again when it does not get its answer in time, and
+            # a message handled twice is answered twice, and paid for twice.
+            if not self._first_delivery(str(data.get("MessageSid", ""))):
+                logger.info("[WhatsApp] Ignoring a message from %s delivered again", sender)
+                return web.Response(text="OK")
+
             throttled = self.limiter.check(sender)
             if throttled:
                 await self._send_message(twilio, throttled, from_number)
                 return web.Response(text="OK")
 
-            # Restricted mode: same guarantees as the other social channels.
-            try:
-                response_text = await self.agent.process_user_input_restricted(user_msg)
-            finally:
-                self.limiter.done(sender)
-
-            await self._send_message(twilio, response_text, from_number)
+            # Answered before the model is: a turn outlasts Twilio's wait for
+            # the webhook, and a webhook that has not answered is sent again.
+            task = asyncio.create_task(self._reply(twilio, user_msg, from_number, sender))
+            self._replies.add(task)
+            task.add_done_callback(self._replies.discard)
             return web.Response(text="OK")
 
         app = web.Application(client_max_size=MAX_REQUEST_BYTES)
@@ -128,6 +163,13 @@ class WhatsAppInterface:
         return app
 
     async def run(self) -> None:
+        if not (self.auth_token or "").strip():
+            logger.error(
+                "[WhatsApp] Not starting: TWILIO_AUTH_TOKEN is empty. The webhook checks "
+                "Twilio's signature with it, and a signature made with an empty key is one "
+                "anybody can make -- set it to the auth token from the Twilio console."
+            )
+            return
         if not self.allowed_numbers:
             logger.error(
                 "[WhatsApp] Not starting: WHATSAPP_ALLOWED_NUMBERS is empty. The webhook is a "

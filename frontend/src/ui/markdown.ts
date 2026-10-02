@@ -25,6 +25,8 @@
  * degrades to readable plain text.
  */
 
+import { el, externalLink } from "./dom";
+
 const URL_SAFE = /^(https?:|mailto:)/i;
 
 /** Schemes allowed as an <img src>. Wider than URL_SAFE on purpose: an image is
@@ -54,10 +56,8 @@ function handleFence(lines: string[], i: number, frag: DocumentFragment): number
         body.push(lines[j] ?? "");
         j++;
     }
-    const pre = document.createElement("pre");
-    const code = document.createElement("code");
-    code.textContent = body.join("\n");
-    pre.appendChild(code);
+    const pre = el("pre");
+    pre.appendChild(el("code", "", body.join("\n")));
     frag.appendChild(pre);
     return j + 1; // consume closing fence (if present)
 }
@@ -70,7 +70,7 @@ function handleHr(lines: string[], i: number, frag: DocumentFragment): number | 
     if (!/^\s*([-*_])(\s*\1){2,}\s*$/.test(lines[i] ?? "")) {
         return null;
     }
-    frag.appendChild(document.createElement("hr"));
+    frag.appendChild(el("hr"));
     return i + 1;
 }
 
@@ -91,13 +91,13 @@ function handleTable(lines: string[], i: number, frag: DocumentFragment): number
         return null;
     }
     const aligns = parseAligns(lines[i + 1] ?? "");
-    const table = document.createElement("table");
-    const thead = document.createElement("thead");
+    const table = el("table");
+    const thead = el("thead");
     thead.appendChild(buildRow(parseRow(lines[i] ?? ""), aligns, "th"));
     table.appendChild(thead);
 
     let j = i + 2; // consume header + delimiter
-    const tbody = document.createElement("tbody");
+    const tbody = el("tbody");
     while (j < lines.length && (lines[j] ?? "").includes("|") && (lines[j] ?? "").trim() !== "") {
         tbody.appendChild(buildRow(parseRow(lines[j] ?? ""), aligns, "td"));
         j++;
@@ -122,7 +122,7 @@ function handleBlockquote(lines: string[], i: number, frag: DocumentFragment): n
     if (!/^\s*>\s?/.test(lines[i] ?? "")) {
         return null;
     }
-    const quote = document.createElement("blockquote");
+    const quote = el("blockquote");
     const parts: string[] = [];
     let j = i;
     while (j < lines.length && /^\s*>\s?/.test(lines[j] ?? "")) {
@@ -154,7 +154,7 @@ function handleParagraph(lines: string[], i: number, frag: DocumentFragment): nu
         para.push(lines[j] ?? "");
         j++;
     }
-    const p = document.createElement("p");
+    const p = el("p");
     appendInlineMultiline(p, para);
     frag.appendChild(p);
     return j;
@@ -223,7 +223,7 @@ function adjustListDepth(stack: ListFrame[], line: string): ListFrame {
 
     // Indent: open a child list inside the previous item.
     if (indent > top.indent) {
-        const nested = document.createElement(isOrdered(line) ? "ol" : "ul");
+        const nested = el(isOrdered(line) ? "ol" : "ul");
         (top.lastLi ?? top.list).appendChild(nested);
         top = { indent, list: nested, lastLi: null };
         stack.push(top);
@@ -237,13 +237,13 @@ function adjustListDepth(stack: ListFrame[], line: string): ListFrame {
  *  first line after the list block. */
 function parseList(lines: string[], start: number): { node: HTMLElement; next: number } {
     let i = start;
-    const rootList = document.createElement(isOrdered(lines[i] ?? "") ? "ol" : "ul");
+    const rootList = el(isOrdered(lines[i] ?? "") ? "ol" : "ul");
     const stack: ListFrame[] = [{ indent: indentOf(lines[i] ?? ""), list: rootList, lastLi: null }];
 
     while (i < lines.length && isListItem(lines[i] ?? "")) {
         const line = lines[i] ?? "";
         const top = adjustListDepth(stack, line);
-        const li = document.createElement("li");
+        const li = el("li");
         appendInline(li, line.replace(/^\s*(?:[-*+]|\d+\.)\s+/, ""));
         top.list.appendChild(li);
         top.lastLi = li;
@@ -305,26 +305,26 @@ function parseAligns(delim: string): Align[] {
 }
 
 function buildRow(cells: string[], aligns: Align[], tag: "th" | "td"): HTMLTableRowElement {
-    const tr = document.createElement("tr");
+    const tr = el("tr");
     cells.forEach((cell, idx) => {
-        const el = document.createElement(tag);
+        const cellEl = el(tag);
         const align = aligns[idx];
         if (align) {
-            el.style.textAlign = align;
+            cellEl.style.textAlign = align;
         }
-        appendInline(el, cell);
-        tr.appendChild(el);
+        appendInline(cellEl, cell);
+        tr.appendChild(cellEl);
     });
     return tr;
 }
 
-/** Append several source lines into `el`, separating them with <br>. */
-function appendInlineMultiline(el: HTMLElement, srcLines: string[]): void {
+/** Append several source lines into `target`, separating them with <br>. */
+function appendInlineMultiline(target: HTMLElement, srcLines: string[]): void {
     srcLines.forEach((l, idx) => {
         if (idx > 0) {
-            el.appendChild(document.createElement("br"));
+            target.appendChild(el("br"));
         }
-        appendInline(el, l);
+        appendInline(target, l);
     });
 }
 
@@ -339,9 +339,7 @@ const INLINE_RULES: InlineRule[] = [
     {
         re: /`([^`]+)`/,
         build: m => {
-            const code = document.createElement("code");
-            code.textContent = m[1]!;
-            return code;
+            return el("code", "", m[1]);
         },
     },
     {
@@ -354,8 +352,7 @@ const INLINE_RULES: InlineRule[] = [
                 // Shown as the text it was, so nothing silently disappears.
                 return document.createTextNode(m[0]);
             }
-            const img = document.createElement("img");
-            img.className = "af-chat-md-img";
+            const img = el("img", "af-chat-md-img");
             img.src = src;
             img.alt = m[1] || "image";
             img.loading = "lazy";
@@ -370,10 +367,7 @@ const INLINE_RULES: InlineRule[] = [
             if (!URL_SAFE.test(href)) {
                 return document.createTextNode(m[0]);
             }
-            const a = document.createElement("a");
-            a.href = href;
-            a.target = "_blank";
-            a.rel = "noopener noreferrer";
+            const a = externalLink(href);
             appendInline(a, text);
             return a;
         },
@@ -388,10 +382,7 @@ const INLINE_RULES: InlineRule[] = [
             if (trail) {
                 url = url.slice(0, url.length - trail.length);
             }
-            const a = document.createElement("a");
-            a.href = url;
-            a.target = "_blank";
-            a.rel = "noopener noreferrer";
+            const a = externalLink(url);
             a.textContent = url;
             if (!trail) {
                 return a;
@@ -404,7 +395,7 @@ const INLINE_RULES: InlineRule[] = [
     {
         re: /\*\*([^*]+)\*\*|__([^_]+)__/,
         build: m => {
-            const strong = document.createElement("strong");
+            const strong = el("strong");
             appendInline(strong, m[1] ?? m[2] ?? "");
             return strong;
         },
@@ -412,7 +403,7 @@ const INLINE_RULES: InlineRule[] = [
     {
         re: /~~([^~]+)~~/,
         build: m => {
-            const del = document.createElement("del");
+            const del = el("del");
             appendInline(del, m[1]!);
             return del;
         },
@@ -420,15 +411,15 @@ const INLINE_RULES: InlineRule[] = [
     {
         re: /\*([^*]+)\*|(?<![A-Za-z0-9_])_([^_]+)_(?![A-Za-z0-9_])/,
         build: m => {
-            const em = document.createElement("em");
+            const em = el("em");
             appendInline(em, m[1] ?? m[2] ?? "");
             return em;
         },
     },
 ];
 
-/** Parse inline markdown in `text` and append the resulting nodes to `el`. */
-function appendInline(el: HTMLElement, text: string): void {
+/** Parse inline markdown in `text` and append the resulting nodes to `target`. */
+function appendInline(target: HTMLElement, text: string): void {
     let rest = text;
     // Every inline rule consumes ≥1 char, so this terminates within text.length
     // iterations (no formatting lost on long messages). The guard is a backstop
@@ -444,16 +435,16 @@ function appendInline(el: HTMLElement, text: string): void {
             }
         }
         if (!best) {
-            el.appendChild(document.createTextNode(rest));
+            target.appendChild(document.createTextNode(rest));
             return;
         }
         if (best.idx > 0) {
-            el.appendChild(document.createTextNode(rest.slice(0, best.idx)));
+            target.appendChild(document.createTextNode(rest.slice(0, best.idx)));
         }
-        el.appendChild(best.rule.build(best.m));
+        target.appendChild(best.rule.build(best.m));
         rest = rest.slice(best.idx + best.m[0].length);
     }
     if (rest) {
-        el.appendChild(document.createTextNode(rest));
+        target.appendChild(document.createTextNode(rest));
     }
 }

@@ -673,6 +673,23 @@ class SpawnService:
                 problem,
             )
             return
+        mismatch = self.host._node_version_mismatch(node)
+        if mismatch:
+            # Before the install, the spawn and the desired state: a node on
+            # other code must not be handed an agent it may not be able to run,
+            # and must not be told to keep running it after a reboot.
+            logger.error("[%s] Cannot spawn %r: %s", self.host.name, config.get("name"), mismatch)
+            await self.host._mqtt_publish(
+                f"agents/{self.host.actor_id}/logs",
+                {
+                    "type": "error",
+                    "message": f"Cannot spawn '{config.get('name')}': {mismatch}",
+                    "child_name": config.get("name"),
+                    "node": node,
+                    "timestamp": time.time(),
+                },
+            )
+            return
         wire_config = self._inject_llm_bridge_code(config)
         name = wire_config.get("name", "remote-agent")
 

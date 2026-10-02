@@ -30,16 +30,17 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 (``self.llm``), so the mixin rests on a stable shared surface.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
+import importlib
 import logging
 import time
+import uuid
 from typing import TYPE_CHECKING
 
-from ...core.actor import Actor, MessageType
+from ...core.actor import Actor, ActorState, MessageType
 from ...core.paths import agent_state_dir
+from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.topics import topic_name_error
 from ..lookup import find_main_actor
 
@@ -111,6 +112,16 @@ class SpawnMixin(_Host):
             # built with it could never be reached — and a message to it that the
             # outbox cannot send used to stall every message behind it.
             logger.error("[%s] Cannot spawn %r: %s", self.name, name, problem)
+            return None
+        try:
+            agent_state_dir(self._persistence_dir.parent, str(name))
+        except ValueError as exc:
+            # The name is also where the agent's state is kept, and one that
+            # would climb out of the state directory is refused there. Refused
+            # here first, before anything is written under it: a state shipped
+            # with a migration would otherwise be half applied and then lost
+            # when the agent failed to start.
+            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
             return None
         return await self._spawn_local_named(
             config,
@@ -365,7 +376,9 @@ class SpawnMixin(_Host):
         logger.info(
             "[%s] Scheduling background install+spawn for '%s': %s", self.name, name, needed
         )
-        asyncio.create_task(self._install_then_spawn(config, name, code, needed))
+        self.run_detached(
+            self._install_then_spawn(config, name, code, needed), name=f"install-{name}"
+        )
         return SpawnPlaceholder(name)
 
     async def _install_then_spawn(self, config: dict, name: str, code: str, packages: list):
@@ -375,8 +388,6 @@ class SpawnMixin(_Host):
         activity feed still shows background installs/spawns. ``_mqtt_publish``
         is on the Actor base; guarded so the mixin stays testable without it.
         """
-        import time
-
         publish = getattr(self, "_mqtt_publish", None)
         try:
             if publish is not None:
@@ -389,6 +400,11 @@ class SpawnMixin(_Host):
                     },
                 )
             await self._install_packages(packages, agent_name=name)
+            if self.state == ActorState.STOPPED:
+                # An install can outlast the stop meant to cancel it. Spawning
+                # now would register an agent into a system that has shut down.
+                logger.info("[%s] Not spawning '%s': stopped during its install", self.name, name)
+                return
             actor = await self._do_spawn_dynamic(config, name, code)
             if actor is not None:
                 self._register_spawn(config)
@@ -457,8 +473,6 @@ class SpawnMixin(_Host):
         import name often differs from the pip name (opencv-python → cv2), so
         this is a heuristic; re-installing an present package is a cheap no-op.
         """
-        import importlib
-
         needed = []
         for pkg in packages:
             import_name = pkg.replace("-", "_").split("[")[0]
@@ -492,8 +506,6 @@ class SpawnMixin(_Host):
                 agent_name,
             )
             return
-
-        import uuid
 
         task_id = f"install_{uuid.uuid4().hex[:8]}"
         future = asyncio.get_event_loop().create_future()
@@ -548,39 +560,6 @@ class SpawnMixin(_Host):
         if not snapshot or not isinstance(snapshot, dict):
             return
 
-        try:
-            from ...core.persistence import (
-                PersistenceAPI,
-                get_db,
-                get_pickle_store,
-            )
-        except Exception as e:
-            logger.debug(
-                "[%s] PersistenceAPI not importable — legacy state injection for '%s': %s",
-                self.name,
-                name,
-                e,
-            )
-            try:
-                import pickle
-
-                pdir = agent_state_dir(self._persistence_dir.parent, name)
-                pdir.mkdir(parents=True, exist_ok=True)
-                with open(pdir / "state.pkl", "wb") as fh:
-                    pickle.dump(snapshot, fh)
-                logger.info(
-                    "[%s] Wrote %s migrated key(s) to %s for '%s' (legacy path)",
-                    self.name,
-                    len(snapshot),
-                    pdir / "state.pkl",
-                    name,
-                )
-            except Exception as e2:
-                logger.warning(
-                    "[%s] Legacy state injection failed for '%s': %s", self.name, name, e2
-                )
-            return
-
         db, pkl = get_db(), get_pickle_store()
         if not (db and pkl):
             logger.warning(
@@ -629,6 +608,12 @@ class SpawnMixin(_Host):
         logger.info("[%s] Replacing '%s' with updated code…", self.name, name)
         try:
             if self._registry:
+                # Forgotten before the stop: the replacement takes a fresh entry
+                # when it is spawned, and if that spawn fails, an entry left
+                # holding the stopped agent would stop it again at shutdown.
+                supervisor = getattr(self._registry, "_supervisor_ref", None)
+                if supervisor is not None:
+                    supervisor.drop_supervised(name)
                 await self._registry.unregister(existing.actor_id)
             await existing.stop()
             # Drop the cached manifest so a list query in the brief window before

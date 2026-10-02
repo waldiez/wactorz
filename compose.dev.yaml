@@ -15,9 +15,24 @@ name: wactorz-dev
 services:
   # ── MQTT broker ─────────────────────────────────────────────────────────────
   mosquitto:
-    image: eclipse-mosquitto:2.0
+    image: eclipse-mosquitto:2.1.2-alpine@sha256:38c0da4f2ef84284d47b3b3eeea1cb3bdeabe81ee10caf0cd5c5ff61ee3ea408
     container_name: wactorz-dev-mosquitto
+    cap_drop: [ALL]
+    # As in compose.yaml: KILL lets the reload watcher signal the broker, which
+    # runs as its own user.
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID, KILL]
+    security_opt: [no-new-privileges:true]
     restart: unless-stopped
+    # Ceilings on memory and process ids, far above what the service uses, so
+    # one that misbehaves is restarted instead of taking the host with it.
+    mem_limit: 512m
+    pids_limit: 256
+    depends_on:
+      # Issues the broker's TLS certificate first, under the app profile. Without
+      # it the broker serves plain MQTT only, which is what `make dev` gets.
+      mqtt-certs:
+        condition: service_completed_successfully
+        required: false
     networks:
       - wactorz-net
     ports:
@@ -27,27 +42,108 @@ services:
       # replaced. Container-to-container traffic is unaffected — the app
       # reaches the broker by service name on wactorz-net, not through this.
       - "127.0.0.1:1883:1883"
+      # TLS, loopback too. Answered once a certificate is in infra/mosquitto/generated.
+      - "127.0.0.1:8883:8883"
     volumes:
       # Read-only — see compose.yaml: without it the image's entrypoint chowns
       # this tracked repo file through the bind mount.
       - ./infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-logs:/mosquitto/log
+      - ./infra/mosquitto/generated:/wactorz-broker:ro
     environment:
       # Defaulted rather than required: this is the development stack, and the
       # same conf file is shared with compose.yaml, so it is authenticated here
       # whether or not anyone set anything.
       MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
       MQTT_PASSWORD: "${MQTT_PASSWORD:-wactorz-dev}"
+    # As in compose.yaml: a TLS listener is added at start when a certificate is in
+    # infra/mosquitto/generated, and not otherwise.
     command:
       - /bin/sh
       - -c
       - |
         set -e
         umask 077
+        # Removed first: this file outlives a restart of the container, and
+        # mosquitto_passwd will not create a file that is already there.
+        rm -f /mosquitto/config/passwd
         mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
         chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
-        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf
+        # Everything Wactorz generates is optional and independent: with none of it
+        # this is the broker as it always was, on 1883 with its own account.
+        take_generated() {
+          # The accounts go after this broker's own, which mosquitto_passwd wrote.
+          if [ -s /wactorz-broker/node_passwd ]; then
+            cat /wactorz-broker/node_passwd >> /mosquitto/config/passwd
+          fi
+          if [ -s /wactorz-broker/acl ]; then
+            cp /wactorz-broker/acl /mosquitto/config/acl
+            chown mosquitto:mosquitto /mosquitto/config/acl 2>/dev/null || true
+          fi
+          if [ -s /wactorz-broker/broker.crt ] && [ -s /wactorz-broker/broker.key ]; then
+            mkdir -p /mosquitto/config/tls
+            cp /wactorz-broker/broker.crt /wactorz-broker/broker.key /mosquitto/config/tls/
+            chown -R mosquitto:mosquitto /mosquitto/config/tls 2>/dev/null || true
+          fi
+        }
+        write_conf() {
+          target=$${1:-/mosquitto/config/run.conf}
+          cp /mosquitto/config/mosquitto.conf "$$target"
+          # Readable after the broker drops to its own user: a reload re-reads this
+          # file as that user, unlike the start, which happens while it is still root.
+          chmod 0644 "$$target"
+          if [ -s /mosquitto/config/acl ]; then
+            printf '\nacl_file /mosquitto/config/acl\n' >> "$$target"
+          fi
+          if [ -s /mosquitto/config/tls/broker.crt ]; then
+            printf '\nlistener 8883\nprotocol mqtt\ncertfile /mosquitto/config/tls/broker.crt\nkeyfile /mosquitto/config/tls/broker.key\n' >> "$$target"
+          fi
+        }
+        announce_conf() {
+          if [ -s /mosquitto/config/acl ]; then echo "[mosquitto] node access list loaded"; fi
+          if [ -s /mosquitto/config/tls/broker.crt ]; then echo "[mosquitto] TLS listener on 8883"; fi
+        }
+        take_generated
+        write_conf
+        announce_conf
+        # A deploy adds an account while this broker is running, and nothing else can
+        # signal it from another container: watch the folder, rebuild what it feeds
+        # the broker, and ask the broker to read it again. Polling rather than inotify,
+        # which does not cross every file-sharing implementation.
+        (
+          # Everything the broker takes from the folder, so a certificate arriving
+          # on its own wakes this too -- it changes the config, not just content.
+          stamp() { cat /wactorz-broker/node_passwd /wactorz-broker/acl /wactorz-broker/broker.crt /wactorz-broker/broker.key 2>/dev/null | md5sum; }
+          last=$$(stamp)
+          while sleep 5; do
+            now=$$(stamp)
+            if [ "$$now" != "$$last" ]; then
+              last=$$now
+              umask 077
+              rm -f /mosquitto/config/passwd
+              mosquitto_passwd -b -c /mosquitto/config/passwd "$$MQTT_USERNAME" "$$MQTT_PASSWORD"
+              chown mosquitto:mosquitto /mosquitto/config/passwd 2>/dev/null || true
+              take_generated
+              # A reload re-reads the accounts and the access list this broker was
+              # started with; it does not pick up an acl_file or a listener the
+              # config did not name, which is what appears the first time a
+              # certificate or an access list is generated. So: same config, reload;
+              # changed config, stop, and the restart policy brings it back with it.
+              write_conf /tmp/next.conf
+              if cmp -s /tmp/next.conf /mosquitto/config/run.conf; then
+                echo "[mosquitto] node accounts changed; reloading"
+                kill -HUP 1
+              else
+                cp /tmp/next.conf /mosquitto/config/run.conf
+                announce_conf
+                echo "[mosquitto] broker configuration changed; restarting to apply it"
+                kill -TERM 1
+              fi
+            fi
+          done
+        ) &
+        exec /usr/sbin/mosquitto -c /mosquitto/config/run.conf
     healthcheck:
       test:
         [
@@ -58,6 +154,98 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── API key ────────────────────────────────────────────────────────────────────
+  # One-shot, as in compose.yaml: the app always runs with a key -- API_KEY from
+  # .env, or one generated here and kept in the api-key-data volume. Read it with
+  #   docker compose -f compose.dev.yaml exec wactorz cat /run/wactorz/api_key
+  api-key:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FLAVOUR: ${WACTORZ_FLAVOUR:-default}
+    container_name: wactorz-dev-api-key
+    restart: "no"
+    mem_limit: 256m
+    pids_limit: 128
+    environment:
+      API_KEY: "${API_KEY:-}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -n "$$API_KEY" ]; then echo "[api-key] Using API_KEY from .env."; exit 0; fi
+        if [ ! -s /run/wactorz/api_key ]; then
+          python -c 'import secrets; print(secrets.token_hex(32), end="")' > /run/wactorz/api_key.tmp
+          chmod 0644 /run/wactorz/api_key.tmp
+          mv /run/wactorz/api_key.tmp /run/wactorz/api_key
+          echo "[api-key] Generated an API key. Read it with: docker compose -f compose.dev.yaml exec wactorz cat /run/wactorz/api_key"
+        fi
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    network_mode: none
+    volumes:
+      - api-key-data:/run/wactorz
+
+  # ── Broker TLS certificate ─────────────────────────────────────────────────────
+  # One-shot. Issues the broker's certificate from a CA kept in ./state/mqtt_tls
+  # -- minted on the first run, and what /deploy hands a node -- and copies the
+  # certificate and key into infra/mosquitto/generated, where the broker reads them. A
+  # wactorz run on this host with MQTT_TLS=1 writes the same folder, and so does
+  # `make mqtt-certs`. The Wactorz image does it because the broker image has no
+  # tool that can. It never fails the stack: without a certificate the broker
+  # serves plain MQTT, as before.
+  mqtt-certs:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        FLAVOUR: ${WACTORZ_FLAVOUR:-default}
+    container_name: wactorz-dev-mqtt-certs
+    # Fixed, because the certificate names the host it is generated on: left to
+    # Docker that is the container's id, which changes on every run, and the
+    # certificate would be reissued -- and the broker restarted -- each time.
+    hostname: mosquitto
+    restart: "no"
+    mem_limit: 512m
+    pids_limit: 256
+    env_file:
+      - .env
+    environment:
+      # The names the certificate carries include the broker this server dials.
+      MQTT_HOST: mosquitto
+      # Node accounts are on for this broker: it is configured here, so it knows
+      # the accounts this writes. The app below hands them out at /deploy, and
+      # both must agree. WACTORZ_NODE_ACCOUNTS=0 in .env keeps every node on the
+      # shared account.
+      WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
+    # Issued as the runtime user -- docker-entrypoint.sh fixes the state directory's
+    # ownership and drops privileges, as in the app -- into this container's /tmp.
+    # Root then copies the certificate into the folder and hands it to the folder's
+    # owner, so the checkout keeps its ownership. DAC_OVERRIDE is for that copy: the
+    # folder belongs to whoever cloned the repository, not to root.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        docker-entrypoint.sh python -m wactorz.broker_certificates --export /tmp/broker-files \
+          && cp -r /tmp/broker-files/. /wactorz-broker/ \
+          && chown "$$(stat -c %u:%g /wactorz-broker)" /wactorz-broker/* \
+          || echo "[mqtt-certs] No certificate issued; the broker serves plain MQTT only." >&2
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./state:/app/state
+      - ./infra/mosquitto/generated:/wactorz-broker
+    networks:
+      - wactorz-net
+
   # ── Wactorz Python app ───────────────────────────────────────────────────────
   wactorz:
     # Opt-in: `docker compose -f compose.dev.yaml --profile app up`. Default `up`
@@ -67,27 +255,47 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        FLAVOUR: ${WACTORZ_FLAVOUR:-default}
     container_name: wactorz-app
     restart: unless-stopped
+    # Ceilings, so a leak or a runaway agent ends with this container restarted
+    # rather than the host out of memory or process ids. Generous on purpose: an
+    # agent that loads a model, or pip unpacking a large package into /tmp
+    # (a tmpfs, so it counts as this container's memory), must fit. Threads
+    # count as process ids. WACTORZ_CPUS is a number of cores; 0 is no limit.
+    mem_limit: "${WACTORZ_MEM_LIMIT:-8g}"
+    pids_limit: ${WACTORZ_PIDS_LIMIT:-4096}
+    cpus: "${WACTORZ_CPUS:-0}"
     env_file:
       - .env
     environment:
       # A published port cannot reach a process bound to the container's own
-      # loopback, so the wide bind is required — and declared, since the
-      # mappings below publish only to the host's loopback.
+      # loopback, so the wide bind is required. It passes the fail-closed check
+      # because a key is always set: API_KEY from .env, or the generated one.
       WACTORZ_BIND_HOST: "0.0.0.0"
-      WACTORZ_EXPOSED_OK: "1"
+      API_KEY_FILE: /run/wactorz/api_key
+      # On for this broker, as in mqtt-certs above, which writes what it serves.
+      WACTORZ_NODE_ACCOUNTS: "${WACTORZ_NODE_ACCOUNTS:-1}"
       MQTT_HOST: mosquitto
       # Same defaults as the broker above, or the two disagree and `make dev`
       # comes up with an app that cannot connect to its own broker.
       MQTT_USERNAME: "${MQTT_USERNAME:-wactorz}"
       MQTT_PASSWORD: "${MQTT_PASSWORD:-wactorz-dev}"
       MQTT_PORT: "1883"
+      # With MQTT_TLS=1 in .env the app dials the broker's TLS port instead
+      # (MQTT_TLS_PORT, 8883). mqtt-certs writes the broker's copy of the
+      # certificate, so the app does not: its filesystem is read-only.
+      MQTT_BROKER_DIR: ""
       INTERFACE: rest
     # See compose.yaml for why these three, and only these three: the entrypoint
     # needs them to chown the state directory before dropping to uid 1000.
     cap_drop: [ALL]
-    cap_add: [CHOWN, SETUID, SETGID]
+    # KILL as well: `init: true` puts tini at pid 1 as root, and the app runs as
+    # its own user after the entrypoint drops privileges, so without it tini
+    # cannot forward a stop signal ("Operation not permitted") and the container
+    # is killed after the timeout instead of shutting down.
+    cap_add: [CHOWN, SETUID, SETGID, KILL]
     security_opt: ["no-new-privileges:true"]
     read_only: true
     tmpfs:
@@ -95,16 +303,18 @@ services:
     init: true
     networks:
       - wactorz-net
-    # Loopback-bound: these carry no authentication of their own, so they are
-    # reachable from this host only. Drop the 127.0.0.1 prefix to expose them.
+    # Loopback-bound. Both require the API key, but they speak plain HTTP.
     ports:
       - "127.0.0.1:8000:8000"
       - "127.0.0.1:8888:8888"
     volumes:
       - ./state:/app/state
+      - api-key-data:/run/wactorz:ro
     depends_on:
       mosquitto:
         condition: service_healthy
+      api-key:
+        condition: service_completed_successfully
     healthcheck:
       # /health, not /: every other route needs the key once API_KEY is set, and
       # a probe cannot carry one. Curling / would report unhealthy forever while
@@ -120,6 +330,8 @@ services:
     image: prom/prometheus:v2.54.1
     container_name: wactorz-prometheus
     restart: unless-stopped
+    mem_limit: 1g
+    pids_limit: 512
     entrypoint:
       - /bin/sh
       - -ec
@@ -127,8 +339,11 @@ services:
       PROMETHEUS_SCRAPE_INTERVAL: "${PROMETHEUS_SCRAPE_INTERVAL:-15s}"
       PROMETHEUS_PYTHON_TARGET: "${PROMETHEUS_PYTHON_TARGET:-wactorz}"
       PROMETHEUS_MONITOR_MOSQUITTO: "${PROMETHEUS_MONITOR_MOSQUITTO:-0}"
+      # The app is always keyed, so the scrape carries its key or gets 401.
+      API_KEY: "${API_KEY:-}"
+      API_KEY_FILE: /run/wactorz/api_key
     ports:
-      - "${PROMETHEUS_EXTERNAL_PORT:-9090}:9090"
+      - "127.0.0.1:${PROMETHEUS_EXTERNAL_PORT:-9090}:9090"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -136,6 +351,7 @@ services:
       - ./infra/prometheus/render-config.sh:/etc/prometheus/render-config.sh:ro
       - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus
+      - api-key-data:/run/wactorz:ro
     command:
       - |
         export PROMETHEUS_TEMPLATE_FILE=/etc/prometheus/prometheus.yml.template
@@ -146,18 +362,67 @@ services:
           --web.console.libraries=/etc/prometheus/console_libraries \
           --web.console.templates=/etc/prometheus/consoles
     depends_on:
+      api-key:
+        condition: service_completed_successfully
       wactorz:
         condition: service_started
       blackbox-exporter:
         condition: service_started
+      alertmanager:
+        condition: service_started
     networks:
       - wactorz-net
+  # ── Alertmanager ─────────────────────────────────────────────────────────────
+  # Takes the alerts Prometheus raises (infra/prometheus/alerts.yml) and sends
+  # them to the webhook in ALERT_WEBHOOK_URL, with ALERT_WEBHOOK_TOKEN as a
+  # bearer token when set. With no address it sends them nowhere, and they are
+  # listed on its own page. For email, Slack or more than one receiver, write
+  # infra/alertmanager/alertmanager.yml and it is used as it is.
+  alertmanager:
+    profiles: [app]
+    image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+    container_name: wactorz-alertmanager
+    restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 256
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # The configuration is written at start, into memory: it can name a
+    # credential, and nothing else in this container needs to be written.
+    read_only: true
+    tmpfs:
+      - /run/alertmanager
+    entrypoint:
+      - /bin/sh
+      - -ec
+    environment:
+      ALERT_WEBHOOK_URL: "${ALERT_WEBHOOK_URL:-}"
+      ALERT_WEBHOOK_TOKEN: "${ALERT_WEBHOOK_TOKEN:-}"
+    # Loopback-bound: its page has no login, and can silence an alert.
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_EXTERNAL_PORT:-9093}:9093"
+    volumes:
+      - ./infra/alertmanager:/etc/wactorz-alertmanager:ro
+      - alertmanager-data:/alertmanager
+    # One instance, so it does not listen for peers to share silences with.
+    command:
+      - |
+        sh /etc/wactorz-alertmanager/render-config.sh /run/alertmanager
+        exec /bin/alertmanager \
+          --config.file=/run/alertmanager/alertmanager.yml \
+          --storage.path=/alertmanager \
+          --cluster.listen-address=
+    networks:
+      - wactorz-net
+
   blackbox-exporter:
     # Feeds prometheus; shares the `app` profile.
     profiles: [app]
     image: prom/blackbox-exporter:v0.25.0
     container_name: wactorz-blackbox
     restart: unless-stopped
+    mem_limit: 256m
+    pids_limit: 256
     command:
       - --config.file=/etc/blackbox_exporter/config.yml
     volumes:
@@ -179,8 +444,11 @@ services:
 
     volumes:
       - ./infra/homeassistant:/config
+    # Published to this host only: Wactorz reaches Home Assistant over the
+    # compose network. HA_EXTERNAL_BIND=0.0.0.0 in .env opens it to the network,
+    # for a phone or another machine.
     ports:
-      - "8123:8123"
+      - "${HA_EXTERNAL_BIND:-127.0.0.1}:${HA_EXTERNAL_PORT:-8123}:8123"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8123"]
       interval: 30s
@@ -189,9 +457,11 @@ services:
       start_period: 60s
 
 volumes:
+  api-key-data:
   mosquitto-data:
   mosquitto-logs:
   prometheus-data:
+  alertmanager-data:
 
 networks:
   wactorz-net:

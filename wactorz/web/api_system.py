@@ -12,14 +12,22 @@ import time
 from aiohttp import web
 from aiohttp.web import Response
 
-from . import cost, origins, runtime
+from . import cost, origins, probes, runtime
 
 logger = logging.getLogger(__name__)
 
 
-async def health_handler(_request: web.Request) -> Response:
-    """Liveness probe — 200 as long as the server is accepting requests."""
-    return web.json_response({"status": "ok"})
+async def readiness_handler(_request: web.Request) -> Response:
+    """Readiness probe — 200 once this process should be sent traffic, 503 until then.
+
+    A monitor with no actor system in its process reports on the broker link it
+    listens on, which is all it depends on.
+    """
+    if runtime.system is None:
+        checks = {"broker": probes.broker_check(runtime.mqtt_connected)}
+    else:
+        checks = await probes.readiness(runtime.system)
+    return probes.readiness_response(checks)
 
 
 async def cost_handler(_request: web.Request) -> Response:

@@ -12,8 +12,6 @@ side: there, a variable is emptied rather than deleted precisely because
 `load_dotenv` refills an absent one.
 """
 
-from __future__ import annotations
-
 import os
 from typing import Any
 

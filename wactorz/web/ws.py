@@ -19,6 +19,12 @@ from ..monitoring.log_redaction import redact
 from . import chat, events, lifecycle, origins, runtime, uploads
 
 logger = logging.getLogger(__name__)
+#: The conversation, on the console. Its own name rather than this module's:
+#: the server quiets `wactorz.web` to warnings, and what was asked and answered
+#: is what someone watching the console most wants to follow.
+chat_logger = logging.getLogger("wactorz.chat")
+#: How much of a turn the console shows. The whole turn is in chat_log.
+CHAT_LOG_PREVIEW_CHARS = 500
 
 #: Seconds between server pings on an open socket.
 #:
@@ -173,6 +179,15 @@ async def broadcast(msg: dict[str, Any]) -> None:
         channel.send(payload)
 
 
+def log_chat_turn(role: str, content: str, agent_name: str) -> None:
+    """Put one chat turn on the console, redacted as chat_log is, and cut short."""
+    text = redact(content)
+    if len(text) > CHAT_LOG_PREVIEW_CHARS:
+        text = text[:CHAT_LOG_PREVIEW_CHARS] + "…"
+    direction = f"user → @{agent_name}" if role == "user" else f"@{agent_name} → user"
+    chat_logger.info("[chat] %s: %s", direction, text)
+
+
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     """Handle websocket connection.
 
@@ -214,7 +229,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
         agent_name: str = "main",
         attachments: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Best-effort write to chat_log. Never raises into the WS path."""
+        """Best-effort write to chat_log, and a line on the console. Never raises into the WS path."""
+        if content:
+            log_chat_turn(role, content, agent_name)
         if runtime.db is None or not (content or attachments):
             return
         try:

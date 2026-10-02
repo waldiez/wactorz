@@ -17,6 +17,7 @@ import {
     type StatCardData,
     type AgentAction,
 } from "./cards";
+import { el } from "../dom";
 
 export interface OverviewHost {
     readonly root: HTMLElement;
@@ -39,23 +40,20 @@ export class OverviewView {
 
     /** Build the full overview element: host bar, stat cards, wactor grid and nodes panel. */
     build(): HTMLElement {
-        const el = document.createElement("div");
-        el.className = "af-overview";
+        const root = el("div", "af-overview");
 
         const [cpu, memUsed, memTotal] = this.host.hostStats();
-        el.appendChild(buildHostBar(cpu, memUsed, memTotal));
+        root.appendChild(buildHostBar(cpu, memUsed, memTotal));
 
-        const statsGrid = document.createElement("div");
-        statsGrid.className = "af-stats-grid";
+        const statsGrid = el("div", "af-stats-grid");
         statsGrid.id = "af-stats-grid";
         buildStatCards(statsGrid, this.host.statData());
-        el.appendChild(statsGrid);
+        root.appendChild(statsGrid);
 
-        const panels = document.createElement("div");
-        panels.className = "af-overview-panels";
+        const panels = el("div", "af-overview-panels");
         panels.append(this._buildWactorPanel(), this._buildNodesPanel());
-        el.appendChild(panels);
-        return el;
+        root.appendChild(panels);
+        return root;
     }
 
     /** Re-render the summary stat cards in place (no-op if not mounted). */
@@ -141,32 +139,25 @@ export class OverviewView {
      * all dynamic text is set via `textContent` — never interpolated into HTML.
      */
     private _buildNodeItem(name: string, meta: string, online: boolean): HTMLElement {
-        const item = document.createElement("div");
-        item.className = "af-node-item";
+        const item = el("div", "af-node-item");
 
-        const info = document.createElement("div");
-        const nameEl = document.createElement("div");
-        nameEl.className = "af-node-name";
-        nameEl.textContent = name;
-        const metaEl = document.createElement("div");
-        metaEl.className = "af-node-meta";
-        metaEl.textContent = meta;
-        info.append(nameEl, metaEl);
+        const info = el("div");
+        info.append(el("div", "af-node-name", name), el("div", "af-node-meta", meta));
 
-        const pill = document.createElement("span");
-        pill.className = `af-node-pill ${online ? "online" : "offline"}`;
-        pill.textContent = online ? "online" : "offline";
+        const pill = el(
+            "span",
+            `af-node-pill ${online ? "online" : "offline"}`,
+            online ? "online" : "offline",
+        );
 
         item.append(info, pill);
         return item;
     }
 
     private _buildWactorPanel(): HTMLElement {
-        const wp = document.createElement("section");
-        wp.className = "af-panel";
+        const wp = el("section", "af-panel");
         wp.innerHTML = `<div class="af-panel-head"><h3>Wactorz</h3><span>actor model · MQTT pub-sub</span></div>`;
-        const grid = document.createElement("div");
-        grid.className = "af-cards-grid";
+        const grid = el("div", "af-cards-grid");
         grid.id = "af-wactor-cards";
         sortAgents(this.host.agents.values()).forEach(agent => grid.appendChild(this._buildCard(agent)));
         wp.appendChild(grid);
@@ -174,11 +165,9 @@ export class OverviewView {
     }
 
     private _buildNodesPanel(): HTMLElement {
-        const np = document.createElement("section");
-        np.className = "af-panel";
+        const np = el("section", "af-panel");
         np.innerHTML = `<div class="af-panel-head"><h3>Nodes</h3><span>from heartbeat telemetry</span></div>`;
-        const nodeList = document.createElement("div");
-        nodeList.className = "af-node-list";
+        const nodeList = el("div", "af-node-list");
         nodeList.id = "af-node-list";
         np.appendChild(nodeList);
         this.renderNodes(nodeList);

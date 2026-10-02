@@ -13,6 +13,7 @@ import { AgentStreams } from "../../io/agentStreams";
 import { MAIN_AGENT } from "../../agents/naming";
 import { renderAgentMarkdown } from "./chatThread";
 import { TURN_IDLE_TIMEOUT_MS } from "./chatIobar";
+import { el } from "../dom";
 
 /** Everything the stream UI needs from the chat controller. */
 export interface StreamHost {
@@ -35,15 +36,9 @@ export interface StreamHost {
 /** The live streaming bubble (plain text while chunks accumulate; swapped for
  *  rendered markdown on stream-end). Returns the row and its text body. */
 function buildStreamRow(from: string, initialText = ""): { row: HTMLElement; body: HTMLElement } {
-    const row = document.createElement("div");
-    row.className = "af-chat-msg af-chat-msg-agent";
-    const fromEl = document.createElement("div");
-    fromEl.className = "af-chat-msg-from";
-    fromEl.textContent = from;
-    const body = document.createElement("div");
-    body.className = "af-chat-msg-bubble";
-    body.textContent = initialText;
-    row.append(fromEl, body);
+    const row = el("div", "af-chat-msg af-chat-msg-agent");
+    const body = el("div", "af-chat-msg-bubble", initialText);
+    row.append(el("div", "af-chat-msg-from", from), body);
     return { row, body };
 }
 
@@ -60,8 +55,7 @@ function buildWaitingRow(from: string): HTMLElement {
     body.setAttribute("role", "status");
     body.setAttribute("aria-label", `${from} is working`);
     for (let i = 0; i < 3; i++) {
-        const dot = document.createElement("span");
-        dot.className = "af-chat-waiting-dot";
+        const dot = el("span", "af-chat-waiting-dot");
         dot.setAttribute("aria-hidden", "true");
         body.appendChild(dot);
     }

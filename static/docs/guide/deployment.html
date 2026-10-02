@@ -173,6 +173,9 @@
 <h2 id="docker-hub">Docker Hub</h2>
 <p>The fastest way to get started — no repo clone or Python needed. See the dedicated guide:</p>
 <p>→ <strong><a href="../guide/dockerhub.html">Quickstart: Docker Hub</a></strong></p>
+<p>The image comes in two sizes: <code>waldiez/wactorz:latest</code>, and <code>waldiez/wactorz:ultra</code> with
+PyTorch, Ultralytics, OpenCV and what the Reachy Mini SDK needs. <a href="../guide/dockerhub.html#which-image">Which image</a>
+says when the larger one is the one to pull.</p>
 <hr />
 <h2 id="full-docker-composeyaml">Full Docker  (<code>compose.yaml</code>)</h2>
 <h3 id="prerequisites">Prerequisites</h3>
@@ -191,6 +194,17 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Open <code>http://localhost:8888</code> (monitor UI) or <code>http://localhost:8000</code> (REST API).</p>
+<p>Compose builds the image from the checkout. For vision agents or the Reachy Mini agent,
+build the larger one (<a href="../guide/dockerhub.html#which-image">which image</a>) by setting
+<code>WACTORZ_FLAVOUR=ultra</code> in <code>.env</code>, then:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+</code></pre></div>
+
+<p>Both ask for the API key. With <code>API_KEY</code> blank in <code>.env</code>, the stack generates one
+on first start and keeps it in a volume. Read it with
+<code>docker compose exec wactorz-python cat /run/wactorz/api_key</code>, or follow the
+one-time sign-in link in <code>docker compose logs wactorz-python</code>. Set <code>API_KEY</code> in
+<code>.env</code> to choose your own.</p>
 <h3 id="services">Services</h3>
 <p>Default profile (no flag) starts Mosquitto only. Add <code>--profile</code> flags to bring up more services.</p>
 <table>
@@ -207,39 +221,79 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <td><em>(all)</em></td>
 <td>mosquitto</td>
 <td><code>mosquitto:1883</code></td>
-<td><code>:1883</code></td>
+<td><code>127.0.0.1:1883</code>, and <code>:8883</code> (TLS)</td>
 </tr>
 <tr>
 <td><code>python</code></td>
 <td>wactorz-python</td>
 <td><code>wactorz-python:8000</code></td>
-<td><code>:8000</code> (REST API)</td>
+<td><code>127.0.0.1:8000</code> (REST API)</td>
 </tr>
 <tr>
 <td><code>python</code></td>
 <td>monitor UI</td>
 <td><code>wactorz-python:8888</code></td>
-<td><code>:8888</code></td>
+<td><code>127.0.0.1:8888</code></td>
 </tr>
 <tr>
 <td><code>python</code></td>
 <td>prometheus</td>
 <td><code>wactorz-prometheus:9090</code></td>
-<td><code>:9090</code></td>
+<td><code>127.0.0.1:9090</code></td>
+</tr>
+<tr>
+<td><code>python</code></td>
+<td>alertmanager</td>
+<td><code>alertmanager:9093</code></td>
+<td><code>127.0.0.1:9093</code></td>
 </tr>
 <tr>
 <td><code>full</code></td>
 <td>home-assistant</td>
 <td><code>homeassistant:8123</code></td>
-<td><code>:8123</code></td>
+<td><code>127.0.0.1:8123</code></td>
 </tr>
 </tbody>
 </table>
+<p>Every port except the broker's TLS one is published to this host only. Reach the
+dashboard and the API from elsewhere through a TLS proxy; <code>HA_EXTERNAL_BIND=0.0.0.0</code>
+opens Home Assistant to the network, and <code>MQTT_EXTERNAL_BIND=0.0.0.0</code> the plain
+broker port.</p>
+<p>Each container has a ceiling on memory and on process ids, so one that leaks is
+restarted instead of exhausting the host. The app's are settings, because what
+an agent loads varies: <code>WACTORZ_MEM_LIMIT</code> (default <code>8g</code>), <code>WACTORZ_PIDS_LIMIT</code>
+(<code>4096</code>, threads included) and <code>WACTORZ_CPUS</code> (cores; <code>0</code>, the default, is no
+limit). An app container that restarts under a heavy agent, with <code>OOMKilled</code> in
+<code>docker inspect</code>, needs <code>WACTORZ_MEM_LIMIT</code> raised. Home Assistant's container
+has none.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Python stack (most common)</span>
 docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
 <span class="c1"># Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)</span>
 </code></pre></div>
 
+<h3 id="health-probes">Health probes</h3>
+<p>Both servers answer the same probes, with no key:</p>
+<ul>
+<li><code>/health</code> (also <code>/healthz</code>, <code>/livez</code>) is <strong>liveness</strong>. It fails only when the
+  process cannot answer, which is what the compose files and the image's
+  <code>HEALTHCHECK</code> restart on.</li>
+<li><code>/ready</code> (also <code>/readyz</code>) is <strong>readiness</strong>. It answers <code>503</code> while the agents
+  start or stop, and while the broker or the database is unreachable.</li>
+</ul>
+<p>On Kubernetes, point each probe at its own path, and give liveness a start
+period that covers startup:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">livenessProbe</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> path</span><span class="p">:</span><span class="w"> </span><span class="nv">/livez</span><span class="p p-Indicator">,</span><span class="nt"> port</span><span class="p">:</span><span class="w"> </span><span class="nv">8888</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span>
+<span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span>
+<span class="nt">readinessProbe</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> path</span><span class="p">:</span><span class="w"> </span><span class="nv">/readyz</span><span class="p p-Indicator">,</span><span class="nt"> port</span><span class="p">:</span><span class="w"> </span><span class="nv">8888</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</code></pre></div>
+
+<p>Never use <code>/ready</code> for liveness. A broker outage would then restart every
+replica in a loop, and restarting fixes nothing the broker's return would not.
+See <a href="https://github.com/waldiez/wactorz/blob/main/docs/api.md">the API reference</a> for what each check means.</p>
 <hr />
 <h2 id="home-assistant-add-on">Home Assistant add-on</h2>
 <p>Use the add-on when Wactorz should run inside Home Assistant OS or a Supervised
@@ -329,6 +383,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Override the timezone used in agents' date/time context (e.g. <code>Europe/Athens</code>). Precedence: a user's <code>pref_timezone</code> fact &gt; <code>WACTORZ_TZ</code> &gt; standard <code>TZ</code> &gt; host local zone. Blank or unknown values fall through to the next candidate</td>
 </tr>
 <tr>
+<td><code>WACTORZ_LOG_FORMAT</code></td>
+<td><code>text</code></td>
+<td><code>json</code> writes each log record as one JSON object on one line (JSON Lines), to the console and to <code>wactorz.log</code>, for a collector that parses logs: fields <code>ts</code> (UTC), <code>level</code>, <code>logger</code>, <code>message</code>, and <code>exception</code> holding the whole traceback. Redaction applies as in text. The dashboard's log view is unaffected. A node reads the setting from its own environment</td>
+</tr>
+<tr>
 <td><code>WACTORZ_RETENTION_CHAT_DAYS</code></td>
 <td><code>365</code></td>
 <td>Days chat history is kept; <code>0</code> keeps it for ever. An attached file goes with the last message that refers to it, or a day after upload if it was never sent</td>
@@ -341,12 +400,47 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <tr>
 <td><code>WACTORZ_RETENTION_OUTBOX_DAYS</code></td>
 <td><code>7</code></td>
-<td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic</td>
+<td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under <code>nodes/</code> or <code>agents/by-name/</code>, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained <code>desired_state</code> follows this setting</td>
 </tr>
 <tr>
 <td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
 <td><code>9090</code></td>
 <td>Prometheus host port</td>
+</tr>
+<tr>
+<td><code>ALERTMANAGER_EXTERNAL_PORT</code></td>
+<td><code>9093</code></td>
+<td>Alertmanager host port</td>
+</tr>
+<tr>
+<td><code>ALERT_WEBHOOK_URL</code></td>
+<td><em>(none)</em></td>
+<td>Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See <code>prometheus.md</code></td>
+</tr>
+<tr>
+<td><code>ALERT_WEBHOOK_TOKEN</code></td>
+<td><em>(none)</em></td>
+<td>Compose only: sent to that webhook as a bearer token</td>
+</tr>
+<tr>
+<td><code>HA_EXTERNAL_BIND</code> / <code>HA_EXTERNAL_PORT</code></td>
+<td><code>127.0.0.1</code> / <code>8123</code></td>
+<td>Where compose publishes Home Assistant (profile <code>full</code>). <code>0.0.0.0</code> opens it to the network</td>
+</tr>
+<tr>
+<td><code>WACTORZ_MEM_LIMIT</code></td>
+<td><code>8g</code></td>
+<td>Compose only: the app container's memory ceiling</td>
+</tr>
+<tr>
+<td><code>WACTORZ_PIDS_LIMIT</code></td>
+<td><code>4096</code></td>
+<td>Compose only: the app container's ceiling on processes and threads</td>
+</tr>
+<tr>
+<td><code>WACTORZ_CPUS</code></td>
+<td><code>0</code></td>
+<td>Compose only: cores the app container may use; <code>0</code> is no limit</td>
 </tr>
 <tr>
 <td><code>PROMETHEUS_SCRAPE_INTERVAL</code></td>

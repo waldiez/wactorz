@@ -194,13 +194,13 @@ async def actor_metrics_handler(request: web.Request) -> Response:
 async def actors_handler(request: web.Request) -> Response:
     """List every local actor for the dashboard grid.
 
-    Deliberately excludes remote-runner agents — see the CONTRACT note below.
+    Deliberately excludes agents running on a node — see the CONTRACT note below.
     """
     # Prefer the live registry (injected at boot via runtime.set_registry) —
     # actor objects carry the authoritative protected flag.  Fall back to the
     # MQTT-derived state dict when no registry was injected (legacy MQTT mode).
     #
-    # CONTRACT: the registry path intentionally excludes remote-runner agents
+    # CONTRACT: the registry path intentionally excludes agents on a node
     # (they are not in the local Python registry).  The frontend relies on this
     # to distinguish local vs remote agents: any agent absent from this response
     # but present via MQTT heartbeat with a "node" field is a remote agent and

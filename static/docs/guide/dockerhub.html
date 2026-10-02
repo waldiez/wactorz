@@ -152,9 +152,41 @@
 </blockquote>
 <hr />
 <ul>
+<li><a href="#which-image">Which image</a></li>
 <li><a href="#option-a--terminal--compose-recommended">Option A — Terminal + Compose (recommended)</a></li>
 <li><a href="#option-b--docker-desktop--terminal">Option B — Docker Desktop + Terminal</a></li>
 </ul>
+<hr />
+<h2 id="which-image">Which image</h2>
+<p>There are two, built from the same source and published under the same name:</p>
+<table>
+<thead>
+<tr>
+<th>Tag</th>
+<th>What it holds</th>
+<th>When to use it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>waldiez/wactorz:latest</code>, <code>:&lt;version&gt;</code></td>
+<td>Wactorz and its integrations (the <code>all</code> extra).</td>
+<td>Agents that talk to APIs, Home Assistant, MQTT, chat platforms. This is the one the examples here use.</td>
+</tr>
+<tr>
+<td><code>waldiez/wactorz:ultra</code>, <code>:&lt;version&gt;-ultra</code></td>
+<td>The same, plus PyTorch (the CPU build), Ultralytics and OpenCV, the system libraries they load, a compiler, and GStreamer with its introspection data.</td>
+<td>Vision agents (anything that imports <code>cv2</code>, <code>torch</code> or <code>ultralytics</code>), and the Reachy Mini catalogue agent, whose SDK has to build part of itself.</td>
+</tr>
+</tbody>
+</table>
+<p>The larger one is several times the size of the other, which is the reason there are
+two. An agent that needs it fails in the small image when it imports <code>cv2</code>
+(<code>libGL.so.1: cannot open shared object file</code>) or when pip tries to build a package that
+ships no wheel. To switch, change the tag in <code>compose.yaml</code> and start again; the state
+volume is the same for both.</p>
+<p>The <code>ultra</code> image runs on Python 3.13, one release behind the other, because the Reachy
+Mini SDK needs it. It has no GPU support: PyTorch in it is the CPU build.</p>
 <hr />
 <h2 id="option-a-terminal-compose-recommended">Option A — Terminal + Compose (recommended)</h2>
 <p>Works in any terminal, including the built-in terminal inside Docker Desktop.</p>
@@ -283,11 +315,11 @@ log_dest stdout
 <p>Fill in at minimum your LLM key and provider. Make sure these Docker-specific values are set:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">MQTT_HOST</span><span class="o">=</span>wactorz-mosquitto
 <span class="nv">PORT</span><span class="o">=</span><span class="m">8000</span>
-<span class="nv">WS_PORT</span><span class="o">=</span><span class="m">8888</span>
+<span class="nv">MONITOR_PORT</span><span class="o">=</span><span class="m">8888</span>
 </code></pre></div>
 
 <blockquote>
-<p><strong>Port conflict?</strong> On some Windows machines port <code>8888</code> is reserved by a system service. If the monitor UI is unreachable, change <code>WS_PORT</code> to any free port (e.g. <code>8887</code>) and use that port in Step 4.</p>
+<p><strong>Port conflict?</strong> On some Windows machines port <code>8888</code> is reserved by a system service. If the monitor UI is unreachable, change <code>MONITOR_PORT</code> to any free port (e.g. <code>8887</code>) and use that port in Step 4.</p>
 </blockquote>
 <h3 id="step-3-start-mosquitto">Step 3 — Start Mosquitto</h3>
 <div class="highlight"><pre><span></span><code><span class="no">[System.IO.File]</span><span class="p">::</span><span class="n">WriteAllText</span><span class="p">(</span>

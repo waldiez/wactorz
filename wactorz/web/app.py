@@ -30,6 +30,7 @@ from . import (
     login,
     mqtt,
     origins,
+    probes,
     runtime,
     sessions,
     static_site,
@@ -75,8 +76,12 @@ def build_app() -> web.Application:
         In middleware rather than per route: nearly every path below is
         registered twice, under `/api/x` and a bare `/x`, and a per-route
         decorator would guard whichever alias its author remembered.
+
+        The probes are left alone: they change nothing and say only whether the
+        process is up, and a load balancer or an orchestrator asks under a name
+        of its own.
         """
-        refusal = origins.refuse(request)
+        refusal = None if request.path in probes.PROBE_PATHS else origins.refuse(request)
         if refusal is not None:
             return refusal
 
@@ -102,7 +107,10 @@ def build_app() -> web.Application:
     app[contract.ACTOR_REGISTRY] = runtime.registry
 
     app.router.add_get("/", static_site.index_handler)
-    app.router.add_get("/health", api_system.health_handler)
+    for path in sorted(probes.LIVENESS_PATHS):
+        app.router.add_get(path, probes.liveness_handler)
+    for path in sorted(probes.READINESS_PATHS):
+        app.router.add_get(path, api_system.readiness_handler)
     # Sign-in. Exempt from the key check and from nothing else — `POST /login`
     # stays inside the origin gate, which is what stands in for a CSRF token.
     app.router.add_get("/login", login.login_page_handler)
@@ -192,22 +200,18 @@ def _abort_port_in_use(exc: OSError) -> NoReturn:
 
 
 async def main(exit_on_failure: bool = False) -> None:
-    """Check preconditions, serve the app, then run the broker listener forever.
+    """Check the port, serve the app, then run the broker listener forever.
 
-    With ``exit_on_failure`` a failed precondition raises ``SystemExit`` (the
+    The broker is deliberately not a precondition. The listener connects in the
+    background and keeps retrying, and `/ready` reports the broker until it is
+    up, so a broker that starts after this process is picked up when it arrives
+    rather than leaving the process without a dashboard until it is restarted.
+
+    With ``exit_on_failure`` a port already in use raises ``SystemExit`` (the
     console-script path); otherwise it returns so an embedding app can carry on.
     """
-    mqtt_ok = await mqtt.check_mqtt()
-    port_ok = await check_ws_port()
-
-    if not mqtt_ok or not port_ok:
-        msg = []
-        if not mqtt_ok:
-            msg.append(f"MQTT broker unreachable ({runtime.MQTT_BROKER}:{runtime.MQTT_PORT})")
-        if not port_ok:
-            msg.append(f"Port {runtime.WS_PORT} already in use")
-        err_msg = "; ".join(msg)
-        logger.error("[startup] Cannot start: %s", err_msg)
+    if not await check_ws_port():
+        logger.error("[startup] Cannot start: port %d already in use", runtime.WS_PORT)
         if exit_on_failure:
             raise SystemExit(1)
         return
@@ -236,6 +240,7 @@ async def main(exit_on_failure: bool = False) -> None:
     sessions.store.bind(ensure_state_dir(), CONFIG.api_key)
 
     origins.log_mode()
+    origins.warn_loopback_proxies()
     app = build_app()
 
     runner = web.AppRunner(app)

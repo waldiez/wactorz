@@ -1,7 +1,5 @@
 """The dashboard is told which Wactorz is answering it."""
 
-from __future__ import annotations
-
 import json
 
 from aiohttp import web

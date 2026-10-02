@@ -4,72 +4,244 @@ not the system Python.
 """
 
 import asyncio
+import contextlib
 import importlib
+import ipaddress
 import logging
-import re
 import shlex
 import socket
+import subprocess
 import sys
 import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import asyncssh
 
+from .._version import __version__
 from ..config import (
     CONFIG,
+    NODE_SIGNING,
     DeployTarget,
     deploy_env_prefix,
     deploy_name_error,
     deploy_target,
     deploy_target_for_host,
 )
+from ..core import broker_accounts
 from ..core.actor import Actor, Message, MessageType
+from ..core.installed_wheel import installed_from_a_direct_reference, wheel_of_installed
+from ..core.mqtt import client_id, install_id, mqtt_client
+from ..core.mqtt_tls import SYSTEM_TRUST, checks_hostname, generated_ca_path
+from ..core.node_signing import next_sequence, node_key
 from ..core.paths import resolve_state_dir
+from ..core.pip import is_installable_name
 from . import node_service
+from .lookup import find_main_actor
 
 logger = logging.getLogger(__name__)
 
+#: The control topics main publishes without retaining them, so a retained message
+#: on one was put there by something else. `desired_state` is not among them: main
+#: retains its own, and republishes it as soon as the node reports that it checks.
+UNRETAINED_CONTROL_TOPICS = ("spawn", "stop", "stop_all", "restart", "restart_agent", "migrate")
+
+#: Where ``/deploy`` puts the CA a node verifies the broker with, under ``~/wactorz``.
+NODE_CA_FILE = "mqtt-ca.crt"
+
+#: Added to the CA's name on a node until the deploy has got as far as restarting
+#: it. The node that is running reads the CA under its own name, and goes on
+#: reading the one it has if the deploy stops early.
+NOT_YET_IN_USE = ".incoming"
+
+#: How long the node's TLS check waits for the broker, in seconds.
+TLS_CHECK_TIMEOUT_S = 5
+
+#: What a node runs to learn whether the broker answers TLS with the CA it was
+#: given. Standard library only: it runs before the node's venv exists, with its own
+#: ``python3``. Arguments: host, port, CA (a path or ``system``), whether to check
+#: the hostname (``1``/``0``), and the timeout. Exits 1 and prints why on failure.
+TLS_CHECK_SCRIPT = """
+import socket, ssl, sys
+host, port, ca, check, timeout = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], float(sys.argv[5])
+try:
+    context = ssl.create_default_context() if ca == "system" else ssl.create_default_context(cafile=ca)
+    context.check_hostname = check == "1"
+    with socket.create_connection((host, port), timeout=timeout) as raw:
+        with context.wrap_socket(raw, server_hostname=host):
+            pass
+except (OSError, ValueError) as exc:
+    print(exc)
+    sys.exit(1)
+"""
+
+#: How long the node's reachability check waits for the broker port, in seconds.
+REACH_CHECK_TIMEOUT_S = 5
+
+#: What a node runs to learn whether the broker's port answers at all. Standard
+#: library only, for the same reason as the TLS check. Arguments: host, port, and
+#: the timeout. Exits 1 and prints why on failure. It answers the question the
+#: node's own log answers only after the deploy has reported success: a firewall
+#: on the broker's host, or an address the node cannot route to, times out here in
+#: seconds rather than retrying there for ever.
+REACH_CHECK_SCRIPT = """
+import socket, sys
+host, port, timeout = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+try:
+    socket.create_connection((host, port), timeout=timeout).close()
+except OSError as exc:
+    print(exc)
+    sys.exit(1)
+"""
+
+#: How long the server waits for the broker to accept the node's account, in seconds.
+CREDENTIAL_CHECK_TIMEOUT_S = 10
+
+#: How long the deploy waits for the node's first heartbeat, in seconds. Generous
+#: rather than tight: a node that installs its packages on first start takes a
+#: while before it connects, and the point is to catch a node that never will.
+FIRST_HEARTBEAT_TIMEOUT_S = 45
+
+_TLS_MODE_ON = frozenset({"on", "1", "true", "yes"})
+_TLS_MODE_OFF = frozenset({"off", "0", "false", "no"})
+
+
+class UnusableNodeAccountError(ValueError):
+    """A node's name cannot be the broker account it would be deployed with."""
+
+    def __init__(self, problem: str) -> None:
+        super().__init__(problem)
+
+
+class UnknownTlsModeError(ValueError):
+    """A deploy target's ``BROKER_TLS`` names no mode."""
+
+    def __init__(self, target: DeployTarget) -> None:
+        super().__init__(
+            f"{deploy_env_prefix(target.name)}_BROKER_TLS is {target.broker_tls!r}: "
+            "use on or off, or leave it unset to check from the node."
+        )
+
+
+class NoCaForNodeError(ValueError):
+    """A deploy target asks for TLS, and there is no CA to give the node."""
+
+    def __init__(self, target: DeployTarget, source: Path) -> None:
+        super().__init__(
+            f"{deploy_env_prefix(target.name)}_BROKER_TLS is on, but there is no CA at "
+            f"{source} to give the node. Set MQTT_TLS_CA, or start the broker Wactorz "
+            "provides once so it issues one."
+        )
+
+
+class CaNotPutInPlaceError(RuntimeError):
+    """The CA uploaded to a node could not be moved to the name the node reads it under."""
+
+    def __init__(self, ca: str, said: str) -> None:
+        super().__init__(
+            f"Could not put the broker's CA at {ca} on the node: {said.strip()[:200]}. "
+            "The node was not restarted."
+        )
+
+
+class BrokerUnreachableFromNodeError(RuntimeError):
+    """The node cannot open the broker's port, so a runner started there would never connect."""
+
+    def __init__(self, node_name: str, broker: str, port: int, reason: str) -> None:
+        super().__init__(
+            f"Node '{node_name}' cannot reach the broker at {broker}:{port}: {reason}. "
+            f"Check that the address is the broker as seen from the node "
+            f"({deploy_env_prefix(node_name)}_BROKER), and that a firewall on the broker's "
+            f"host allows inbound {port} from the node."
+        )
+
+
+class BrokerRefusedNodeAccountError(RuntimeError):
+    """The broker will not accept the account the node is about to be given."""
+
+    def __init__(self, node_name: str, username: str, reason: str) -> None:
+        shown = username or "(anonymous)"
+        super().__init__(
+            f"The broker refused the account node '{node_name}' would use ({shown}): {reason}. "
+            f"Check MQTT_USERNAME and MQTT_PASSWORD, or the node's own "
+            f"{deploy_env_prefix(node_name)}_BROKER_USER and _BROKER_PASSWORD."
+        )
+
+
+@dataclass(frozen=True)
+class NodeTls:
+    """How ``/deploy`` connects a node to the broker, and why."""
+
+    enabled: bool
+    port: int
+    #: ``MQTT_TLS_CA`` as the node reads it: the CA's path there, or ``system``.
+    ca: str = ""
+    check_hostname: bool = False
+    note: str = ""
+
+
+def tls_mode(value: str) -> str | None:
+    """``auto``, ``on`` or ``off`` for a ``DEPLOY_<NODE>_BROKER_TLS`` value, or None."""
+    setting = value.strip().lower()
+    if setting in ("", "auto"):
+        return "auto"
+    if setting in _TLS_MODE_ON:
+        return "on"
+    if setting in _TLS_MODE_OFF:
+        return "off"
+    return None
+
+
+def reach_check_command(broker: str, port: int) -> str:
+    """The shell command that runs :data:`REACH_CHECK_SCRIPT` on the node, every value quoted."""
+    return " ".join(
+        [
+            "python3",
+            "-c",
+            shlex.quote(REACH_CHECK_SCRIPT),
+            shlex.quote(broker),
+            str(int(port)),
+            str(REACH_CHECK_TIMEOUT_S),
+        ]
+    )
+
+
+def tls_check_command(broker: str, tls: NodeTls) -> str:
+    """The shell command that runs :data:`TLS_CHECK_SCRIPT` on the node, every value quoted."""
+    return " ".join(
+        [
+            "python3",
+            "-c",
+            shlex.quote(TLS_CHECK_SCRIPT),
+            shlex.quote(broker),
+            str(int(tls.port)),
+            shlex.quote(tls.ca),
+            "1" if tls.check_hostname else "0",
+            str(TLS_CHECK_TIMEOUT_S),
+        ]
+    )
+
+
+def known_hosts_address(host: str) -> str:
+    """``host`` if it is an IP address, otherwise ``""``.
+
+    `asyncssh.match_known_hosts` takes a host *and* an address, and parses the
+    address as an IP — a name given there raises `ValueError` before any lookup
+    happens. Passing the host for both failed every deploy to a target named
+    rather than numbered, `.local` names included, which is what the docs tell
+    people to use. Given ``""`` it falls back to the host and tolerates a name,
+    which is what is wanted whenever the address is not separately known.
+    """
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return ""
+    else:
+        return host
+
 
 # pip package name → importable module name
-#: What a package name may look like. PEP 508 names are letters, digits, and
-#: `-`/`_`/`.` as internal separators; a version specifier or extras may follow.
-#: Nothing else — no path, no URL, no whitespace, and no leading `-`.
-_PACKAGE_NAME = re.compile(
-    # Name: never a leading dash, which is what makes an option an option.
-    r"[A-Za-z0-9][A-Za-z0-9._-]*"
-    # Optional extras: package[extra,extra]
-    r"(?:\[[A-Za-z0-9,._-]+\])?"
-    # Optional version specifiers, comma-separated: >=1.2,<2. No spaces — a
-    # space would let a second argument ride along inside one list element.
-    r"(?:"
-    r"(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+"
-    r"(?:,(?:[=<>!~]=|[<>])[A-Za-z0-9._*+!-]+)*"
-    r")?"
-)
-
-
-def is_installable_name(package: str) -> bool:
-    """Whether `package` is a package name and not an instruction to pip.
-
-    Two different exposures, one answer.
-
-    Locally the command is built as a *list*, so there is no shell — but pip
-    reads its own options from positional arguments, so `--index-url=http://…`
-    or a bare URL is honoured as configuration rather than treated as a name.
-    That is fetch-and-execute from an attacker-chosen index with no shell
-    involved, and it arrives in a spawn config an LLM wrote.
-
-    Remotely the same list is joined into a string and sent over SSH, so there
-    the value is also shell syntax — `;`, backticks, `$(…)`. `shlex.quote`
-    handles that half; this handles the half quoting cannot, because a properly
-    quoted `--index-url` is still an option.
-
-    An allow-list rather than a deny-list: the set of legitimate names is small
-    and describable, and the set of harmful strings is not.
-    """
-    candidate = (package or "").strip()
-    return bool(candidate) and _PACKAGE_NAME.fullmatch(candidate) is not None
 
 
 PACKAGE_TO_IMPORT = {
@@ -139,6 +311,9 @@ class InstallerAgent(Actor):
         # Serialises the read-then-append on the known-hosts file: two deploys
         # to new hosts at once would otherwise both read "unknown" and race.
         self._known_hosts_lock = asyncio.Lock()
+        #: When the current deploy began: a heartbeat older than this belongs to
+        #: whatever ran on the node before it.
+        self._deploy_started_at = 0.0
 
     def _current_task_description(self) -> str:
         return "idle"
@@ -200,7 +375,7 @@ class InstallerAgent(Actor):
             return await self._node_install(payload)
 
         if action == "node_deploy":
-            # Full bootstrap: copy remote_runner.py + install deps + start runner
+            # Full bootstrap: install wactorz on the node + start it as one
             # payload: {host, node_name, broker}; SSH auth comes from the deploy target
             return await self._node_deploy(payload)
 
@@ -315,8 +490,6 @@ class InstallerAgent(Actor):
         (the default in some Python versions / environments). subprocess.run() works
         correctly on all platforms.
         """
-        import subprocess
-
         cmd = [sys.executable, "-m", "pip", "install", package, "--quiet"]
         if sys.platform != "win32":
             cmd.append("--break-system-packages")
@@ -450,7 +623,9 @@ class InstallerAgent(Actor):
         path = self._known_hosts_path()
         async with self._known_hosts_lock:
             try:
-                known = asyncssh.match_known_hosts(str(path), host, host, port)[0]
+                known = asyncssh.match_known_hosts(
+                    str(path), host, known_hosts_address(host), port
+                )[0]
             except FileNotFoundError:
                 known = []
             if known:
@@ -487,6 +662,7 @@ class InstallerAgent(Actor):
         node_name: str,
         broker: str,
         port: int,
+        tls: NodeTls | None = None,
     ) -> bool:
         """Write ``<home>/wactorz/.env``, mode 0600. Returns whether it holds credentials.
 
@@ -522,14 +698,29 @@ class InstallerAgent(Actor):
         This is the out-of-band channel the broker credentials must travel by:
         sending them over the broker itself would publish the very secret that
         protects it, to a channel that is unauthenticated until they arrive.
+
+        The node's signing key travels the same way, with the sequence number main
+        has reached and what to do with a control message not signed for it
+        (``WACTORZ_NODE_SIGNING``). See ``core/node_signing.py``.
+
+        A node on TLS gets its settings spelled out -- the CA's path, and whether the
+        hostname is checked -- rather than left to the defaults of
+        ``core/mqtt_tls.py``, which name the server's state directory, not the
+        node's.
         """
-        username = target.broker_user or CONFIG.mqtt_username or ""
-        password = target.broker_password or CONFIG.mqtt_password or ""
+        username, password = self._node_account(target, node_name)
         lines = [
             f"WACTORZ_NODE={shlex.quote(node_name)}",
             f"WACTORZ_BROKER={shlex.quote(broker)}",
             f"WACTORZ_PORT={shlex.quote(str(port))}",
+            f"WACTORZ_NODE_KEY={shlex.quote(node_key(node_name))}",
+            f"WACTORZ_CONTROL_SINCE={next_sequence()}",
+            f"WACTORZ_NODE_SIGNING={shlex.quote(NODE_SIGNING)}",
         ]
+        if tls is not None and tls.enabled:
+            lines.append("MQTT_TLS=1")
+            lines.append(f"MQTT_TLS_CA={shlex.quote(tls.ca)}")
+            lines.append(f"MQTT_TLS_CHECK_HOSTNAME={1 if tls.check_hostname else 0}")
         credentials = bool(username or password)
         if credentials:
             lines.append(f"MQTT_USERNAME={shlex.quote(username)}")
@@ -544,6 +735,136 @@ class InstallerAgent(Actor):
         # created world-readable and tightened later.
         await sftp.chmod(remote, 0o600)
         return credentials
+
+    async def _clear_planted_control(self, node_name: str) -> None:
+        """Clear whatever is retained on this node's control topics, before it starts.
+
+        A node acts on what it finds on those topics the moment it subscribes, and a
+        spawn carries code. Main never retains them, so anything retained there came
+        from somewhere else -- and a broker account can write the topics of a name
+        that is not a node yet, which no access list can name in advance.
+
+        The clears are unsigned, as an empty payload always is; they instruct nothing,
+        and a node ignores them.
+        """
+        for leaf in UNRETAINED_CONTROL_TOPICS:
+            await self._mqtt_publish(f"nodes/{node_name}/{leaf}", b"", retain=True, qos=1)
+
+    @staticmethod
+    def _node_account(target: DeployTarget, node_name: str) -> tuple[str, str]:
+        """The broker account a node presents: one of its own, a derived one, or the server's.
+
+        A derived account only where the broker has one -- the brokers Wactorz
+        configures, with `WACTORZ_NODE_ACCOUNTS` set -- because an account no broker
+        knows leaves the node authenticating against nothing. Anywhere else the
+        server's own account stays the default, as it has been. A `broker_user` or
+        `broker_password` set for the target wins over both.
+        """
+        default_user, default_password = CONFIG.mqtt_username or "", CONFIG.mqtt_password or ""
+        if CONFIG.node_accounts:
+            problem = broker_accounts.name_error(node_name)
+            if problem:
+                raise UnusableNodeAccountError(problem)
+            default_user = node_name
+            default_password = broker_accounts.password(node_name)
+        return target.broker_user or default_user, target.broker_password or default_password
+
+    async def _decide_node_tls(
+        self, conn: Any, sftp: Any, target: DeployTarget, home: str, broker: str, plain_port: int
+    ) -> NodeTls:
+        """Whether this node reaches the broker over TLS, handing it the CA if so.
+
+        The node is given the CA this server trusts (``MQTT_TLS_CA``): the one this
+        install generated, one of your own, or none for ``system``. Then it checks
+        from the node itself -- the only place the answer is true -- that the broker
+        answers TLS on the target's TLS port with that CA. Unless the target says
+        otherwise, a node whose check fails keeps plain MQTT on its usual port, so a
+        redeploy never strands a node on a broker that serves no TLS.
+
+        The CA is uploaded beside the name the node reads it under, not over it
+        (:data:`NOT_YET_IN_USE`), and checked from there. The answer names where it
+        will be once :meth:`_settle_node_ca` has moved it.
+
+        ``DEPLOY_<NODE>_BROKER_TLS=on`` gives the node TLS even when the check
+        fails (the broker may not be up yet) and fails the deploy when there is no
+        CA to hand over; ``off`` skips all of it.
+        """
+        mode = tls_mode(target.broker_tls)
+        if mode is None:
+            raise UnknownTlsModeError(target)
+        plain = NodeTls(enabled=False, port=plain_port)
+        if mode == "off":
+            return replace(plain, note="TLS is off for this node.")
+
+        setting = CONFIG.mqtt_tls_ca.strip()
+        check = checks_hostname(setting, CONFIG.mqtt_tls_check_hostname)
+        if setting.lower() == SYSTEM_TRUST:
+            ca = SYSTEM_TRUST
+        else:
+            source = Path(setting).expanduser() if setting else generated_ca_path()
+            if not source.is_file():
+                if mode == "on":
+                    raise NoCaForNodeError(target, source)
+                return replace(plain, note=f"No CA at {source} to give it.")
+            ca = f"{home}/wactorz/{NODE_CA_FILE}"
+            await sftp.put(str(source), ca + NOT_YET_IN_USE)
+
+        tls = NodeTls(enabled=True, port=target.broker_tls_port, ca=ca, check_hostname=check)
+        uploaded = tls if ca == SYSTEM_TRUST else replace(tls, ca=ca + NOT_YET_IN_USE)
+        ok, output = await self._ssh_run(conn, tls_check_command(broker, uploaded))
+        if ok:
+            return replace(tls, note=f"The broker answered TLS on port {tls.port}.")
+        reason = (output.splitlines() or ["no answer"])[-1][:200]
+        if mode == "on":
+            return replace(
+                tls, note=f"TLS is on for this node, though the broker did not answer it: {reason}"
+            )
+        return replace(
+            plain, note=f"The broker did not answer TLS on port {tls.port} from the node: {reason}"
+        )
+
+    async def _settle_node_ca(self, conn: Any, home: str, tls: NodeTls) -> None:
+        """Move the uploaded CA to the name the node reads, or remove it.
+
+        ``tls`` is what the node is about to be started with. A node that will
+        not read a CA from that name has no use for the upload.
+        """
+        ca = f"{home}/wactorz/{NODE_CA_FILE}"
+        uploaded = shlex.quote(ca + NOT_YET_IN_USE)
+        if not tls.enabled or tls.ca != ca:
+            await self._ssh_run(conn, f"rm -f {uploaded}")
+            return
+        ok, said = await self._ssh_run(conn, f"mv -f {uploaded} {shlex.quote(ca)} 2>&1")
+        if not ok:
+            raise CaNotPutInPlaceError(ca, said)
+
+    async def _discard_uploaded_ca(self, conn: Any, home: str) -> None:
+        """Remove the uploaded CA for a deploy that is giving up; the node keeps the one it had.
+
+        Tidying, on the way out of a failure that is about to be reported: a
+        connection that has gone too is not allowed to replace that report with
+        its own. What is left is a file the node never reads, and the next
+        deploy writes over.
+        """
+        uploaded = f"{home}/wactorz/{NODE_CA_FILE}{NOT_YET_IN_USE}"
+        with contextlib.suppress(OSError, asyncssh.Error):
+            await self._ssh_run(conn, f"rm -f {shlex.quote(uploaded)}")
+
+    async def _node_runtime(self, conn: Any, node_name: str, home: str, host: str) -> str | None:
+        """Give the node a venv with wactorz in it. Returns what went wrong, if anything did."""
+        # A venv, created when there is none: avoids all --break-system-packages issues.
+        no_venv = await self._ensure_venv(conn, node_name, home)
+        if no_venv:
+            return no_venv
+        # Wactorz itself. The node runs the package, not a copy of one file, so
+        # its agents are the same DynamicAgent main runs.
+        if await self._install_wactorz(conn, node_name, home):
+            return None
+        return (
+            f"Could not install wactorz {__version__} on {host}. "
+            f"The node needs it to run; see this node's log above for pip's "
+            f"own account of why."
+        )
 
     async def _ssh_kwargs(self, payload: dict) -> dict:
         """Build asyncssh connection kwargs for a task payload.
@@ -626,13 +947,200 @@ class InstallerAgent(Actor):
         output = (result.stdout or "") + (result.stderr or "")
         return result.exit_status == 0, output.strip()
 
+    async def _ensure_venv(self, conn: Any, node_name: str, home: str) -> str | None:
+        """Make sure the node has a virtualenv with pip in it. Why it has none, or None.
+
+        Judged by the pip inside it rather than by the directory. Where Python's
+        `venv` module is packaged apart from Python -- Debian and what derives
+        from it -- `python3 -m venv` makes the directory and then fails for
+        want of `ensurepip`, leaving something that looks like a virtualenv and
+        cannot install anything. That one is made again, and when it cannot be
+        made the deploy stops here and names the package, rather than going on
+        to an install whose error is about pip.
+        """
+        venv = shlex.quote(f"{home}/wactorz/venv")
+        has_pip = f"test -x {venv}/bin/pip"
+        if (await self._ssh_run(conn, has_pip))[0]:
+            self._log_remote(f"[{node_name}] venv: exists")
+            return None
+        # --clear, so a directory left by an attempt that failed is replaced.
+        _, out = await self._ssh_run(conn, f"python3 -m venv --clear {venv} 2>&1")
+        if (await self._ssh_run(conn, has_pip))[0]:
+            self._log_remote(f"[{node_name}] venv: created")
+            return None
+        said = " ".join(out.split())[-300:] or "it printed nothing"
+        self._log_remote(f"[{node_name}] venv: could not be created ({said})")
+        if "ensurepip" in out or "No module named venv" in out:
+            return (
+                f"The node's Python cannot create a virtual environment: its `venv` module "
+                f"is not installed. On Debian, Ubuntu and Raspberry Pi OS it is a package of "
+                f"its own. On the node, run `sudo apt install python3-venv`, then "
+                f"`/deploy {node_name}` again. The node said: {said}"
+            )
+        return (
+            f"Could not create a virtual environment at ~/wactorz/venv on the node, which "
+            f"Wactorz is installed into. `python3 -m venv` said: {said}"
+        )
+
+    async def _install_wactorz(self, conn: Any, node_name: str, home: str) -> bool:
+        """Put this exact version of wactorz into the node's venv.
+
+        Pinned to the version main is running, and deliberately: the two
+        exchange spawn configs, manifests and signed control messages, and a
+        node a release apart from main is the kind of mismatch that surfaces as
+        an agent that will not start, days later.
+
+        From PyPI, which is the ordinary case, when this server was installed
+        from there. A checkout deploys itself: its wheel is built here and
+        uploaded. So does a server installed from a branch or a commit, as a
+        Home Assistant add-on under test is: PyPI has either nothing under its
+        version number or other code, so the node is given a wheel of the
+        package as it is installed here.
+        """
+        # Absolute, from the home the node reported, never `~`: SFTP does no
+        # tilde expansion, so an upload to `~/wactorz/…` creates a directory
+        # literally named `~`; and `shlex.quote` would stop a shell expanding
+        # one anyway, since a quoted tilde is just a character.
+        pip = shlex.quote(f"{home}/wactorz/venv/bin/pip")
+
+        # A checkout deploys itself. Running from a source tree means the code
+        # that matters is here, not on PyPI -- and at the same version number
+        # pip would find the node already satisfied and change nothing, so a
+        # deploy of edited code silently shipped the previous one.
+        wheel = await self._build_wheel()
+        if wheel is not None:
+            return await self._install_wheel(conn, node_name, home, pip, wheel, "this checkout")
+        wheel = await self._installed_wheel()
+        if wheel is not None:
+            return await self._install_wheel(conn, node_name, home, pip, wheel, "this install")
+
+        spec = f"wactorz=={__version__}"
+        self._log_remote(f"[{node_name}] Installing {spec} into the venv...")
+        ok, out = await self._ssh_run(conn, f"{pip} install {shlex.quote(spec)} -q 2>&1")
+        if ok and await self._can_run_as_node(conn, home):
+            self._log_remote(f"[{node_name}] {spec} installed from PyPI.")
+            return True
+
+        why = (
+            f"The published {spec} cannot run as a node."
+            if ok
+            else f"{spec} could not be installed from PyPI ({out[-160:]})."
+        )
+        self._log_remote(
+            f"[{node_name}] {why} This server was installed from PyPI and has no source "
+            f"tree beside it to build a wheel from, so there is nothing else to try."
+        )
+        return False
+
+    async def _install_wheel(
+        self, conn: Any, node_name: str, home: str, pip: str, wheel: Path, built_from: str
+    ) -> bool:
+        """Put a wheel built here onto the node, and check it can be a node."""
+        self._log_remote(f"[{node_name}] Installing {wheel.name} built from {built_from}...")
+        remote_wheel = f"{home}/wactorz/{wheel.name}"
+        async with conn.start_sftp_client() as sftp:
+            await sftp.put(str(wheel), remote_wheel)
+        # Twice, and the second time forced with `--no-deps`. Two pip behaviours
+        # meet here and neither can be worked around by one call.
+        #
+        # It refuses a wheel whose version is already installed -- "already
+        # installed with the same version as the provided wheel" -- and leaves
+        # the old code in place, which is the very code this path exists to
+        # replace. So the install has to be forced.
+        #
+        # But `--force-reinstall` alone reinstalls every *dependency* too, healthy
+        # or not. On a node with no route to PyPI -- one of the reasons this path
+        # exists -- that turns a deploy that would have worked into "Could not
+        # find a version that satisfies the requirement aiomqtt", because it
+        # tears down a satisfied dependency it then cannot replace. Where there
+        # is a route, it still re-fetches and rewrites a dozen packages onto an
+        # SD card on every deploy.
+        #
+        # So: one ordinary call to settle the dependencies, and one forced call
+        # that touches nothing but us.
+        quoted = shlex.quote(remote_wheel)
+        ok, out = await self._ssh_run(conn, f"{pip} install {quoted} -q 2>&1")
+        if ok:
+            ok, out = await self._ssh_run(
+                conn, f"{pip} install --force-reinstall --no-deps {quoted} -q 2>&1"
+            )
+        if not ok:
+            self._log_remote(f"[{node_name}] Installing {wheel.name} failed: {out[-300:]}")
+            return False
+        if not await self._can_run_as_node(conn, home):
+            self._log_remote(
+                f"[{node_name}] {wheel.name} installed but cannot run as a node. "
+                f"Something is shadowing it on this node — check for another wactorz "
+                f"in the venv or on PYTHONPATH."
+            )
+            return False
+        self._log_remote(f"[{node_name}] {wheel.name} installed from this machine.")
+        return True
+
+    async def _can_run_as_node(self, conn: Any, home: str) -> bool:
+        """Whether the wactorz now on this node can actually be a node.
+
+        Asked of the install rather than assumed from its version, because a
+        version number is a claim and this is the thing being relied on. The
+        failure it rules out is silent: every release before the node runtime
+        answers to `wactorz==<that number>` and has no `wactorz.node` in it.
+
+        The command is checked as well as the module: the unit starts the node
+        through `wactorz-node`, which a release before that script existed
+        installs without, and a unit whose command is missing never starts.
+        """
+        python = shlex.quote(f"{home}/wactorz/venv/bin/python")
+        ok, _ = await self._ssh_run(conn, f"{python} -c 'import wactorz.node'")
+        if not ok:
+            return False
+        script = shlex.quote(f"{home}/wactorz/venv/bin/wactorz-node")
+        ok, _ = await self._ssh_run(conn, f"test -x {script}")
+        return ok
+
+    async def _installed_wheel(self) -> Path | None:
+        """A wheel of wactorz as installed here, when it did not come from a package index.
+
+        Off the event loop, like the build below: it reads and compresses every
+        file of the package.
+        """
+        if not installed_from_a_direct_reference("wactorz"):
+            return None
+        directory = Path(resolve_state_dir()) / "node_wheel"
+        return await asyncio.to_thread(wheel_of_installed, "wactorz", directory)
+
+    async def _build_wheel(self) -> Path | None:
+        """Build a wheel of this checkout, or None when there is no checkout.
+
+        Off the event loop: a build takes seconds to minutes, and every actor in
+        this process shares the loop it would otherwise hold.
+        """
+        root = Path(__file__).resolve().parent.parent.parent
+        if not (root / "pyproject.toml").exists():
+            return None
+        out_dir = root / "dist"
+
+        def _build() -> int:
+            return subprocess.run(  # noqa: S603  # a literal argv naming this interpreter
+                [sys.executable, "-m", "pip", "wheel", str(root), "--no-deps", "-w", str(out_dir)],
+                capture_output=True,
+                check=False,
+            ).returncode
+
+        if await asyncio.to_thread(_build) != 0:
+            return None
+        built = sorted(
+            out_dir.glob(f"wactorz-{__version__}-*.whl"), key=lambda p: p.stat().st_mtime
+        )
+        return built[-1] if built else None
+
     def _log_remote(self, message: str):
         logger.info("[%s] %s", self.name, message)
-        asyncio.create_task(
+        self.run_detached(
             self._mqtt_publish(
                 f"agents/{self.actor_id}/logs",
                 {"type": "log", "message": message, "timestamp": time.time()},
-            )
+            ),
+            name="log",
         )
 
     async def _node_install(self, payload: dict) -> dict:
@@ -715,11 +1223,17 @@ class InstallerAgent(Actor):
 
         Steps:
           1. Create ~/wactorz/ directory
-          2. Upload remote_runner.py
-          3. Install aiomqtt (the only runtime dependency)
-          4. Kill any existing runner with the same node name
-          5. Start the runner in the background
-          6. Verify it appears online within 15 seconds
+          2. Ask whether the node can reach the broker, over TLS or not, and
+             whether the broker accepts the account it will be given
+          3. Install wactorz at this machine's version into a venv there
+          4. Write ~/wactorz/.env — broker, credentials, signing key, TLS
+          5. Kill any runner already answering for this node name
+          6. Install and start a systemd unit, or fall back to nohup
+          7. Wait for its first heartbeat, and fail with its log if none arrives
+
+        Nothing a running node reads is changed before step 4. A node that is
+        already deployed keeps its environment and its CA when a deploy stops
+        earlier, so its next restart takes it back to the server it was on.
 
         payload keys:
           host       — IP or hostname
@@ -773,19 +1287,9 @@ class InstallerAgent(Actor):
         # runner into a different account than the one it authenticates as.
         user = target.user
 
-        # Find remote_runner.py relative to this file
-        import pathlib
-
-        candidates = [
-            pathlib.Path(__file__).parent.parent / "remote_runner.py",
-            pathlib.Path("remote_runner.py"),
-            pathlib.Path(__file__).parent.parent.parent / "remote_runner.py",
-        ]
-        runner_path = next((p for p in candidates if p.exists()), None)
-        if not runner_path:
-            return {"error": "remote_runner.py not found. Make sure it is in the wactorz root."}
-
         self._log_remote(f"Deploying node '{node_name}' to {user}@{host}...")
+        # A heartbeat older than this is the previous runner's, not the new one's.
+        self._deploy_started_at = time.time()
 
         try:
             async with asyncssh.connect(**(await self._ssh_kwargs(payload))) as conn:
@@ -800,35 +1304,60 @@ class InstallerAgent(Actor):
                 home_dir = resolved.strip() or f"/home/{user}"
                 self._log_remote(f"[{node_name}] Directory created at {home_dir}/wactorz.")
 
-                # 2. Upload remote_runner.py and, if the broker needs them, the
-                # credentials it will read from its environment.
+                # 2. Whether the node reaches the broker over TLS, which also
+                # decides the port every later step starts the runner with. The
+                # CA goes to the node for that check, beside the one it may
+                # already be using.
                 async with conn.start_sftp_client() as sftp:
-                    await sftp.put(str(runner_path), f"{home_dir}/wactorz/remote_runner.py")
-                    has_credentials = await self._put_node_env(
-                        sftp, target, home_dir, node_name, str(broker), int(mqtt_port)
+                    tls = await self._decide_node_tls(
+                        conn, sftp, target, home_dir, str(broker), int(mqtt_port)
                     )
-                self._log_remote(f"[{node_name}] remote_runner.py uploaded.")
+                mqtt_port = tls.port
+                # Two questions answered before anything is written that the
+                # node will act on, each from the only place it can be
+                # answered: the node says whether it can open the broker's
+                # port, and the server -- which can reach the broker -- says
+                # whether the broker accepts the account the node is about to
+                # be given. A node started without either answer retries for
+                # ever, with the reason in a journal nobody is reading.
+                # Whichever way the deploy stops before the node's settings are
+                # written, by an answer or by an error, the upload goes with it.
+                try:
+                    await self._check_broker_reachable(conn, node_name, str(broker), mqtt_port)
+                    await self._check_node_account(target, node_name)
+                    self._log_remote(
+                        f"[{node_name}] Broker connection: "
+                        f"{'TLS' if tls.enabled else 'plain MQTT'} on port {mqtt_port}. {tls.note}"
+                    )
+                    # 3 and 4. A venv, and wactorz installed into it.
+                    no_runtime = await self._node_runtime(conn, node_name, home_dir, host)
+                except Exception:
+                    await self._discard_uploaded_ca(conn, home_dir)
+                    raise
+                if no_runtime:
+                    await self._discard_uploaded_ca(conn, home_dir)
+                    return {
+                        "success": False,
+                        "node_name": node_name,
+                        "host": host,
+                        "error": no_runtime,
+                    }
+
+                # 5. The credentials the node will read from its environment,
+                # and the CA under the name that environment gives it. Written
+                # only now that there is a runtime to start with them: a node
+                # already running here reads both on its next restart, and until
+                # this point that restart would have been to the server it is on.
+                async with conn.start_sftp_client() as sftp:
+                    has_credentials = await self._put_node_env(
+                        sftp, target, home_dir, node_name, str(broker), mqtt_port, tls
+                    )
+                await self._settle_node_ca(conn, home_dir, tls)
                 self._log_remote(f"[{node_name}] Node environment written to ~/wactorz/.env.")
                 if has_credentials:
                     self._log_remote(f"[{node_name}] Broker credentials included.")
 
-                # 3. Create venv if it doesn't exist — avoids all --break-system-packages issues
-                ok, out = await self._ssh_run(
-                    conn,
-                    "test -d ~/wactorz/venv && echo exists || python3 -m venv ~/wactorz/venv && echo created",
-                )
-                self._log_remote(f"[{node_name}] venv: {out.strip()}")
-
-                # 4. Install aiomqtt into the venv
-                ok, out = await self._ssh_run(
-                    conn, "~/wactorz/venv/bin/pip install aiomqtt psutil -q 2>&1"
-                )
-                if not ok:
-                    self._log_remote(f"[{node_name}] pip install warning: {out[:150]}")
-                else:
-                    self._log_remote(f"[{node_name}] aiomqtt installed into venv.")
-
-                # 5. Kill any existing instance with this node name. This runs
+                # 6. Kill any existing instance with this node name. This runs
                 # whatever supervision we end up installing: a node deployed
                 # before this step existed has a `nohup` runner live right now,
                 # and starting a unit beside it would leave two runners
@@ -836,10 +1365,22 @@ class InstallerAgent(Actor):
                 # The pattern is quoted as one argument rather than wrapped in
                 # literal quotes: a name containing a quote would otherwise end
                 # them and the rest would be read as more shell.
-                pattern = f"remote_runner.py.*--name {node_name}"
+                # Matches both spellings: the unit started by this deploy
+                # (`wactorz --node <name>`) and the single-file runner a node
+                # deployed before the package was installed there is still
+                # running (`remote_runner.py --name <name>`).
+                # From here until the node's first heartbeat after the restart,
+                # main must not read the node's silence, or its empty first
+                # heartbeats, as agents crashing: they are this deploy.
+                self._mark_redeploying(node_name)
+                pattern = f"(wactorz.*--node|remote_runner.py.*--name) {node_name}"
                 await self._ssh_run(conn, f"pkill -f {shlex.quote(pattern)} 2>/dev/null; true")
 
-                # 6. Supervise it — a systemd unit at the least-privileged rung
+                # 7. Clear anything retained on this node's control topics, before
+                # it is started and subscribes to them.
+                await self._clear_planted_control(node_name)
+
+                # 8. Supervise it — a systemd unit at the least-privileged rung
                 # this node supports, and `nohup` only when it supports none.
                 async def run_on_node(command: str) -> tuple[bool, str]:
                     return await self._ssh_run(conn, command)
@@ -849,9 +1390,30 @@ class InstallerAgent(Actor):
                     await self._ssh_run(conn, self._nohup_launch(node_name, broker, mqtt_port))
                 self._log_remote(f"[{node_name}] Runner started — supervision: {rung.label}.")
 
-            self._log_remote(
-                f"[{node_name}] Deploy complete! Node will appear in /nodes within 15s."
-            )
+                # 9. Started is not connected. Wait for the node to say so itself,
+                # and when it does not, bring back what it logged instead of
+                # reporting a success the dashboard will contradict.
+                try:
+                    heartbeat_error = await self._await_first_heartbeat(node_name)
+                finally:
+                    # Whatever happened, the node is judged normally from here:
+                    # a deploy that failed must not leave it exempt for ever.
+                    self._unmark_redeploying(node_name)
+                if heartbeat_error:
+                    tail = await self._node_log_tail(conn, rung, node_name)
+                    msg = f"[{node_name}] {heartbeat_error}"
+                    if tail:
+                        msg += f"\nThe node's log ends with:\n{tail}"
+                    self._log_remote(msg)
+                    return {
+                        "success": False,
+                        "node_name": node_name,
+                        "host": host,
+                        "supervision": rung.label,
+                        "error": msg,
+                    }
+
+            self._log_remote(f"[{node_name}] Deploy complete! Node is online.")
             # Record where the node lives; credentials stay in the environment.
             self._persist_node_info(node_name=node_name, host=host, user=user)
             return {
@@ -859,20 +1421,122 @@ class InstallerAgent(Actor):
                 "node_name": node_name,
                 "host": host,
                 "broker": broker,
+                "broker_port": mqtt_port,
+                "tls": tls.enabled,
                 # Reported rather than inferred: a node that fell back to nohup
                 # is otherwise indistinguishable from a supervised one, and the
                 # difference is whether it comes back after a reboot.
                 "supervision": rung.label,
                 "message": (
-                    f"Node '{node_name}' deployed to {user}@{host} ({rung.label}). "
-                    f"It will appear in /nodes within ~15 seconds."
+                    f"Node '{node_name}' deployed to {user}@{host} ({rung.label}), "
+                    f"{'TLS' if tls.enabled else 'plain MQTT'} to the broker. "
+                    f"Its first heartbeat has arrived."
                 ),
             }
 
         except Exception as e:
+            self._unmark_redeploying(node_name)
             msg = f"Deploy failed for '{node_name}' on {host}: {e}"
             self._log_remote(msg)
             return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
+
+    async def _check_broker_reachable(
+        self, conn: Any, node_name: str, broker: str, port: int
+    ) -> None:
+        """Fail the deploy when the node cannot open the broker's port.
+
+        Run on the node, because that is where the answer is true: the server
+        reaching the broker says nothing about a firewall between the broker's
+        host and the node, or an address that only resolves on the server.
+        """
+        ok, output = await self._ssh_run(conn, reach_check_command(broker, port))
+        if ok:
+            self._log_remote(f"[{node_name}] The broker answers on {broker}:{port} from the node.")
+            return
+        reason = (output.splitlines() or ["no answer"])[-1][:200]
+        raise BrokerUnreachableFromNodeError(node_name, broker, port, reason)
+
+    async def _check_node_account(self, target: DeployTarget, node_name: str) -> None:
+        """Fail the deploy when the broker refuses the account the node would be given.
+
+        Checked from the server, against the broker the server itself uses, with
+        exactly the username and password that are about to be written to the
+        node. A mistyped password, a comment that became one, or an account no
+        broker has are all caught here rather than in the node's journal.
+
+        Skipped where the check could not be honest: a node whose broker address
+        differs from the server's may well be talking to a different broker.
+        """
+        if target.broker and target.broker != CONFIG.mqtt_host:
+            return
+        username, password = self._node_account(target, node_name)
+        if not (username or password):
+            return
+        try:
+            await asyncio.wait_for(
+                self._connect_once(username, password, node_name), CREDENTIAL_CHECK_TIMEOUT_S
+            )
+        except asyncio.TimeoutError as exc:
+            raise BrokerRefusedNodeAccountError(node_name, username, "no answer in time") from exc
+        except Exception as exc:
+            raise BrokerRefusedNodeAccountError(node_name, username, str(exc)[:200]) from exc
+        self._log_remote(f"[{node_name}] The broker accepts the node's account.")
+
+    @staticmethod
+    async def _connect_once(username: str, password: str, node_name: str) -> None:
+        """Open and close one broker connection as the node would."""
+        async with mqtt_client(
+            CONFIG.mqtt_host,
+            CONFIG.mqtt_port,
+            username=username,
+            password=password or None,
+            identifier=client_id("srv", install_id(), f"deploy-{node_name}"),
+        ):
+            pass
+
+    def _mark_redeploying(self, node_name: str) -> None:
+        """Tell main a deploy is restarting the node; see `NodeManager.begin_redeploy`."""
+        main = find_main_actor(self._registry)
+        if main is not None:
+            main.nodes.begin_redeploy(node_name)
+
+    def _unmark_redeploying(self, node_name: str) -> None:
+        main = find_main_actor(self._registry)
+        if main is not None:
+            main.nodes.end_redeploy(node_name)
+
+    async def _await_first_heartbeat(self, node_name: str) -> str | None:
+        """Wait for main to record a heartbeat from the node; the failure text if none.
+
+        Read off main's own node table, so the deploy reports the same fact the
+        dashboard does. No main in the registry -- the installer running on its
+        own -- means there is nobody to ask, and the wait is skipped rather than
+        failed.
+        """
+        main = find_main_actor(self._registry)
+        if main is None:
+            return None
+        deadline = time.monotonic() + FIRST_HEARTBEAT_TIMEOUT_S
+        while time.monotonic() < deadline:
+            seen = main._known_nodes.get(node_name, {}).get("last_seen", 0.0)
+            if seen and seen >= self._deploy_started_at:
+                return None
+            await asyncio.sleep(1.0)
+        return (
+            f"The node started but sent no heartbeat within "
+            f"{FIRST_HEARTBEAT_TIMEOUT_S}s. It is still running there and will keep "
+            f"retrying; the reason is in its log."
+        )
+
+    async def _node_log_tail(self, conn: Any, rung: Any, node_name: str) -> str:
+        """The last lines the node logged, for a deploy that failed."""
+        if rung is node_service.NOHUP:
+            command = f"tail -n 12 ~/wactorz/{shlex.quote(node_name + '.log')} 2>/dev/null"
+        else:
+            journal = "journalctl --user" if rung is node_service.USER else "journalctl"
+            command = f"{journal} -u {node_service.UNIT_NAME} -n 12 --no-pager -o cat 2>/dev/null"
+        _, output = await self._ssh_run(conn, command)
+        return output.strip()[:1500]
 
     @staticmethod
     def _nohup_launch(node_name: str, broker: Any, mqtt_port: Any) -> str:
@@ -895,10 +1559,10 @@ class InstallerAgent(Actor):
         log_path = shlex.quote(f"{node_name}.log")
         return (
             "set -a; . ~/wactorz/.env; set +a; "
-            "nohup ~/wactorz/venv/bin/python ~/wactorz/remote_runner.py "
-            f"--broker {shlex.quote(str(broker))} "
-            f"--port {shlex.quote(str(mqtt_port))} "
-            f"--name {shlex.quote(node_name)} "
+            "nohup ~/wactorz/venv/bin/wactorz-node "
+            f"--mqtt-broker {shlex.quote(str(broker))} "
+            f"--mqtt-port {shlex.quote(str(mqtt_port))} "
+            f"--node {shlex.quote(node_name)} "
             f"> ~/wactorz/{log_path} 2>&1 &"
         )
 

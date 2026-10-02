@@ -11,8 +11,6 @@ These agents genuinely cannot answer questions. Saying so is the fix; the
 structured fields stay for the callers that delegate to them and read them.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 from typing import Any

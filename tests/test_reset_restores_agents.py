@@ -138,3 +138,56 @@ class TestResetRepublishesTheSurvivors:
         assert [a["name"] for a in broadcast.await_args_list[-1].args[0]["state"]["agents"]] == [
             "main"
         ]
+
+
+class _Spawned:
+    """A user-spawned actor that records the order it is taken down in."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.actor_id = f"id-{name}"
+        self.protected = False
+        self.calls: list[str] = []
+        self.metrics = types.SimpleNamespace(messages_processed=0)
+        self.total_cost_usd = 0.0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+
+    async def delete_own_traces(self) -> None:
+        self.calls.append("traces")
+
+    async def stop(self) -> None:
+        self.calls.append("stop")
+
+    def _build_heartbeat(self) -> dict[str, Any]:
+        return {"actor_id": self.actor_id, "name": self.name, "state": "stopped"}
+
+
+class TestResetForgetsAgentsCompletely:
+    """A factory reset removes a spawned agent for good, so its own traces go too."""
+
+    async def test_a_forgotten_agent_clears_up_after_itself_before_it_stops(
+        self, clean_state: None
+    ) -> None:
+        # The Flic agent's pairing keys and its buttons' retained state are
+        # the agent's own; a plain stop leaves them for the next spawn.
+        from tests.test_reset import _make_request  # reuse the request builder
+
+        spawned = _Spawned("flic")
+        kept = _Spawned("main")
+        kept.protected = True
+        registry = MagicMock()
+        registry.all_actors.return_value = [kept, spawned]
+        registry.unregister = AsyncMock()
+        runtime.registry = registry
+
+        with (
+            patch("wactorz.web.ws.broadcast", new=AsyncMock()),
+            patch("wactorz.reset.reset_all"),
+            patch("wactorz.web.lifecycle.purge_agent_retained", new=AsyncMock()),
+        ):
+            resp = await api_reset.reset_handler(_make_request({"scope": "all"}))
+
+        assert resp.status == 200
+        assert spawned.calls == ["traces", "stop"]
+        assert kept.calls == []

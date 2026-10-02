@@ -18,6 +18,7 @@ import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
 import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
+import { el } from "../dom";
 import {
     preferredChatTarget,
     replacementTarget,
@@ -167,8 +168,7 @@ export class DashboardChat {
     buildChatView(): HTMLElement {
         // Building the view is the first moment there is something to open on.
         this.resolveDefaultTarget();
-        const chat = document.createElement("div");
-        chat.className = "af-chat";
+        const chat = el("div", "af-chat");
         chat.append(
             buildChatSidebar(this.sidebarFilter, value => {
                 this.sidebarFilter = value;

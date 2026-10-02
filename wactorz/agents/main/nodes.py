@@ -13,20 +13,21 @@ Deliberately knows nothing about MQTT, the registry or the actor system. It is a
 dict of heartbeats with questions attached, so it can be tested as one.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
 import time
 from typing import Any
 
+from ..._version import __version__
 from ...core.actor import derive_actor_id
+from ...core.compatibility import compatible
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
     install_id,
     mqtt_client,
+    reconnect_wait,
     session_kwargs,
 )
 from .hosts import NodeHost
@@ -57,6 +58,26 @@ VANISH_MISS_THRESHOLD = 3
 #: a brief network gap costs a grey dot rather than a deletion.
 ONLINE_WINDOW_S = 30.0
 
+#: The least time between two republishes of one node's desired state prompted by
+#: what its heartbeats say about signing. A node reporting failures on every
+#: heartbeat would otherwise have it republished on every one.
+SIGNING_REPUBLISH_INTERVAL_S = 60.0
+
+
+def _as_count(value: object) -> int:
+    """A count a heartbeat reported, or 0 for anything that is not one."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(value, 0)
+
+
+def _as_names(value: object) -> list[str]:
+    """A list of agent names from a heartbeat, or none if it is not one."""
+    if not isinstance(value, list):
+        return []
+    return [name for name in value if isinstance(name, str)]
+
+
 #: How long a node may stay silent before its agents are treated as lost.
 #:
 #: Longer than the window above on purpose. That one drives the indicator in the
@@ -66,6 +87,16 @@ OFFLINE_GRACE_S = 90.0
 
 #: How often the watcher looks for nodes that have gone quiet.
 OFFLINE_CHECK_INTERVAL_S = 15.0
+
+
+def _runner_restarted(record: dict[str, Any], before: dict[str, Any]) -> bool:
+    """Whether two heartbeats of one node came from different runs of its runner."""
+    if record.get("pid") != before.get("pid"):
+        return True
+    uptime, was_uptime = record.get("uptime_s"), before.get("uptime_s")
+    if isinstance(uptime, (int, float)) and isinstance(was_uptime, (int, float)):
+        return uptime < was_uptime
+    return False
 
 
 def remote_actor_id(agent_name: str) -> str:
@@ -95,6 +126,12 @@ class NodeManager:
         self.manifest_registry = manifests if manifests is not None else ManifestRegistry(host)
         #: (node, agent) -> consecutive heartbeats that agent has been missing.
         self.agent_misses: dict[tuple[str, str], int] = {}
+        #: Nodes a deploy is restarting right now. Their silence and their empty
+        #: heartbeats are main's own doing, not a crash, and are not acted on.
+        self.redeploying: set[str] = set()
+        #: node -> monotonic time its desired state was last republished because of
+        #: what its heartbeat said about signing.
+        self.signing_republished_at: dict[str, float] = {}
 
     def list_nodes(self) -> list[dict[str, Any]]:
         """Every known node, with its age resolved to an `online` flag.
@@ -133,6 +170,57 @@ class NodeManager:
     def online_names(self) -> list[str]:
         """The online nodes, sorted — this reaches a person in an error message."""
         return sorted(name for name in self.known if self.is_online(name))
+
+    def begin_redeploy(self, node_name: str) -> None:
+        """Say that `node_name` is about to be stopped and started by a deploy.
+
+        Until :meth:`end_redeploy`, the node's agents are not pruned when its
+        heartbeats stop listing them, and the node is not forgotten when the
+        heartbeats stop altogether. Both are what a redeploy looks like from
+        here: the old process is killed, the new one comes up with no agents and
+        only then reconciles against the desired state. Reading either as a
+        crash is what deleted the agents a redeploy was meant to keep.
+        """
+        self.redeploying.add(node_name)
+
+    def end_redeploy(self, node_name: str) -> None:
+        """The deploy is over, one way or the other: judge the node normally again.
+
+        The miss counters are reset rather than kept: whatever was counted during
+        the deploy was the deploy, and the new node's first heartbeats -- sent
+        before it has reconciled -- must not carry that count over the threshold.
+        """
+        self.redeploying.discard(node_name)
+        for key in [k for k in self.agent_misses if k[0] == node_name]:
+            self.agent_misses.pop(key, None)
+
+    def version_mismatch(self, node_name: str) -> str | None:
+        """Why an agent must not be sent to `node_name`, or None when it may be.
+
+        A node runs the same package as main, from the same release series: its
+        agents are built from the same code and speak the same contract, and a
+        spawn config main writes today may name something an older node has
+        never heard of. A node on another series is refused, with the command
+        that brings it level; one that differs in the patch number alone is
+        not, so a fix to the server does not mean deploying every node again.
+
+        A node that reports no version at all is not judged here. That is a
+        runtime from before the field existed, and what to do about it is the
+        signing and runtime handling's call, made on the same heartbeat. Only
+        ever asked about a node main has heard from: whether the node is online
+        at all is a separate question with its own answer.
+        """
+        info = self.known.get(node_name)
+        if not info:
+            return None
+        reported = info.get("version")
+        if not reported or compatible(__version__, str(reported)):
+            return None
+        return (
+            f"node '{node_name}' is running version {reported}, which does not work with "
+            f"this server's {__version__}. Redeploy it with `/deploy {node_name}` so both "
+            "run the same release."
+        )
 
     def running_agent(self, name: str) -> str:
         """The online node running `name`, or "" if none currently claims it.
@@ -221,7 +309,7 @@ class NodeManager:
                         "[main] Node heartbeat listener still unavailable — retrying in %ss…",
                         int(RECONNECT_DELAY_S),
                     )
-                await asyncio.sleep(RECONNECT_DELAY_S)
+                await asyncio.sleep(reconnect_wait(RECONNECT_DELAY_S))
 
     async def receive_node_message(self, topic: str, payload: bytes | None) -> None:
         """Route one message from a node to whichever half handles it."""
@@ -243,7 +331,8 @@ class NodeManager:
     async def receive_heartbeat(self, node_name: str, data: dict[str, Any]) -> None:
         """Take one heartbeat: prune what vanished, record the node, fill gaps."""
         agents = data.get("agents", [])
-        previous = set(self.known.get(node_name, {}).get("agents", []))
+        before = self.known.get(node_name)
+        previous = set((before or {}).get("agents", []))
         await self._prune_vanished(node_name, set(agents), previous)
         self.known[node_name] = {
             "last_seen": time.time(),
@@ -259,9 +348,130 @@ class NodeManager:
             "cpu_pct": data.get("cpu_pct"),
             "mem_used_mb": data.get("mem_used_mb"),
             "mem_free_mb": data.get("mem_free_mb"),
+            # Whether the node checks what main sends it. A heartbeat without it
+            # comes from a runner older than signing, which checks nothing.
+            "signing": data.get("signing") or "off",
+            "signing_failures": _as_count(data.get("signing_failures")),
+            # Whether the node reaches the broker over TLS. A heartbeat without it
+            # comes from a runner older than TLS, which does not.
+            "tls": data.get("tls") is True,
+            # The node's agents whose restarts have slowed after repeated
+            # crashes. A heartbeat without it comes from a runner older than
+            # slow retry, which reports none.
+            "slow_retry": _as_names(data.get("slow_retry")),
         }
         self._bootstrap_contracts(node_name, agents)
         self._touch_monitor(agents)
+        await self.follow_signing(node_name, self.known[node_name], before)
+        self.follow_restarts(node_name, self.known[node_name], before)
+
+    def follow_restarts(
+        self, node_name: str, record: dict[str, Any], before: dict[str, Any] | None
+    ) -> None:
+        """Say in chat when an agent on a node starts or stops crashing repeatedly.
+
+        On main the supervisor tells main itself; a node's supervisor has no main
+        to tell, so the node lists these agents in its heartbeat and main tells
+        the user what changed. Once each way, not on every heartbeat.
+        """
+        host = self.host
+        if host is None:
+            return
+        now = set(record.get("slow_retry", []))
+        was = set((before or {}).get("slow_retry", []))
+        for name in sorted(now - was):
+            host._queue_notification(
+                {
+                    "severity": "critical",
+                    "message": (
+                        f"🚨 **{name}** on node '{node_name}' keeps crashing. It will keep "
+                        "being restarted, but less often, with the wait growing up to an "
+                        "hour. Fix its code, or delete it, if it is not going to recover "
+                        "on its own."
+                    ),
+                }
+            )
+        # Only those still there, on a runner that has not restarted: one
+        # deleted is not a recovery, and a runner that restarted starts every
+        # agent with a clean slate, recovered or not.
+        if before is None or _runner_restarted(record, before):
+            return
+        for name in sorted((was - now) & set(record.get("agents", []))):
+            host._queue_notification(
+                {
+                    "severity": "info",
+                    "message": (
+                        f"✅ **{name}** on node '{node_name}' has stayed up since its last "
+                        "restart; it is back to normal supervision."
+                    ),
+                }
+            )
+
+    async def follow_signing(
+        self, node_name: str, record: dict[str, Any], before: dict[str, Any] | None
+    ) -> None:
+        """Act on what a heartbeat says about signing.
+
+        Two things need main. A node that received a control message not signed for
+        it is being sent something main did not sign, and nobody reads a Pi's log,
+        so it is said in chat. And a node that checks signatures needs a signed
+        desired state: the one retained at the broker may predate signing, or be
+        forged, and a node that refuses it does not bring its agents back. Main
+        publishes its own over it -- when the node first says it checks, and again
+        after it reports a failure.
+        """
+        host = self.host
+        if host is None:
+            return
+        mode = record.get("signing", "off")
+        failures = record.get("signing_failures", 0)
+        was_mode = (before or {}).get("signing", "off")
+        was_failures = (before or {}).get("signing_failures", 0)
+        # A runner that restarted counts from zero again.
+        new_failures = failures - was_failures if failures >= was_failures else failures
+        if mode == "invalid":
+            if was_mode != "invalid":
+                host._queue_notification(
+                    {
+                        "severity": "critical",
+                        "message": (
+                            f"Node '{node_name}' cannot read its signing key, so it refuses "
+                            f"everything main sends it. Deploy it again: /deploy {node_name}"
+                        ),
+                    }
+                )
+            return
+        if new_failures:
+            outcome = "refused" if mode == "enforce" else "acted on"
+            logger.warning(
+                "[main] Node %r received %d control message(s) not signed for it, and %s them.",
+                node_name,
+                new_failures,
+                outcome,
+            )
+            host._queue_notification(
+                {
+                    "severity": "warning",
+                    "message": (
+                        f"Node '{node_name}' received {new_failures} command(s) that were not "
+                        f"signed for it, and {outcome} them. A desired state published before "
+                        "the node was redeployed does this once, and main republishes it "
+                        "signed; if it keeps happening, something other than this Wactorz "
+                        "is publishing to the node."
+                    ),
+                }
+            )
+        checks = mode in ("warn", "enforce")
+        if checks and (was_mode != mode or new_failures) and self._signing_republish_due(node_name):
+            await host._update_node_desired_state(node_name)
+
+    def _signing_republish_due(self, node_name: str) -> bool:
+        now = time.monotonic()
+        last = self.signing_republished_at.get(node_name)
+        if last is not None and now - last < SIGNING_REPUBLISH_INTERVAL_S:
+            return False
+        self.signing_republished_at[node_name] = now
+        return True
 
     def agents_to_prune(self, node_name: str, current: set[str], previous: set[str]) -> list[str]:
         """Registry agents on this node that have now missed enough heartbeats.
@@ -273,7 +483,7 @@ class NodeManager:
         node's to lose.
         """
         host = self.host
-        if host is None:
+        if host is None or node_name in self.redeploying:
             return []
         to_prune: list[str] = []
         for agent_name, cfg in list(host._get_spawn_registry().items()):
@@ -415,54 +625,72 @@ class NodeManager:
         while host.state.value not in ("stopped", "failed"):
             try:
                 await asyncio.sleep(OFFLINE_CHECK_INTERVAL_S)
-                now = time.time()
-                # Snapshot to avoid mutation-during-iteration
-                stale_nodes = [
-                    (name, info)
-                    for name, info in list(self.known.items())
-                    if (now - info.get("last_seen", 0)) > OFFLINE_GRACE_S
-                ]
-                if not stale_nodes:
-                    continue
-
-                reg = host._get_spawn_registry()
-                for node_name, _info in stale_nodes:
-                    logger.warning(
-                        "[main] Node %r has been silent for >%.0fs — treating as offline",
-                        node_name,
-                        OFFLINE_GRACE_S,
-                    )
-                    # Find all agents that belong to this node according to the
-                    # spawn registry (the heartbeat's last-known agent list may
-                    # be stale).
-                    lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
-                    for agent_name in lost:
-                        host._remove_from_spawn_registry(agent_name)
-                        # As in _prune_vanished: the retained desired_state has
-                        # to lose the agent too, or the node resurrects it on
-                        # its next reconcile into a main that has forgotten it.
-                        await host._update_node_desired_state(node_name, remove_name=agent_name)
-                        await host._clear_agent_manifest(agent_name)
-                        host._record_agent_deletion(
-                            agent_name,
-                            reason=f"node '{node_name}' went offline",
-                        )
-                    # Drop the node from our tracking. If it comes back, the
-                    # heartbeat listener will re-add it as a fresh entry.
-                    self.known.pop(node_name, None)
-                    if lost:
-                        host._queue_notification(
-                            {
-                                "_monitor_notification": True,
-                                "message": (
-                                    f"Node '{node_name}' is offline. "
-                                    f"Lost agents: {', '.join(lost)}."
-                                ),
-                                "severity": "warning",
-                                "timestamp": now,
-                            }
-                        )
+                await self.forget_offline_nodes(time.time())
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning("[%s] Node offline watcher error: %s", host.name, e)
+
+    async def forget_offline_nodes(self, now: float) -> None:
+        """Treat every node silent for longer than OFFLINE_GRACE_S as gone.
+
+        Its agents are removed as a delete removes them, and a stop is queued for
+        each on the node. The node is away, so the broker holds the stop in its
+        session until it returns, behind whatever already waits there -- a spawn
+        published while it was gone included. On its return the node stops what
+        main has already forgotten, instead of starting a withdrawn spawn or
+        carrying on with agents nothing supervises any more.
+        """
+        host = self.host
+        if host is None:
+            return
+
+        # Snapshot to avoid mutation-during-iteration
+        stale_nodes = [
+            (name, info)
+            for name, info in list(self.known.items())
+            if (now - info.get("last_seen", 0)) > OFFLINE_GRACE_S and name not in self.redeploying
+        ]
+        if not stale_nodes:
+            return
+
+        reg = host._get_spawn_registry()
+        for node_name, _info in stale_nodes:
+            logger.warning(
+                "[main] Node %r has been silent for >%.0fs — treating as offline",
+                node_name,
+                OFFLINE_GRACE_S,
+            )
+            # Find all agents that belong to this node according to the
+            # spawn registry (the heartbeat's last-known agent list may
+            # be stale).
+            lost = [n for n, cfg in reg.items() if cfg.get("node", "").strip() == node_name]
+            for agent_name in lost:
+                host._remove_from_spawn_registry(agent_name)
+                # As in _prune_vanished: the retained desired_state has
+                # to lose the agent too, or the node resurrects it on
+                # its next reconcile into a main that has forgotten it.
+                await host._update_node_desired_state(node_name, remove_name=agent_name)
+                # Queued in the node's session while it is away, behind
+                # anything already waiting there, so on its return it
+                # stops this agent rather than starting a withdrawn spawn.
+                await host._mqtt_publish(f"nodes/{node_name}/stop", {"name": agent_name}, qos=1)
+                await host._clear_agent_manifest(agent_name)
+                host._record_agent_deletion(
+                    agent_name,
+                    reason=f"node '{node_name}' went offline",
+                )
+            # Drop the node from our tracking. If it comes back, the
+            # heartbeat listener will re-add it as a fresh entry.
+            self.known.pop(node_name, None)
+            if lost:
+                host._queue_notification(
+                    {
+                        "_monitor_notification": True,
+                        "message": (
+                            f"Node '{node_name}' is offline. Lost agents: {', '.join(lost)}."
+                        ),
+                        "severity": "warning",
+                        "timestamp": now,
+                    }
+                )

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.waiting import PATIENCE_S
 from wactorz.core.persistence import maintenance
 from wactorz.core.persistence.db import WactorzDB
 
@@ -131,7 +132,7 @@ class TestStartAndStop:
         maintenance.INTERVAL_S, original = 0.01, maintenance.INTERVAL_S
         try:
             maintenance.start()
-            await asyncio.to_thread(started.wait, 2.0)
+            assert await asyncio.to_thread(started.wait, PATIENCE_S), "the job never started"
             await maintenance.stop()
         finally:
             maintenance.INTERVAL_S = original

@@ -77,6 +77,20 @@ def test_targets_parse_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert parsed[1].user == "pi"
 
 
+def test_a_targets_tls_override_parses_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEPLOY_TARGETS", "rpi-kitchen, rpi-garage")
+    monkeypatch.setenv("DEPLOY_RPI_KITCHEN_BROKER_TLS", " off ")
+    monkeypatch.setenv("DEPLOY_RPI_KITCHEN_BROKER_TLS_PORT", "18883")
+    monkeypatch.delenv("DEPLOY_RPI_GARAGE_BROKER_TLS", raising=False)
+    monkeypatch.delenv("DEPLOY_RPI_GARAGE_BROKER_TLS_PORT", raising=False)
+
+    kitchen, garage = config_module._deploy_targets()
+
+    assert (kitchen.broker_tls, kitchen.broker_tls_port) == ("off", 18883)
+    # Unset: the deploy checks from the node, on the usual TLS port.
+    assert (garage.broker_tls, garage.broker_tls_port) == ("", 8883)
+
+
 def test_unset_targets_parse_to_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """No configuration means no targets — not one target named ""."""
     monkeypatch.delenv("DEPLOY_TARGETS", raising=False)
@@ -611,7 +625,13 @@ async def _deploy_with_home(installer, targets, monkeypatch, home: str) -> _Fake
         # dials the target for its host key and the test hangs on the network.
         return "known_hosts"
 
+    async def _account(*_args: object) -> None:
+        # The broker is not part of what these tests are about; the check that
+        # asks it has its own tests.
+        return None
+
     monkeypatch.setattr(installer, "_known_hosts", _known_hosts)
+    monkeypatch.setattr(installer, "_check_node_account", _account)
     monkeypatch.setattr(installer_module.asyncssh, "connect", lambda **_kw: conn)
     monkeypatch.setattr(installer, "_persist_node_info", lambda **_kw: None)
 
@@ -625,12 +645,11 @@ async def test_uploads_follow_the_home_the_node_reports(
     """Nothing is addressed as `/home/<user>`.
 
     Every shell step in the deploy uses `~`, so a home that is not under
-    `/home` -- root's `/root` above all -- would put the runner and its `.env`
+    `/home` -- root's `/root` above all -- would put the node's `.env`
     somewhere the venv is not. Deploying as root failed on exactly this.
     """
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
 
-    assert conn.sftp.uploads == ["/root/wactorz/remote_runner.py"]
     assert conn.sftp.opened == ["/root/wactorz/.env"]
 
 
@@ -639,7 +658,6 @@ async def test_an_unusual_home_is_honoured_end_to_end(
 ) -> None:
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/var/lib/node")
 
-    assert conn.sftp.uploads == ["/var/lib/node/wactorz/remote_runner.py"]
     assert conn.sftp.opened == ["/var/lib/node/wactorz/.env"]
 
 
@@ -651,7 +669,7 @@ async def test_the_unit_is_written_against_that_home(
     conn = await _deploy_with_home(installer, targets, monkeypatch, "/root")
 
     unit = next(c for c in conn.commands if "WZUNIT" in c)
-    assert "ExecStart=/root/wactorz/venv/bin/python /root/wactorz/remote_runner.py" in unit
+    assert "ExecStart=/root/wactorz/venv/bin/wactorz-node " in unit
     assert "/home/pi" not in unit
 
 

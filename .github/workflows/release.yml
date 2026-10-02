@@ -5,9 +5,10 @@ on:
     tags:
       - 'v*.*.*'
 
+# Read-only by default, and the two write grants on the one job that publishes:
+# granted here, they would reach the CI run below as well.
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   # The whole of CI, on the tagged commit. A tag is not proof anything passed:
@@ -21,11 +22,15 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      contents: write  # the GitHub release
+      id-token: write  # PyPI trusted publishing
 
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # Before anything is built. The wheel takes its version from
       # _version.py (hatch reads it), never from the tag, so the two can
@@ -56,15 +61,18 @@ jobs:
           done
           echo "tag $tag matches the package and both add-on manifests."
 
-      - uses: actions/setup-python@v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
 
       # Pinned from package.json's "packageManager": this build's output is
       # published, so it must match the assets CI verified against the tree.
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      # No cache: what is published is built from the lockfile alone, never
+      # from a cache another workflow run could have written.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: frontend/package.json
+          no-cache: true
 
       - name: Install build deps
         run: pip install hatchling twine
@@ -78,6 +86,17 @@ jobs:
 
       - name: Validate
         run: twine check dist/*
+
+      # What a user gets from `pip install wactorz`: the wheel on its own, in a
+      # clean environment, importing at the tag's version and starting its CLI.
+      - name: The wheel installs and imports
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel-check"
+          "$RUNNER_TEMP/wheel-check/bin/pip" install --quiet dist/*.whl
+          installed=$("$RUNNER_TEMP/wheel-check/bin/python" -c "import wactorz; print(wactorz.__version__)")
+          [ "$installed" = "${GITHUB_REF_NAME#v}" ] \
+            || { echo "::error::the wheel installs as $installed, not ${GITHUB_REF_NAME#v}"; exit 1; }
+          "$RUNNER_TEMP/wheel-check/bin/wactorz" --help > /dev/null
 
       # Only this version's section — the whole CHANGELOG makes the release
       # page an endless scroll of every past version.
@@ -95,22 +114,55 @@ jobs:
           fi
           cat release-notes.md
 
-      # Kept, now that the version is asserted above: what it covers is a
-      # re-run after a later step failed, where the upload already succeeded.
-      # Without that assertion it was the thing that made a mis-tagged release
-      # silent rather than loud.
-      # The one action here left on a moving ref, deliberately. It holds the
-      # OIDC trusted-publishing exchange, and PyPA maintain `release/v1` so a
-      # fix to that exchange reaches every publisher without intervention.
-      # Pinning a sha would opt out of exactly the updates most worth having.
+      # `skip-existing` covers a re-run after a later step failed, where the
+      # upload already succeeded; the version assertion above is what keeps a
+      # mis-tagged release loud. Pinned like everything else: this action holds
+      # the OIDC trusted-publishing exchange, which is the reason not to run
+      # code nobody reviewed, and Dependabot proposes PyPA's fixes a week after
+      # each release.
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           skip-existing: true
 
+      # The runner's own `gh`, rather than a third-party action holding
+      # `contents: write`. Re-runnable like the upload above: a release that
+      # already exists has its files and notes replaced instead.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          body_path: release-notes.md
-          files: dist/*
-          generate_release_notes: false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag \
+              --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+          fi
+
+  # The images, once the package they carry is published. Each workflow builds
+  # once, pushes by digest, checks that digest and only then tags it; see there.
+  image:
+    name: App image
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      tag: ${{ github.ref_name }}
+    # By name rather than `secrets: inherit`: the workflow gets the two it uses.
+    secrets:
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      QUAY_TOKEN: ${{ secrets.QUAY_TOKEN }}
+
+  addon-image:
+    name: Add-on images
+    needs: release
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/addon-image.yml
+    with:
+      tag: ${{ github.ref_name }}

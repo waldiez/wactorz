@@ -5,6 +5,7 @@ Every agent IS an actor. Actors communicate via message passing only.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import pickle
@@ -12,7 +13,7 @@ import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import psutil
 
 from .atomic_io import quarantine_unreadable, write_pickle
+from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
 
 if TYPE_CHECKING:
@@ -125,6 +127,30 @@ class MessageType(str, Enum):
     STATUS_RESPONSE = "status_response"
 
 
+#: How long a sender waits for room in a full mailbox before its message is
+#: refused. Long enough to outlast a burst the recipient is working through,
+#: and bounded so that one actor which has stopped reading cannot hold every
+#: actor that writes to it.
+MAILBOX_WAIT_S = 30.0
+
+#: How long a listener waits before it tries the broker again.
+RECONNECT_DELAY_S = 5.0
+
+#: How often a waiting sender looks again for room.
+_MAILBOX_POLL_S = 0.05
+
+#: Message types that only report: losing one loses nothing a later one will
+#: not say again.
+_REPORT_TYPES = frozenset(
+    {
+        MessageType.HEARTBEAT,
+        MessageType.TICK,
+        MessageType.STATUS_REQUEST,
+        MessageType.STATUS_RESPONSE,
+    }
+)
+
+
 @dataclass
 class Message:
     """One unit of communication between actors."""
@@ -135,6 +161,22 @@ class Message:
     reply_to: str | None = None
     message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: float = field(default_factory=time.time)
+
+    @property
+    def is_notification(self) -> bool:
+        """Whether this only reports something, and asks nothing of its recipient.
+
+        A heartbeat, a status exchange, or an alert for main's notification
+        list. A full mailbox drops these at once: the sender is a supervisor or
+        a monitor, which must not be held up by the actor it is reporting to.
+        """
+        if self.type in _REPORT_TYPES:
+            return True
+        return (
+            self.type == MessageType.TASK
+            and isinstance(self.payload, dict)
+            and bool(self.payload.get("_monitor_notification"))
+        )
 
     def to_dict(self) -> dict:
         """A JSON-serialisable form, for MQTT and the dashboard."""
@@ -165,6 +207,8 @@ class ActorMetrics:
     tasks_failed: int = 0
     restart_count: int = 0  # incremented by Supervisor on each restart
     heartbeats: int = 0
+    #: Messages this actor's mailbox had no room for and did not take.
+    messages_refused: int = 0
 
     @property
     def uptime(self) -> float:
@@ -197,6 +241,9 @@ class Actor(ABC):
 
         # Async mailbox (inbox)
         self._mailbox: asyncio.Queue = asyncio.Queue(maxsize=mailbox_size)
+        #: When the message being handled was taken up, on the monotonic clock;
+        #: None between messages.
+        self._handling_since: float | None = None
         self._outbox: dict[str, asyncio.Queue] = {}  # actor_id -> queue ref
 
         # Registry reference (set by ActorSystem)
@@ -204,6 +251,13 @@ class Actor(ABC):
         self._mqtt_client: Any | None = None
         self._mqtt_broker: str = "localhost"
         self._mqtt_port: int = 1883
+
+        #: The node this actor runs on, empty when it runs on main. Set by the
+        #: node runner on the agents it starts; every heartbeat carries it, so
+        #: the dashboard can place an agent without having to ask which node
+        #: claimed it. The empty string is what the rest of the framework means
+        #: by local — see main's `is_target_local`.
+        self._node: str = ""
 
         # Persistence
         # Use name as persistence folder so it survives restarts with same name
@@ -247,6 +301,9 @@ class Actor(ABC):
 
         # Background tasks
         self._tasks: list[asyncio.Task] = []
+        #: Resolved once this run's stop has finished; see stop(). Created by the
+        #: first stop, not here, and cleared by start().
+        self._stopped: asyncio.Future[None] | None = None
 
         # Cached process handle for heartbeat metrics — one per actor so each
         # has an independent cpu_percent baseline (interval=None, non-blocking).
@@ -263,6 +320,7 @@ class Actor(ABC):
 
     async def start(self):
         """Start the actor's event loop."""
+        self._stopped = None
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
         await self._load_persistent_state()
@@ -283,7 +341,27 @@ class Actor(ABC):
         logger.info("[%s] Actor started.", self.name)
 
     async def stop(self):
-        """Gracefully stop the actor."""
+        """Gracefully stop the actor, once per run however many ask.
+
+        A second stop -- a replace or a migration that reaches an actor the
+        supervisor also stops, or shutdown meeting a delete -- would run
+        ``on_stop`` and the state saves again. It waits for the first to finish
+        instead, and returns: a caller that goes on to act on the stopped actor,
+        such as a delete purging its state, then acts after the stop and not
+        during it. ``start()`` begins a new run.
+        """
+        if self._stopped is not None:
+            await asyncio.shield(self._stopped)
+            return
+        self._stopped = asyncio.get_running_loop().create_future()
+        try:
+            await self._stop_once()
+        finally:
+            if not self._stopped.done():
+                self._stopped.set_result(None)
+
+    async def _stop_once(self):
+        """What stopping does: wind down, clean up, save, and say so."""
         self.state = ActorState.STOPPED
         await self._wind_down_tasks()
         # Shield cleanup from CancelledError — chat tasks run as fire-and-forget
@@ -298,18 +376,24 @@ class Actor(ABC):
         # already marked cancelling. So it is remembered, both steps still run,
         # and it is re-raised once cleanup is done.
         cancelled = False
+        # A failure in either is said and the stop goes on: the actor still has
+        # to come off the broker and out of the registry, and an agent's own
+        # `on_stop` is code nobody here wrote.
         try:
             await asyncio.shield(self.on_stop())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
-            pass
+        except Exception:
+            logger.exception("[%s] on_stop failed; stopping anyway", self.name)
         try:
             await asyncio.shield(self._save_persistent_state())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
-            pass
+        except Exception:
+            logger.exception(
+                "[%s] Could not save state while stopping; what it last persisted may be lost",
+                self.name,
+            )
 
         # ── Persist message count so overview survives restarts ──────────
         if self.metrics.messages_processed > 0:
@@ -365,6 +449,51 @@ class Actor(ABC):
     #: How long stop() waits for a cancelled task before giving up on it.
     TASK_SHUTDOWN_TIMEOUT = 5.0
 
+    async def _discard_child(self, child: Actor) -> None:
+        """Stop and unregister a child whose start did not complete."""
+        with contextlib.suppress(Exception):
+            await child.stop()
+        if self._registry:
+            with contextlib.suppress(Exception):
+                await self._registry.unregister(child.actor_id)
+
+    def run_detached(
+        self, coro: Coroutine[Any, Any, Any], *, name: str | None = None
+    ) -> asyncio.Task[Any]:
+        """Run ``coro`` alongside the actor, as a task the actor owns.
+
+        For work the caller does not wait for. A bare ``asyncio.create_task``
+        keeps no reference, so the task can be garbage-collected part-way
+        through, and nothing cancels it when the actor stops: it goes on
+        running against an actor, or a system, that has already shut down.
+        This one is held in ``_tasks`` until it ends, so ``stop()`` cancels and
+        waits for it like the actor's own loops, and a failure is logged rather
+        than surfacing as "exception never retrieved" whenever it is collected.
+        """
+        task = asyncio.create_task(coro, name=name)
+        if self.state == ActorState.STOPPED:
+            # Too late to own it: stop() sets this before winding tasks down,
+            # so one added now would be cleared without being cancelled.
+            task.cancel()
+            logger.debug("[%s] Not starting %s: the actor has stopped", self.name, task.get_name())
+            return task
+        self._tasks.append(task)
+        task.add_done_callback(self._forget_detached)
+        return task
+
+    def _forget_detached(self, task: asyncio.Task[Any]) -> None:
+        """Drop a finished detached task, reporting how it failed if it did."""
+        # Already gone when stop() cleared the list while winding down.
+        if task in self._tasks:
+            self._tasks.remove(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "[%s] Background task %s failed", self.name, task.get_name(), exc_info=error
+            )
+
     async def _wind_down_tasks(self) -> None:
         """Cancel the actor's own tasks and wait for them to actually finish.
 
@@ -381,30 +510,25 @@ class Actor(ABC):
         """
         current = asyncio.current_task()
         others = [task for task in self._tasks if task is not current]
-        for task in others:
-            task.cancel()
         try:
             if others:
                 # Bounded: a task that will not unwind must not hold up shutdown.
-                # asyncio.wait, not wait_for: on Python 3.10 a wait_for whose
-                # guarded future completes in the same instant the caller is
-                # cancelled returns the result from inside its CancelledError
-                # handler, and the caller never learns it was cancelled — the
-                # supervisor's watch loop resumed polling while Supervisor.stop()
-                # awaited it for ever. The tasks are already cancelled above, so
-                # there is nothing for wait_for's cancel-on-timeout to do that
-                # asyncio.wait does not.
-                _done, pending = await asyncio.wait(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
-                if pending:
+                # Each is asked again while it keeps running: on Python 3.10 and
+                # 3.11 a cancellation that lands inside a wait_for is discarded, and
+                # the broker and Home Assistant clients both wait that way, so one
+                # request can leave stop() waiting out the whole timeout.
+                # cancel_all_until_done never uses wait_for itself, for the same
+                # reason: a caller cancelled while waiting here still learns it was.
+                still_running = await cancel_all_until_done(
+                    others, timeout=self.TASK_SHUTDOWN_TIMEOUT
+                )
+                if still_running:
                     logger.warning(
                         "[%s] %d task(s) did not stop within %gs.",
                         self.name,
-                        len(pending),
+                        len(still_running),
                         self.TASK_SHUTDOWN_TIMEOUT,
                     )
-                for task in _done:
-                    if not task.cancelled():
-                        task.exception()  # retrieved, so the loop does not warn at GC
         # CancelledError is deliberately not caught. Swallowing it consumes the
         # caller's own cancellation: the supervisor's watch loop was cancelled
         # here while stopping an actor, never saw the error, resumed its poll
@@ -430,7 +554,11 @@ class Actor(ABC):
                 }
                 if msg.type not in _noise:
                     self.metrics.messages_processed += 1
-                await self._dispatch(msg)
+                self._handling_since = time.monotonic()
+                try:
+                    await self._dispatch(msg)
+                finally:
+                    self._handling_since = None
                 self._mailbox.task_done()
 
             except asyncio.TimeoutError:
@@ -577,6 +705,7 @@ class Actor(ABC):
             "task": self._current_task_description(),
             "protected": self.protected,
             "essential": self.essential,
+            "node": self._node,
         }
 
     def _build_metrics(self) -> dict:
@@ -603,6 +732,19 @@ class Actor(ABC):
             sup = self._registry._supervisor_ref
             if sup is not None:
                 sup.release(self.name)
+
+    def _leave_supervision(self) -> None:
+        """Tell the supervisor this actor is gone for good: deleted, or ended itself.
+
+        Stronger than :meth:`_release_from_supervision`, which keeps the entry so
+        a stopped actor can be supervised again when it starts. An actor that
+        will not come back needs no entry, and a kept one holds what the actor
+        was built from until the process exits.
+        """
+        if self._registry and hasattr(self._registry, "_supervisor_ref"):
+            sup = self._registry._supervisor_ref
+            if sup is not None:
+                sup.drop_supervised(self.name)
 
     def _resume_supervision(self) -> None:
         """Put this actor back under supervision after a deliberate stop.
@@ -646,7 +788,8 @@ class Actor(ABC):
             self._release_from_supervision()
             await self.stop()
         elif command == "delete":
-            self._release_from_supervision()
+            self._leave_supervision()
+            await self.delete_own_traces()
             if self._registry:
                 main = self._registry.find_by_name("main")
                 if main and hasattr(main, "_remove_from_spawn_registry"):
@@ -658,18 +801,27 @@ class Actor(ABC):
             return False
         return True
 
+    async def delete_own_traces(self) -> None:
+        """Run `on_delete`, never letting a failure in it stop the deletion."""
+        try:
+            await self.on_delete()
+        except Exception:
+            logger.exception("[%s] on_delete failed; deleting anyway", self.name)
+
     async def _command_listener(self):
         """Carry commands from agents/{id}/commands to :meth:`apply_command`.
 
         Transport only. Needed for actors a caller cannot reach in process —
         after the direct-dispatch change that means agents on remote nodes.
         """
-        try:
-            import aiomqtt  # pylint: disable=unused-import  # noqa: F401
-        except ImportError:
-            return
         # local: avoids core/__init__ import cycle
-        from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client, session_kwargs
+        from .mqtt import (
+            AGENT_SESSION_EXPIRY_SECONDS,
+            client_id,
+            mqtt_client,
+            reconnect_wait,
+            session_kwargs,
+        )
 
         topic = f"agents/{self.actor_id}/commands"
         # Same rule the subscription hub follows: only an identity that
@@ -681,6 +833,9 @@ class Actor(ABC):
         # connects as `wactorz-agent-<actor id>`, and two connections sharing an
         # id kick each other off the broker for ever.
         identifier = client_id("agent", str(self.actor_id), "commands")
+        # Whether the connection is known to be down, so it is said when it
+        # goes and when it comes back, not at every attempt in between.
+        down = False
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 async with mqtt_client(
@@ -693,6 +848,9 @@ class Actor(ABC):
                 ) as client:
                     await client.subscribe(topic, qos=1 if durable else 0)
                     logger.debug("[%s] Subscribed to %s", self.name, topic)
+                    if down:
+                        down = False
+                        logger.info("[%s] Listening for commands again.", self.name)
                     async for message in client.messages:
                         try:
                             data = json.loads(message.payload.decode())
@@ -708,9 +866,19 @@ class Actor(ABC):
                             logger.exception("[%s] Command parse error", self.name)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as exc:
                 if self.state not in (ActorState.STOPPED, ActorState.FAILED):
-                    await asyncio.sleep(5)
+                    if not down:
+                        down = True
+                        logger.warning(
+                            "[%s] Lost the broker connection it takes commands on (%s). A stop "
+                            "or delete sent over the broker will not reach it until it is "
+                            "back; trying again every %gs or so.",
+                            self.name,
+                            exc,
+                            RECONNECT_DELAY_S,
+                        )
+                    await asyncio.sleep(reconnect_wait(RECONNECT_DELAY_S))
 
     def _current_task_description(self) -> str:
         return "idle"  # Override in subclasses
@@ -730,9 +898,63 @@ class Actor(ABC):
         if self._registry:
             await self._registry.broadcast(self.actor_id, msg_type, payload)
 
-    async def receive(self, msg: Message):
-        """External entry point - put message in mailbox."""
-        await self._mailbox.put(msg)
+    @property
+    def handling_seconds(self) -> float:
+        """How long this actor has been on the message it is handling; 0 when idle.
+
+        The heartbeat is a task of its own and carries on whatever the message
+        loop is doing, so an actor waiting for ever on one message still looks
+        alive. This is what tells the two apart.
+        """
+        since = self._handling_since
+        return 0.0 if since is None else time.monotonic() - since
+
+    async def receive(self, msg: Message) -> bool:
+        """Put a message in this actor's mailbox. False if there was no room for it.
+
+        A mailbox with room takes the message at once. A full one means this
+        actor is not keeping up, and the sender is usually another actor in the
+        middle of handling a message of its own, so how long it may be held is
+        bounded: a notification is dropped on the spot, and anything else waits
+        ``MAILBOX_WAIT_S`` for room and is then refused. Either way the sender
+        is told, and can report that rather than hang.
+        """
+        if self.offer(msg):
+            return True
+        if msg.is_notification:
+            self._note_refused(msg, "dropped a notification")
+            return False
+        deadline = time.monotonic() + MAILBOX_WAIT_S
+        while time.monotonic() < deadline:
+            await asyncio.sleep(_MAILBOX_POLL_S)
+            if self.offer(msg):
+                return True
+        self._note_refused(msg, f"refused a message after waiting {MAILBOX_WAIT_S:g}s")
+        return False
+
+    def offer(self, msg: Message) -> bool:
+        """Put a message in the mailbox if it has room, without waiting. True if it did."""
+        try:
+            self._mailbox.put_nowait(msg)
+        except asyncio.QueueFull:
+            return False
+        return True
+
+    def _note_refused(self, msg: Message, what: str) -> None:
+        """Count a message the mailbox had no room for, and say so at a rate a log can carry."""
+        self.metrics.messages_refused += 1
+        refused = self.metrics.messages_refused
+        if refused == 1 or refused % 100 == 0:
+            logger.warning(
+                "[%s] Mailbox full at %d: %s (%s from %s; %d refused so far). The actor is "
+                "not keeping up with what it is sent, or is stuck on one message.",
+                self.name,
+                self._mailbox.maxsize,
+                what,
+                msg.type.value,
+                msg.sender_id[:8],
+                refused,
+            )
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
@@ -774,8 +996,19 @@ class Actor(ABC):
         if self._registry:
             await self._registry.register(child)
 
-        # Start the child
-        await child.start()
+        # Start the child. Registered already, so a start that fails or is
+        # cancelled must take it back out: nothing else holds it to stop, and
+        # supervision has not adopted it yet.
+        try:
+            await child.start()
+        except BaseException:
+            # Shielded, so a second cancellation cannot cut the cleanup short;
+            # it is still passed on once the cleanup is done.
+            try:
+                await asyncio.shield(self._discard_child(child))
+            except asyncio.CancelledError:
+                raise asyncio.CancelledError from None
+            raise
 
         # ── Erlang/OTP: register child under Supervisor so it's never an orphan ──
         # We reach into the registry to find the ActorSystem's supervisor.
@@ -783,7 +1016,7 @@ class Actor(ABC):
         try:
             if self._registry and hasattr(self._registry, "_supervisor_ref"):
                 supervisor = self._registry._supervisor_ref
-                if supervisor is not None and child.name not in supervisor._specs:
+                if supervisor is not None:
                     # Snapshot what the child was built from. The factory runs
                     # again on every restart, possibly much later, and must
                     # rebuild the child as it was rather than from whatever this
@@ -816,20 +1049,18 @@ class Actor(ABC):
                                 pass
                         return c
 
-                    supervisor.supervise(
+                    # Adopted as it runs, so the watch loop monitors it at once
+                    # without a redundant restart -- and re-armed if the name
+                    # was supervised before and released, or it would not be.
+                    supervisor.adopt(
                         child.name,
                         _child_factory,
+                        child,
                         strategy=SupervisorStrategy.ONE_FOR_ONE,
                         max_restarts=5,
                         restart_window=60.0,
                         restart_delay=2.0,
                     )
-                    # Point spec.actor at the already-running child so the watch loop
-                    # starts monitoring immediately without a redundant restart.
-                    supervisor._specs[child.name].actor = child
-                    if child.name not in supervisor._order:
-                        supervisor._order.append(child.name)
-                    child.supervisor_id = str(id(supervisor))
                     logger.info(
                         "[%s] Child '%s' auto-registered under Supervisor.", self.name, child.name
                     )
@@ -863,8 +1094,10 @@ class Actor(ABC):
     async def _save_persistent_state(self):
         """Save state to disk. Called on stop() after on_stop()."""
         if self._persistence_api is not None:
-            # New path: state is written per-key via persist(), nothing to batch-save.
-            # But keep pickle save for agent.state (arbitrary objects) backward compat.
+            # State is kept per key as persist() is called, and its file is
+            # written a moment later. A stop does not leave that to the moment:
+            # once it returns, the file holds what the agent last persisted.
+            self._persistence_api.flush()
             return
         # Legacy pickle path
         try:
@@ -974,9 +1207,19 @@ class Actor(ABC):
                     encoded = payload
                 else:
                     encoded = json.dumps(payload)
-                await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
+                user_properties = self._publish_properties(topic, encoded)
+                if user_properties:
+                    await self._mqtt_client.publish(
+                        topic, encoded, retain=retain, qos=qos, user_properties=user_properties
+                    )
+                else:
+                    await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
             except Exception as e:
                 logger.debug("[%s] MQTT publish failed: %s", self.name, e)
+
+    def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
+        """MQTT v5 user properties to send with ``encoded`` on ``topic``. None for most actors."""
+        return None
 
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
@@ -1070,6 +1313,22 @@ class Actor(ABC):
 
     async def on_stop(self):
         """Called when actor stops. Override for cleanup."""
+
+    async def on_delete(self):
+        """Called before the stop that ends a deletion. Override to remove what stop keeps.
+
+        A stop is expected to be undone later, so it keeps state; a delete
+        promises that no trace of the agent is left. The caller purges the
+        stores it knows about afterwards. This is for everything else the agent
+        owns: files of its own, and retained messages outside `agents/<id>/`.
+
+        It runs where an agent is deleted in this process: main's delete, the
+        actor's own `delete` command, and a factory reset forgetting it. A
+        node's runner does not call it. Its delete also drops the copy an agent
+        leaves behind when it migrates, and there the agent lives on elsewhere
+        under the same topics, so removing its retained messages would take
+        them from the copy that is running.
+        """
 
     @abstractmethod
     async def handle_message(self, msg: Message):

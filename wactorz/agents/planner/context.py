@@ -5,8 +5,6 @@ planner needs the MQTT topics and Home Assistant entity ids behind them, and
 the field names their payloads actually use.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -199,15 +197,25 @@ class ContextMixin(_Host):
         return sample_lines
 
 
+#: How many topics are listened to for a sample, and how many of them one
+#: agent may take: the wait is shared, so a few agents with many topics each
+#: must not crowd out the rest.
+SAMPLED_TOPICS = 10
+SAMPLED_PER_AGENT = 5
+
+
 def topics_worth_sampling(bus: Any) -> list[tuple[str, str]]:
-    """Up to ten distinct published topics, with the agent publishing each."""
+    """Distinct published topics to sample, each with the agent publishing it.
+
+    At most `SAMPLED_TOPICS` in all and `SAMPLED_PER_AGENT` from any one agent.
+    """
     topics: list[tuple[str, str]] = []
     for contract in bus.registry.all_contracts():
-        for topic in (contract.publishes or [])[:5]:
+        for topic in (contract.publishes or [])[:SAMPLED_PER_AGENT]:
+            if len(topics) >= SAMPLED_TOPICS:
+                return topics
             if not any(t == topic for t, _ in topics):
                 topics.append((topic, contract.name))
-        if len(topics) >= 10:
-            break
     return topics
 
 

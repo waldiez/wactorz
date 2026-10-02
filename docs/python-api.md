@@ -138,6 +138,12 @@ system.supervisor.supervise(
 await system.supervisor.start()
 ```
 
+A crashed actor is restarted after `restart_delay`, doubled with each crash in a row up to
+60 s. Once it stays up for `restart_window` the streak ends. After `max_restarts` crashes in a
+row, restarts slow down — 5 minutes, doubling up to an hour — and main is told; the actor is
+never given up on automatically. An actor counts as crashed when its state is `FAILED`, its
+heartbeat goes silent, or it logs ten errors within a minute.
+
 To intentionally stop an actor without triggering a restart, call
 `supervisor.release(name)` before stopping it — the same pattern used by
 `_handle_stop` and `_command_listener` internally.

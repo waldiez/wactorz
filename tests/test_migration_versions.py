@@ -12,8 +12,6 @@ paired state migration that threw is what lets failed state work be recorded as
 done and never retried.
 """
 
-from __future__ import annotations
-
 import json
 import sqlite3
 from collections.abc import Iterator

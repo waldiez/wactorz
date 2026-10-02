@@ -9,28 +9,51 @@ import asyncio
 import logging
 import signal
 import sys
+import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, Any, cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
-from wactorz import retention
+from wactorz import config, retention
 from wactorz.agents.lookup import find_main_actor
+from wactorz.broker_certificates import prepare_broker_files
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS
+from wactorz.core import cancellation
+from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.paths import ensure_state_dir
 from wactorz.dev_reload import start_reloader
 from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_setup import setup_logging
+from wactorz.monitoring.loop_lag import LoopLagMonitor
+from wactorz.web import runtime
 from wactorz.web.auth import exposure_refusal
+
+if TYPE_CHECKING:
+    from wactorz.core.registry import ActorSystem
 
 logger = logging.getLogger(__name__)
 
+#: Set as the shutdown sequence begins, so the signal handler stops asking the app
+#: task to stop once it is stopping. A threading.Event rather than an asyncio one:
+#: the Windows fallback runs the handler between bytecodes, outside the loop.
+_shutting_down = threading.Event()
+
+#: Watches the event loop from a thread, and says in the log where it is when it
+#: stops running.
+_loop_lag = LoopLagMonitor()
+
 
 async def _start_web_ui(
-    port: int, mqtt_broker: str, mqtt_port: int, actor_registry=None, persistence_db=None
+    port: int,
+    mqtt_broker: str,
+    mqtt_port: int,
+    actor_registry=None,
+    persistence_db=None,
+    system: "ActorSystem | None" = None,
 ) -> None:
     """Start the monitor web server as a quiet background asyncio task."""
-    from wactorz.web import runtime
     from wactorz.web.app import main as run_server
 
     runtime.MQTT_BROKER = mqtt_broker
@@ -40,13 +63,67 @@ async def _start_web_ui(
     # Wire the registry in so chat is routed directly
     if actor_registry is not None:
         runtime.set_registry(actor_registry)
+    if system is not None:
+        runtime.set_system(system)
     if persistence_db is not None:
         runtime.set_db(persistence_db)
 
     for _name in ("wactorz.web", "aiohttp.access", "aiohttp.server"):
         logging.getLogger(_name).setLevel(logging.WARNING)
 
-    asyncio.create_task(run_server())
+    runtime.server_task = asyncio.create_task(run_server(), name="monitor")
+
+
+#: How long shutdown waits for the monitor to stop, asking again as it goes. Well
+#: past its ordinary cleanup, which is closing the broker listener and the server.
+MONITOR_STOP_TIMEOUT_S = 10.0
+
+
+async def _stop_web_ui() -> None:
+    """Stop the monitor task this process started, if it started one.
+
+    Here rather than left to ``asyncio.run``, which cancels whatever is still
+    running once ``app()`` returns and then waits on it without a limit. On
+    Python 3.10 and 3.11 that one request can be lost inside the broker listener,
+    when it lands while a subscribe is completing, and the process then never
+    exits. :func:`cancel_until_done` asks again until the task has stopped.
+    """
+    task, runtime.server_task = runtime.server_task, None
+    if task is None:
+        return
+    if not await cancel_until_done(task, timeout=MONITOR_STOP_TIMEOUT_S):
+        logger.warning("[shutdown] The monitor did not stop within %gs.", MONITOR_STOP_TIMEOUT_S)
+
+
+#: How long shutdown waits for the tasks nothing else stopped, asking again as it goes.
+LEFTOVER_STOP_TIMEOUT_S = 10.0
+
+
+async def _stop_leftover_tasks() -> None:
+    """Stop every task still running, asking again for any that lose the request.
+
+    What ``asyncio.run`` does once ``app()`` returns, done here with
+    :func:`cancel_until_done` instead of a single cancellation and an open-ended
+    wait. A broker connection an agent opened and nothing closed, such as a topic
+    stream window, can lose that one request on Python 3.10 and 3.11 and hold the
+    process open.
+    """
+    current = asyncio.current_task()
+    await _stop_tasks([task for task in asyncio.all_tasks() if task is not current])
+
+
+async def _stop_tasks(
+    tasks: list[asyncio.Task[Any]], timeout: float = LEFTOVER_STOP_TIMEOUT_S
+) -> None:
+    """Stop `tasks` together, and name any that are still running at the end."""
+    stuck = await cancel_all_until_done(tasks, timeout=timeout)
+    if stuck:
+        logger.warning(
+            "[shutdown] %d task(s) did not stop within %gs: %s",
+            len(stuck),
+            timeout,
+            ", ".join(task.get_name() for task in stuck),
+        )
 
 
 def _print_ready_banner(port: int) -> None:
@@ -60,15 +137,24 @@ def _print_ready_banner(port: int) -> None:
     act on, and when the login ceremony lands it gains a one-time link — which
     must reach the terminal without also being written to the unrotated log file
     or shipped onward by a metrics exporter.
+
+    Behind Home Assistant's ingress there is no terminal. What is printed goes
+    into the add-on's log, which Home Assistant keeps and shows, and
+    ``localhost`` there is the inside of a container nobody browses to. So the
+    banner points at the panel, which signs the user in itself, and no sign-in
+    link is made at all.
     """
     from wactorz.web import login, static_site
 
-    lines = [f"Dashboard   http://localhost:{port}/"]
-    if static_site.DOCS_SITE.is_dir():
-        lines.append(f"Docs        http://localhost:{port}/docs/")
-    sign_in = login.sign_in_line(port)
-    if sign_in is not None:
-        lines.append(sign_in)
+    if config.INGRESS_ENABLED:
+        lines = ["Open Wactorz from the Home Assistant sidebar."]
+    else:
+        lines = [f"Dashboard   http://localhost:{port}/"]
+        if static_site.DOCS_SITE.is_dir():
+            lines.append(f"Docs        http://localhost:{port}/docs/")
+        sign_in = login.sign_in_line(port)
+        if sign_in is not None:
+            lines.append(sign_in)
     width = max(len(line) for line in lines) + 4
     print("\n    ┌" + "─" * width + "┐")
     for line in lines:
@@ -76,7 +162,9 @@ def _print_ready_banner(port: int) -> None:
     print("    └" + "─" * width + "┘\n", flush=True)
 
 
-async def build_system(args: argparse.Namespace):
+async def build_system(
+    args: argparse.Namespace, on_system: "Callable[[ActorSystem], object] | None" = None
+):
     from wactorz.agents.catalog_agent import CatalogAgent
     from wactorz.agents.home_assistant_agent import HomeAssistantAgent
     from wactorz.agents.home_assistant_map_agent import HomeAssistantMapAgent
@@ -148,6 +236,10 @@ async def build_system(args: argparse.Namespace):
         mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
         state_dir=_sd,
     )
+    if on_system is not None:
+        # Handed over before anything is started on it, so a stop that arrives
+        # part-way through startup can still stop whatever had started by then.
+        on_system(system)
     # MQTT client must exist before factories run so injected actors can publish
     system._mqtt_client = await MQTTPublisher.create(
         args.mqtt_broker or CONFIG.mqtt_host,
@@ -304,6 +396,7 @@ async def build_system(args: argparse.Namespace):
             mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
             actor_registry=system.registry,
             persistence_db=_db,
+            system=system,
         )
 
     # After the stores exist and before the agents that write to them: the
@@ -345,6 +438,21 @@ def _install_signal_handlers() -> None:
         return
     loop = asyncio.get_running_loop()
     stopping = False
+    _shutting_down.clear()
+
+    def _keep_asking() -> None:
+        """Cancel the app task, and ask again later until its shutdown has begun.
+
+        One request is not always enough. On Python 3.10 and 3.11 a cancellation
+        that lands while startup is inside a wait_for is discarded — the broker and
+        Home Assistant clients both wait that way — and startup then carries on as
+        though nothing had asked it to stop. A timer rather than a task, so the
+        shutdown's own sweep of leftover tasks has nothing of this to cancel.
+        """
+        if task.done() or _shutting_down.is_set():
+            return
+        task.cancel()
+        loop.call_later(cancellation.RECANCEL_AFTER_S, _keep_asking)
 
     def _request_stop(*_: object) -> None:
         nonlocal stopping
@@ -353,7 +461,7 @@ def _install_signal_handlers() -> None:
             return
         stopping = True
         logger.info("Shutdown signal received — stopping actors.")
-        loop.call_soon_threadsafe(task.cancel)
+        loop.call_soon_threadsafe(_keep_asking)
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -362,19 +470,72 @@ def _install_signal_handlers() -> None:
             signal.signal(sig, _request_stop)
 
 
+async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any]:
+    """Build the system, and stop what had started if startup does not finish.
+
+    A stop requested during startup arrives as a cancellation inside build_system,
+    before app() reaches the try whose finally shuts down. Left there, the agents
+    that had started would never be stopped, so their state would not be written,
+    and everything still running would get asyncio.run's single cancellation —
+    the one a lost request on Python 3.10 and 3.11 turns into a hang.
+    """
+    started: list[ActorSystem] = []
+    try:
+        return await build_system(args, on_system=started.append)
+    except BaseException:
+        await _shut_down(started[0] if started else None)
+        raise
+
+
+async def _shut_down(system: "ActorSystem | None") -> None:
+    """Stop everything, in the order that keeps state intact.
+
+    Shared by both ways out: a stop once the system is running, and one that
+    arrives part-way through startup, when some of it never started. Each step
+    copes with what did not.
+    """
+    # First of all, before anything is awaited: from here on the signal handler
+    # stops asking, so a repeated request never lands inside the shutdown itself.
+    _shutting_down.set()
+    from wactorz.core.persistence import close_persistence, maintenance
+
+    # First: a scheduled job holds the connection lock while it runs, and the
+    # actors below are about to want it to write their state out.
+    await maintenance.stop()
+    if system is not None:
+        await system.stop_all()
+    # After the agents, so the dashboard still hears them stop, and before the
+    # database closes, because the monitor's broker listener writes chat to it.
+    await _stop_web_ui()
+    # Then the database: actors write state as they stop, so the connection has to
+    # outlive them. Closing checkpoints the WAL rather than leaving -wal/-shm
+    # behind for the next start to recover.
+    close_persistence()
+    _loop_lag.stop()
+    # Last, rather than left to asyncio.run: see _stop_leftover_tasks.
+    await _stop_leftover_tasks()
+
+
 async def app(args: argparse.Namespace):
     # First, so both cover startup as well as steady state. setup_logging builds
     # the handlers with redaction already attached, so no record reaches an
     # unfiltered console or log file.
     setup_logging()
     install_log_buffer()
+    # From the start, so a startup step that blocks the loop is named too.
+    _loop_lag.start()
 
     # Before anything binds, and at the *process* root rather than in one
     # server's startup. Three servers read `CONFIG.bind_host` — the monitor, the
     # REST API and the WhatsApp webhook — so a check that lived in the monitor
     # alone left the REST interface serving chat and lifecycle commands to the
     # network in exactly the configuration this refusal exists to stop.
-    refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key)
+    #
+    # What a broker of ours reads is written here as well -- its TLS certificate,
+    # and the node accounts when those are on -- before the first connection. A CA
+    # that cannot be loaded refuses the same way: it would fail every reconnect
+    # after this one too.
+    refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key) or prepare_broker_files()
     if refusal:
         logger.error("[startup] %s", refusal)
         raise SystemExit(1)
@@ -384,9 +545,7 @@ async def app(args: argparse.Namespace):
 
     _install_signal_handlers()
 
-    system, main_actor, _db = await build_system(args)
-
-    from wactorz.core.persistence import close_persistence
+    system, main_actor, _db = await _build_system_or_stop(args)
 
     if not getattr(args, "no_monitor", False):
         _print_ready_banner(args.monitor_port)
@@ -427,7 +586,7 @@ async def app(args: argparse.Namespace):
                 await asyncio.gather(system.run_forever(), *_run_all(companions))
         elif interface == "rest":
             port = args.port or CONFIG.port
-            iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key)
+            iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key, system=system)
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
         elif interface == "discord":
             discord_token = args.discord_token or CONFIG.discord_token
@@ -466,13 +625,4 @@ async def app(args: argparse.Namespace):
     except Exception:
         logger.exception("System error")
     finally:
-        # First: a scheduled job holds the connection lock while it runs, and
-        # the actors below are about to want it to write their state out.
-        from wactorz.core.persistence import maintenance
-
-        await maintenance.stop()
-        await system.stop_all()
-        # Last: actors write state as they stop, so the connection has to outlive
-        # them. Closing checkpoints the WAL rather than leaving -wal/-shm behind
-        # for the next start to recover.
-        close_persistence()
+        await _shut_down(system)

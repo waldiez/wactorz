@@ -2,7 +2,6 @@
 Supports Anthropic Claude, OpenAI, Ollama (local), and custom providers.
 """
 
-import asyncio
 import logging
 import time
 from collections.abc import AsyncGenerator
@@ -98,7 +97,7 @@ class LLMAgent(Actor):
         return self._now_context() + "\n" + self.system_prompt
 
     async def on_start(self):
-        _ = asyncio.create_task(refresh_pricing())
+        self.run_detached(refresh_pricing(), name="refresh-pricing")
         # Restore conversation history and rolling summary from persistence
         saved = self.recall("conversation_history", [])
         clean = []

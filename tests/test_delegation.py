@@ -382,3 +382,20 @@ class TestTheReplyTopic:
                 seen.append(topic)
 
         assert len(set(seen)) == 3
+
+
+class TestAnAgentThatCannotTakeTheTask:
+    async def test_no_answer_is_waited_for(self) -> None:
+        # Its mailbox had no room, so nothing will reply. The same answer as an
+        # agent that stays silent, without waiting the timeout out.
+        main = _Main(running=("weather",))
+
+        async def _refused(actor_id: str, kind: Any, payload: dict[str, Any]) -> bool:
+            return False
+
+        setattr(main.actor, "send", _refused)
+
+        result = await asyncio.wait_for(main.delegate("weather", timeout=600), timeout=5)
+
+        assert result is None
+        assert main.actor._result_futures == {}

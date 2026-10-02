@@ -21,6 +21,7 @@
 
 <p align="center">
 <a href="https://github.com/waldiez/wactorz/actions/workflows/ci.yml"><img src="https://github.com/waldiez/wactorz/actions/workflows/ci.yml/badge.svg" alt="CI"/></a>
+<a href="https://coveralls.io/github/waldiez/wactorz"><img src="https://coveralls.io/repos/github/waldiez/wactorz/badge.svg" alt="Coverage"/></a>
 <a href="https://pypi.org/project/wactorz/"><img src="https://img.shields.io/pypi/v/wactorz.svg" alt="PyPI"/></a>
 <a href="https://github.com/waldiez/wactorz/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"/></a>
 <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python"/></a>
@@ -100,7 +101,7 @@ Dashboard: `http://localhost:8888`.
 
 > [!IMPORTANT]
 > Wactorz binds to `127.0.0.1` by default and its agents execute code. **Set `API_KEY`
-> before exposing it beyond loopback** — it warns at startup if you expose it without
+> before exposing it beyond loopback** — it refuses to start if you expose it without
 > one. See [Security](#security) before deploying anywhere shared.
 
 If you'd rather skip the clone, [pull the image from Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html). To run without an API key, use Ollama:
@@ -244,8 +245,9 @@ See [docs/evaluation.md](docs/evaluation.md) for the benchmark format and metric
   handshake, the Prometheus scrape, and the login flow are authenticated — constant-time
   comparison, session cookies that survive a restart, and sign-in throttling.
 - **The server binds to `127.0.0.1`.** Reaching it from the network is deliberate: set
-  `WACTORZ_BIND_HOST` *and* `WACTORZ_EXPOSED_OK=1`. Startup warns if it is exposed
-  without a key, or with a guessable one.
+  `WACTORZ_BIND_HOST`, and startup refuses unless `API_KEY` is set too, or
+  `WACTORZ_EXPOSED_OK=1` says the only way in is already authenticated. A key short
+  enough to guess is warned about.
 - **The broker requires credentials.** Anonymous MQTT is off, and remote nodes are given
   credentials rather than connecting openly.
 - Origin and Host allow-lists guard the HTTP surface and the WebSocket handshake against

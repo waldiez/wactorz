@@ -264,9 +264,9 @@ class TestTheOutbox:
 
     async def test_zero_keeps_every_message(self, tmp_path: Path) -> None:
         pub = self._publisher(tmp_path, days=0)
-        self._stored(tmp_path, "nodes/pi/spawn", 4000)
+        self._stored(tmp_path, "custom/x", 4000)
 
         pub._expire()
 
-        assert self._replayed(pub) == ["nodes/pi/spawn"]
+        assert self._replayed(pub) == ["custom/x"]
         pub._close_db()

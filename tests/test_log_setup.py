@@ -297,3 +297,39 @@ class TestTheFormat:
         assert isinstance(handler, logging.StreamHandler)
         assert isinstance(handler.formatter, log_setup.JsonFormatter)
         assert asked["level"] == logging.WARNING
+
+
+def _as_a_process_that_has_configured_nothing() -> None:
+    """Take the test runner's own handlers off the root logger.
+
+    It hangs them there for the length of each test's call, after any fixture
+    has run, and a set-up that finds handlers on the root logger adds none.
+    """
+    logging.getLogger().handlers = []
+
+
+class TestANodesConsole:
+    """A node logs to its console alone, through a set-up of its own."""
+
+    def test_it_redacts_as_the_servers_does(self) -> None:
+        _as_a_process_that_has_configured_nothing()
+
+        log_setup.setup_console_logging()
+
+        (console,) = logging.getLogger().handlers
+        assert isinstance(console, logging.StreamHandler)
+        assert any(isinstance(f, SecretRedactingFilter) for f in console.filters)
+
+    def test_a_password_an_agent_logs_does_not_reach_it(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        _as_a_process_that_has_configured_nothing()
+        log_setup.setup_console_logging()
+
+        logging.getLogger("wactorz.node.test").warning("connecting with MQTT_PASSWORD=hunter2-x9")
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+
+        written = capsys.readouterr().err
+        assert "MQTT_PASSWORD=" in written
+        assert "hunter2-x9" not in written

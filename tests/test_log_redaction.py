@@ -160,6 +160,41 @@ class TestDictRepr:
         assert "22" in out
 
 
+class TestKeysRecognisedByTheirShape:
+    """A key in a log line with no name beside it to find it by.
+
+    Each is put together here from its parts, so that no line of this file holds
+    something a scanner for committed secrets would take for one.
+    """
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "AIza" + "Sy0" * 11 + "ab",
+            "nvapi-" + "Zx9_" * 12,
+            "M" + "TA4" * 8 + "." + "GhIjKl" + "." + "aB3" * 9,
+        ],
+        ids=["a Google API key", "an NVIDIA API key", "a Discord bot token"],
+    )
+    def test_it_is_redacted_wherever_it_appears(self, key: str) -> None:
+        out = scrub(f"request failed for {key} with status 401")
+
+        assert key not in out
+        assert out == f"request failed for {REDACTED} with status 401"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "AIza is how a Google key starts",
+            "nvapi-short",
+            "wactorz.agents.main.migration: [main] Subscribed to state_return topics.",
+            "Module.attribute.method_with_a_long_name_that_goes_on_and_on()",
+        ],
+    )
+    def test_what_only_resembles_one_is_left_alone(self, line: str) -> None:
+        assert scrub(line) == line
+
+
 class TestLeavesOrdinaryLinesAlone:
     @pytest.mark.parametrize(
         "line",

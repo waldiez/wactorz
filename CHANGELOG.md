@@ -59,6 +59,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A node's log is redacted like the server's.** A node is handed a broker password and a signing key and runs agent code that logs what it likes, and its console went to its journal or its log file as written. It now goes through the same redaction as the server's log. The redaction also recognises three more keys by their shape, with no name beside them: Google API keys, NVIDIA API keys and Discord bot tokens.
+
+- **An unsigned request can no longer use up a node's own.** Main remembers which model requests from nodes it has answered, so that a redelivered one is not paid for twice. It remembered a request before it had checked who sent it, so anything on the broker could send an unsigned one naming a node's reply topic and have the node's real request for that topic dropped as a repeat. A request is now remembered only once it is one main will answer.
+
+- **A message to an agent on a node while the broker is down is logged as the outage it is.** The user was told the agent could not be reached, which is right, and the server logged an error with a traceback, as for a fault of its own. It is now a warning with the reason, like every other line an outage produces.
+
+- **`MONITOR_PORT` and `WS_PORT` give one answer.** The command line read `MONITOR_PORT` and fell back to `WS_PORT`; the configuration read only `WS_PORT`. Both now read `MONITOR_PORT`, then `WS_PORT`, then 8888.
+
+- **Starting no longer holds the event loop while a model SDK is imported.** On a small machine with a cold disk the first import of a provider's SDK took seconds, on the loop, and every start logged a warning with a stack for it. The provider is now built in a thread.
+
+- **The deploy reply's two sentences are on two lines**: "...while packages install on the remote machine)" ran straight into "[OK] Node ... is live".
+
 - **Closing a dashboard tab no longer logs an error.** When a browser left while the server was writing a large frame to it, the server cancelled its writer in the middle of that write. The write of a compressed frame runs in a task of the socket's own that a cancellation does not reach: it went on alone, failed against the closing socket, and was logged by the event loop as an error with a traceback. A frame that is being written is now given a moment to end before the writer is stopped, and a write that fails because the client has gone is not reported.
 
 - **An agent's replies are no longer shown twice after it is moved or comes back.** The dashboard fetches an agent's chat history again when the agent goes and reappears under its name, which is what moving it to another machine does. It reconciled the user's own messages with their stored copies and not the agent's replies, so every reply already on screen appeared a second time. Replies are now paired with their stored copies the same way.

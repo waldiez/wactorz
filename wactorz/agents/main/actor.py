@@ -1232,7 +1232,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         yield (
             f"[deploy] Deploying to {target.user}@{host} as node '{node_name}'...\n"
-            f"(This may take 20-60 seconds while packages install on the remote machine)"
+            f"(This may take 20-60 seconds while packages install on the remote machine)\n"
         )
         try:
             result = await self.delegate_to_installer(

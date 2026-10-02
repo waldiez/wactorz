@@ -194,9 +194,6 @@ class LLMBridge:
         if reply_topic in self._answered:
             logger.info("[main] LLM bridge: ignoring a redelivered request for %s", reply_topic)
             return
-        self._answered[reply_topic] = None
-        while len(self._answered) > ANSWERED_MEMORY:
-            self._answered.popitem(last=False)
 
         if not request_signed_for(data, node_name):
             if NODE_SIGNING == "enforce":
@@ -210,6 +207,14 @@ class LLMBridge:
                 await self.host._mqtt_publish(reply_topic, {"text": REFUSED_UNSIGNED})
                 return
             self._warn_unsigned(node_name, agent_name)
+
+        # Remembered only now that the request is one this bridge will answer.
+        # Remembered before the signature was read, a request anyone could send
+        # -- unsigned, naming a reply topic it had seen or guessed -- would have
+        # the node's own request for that topic taken for its repeat.
+        self._answered[reply_topic] = None
+        while len(self._answered) > ANSWERED_MEMORY:
+            self._answered.popitem(last=False)
 
         logger.info("[main] LLM bridge: request from %r on %r", agent_name, node_name)
 

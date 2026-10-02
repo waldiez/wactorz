@@ -88,10 +88,17 @@ _TELEGRAM_BOT_TOKEN = re.compile(r"(/bot)(\d{3,15}:[A-Za-z0-9_\-]{20,128})")
 # Home Assistant's long-lived access tokens take this form.
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_\-]{5,2048}\.eyJ[A-Za-z0-9_\-]{5,4096}\.[A-Za-z0-9_\-]{5,1024}")
 # API keys whose prefix says what they are: OpenAI and Anthropic (`sk-`), GitHub
-# (`ghp_`, `gho_`, `ghs_`, `github_pat_`) and Slack (`xoxb-` and its siblings).
+# (`ghp_`, `gho_`, `ghs_`, `github_pat_`), Slack (`xoxb-` and its siblings),
+# Google (`AIza`, for Gemini among others) and NVIDIA (`nvapi-`).
 _PREFIXED_KEY = re.compile(
     r"\b(?:sk-[A-Za-z0-9_\-]{20,256}|gh[pousr]_[A-Za-z0-9]{30,255}"
-    r"|github_pat_[A-Za-z0-9_]{30,255}|xox[abprs]-[A-Za-z0-9\-]{10,255})"
+    r"|github_pat_[A-Za-z0-9_]{30,255}|xox[abprs]-[A-Za-z0-9\-]{10,255}"
+    r"|AIza[A-Za-z0-9_\-]{35}|nvapi-[A-Za-z0-9_\-]{20,256})"
+)
+# A Discord bot token: the bot's id in base64, a timestamp and a signature, with
+# a dot between each. The id is digits, so its encoding starts with M, N or O.
+_DISCORD_BOT_TOKEN = re.compile(
+    r"\b[MNO][A-Za-z0-9_\-]{23,27}\.[A-Za-z0-9_\-]{6,7}\.[A-Za-z0-9_\-]{27,45}"
 )
 
 
@@ -131,6 +138,7 @@ def redact(text: str) -> str:
     text = _TELEGRAM_BOT_TOKEN.sub(rf"\1{REDACTED}", text)
     text = _JWT.sub(REDACTED, text)
     text = _PREFIXED_KEY.sub(REDACTED, text)
+    text = _DISCORD_BOT_TOKEN.sub(REDACTED, text)
     text = _DICT_ITEM.sub(rf"\1\2{REDACTED}\4", text)
     text = _DICT_ITEM_OPEN.sub(rf"\1\2{REDACTED}", text)
     text = _AUTH_SCHEME.sub(rf"\1\2{REDACTED}", text)

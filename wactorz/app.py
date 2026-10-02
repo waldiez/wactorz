@@ -186,7 +186,10 @@ async def build_system(
         "gemini": args.gemini_model,
     }.get(llm)
     try:
-        provider = create_provider(llm, model_flag)
+        # In a thread: building a provider imports its SDK, which on a small
+        # machine with a cold disk takes seconds, and nothing else of the
+        # start-up has to wait behind it.
+        provider = await asyncio.to_thread(create_provider, llm, model_flag)
     except ValueError:
         provider = None
     if provider is None:

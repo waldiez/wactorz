@@ -75,6 +75,9 @@ def setup_console_logging(level: int = logging.INFO) -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(formatter())
     logging.basicConfig(level=level, handlers=[handler])
+    # A node is handed a broker password and a signing key, and runs agent
+    # code that logs what it likes: its console is read like the server's.
+    install_redaction()
 
 
 # 50 MB across all files. The log used to grow without bound, which on a

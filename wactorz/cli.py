@@ -6,7 +6,6 @@ System assembly and the run loop live in :mod:`wactorz.app`; the dev reloader in
 
 import argparse
 import asyncio
-import os
 import sys
 
 # pylint: disable=unused-import
@@ -45,7 +44,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         "--monitor-port",
         type=int,
-        default=int(os.getenv("MONITOR_PORT", str(CONFIG.ws_port))),
+        default=CONFIG.ws_port,
         help="Port for the background web UI / monitor server (default: 8888)",
     )
     parser.add_argument(

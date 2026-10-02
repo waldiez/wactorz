@@ -15,6 +15,7 @@ import hashlib
 import logging
 import os
 import stat
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -472,3 +473,21 @@ class TestExportingForABrokerOfOurs:
         written = logins.read_text(encoding="utf-8")
         assert "username: rpi-garage" in written
         assert "rpi kitchen" not in written
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows has no such file modes")
+    def test_the_logins_are_readable_by_their_owner_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Password hashes: for whoever administers the broker, not for every
+        # account on the machine.
+        logins = tmp_path / "share" / "mosquitto-logins.yaml"
+        self._configure(
+            monkeypatch,
+            tmp_path,
+            node_accounts=True,
+            deploy_targets=(DeployTarget(name="rpi-garage"),),
+        )
+
+        broker_certificates.main(["--dir", str(tmp_path / "tls"), "--logins", str(logins)])
+
+        assert stat.S_IMODE(logins.stat().st_mode) == 0o600

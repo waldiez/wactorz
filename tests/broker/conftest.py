@@ -19,7 +19,7 @@ import pytest
 
 from wactorz.agents.lookup import find_main_actor
 from wactorz.agents.main.actor import MainActor
-from wactorz.core import node_signing
+from wactorz.core import node_signing, persistence
 from wactorz.core.cancellation import cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.registry import ActorSystem
@@ -64,16 +64,27 @@ def broker_fixture() -> tuple[str, int]:
 async def main_fixture(
     broker: tuple[str, int], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[MainActor]:
-    """A started main, on its own state directory, publishing through the real publisher."""
+    """A started main, on its own state directory, publishing through the real publisher.
+
+    With the database and the store the server gives it, which the agents it
+    spawns inherit: what an agent keeps is read from there when it is moved.
+    """
     host, port = broker
     state = tmp_path / "main"
     state.mkdir()
     monkeypatch.setenv("WACTORZ_STATE_DIR", str(state))
     system = ActorSystem(mqtt_broker=host, mqtt_port=port, state_dir=str(state))
     system._mqtt_client = await MQTTPublisher.create(host, port, db_path=state / "mqtt_outbox.db")
-    system.supervisor.supervise(
-        "main", lambda: MainActor(llm_provider=None, name="main", persistence_dir=str(state))
+    db, pickles = persistence.init_persistence(
+        db_path=state / "wactorz.db", state_dir=str(state), run_migration=False
     )
+
+    def _main() -> MainActor:
+        actor = MainActor(llm_provider=None, name="main", persistence_dir=str(state))
+        actor._persistence_api = persistence.PersistenceAPI(db, pickles, actor.name)
+        return actor
+
+    system.supervisor.supervise("main", _main)
     await system.supervisor.start()
     main = find_main_actor(system.registry)
     assert main is not None
@@ -81,6 +92,7 @@ async def main_fixture(
         yield main
     finally:
         await system.stop_all()
+        persistence.close_persistence()
 
 
 @pytest.fixture(name="node")

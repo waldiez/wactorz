@@ -245,6 +245,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         nodes = account_nodes()
         args.logins.parent.mkdir(parents=True, exist_ok=True)
         args.logins.write_text(broker_accounts.home_assistant_logins(nodes), encoding="utf-8")
+        # Password hashes, for whoever administers the broker and nobody else
+        # with an account on the machine.
+        args.logins.chmod(0o600)
     return 0
 
 

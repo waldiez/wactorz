@@ -78,6 +78,16 @@ def _api_key() -> str:
         return ""
 
 
+def _dashboard_port() -> int:
+    """The port the dashboard is served on, from either of the names it has had.
+
+    ``MONITOR_PORT`` is the one the documentation and the compose files use.
+    ``WS_PORT`` is the older one, read when the other is unset, so a setup that
+    only ever set that keeps its port.
+    """
+    return _env_int("MONITOR_PORT", _env_int("WS_PORT", 8888))
+
+
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None:
@@ -575,7 +585,7 @@ CONFIG = AppConfig(
     discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
-    ws_port=_env_int("WS_PORT", 8888),
+    ws_port=_dashboard_port(),
     nim_api_key=os.getenv("NIM_API_KEY", ""),
     nvidia_api_key=os.getenv("NVIDIA_API_KEY", ""),
     twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),

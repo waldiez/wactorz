@@ -228,3 +228,54 @@ def test_an_install_with_no_nodes_is_not_warned_about_node_accounts(addon: str) 
     guard = script.rindex('if [ -n "$DEPLOY_TARGETS" ]; then', 0, warning)
 
     assert script[guard:warning].count("\n") == 1, "the warning is the guarded statement"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="runs a function of the start script through bash, which Windows lacks",
+)
+@pytest.mark.parametrize("addon", ADDONS)
+class TestAccountWarningsReachTheLog:
+    """The step that writes the node accounts succeeds while leaving a node out.
+
+    Its output is kept by the start script, and was shown only when the step
+    failed: a deploy target left out for its name was never mentioned until a
+    deploy refused it.
+    """
+
+    @staticmethod
+    def _run(addon: str, output: str) -> list[str]:
+        script = _addon(addon, "run.sh")
+        start = script.index("say_account_warnings() {")
+        function = script[start : script.index("\n}\n", start) + 3]
+        harness = (
+            'bashio::log.warning() { echo "WARNING $*"; }\n'
+            + function
+            + 'say_account_warnings "$1"\n'
+        )
+        done = subprocess.run(  # a fragment of this repository's script
+            ["bash", "-c", harness, "--", output],  # bash is found on PATH on purpose
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return done.stdout.splitlines()
+
+    def test_what_it_said_about_the_accounts_is_passed_on(self, addon: str) -> None:
+        output = (
+            "[mqtt-tls] Issuing the broker certificate: there is none\n"
+            "[mqtt-accounts] Node name 'rpi kitchen' contains ' '. Until then it has no broker account.\n"
+        )
+
+        (line,) = self._run(addon, output)
+
+        assert line.startswith("WARNING [mqtt-accounts] Node name 'rpi kitchen'")
+
+    def test_with_nothing_to_say_nothing_is_said_and_the_script_goes_on(self, addon: str) -> None:
+        assert self._run(addon, "[mqtt-tls] Issuing the broker certificate: there is none\n") == []
+
+    def test_it_is_asked_after_both_steps_that_write_accounts(self, addon: str) -> None:
+        script = _addon(addon, "run.sh")
+
+        assert 'say_account_warnings "$mqtt_tls_log"' in script
+        assert 'say_account_warnings "$logins_log"' in script

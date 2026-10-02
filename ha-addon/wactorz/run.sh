@@ -314,11 +314,21 @@ export WACTORZ_BROKER_ACCOUNTS
 # again only when it nears expiry or stops naming the broker's addresses; the CA
 # stays, so deployed nodes keep trusting it. Never fatal: without a certificate
 # every broker serves plain MQTT on 1883, as before.
+# What the step below had to say about the node accounts, when it succeeded: a
+# deploy target whose name cannot be a broker account is left out, and this is
+# where its owner hears of it before a deploy refuses it.
+say_account_warnings() {
+    printf '%s\n' "$1" | grep -F '[mqtt-accounts]' | while IFS= read -r line; do
+        bashio::log.warning "$line"
+    done || true
+}
+
 MQTT_BROKER_FILES=/tmp/mosquitto-tls
 mqtt_tls_ready=false
 if mqtt_tls_log=$(python3 -m wactorz.broker_certificates --export "$MQTT_BROKER_FILES" 2>&1); then
     mqtt_tls_ready=true
     bashio::log.info "Broker TLS certificate ready (CA: ${WACTORZ_STATE_DIR}/mqtt_tls/ca.crt)."
+    say_account_warnings "$mqtt_tls_log"
 else
     bashio::log.warning "Could not issue the broker TLS certificate; brokers serve plain MQTT only. ${mqtt_tls_log}"
 fi
@@ -343,6 +353,7 @@ fi
 if [ "$WACTORZ_NODE_ACCOUNTS" = "true" ] && [ "$MOSQUITTO_EMBEDDED" != "true" ] && [ -d /share ] && [ -w /share ]; then
     if logins_log=$(python3 -m wactorz.broker_certificates --logins /share/wactorz/mosquitto-logins.yaml 2>&1); then
         bashio::log.info "Wrote /share/wactorz/mosquitto-logins.yaml. Paste its logins: entries into the Mosquitto add-on's configuration, keeping any already there, and restart it."
+        say_account_warnings "$logins_log"
     else
         bashio::log.warning "Could not write the node accounts for the Mosquitto add-on. ${logins_log}"
     fi

@@ -52,12 +52,14 @@ def _install(site: Path, origin: dict | None, wheel: str | None = None) -> None:
     for name, text in files.items():
         path = site / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        # As bytes: written as text, a line ending becomes the platform's own,
+        # and an installed file is whatever the wheel held.
+        path.write_bytes(text.encode("utf-8"))
     # As an installer records them: the files, the command it generated beside
     # the environment, and the record itself.
     recorded = [*files, "../../bin/demo-node", "demo-1.2.3.dist-info/RECORD"]
-    (site / "demo-1.2.3.dist-info" / "RECORD").write_text(
-        "".join(f"{name},,\n" for name in recorded), encoding="utf-8"
+    (site / "demo-1.2.3.dist-info" / "RECORD").write_bytes(
+        "".join(f"{name},,\n" for name in recorded).encode("utf-8")
     )
 
 

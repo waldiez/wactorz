@@ -400,6 +400,16 @@ def test_the_checks_run_before_the_node_environment_is_written() -> None:
     assert account < env
 
 
+def test_the_node_environment_is_written_after_the_install() -> None:
+    # A node already deployed reads it at its next restart. Written before a
+    # step that can fail, it sends that restart to a server the node never
+    # finished being deployed from.
+    source = inspect.getsource(InstallerAgent._node_deploy)
+    env = source.index("_put_node_env(")
+    assert source.index("_node_runtime(") < env
+    assert env < source.index("pkill")
+
+
 def test_the_heartbeat_wait_runs_after_the_node_starts() -> None:
     source = inspect.getsource(InstallerAgent._node_deploy)
     assert source.index("node_service.install") < source.index("_await_first_heartbeat")

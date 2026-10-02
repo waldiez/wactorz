@@ -1117,8 +1117,8 @@ DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
 1. Use the configured host (or resolve `rpi-kitchen.local` over mDNS if no host is set)
 2. Verify the SSH host key, recording it on first contact
 3. Check from the Pi that the broker's port answers, and from the server that the broker accepts the account the Pi will use
-4. Write the node's environment (broker, credentials, signing key) to `~/wactorz/.env`
-5. Install `wactorz`, at main's own version, into a venv on the Pi
+4. Install `wactorz`, at main's own version, into a venv on the Pi
+5. Write the node's environment (broker, credentials, signing key) to `~/wactorz/.env`
 6. Start it under a systemd unit, so it survives a reboot
 7. Wait for the node's first heartbeat; a node that sends none fails the deploy with the last lines of its log
 

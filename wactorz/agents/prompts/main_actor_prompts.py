@@ -657,8 +657,8 @@ Example:
   })
 
   This will:
-    1. Write the node's environment (broker, credentials, signing key) to ~/wactorz/.env
-    2. Install wactorz at this machine's version into a venv on the node
+    1. Install wactorz at this machine's version into a venv on the node
+    2. Write the node's environment (broker, credentials, signing key) to ~/wactorz/.env
     3. Start it under a systemd unit, so it survives a reboot
     4. Wait for the node's first heartbeat; a node that sends none fails the deploy
 

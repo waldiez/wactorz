@@ -624,6 +624,102 @@ class TestNodeDeploy:
         assert "wactorz" in result["error"]
         assert not any("pkill" in c for c in conn.commands), "the node was left half-deployed"
 
+    @pytest.mark.parametrize("stops_at", ["the broker account", "the venv", "the install"])
+    async def test_a_deploy_that_stops_early_leaves_a_running_node_as_it_was(
+        self,
+        installer: InstallerAgent,
+        conn: _Conn,
+        monkeypatch: pytest.MonkeyPatch,
+        stops_at: str,
+    ) -> None:
+        # The node already there is running, and reads its environment and its
+        # CA when it next restarts. Replaced by a deploy that then fails, they
+        # take that restart to the broker of a server the node was never
+        # deployed from.
+        self._target(monkeypatch, installer)
+        if stops_at == "the venv":
+            conn.answers = {
+                "test -x": (False, ""),
+                "python3 -m venv": (False, "ensurepip is not available"),
+            }
+        written: list[str] = []
+
+        async def _tls(*_args: Any) -> NodeTls:
+            return NodeTls(enabled=True, port=8883, ca="/home/pi/wactorz/mqtt-ca.crt")
+
+        async def _env(*_args: Any) -> bool:
+            written.append("env")
+            return True
+
+        async def _no_install(*_args: Any, **_kw: Any) -> bool:
+            return False
+
+        async def _account(*_args: Any) -> None:
+            if stops_at == "the broker account":
+                raise PermissionError("the broker refused the account")
+
+        monkeypatch.setattr(installer, "_decide_node_tls", _tls)
+        monkeypatch.setattr(installer, "_check_node_account", _account)
+        monkeypatch.setattr(installer, "_put_node_env", _env)
+        monkeypatch.setattr(installer, "_install_wactorz", _no_install)
+
+        result = await installer._node_deploy({"host": "10.0.0.5", "node_name": "rpi"})
+
+        assert result["success"] is False
+        if stops_at == "the broker account":
+            assert "the broker refused the account" in result["error"]
+        assert written == [], "the environment the running node restarts with was replaced"
+        assert not any(c.startswith("mv -f") for c in conn.commands)
+        assert any(
+            c.startswith("rm -f") and installer_agent.NOT_YET_IN_USE in c for c in conn.commands
+        ), "the uploaded CA is not left behind"
+
+    async def test_the_environment_and_the_ca_go_in_once_the_install_has_succeeded(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._target(monkeypatch, installer)
+        conn.answers = {"cd ~ && pwd": (True, "/home/pi")}
+        order: list[str] = []
+        ca = f"/home/pi/wactorz/{installer_agent.NODE_CA_FILE}"
+
+        async def _tls(*_args: Any) -> NodeTls:
+            return NodeTls(enabled=True, port=8883, ca=ca)
+
+        async def _env(*_args: Any) -> bool:
+            order.append("env")
+            return True
+
+        async def _installed(*_args: Any, **_kw: Any) -> bool:
+            order.append("install")
+            return True
+
+        async def _service(run: Any, *, user: str, home: str) -> Any:
+            order.append("start")
+            return node_service.USER
+
+        async def _account(*_args: Any) -> None:
+            return None
+
+        async def _heartbeat(_node_name: str) -> str | None:
+            return None
+
+        monkeypatch.setattr(installer, "_decide_node_tls", _tls)
+        monkeypatch.setattr(installer, "_check_node_account", _account)
+        monkeypatch.setattr(installer, "_put_node_env", _env)
+        monkeypatch.setattr(installer, "_install_wactorz", _installed)
+        monkeypatch.setattr(installer, "_await_first_heartbeat", _heartbeat)
+        monkeypatch.setattr(installer, "_persist_node_info", lambda **_kw: None)
+        monkeypatch.setattr(installer_agent.node_service, "install", _service)
+
+        result = await installer._node_deploy({"host": "10.0.0.5", "node_name": "rpi"})
+
+        assert result["success"] is True, result
+        assert order == ["install", "env", "start"]
+        moved = next(i for i, c in enumerate(conn.commands) if c.startswith("mv -f"))
+        stopped = next(i for i, c in enumerate(conn.commands) if "pkill" in c)
+        assert ca in conn.commands[moved]
+        assert moved < stopped, "the node is restarted with the CA already under its name"
+
 
 class TestInstallingWactorzOnTheNode:
     """A node runs the package, so the deploy's job is to put it there.
@@ -648,6 +744,19 @@ class TestInstallingWactorzOnTheNode:
             return None
 
         monkeypatch.setattr(installer, "_build_wheel", _no_wheel)
+        # From a package index, that is: the one case in which the index has
+        # the code this server runs.
+        monkeypatch.setattr(installer, "_installed_wheel", _no_wheel)
+
+    def _from_a_branch(self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _no_checkout() -> None:
+            return None
+
+        async def _as_installed() -> Path:
+            return self.WHEEL
+
+        monkeypatch.setattr(installer, "_build_wheel", _no_checkout)
+        monkeypatch.setattr(installer, "_installed_wheel", _as_installed)
 
     async def test_a_checkout_deploys_its_own_code(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
@@ -700,6 +809,20 @@ class TestInstallingWactorzOnTheNode:
 
         assert conn.sftp.uploads == [(str(self.WHEEL), f"/root/wactorz/{self.WHEEL.name}")]
         assert not any("~" in command for command in conn.commands)
+
+    async def test_a_server_installed_from_a_branch_deploys_what_it_has_installed(
+        self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A Home Assistant add-on under test is built from a commit. PyPI has
+        # the last release under the same version number, which is other code:
+        # installed on the node, it was refused as unable to be a node, and
+        # there was nothing else to try.
+        self._from_a_branch(installer, monkeypatch)
+
+        assert await installer._install_wactorz(conn, "rpi", "/home/pi") is True
+
+        assert conn.sftp.uploads == [(str(self.WHEEL), f"/home/pi/wactorz/{self.WHEEL.name}")]
+        assert not any(f"wactorz=={__version__}" in command for command in conn.commands)
 
     async def test_an_installed_package_deploys_the_published_one(
         self, installer: InstallerAgent, conn: _Conn, monkeypatch: pytest.MonkeyPatch

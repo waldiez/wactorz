@@ -166,7 +166,7 @@ tool-image = $(shell sed -n 's/^FROM \(.*\) AS $(1)$$/\1/p' .github/tools/Docker
 
 # The shell scripts shellcheck reads. The add-ons' run.sh start with bashio's
 # shebang, which shellcheck cannot place, so they are named as bash.
-SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh infra/alertmanager/render-config.sh scripts/image-smoke.sh scripts/test-broker.sh
+SHELL_SCRIPTS := docker-entrypoint.sh run.sh infra/prometheus/render-config.sh infra/alertmanager/render-config.sh scripts/image-smoke.sh scripts/test-broker.sh e2e/stack/node/start.sh
 ADDON_SCRIPTS := ha-addon/wactorz/run.sh ha-addon/wactorz-ultra/run.sh
 
 # The docker calls below name paths inside containers (`-w /src`, the docker
@@ -182,7 +182,7 @@ lint-ci: ## Lint the GitHub workflows (zizmor), shell scripts (shellcheck) and D
 		$(call tool-image,zizmor) $(if $(GH_TOKEN),,--offline) .
 	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $(call tool-image,shellcheck) $(SHELL_SCRIPTS)
 	docker run --rm -v "$(CURDIR):/mnt:ro" -w /mnt $(call tool-image,shellcheck) --shell=bash $(ADDON_SCRIPTS)
-	@for f in Dockerfile ha-addon/*/Dockerfile; do \
+	@for f in Dockerfile ha-addon/*/Dockerfile e2e/stack/node/Dockerfile; do \
 		echo "hadolint $$f"; docker run --rm -i $(call tool-image,hadolint) < "$$f" || exit 1; \
 	done
 	@# The committed tree, handed over as an archive: what is in the commit and

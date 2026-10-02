@@ -17,11 +17,12 @@ updates:
       actions:
         patterns: ["*"]
 
-  # The app image's base, the tool images CI runs (.github/tools/Dockerfile), and
-  # the add-ons' bases (ha-addon/bases/Dockerfile). A base bump there must reach
+  # The app image's base, the tool images CI runs (.github/tools/Dockerfile),
+  # the machine the end-to-end suite deploys a node to (e2e/stack/node/Dockerfile),
+  # and the add-ons' bases (ha-addon/bases/Dockerfile). A base bump there must reach
   # each add-on's build.yaml and Dockerfile default too; a test says which.
   - package-ecosystem: docker
-    directories: ["/", "/.github/tools", "/ha-addon/bases"]
+    directories: ["/", "/.github/tools", "/ha-addon/bases", "/e2e/stack/node"]
     schedule:
       interval: weekly
     cooldown:

@@ -54,11 +54,14 @@ MESSAGE_FROM = ".af-chat-msg-from"
 MESSAGE_BODY = ".af-chat-msg-bubble"
 WAITING_BODY = "af-chat-waiting"
 NODE_LIST = "#af-node-list"
+CONNECTION_BADGE = ".af-conn-badge"
 CARD_NAME = ".af-card-name"
 CARD_STATE = ".af-card-state-label"
 CARD_ACTION = "[data-action='{action}']"
 CARD_CHAT = ".af-chat-btn"
 CONFIRM = ".af-confirm"
+RESET_MENU = "Clear stored state"
+RESET_ENTRY = ".af-audio-popover.open button"
 CONFIRM_TITLE = ".af-confirm-title"
 CONFIRM_MESSAGE = ".af-confirm-message"
 CONFIRM_OK = ".af-confirm-ok"
@@ -132,6 +135,10 @@ class Dashboard:
     def at_sign_in(self) -> bool:
         return self.page.locator(LOGIN_KEY).count() == 1
 
+    def connection(self) -> str:
+        """What the header says about the page's feed from the server."""
+        return self.page.locator(CONNECTION_BADGE).first.inner_text().strip()
+
     def show(self, view: str) -> Dashboard:
         self.page.locator(NAV_BUTTON.format(view=view)).first.click()
         self.page.wait_for_selector(VIEW_CONTENT[view], state="visible")
@@ -203,6 +210,31 @@ class Dashboard:
         self.page.wait_for_selector(CONFIRM, state="detached")
         return self
 
+    # ── Clearing what the install has stored ────────────────────────────────
+
+    def clear(self, what: str) -> str:
+        """Choose ``what`` in the header's "Clear stored state" menu, and confirm.
+
+        The menu asks in place: the first press turns the entry into a question,
+        and the second answers it. Returns the question it asked.
+        """
+        self.page.get_by_role("button", name=RESET_MENU, exact=True).click()
+        entry = self.page.locator(RESET_ENTRY).filter(has_text=what)
+        entry.click()
+        asked = entry.inner_text().strip()
+        entry.click()
+        return asked
+
+    def notices(self) -> list[str]:
+        """The toasts on screen now, each as its title and its message."""
+        return list(
+            self.page.locator(TOAST).evaluate_all(
+                """toasts => toasts.map(toast =>
+                    (toast.querySelector('.wz-toast__name')?.innerText || '').trim() + ': ' +
+                    (toast.querySelector('.wz-toast__message')?.innerText || '').trim())"""
+            )
+        )
+
     def node_names(self) -> set[str]:
         names = self.page.locator(f"{NODE_LIST} .af-node-name").all_inner_texts()
         return {name.strip() for name in names}
@@ -266,28 +298,33 @@ class Dashboard:
         """Agent messages in the thread on screen that no scenario has said it expected."""
         return self.said()[self._claimed.get(self.talking_to, 0) :]
 
-    def all_unclaimed(self) -> dict[str, list[Said]]:
-        """The same for every agent's thread, by agent. Leaves the screen as it was."""
+    def _every_thread(self) -> dict[str, list[Said]]:
+        """What each agent's thread holds, by agent. Leaves the screen as it was."""
         self.show("chat")
         was = self.talking_to
-        found: dict[str, list[Said]] = {}
+        threads: dict[str, list[Said]] = {}
         for agent in self._targets():
+            # An agent can leave the list between reading it and choosing it:
+            # one on a node goes when the node does.
+            if agent not in self._targets():
+                continue
             self.read_thread_of(agent)
-            pending = self.unclaimed()
-            if pending:
-                found[agent] = pending
-        self.read_thread_of(was)
-        return found
+            threads[agent] = self.said()
+        if was in self._targets():
+            self.read_thread_of(was)
+        return threads
+
+    def all_unclaimed(self) -> dict[str, list[Said]]:
+        """Agent messages no scenario has said it expected, in every thread, by agent."""
+        pending = {
+            agent: said[self._claimed.get(agent, 0) :]
+            for agent, said in self._every_thread().items()
+        }
+        return {agent: said for agent, said in pending.items() if said}
 
     def all_said(self) -> list[Said]:
         """Every agent message in every thread."""
-        self.show("chat")
-        was = self.talking_to
-        everything: list[Said] = []
-        for agent in self._targets():
-            everything += self.read_thread_of(agent).said()
-        self.read_thread_of(was)
-        return everything
+        return [said for thread in self._every_thread().values() for said in thread]
 
     def expect(self, sender: str, text: str, *, timeout: float = REPLY_TIMEOUT) -> Said:
         """The next agent message in the thread on screen is from ``sender`` and says exactly ``text``.

@@ -60,7 +60,9 @@ def run_on(command: str) -> subprocess.CompletedProcess[str]:
 
 def running() -> bool:
     """Whether a node process is running on the machine."""
-    return run_on("pgrep -f 'wactorz-node'").returncode == 0
+    # The brackets keep the search from finding the shell that runs it, whose
+    # own command line holds the words searched for.
+    return run_on("pgrep -f '[w]actorz-node'").returncode == 0
 
 
 def settings() -> dict[str, str]:

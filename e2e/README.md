@@ -43,6 +43,21 @@ guard (`harness/guard.py`) fails the journey on:
 A journey that provokes one of these on purpose says which, with
 `unexpected.allow(pattern)`, beside the reason.
 
+## The journeys
+
+| | |
+| --- | --- |
+| 01 | A browser with no session is asked for the key; a wrong key and a request without one are refused; signed in, every view draws. |
+| 02 | Main answers what it was asked, the answer is paid for, and the conversation survives a reload. |
+| 03 | Asked for an agent, main starts one; it has a card and answers for itself. |
+| 04 | The catalogue lists what it has and starts the recipe asked for. |
+| 05 | `/deploy` from the chat puts a node on the machine: a wheel of this checkout, TLS, an account of its own. |
+| 06 | An agent is started on the node, moved home and out again with its memory, and another asks the model through the server. |
+| 07 | An agent is stopped and started from its card; deleting asks first, and cancel keeps it. |
+| 08 | The broker goes away and comes back: the page says so, and so does an agent that cannot be reached. |
+| 09 | The server restarts: its agents, the node's agents, the conversations and the open tab all carry on. |
+| 10 | Agents are deleted one by one, then everything is wiped: what is left is what a fresh install runs. |
+
 ## Order
 
 The journeys run in file order and each starts from what the last one left, as

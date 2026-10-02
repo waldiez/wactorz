@@ -83,6 +83,9 @@ class Backend:
     state_dir: Path
     console_log: Path
     rest: Rest
+    #: What it was started with, so it can be started again the same.
+    run: Run | None = None
+    script: str = ""
 
     @property
     def url(self) -> str:
@@ -120,6 +123,17 @@ class Backend:
                 "the backend did not exit within 30s of a single interrupt; it was killed"
             ) from None
         return time.monotonic() - started
+
+    def restart(self) -> None:
+        """Stop the process and start it again, on the same state, ports and settings.
+
+        This object goes on standing for the application: what holds it does
+        not have to be told there is a new process behind it.
+        """
+        assert self.run is not None
+        self.kill()
+        again = start(self.run, script=self.script)
+        self.process = again.process
 
     def kill(self) -> None:
         """Stop the process, whatever state it is in. For teardown, not scenarios."""
@@ -225,6 +239,8 @@ def start(
         state_dir=run.state,
         console_log=console_log,
         rest=Rest(f"http://127.0.0.1:{run.ports.dashboard}", api_key=run.api_key),
+        run=run,
+        script=script,
     )
     if wait_for_ready:
         try:

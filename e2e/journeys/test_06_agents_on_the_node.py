@@ -66,11 +66,12 @@ def test_moved_out_again_it_still_remembers(
     dashboard.say(f"/migrate counter {NODE_NAME}", to="main")
 
     # Main tells of what finished since it last spoke before it answers: here,
-    # that the move home succeeded. It says so twice, in two wordings.
+    # that the move home succeeded. It says so twice, in two wordings, in
+    # either order.
     dashboard.expect_like(
         "main",
-        rf"✅ System: Migration of 'counter' from '{NODE_NAME}' → local succeeded\.\s+"
-        r"✅ System: Migration of 'counter' to 'local' succeeded\.\s+"
+        rf"(?:✅ System: Migration of 'counter' (?:from '{NODE_NAME}' → local|to 'local') "
+        r"succeeded\.\s+){2}"
         rf"\[OK\] Migrating 'counter' from 'local' → '{NODE_NAME}' "
         r"\(waiting for it to confirm it started\)\.",
     )

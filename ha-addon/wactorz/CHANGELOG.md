@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: `/deploy` from the add-on failed with "The published wactorz cannot run as a node" when the add-on was built from a commit whose version is published without the node runtime. The node is now sent the copy of Wactorz the add-on is running.
+- Fixed: a `/deploy` that failed part way had already rewritten the node's settings, so a node deployed from another server moved to the add-on's broker at its next restart. The settings are now written only once the install on the node has succeeded.
 - Changed: **Wactorz no longer runs as root inside the addon, and Home Assistant's configuration folder is mapped read-only.** The start script still begins as root, for what needs it, then runs Wactorz as an ordinary user that cannot regain root. Agents run code a model wrote; as root that code could rewrite your Home Assistant configuration and read files private to root, such as Home Assistant's login storage. **Nothing in your options changes**: `/config/...` paths still work, and an SSH key for a deploy target can stay private to root, because Wactorz is handed a copy at start. Data left by the earlier root-run version is handed over on the first start. Packages agents install at runtime now go under `/data` and survive an update. **What stops working:** an agent that writes into `/config` or `/share` can no longer do so.
 - Fixed: one deploy target whose name cannot be a broker account, one with a space in it for example, no longer turns off TLS and node accounts on the embedded broker for every node. That target is named in the log and left out; the rest are unaffected.
 - Fixed: when Home Assistant cannot be reached at start, the log says so instead of `HA probe returned 000000`.

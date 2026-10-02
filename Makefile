@@ -1,7 +1,7 @@
 .PHONY: help dev dev-full dev-ui dev-down dev-app dev-backend precommit-install precommit-run build build-frontend build-py \
 		check fmt fmt-py lint lint-py lint-ci tool-image image image-smoke image-scan lock audit test-py-versions test-broker format clean \
         up down logs shell mqtt-certs \
-        run run-py test test-py test-frontend coverage coverage-py coverage-frontend ci \
+        run run-py test test-py test-py-tracked python-path test-frontend coverage coverage-py coverage-frontend ci \
         install install-py install-docs install-dev install-frontend docs-serve docs-build publish
 
 # ── Windows shell setup ──────────────────────────────────────────────────────
@@ -303,12 +303,24 @@ install-frontend: ## Install frontend dependencies
 	cd $(FRONTEND_DIR) && $(PKG_MGR) install
 
 precommit-install: ## Install the git pre-commit hook (prek)
-	prek install
+	$(PYTHON) -m prek install
 
 precommit-run: ## Run all configured hooks across the repo (prek)
-	prek run --all-files
+	$(PYTHON) -m prek run --all-files
 
 test: test-py test-frontend ## Run all tests (Python + frontend)
+
+python-path: ## Print the interpreter every Python target here runs (.venv's when there is one)
+	@echo $(PYTHON)
+
+# What the commit hook runs. The hook sets unstaged changes aside before it
+# starts, but not files git has never been told about: a new test file for work
+# that is not part of the commit would then run against code that has just been
+# set aside, and fail a commit it has nothing to do with. Those files are left
+# out; one that is staged is in the commit and runs.
+test-py-tracked: ## Run the Python tests git knows about, leaving out untracked files (the commit hook)
+	$(PYTHON) -m pytest tests -n auto \
+		$$(git ls-files --others --exclude-standard -- 'tests/*.py' | sed 's/^/--ignore=/')
 
 test-py: ## Run Python tests (pytest)
 	@# -n auto here and not in pyproject's addopts: parallel wins on the whole

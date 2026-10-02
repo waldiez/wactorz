@@ -65,7 +65,10 @@ Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 
 Install the commit hooks to run these on every commit: `make precommit-install`. They run
 through [prek](https://github.com/j178/prek), a faster drop-in for pre-commit that reads the
-same `.pre-commit-config.yaml`; it comes with `make install-dev`.
+same `.pre-commit-config.yaml`; it comes with `make install-dev`. The hooks use the
+project's `.venv` whether or not it is activated, and run the tests git knows about: a new
+test file you have not staged is left out, since the hook sets your other unstaged changes
+aside and the file would run without the code it tests.
 
 ## Commit Messages
 

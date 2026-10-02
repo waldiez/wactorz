@@ -16,6 +16,10 @@ The fastest way to get started — no repo clone or Python needed. See the dedic
 
 → **[Quickstart: Docker Hub](dockerhub.md)**
 
+The image comes in two sizes: `waldiez/wactorz:latest`, and `waldiez/wactorz:ultra` with
+PyTorch, Ultralytics, OpenCV and what the Reachy Mini SDK needs. [Which image](dockerhub.md#which-image)
+says when the larger one is the one to pull.
+
 ---
 
 ## Full Docker  (`compose.yaml`)
@@ -38,6 +42,14 @@ docker compose --profile python up -d
 ```
 
 Open `http://localhost:8888` (monitor UI) or `http://localhost:8000` (REST API).
+
+Compose builds the image from the checkout. For vision agents or the Reachy Mini agent,
+build the larger one ([which image](dockerhub.md#which-image)) by setting
+`WACTORZ_FLAVOUR=ultra` in `.env`, then:
+
+```bash
+docker compose --profile python up -d --build
+```
 
 Both ask for the API key. With `API_KEY` blank in `.env`, the stack generates one
 on first start and keeps it in a volume. Read it with

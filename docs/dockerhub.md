@@ -6,8 +6,29 @@ The fastest way to run Wactorz — no repo clone needed. Everything runs in cont
 
 ---
 
+- [Which image](#which-image)
 - [Option A — Terminal + Compose (recommended)](#option-a--terminal--compose-recommended)
 - [Option B — Docker Desktop + Terminal](#option-b--docker-desktop--terminal)
+
+---
+
+## Which image
+
+There are two, built from the same source and published under the same name:
+
+| Tag | What it holds | When to use it |
+| --- | --- | --- |
+| `waldiez/wactorz:latest`, `:<version>` | Wactorz and its integrations (the `all` extra). | Agents that talk to APIs, Home Assistant, MQTT, chat platforms. This is the one the examples here use. |
+| `waldiez/wactorz:ultra`, `:<version>-ultra` | The same, plus PyTorch (the CPU build), Ultralytics and OpenCV, the system libraries they load, a compiler, and GStreamer with its introspection data. | Vision agents (anything that imports `cv2`, `torch` or `ultralytics`), and the Reachy Mini catalogue agent, whose SDK has to build part of itself. |
+
+The larger one is several times the size of the other, which is the reason there are
+two. An agent that needs it fails in the small image when it imports `cv2`
+(`libGL.so.1: cannot open shared object file`) or when pip tries to build a package that
+ships no wheel. To switch, change the tag in `compose.yaml` and start again; the state
+volume is the same for both.
+
+The `ultra` image runs on Python 3.13, one release behind the other, because the Reachy
+Mini SDK needs it. It has no GPU support: PyTorch in it is the CPU build.
 
 ---
 

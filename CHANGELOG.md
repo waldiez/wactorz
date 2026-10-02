@@ -57,6 +57,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Closing a dashboard tab no longer logs an error.** When a browser left while the server was writing a large frame to it, the server cancelled its writer in the middle of that write. The write of a compressed frame runs in a task of the socket's own that a cancellation does not reach: it went on alone, failed against the closing socket, and was logged by the event loop as an error with a traceback. A frame that is being written is now given a moment to end before the writer is stopped, and a write that fails because the client has gone is not reported.
+
 - **An agent's replies are no longer shown twice after it is moved or comes back.** The dashboard fetches an agent's chat history again when the agent goes and reappears under its name, which is what moving it to another machine does. It reconciled the user's own messages with their stored copies and not the agent's replies, so every reply already on screen appeared a second time. Replies are now paired with their stored copies the same way.
 
 - **`/deploy` works from a server installed from a branch or a commit.** A server installed with `pip install "wactorz @ git+..."` -- the Home Assistant add-ons built from this repository, among others -- has no source tree to build a node's wheel from, and the version it answers to may be published in a form that has no node runtime. The deploy then failed with "there is nothing else to try". It now packs a wheel from the copy that is installed and running, and sends that, so the node gets the code the server has. A server installed from PyPI still installs the published release on the node, and a checkout still builds its own wheel.

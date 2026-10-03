@@ -9,7 +9,7 @@ Included:
 - Python REST API metrics at `/metrics`
 - actor health and runtime metrics from the Python registry
 - process/runtime metrics from the Python process
-- Prometheus in Docker Compose
+- Prometheus in Docker Compose, and Alertmanager to deliver its alerts
 - optional Mosquitto availability probe controlled by `.env`
 
 ## What Is Monitored
@@ -33,6 +33,30 @@ Prometheus scrapes the Python REST service and records:
 - LLM cost in USD
 - process/runtime metrics exported by `prometheus_client`
 
+And, for what the dashboard does not show:
+
+| Metric | What it says |
+|---|---|
+| `wactorz_mqtt_connected` | `1` while the server's broker connection is up |
+| `wactorz_mqtt_outbox_queued` | Messages in memory waiting to be sent to the broker |
+| `wactorz_mqtt_outbox_backlog` | Stored messages waiting on disk for room in that queue |
+| `wactorz_mqtt_publish_failures_total` | Publishes that failed on a live connection and were held to retry |
+| `wactorz_mqtt_outbox_dropped_total` | Messages discarded because the outbox was full |
+| `wactorz_mqtt_outbox_discarded_total` | Messages given up on: unsendable, expired undelivered, or failing every try |
+| `wactorz_actor_mailbox_depth{actor_name}` | Messages waiting in an actor's mailbox |
+| `wactorz_actor_messages_refused_total{actor_name}` | Messages a full mailbox had no room for: notifications dropped, anything else refused after a wait |
+| `wactorz_actor_handling_seconds{actor_name}` | How long an actor has been on the message it is handling; `0` when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck |
+| `wactorz_event_loop_lag_seconds` | Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting |
+| `wactorz_nodes{state}` | Edge nodes that are `up` and `down` |
+| `wactorz_node_up{node}` | `1` while a node's heartbeat is recent |
+| `wactorz_node_heartbeat_age_seconds{node}` | Seconds since a node's last heartbeat |
+| `wactorz_node_agents{node}` | Agents a node reported running |
+| `wactorz_node_info{node,version,runtime}` | The version and runtime a node reported |
+| `wactorz_llm_requests_total{provider,outcome}` | LLM requests by how they ended: `ok`, `unavailable` (the provider kept failing through every retry) or `error` (anything else: a rejected request, a bad key) |
+| `wactorz_llm_request_duration_seconds{provider}` | Time from a request to its answer or failure, retries included; for a streamed answer, to its last chunk |
+
+A request counts once however many attempts it took, and one the caller cancelled is not counted. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.
+
 The app exposes these at:
 
 ```text
@@ -53,7 +77,7 @@ This is availability monitoring, not deep service-specific exporter telemetry.
 ## Authentication
 
 `/metrics` is served by the API on port 8000, and once `API_KEY` is set every
-route there except `/health` requires it. An unauthenticated scrape gets `401`
+route there except the health probes requires it. An unauthenticated scrape gets `401`
 and the target goes down with nothing written to the log, so a keyed install
 loses its metrics silently unless the scrape carries the key.
 
@@ -105,17 +129,24 @@ Notes:
 
 ### Main stack
 
-Use the Python profiles:
+Prometheus, Alertmanager and the Blackbox Exporter belong to the `python` profile:
 
 ```bash
 docker compose --profile python up -d
-docker compose --profile full up -d
+```
+
+The `full` profile adds Home Assistant and does not start them; give both profiles to have both:
+
+```bash
+docker compose --profile python --profile full up -d
 ```
 
 ### Development stack
 
+There they belong to the `app` profile:
+
 ```bash
-docker compose -f compose.dev.yaml up -d
+docker compose -f compose.dev.yaml --profile app up -d
 ```
 
 Prometheus is available at:
@@ -137,7 +168,7 @@ PROMETHEUS_PYTHON_TARGET=wactorz-python
 Then run:
 
 ```bash
-docker compose --profile python up -d prometheus blackbox-exporter wactorz-python
+docker compose --profile python up -d prometheus alertmanager blackbox-exporter wactorz-python
 ```
 
 ### 2. Wactorz from terminal, Prometheus in Compose
@@ -151,7 +182,7 @@ PROMETHEUS_PYTHON_TARGET=host.docker.internal
 Start Wactorz locally in REST mode, then run:
 
 ```bash
-docker compose --profile python up -d --no-deps prometheus blackbox-exporter
+docker compose --profile python up -d --no-deps prometheus alertmanager blackbox-exporter
 ```
 
 This starts only the monitoring containers and points Prometheus at the Wactorz process running on your host.
@@ -195,4 +226,37 @@ Basic Prometheus alert rules are included for:
 
 - Python app down
 - actor heartbeat stale
+- an actor on one message for over 30 minutes
+- the event loop blocked for more than 5 seconds
+- the broker connection lost for 2 minutes
+- more than 100 outgoing messages waiting for 10 minutes
+- outgoing messages dropped or given up on
+- an edge node down for 5 minutes
+- more than half the requests to an LLM provider failing for 10 minutes
 - optional dependency probe failing
+
+They live in `infra/prometheus/alerts.yml`. Prometheus evaluates them and hands the ones that fire to Alertmanager, which the compose stack starts beside it.
+
+## Where Alerts Go
+
+Nowhere, until you say. Out of the box Alertmanager lists what is firing on its own page and delivers nothing:
+
+```text
+http://localhost:${ALERTMANAGER_EXTERNAL_PORT:-9093}
+```
+
+To be told about an alert, name a webhook in `.env`:
+
+```env
+ALERT_WEBHOOK_URL=https://example.org/hooks/wactorz
+# Optional. Sent as "Authorization: Bearer <token>".
+ALERT_WEBHOOK_TOKEN=
+```
+
+and restart the service (`docker compose --profile python up -d alertmanager`). Every alert, and its resolution, is then sent there as an HTTP `POST` carrying [Alertmanager's JSON](https://prometheus.io/docs/alerting/latest/configuration/#webhook_config). The method and the body are Alertmanager's and are not settings; the token is the one credential it sends. Alerts with the same name are grouped into one notification, sent 30 seconds after the first fires and repeated every 4 hours while it lasts.
+
+The address and the token are written to files inside the container, in memory, and the configuration names those files, so neither shows on Alertmanager's status page.
+
+For anything a single webhook cannot express, such as email, Slack, several receivers, custom headers or routing by severity, write your own configuration to `infra/alertmanager/alertmanager.yml`. It is used exactly as written, the two settings above are then not read, and the file is ignored by git because it usually holds a credential. The [Alertmanager documentation](https://prometheus.io/docs/alerting/latest/configuration/) describes the format.
+
+Alertmanager's page has no login and can silence an alert, so it is published to this host only, like Prometheus.

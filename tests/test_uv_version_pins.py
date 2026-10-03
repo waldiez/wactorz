@@ -1,0 +1,45 @@
+"""CI and the app image use one uv.
+
+The image exports its locked dependencies with the uv pinned in its Dockerfile,
+and every CI job installs the uv named by `UV_VERSION` in ci.yml. Dependabot
+bumps the first and not the second, so the two could drift, and CI would then
+check the lockfile with a different uv than the one the image is built with.
+"""
+
+import re
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _dockerfile_uv() -> str:
+    text = (ROOT / "Dockerfile").read_text()
+    found = re.search(
+        r"^FROM ghcr\.io/astral-sh/uv:([^@\s]+)@sha256:[0-9a-f]{64} AS uv$", text, re.MULTILINE
+    )
+    assert found is not None, "the Dockerfile's uv stage is pinned by tag and digest"
+    return found.group(1)
+
+
+def _ci_uv() -> str:
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    return str(workflow["env"]["UV_VERSION"])
+
+
+def test_ci_installs_the_uv_the_image_is_built_with() -> None:
+    assert _ci_uv() == _dockerfile_uv(), (
+        "Dependabot moved one of them: set UV_VERSION in .github/workflows/ci.yml "
+        "to the version in the Dockerfile's `AS uv` line"
+    )
+
+
+def test_every_workflow_that_installs_uv_installs_that_one() -> None:
+    # A workflow of its own names the version again, and would drift from it.
+    for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        env = (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("env") or {}
+        if "UV_VERSION" in env:
+            assert str(env["UV_VERSION"]) == _ci_uv(), (
+                f"{path.name} installs another uv than ci.yml: set them to the same version"
+            )

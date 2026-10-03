@@ -10,7 +10,7 @@ else
     python_target="wactorz:8000"
 fi
 monitor_mosquitto="${PROMETHEUS_MONITOR_MOSQUITTO:-1}"
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 template_file="${PROMETHEUS_TEMPLATE_FILE:-${script_dir}/prometheus.yml}"
 
 is_enabled() {
@@ -44,6 +44,16 @@ cat >>"$out_file" <<EOF
     authorization:
       type: Bearer
       credentials: '${api_key_yaml}'
+EOF
+elif [ -n "${API_KEY_FILE:-}" ] && [ -s "$API_KEY_FILE" ]; then
+    # A key compose generated rather than one written into .env. Named, not
+    # copied: Prometheus reads the file on every scrape, so the key never lands
+    # in the rendered config at all. Quoted the same way as the key above.
+    api_key_file_yaml=$(printf '%s' "$API_KEY_FILE" | sed "s/'/''/g")
+cat >>"$out_file" <<EOF
+    authorization:
+      type: Bearer
+      credentials_file: '${api_key_file_yaml}'
 EOF
 fi
 

@@ -730,6 +730,17 @@ class Migration:
                 f"'{current_node or 'local'}'.",
             }
 
+        mismatch = None if is_target_local else self.host._node_version_mismatch(target_node)
+        if mismatch:
+            # Same footing as an offline target: nothing has moved yet, so the
+            # agent simply stays where it is.
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}': {mismatch} "
+                f"Migration aborted — the agent stays on "
+                f"'{current_node or 'local'}'.",
+            }
+
         if current_node and not is_target_local:
             # ── Remote → Remote migration ────────────────────────────────────
             # The source node still has the agent's compiled code and state;
@@ -747,8 +758,8 @@ class Migration:
             # Routed through main, in two legs: ask the source to hand the
             # agent back (the `@main` machinery), then place it on the target
             # ourselves. The source no longer publishes to another node's spawn
-            # topic -- that was lateral remote code execution, and the ACL that
-            # closes it forbids the write anyway.
+            # topic -- that was lateral remote code execution, and a node holding
+            # a signing key refuses a spawn not signed by main.
             return_token = secrets.token_hex(8)
             self.pending_returns[return_token] = {
                 "agent_name": agent_name,
@@ -921,6 +932,13 @@ class Migration:
             local = self.host._registry.find_by_name(agent_name)
             if local:
                 try:
+                    # Forgotten by the supervisor first, as main's delete does:
+                    # an entry left holding the stopped instance would stop it
+                    # again at shutdown, running its on_stop and saves twice. A
+                    # rollback spawns it afresh, which gives it a new entry.
+                    supervisor = getattr(self.host._registry, "_supervisor_ref", None)
+                    if supervisor is not None:
+                        supervisor.drop_supervised(agent_name)
                     await self.host._registry.unregister(local.actor_id)
                     await local.stop()
                     self.host._agent_manifests.pop(agent_name, None)

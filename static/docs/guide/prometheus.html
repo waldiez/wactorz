@@ -153,7 +153,7 @@
 <li>Python REST API metrics at <code>/metrics</code></li>
 <li>actor health and runtime metrics from the Python registry</li>
 <li>process/runtime metrics from the Python process</li>
-<li>Prometheus in Docker Compose</li>
+<li>Prometheus in Docker Compose, and Alertmanager to deliver its alerts</li>
 <li>optional Mosquitto availability probe controlled by <code>.env</code></li>
 </ul>
 <h2 id="what-is-monitored">What Is Monitored</h2>
@@ -175,6 +175,86 @@
 <li>LLM cost in USD</li>
 <li>process/runtime metrics exported by <code>prometheus_client</code></li>
 </ul>
+<p>And, for what the dashboard does not show:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>What it says</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wactorz_mqtt_connected</code></td>
+<td><code>1</code> while the server's broker connection is up</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_queued</code></td>
+<td>Messages in memory waiting to be sent to the broker</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_backlog</code></td>
+<td>Stored messages waiting on disk for room in that queue</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_publish_failures_total</code></td>
+<td>Publishes that failed on a live connection and were held to retry</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_dropped_total</code></td>
+<td>Messages discarded because the outbox was full</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_discarded_total</code></td>
+<td>Messages given up on: unsendable, expired undelivered, or failing every try</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_mailbox_depth{actor_name}</code></td>
+<td>Messages waiting in an actor's mailbox</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_messages_refused_total{actor_name}</code></td>
+<td>Messages a full mailbox had no room for: notifications dropped, anything else refused after a wait</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_handling_seconds{actor_name}</code></td>
+<td>How long an actor has been on the message it is handling; <code>0</code> when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck</td>
+</tr>
+<tr>
+<td><code>wactorz_event_loop_lag_seconds</code></td>
+<td>Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting</td>
+</tr>
+<tr>
+<td><code>wactorz_nodes{state}</code></td>
+<td>Edge nodes that are <code>up</code> and <code>down</code></td>
+</tr>
+<tr>
+<td><code>wactorz_node_up{node}</code></td>
+<td><code>1</code> while a node's heartbeat is recent</td>
+</tr>
+<tr>
+<td><code>wactorz_node_heartbeat_age_seconds{node}</code></td>
+<td>Seconds since a node's last heartbeat</td>
+</tr>
+<tr>
+<td><code>wactorz_node_agents{node}</code></td>
+<td>Agents a node reported running</td>
+</tr>
+<tr>
+<td><code>wactorz_node_info{node,version,runtime}</code></td>
+<td>The version and runtime a node reported</td>
+</tr>
+<tr>
+<td><code>wactorz_llm_requests_total{provider,outcome}</code></td>
+<td>LLM requests by how they ended: <code>ok</code>, <code>unavailable</code> (the provider kept failing through every retry) or <code>error</code> (anything else: a rejected request, a bad key)</td>
+</tr>
+<tr>
+<td><code>wactorz_llm_request_duration_seconds{provider}</code></td>
+<td>Time from a request to its answer or failure, retries included; for a streamed answer, to its last chunk</td>
+</tr>
+</tbody>
+</table>
+<p>A request counts once however many attempts it took, and one the caller cancelled is not counted. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.</p>
 <p>The app exposes these at:</p>
 <div class="highlight"><pre><span></span><code>GET /metrics
 </code></pre></div>
@@ -188,7 +268,7 @@
 <p>This is availability monitoring, not deep service-specific exporter telemetry.</p>
 <h2 id="authentication">Authentication</h2>
 <p><code>/metrics</code> is served by the API on port 8000, and once <code>API_KEY</code> is set every
-route there except <code>/health</code> requires it. An unauthenticated scrape gets <code>401</code>
+route there except the health probes requires it. An unauthenticated scrape gets <code>401</code>
 and the target goes down with nothing written to the log, so a keyed install
 loses its metrics silently unless the scrape carries the key.</p>
 <p>The endpoint accepts either <code>X-API-Key</code> or <code>Authorization: Bearer</code>.</p>
@@ -228,13 +308,17 @@ REST_EXTERNAL_PORT=8000
 </ul>
 <h2 id="docker-compose">Docker Compose</h2>
 <h3 id="main-stack">Main stack</h3>
-<p>Use the Python profiles:</p>
+<p>Prometheus, Alertmanager and the Blackbox Exporter belong to the <code>python</code> profile:</p>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>The <code>full</code> profile adds Home Assistant and does not start them; give both profiles to have both:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <h3 id="development-stack">Development stack</h3>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d
+<p>There they belong to the <code>app</code> profile:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>--profile<span class="w"> </span>app<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <p>Prometheus is available at:</p>
@@ -248,7 +332,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Then run:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>prometheus<span class="w"> </span>blackbox-exporter<span class="w"> </span>wactorz-python
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>prometheus<span class="w"> </span>alertmanager<span class="w"> </span>blackbox-exporter<span class="w"> </span>wactorz-python
 </code></pre></div>
 
 <h3 id="2-wactorz-from-terminal-prometheus-in-compose">2. Wactorz from terminal, Prometheus in Compose</h3>
@@ -257,7 +341,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Start Wactorz locally in REST mode, then run:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-deps<span class="w"> </span>prometheus<span class="w"> </span>blackbox-exporter
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-deps<span class="w"> </span>prometheus<span class="w"> </span>alertmanager<span class="w"> </span>blackbox-exporter
 </code></pre></div>
 
 <p>This starts only the monitoring containers and points Prometheus at the Wactorz process running on your host.</p>
@@ -289,8 +373,31 @@ curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </spa
 <ul>
 <li>Python app down</li>
 <li>actor heartbeat stale</li>
+<li>an actor on one message for over 30 minutes</li>
+<li>the event loop blocked for more than 5 seconds</li>
+<li>the broker connection lost for 2 minutes</li>
+<li>more than 100 outgoing messages waiting for 10 minutes</li>
+<li>outgoing messages dropped or given up on</li>
+<li>an edge node down for 5 minutes</li>
+<li>more than half the requests to an LLM provider failing for 10 minutes</li>
 <li>optional dependency probe failing</li>
 </ul>
+<p>They live in <code>infra/prometheus/alerts.yml</code>. Prometheus evaluates them and hands the ones that fire to Alertmanager, which the compose stack starts beside it.</p>
+<h2 id="where-alerts-go">Where Alerts Go</h2>
+<p>Nowhere, until you say. Out of the box Alertmanager lists what is firing on its own page and delivers nothing:</p>
+<div class="highlight"><pre><span></span><code>http://localhost:${ALERTMANAGER_EXTERNAL_PORT:-9093}
+</code></pre></div>
+
+<p>To be told about an alert, name a webhook in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>ALERT_WEBHOOK_URL=https://example.org/hooks/wactorz
+<span class="gh">#</span> Optional. Sent as &quot;Authorization: Bearer &lt;token&gt;&quot;.
+ALERT_WEBHOOK_TOKEN=
+</code></pre></div>
+
+<p>and restart the service (<code>docker compose --profile python up -d alertmanager</code>). Every alert, and its resolution, is then sent there as an HTTP <code>POST</code> carrying <a href="https://prometheus.io/docs/alerting/latest/configuration/#webhook_config">Alertmanager's JSON</a>. The method and the body are Alertmanager's and are not settings; the token is the one credential it sends. Alerts with the same name are grouped into one notification, sent 30 seconds after the first fires and repeated every 4 hours while it lasts.</p>
+<p>The address and the token are written to files inside the container, in memory, and the configuration names those files, so neither shows on Alertmanager's status page.</p>
+<p>For anything a single webhook cannot express, such as email, Slack, several receivers, custom headers or routing by severity, write your own configuration to <code>infra/alertmanager/alertmanager.yml</code>. It is used exactly as written, the two settings above are then not read, and the file is ignored by git because it usually holds a credential. The <a href="https://prometheus.io/docs/alerting/latest/configuration/">Alertmanager documentation</a> describes the format.</p>
+<p>Alertmanager's page has no login and can silence an alert, so it is published to this host only, like Prometheus.</p>
   </main>
 </div>
 

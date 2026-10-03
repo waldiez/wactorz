@@ -94,7 +94,7 @@ def _stored(pub: MQTTPublisher) -> list[str]:
 def _queue_stored(pub: MQTTPublisher, topic: str) -> None:
     """A QoS 1 message as publish() leaves it: stored, then queued."""
     row_id = pub._save_to_db(topic, "x", False, 1)
-    pub._queue.put_nowait((topic, "x", False, 1, row_id))
+    pub._queue.put_nowait((topic, "x", False, 1, row_id, None))
 
 
 class TestTheTopicRules:

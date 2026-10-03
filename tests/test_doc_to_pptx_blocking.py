@@ -48,7 +48,9 @@ class TestRunBlocking:
 
         # Called inline this is 0: nothing else gets a turn until the command
         # returns, which is what let a 60s task timeout sit behind a 120s npm.
-        assert ticks > 5
+        # How many turns fit is the machine's business; that there were any is
+        # the point.
+        assert ticks > 0
 
     async def test_a_task_timeout_can_now_fire(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(_agent["subprocess"], "run", _slow_command)

@@ -209,6 +209,21 @@ class TestMirroringIntoTheTopicBus:
 
         assert bus.contracts["weather"].publishes == ["sensors/weather"]
 
+    async def test_the_description_reaches_the_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The planner reads contracts, not manifests: an agent's own account of
+        # its topics has to be carried across or the planner never sees it.
+        bus = _Bus()
+
+        await run_listener(
+            monkeypatch,
+            [message("flic", description="Buttons: 'Desk' is custom/flic/bh16-f58317.")],
+            bus=bus,
+        )
+
+        assert bus.contracts["flic"].description == "Buttons: 'Desk' is custom/flic/bh16-f58317."
+
     async def test_observed_field_names_win_over_the_declared_schema(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

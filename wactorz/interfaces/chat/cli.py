@@ -138,11 +138,6 @@ class CLIInterface:
                 return f"[error] Agent '{agent_name}' not found. Remote agents: {', '.join(known)}"
             return f"[error] Agent '{agent_name}' not found. No remote nodes connected."
 
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            return "[error] aiomqtt not installed"
-
         reply_topic = f"main/reply/{main.actor_id}/{uuid.uuid4().hex[:8]}"
         result_holder = []
 
@@ -243,7 +238,7 @@ class CLIInterface:
 
         if result.get("success"):
             print(f"""
-  Node '{node_name}' is live! It will appear in /nodes within ~15 seconds.
+  Node '{node_name}' is live and its first heartbeat has arrived.
 
   Now spawn agents on it — just tell main:
     "spawn a CPU monitor agent on {node_name}"

@@ -108,9 +108,10 @@ class TestTheNameIsRecoverable:
 
     def test_the_formula_itself_is_pinned(self) -> None:
         """The lookup matches a published id against names, so it holds only
-        while every copy of this derivation agrees — and `remote_runner` keeps
-        its own, deliberately. Asserting the value rather than the function's
-        reflexivity is what makes both copies drifting the same way impossible.
+        while the derivation itself does not move. Asserting the value rather
+        than the function's reflexivity is what catches a change to it: an id
+        keys a held broker session, so agents that were running before an
+        upgrade would be unreachable after one.
         """
         assert derive_actor_id("worker") == str(
             uuid.uuid5(uuid.NAMESPACE_DNS, "wactorz.actor.worker")

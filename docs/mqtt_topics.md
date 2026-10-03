@@ -328,26 +328,41 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 ## LLM Bridge & RPC Reply Topics
 
 Remote agents never hold API keys — they route LLM calls through `main`, which
-replies on a per-request ephemeral topic.
+replies on a per-request topic in the asking node's own reply space.
 
 ### `main/llm_request`
-**Published by:** Remote agents (`remote_runner.py`)
+**Published by:** Agents running on a node (`wactorz-node`)
 **Subscribed by:** MainActor's LLM bridge (`agents/main/llm_bridge.py`)
 **Purpose:** Centralized LLM calls so no API key leaves `main`.
 
 ```json
 {
-  "prompt":       "...",
-  "_reply_topic": "main/reply/{actor_id}/{uuid}"
+  "messages":     [{"role": "user", "content": "..."}],
+  "system":       "...",
+  "agent":        "collector",
+  "node":         "rpi-kitchen",
+  "_reply_topic": "nodes/rpi-kitchen/reply/{id}",
+  "_sig":         "{hex HMAC-SHA256}"
 }
 ```
 
+`prompt` may stand in for `messages`. `_sig` is made with the node's signing key
+over every other field, written canonically (sorted keys, compact separators);
+see `sign_request` in `core/node_signing.py`. Main answers only when
+`_reply_topic` is `nodes/<node>/reply/<hex id>` for the `node` the request names,
+and refuses an unsigned or wrongly signed request under
+`WACTORZ_NODE_SIGNING=enforce` with an error reply.
+
 ---
 
-### `main/reply/{actor_id}/{uuid}`
-**Published by:** MainActor (and any RPC responder)
-**Trigger:** Reply to an `main/llm_request` or task request
-**Purpose:** Ephemeral, per-request reply channel (UUID suffix, one-shot).
+### `nodes/{node}/reply/{id}`
+**Published by:** MainActor's LLM bridge
+**Trigger:** Reply to a `main/llm_request`
+**Purpose:** Per-request reply channel for one node (random id, one-shot).
+
+```json
+{ "text": "..." }
+```
 
 ---
 
@@ -513,7 +528,7 @@ agent can read current state without a request/response round-trip.
 | `nodes/{node}/restart` | Main actor | `{ "reason": "..." }` |
 | `nodes/{node}/restart_agent` | Main actor | `{ "name": "..." }` |
 | `nodes/{node}/migrate` | Main actor | `{ "name": "...", "target_node": "..." }` |
-| `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "version": "0.6.1", "runtime": "runner", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000 }` — `version` is the Wactorz release the node runs and `runtime` what kind of process answers; a node deployed before these fields sends neither and is recorded as `runner` at an unknown version |
+| `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "version": "0.7.0", "runtime": "runner", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000 }` — `version` is the Wactorz release the node runs and `runtime` what kind of process answers; a node deployed before these fields sends neither and is recorded as `runner` at an unknown version |
 | `agents/{node}/logs` | Remote runner | `{ "type": "spawned", "message": "...", "node": "...", "timestamp": ... }` |
 | `nodes/{node}/logs` | Remote runner | `{ "type": "log", "message": "...", "timestamp": ... }` |
 | `nodes/{node}/list` | Main actor | *(request)* published to make the runner emit `nodes/{node}/agents` |

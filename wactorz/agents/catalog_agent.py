@@ -24,10 +24,12 @@ Or via main (natural language):
 import asyncio
 import importlib
 import importlib.metadata
+import importlib.util
 import logging
 import pathlib
 import re
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from ..core.actor import Actor, Message, MessageType
@@ -38,6 +40,10 @@ if TYPE_CHECKING:
     from .main import MainActor
 
 logger = logging.getLogger(__name__)
+
+#: How long a spawn waits for the installer to finish a recipe's missing
+#: packages before it goes ahead without them.
+INSTALL_WAIT_S = 120.0
 
 BETA_WARNING = (
     "Experimental/Beta agent: behavior may change, fail, or be removed. "
@@ -104,8 +110,6 @@ def _wants_experimental(text: str) -> bool:
 
 
 def _load_recipe(filename: str) -> str | None:
-    import importlib.util
-
     path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
     if not path.exists():
         logger.warning("[catalog] Recipe file not found: %s", path)
@@ -159,6 +163,44 @@ def _build_native_catalog() -> dict:
         logger.info("[catalog] Loaded weather-agent recipe")
     except ImportError as e:
         logger.warning("[catalog] weather-agent unavailable: %s", e)
+
+    try:
+        from ..catalogue_agents.flic_agent import FlicAgent
+
+        native["flic"] = {
+            "name": "flic",
+            "type": "native",
+            "factory": FlicAgent,
+            "description": (
+                "Pairs Flic 2 buttons over Bluetooth and publishes each press as its own "
+                "MQTT topic, so a physical button can trigger anything that can be wired "
+                "to a topic. Needs pyflic-ble (wactorz[flic]) and Python 3.12+."
+            ),
+            "capabilities": [
+                "flic",
+                "button",
+                "bluetooth",
+                "ble",
+                "physical_trigger",
+                "event_source",
+            ],
+            "input_schema": {
+                "action": (
+                    "help | scan | pair | list | rename | listen | stop | status | forget | late"
+                ),
+                "name": "str - button to act on, or the name to give a new pairing",
+                "new_name": "str - replacement name, for rename",
+                "value": "str - on | off, for late",
+            },
+            "output_schema": {
+                "ok": "bool",
+                "action": "str - the command that ran",
+                "result": "str - what to tell the person who asked",
+            },
+        }
+        logger.info("[catalog] Loaded flic recipe")
+    except ImportError as e:
+        logger.warning("[catalog] flic unavailable: %s", e)
 
     try:
         from .google_calendar_agent import GoogleCalendarAgent
@@ -871,7 +913,7 @@ class CatalogAgent(Actor):
             install = recipe.get("install", [])
             if install:
                 # Fast-path: check which packages are already importable.
-                # Avoids a 120s installer wait when deps were installed in a
+                # Avoids the installer wait when deps were installed in a
                 # previous session — same logic as main._spawn_dynamic_agent.
                 needed = [pkg for pkg in install if not _dependency_is_satisfied(pkg)]
 
@@ -881,9 +923,7 @@ class CatalogAgent(Actor):
                         logger.info(
                             "[%s] Installing missing deps for '%s': %s", self.name, name, needed
                         )
-                        import uuid as _uuid
-
-                        task_id = f"cat_install_{_uuid.uuid4().hex[:8]}"
+                        task_id = f"cat_install_{uuid.uuid4().hex[:8]}"
                         future = asyncio.get_running_loop().create_future()
                         main = find_main_actor(self._registry)
                         if main:
@@ -901,13 +941,26 @@ class CatalogAgent(Actor):
                                 "_task_id": task_id,
                             },
                         )
-                        await installer.receive(install_msg)
                         try:
-                            await asyncio.wait_for(future, timeout=120.0)
+                            if await installer.receive(install_msg) is False:
+                                # Its mailbox had no room, so no result is
+                                # coming to wait for.
+                                logger.warning(
+                                    "[%s] installer is not taking messages — skipping dep "
+                                    "install for '%s'",
+                                    self.name,
+                                    name,
+                                )
+                            else:
+                                await asyncio.wait_for(future, timeout=INSTALL_WAIT_S)
                         except asyncio.TimeoutError:
                             logger.warning(
                                 "[%s] Install timeout for '%s' — proceeding anyway", self.name, name
                             )
+                        finally:
+                            # Answered or not, nothing waits on it any more.
+                            if main:
+                                main._result_futures.pop(task_id, None)
                     else:
                         logger.warning(
                             "[%s] installer not found — skipping dep install for '%s'",

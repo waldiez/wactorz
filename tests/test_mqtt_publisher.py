@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 
+from tests.waiting import PATIENCE_S, until
 from wactorz.core.mqtt_publisher import MQTTPublisher
 
 
@@ -91,12 +92,15 @@ def _outbox(db_path: str | Path) -> list[tuple[Any]]:
 
 
 async def _settle(pub: MQTTPublisher, client: _FakeClient, expected: int = 1) -> None:
-    """Wait for the drain loop to get through the queue."""
-    for _ in range(200):
-        if len(client.published) >= expected and pub.queue_depth == 0:
-            return
-        await asyncio.sleep(0.005)
-    raise AssertionError(f"drained {len(client.published)}, wanted {expected}")
+    """Wait for the drain loop to get through the queue.
+
+    For as long as it takes: a publish that failed is sent again only after the
+    publisher's reconnect wait, which is a second and a little more.
+    """
+    await until(
+        lambda: len(client.published) >= expected and pub.queue_depth == 0,
+        f"the publisher draining {expected} message(s)",
+    )
 
 
 class TestQoSRouting:
@@ -160,7 +164,7 @@ class TestDurability:
         second._load_pending_from_db()
 
         assert second.queue_depth == 1
-        topic, payload, _retain, qos, row_id = second._queue.get_nowait()
+        topic, payload, _retain, qos, row_id, _properties = second._queue.get_nowait()
         assert (topic, payload, qos) == ("nodes/alpha/spawn", "payload", 1)
         assert row_id > 0
 
@@ -228,7 +232,9 @@ class TestDelivery:
         broker._client.fail_next = 10_000  # the broker never accepts anything
         pub = await MQTTPublisher.create("localhost", 1883, db_path=str(tmp_path / "o.db"))
         try:
-            await asyncio.wait_for(pub.publish("agents/a1/status", "{}"), timeout=0.5)
+            # A broker that never accepts would hold this for ever; any limit
+            # tells the two apart, so it is one a slow machine cannot reach.
+            await asyncio.wait_for(pub.publish("agents/a1/status", "{}"), timeout=PATIENCE_S)
         finally:
             await pub.disconnect()
 
@@ -288,7 +294,7 @@ class TestWithoutABroker:
         assert pub.queue_depth == 0
         assert not (tmp_path / "outbox.db").exists()
 
-    async def test_create_survives_an_outbox_it_cannot_open(
+    async def test_an_outbox_it_cannot_open_costs_durability_not_delivery(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         def _explode(self) -> None:
@@ -296,11 +302,18 @@ class TestWithoutABroker:
 
         monkeypatch.setattr(MQTTPublisher, "_init_db", _explode)
         pub = await MQTTPublisher.create("localhost", 1883, db_path=str(tmp_path / "o.db"))
-
-        # A publisher that cannot start must not take the actor system with it.
-        assert pub._available is False
-        await pub.publish("nodes/alpha/spawn", "payload", qos=1)
-        assert pub.queue_depth == 0
+        try:
+            # Heartbeats, commands and chat still go out, held in memory until
+            # they do, rather than nothing being sent for the life of the process.
+            assert pub._available is True
+            assert pub._memory_only is True
+            await pub.publish("nodes/alpha/spawn", "payload", qos=1)
+            assert pub.queue_depth == 1
+            assert pub._queue.get_nowait()[4] == -1
+            # Kept running: it is what tries the outbox again.
+            assert pub._checkpoint_task is not None
+        finally:
+            await pub.disconnect()
 
     async def test_disconnect_is_safe_before_create(self, tmp_path: Path) -> None:
         await MQTTPublisher(db_path=str(tmp_path / "o.db")).disconnect()
@@ -319,8 +332,12 @@ class TestWithoutABroker:
 
         pub = await MQTTPublisher.create("nowhere", 1883, db_path=str(tmp_path / "o.db"))
         try:
-            # Long enough for the first retry — the one that would repeat.
-            await asyncio.sleep(1.2)
+            # Until the first retry has failed too — the one that would repeat
+            # the warning, and is said at debug instead.
+            await until(
+                lambda: any(r.levelno == logging.DEBUG for r in caplog.records),
+                "the publisher retrying the broker",
+            )
         finally:
             await pub.disconnect()
 

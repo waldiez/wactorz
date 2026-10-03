@@ -24,8 +24,6 @@ Structured commands are still accepted for programmatic callers:
   remember my location as <location>
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re
@@ -523,6 +521,21 @@ def _resolve_when(low: str, today: date) -> dict[str, Any]:
     return out
 
 
+def _named_place(reply: str) -> str:
+    """The place a model named, out of a reply that may say more than the name.
+
+    Its first line that says anything, without the quotes a model likes to put
+    around a name. The line is taken first and the quotes after: taken off the
+    whole reply, a closing quote that is followed by more text is not at the
+    end, and stays on the name.
+    """
+    for line in reply.splitlines():
+        named = line.strip().strip("\"'").strip()
+        if named:
+            return named
+    return ""
+
+
 def _clean_location(cand: str) -> str | None:
     """Strip temporal/topic/filler words, leaving a plausible place name."""
     if not cand:
@@ -765,7 +778,7 @@ class WeatherAgent(Actor):
                     "If there is no location, reply exactly: NONE"
                 ),
             )
-            loc = (reply or "").strip().strip('"').splitlines()[0].strip()
+            loc = _named_place(reply or "")
             if not loc or loc.upper() == "NONE" or len(loc) > 80:
                 return None
             return loc if await self._geocode(loc) else None

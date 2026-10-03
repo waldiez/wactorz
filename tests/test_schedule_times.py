@@ -6,8 +6,6 @@ a schedule whose time has just passed must roll to the next occurrence, not fire
 immediately and then again.
 """
 
-from __future__ import annotations
-
 from datetime import datetime, timedelta, timezone
 
 import pytest

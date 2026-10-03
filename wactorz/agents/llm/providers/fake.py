@@ -18,8 +18,6 @@ to reply, with a default. Tests take the default; a recorded walkthrough loads a
 script whose answers read well. The provider is the same either way.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import AsyncGenerator, Mapping
 

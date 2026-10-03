@@ -28,6 +28,11 @@ Load a manual first, then ask questions against it.
 | `action` | `load_manual`, `ask`, `status`, `clear` |
 | `device` | model name or query (for `load_manual`) |
 | `question` | question about the loaded manual (for `ask`) |
+| `url` | the manual's address, to skip the search (for `load_manual`) |
+
+The agent fetches only public web addresses — a search result, a link in a page,
+or a `url` you give it — and checks every redirect the same way, so a manual on
+your own network cannot be loaded by URL. A download stops at 50 MB.
 
 Returns `success`, `device`, `url` (the PDF), `pages`, `chars`, a `preview`, and the LLM
 `answer`.

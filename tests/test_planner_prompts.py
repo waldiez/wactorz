@@ -19,7 +19,7 @@ from wactorz.agents.prompts.planner_prompts import (
 #: Template name -> the fields its call site in the planner passes.
 TEMPLATES = {
     "DECOMPOSE_PROMPT": (DECOMPOSE_PROMPT, {"workers_desc", "topic_schema_ctx", "task"}),
-    "HA_FEASIBILITY_PROMPT": (HA_FEASIBILITY_PROMPT, {"task", "ha_section"}),
+    "HA_FEASIBILITY_PROMPT": (HA_FEASIBILITY_PROMPT, {"task", "ha_section", "topic_section"}),
     "RULE_CONFLICT_PROMPT": (RULE_CONFLICT_PROMPT, {"task"}),
 }
 

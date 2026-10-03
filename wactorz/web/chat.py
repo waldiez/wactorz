@@ -17,6 +17,7 @@ from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
+from aiomqtt import MqttError
 
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
@@ -533,6 +534,18 @@ async def route_chat(
                             )
                             await _end_fn()
                             return
+                except (OSError, MqttError) as exc:
+                    # The broker is not there to carry it. That is an outage,
+                    # which every listener is already reporting: a warning with
+                    # the reason, and no traceback of code that did its job.
+                    logger.warning(
+                        "[io-gateway] Could not reach @%s on %s: %s", target_name, remote_node, exc
+                    )
+                    await reply_fn(
+                        f"[error] Could not reach @{target_name} on {remote_node}: {exc}"
+                    )
+                    await _end_fn()
+                    return
                 except Exception as exc:
                     logger.exception("[io-gateway] Remote @%s routing failed", target_name)
                     await reply_fn(

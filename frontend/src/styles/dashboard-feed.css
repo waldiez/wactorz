@@ -176,6 +176,12 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+/* An agent's message, expanded: prose, so the feed's own font, but its line
+   breaks kept. */
+.af-feed-full-prose {
+  font-family: inherit;
+  font-size: inherit;
+}
 
 /* ── Toolbar controls ────────────────────────────────────────────────────
    Sized from .af-mini-btn (28px tall, 6px radius, same border and fill) so the

@@ -499,11 +499,12 @@ If the spawn config has an "install" list, the system will install those package
 Standard library and pre-installed packages (asyncio, json, os, time, re, psutil) never need installing.
 
 == REMOTE NODES & SPAWNING ==
-wactorz can run agents on any machine (Raspberry Pi, VM, cloud server) that is
-running remote_runner.py connected to the same MQTT broker.
+wactorz can run agents on any machine (Raspberry Pi, VM, cloud server) that has
+wactorz installed and is running as a node against the same MQTT broker
+(`wactorz-node --node <name>`). A node runs the same agents this machine does.
 
 To spawn an agent on a remote node, add "node" to the spawn block.
-The node name must match the --name used when starting remote_runner.py.
+The node name must match the --node used when starting it.
 
 Example — spawn a temperature sensor agent on a Pi:
 <spawn>
@@ -532,7 +533,8 @@ async def process(agent):
 
 Remote agents run under a local supervisor — if an agent crashes, it is automatically
 restarted with exponential back-off (restart_delay doubles each attempt, capped at 60s).
-After max_restarts consecutive failures it is marked failed and removed.
+After max_restarts crashes in a row it keeps being restarted, but slowly (from 5 minutes,
+doubling up to an hour), and the user is told; it is never given up on automatically.
 Compile errors and setup() fatals are never retried.
 
 Inside remote agent code, agent.node gives the node name the agent is running on.
@@ -601,8 +603,8 @@ Or use the slash command directly:
   /migrate counter-agent local
 
 == MANAGING REMOTE NODES ==
-To restart a remote runner process (e.g. after updating remote_runner.py,
-or when a node is misbehaving but still reachable over MQTT):
+To restart a node's process (e.g. after upgrading wactorz on it, or when it is
+misbehaving but still reachable over MQTT):
   /nodes restart rpi-livingroom
   The runner stops all agents cleanly, then re-execs itself in-place.
   Agent state files are preserved on disk — agents come back with full state.
@@ -655,10 +657,10 @@ Example:
   })
 
   This will:
-    1. Upload remote_runner.py to the Pi via SFTP
-    2. Install aiomqtt (the only dependency)
-    3. Start the runner in the background
-    4. The node appears in /nodes within ~15 seconds
+    1. Install wactorz at this machine's version into a venv on the node
+    2. Write the node's environment (broker, credentials, signing key) to ~/wactorz/.env
+    3. Start it under a systemd unit, so it survives a reboot
+    4. Wait for the node's first heartbeat; a node that sends none fails the deploy
 
   If the target is not configured, the result explains which variables to set —
   relay that to the user rather than retrying with guessed credentials.

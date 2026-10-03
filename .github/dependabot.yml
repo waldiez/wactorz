@@ -1,0 +1,82 @@
+# Proposes new releases of what CI and the images pin, and of the Python
+# dependencies locked in uv.lock.
+#
+# `cooldown` holds each release back for a week: a compromised release is
+# usually found and pulled within days, and should not be proposed the day it
+# appears. `groups` makes each ecosystem one pull request a week, not one per
+# package.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The app image's base, the tool images CI runs (.github/tools/Dockerfile),
+  # the machine the end-to-end suite deploys a node to (e2e/stack/node/Dockerfile),
+  # and the add-ons' bases (ha-addon/bases/Dockerfile). A base bump there must reach
+  # each add-on's build.yaml and Dockerfile default too; a test says which.
+  - package-ecosystem: docker
+    directories: ["/", "/.github/tools", "/ha-addon/bases", "/e2e/stack/node"]
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      images:
+        patterns: ["*"]
+    ignore:
+      # A new digest of the same Python is proposed; a new Python is not. The
+      # app Dockerfile has two bases on two Python releases, and the `ultra` one
+      # stays where the Reachy Mini SDK's PyGObject still builds. Moving either
+      # is done by hand, with the CI matrix and the lockfile.
+      #
+      # By name, so it reaches only the official `python` image, which among
+      # these directories is the app Dockerfile's alone: the add-on bases are
+      # Home Assistant's images under other names, and are proposed as before.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  # The images compose.yaml and compose.dev.yaml run: the broker, pinned by
+  # digest to the same release the broker tests use, and the rest by tag.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      compose:
+        patterns: ["*"]
+
+  - package-ecosystem: bun
+    directory: /frontend
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      frontend:
+        patterns: ["*"]
+
+  # uv.lock, and pyproject.toml where a range must widen for a new release.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]
+    ignore:
+      # Pinned exactly in the docs extra so the committed static/docs is
+      # reproducible: a bump changes the generated HTML, so it is made by hand
+      # together with `make docs-build`.
+      - dependency-name: "markdown"
+      - dependency-name: "pygments"

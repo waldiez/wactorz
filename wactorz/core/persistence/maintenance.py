@@ -15,8 +15,6 @@ redesign: the retention job (:mod:`wactorz.retention`) is registered by the app,
 ahead of the checkpoint.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

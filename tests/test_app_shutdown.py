@@ -5,8 +5,6 @@ mid-write: cancelling the app task is what runs the shutdown `finally`, and
 without a handler SIGTERM does nothing at all when the process is PID 1.
 """
 
-from __future__ import annotations
-
 import asyncio
 import signal
 from typing import Any
@@ -152,3 +150,28 @@ class TestReadyBanner:
         monkeypatch.setattr(login, "sign_in_line", lambda _port: None)
         _print_ready_banner(8888)
         assert "Sign in" not in capsys.readouterr().out
+
+    def test_behind_ingress_it_points_at_the_panel_and_makes_no_sign_in_link(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # What is printed there lands in the add-on's log, which Home Assistant
+        # keeps and shows: no place for a link that signs whoever opens it in.
+        from wactorz import config
+        from wactorz.web import login
+
+        minted: list[int] = []
+
+        def _sign_in_line(port: int) -> str:
+            minted.append(port)
+            return "Sign in    http://localhost/login?code=secret"
+
+        monkeypatch.setattr(config, "INGRESS_ENABLED", True)
+        monkeypatch.setattr(login, "sign_in_line", _sign_in_line)
+
+        _print_ready_banner(8888)
+
+        out = capsys.readouterr().out
+        assert "Home Assistant sidebar" in out
+        assert "localhost" not in out
+        assert "code=" not in out
+        assert minted == [], "no code is issued when nobody could use the link"

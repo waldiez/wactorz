@@ -7,8 +7,6 @@ every check and surfaces as an agent that will not start.
 Parsing is not coverage. It is the floor.
 """
 
-from __future__ import annotations
-
 import ast
 import pathlib
 import sys

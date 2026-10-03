@@ -195,7 +195,8 @@ describe("Devices nav link (external HA link, no embedded client)", () => {
         expect(link.tagName).toBe("A");
         expect(link.getAttribute("href")).toBe("http://ha.local:8123");
         expect(link.target).toBe("_blank");
-        expect(link.rel).toBe("noopener");
+        // noreferrer as well: Home Assistant has no use for this page's address.
+        expect(link.rel).toBe("noopener noreferrer");
         expect(link.style.display).not.toBe("none");
         // It is NOT a view button — it carries no data-view and never goes active.
         expect(link.hasAttribute("data-view")).toBe(false);

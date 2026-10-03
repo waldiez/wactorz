@@ -26,6 +26,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, Message, MessageType
+from ...core.cancellation import cancel_all_until_done
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
 from .api import AgentAPI
@@ -136,6 +137,9 @@ class DynamicAgent(Actor):
         #: Set once the program has asked to end, so a second ask — or a
         #: process loop still finishing its tick — does not repeat the work.
         self._ending = False
+        #: What `agent.set_status()` last said. Shown on the agent's card in
+        #: place of its description, for an agent that keeps it up to date.
+        self._status_text = ""
 
         # Public API exposed to generated code via `agent` parameter
         # Owned here rather than grafted on by AgentAPI at first use: a
@@ -149,6 +153,14 @@ class DynamicAgent(Actor):
         self._subscribed_topics: dict[tuple[str, int], Any] = {}
         #: The last contract this agent declared, published in its manifest.
         self._topic_contract: Any = None
+        #: What the spawn config said this agent would publish and consume,
+        #: before any of its code ran. `declare_contract` adds to this rather
+        #: than replacing it, so a topic named at spawn time is still in the
+        #: manifest after the program declares one of its own.
+        self._spawn_contract: Any = None
+        #: What this agent says it can do, from its spawn config. Free-form
+        #: strings the planner searches; the manifest carries them.
+        self.capabilities: list[Any] = []
         self._api = AgentAPI(self)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
@@ -229,7 +241,7 @@ class DynamicAgent(Actor):
         on the next restart, and nothing it could do afterwards would bring
         itself back — no more of its code runs.
 
-        Supervision is released first, or the watchdog reads the stop as a
+        Supervision is left first, for good, or the watchdog reads the stop as a
         crash. The spawn-registry entry goes so a restart does not restore it,
         and the manifest is withdrawn last, after the final status, so the
         dashboard reads one unambiguous "gone" rather than a stop it might show
@@ -241,7 +253,7 @@ class DynamicAgent(Actor):
         if self._ending:
             return
         self._ending = True
-        self._release_from_supervision()
+        self._leave_supervision()
         registry = self._registry
         if registry is not None:
             main = find_main_actor(registry)
@@ -269,23 +281,18 @@ class DynamicAgent(Actor):
         """
         current = asyncio.current_task()
         others = [task for task in self._program_tasks if task is not current and not task.done()]
-        for task in others:
-            task.cancel()
         if others:
-            # asyncio.wait, not wait_for, for the reason given in
-            # Actor._wind_down_tasks: a repair is started from inside the process
-            # loop it replaces, so a cancellation arriving here is one this agent
-            # still has to act on.
-            _done, pending = await asyncio.wait(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
-            if pending:
+            # Asked again while they keep running, and never through wait_for, for
+            # the reasons given in Actor._wind_down_tasks: a repair is started from
+            # inside the process loop it replaces, so a cancellation arriving here
+            # is one this agent still has to act on.
+            still_running = await cancel_all_until_done(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
+            if still_running:
                 logger.warning(
                     "[%s] %d task(s) of the old program did not stop in time.",
                     self.name,
-                    len(pending),
+                    len(still_running),
                 )
-            for task in _done:
-                if not task.cancelled():
-                    task.exception()  # retrieved, so the loop does not warn at GC
         self._program_tasks = [task for task in self._program_tasks if not task.done()]
         self._subscribed_topics.clear()
         # The subscription connection is shared and outlives any one program, so
@@ -399,17 +406,10 @@ class DynamicAgent(Actor):
         await self._run_generated_cleanup()
 
         release_open_resources(self._api, self._ns, self.name)
+        self._api._close_windows()
 
-        # ── Cancel any tasks spawned inside setup/process code ─────────────
-        # Generated code may have called asyncio.create_task() directly without
-        # adding to _tasks. We can't track those, but we can ensure all tasks
-        # we DO track are properly cancelled and awaited.
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
-        # Give cancelled tasks a moment to actually stop
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+        # The tasks themselves, program tasks included, were cancelled and
+        # awaited by stop() before this ran; only the bookkeeping is left.
         self._program_tasks.clear()
 
     # ── Code compilation ───────────────────────────────────────────────────
@@ -980,16 +980,28 @@ class DynamicAgent(Actor):
                 ),
             )
 
+    async def _run_handle_task(self, payload: Any) -> Any:
+        """Call the generated ``handle_task`` under its timeout, and return the result.
+
+        The call itself, with nothing about where the answer goes: an agent on
+        main replies with a RESULT message to whoever sent the task, and one on
+        a node publishes to the reply topic the request named. Both get here.
+
+        Raises what the program raised, boxed by :func:`_bounded_call`, so each
+        caller reports the failure the way its own transport expects.
+        """
+        return await _bounded_call(
+            self._fn_handle_task(self._api, payload or {}),  # pyright: ignore[reportOptionalCall]  # callers check it is compiled
+            self._HANDLE_TASK_TIMEOUT,
+        )
+
     async def _invoke_handle_task(
         self, msg: Message, _incoming: Any, _corr: Any, _with_corr: Any
     ) -> Any:
         """Call the generated handle_task(), tagging the reply with its id."""
         if self._fn_handle_task:
             try:
-                result = await _bounded_call(
-                    self._fn_handle_task(self._api, msg.payload or {}),
-                    self._HANDLE_TASK_TIMEOUT,
-                )
+                result = await self._run_handle_task(msg.payload)
                 if msg.sender_id and result is not None:
                     await self.send(msg.sender_id, MessageType.RESULT, _with_corr(result))
             except asyncio.TimeoutError:
@@ -1195,25 +1207,24 @@ class DynamicAgent(Actor):
                 supervisor = self._registry._supervisor_ref
                 if supervisor is not None and self.name in supervisor._specs:
                     spec = supervisor._specs[self.name]
-                    # Build a new factory that injects the fixed code
-                    _fixed = fixed_code
-                    _old_factory = spec.factory
-                    _name = self.name
-                    _mqtt_client = self._mqtt_client
-                    _mqtt_broker = self._mqtt_broker
-                    _mqtt_port = self._mqtt_port
-                    _registry = self._registry
 
+                    # A factory that builds what the old one built, with the
+                    # fixed code in it. Both are bound as defaults so this
+                    # closure keeps the factory it is wrapping: `spec.factory`
+                    # is reassigned on the next line, and a second repair wraps
+                    # this one in turn.
+                    #
+                    # It carries nothing else. The broker and the registry are
+                    # applied to the actor by whoever spawns it -- the
+                    # supervisor's inject step -- so capturing them here only
+                    # held an MQTT client alive for the life of the spec.
                     async def _fixed_factory(
-                        old_f: Any = _old_factory,
-                        code: Any = _fixed,
-                        mc: Any = _mqtt_client,
-                        mb: Any = _mqtt_broker,
-                        mp: Any = _mqtt_port,
+                        old_f: Any = spec.factory,
+                        code: str = fixed_code,
                     ) -> Any:
-                        # Call the original factory to get a correctly configured instance
                         actor = await old_f() if inspect.iscoroutinefunction(old_f) else old_f()
-                        # Patch in the fixed code before the actor starts
+                        # Patched before the actor starts, so it compiles the
+                        # repaired program rather than the one that failed.
                         actor._code = code
                         return actor
 
@@ -1238,7 +1249,7 @@ class DynamicAgent(Actor):
         return hb
 
     def _current_task_description(self) -> str:
-        return self.description or "running dynamic code"
+        return self._status_text or self.description or "running dynamic code"
 
     def _accrue_usage(self, usage: dict[str, Any]) -> None:
         if not isinstance(usage, dict):

@@ -19,7 +19,7 @@ from ..openai_shape import (
     openai_messages,
 )
 from ..pricing import calc_cost
-from ..retry import is_retryable
+from ..retry import attempt_timeout, is_retryable
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +55,15 @@ class NIMProvider(LLMProvider):
 
         self.model = model
         self.base_url = base_url
+        # No retries of the SDK's own: `LLMProvider` retries, with one policy
+        # for every provider, and the two would multiply. The timeout is the
+        # configured one for the same reason: left to the SDK's default, a
+        # setting of "no limit" would still be cut off at the SDK's.
         self.client = openai.AsyncOpenAI(
             api_key=api_key or "dummy",  # NIM free tier may not require a key locally
             base_url=base_url,
+            max_retries=0,
+            timeout=attempt_timeout(),
         )
 
     @classmethod

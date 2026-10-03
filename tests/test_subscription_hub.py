@@ -549,3 +549,25 @@ class TestRepairUnbinds:
         assert seen == ["after"]
         assert len(broker.connections) == 1, "a repair should not rebuild the connection"
         _stop(hub)
+
+
+async def test_a_subscribe_on_the_live_connection_is_held_until_it_is_done(
+    broker: FakeBroker,
+) -> None:
+    # Not left for the collector to take part-way through.
+    async def noop(_payload: Any) -> None:
+        return None
+
+    hub = SubscriptionHub(FakeActor())
+    hub.bind("sensors/a", noop)
+    await _settle()
+
+    hub.bind("sensors/b", noop)
+    pending = set(hub._subscribing)
+    await _settle()
+
+    assert pending
+    assert all(task.done() for task in pending)
+    assert hub._subscribing == set()
+    _stop(hub)
+    await hub.clear()

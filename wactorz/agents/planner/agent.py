@@ -126,10 +126,15 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         self._lifetime_task = asyncio.create_task(self._lifetime_watchdog())
 
         if self._task:
-            asyncio.create_task(self._report_plan(self._task))
+            self.run_detached(self._report_plan(self._task), name="report-plan")
 
     async def on_stop(self) -> None:
         """Persist final cost metrics so lifetime spend survives agent termination."""
+        # Stopped from outside, the watchdog would still wake at its deadline
+        # and tear down a planner that is already gone.
+        watchdog = self._lifetime_task
+        if watchdog is not None and not watchdog.done() and watchdog is not asyncio.current_task():
+            watchdog.cancel()
         if self.total_cost_usd > 0:
             self.persist(
                 "_final_cost",
@@ -330,7 +335,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
 
         await self._log("Task complete.")
         if self._auto_terminate:
-            asyncio.create_task(self._deferred_stop())
+            self.run_detached(self._deferred_stop(), name="self-stop")
 
         return answer
 
@@ -542,20 +547,20 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     async def _release_from_registry(self) -> None:
         """Let go of everything holding this planner alive, Supervisor first.
 
-        spawn() registers every child with the Supervisor, which keeps a strong
-        reference and a name in its order. Unregistering alone would drop the
-        planner from the message registry while the Supervisor still held the
-        object, so _specs would grow by one planner per request until the app
-        restarted. release() drops the reference and retires the spec, which
-        also rules out a restart race. Mirrors the delete path main uses.
+        spawn() registers every child with the Supervisor, which keeps a spec, a
+        factory closure over what the planner was built from, and a name in its
+        order. Each planner has a name of its own, so a spec left behind -- even a
+        retired one -- is one more per pipeline request until the app restarts.
+        drop_supervised() forgets it, which also rules out a restart race.
+        Mirrors the delete path main uses.
         """
         if self._registry:
             sup = getattr(self._registry, "_supervisor_ref", None)
             if sup is not None:
                 try:
-                    sup.release(self.name)
+                    sup.drop_supervised(self.name)
                 except Exception as exc:
-                    logger.debug("[%s] Supervisor release failed: %s", self.name, exc)
+                    logger.debug("[%s] Leaving supervision failed: %s", self.name, exc)
 
         if self._registry:
             try:
@@ -585,15 +590,15 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
 
         await self._log("Self-terminating.")
 
-        # ── Release from the Supervisor FIRST ──────────────────────────────
+        # ── Leave the Supervisor FIRST ─────────────────────────────────────
         # spawn() auto-registers every child under the Supervisor, which pins a
         # strong reference (spec.actor) and keeps the name in _order. Without
-        # releasing, unregister()+stop() only removes us from the message
+        # forgetting it, unregister()+stop() only removes us from the message
         # registry — the Supervisor still holds the object, so it is never
         # garbage-collected and _specs grows one entry per planner until the app
-        # restarts. release() drops the actor reference and marks the spec
-        # retired (which also prevents any restart race). This mirrors main's
-        # own delete path: release() → unregister() → stop().
+        # restarts. drop_supervised() removes the entry outright, which also
+        # rules out a restart race. This mirrors main's own delete path:
+        # drop_supervised() → unregister() → stop().
         await self._release_from_registry()
         try:
             await self.stop()

@@ -11,6 +11,7 @@
  */
 
 import { escapeHtml } from "./escapeHtml";
+import { button, el } from "./dom";
 
 export type ToastType = "chat" | "spawn" | "alert-error" | "alert-warning" | "welcome" | "system";
 
@@ -320,8 +321,7 @@ export class ToastManager {
     }
 
     private createContainer(): void {
-        this.container = document.createElement("div");
-        this.container.className = "wz-toasts";
+        this.container = el("div", "wz-toasts");
         // Announce new toasts to screen readers as they're added (not the whole
         // stack), so audible-only cues (TTS replies, alerts) have a text equivalent.
         this.container.setAttribute("aria-live", "polite");
@@ -340,10 +340,9 @@ export class ToastManager {
             this.dismiss(this.active[0]!);
         }
 
-        const el = document.createElement("div");
-        el.className = "wz-toast";
+        const toastEl = el("div", "wz-toast");
 
-        el.innerHTML = `
+        toastEl.innerHTML = `
       <div class="wz-toast__strip" style="background:${theme.strip}"></div>
       <div class="wz-toast__body">
         <div class="wz-toast__avatar" style="background:${theme.avatar}">${escapeHtml(initials(opts.title))}</div>
@@ -364,46 +363,47 @@ export class ToastManager {
 
         // Action buttons
         if (opts.actions?.length) {
-            this._renderActions(el, opts.actions, theme);
+            this._renderActions(toastEl, opts.actions, theme);
         }
 
         // Click anywhere to dismiss
-        el.addEventListener("click", () => this.dismiss(el));
+        toastEl.addEventListener("click", () => this.dismiss(toastEl));
 
-        this.container.appendChild(el);
-        this.active.push(el);
+        this.container.appendChild(toastEl);
+        this.active.push(toastEl);
 
-        this._animateAndSchedule(el, duration);
+        this._animateAndSchedule(toastEl, duration);
     }
 
     /** Build and wire the action buttons into the toast's actions container. */
-    private _renderActions(el: HTMLElement, actions: ToastAction[], theme: ThemeEntry): void {
-        const actionsEl = el.querySelector(".wz-toast__actions")!;
+    private _renderActions(toastEl: HTMLElement, actions: ToastAction[], theme: ThemeEntry): void {
+        const actionsEl = toastEl.querySelector(".wz-toast__actions")!;
         for (const action of actions) {
-            const btn = document.createElement("button");
-            btn.className = "wz-toast__btn" + (action.primary ? " wz-toast__btn--primary" : "");
+            const btn = button(
+                "wz-toast__btn" + (action.primary ? " wz-toast__btn--primary" : ""),
+                action.label,
+            );
             btn.style.cssText = action.primary
                 ? `border-color:${theme.badge}55;background:${theme.badgeBg};color:${theme.badge}`
                 : "";
-            btn.textContent = action.label;
             btn.addEventListener("click", e => {
                 e.stopPropagation();
                 action.onClick();
-                this.dismiss(el);
+                this.dismiss(toastEl);
             });
             actionsEl.appendChild(btn);
         }
     }
 
     /** Trigger the enter animation, run the progress countdown and schedule auto-dismiss. */
-    private _animateAndSchedule(el: HTMLElement, duration: number): void {
+    private _animateAndSchedule(toastEl: HTMLElement, duration: number): void {
         // Animate in (next frame so transition fires)
         requestAnimationFrame(() => {
-            requestAnimationFrame(() => el.classList.add("wz-toast--in"));
+            requestAnimationFrame(() => toastEl.classList.add("wz-toast--in"));
         });
 
         // Progress bar countdown
-        const bar = el.querySelector<HTMLElement>(".wz-toast__progress-bar")!;
+        const bar = toastEl.querySelector<HTMLElement>(".wz-toast__progress-bar")!;
         bar.style.transition = `transform ${duration}ms linear`;
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -412,21 +412,21 @@ export class ToastManager {
         });
 
         // Auto-dismiss
-        const timer = window.setTimeout(() => this.dismiss(el), duration);
-        el.dataset["timer"] = String(timer);
+        const timer = window.setTimeout(() => this.dismiss(toastEl), duration);
+        toastEl.dataset["timer"] = String(timer);
     }
 
-    private dismiss(el: HTMLElement): void {
-        if (!el.isConnected) {
+    private dismiss(toastEl: HTMLElement): void {
+        if (!toastEl.isConnected) {
             return;
         }
-        clearTimeout(Number(el.dataset["timer"]));
-        el.classList.remove("wz-toast--in");
-        el.classList.add("wz-toast--out");
-        this.active = this.active.filter(t => t !== el);
-        el.addEventListener("transitionend", () => el.remove(), { once: true });
+        clearTimeout(Number(toastEl.dataset["timer"]));
+        toastEl.classList.remove("wz-toast--in");
+        toastEl.classList.add("wz-toast--out");
+        this.active = this.active.filter(t => t !== toastEl);
+        toastEl.addEventListener("transitionend", () => toastEl.remove(), { once: true });
         // Safety net if transitionend never fires
-        window.setTimeout(() => el.isConnected && el.remove(), 600);
+        window.setTimeout(() => toastEl.isConnected && toastEl.remove(), 600);
     }
 }
 

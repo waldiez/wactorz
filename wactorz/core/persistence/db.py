@@ -198,6 +198,26 @@ class WactorzDB:
                 self._conn.close()
                 self._conn = None
 
+    def ping(self, timeout: float) -> bool:
+        """Whether the connection answers a trivial query. **Blocks; run it on a thread.**
+
+        Waits at most ``timeout`` for the connection lock rather than for as long
+        as a writer holds it, so a caller asking whether the database is usable
+        is not held up by the very stall it is asking about.
+        """
+        if not self._lock.acquire(timeout=timeout):
+            return False
+        try:
+            if self._conn is None:
+                return False
+            self._conn.execute("SELECT 1").fetchone()
+        except sqlite3.Error:
+            return False
+        else:
+            return True
+        finally:
+            self._lock.release()
+
     def __enter__(self) -> "WactorzDB":
         return self
 

@@ -43,7 +43,7 @@ export interface HeartbeatPayload {
     cpu?: number;
     memory_mb?: number;
     task?: string;
-    /** Set for remote-runner agents — matches node_name from remote_runner.py. */
+    /** Set for agents on a node — matches the node’s own name. */
     node?: string;
 }
 

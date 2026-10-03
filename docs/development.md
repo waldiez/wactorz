@@ -148,7 +148,7 @@ MQTT_PASSWORD=
 #### Web dashboard
 
 ```env
-WS_PORT=8888   # dashboard port, default 8888
+MONITOR_PORT=8888   # dashboard port, default 8888; WS_PORT is read only when this is unset
 ```
 
 ---
@@ -390,11 +390,19 @@ wactorz/                         ← repo root
 ```bash
 git clone https://github.com/waldiez/wactorz.git
 cd wactorz
-pip install -e ".[all]"
+make install-dev
 
 # Start with hot-reload (restarts on .py/.yaml file changes)
-wactorz --reload
+.venv/bin/wactorz --reload
 ```
+
+`make install-dev` uses [uv](https://docs.astral.sh/uv/) when it is installed,
+putting the versions pinned in `uv.lock` into `.venv`; without it, pip installs
+from the ranges in `pyproject.toml`. It never removes what is already there, so
+extras installed by hand survive it. `USE_UV=0` forces pip. After changing a
+dependency, `make lock` re-resolves `uv.lock`, and `make audit` checks it for
+known vulnerabilities. What agents install at runtime, here and on edge nodes,
+always goes through pip.
 
 ### Adding a catalog recipe
 
@@ -416,8 +424,8 @@ touch wactorz/catalogue_agents/my_agent.py
 ### Running tests
 
 ```bash
-pip install -e ".[dev]"
-make test-py          # or: python -m pytest tests
+make install-dev
+make test-py          # or: .venv/bin/python -m pytest tests
 ```
 
 ---

@@ -10,6 +10,7 @@
 import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
 import type { CostLimitInfo } from "./settings";
+import { button, el } from "../dom";
 
 /** Compact token count for the card meta line: 1234 → "1.2k", 1_200_000 → "1.2M". */
 function fmtTokens(n: number): string {
@@ -57,9 +58,8 @@ export function buildHostBar(
     memUsed: number | null,
     memTotal: number | null,
 ): HTMLElement {
-    const bar = document.createElement("div");
+    const bar = el("div", "af-host-bar");
     bar.id = "af-host-bar";
-    bar.className = "af-host-bar";
 
     const { cpuPct, cpuText, memPct, memText } = hostBarValues(cpu, memUsed, memTotal);
 
@@ -163,8 +163,7 @@ function computeStatSpecs(data: StatCardData): StatSpec[] {
 export function buildStatCards(container: HTMLElement, data: StatCardData): void {
     container.innerHTML = "";
     computeStatSpecs(data).forEach(({ label, value, detail, accent, extra }) => {
-        const card = document.createElement("div");
-        card.className = "af-stat-card";
+        const card = el("div", "af-stat-card");
         card.style.borderColor = `${accent}44`;
         // Safe innerHTML: label/value/detail/accent/extra all come from
         // computeStatSpecs — fixed strings, numbers and hex colors, never
@@ -196,9 +195,7 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
     // undone by starting it again, and deleting one is not. They sit next to each
     // other, so sharing a colour invited the second when the first was meant.
     const add = (label: string, action: AgentAction, tone: "" | "caution" | "danger" = "") => {
-        const b = document.createElement("button");
-        b.className = `af-mini-btn${tone ? ` ${tone}` : ""}`;
-        b.textContent = label;
+        const b = button(`af-mini-btn${tone ? ` ${tone}` : ""}`, label);
         b.dataset["action"] = action;
         controls.appendChild(b);
     };
@@ -219,13 +216,10 @@ export function appendActionBtns(controls: HTMLElement, agent: AgentInfo): void 
 }
 
 function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLElement {
-    const controls = document.createElement("div");
-    controls.className = "af-card-controls";
+    const controls = el("div", "af-card-controls");
 
     if (canDirectMessage(agent)) {
-        const chatBtn = document.createElement("button");
-        chatBtn.className = "af-mini-btn af-chat-btn";
-        chatBtn.textContent = "Chat";
+        const chatBtn = button("af-mini-btn af-chat-btn", "Chat");
         chatBtn.hidden = stateLabel(agent.state) === "stopped";
         chatBtn.addEventListener("click", e => {
             e.stopPropagation();
@@ -249,23 +243,18 @@ function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLEleme
 function appendCardHeader(card: HTMLElement, agent: AgentInfo, hbMs: number): void {
     const color = stateColor(agent.state);
 
-    const dot = document.createElement("div");
+    const dot = el("div");
     // Pre-apply af-card-pulse when we already know this agent's heartbeat.
     dot.className = hbMs > 0 ? "af-card-state-dot af-card-pulse" : "af-card-state-dot";
     dot.style.background = color;
     dot.style.boxShadow = `0 0 8px ${color}`;
 
-    const name = document.createElement("div");
-    name.className = "af-card-name";
-    name.textContent = agent.name;
+    const name = el("div", "af-card-name", agent.name);
 
-    const stateLbl = document.createElement("div");
-    stateLbl.className = "af-card-state-label";
+    const stateLbl = el("div", "af-card-state-label", stateLabel(agent.state));
     stateLbl.style.color = color;
-    stateLbl.textContent = stateLabel(agent.state);
 
-    const meta = document.createElement("div");
-    meta.className = "af-card-meta";
+    const meta = el("div", "af-card-meta");
     // Cost only when actually spent — an idle LLM agent reports $0.0000, which is noise.
     const cost = agent.costUsd ?? 0;
     meta.innerHTML = `
@@ -286,25 +275,20 @@ function appendTokenLine(card: HTMLElement, agent: AgentInfo): void {
     if (inTok === 0 && outTok === 0) {
         return;
     }
-    const tokens = document.createElement("div");
-    tokens.className = "af-card-tokens";
+    const tokens = el("div", "af-card-tokens", `${fmtTokens(inTok)}↑ ${fmtTokens(outTok)}↓`);
     tokens.title = "tokens in / out";
-    tokens.textContent = `${fmtTokens(inTok)}↑ ${fmtTokens(outTok)}↓`;
     card.appendChild(tokens);
 }
 
 /** Build a single agent ("wactor") card, wiring its control buttons to `cb`. */
 export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCallbacks): HTMLElement {
-    const card = document.createElement("div");
-    card.className = "af-card";
+    const card = el("div", "af-card");
     card.dataset["id"] = agent.id;
 
     appendCardHeader(card, agent, hbMs);
 
     if (agent.task) {
-        const task = document.createElement("div");
-        task.className = "af-card-task";
-        task.textContent = agent.task;
+        const task = el("div", "af-card-task", agent.task);
         task.title = agent.task;
         card.appendChild(task);
     }
@@ -312,10 +296,8 @@ export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCa
     card.appendChild(buildCardControls(agent, cb));
 
     if (agent.protected) {
-        const shield = document.createElement("div");
-        shield.className = "af-card-protected";
+        const shield = el("div", "af-card-protected", "🔒");
         shield.title = "Protected wactor";
-        shield.textContent = "🔒";
         card.appendChild(shield);
     }
 

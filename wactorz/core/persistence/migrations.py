@@ -202,8 +202,9 @@ def _upgrade_baselines(db, pickle_store):
                         baseline[field] = default
                         upgraded = True
             if upgraded:
-                with open(pkl_path, "wb") as f:
-                    pickle.dump(state, f)
+                # Through the store: it keeps each state in memory, and a file
+                # changed behind it would be written over by what it holds.
+                pickle_store.save(agent_dir.name, state)
                 logger.info("[Migration] Upgraded pickle baselines for '%s'", agent_dir.name)
         except Exception as exc:
             # One agent's unreadable pickle must not abort the whole migration —

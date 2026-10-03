@@ -1,0 +1,57 @@
+name: Soak
+
+# A main and a node kept busy over a real mosquitto, far longer than a test on
+# a push can take: agents spawned, asked and deleted over and over, with what
+# is left behind compared after every round. It fails on anything that only
+# grows, which is what a long-running install would run out of.
+on:
+  # Nightly. GitHub runs a schedule on the default branch only.
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: How long to run, in seconds
+        default: "1800"
+
+permissions:
+  contents: read
+
+env:
+  # The uv CI installs with; a test keeps this and ci.yml on the same version.
+  UV_VERSION: "0.12.21"
+  # A scheduled run has no inputs.
+  DURATION: ${{ inputs.duration || '1800' }}
+
+jobs:
+  soak:
+    name: Main and a node, kept busy
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: '3.13'
+          activate-environment: true
+          enable-cache: false
+
+      - name: Install
+        run: uv sync --locked --extra all --extra dev
+
+      - name: Soak
+        run: make soak DURATION="$DURATION" SOAK_REPORT=soak-report.json
+
+      # Kept whether it passed or not: a slow climb shows across several
+      # nights' samples before it crosses a limit on any one of them.
+      - name: Upload the samples
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: soak-report
+          path: soak-report.json
+          if-no-files-found: ignore

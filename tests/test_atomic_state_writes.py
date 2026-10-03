@@ -53,21 +53,54 @@ class TestWritePickle:
         assert pickle.loads(target.read_bytes()) == {"generation": 1}
 
 
-class TestPickleStore:
-    def test_a_failed_save_keeps_the_last_good_state(self, tmp_path: Path) -> None:
-        store = PickleStore(str(tmp_path))
-        assert store.save("worker", {"generation": 1}) is True
+def _on_disk(tmp_path: Path, agent: str) -> dict:
+    """What a restart would read for ``agent``."""
+    return pickle.loads((tmp_path / agent / "state.pkl").read_bytes())
 
-        assert store.save("worker", {"bad": _Unpicklable()}) is False
+
+class TestPickleStore:
+    """A state that cannot be written costs that write, not the file.
+
+    The store keeps the state in memory and writes the file after; with no
+    event loop running, as here, it writes at once.
+    """
+
+    def test_a_failed_save_keeps_the_last_good_file(self, tmp_path: Path) -> None:
+        store = PickleStore(str(tmp_path))
+        store.save("worker", {"generation": 1})
+
+        store.save("worker", {"bad": _Unpicklable()})
 
         # Not {} — that is what the truncating write produced, and it is
         # indistinguishable from an agent that had never saved at all.
-        assert store.load("worker") == {"generation": 1}
+        assert _on_disk(tmp_path, "worker") == {"generation": 1}
 
-    def test_a_lost_save_is_reported_to_the_caller(self, tmp_path: Path) -> None:
+    def test_a_lost_save_is_reported_with_the_file_it_was_for(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
         store = PickleStore(str(tmp_path))
-        assert store.save("worker", {"bad": _Unpicklable()}) is False
-        assert store.save("worker", {"generation": 1}) is True
+
+        store.save("worker", {"bad": _Unpicklable()})
+
+        assert "state.pkl was not written" in caplog.text
+        assert "worker" in caplog.text
+
+    def test_the_agent_keeps_its_state_in_memory_all_the_same(self, tmp_path: Path) -> None:
+        # It carries on with what it has; only a restart would miss it.
+        store = PickleStore(str(tmp_path))
+        bad = _Unpicklable()
+
+        store.save("worker", {"bad": bad, "count": 3})
+
+        assert store.load("worker") == {"bad": bad, "count": 3}
+
+    def test_a_later_save_that_can_be_written_is(self, tmp_path: Path) -> None:
+        store = PickleStore(str(tmp_path))
+        store.save("worker", {"bad": _Unpicklable()})
+
+        store.save("worker", {"generation": 1})
+
+        assert _on_disk(tmp_path, "worker") == {"generation": 1}
 
 
 class TestLegacyActorPath:

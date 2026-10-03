@@ -7,8 +7,7 @@ self.total_*_tokens, self._persist_cost, self.system_prompt) plus the Actor
 base (self.persist, self.recall, self._registry).
 """
 
-from __future__ import annotations
-
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -296,14 +295,12 @@ class MemoryMixin(_Host):
             self.total_output_tokens += _usage.get("output_tokens", 0)
             self.total_cost_usd += _usage.get("cost_usd", 0.0)
             self._persist_cost()
-            import json as _json
-
             clean = raw.strip().removeprefix("```json").removeprefix("```")
             clean = clean.removesuffix("```").strip()
             if not clean:
                 logger.warning("[%s] Facts extraction returned empty string", self.name)
                 return
-            new_facts = _json.loads(clean)
+            new_facts = json.loads(clean)
             if not isinstance(new_facts, dict):
                 logger.warning(
                     "[%s] Facts extraction returned non-dict: %s",
@@ -352,7 +349,7 @@ class MemoryMixin(_Host):
                 )
             else:
                 logger.info("[%s] User facts updated: %s", self.name, list(normalized.keys()))
-        except _json.JSONDecodeError as e:
+        except json.JSONDecodeError as e:
             logger.warning(
                 "[%s] Facts extraction JSON parse failed: %s. Raw response (first 200 chars): %r",
                 self.name,

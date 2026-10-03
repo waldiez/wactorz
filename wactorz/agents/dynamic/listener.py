@@ -18,6 +18,10 @@ import time
 import traceback
 from typing import Any
 
+import aiomqtt
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.properties import Properties
+
 from ...core.mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client
 from ...core.topic_bus import topic_matches
 
@@ -122,6 +126,9 @@ class SubscriptionHub:
         self._bindings: list[_Binding] = []
         self._client: Any = None
         self._task: asyncio.Task | None = None
+        #: Subscriptions sent on the live connection and not yet acknowledged,
+        #: held so none is collected part-way through.
+        self._subscribing: set[asyncio.Task] = set()
         self._warned = [False]
 
     def bind(self, topic: str, callback: Any) -> asyncio.Task | None:
@@ -136,7 +143,9 @@ class SubscriptionHub:
         self._bindings.append(binding)
         binding.worker = asyncio.create_task(self._drain(binding))
         if self._client is not None:
-            asyncio.create_task(self._subscribe_now(topic))
+            task = asyncio.create_task(self._subscribe_now(topic))
+            self._subscribing.add(task)
+            task.add_done_callback(self._subscribing.discard)
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self.run())
             return self._task
@@ -155,6 +164,8 @@ class SubscriptionHub:
         self._bindings.clear()
         for binding in bindings:
             self._stop_worker(binding)
+        for task in list(self._subscribing):
+            task.cancel()
         client = self._client
         if client is None:
             return
@@ -202,10 +213,6 @@ class SubscriptionHub:
         """Connect arguments that make the broker keep this session, or not."""
         if not self._durable:
             return {}
-        import aiomqtt
-        from paho.mqtt.packettypes import PacketTypes
-        from paho.mqtt.properties import Properties
-
         properties = Properties(PacketTypes.CONNECT)
         properties.SessionExpiryInterval = self.SESSION_EXPIRY_SECONDS
         return {
@@ -235,11 +242,6 @@ class SubscriptionHub:
 
     async def run(self) -> None:
         """Hold the connection open and dispatch what arrives, reconnecting for ever."""
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.exception("[%s] aiomqtt not installed", self._actor.name)
-            return
         while True:
             try:
                 # Workers are cancelled when this task is, so a hub that is

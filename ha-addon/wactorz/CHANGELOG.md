@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 
 - Changed: `/share/wactorz/mosquitto-logins.yaml` is written readable by its owner alone. It holds password hashes.
 - Fixed: `/deploy` from the add-on failed with "The published wactorz cannot run as a node" when the add-on was built from a commit whose version is published without the node runtime. The node is now sent the copy of Wactorz the add-on is running.

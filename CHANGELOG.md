@@ -3,7 +3,30 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased] — pending
+## [0.7.0] - 2026-10-03
+
+Wactorz 0.7.0 is about trust and visibility: edge nodes now run the real Wactorz package over an authenticated, encrypted link, every install is locked down by default, and an operator can see when something is stuck, down or failing. A short summary comes first; the full account of each change follows it.
+
+### Before you upgrade
+
+- **Redeploy every edge node.** A node must now run the same release series as the server: the server refuses to spawn an agent on, or migrate one to, a 0.6 node, and says to run `/deploy <node>`. The redeploy is also what brings a node signed commands, TLS, its own broker account, signed model requests and the systemd watchdog. Agents already running on a node are left alone until then, and their state carries over.
+- **Compose: rebuild with `docker compose --profile python up -d --build`.** The stacks no longer run without an API key: one is generated on first start when `.env` sets none (`docker compose exec wactorz-python cat /run/wactorz/api_key`). Plain MQTT on `1883` and Home Assistant's `8123` are now published to the host only; set `MQTT_EXTERNAL_BIND=0.0.0.0` while a node is still on plain MQTT, and `HA_EXTERNAL_BIND=0.0.0.0` if you open Home Assistant from another machine.
+- **Other clients on the broker need listing once a node is deployed with its own account.** On the compose broker and the add-ons' embedded one, an account the access list does not name loses access: add Home Assistant's, zigbee2mqtt's or any other in `WACTORZ_BROKER_ACCOUNTS` (`broker_accounts` in the add-ons).
+- **Home Assistant add-ons no longer run Wactorz as root, and map `/config` read-only.** An agent that writes into `/config` or `/share` can no longer do so. If you published port `8000` or `8888` without an `api_key`, set one: a key is now generated when it is blank.
+- **Behind a reverse proxy that relies on `X-Forwarded-Host`**, set `WACTORZ_TRUSTED_PROXIES` to the proxy's address; forwarded headers from anyone else are now ignored.
+- **The WhatsApp webhook needs `TWILIO_AUTH_TOKEN`** and refuses to start without it.
+- **Agent state is written about a second after `persist()`**, off the event loop. A stop, a migration and a clean shutdown still save everything; a killed process can lose the last second.
+
+### Highlights
+
+- **Edge nodes you can trust.** Commands to a node are signed, its broker link uses TLS, each node gets its own broker account limited by an access list, and main's model answers only signed requests from the nodes it deployed.
+- **Nodes run the real Wactorz.** `/deploy` installs the package itself, starts it with `wactorz-node`, and reports success only once the node has reached the broker and sent a heartbeat. Redeploying no longer deletes a node's agents.
+- **Locked down by default.** Compose and the add-ons always have an API key, the add-ons drop root, ingress trusts the Supervisor alone, and the REST API refuses other sites when it has no key.
+- **See what is wrong.** `/ready` and Kubernetes-style probes, metrics for the broker, nodes, LLM requests, mailboxes and a blocked event loop, Alertmanager in the compose stack, and JSON logs for a collector.
+- **Agents that keep going.** A crashing agent is restarted more slowly instead of given up on, a full mailbox no longer stalls its senders, and saving state no longer holds every agent while the disk catches up.
+- **A second image, `ultra`,** with PyTorch, Ultralytics, OpenCV and GStreamer for vision agents and the Reachy Mini SDK.
+- **Flic buttons as triggers,** paired from chat with the new `flic` catalogue agent.
+- **Releases you can verify.** Dependencies come from a lockfile, images are published only after the tests pass and a vulnerability scan, and each image lists the third-party packages and licenses it carries.
 
 ### Added
 

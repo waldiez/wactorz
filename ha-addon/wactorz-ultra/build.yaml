@@ -5,7 +5,7 @@ build_from:
 args:
   # The wactorz release this add-on version is built from, kept in step by
   # scripts/sync_versions.py. Set a branch, tag or sha in a local test copy.
-  WACTORZ_REF: v0.6.1
+  WACTORZ_REF: v0.7.0
 labels:
   org.opencontainers.image.title: "Wactorz Home Assistant add-on"
   org.opencontainers.image.source: "https://github.com/waldiez/wactorz"

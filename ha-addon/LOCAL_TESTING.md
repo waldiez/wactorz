@@ -47,7 +47,7 @@ Use this path when testing Dockerfile changes or Python changes from a branch.
    ships naming the release this add-on version belongs to:
 
    ```diff
-   -  WACTORZ_REF: v0.6.1
+   -  WACTORZ_REF: v0.7.0
    +  WACTORZ_REF: your-branch
    ```
 

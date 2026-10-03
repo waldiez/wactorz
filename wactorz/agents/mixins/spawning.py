@@ -44,6 +44,7 @@ from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.topics import topic_name_error
 from ...plugins import for_target
 from ..lookup import find_main_actor
+from ..rule_agent import RuleAgent, RuleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,8 @@ class SpawnMixin(_Host):
             actor = await self._spawn_ha_actuator(config, name)
         elif agent_type == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
+        elif agent_type == "rule":
+            actor = await self._spawn_rule_agent(config, name)
         elif agent_type == "module":
             actor = await self._spawn_module_agent(config, name)
         elif agent_type == "llm" or (not code and system_prompt):
@@ -334,6 +337,22 @@ class SpawnMixin(_Host):
         except Exception:
             logger.exception("[%s] Failed to spawn ScheduledAgent '%s'", self.name, name)
             return None
+
+    async def _spawn_rule_agent(self, config: dict, name: str) -> Actor | None:
+        """Spawn a rule: triggers, conditions and actions, as `rule_agent` describes."""
+        try:
+            rule = RuleConfig.from_dict(config)
+        except ValueError as exc:
+            # An expected rejection of the config, reported in full by its message.
+            logger.error("[%s] Cannot spawn rule %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
+            return None
+        logger.info("[%s] Spawning rule %r on %s", self.name, name, ", ".join(rule.triggers))
+        return await self.spawn(
+            RuleAgent,
+            config=rule,
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
+        )
 
     async def _spawn_module_agent(self, config: dict, name: str) -> Actor | None:
         """Spawn an agent this deployment brings, named by its ``target`` import path.

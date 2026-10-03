@@ -130,7 +130,8 @@ wactorz.run(agents=[detect], minimal=True)   # monitor + dashboard + your agent,
 ```
 
 Or name it in `WACTORZ_AGENTS=mypkg.agent:detect` for a normal `wactorz` start, or list it
-as a `wactorz.agents` entry point in your package. The Home Assistant agents start only
+as a `wactorz.agents` entry point in your package. `wactorz.pipeline(...)` groups several
+such agents with a schedule and rules, wiring checked up front. The Home Assistant agents start only
 when Home Assistant is configured. See [Bringing your own agents](https://docs.waldiez.io/wactorz/guide/agents.html#bringing-your-own-agents)
 and [`examples/imu_anomaly/`](examples/imu_anomaly/README.md).
 

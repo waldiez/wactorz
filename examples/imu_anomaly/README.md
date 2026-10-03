@@ -13,6 +13,7 @@ language model.
 | `train.py` | Fits it on synthetic "normal" motion and writes `imu_model.pkl`. Stands in for your own training. |
 | `agent.py` | The agent: a function declared with `@wactorz.agent`, subscribed to `sensors/imu/#`, publishing anomalies on `anomalies/imu`. |
 | `run.py` | Starts Wactorz with that agent, in the minimal profile. |
+| `pipeline.py` | The detector as one stage of a pipeline: a notifier, a report on a schedule, and a rule that alerts on a strong anomaly. |
 | `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal. |
 
 ## Run it
@@ -61,6 +62,35 @@ across restarts with `persist`/`recall`.
 monitor, restarts it if it crashes, and serves the dashboard. With
 `minimal=True` no orchestrator, catalogue or installer starts, so no model API
 key is needed.
+
+## As a pipeline
+
+`pipeline.py` keeps `detect` as it is and adds two more functions and some glue,
+declared together:
+
+```python
+watch = wactorz.pipeline(
+    "imu-watch",
+    steps=[detect, notify, report],
+    schedule={"type": "interval", "seconds": 300},
+    rules=[
+        {
+            "triggers": ["anomalies/imu"],
+            "conditions": [{"field": "score", "op": "gt", "value": 20}],
+            "actions": [{"type": "publish", "topic": "alerts/imu", "payload": {"level": "high"}}],
+            "cooldown_seconds": 30,
+        }
+    ],
+)
+```
+
+Each step is still an agent with its own card. The schedule becomes a
+scheduled agent ticking `pipelines/imu-watch/tick`, which `report` listens to;
+the rule becomes a rule agent that publishes to `alerts/imu` at most every
+thirty seconds. Wiring is checked when the pipeline is declared: a step that
+listens on a topic nothing in the pipeline publishes is refused before anything
+starts. Run it with `python pipeline.py` and publish readings as before; the
+feed shows five agents, and `/rules` in a full installation lists `imu-watch`.
 
 ## The same agent in a full installation
 

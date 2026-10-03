@@ -15,6 +15,7 @@ from .main import MainActor
 from .monitor_agent import MonitorActor
 from .one_off_actuator_agent import OneOffActuatorAgent
 from .planner import PlannerAgent
+from .rule_agent import RuleAgent
 from .scheduled_agent import ScheduledAgent
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "OneOffActuatorAgent",
     "OpenAIProvider",
     "PlannerAgent",
+    "RuleAgent",
     "ScheduledAgent",
     "agent",
 ]

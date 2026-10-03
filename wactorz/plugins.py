@@ -53,6 +53,11 @@ class AgentPlugin:
     autostart: bool = True
     input_schema: dict[str, Any] = field(default_factory=dict)
     output_schema: dict[str, Any] = field(default_factory=dict)
+    #: The topics the agent listens to and writes to, as far as it says: a
+    #: decorated function's arguments, or ``SUBSCRIBES``/``PUBLISHES`` on a
+    #: class. What a pipeline checks its wiring against.
+    subscribes: tuple[str, ...] = ()
+    publishes: tuple[str, ...] = ()
 
     def build(
         self,
@@ -115,6 +120,15 @@ def _accepted_parameters(cls: type) -> set[str] | None:
     return {p.name for p in params}
 
 
+def _topics(value: Any) -> tuple[str, ...]:
+    """``value`` as a tuple of topics: one string, several, or none."""
+    if not value:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(t) for t in value)
+
+
 def _first_line(text: str | None) -> str:
     return (text or "").strip().split("\n")[0].strip()
 
@@ -138,6 +152,8 @@ def plugin_from(obj: Any, target: str = "") -> AgentPlugin:
             autostart=spec.autostart,
             input_schema=dict(spec.input_schema),
             output_schema=dict(spec.output_schema),
+            subscribes=tuple(spec.subscribes),
+            publishes=(spec.publishes,) if spec.publishes else (),
         )
     if inspect.isclass(obj) and issubclass(obj, Actor):
         name = getattr(obj, "AGENT_NAME", None) or agent_name_from(obj.__name__)
@@ -152,6 +168,8 @@ def plugin_from(obj: Any, target: str = "") -> AgentPlugin:
             autostart=bool(getattr(obj, "AUTOSTART", True)),
             input_schema=dict(getattr(obj, "INPUT_SCHEMA", {}) or {}),
             output_schema=dict(getattr(obj, "OUTPUT_SCHEMA", {}) or {}),
+            subscribes=_topics(getattr(obj, "SUBSCRIBES", ())),
+            publishes=_topics(getattr(obj, "PUBLISHES", ())),
         )
     raise TypeError(
         f"{target or obj!r} is neither a function declared with @wactorz.agent "
@@ -185,13 +203,25 @@ _plugins: dict[str, AgentPlugin] | None = None
 _registered: dict[str, AgentPlugin] = {}
 
 
-def register(obj: Any, *, target: str = "") -> AgentPlugin:
+def register(obj: Any, *, target: str = "", autostart: bool | None = None) -> AgentPlugin:
     """Make ``obj`` -- a decorated function or an Actor subclass -- a plugin now.
 
     What :func:`wactorz.run` does with each agent it is given. A plugin under
-    the same name replaces the earlier one.
+    the same name replaces the earlier one. ``autostart`` overrides what the
+    object says: a pipeline registers its steps so they may be spawned by
+    target, and starts them itself.
     """
     plugin = plugin_from(obj, target or _target_of(obj))
+    if autostart is not None:
+        plugin.autostart = autostart
+    _registered[plugin.name] = plugin
+    if _plugins is not None:
+        _plugins[plugin.name] = plugin
+    return plugin
+
+
+def register_plugin(plugin: AgentPlugin) -> AgentPlugin:
+    """Keep an already-built plugin, under its name. Same name replaces."""
     _registered[plugin.name] = plugin
     if _plugins is not None:
         _plugins[plugin.name] = plugin

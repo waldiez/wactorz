@@ -16,6 +16,7 @@ from wactorz import plugins
 from wactorz.agents.function_agent import FunctionAgent, agent
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.mixins.spawning import SpawnMixin
+from wactorz.agents.rule_agent import RuleAgent
 from wactorz.core.actor import ActorState
 
 if TYPE_CHECKING:
@@ -117,3 +118,34 @@ class TestModuleSpawns:
         host = _Host()
 
         assert await host._spawn_local_from_config({"name": "x", "type": "module"}) is None
+
+
+class TestRuleSpawns:
+    async def test_a_rule_config_spawns_a_rule_agent(self) -> None:
+        host = _Host()
+
+        actor = await host._spawn_local_from_config(
+            {
+                "name": "imu-alert",
+                "type": "rule",
+                "triggers": ["anomalies/imu"],
+                "conditions": [{"field": "score", "op": "gt", "value": 10}],
+                "actions": [{"type": "publish", "topic": "alerts/imu"}],
+            }
+        )
+
+        assert isinstance(actor, RuleAgent) and actor.name == "imu-alert"
+        assert actor.config.triggers == ("anomalies/imu",)
+        assert host.registered[0]["type"] == "rule"
+
+    async def test_an_invalid_rule_is_refused_by_message(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        host = _Host()
+
+        actor = await host._spawn_local_from_config(
+            {"name": "bad", "type": "rule", "triggers": "a/b"}
+        )
+
+        assert actor is None
+        assert "at least one action" in caplog.text

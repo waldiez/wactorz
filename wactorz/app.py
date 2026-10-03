@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
-from wactorz import config, plugins, retention
+from wactorz import config, pipelines, plugins, retention
 from wactorz.agents.lookup import find_main_actor
 from wactorz.broker_certificates import prepare_broker_files
 from wactorz.cli import get_args
@@ -349,6 +349,38 @@ async def build_system(
     def make_catalog() -> Actor:
         return _wire_persistence(CatalogAgent(name="catalog", persistence_dir=_sd))
 
+    def pipeline_factories(pipe: pipelines.Pipeline) -> list[tuple[str, Callable[[], Actor]]]:
+        """One supervised factory per agent of ``pipe``: its steps, schedule and rules."""
+        from wactorz.agents.rule_agent import RuleAgent
+        from wactorz.agents.scheduled_agent import ScheduledAgent
+
+        factories: list[tuple[str, Callable[[], Actor]]] = [
+            (step.name, make_plugin_factory(step)) for step in pipe.steps
+        ]
+        if pipe.schedule is not None:
+
+            def make_schedule(
+                spec: dict[str, Any] = pipe.schedule, topic: str = pipe.tick_topic
+            ) -> Actor:
+                return _wire_persistence(
+                    ScheduledAgent(
+                        name=pipe.schedule_name,
+                        schedule=spec,
+                        publish_topic=topic,
+                        description=f"ticks pipeline {pipe.name}",
+                        persistence_dir=_sd,
+                    )
+                )
+
+            factories.append((pipe.schedule_name, make_schedule))
+        for rule_name, rule in zip(pipe.rule_names, pipe.rules, strict=True):
+
+            def make_rule(name: str = rule_name, cfg: Any = rule) -> Actor:
+                return _wire_persistence(RuleAgent(cfg, name=name, persistence_dir=_sd))
+
+            factories.append((rule_name, make_rule))
+        return factories
+
     def make_plugin_factory(plugin: plugins.AgentPlugin) -> Callable[[], Actor]:
         def make() -> Actor:
             return _wire_persistence(
@@ -435,6 +467,19 @@ async def build_system(
             restart_delay=1.0,
         )
 
+    # The pipelines this deployment declares: each step, schedule and rule is
+    # an agent of its own, supervised like the plugins above. The definition
+    # is the record; nothing of it goes through the spawn registry.
+    for pipe in pipelines.discover().values():
+        for agent_name, factory in pipeline_factories(pipe):
+            system.supervisor.supervise(
+                agent_name,
+                factory,
+                strategy=SupervisorStrategy.ONE_FOR_ONE,
+                max_restarts=5,
+                restart_delay=1.0,
+            )
+
     # Bind the monitor web UI BEFORE starting the supervisor. Agent startup
     # touches the MQTT broker, and on a slow/unreachable/auth-rejected broker
     # that can stall — previously the UI started *after* supervisor.start(), so a
@@ -468,6 +513,13 @@ async def build_system(
     if not main_actor and not minimal:
         logger.error("Failed to find the main actor.")
         sys.exit(1)
+    if main_actor is not None:
+        # Recorded beside the planner's rules, so `/rules` lists a declared
+        # pipeline and `/rules delete` stops the whole of it.
+        known = main_actor.get_pipeline_rules()
+        for pipe in pipelines.discover().values():
+            if pipe.name not in known:
+                main_actor.save_pipeline_rule(pipe.record())
 
     logger.info("Wactorz system started. Supervision tree active.")
     return system, main_actor, _db
@@ -690,6 +742,7 @@ async def app(args: argparse.Namespace):
 def run(
     agents: Iterable[Any] = (),
     *,
+    pipelines_: Iterable[pipelines.Pipeline] = (),
     web: bool = True,
     minimal: bool = False,
     monitor_port: int | None = None,
@@ -702,7 +755,9 @@ def run(
 
     ``agents`` are Actor subclasses or functions declared with
     :func:`wactorz.agent`; each is supervised beside the built-ins and shown on
-    the dashboard, which ``web=False`` leaves off. ``minimal=True`` starts no
+    the dashboard, which ``web=False`` leaves off. ``pipelines_`` are what
+    :func:`wactorz.pipeline` returned, though declaring one registers it
+    already; the argument is for a pipeline built elsewhere. ``minimal=True`` starts no
     orchestrator, catalogue or installer, so no model is needed: the monitor,
     the dashboard and the given agents only. The other arguments stand in for
     the command line's; ``state_dir`` is where everything durable is kept, as
@@ -712,6 +767,8 @@ def run(
         os.environ["WACTORZ_STATE_DIR"] = str(state_dir)
     for item in agents:
         plugins.register(item)
+    for pipe in pipelines_:
+        pipelines.register(pipe)
     asyncio.run(app(get_args(run_argv(web, minimal, monitor_port, mqtt_broker, mqtt_port, llm))))
 
 

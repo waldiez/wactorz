@@ -35,6 +35,7 @@ from .agents import (
     OneOffActuatorAgent,
     OpenAIProvider,
     PlannerAgent,
+    RuleAgent,
     ScheduledAgent,
     agent,
 )
@@ -57,10 +58,24 @@ __all__ += [
     "OneOffActuatorAgent",
     "OpenAIProvider",
     "PlannerAgent",
+    "RuleAgent",
     "ScheduledAgent",
     "agent",
+    "pipeline",
     "run",
 ]
+
+
+def pipeline(*args: Any, **kwargs: Any) -> Any:
+    """Declare a pipeline of agents; see :func:`wactorz.pipelines.pipeline`.
+
+    Imported on call for the same reason as :func:`run`: the pipelines module
+    reads the configuration, which a script that only declares agents may
+    not want at import.
+    """
+    from .pipelines import pipeline as _pipeline
+
+    return _pipeline(*args, **kwargs)
 
 
 def run(*args: Any, **kwargs: Any) -> None:

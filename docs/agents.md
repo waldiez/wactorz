@@ -668,5 +668,57 @@ agents do not start; `WACTORZ_HA_AGENTS=on|off` decides outright.
 starts the monitor, the dashboard and your agents only — no orchestrator,
 catalogue or installer, so no model API key is needed.
 
+### Pipelines
+
+Steps that work together are declared together. Each step stays an agent of
+its own; the pipeline groups them, adds a schedule and rules, and records
+itself beside the planner's pipelines so `/rules` lists it and `/rules delete`
+stops the whole of it:
+
+```python
+watch = wactorz.pipeline(
+    "imu-watch",
+    steps=[detect, notify, report],              # decorated functions, Actor classes or targets
+    inputs=["sensors/imu/#"],                    # what comes from outside (the first step may omit it)
+    schedule={"type": "interval", "seconds": 300},   # a scheduled agent ticking pipelines/imu-watch/tick
+    rules=[{"triggers": ["anomalies/imu"],
+            "conditions": [{"field": "score", "op": "gt", "value": 20}],
+            "actions": [{"type": "publish", "topic": "alerts/imu", "payload": {"level": "high"}}],
+            "cooldown_seconds": 30}],
+)
+```
+
+Wiring is checked when the pipeline is declared: a step or rule listening on a
+topic nothing in the pipeline publishes, and not named in `inputs`, is a
+`ValueError` before anything starts. A pipeline declared at module level is
+found through `WACTORZ_PIPELINES=mypkg.flows:watch`, a `wactorz.pipelines`
+entry point, or `wactorz.run(pipelines_=[watch])`; its agents are supervised
+at startup like any plugin. The schedule takes every form `ScheduledAgent`
+accepts. In the minimal profile there is no main, so the rule record is
+skipped and the agents simply run.
+
+### RuleAgent `[spawned]`
+
+The glue between stages without a program per rule: trigger topics, conditions
+on the payload, a cooldown, and actions. Spawnable on its own with
+`"type": "rule"`:
+
+```json
+{"type": "rule", "name": "imu-alert",
+ "triggers": ["anomalies/imu"],
+ "conditions": [{"field": "score", "op": "gt", "value": 10}],
+ "actions": [{"type": "publish", "topic": "alerts/imu", "payload": {"level": "high"}},
+             {"type": "task", "agent": "notify", "payload": {"text": "IMU anomaly {score}"}},
+             {"type": "webhook", "url": "https://hooks.example/imu"}],
+ "cooldown_seconds": 30}
+```
+
+Conditions take `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`,
+`exists` and `absent` (or `==`, `>`, and so on), with dotted fields such as
+`reading.ax`. An action's payload may name trigger fields in braces and carries
+the trigger payload under `trigger` unless `include_trigger` is false. A task
+sent to a rule is a trial run: the payload is judged as a trigger and the
+verdict returned. Home Assistant service calls stay with `ha_actuator`.
+
 A complete example, a trained model over IMU readings on MQTT, is in
 [`examples/imu_anomaly/`](https://github.com/waldiez/wactorz/tree/main/examples/imu_anomaly).

@@ -228,7 +228,14 @@ reads and `spec.build()` turns into a `FunctionAgent`.
 | `requires` | `{"ram_mb": ..., "packages": [...], ...}`, carried in the manifest and spawn record |
 | `autostart` | `False` keeps the agent in the catalogue until asked for |
 
-### `wactorz.run(agents=(), *, web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None)`
+### `wactorz.pipeline(name, steps=(), *, inputs=(), schedule=None, rules=(), description="")`
+
+Declares a pipeline of agents and checks its wiring; see
+[Pipelines](agents.md#pipelines). Returns a `Pipeline` whose `agent_names`,
+`producers()`, `spawn_configs()` and `record()` describe it. Rules are
+`wactorz.agents.rule_agent.RuleConfig` objects or the dicts that build them.
+
+### `wactorz.run(agents=(), *, pipelines_=(), web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None)`
 
 Starts the system from a script with the given agents (decorated functions or
 `Actor` subclasses) supervised beside the built-ins. `minimal=True` starts the

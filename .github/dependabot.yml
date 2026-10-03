@@ -5,10 +5,15 @@
 # usually found and pulled within days, and should not be proposed the day it
 # appears. `groups` makes each ecosystem one pull request a week, not one per
 # package.
+#
+# Every update targets `dev`, where all work lands; `main` takes only releases.
+# Left unset, Dependabot targets the default branch, `main`. It reads this file
+# from `main` too, so a change here takes effect once it is released.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
@@ -23,6 +28,7 @@ updates:
   # each add-on's build.yaml and Dockerfile default too; a test says which.
   - package-ecosystem: docker
     directories: ["/", "/.github/tools", "/ha-addon/bases", "/e2e/stack/node"]
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
@@ -46,6 +52,7 @@ updates:
   # digest to the same release the broker tests use, and the rest by tag.
   - package-ecosystem: docker-compose
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
@@ -56,6 +63,7 @@ updates:
 
   - package-ecosystem: bun
     directory: /frontend
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
@@ -67,6 +75,7 @@ updates:
   # uv.lock, and pyproject.toml where a range must widen for a new release.
   - package-ecosystem: uv
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:

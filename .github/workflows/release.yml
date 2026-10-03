@@ -98,18 +98,14 @@ jobs:
             || { echo "::error::the wheel installs as $installed, not ${GITHUB_REF_NAME#v}"; exit 1; }
           "$RUNNER_TEMP/wheel-check/bin/wactorz" --help > /dev/null
 
-      # Only this version's section — the whole CHANGELOG makes the release
-      # page an endless scroll of every past version.
+      # This version's summary — its opening paragraph, "Before you upgrade"
+      # and "Highlights" — with a link to the full section at the tag. The full
+      # account of every change is too long for a release page; see the script.
       - name: Extract release notes for this tag
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          awk -v hdr="## [$version]" '
-            index($0, hdr) == 1 { found = 1; next }
-            found && /^## \[/   { exit }
-            found               { print }
-          ' CHANGELOG.md > release-notes.md
-          if [ ! -s release-notes.md ]; then
-            echo "::error::No CHANGELOG.md section found for $version" >&2
+          if ! python scripts/release_notes.py "$GITHUB_REF_NAME" \
+              --url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" > release-notes.md; then
+            echo "::error::No CHANGELOG.md section found for $GITHUB_REF_NAME" >&2
             exit 1
           fi
           cat release-notes.md

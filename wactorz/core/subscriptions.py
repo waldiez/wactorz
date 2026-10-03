@@ -37,6 +37,24 @@ logger = logging.getLogger(__name__)
 MAX_CONSECUTIVE_FAILURES = 5
 
 
+def decode_payload(raw: Any) -> Any:
+    """What a message carried: JSON when it is JSON, else the text, else the bytes.
+
+    A camera frame or an audio chunk is bytes that are neither, and must reach
+    the callback as bytes rather than end the connection on a decode error.
+    """
+    if not isinstance(raw, (bytes, bytearray)):
+        return raw
+    try:
+        text = bytes(raw).decode()
+    except UnicodeDecodeError:
+        return {"raw": bytes(raw)}
+    try:
+        return json.loads(text)
+    except ValueError:
+        return {"raw": text}
+
+
 async def safe_invoke(cb: Any, payload: Any, actor: Any, warned: list[bool]) -> None:
     """Run a subscribe callback, tolerating a stray `await` on a sync call."""
     try:
@@ -292,10 +310,7 @@ class SubscriptionHub:
         would stall every other subscription sharing it.
         """
         topic = str(message.topic)
-        try:
-            payload = json.loads(message.payload.decode())
-        except Exception:
-            payload = {"raw": message.payload.decode()}
+        payload = decode_payload(message.payload)
         for binding in list(self._bindings):
             if topic_matches(binding.topic, topic):
                 binding.offer(payload)

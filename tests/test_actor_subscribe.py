@@ -164,6 +164,27 @@ class TestSubscribe:
 
         assert hub_task.done()
 
+    async def test_a_binary_payload_reaches_the_callback_as_bytes(
+        self, broker: FakeBroker, probe: Probe
+    ) -> None:
+        """A camera frame is not JSON and not text; it must not end the connection."""
+        seen: list[Any] = []
+
+        async def on_frame(payload: Any) -> None:
+            seen.append(payload)
+
+        probe.subscribe("camera/frames", on_frame)
+        await _settle()
+        frame = b"\xff\xd8\xff\xe0JFIF\x00binary"
+        await broker.deliver("camera/frames", frame)
+        await broker.deliver("camera/frames", b"plain text")
+        await broker.deliver("camera/frames", b'{"ok": 1}')
+        await _settle()
+
+        assert seen == [{"raw": frame}, {"raw": "plain text"}, {"ok": 1}]
+        assert len(broker.connections) == 1
+        await _stop_hub(probe)
+
     async def test_a_callback_must_be_callable(self, probe: Probe) -> None:
         with pytest.raises(TypeError):
             probe.subscribe("a/one", "not a function")  # type: ignore[arg-type]  # the refused value

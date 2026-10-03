@@ -374,7 +374,7 @@ services:
 
   prometheus:
     profiles: [python]
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v3.15.0
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     container_name: wactorz-prometheus
@@ -471,7 +471,7 @@ services:
 
   blackbox-exporter:
     profiles: [python]
-    image: prom/blackbox-exporter:v0.25.0
+    image: prom/blackbox-exporter:v0.28.0
     cap_drop: [ALL]
     read_only: true
     security_opt: [no-new-privileges:true]

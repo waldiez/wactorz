@@ -1,0 +1,25 @@
+/* Wactorz MkDocs Material theme overrides */
+
+:root {
+  --md-primary-fg-color:        #4f8ef7;
+  --md-primary-fg-color--light: #82aaff;
+  --md-primary-fg-color--dark:  #3a6fd4;
+  --md-accent-fg-color:         #00d4ff;
+  --md-default-bg-color:        #05080e;
+  --md-default-fg-color:        #dde3f0;
+  --md-code-bg-color:           #0d1426;
+  --md-code-fg-color:           #c3e88d;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color:    #05080e;
+  --md-default-bg-color--light: #080d1a;
+  --md-default-bg-color--dark:  #030508;
+  --md-code-bg-color:       #0d1426;
+  --md-typeset-a-color:     #4f8ef7;
+}
+
+/* Monospaced body to match project aesthetic */
+body { font-family: 'JetBrains Mono', monospace; }
+
+.md-nav__title { font-weight: 600; letter-spacing: 0.05em; }

@@ -132,6 +132,7 @@ class TestOnStart:
         assert subscribed == ["a/one", "b/#"]
         manifest = next(p for t, p in published if t.endswith("/manifest"))
         assert manifest["publishes"] == ["out/x"]
+        assert manifest["subscribes"] == ["a/one", "b/#"]
         assert manifest["description"] == "d"
         feed = next(p for t, p in published if t.endswith("/logs"))
         assert feed["message"] == "Listening on a/one, b/#"

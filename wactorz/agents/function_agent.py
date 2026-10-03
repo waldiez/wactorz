@@ -192,6 +192,7 @@ class FunctionAgent(Actor):
             capabilities=list(self.spec.capabilities),
             input_schema=self.spec.input_schema,
             output_schema=self.spec.output_schema,
+            subscribes=list(self.spec.subscribes),
         )
         for topic in self.spec.subscribes:
             self.subscribe(topic, self._on_message)

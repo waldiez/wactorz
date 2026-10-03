@@ -1365,6 +1365,7 @@ class Actor(ABC):
         capabilities: list[str] | None = None,
         input_schema: dict[str, Any] | None = None,
         output_schema: dict[str, Any] | None = None,
+        subscribes: list[str] | None = None,
     ) -> None:
         """Publish a capability manifest so main's topic registry can discover this actor.
         Call from on_start() in any actor that wants to be discoverable.
@@ -1379,6 +1380,7 @@ class Actor(ABC):
             "actor_id": self.actor_id,
             "description": description,
             "publishes": publishes or [],
+            "subscribes": subscribes or [],
             "capabilities": capabilities or [],
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},

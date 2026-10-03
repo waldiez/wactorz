@@ -253,6 +253,7 @@ class RuleAgent(Actor):
             publishes=list(self.config.publishes),
             capabilities=["rule"],
             input_schema={"trigger payload": "any"},
+            subscribes=list(self.config.triggers),
         )
         for topic in self.config.triggers:
             self.subscribe(topic, self.evaluate)

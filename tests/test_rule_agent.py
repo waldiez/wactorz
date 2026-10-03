@@ -237,3 +237,4 @@ class TestEvaluation:
         assert subscribed == ["a/one", "b/#"]
         manifest = next(p for t, p in published if t.endswith("/manifest"))
         assert manifest["publishes"] == ["alerts/imu"]
+        assert manifest["subscribes"] == ["a/one", "b/#"]

@@ -211,6 +211,47 @@ planner executes the approved plan, spawns required agents, and self-terminates.
 
 ---
 
+## Library use
+
+### `wactorz.agent`
+
+Declares a function as an agent; see [Bringing your own agents](agents.md#bringing-your-own-agents).
+Returns the function unchanged with an `AgentSpec` attached, which `wactorz.plugins`
+reads and `spec.build()` turns into a `FunctionAgent`.
+
+| Argument | Meaning |
+|---|---|
+| `name` | Agent name; default from the function name (`detect_v2` → `detect-v2`) |
+| `subscribes` | A topic filter or a list of them; the function is called per message |
+| `publishes` | Topic the return value is published to (`None` publishes nothing) |
+| `description`, `capabilities`, `input_schema`, `output_schema` | The manifest |
+| `requires` | `{"ram_mb": ..., "packages": [...], ...}`, carried in the manifest and spawn record |
+| `autostart` | `False` keeps the agent in the catalogue until asked for |
+
+### `wactorz.run(agents=(), *, web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None)`
+
+Starts the system from a script with the given agents (decorated functions or
+`Actor` subclasses) supervised beside the built-ins. `minimal=True` starts the
+monitor, the dashboard and the given agents only. Returns when the system stops.
+
+### `Actor.subscribe(topic, callback)` and `Actor.window(topic, seconds=300, max_size=1000)`
+
+On every actor. `subscribe` calls `callback(payload)` for each message matching
+the filter, on one shared broker connection; a plain function runs on a worker
+thread, a coroutine function on the loop. `window` returns the
+`StreamWindow` for a topic, one per topic, started on first use and stopped
+with the actor.
+
+### `wactorz.plugins`
+
+`discover()` finds every agent the deployment brings — `wactorz.agents` entry
+points, `WACTORZ_AGENTS`, and whatever `register()` was given — as `AgentPlugin`
+objects with a `build(name=, persistence_dir=, llm_provider=, options=)` method.
+`for_target("pkg.mod:attr")` is what a `type: "module"` spawn config resolves
+through, and finds registered targets only.
+
+---
+
 ## Persistence
 
 ### `wactorz.core.persistence`

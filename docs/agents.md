@@ -574,49 +574,99 @@ Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `
 
 ---
 
-## Writing a new core agent
+## Bringing your own agents
 
-For agents that need to be part of the supervision tree (always running, not spawnable from chat), subclass `Actor` directly:
+Wactorz is a library as much as an application: an agent you already have — a
+trained model, a class with its own loop — runs supervised beside the built-in
+ones, with persistence, heartbeats and a dashboard card, without forking
+`app.py`.
+
+### One function, one decorator
+
+The smallest agent is a function. `@wactorz.agent` gives it a name, topics and
+a manifest, and leaves it a plain function you can still call and test:
+
+```python
+import wactorz
+
+@wactorz.agent(
+    name="imu-anomaly",
+    subscribes="sensors/imu/#",
+    publishes="anomalies/imu",
+    description="Flags IMU readings the trained model calls abnormal.",
+    requires={"ram_mb": 128, "packages": ["numpy"]},
+)
+def detect(reading: dict) -> dict | None:
+    return reading if MODEL.score(reading) > 4.0 else None
+```
+
+The function is called once per message with the decoded payload, and once per
+task sent to the agent by chat (`@imu-anomaly {...}`) or by another agent.
+What it returns is published to `publishes`, or sent back as the task's
+result; `None` publishes nothing. A plain function runs on a worker thread, so
+a slow model never holds the event loop; a coroutine function runs on the
+loop. A function that takes a second parameter is given the actor, for
+`persist`, `recall`, `publish` and the `options` a spawn config passed it.
+
+### An `Actor` subclass
+
+For an agent with its own lifecycle, subclass `Actor`. The base class now
+subscribes and keeps windows for you, on one shared broker connection that is
+closed when the actor stops:
 
 ```python
 from wactorz.core.actor import Actor, Message, MessageType
 
 class MyAgent(Actor):
-
-    def __init__(self, **kwargs):
-        kwargs.setdefault("name", "my-agent")
-        super().__init__(**kwargs)
+    DESCRIPTION = "Watches the pump."
+    CAPABILITIES = ["pump"]
 
     async def on_start(self):
-        asyncio.create_task(self._my_loop())
+        self.subscribe("sensors/pump/#", self.on_reading)        # async or plain callback
+        self.flow = self.window("sensors/pump/flow", seconds=60)  # rolling window
+
+    async def on_reading(self, payload: dict):
+        if self.flow.falling(threshold=2.0):
+            await self._mqtt_publish("alerts/pump", {"flow": payload})
 
     async def handle_message(self, msg: Message):
         if msg.type != MessageType.TASK:
             return
-        result = {"echo": msg.payload}
+        result = {"flow_mean": self.flow.mean("value")}
         if isinstance(msg.payload, dict):
             result["_task_id"] = msg.payload.get("_task_id")
         await self.send(msg.reply_to or msg.sender_id, MessageType.RESULT, result)
-
-    async def _my_loop(self):
-        while True:
-            await self._mqtt_publish("custom/my-agent/tick", {"ts": time.time()})
-            await asyncio.sleep(10)
 ```
 
-Then register it in `app.py` inside `build_system()`. `_sd` there is the state directory
-resolved at startup, and `_wire_persistence` attaches the persistence API:
+`DESCRIPTION`, `CAPABILITIES`, `REQUIRES`, `INPUT_SCHEMA` and `OUTPUT_SCHEMA` on
+the class are read into the catalogue entry; `AGENT_NAME` names the agent
+(default: the class name, `MyAgent` → `my-agent`); `AUTOSTART = False` keeps it
+in the catalogue until asked for.
 
-```python
-from wactorz.agents.my_agent import MyAgent
+### Registering it
 
-def make_my_agent():
-    return _wire_persistence(
-        MyAgent(name="my-agent", persistence_dir=_sd))
+Three ways in, all equivalent once the system is up:
 
-system.supervisor.supervise(
-    "my-agent", make_my_agent,
-    strategy=SupervisorStrategy.ONE_FOR_ONE,
-    max_restarts=5, restart_delay=1.0
-)
-```
+| How | Where | For |
+| --- | ----- | --- |
+| `wactorz.run(agents=[detect, MyAgent], web=True)` | a script | development, a single deployment |
+| `WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:MyAgent wactorz` | the environment | a configured deployment |
+| `[project.entry-points."wactorz.agents"]` in your package's `pyproject.toml` | the package | anything `pip install`ed |
+
+A registered agent is supervised at startup, listed by `@catalog list`, and
+restored from the spawn registry after a restart. A spawn config may also name
+it by path, `{"type": "module", "target": "mypkg.agents:detect", "name":
+"imu-left", "options": {...}}`, which is how one function runs under several
+names — but only a registered target is accepted, because a spawn config can be
+model-authored.
+
+### Profiles
+
+Without Home Assistant configured (`HA_URL` and `HA_TOKEN`) the Home Assistant
+agents do not start; `WACTORZ_HA_AGENTS=on|off` decides outright.
+`wactorz --minimal` (or `WACTORZ_MINIMAL=1`, or `wactorz.run(..., minimal=True)`)
+starts the monitor, the dashboard and your agents only — no orchestrator,
+catalogue or installer, so no model API key is needed.
+
+A complete example, a trained model over IMU readings on MQTT, is in
+[`examples/imu_anomaly/`](https://github.com/waldiez/wactorz/tree/main/examples/imu_anomaly).

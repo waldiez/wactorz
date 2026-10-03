@@ -1,5 +1,7 @@
 """Wactorz - Actor-Model Multi-Agent Framework"""
 
+from typing import Any
+
 from ._version import __version__
 from .core.actor import Actor, ActorState, Message, MessageType
 from .core.registry import ActorRegistry, ActorSystem
@@ -19,6 +21,7 @@ from .agents import (
     AnthropicProvider,
     CatalogAgent,
     DynamicAgent,
+    FunctionAgent,
     HomeAssistantActuatorAgent,
     HomeAssistantAgent,
     HomeAssistantMapAgent,
@@ -33,12 +36,14 @@ from .agents import (
     OpenAIProvider,
     PlannerAgent,
     ScheduledAgent,
+    agent,
 )
 
 __all__ += [
     "AnthropicProvider",
     "CatalogAgent",
     "DynamicAgent",
+    "FunctionAgent",
     "HomeAssistantActuatorAgent",
     "HomeAssistantAgent",
     "HomeAssistantMapAgent",
@@ -53,4 +58,18 @@ __all__ += [
     "OpenAIProvider",
     "PlannerAgent",
     "ScheduledAgent",
+    "agent",
+    "run",
 ]
+
+
+def run(*args: Any, **kwargs: Any) -> None:
+    """Start Wactorz from a script; see :func:`wactorz.app.run`.
+
+    Imported on call rather than at package import: the application module
+    pulls in the web server and every interface, which a script that only
+    declares agents never needs.
+    """
+    from .app import run as _run
+
+    _run(*args, **kwargs)

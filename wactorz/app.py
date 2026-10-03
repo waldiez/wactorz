@@ -7,18 +7,20 @@ runs the selected interface. Parsed arguments are supplied by :mod:`wactorz.cli`
 import argparse
 import asyncio
 import logging
+import os
 import signal
 import sys
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
-from wactorz import config, retention
+from wactorz import config, plugins, retention
 from wactorz.agents.lookup import find_main_actor
 from wactorz.broker_certificates import prepare_broker_files
-from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS
+from wactorz.cli import get_args
+from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
 from wactorz.core import cancellation
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
@@ -160,6 +162,20 @@ def _print_ready_banner(port: int) -> None:
     for line in lines:
         print(f"    │  {line.ljust(width - 4)}  │")
     print("    └" + "─" * width + "┘\n", flush=True)
+
+
+def home_assistant_agents_enabled(settings: AppConfig) -> bool:
+    """Whether the Home Assistant agents are part of this system.
+
+    ``WACTORZ_HA_AGENTS`` decides outright with ``on`` or ``off``; ``auto``
+    starts them when Home Assistant is configured and leaves them out when it
+    is not, so a deployment without one is not told about lights.
+    """
+    if settings.ha_agents == "on":
+        return True
+    if settings.ha_agents == "off":
+        return False
+    return bool(settings.ha_url and settings.ha_token)
 
 
 async def build_system(
@@ -333,7 +349,20 @@ async def build_system(
     def make_catalog() -> Actor:
         return _wire_persistence(CatalogAgent(name="catalog", persistence_dir=_sd))
 
-    (
+    def make_plugin_factory(plugin: plugins.AgentPlugin) -> Callable[[], Actor]:
+        def make() -> Actor:
+            return _wire_persistence(
+                plugin.build(
+                    persistence_dir=_sd, llm_provider=provider_for("dynamic", make_provider())
+                )
+            )
+
+        return make
+
+    minimal = bool(getattr(args, "minimal", False) or CONFIG.minimal)
+    if minimal:
+        logger.info("Minimal profile: starting the monitor and this deployment's agents only.")
+    else:
         system.supervisor.supervise(
             "main",
             make_main,
@@ -341,49 +370,70 @@ async def build_system(
             max_restarts=10,
             restart_delay=2.0,
         )
-        .supervise(
-            "monitor",
-            make_monitor,
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=10,
-            restart_delay=1.0,
-        )
-        .supervise(
+    system.supervisor.supervise(
+        "monitor",
+        make_monitor,
+        strategy=SupervisorStrategy.ONE_FOR_ONE,
+        max_restarts=10,
+        restart_delay=1.0,
+    )
+    if not minimal:
+        system.supervisor.supervise(
             "installer",
             make_installer,
             strategy=SupervisorStrategy.ONE_FOR_ONE,
             max_restarts=3,
             restart_delay=2.0,
         )
-        .supervise(
-            "home-assistant-agent",
-            make_ha_agent,
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=5,
-            restart_delay=1.0,
+    if home_assistant_agents_enabled(CONFIG):
+        (
+            system.supervisor.supervise(
+                "home-assistant-agent",
+                make_ha_agent,
+                strategy=SupervisorStrategy.ONE_FOR_ONE,
+                max_restarts=5,
+                restart_delay=1.0,
+            )
+            .supervise(
+                "home-assistant-map-agent",
+                make_ha_map_agent,
+                strategy=SupervisorStrategy.ONE_FOR_ONE,
+                max_restarts=5,
+                restart_delay=1.0,
+            )
+            .supervise(
+                "home-assistant-state-bridge",
+                make_ha_state_bridge,
+                strategy=SupervisorStrategy.ONE_FOR_ONE,
+                max_restarts=5,
+                restart_delay=1.0,
+            )
         )
-        .supervise(
-            "home-assistant-map-agent",
-            make_ha_map_agent,
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=5,
-            restart_delay=1.0,
-        )
-        .supervise(
-            "home-assistant-state-bridge",
-            make_ha_state_bridge,
-            strategy=SupervisorStrategy.ONE_FOR_ONE,
-            max_restarts=5,
-            restart_delay=1.0,
-        )
-        .supervise(
+    else:
+        logger.info("Home Assistant agents not started: HA_URL and HA_TOKEN are not set.")
+    if not minimal:
+        system.supervisor.supervise(
             "catalog",
             make_catalog,
             strategy=SupervisorStrategy.ONE_FOR_ONE,
             max_restarts=10,
             restart_delay=2.0,
         )
-    )
+
+    # The agents this deployment brings -- WACTORZ_AGENTS, wactorz.agents entry
+    # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
+    # the same persistence. One that is not for autostart waits in the
+    # catalogue to be asked for.
+    for plugin in plugins.discover().values():
+        if not plugin.autostart:
+            continue
+        system.supervisor.supervise(
+            plugin.name,
+            make_plugin_factory(plugin),
+            strategy=SupervisorStrategy.ONE_FOR_ONE,
+            max_restarts=5,
+            restart_delay=1.0,
+        )
 
     # Bind the monitor web UI BEFORE starting the supervisor. Agent startup
     # touches the MQTT broker, and on a slow/unreachable/auth-rejected broker
@@ -415,7 +465,7 @@ async def build_system(
     await system.supervisor.start()
 
     main_actor = find_main_actor(system.registry)
-    if not main_actor:
+    if not main_actor and not minimal:
         logger.error("Failed to find the main actor.")
         sys.exit(1)
 
@@ -572,10 +622,16 @@ async def app(args: argparse.Namespace):
 
     # Configured social channels run alongside the primary interface, not
     # instead of it (the dashboard stays primary; the bots ride along).
-    companions = build_social_companions(main_actor, interface)
+    companions = build_social_companions(main_actor, interface) if main_actor else []
 
     try:
-        if interface == "cli":
+        if main_actor is None:
+            # The minimal profile: no orchestrator to talk to, so no chat
+            # interface. The dashboard, the monitor and the deployment's own
+            # agents run until asked to stop.
+            system._running = True
+            await system.run_forever()
+        elif interface == "cli":
             if sys.stdin.isatty():
                 iface = CLIInterface(main_actor)
                 await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
@@ -629,3 +685,56 @@ async def app(args: argparse.Namespace):
         logger.exception("System error")
     finally:
         await _shut_down(system)
+
+
+def run(
+    agents: Iterable[Any] = (),
+    *,
+    web: bool = True,
+    minimal: bool = False,
+    monitor_port: int | None = None,
+    mqtt_broker: str | None = None,
+    mqtt_port: int | None = None,
+    llm: str | None = None,
+    state_dir: str | None = None,
+) -> None:
+    """Start Wactorz from a script, with the agents it is given.
+
+    ``agents`` are Actor subclasses or functions declared with
+    :func:`wactorz.agent`; each is supervised beside the built-ins and shown on
+    the dashboard, which ``web=False`` leaves off. ``minimal=True`` starts no
+    orchestrator, catalogue or installer, so no model is needed: the monitor,
+    the dashboard and the given agents only. The other arguments stand in for
+    the command line's; ``state_dir`` is where everything durable is kept, as
+    ``WACTORZ_STATE_DIR`` would say. Returns when the system has stopped.
+    """
+    if state_dir is not None:
+        os.environ["WACTORZ_STATE_DIR"] = str(state_dir)
+    for item in agents:
+        plugins.register(item)
+    asyncio.run(app(get_args(run_argv(web, minimal, monitor_port, mqtt_broker, mqtt_port, llm))))
+
+
+def run_argv(
+    web: bool,
+    minimal: bool,
+    monitor_port: int | None,
+    mqtt_broker: str | None,
+    mqtt_port: int | None,
+    llm: str | None,
+) -> list[str]:
+    """The command line :func:`run`'s arguments stand for, so one parser serves both."""
+    argv: list[str] = []
+    if not web:
+        argv.append("--no-monitor")
+    if minimal:
+        argv.append("--minimal")
+    if monitor_port is not None:
+        argv += ["--monitor-port", str(monitor_port)]
+    if mqtt_broker is not None:
+        argv += ["--mqtt-broker", mqtt_broker]
+    if mqtt_port is not None:
+        argv += ["--mqtt-port", str(mqtt_port)]
+    if llm is not None:
+        argv += ["--llm", llm]
+    return argv

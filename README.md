@@ -113,6 +113,27 @@ python -m wactorz --llm ollama --ollama-model llama3
 
 Windows setup is in [docs/windows.md](https://github.com/waldiez/wactorz/blob/main/docs/windows.md); the full set of deployment options lives in [docs/deployment.md](https://docs.waldiez.io/wactorz/guide/deployment.html).
 
+## Use it as a library
+
+Bring an agent you already have — a trained model, a class with its own loop — and
+Wactorz supervises it, restarts it, persists its state and shows it on the dashboard.
+One decorator is enough:
+
+```python
+import wactorz
+
+@wactorz.agent(subscribes="sensors/imu/#", publishes="anomalies/imu")
+def detect(reading: dict) -> dict | None:
+    return reading if MODEL.score(reading) > 4.0 else None
+
+wactorz.run(agents=[detect], minimal=True)   # monitor + dashboard + your agent, no LLM needed
+```
+
+Or name it in `WACTORZ_AGENTS=mypkg.agent:detect` for a normal `wactorz` start, or list it
+as a `wactorz.agents` entry point in your package. The Home Assistant agents start only
+when Home Assistant is configured. See [Bringing your own agents](https://docs.waldiez.io/wactorz/guide/agents.html#bringing-your-own-agents)
+and [`examples/imu_anomaly/`](examples/imu_anomaly/README.md).
+
 ---
 
 ## Example prompts

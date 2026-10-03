@@ -32,6 +32,7 @@ from ..lookup import find_main_actor
 from .api import AgentAPI
 from .carryover import carry_over_globals
 from .cv2_shim import resilient_cv2_module
+from .listener import hub_for
 from .resources import release_open_resources
 from .safety import extract_function_body, validate_code_safety
 from .sanitize import sanitize_code
@@ -162,6 +163,10 @@ class DynamicAgent(Actor):
         #: strings the planner searches; the manifest carries them.
         self.capabilities: list[Any] = []
         self._api = AgentAPI(self)
+
+    def _make_hub(self) -> Any:
+        """The repair-aware hub, so `Actor.subscribe` on this agent repairs too."""
+        return hub_for(self)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 

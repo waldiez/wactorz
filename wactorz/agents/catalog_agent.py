@@ -32,6 +32,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from .. import plugins
 from ..core.actor import Actor, Message, MessageType
 from ..core.paths import resolve_state_dir
 from .lookup import find_main_actor
@@ -272,6 +273,17 @@ def _build_native_catalog() -> dict:
     except ImportError as e:
         logger.warning("[catalog] gmail-agent unavailable: %s", e)
 
+    # The agents this deployment brings, beside the packaged ones: listed,
+    # described and spawned the same way, and restored from the registry by
+    # name through `get_native_factory`.
+    for plugin in plugins.discover().values():
+        if plugin.name in native:
+            logger.warning(
+                "[catalog] Plugin %r is shadowed by a packaged recipe of the same name",
+                plugin.name,
+            )
+            continue
+        native[plugin.name] = plugin.recipe()
     return native
 
 

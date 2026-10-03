@@ -13,8 +13,8 @@ import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + conso
 from wactorz.config import CONFIG
 
 
-def get_args() -> argparse.Namespace:
-    """Parse the cli args."""
+def get_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the cli args: the process's own, or ``argv`` when given."""
     parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
     parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
     parser.add_argument("--port", type=int)
@@ -51,6 +51,15 @@ def get_args() -> argparse.Namespace:
         "--no-monitor", action="store_true", help="Disable the background web UI server"
     )
     parser.add_argument(
+        "--minimal",
+        action="store_true",
+        help=(
+            "Start only the monitor and the agents this deployment brings (WACTORZ_AGENTS, "
+            "wactorz.agents entry points): no orchestrator, catalogue or installer, so no "
+            "model is needed. Same as WACTORZ_MINIMAL=1."
+        ),
+    )
+    parser.add_argument(
         "--reload",
         action="store_true",
         help="Watch wactorz/ for changes and auto-restart (dev mode)",
@@ -80,7 +89,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--name", help=argparse.SUPPRESS)
     parser.add_argument("--broker", help=argparse.SUPPRESS)
     parser.add_argument("--loglevel", default="INFO", help=argparse.SUPPRESS)
-    args, _ = parser.parse_known_args()
+    args, _ = parser.parse_known_args(argv)
     _warn_about_tokens_on_the_command_line(args)
 
     return args

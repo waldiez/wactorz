@@ -3,6 +3,12 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — pending
+
+### Added
+
+- **Wactorz as a library: bring your own agents.** An agent you already have runs supervised beside the built-in ones, with persistence, heartbeats and a dashboard card, without forking `app.py`. A function becomes an agent with one decorator, `@wactorz.agent(name=..., subscribes=..., publishes=...)`: it is called once per message on the topics it subscribes to and once per task chat or another agent sends it, what it returns is published, a plain function runs on a worker thread so a slow model never holds the event loop, and the function stays a function. An `Actor` subclass works as it always did, and the base class now has `subscribe(topic, callback)` and `window(topic, seconds)` of its own, on one shared broker connection closed when the actor stops, so a native agent no longer opens a connection per topic. Either is registered by passing it to `wactorz.run(agents=[...])` from a script, naming it in `WACTORZ_AGENTS` as a `package.module:attr` target, or listing it as a `wactorz.agents` entry point in its package; a registered agent is supervised at startup, listed by `@catalog list`, restored after a restart, and may be spawned under another name with a `type: "module"` spawn config — for registered targets only, since a spawn config can be model-authored. The Home Assistant agents start only when `HA_URL` and `HA_TOKEN` are set (`WACTORZ_HA_AGENTS=on|off` decides outright), and `wactorz --minimal` (`WACTORZ_MINIMAL=1`, `wactorz.run(..., minimal=True)`) starts the monitor, the dashboard and your agents with no orchestrator, catalogue or installer, so no model API key is needed. `examples/imu_anomaly/` shows a trained model watching IMU readings on MQTT end to end. **Nothing changes for an installation with Home Assistant configured.**
+
 ## [0.7.0] - 2026-10-03
 
 Wactorz 0.7.0 is about trust and visibility: edge nodes now run the real Wactorz package over an authenticated, encrypted link, every install is locked down by default, and an operator can see when something is stuck, down or failing. A short summary comes first; the full account of each change follows it.

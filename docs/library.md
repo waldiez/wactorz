@@ -113,7 +113,9 @@ uses; inside a notebook, or beside any other server on that port, pass
 
 `serve` behaves as a library call inside someone else's program: it leaves the
 host's logging configuration alone (`configure_logging=True` asks for the
-command's console and file handlers, which `run()` does), `state_dir` is set
+command's console and file handlers, which `run()` does; a host that has
+configured no logging at all still sees warnings and errors on stderr, as it
+would without Wactorz), `state_dir` is set
 for the run rather than written to the environment, and a configuration that
 cannot be started, an exposed bind address with no API key, a chat interface
 whose token is missing, a provider whose SDK is not installed, raises
@@ -126,6 +128,13 @@ it creates and stops only those. Cancelling the `serve` task raises
 around it sees the cancellation as one.
 `wactorz.system()` is the running `ActorSystem`, with the registry your actors
 are in, and `None` outside a run.
+
+On Windows the loop matters: the broker client needs a selector loop, and a
+proactor loop, which uvicorn builds there by default, cannot serve it. `serve`
+refuses to start on one with a `StartupError` that says what to do: start
+uvicorn with `--loop asyncio:SelectorEventLoop`, or set
+`asyncio.WindowsSelectorEventLoopPolicy()` before the loop is made. Jupyter's
+kernel already uses the selector loop.
 
 ## Or register it, and start `wactorz` as usual
 

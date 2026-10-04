@@ -109,11 +109,15 @@ demand with `actor.call()`, the way a task from chat would.
 
 ```bash
 pip install fastapi uvicorn
-uvicorn fastapi_app:app --port 8000
+python fastapi_app.py                      # or: uvicorn fastapi_app:app --port 8000
 curl -X POST localhost:8000/detect -H 'content-type: application/json' -d '{"ax": 9, "ay": -7.5, "az": 1}'
 ```
 
-The dashboard is still on 8888; pass `web=False` to leave it off.
+On Windows, start uvicorn with `--loop asyncio:SelectorEventLoop`: its default
+there is a proactor loop, which cannot watch the broker's socket, and Wactorz
+refuses to start on it with a message saying so. `python fastapi_app.py` asks
+for the selector loop itself. The dashboard is still on 8888; pass `web=False`
+to leave it off.
 
 ## As a pipeline
 

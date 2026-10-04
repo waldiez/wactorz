@@ -6,7 +6,13 @@ actors are stopped and their state written before the process exits. The
 routes reach the running agent through `wactorz.system()`.
 
     pip install fastapi uvicorn
-    uvicorn fastapi_app:app --port 8000
+    python fastapi_app.py                                        # any platform
+    uvicorn fastapi_app:app --port 8000 --loop asyncio:SelectorEventLoop   # Windows
+    uvicorn fastapi_app:app --port 8000                          # elsewhere
+
+On Windows uvicorn builds a proactor loop by default, which cannot watch the
+broker's socket; Wactorz refuses to start on it and says so. The `__main__`
+block below asks uvicorn for a selector loop, so the script runs anywhere.
 
 The dashboard stays on 8888; `web=False` would leave it off.
 """
@@ -64,3 +70,9 @@ async def detect_now(reading: dict) -> dict:
     """Score one reading on demand, the way a task from chat would."""
     result = await _actor().call(reading)
     return {"anomaly": result is not None, **(result or {})}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, port=8000, loop="asyncio:SelectorEventLoop")

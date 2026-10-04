@@ -29,7 +29,7 @@ from wactorz.dev_reload import start_reloader
 from wactorz.errors import StartupError
 from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_buffer import uninstall as uninstall_log_buffer
-from wactorz.monitoring.log_setup import setup_logging
+from wactorz.monitoring.log_setup import install_fallback, setup_logging, uninstall_fallback
 from wactorz.monitoring.loop_lag import LoopLagMonitor
 from wactorz.web import runtime
 from wactorz.web.auth import exposure_refusal
@@ -688,6 +688,7 @@ async def _shut_down(system: "ActorSystem | None") -> None:
     await _stop_leftover_tasks()
     # After everything that might still log a line worth seeing on the dashboard.
     uninstall_log_buffer()
+    uninstall_fallback()
 
 
 async def app(
@@ -709,6 +710,10 @@ async def app(
     # unfiltered console or log file.
     if configure_logging:
         setup_logging()
+    else:
+        # Before the buffer below, which would otherwise silence every warning
+        # in a host that configured no logging of its own.
+        install_fallback()
     install_log_buffer()
     # From the start, so a startup step that blocks the loop is named too.
     _loop_lag.start()
@@ -730,8 +735,31 @@ async def app(
         own_tasks.stop(tagger)
 
 
+def loop_refusal(loop: asyncio.AbstractEventLoop) -> str:
+    """Why the system cannot run on ``loop``, or an empty string.
+
+    The broker client watches sockets through ``add_reader``, which a loop
+    that never overrode the abstract one cannot do: Windows' proactor loop,
+    which uvicorn builds there by default, and which is already running by
+    the time a host awaits :func:`serve`. A running loop cannot be swapped, so
+    the most the library can do is say so, and how to start differently.
+    """
+    if getattr(type(loop), "add_reader", None) is not asyncio.AbstractEventLoop.add_reader:
+        return ""
+    return (
+        f"the running event loop ({type(loop).__name__}) cannot watch sockets, which the "
+        "broker connection needs. Start the host on a selector loop: with uvicorn, "
+        "`--loop asyncio:SelectorEventLoop`; in a script, "
+        "`asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())` "
+        "before the loop is made."
+    )
+
+
 def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
     """What is settled before anything is built; see :func:`app`."""
+    refused = loop_refusal(asyncio.get_running_loop())
+    if refused:
+        raise StartupError(refused)
     # Before anything binds, and at the *process* root rather than in one
     # server's startup. Three servers read `CONFIG.bind_host` — the monitor, the
     # REST API and the WhatsApp webhook — so a check that lived in the monitor

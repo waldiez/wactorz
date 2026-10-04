@@ -4,6 +4,7 @@ its own agents."""
 
 import asyncio
 import dataclasses
+import logging
 import os
 import sys
 from pathlib import Path
@@ -265,6 +266,108 @@ class TestAppAsALibraryCall:
             )
 
         assert stopped == [fake_system]
+
+
+class TestTheLoopCheck:
+    """A loop that cannot watch sockets is refused up front, with the way out."""
+
+    async def test_the_running_loop_here_is_fine(self) -> None:
+        assert app_module.loop_refusal(asyncio.get_running_loop()) == ""
+
+    def test_a_loop_without_add_reader_is_refused_naming_the_uvicorn_flag(self) -> None:
+        class ProactorEventLoop(asyncio.AbstractEventLoop):
+            """What Windows' proactor loop is: the abstract add_reader, never overridden."""
+
+        refused = app_module.loop_refusal(ProactorEventLoop())  # pyright: ignore[reportAbstractUsage]
+        assert "ProactorEventLoop" in refused
+        assert "--loop asyncio:SelectorEventLoop" in refused
+        assert "WindowsSelectorEventLoopPolicy" in refused
+
+    async def test_app_refuses_on_it_before_anything_is_built(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(app_module, "loop_refusal", lambda loop: "wrong loop")
+        monkeypatch.setattr(app_module, "exposure_refusal", lambda host, key: "")
+        built: list[object] = []
+
+        async def build(args: object) -> None:
+            built.append(args)
+
+        monkeypatch.setattr(app_module, "_build_system_or_stop", build)
+
+        with pytest.raises(StartupError, match="wrong loop"):
+            await app_module.app(get_args([]), configure_logging=False)
+        assert built == []
+
+
+class TestWarningsStayVisibleInAHost:
+    """A library call leaves logging alone, and a bare host still sees warnings.
+
+    Against a logger of the test's own: pytest keeps capture handlers on the
+    real root logger, so it is never bare here.
+    """
+
+    @pytest.fixture(autouse=True)
+    def no_fallback_yet(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from wactorz.monitoring import log_setup
+
+        monkeypatch.setattr(log_setup, "_fallback", None)
+
+    def test_a_bare_root_gets_a_stderr_handler_for_warnings(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from wactorz.monitoring import log_setup
+
+        root = logging.getLogger("tests.bare-host")
+        root.handlers.clear()
+        root.propagate = False
+        handler = log_setup.install_fallback(root)
+        assert handler is not None and root.handlers == [handler]
+        assert handler.level == logging.WARNING
+        assert log_setup.install_fallback(root) is None, "once"
+
+        root.info("quiet")
+        root.warning("the broker is exposed")
+        err = capsys.readouterr().err
+        assert "the broker is exposed" in err and "quiet" not in err
+
+        log_setup.uninstall_fallback(root)
+        assert root.handlers == []
+
+    def test_a_host_with_its_own_handler_is_left_alone(self) -> None:
+        from wactorz.monitoring import log_setup
+
+        root = logging.getLogger("tests.configured-host")
+        root.handlers.clear()
+        hosts = logging.NullHandler()
+        root.addHandler(hosts)
+        assert log_setup.install_fallback(root) is None
+        assert root.handlers == [hosts]
+
+    async def test_app_adds_it_before_the_buffer_and_removes_it_at_shutdown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        monkeypatch.setattr(app_module, "install_fallback", lambda: order.append("fallback"))
+        monkeypatch.setattr(app_module, "install_log_buffer", lambda: order.append("buffer"))
+        monkeypatch.setattr(app_module, "uninstall_fallback", lambda: order.append("removed"))
+        monkeypatch.setattr(app_module, "exposure_refusal", lambda host, key: "refused")
+
+        with pytest.raises(StartupError):
+            await app_module.app(get_args([]), configure_logging=False)
+
+        assert order == ["fallback", "buffer", "removed"]
+
+    async def test_the_command_does_not_need_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        called: list[str] = []
+        monkeypatch.setattr(app_module, "setup_logging", lambda: called.append("setup"))
+        monkeypatch.setattr(app_module, "install_fallback", lambda: called.append("fallback"))
+        monkeypatch.setattr(app_module, "exposure_refusal", lambda host, key: "refused")
+
+        with pytest.raises(StartupError):
+            await app_module.app(get_args([]))
+
+        assert called == ["setup"]
 
 
 class TestTheProviderUnderTheMinimalProfile:

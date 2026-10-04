@@ -1281,6 +1281,18 @@ class Actor(ABC):
 
     # ─── MQTT ─────────────────────────────────────────────────────────────────
 
+    async def publish(
+        self, topic: str, payload: Any, *, retain: bool = False, qos: int = 0
+    ) -> None:
+        """Publish ``payload`` on ``topic`` for anything on the broker to read.
+
+        A dict or list goes out as JSON, bytes as they are, anything else as
+        text. ``retain`` keeps the last message on the broker for whoever
+        subscribes later; ``qos=1`` asks for at-least-once delivery, for a
+        message that must not be lost while the broker is away.
+        """
+        await self._mqtt_publish(topic, payload, retain=retain, qos=qos)
+
     async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
         if self._mqtt_client:
             try:

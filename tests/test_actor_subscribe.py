@@ -212,6 +212,26 @@ class TestSubscribe:
         assert isinstance(agent._make_hub(), listener_module.SubscriptionHub)
 
 
+class TestPublish:
+    async def test_publish_is_the_public_name_for_what_the_actor_sends(
+        self, probe: Probe, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sent: list[tuple[str, Any, bool, int]] = []
+
+        async def record(topic: str, payload: Any, retain: bool = False, qos: int = 0) -> None:
+            sent.append((topic, payload, retain, qos))
+
+        monkeypatch.setattr(probe, "_mqtt_publish", record)
+
+        await probe.publish("alerts/imu", {"level": "high"})
+        await probe.publish("state/imu", {"on": True}, retain=True, qos=1)
+
+        assert sent == [
+            ("alerts/imu", {"level": "high"}, False, 0),
+            ("state/imu", {"on": True}, True, 1),
+        ]
+
+
 class TestWindow:
     @pytest.fixture(autouse=True)
     def _no_window_connections(self, monkeypatch: pytest.MonkeyPatch) -> None:

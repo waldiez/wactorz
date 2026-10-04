@@ -66,3 +66,57 @@ class TestTheMinimalProfile:
 
     def test_defaults_add_nothing(self) -> None:
         assert app_module.run_argv(True, False, None, None, None, None) == []
+
+
+class TestServe:
+    """`serve` is the entry point for a host with a loop of its own; `run` wraps it."""
+
+    async def test_serve_registers_what_it_is_given_and_awaits_the_app(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wactorz import plugins
+        from wactorz.agents.function_agent import agent
+
+        plugins.clear()
+        seen: dict[str, object] = {}
+
+        async def fake_app(args: object, *, handle_signals: bool = True) -> None:
+            seen["args"] = args
+            seen["handle_signals"] = handle_signals
+
+        monkeypatch.setattr(app_module, "app", fake_app)
+
+        @agent
+        def probe(payload: dict) -> None:
+            return None
+
+        await app_module.serve([probe], minimal=True, web=False)
+
+        assert "probe" in plugins.discover()
+        assert seen["handle_signals"] is False
+        args = seen["args"]
+        assert getattr(args, "minimal") and getattr(args, "no_monitor")
+        plugins.clear()
+
+    def test_run_takes_the_signals_and_the_same_arguments(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        async def fake_app(args: object, *, handle_signals: bool = True) -> None:
+            seen["handle_signals"] = handle_signals
+            seen["port"] = getattr(args, "monitor_port")
+
+        monkeypatch.setattr(app_module, "app", fake_app)
+
+        app_module.run(monitor_port=9100)
+
+        assert seen == {"handle_signals": True, "port": 9100}
+
+    def test_the_package_exports_both(self) -> None:
+        import inspect
+
+        import wactorz
+
+        assert inspect.iscoroutinefunction(wactorz.serve)
+        assert callable(wactorz.run)

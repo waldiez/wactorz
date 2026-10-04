@@ -14,6 +14,7 @@ language model.
 | `agent.py` | The agent: a function declared with `@wactorz.agent`, subscribed to `sensors/imu/#`, publishing anomalies on `anomalies/imu`. |
 | `run.py` | Starts Wactorz with that agent, in the minimal profile. |
 | `pipeline.py` | The detector as one stage of a pipeline: a notifier, a report on a schedule, and a rule that alerts on a strong anomaly. |
+| `notebook.ipynb` | The same, from Jupyter: the system on the notebook's loop through `wactorz.serve()`, readings published and anomalies read from cells, the running agent inspected in-process. |
 | `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal. |
 
 ## Run it
@@ -59,9 +60,30 @@ parameter is the actor, used here to load the model once and keep a count
 across restarts with `persist`/`recall`.
 
 `run.py` hands the function to `wactorz.run()`, which supervises it beside the
-monitor, restarts it if it crashes, and serves the dashboard. With
+monitor, restarts it if it crashes, and serves the dashboard. Inside a program
+that already has an event loop, `await wactorz.serve(agents=[detect], minimal=True)`
+does the same without taking over the loop or the signals. With
 `minimal=True` no orchestrator, catalogue or installer starts, so no model API
 key is needed.
+
+## From a notebook
+
+`notebook.ipynb` runs the detector on Jupyter's own event loop:
+
+```python
+system_task = asyncio.create_task(
+    wactorz.serve(agents=[detect], minimal=True, monitor_port=8890)
+)
+```
+
+The dashboard goes on port 8890 because Jupyter's own server already has 8888,
+the dashboard's default; the notebook prints the address it used.
+
+then publishes readings from a cell, collects anomalies from another, reaches
+the running actor through `wactorz.web.runtime.registry` to read its counters
+and persisted state, sends it a task the way chat would, and stops it by
+cancelling the task. Start Jupyter from this folder, or the first cell adds it
+to the path.
 
 ## As a pipeline
 

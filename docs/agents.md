@@ -579,7 +579,8 @@ Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `
 Wactorz is a library as much as an application: an agent you already have — a
 trained model, a class with its own loop — runs supervised beside the built-in
 ones, with persistence, heartbeats and a dashboard card, without forking
-`app.py`.
+`app.py`. The full walkthrough with examples is [Using Wactorz as a library](library.md);
+this section is the reference.
 
 ### One function, one decorator
 
@@ -627,7 +628,7 @@ class MyAgent(Actor):
 
     async def on_reading(self, payload: dict):
         if self.flow.falling(threshold=2.0):
-            await self._mqtt_publish("alerts/pump", {"flow": payload})
+            await self.publish("alerts/pump", {"flow": payload})
 
     async def handle_message(self, msg: Message):
         if msg.type != MessageType.TASK:

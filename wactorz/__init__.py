@@ -39,6 +39,7 @@ from .agents import (
     ScheduledAgent,
     agent,
 )
+from .agents.rule_agent import RuleAction, RuleCondition, RuleConfig
 
 __all__ += [
     "AnthropicProvider",
@@ -58,11 +59,15 @@ __all__ += [
     "OneOffActuatorAgent",
     "OpenAIProvider",
     "PlannerAgent",
+    "RuleAction",
     "RuleAgent",
+    "RuleCondition",
+    "RuleConfig",
     "ScheduledAgent",
     "agent",
     "pipeline",
     "run",
+    "serve",
 ]
 
 
@@ -76,6 +81,13 @@ def pipeline(*args: Any, **kwargs: Any) -> Any:
     from .pipelines import pipeline as _pipeline
 
     return _pipeline(*args, **kwargs)
+
+
+async def serve(*args: Any, **kwargs: Any) -> None:
+    """Run Wactorz on the caller's event loop; see :func:`wactorz.app.serve`."""
+    from .app import serve as _serve
+
+    await _serve(*args, **kwargs)
 
 
 def run(*args: Any, **kwargs: Any) -> None:

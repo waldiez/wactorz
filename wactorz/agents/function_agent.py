@@ -231,7 +231,7 @@ class FunctionAgent(Actor):
         self.metrics.tasks_completed += 1
         if result is None or not self.spec.publishes:
             return
-        await self._mqtt_publish(self.spec.publishes, result)
+        await self.publish(self.spec.publishes, result)
         await self.log(f"→ {self.spec.publishes}: {_summary(result)}")
 
     async def handle_message(self, msg: Message) -> None:

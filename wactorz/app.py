@@ -621,7 +621,7 @@ async def _shut_down(system: "ActorSystem | None") -> None:
     await _stop_leftover_tasks()
 
 
-async def app(args: argparse.Namespace):
+async def app(args: argparse.Namespace, *, handle_signals: bool = True):
     # First, so both cover startup as well as steady state. setup_logging builds
     # the handlers with redaction already attached, so no record reaches an
     # unfiltered console or log file.
@@ -648,7 +648,11 @@ async def app(args: argparse.Namespace):
     if args.reload:
         start_reloader(logger)
 
-    _install_signal_handlers()
+    # A host that embeds the system -- a notebook, a web framework, a ROS node --
+    # owns its signals; it stops this by cancelling the task, which unwinds into
+    # the same shutdown below.
+    if handle_signals:
+        _install_signal_handlers()
 
     system, main_actor, _db = await _build_system_or_stop(args)
 
@@ -739,6 +743,44 @@ async def app(args: argparse.Namespace):
         await _shut_down(system)
 
 
+async def serve(
+    agents: Iterable[Any] = (),
+    *,
+    pipelines_: Iterable[pipelines.Pipeline] = (),
+    web: bool = True,
+    minimal: bool = False,
+    monitor_port: int | None = None,
+    mqtt_broker: str | None = None,
+    mqtt_port: int | None = None,
+    llm: str | None = None,
+    state_dir: str | None = None,
+    handle_signals: bool = False,
+) -> None:
+    """Run Wactorz inside an event loop that is already running, with the agents it is given.
+
+    For a notebook, a web framework or a ROS node that has a loop of its own:
+    ``await wactorz.serve(...)``, or run it as a task and cancel that task to
+    stop the system. ``agents`` are Actor subclasses or functions declared with
+    :func:`wactorz.agent`; each is supervised beside the built-ins and shown on
+    the dashboard, which ``web=False`` leaves off. ``pipelines_`` are what
+    :func:`wactorz.pipeline` returned, though declaring one registers it
+    already; the argument is for a pipeline built elsewhere. ``minimal=True``
+    starts no orchestrator, catalogue or installer, so no model is needed: the
+    monitor, the dashboard and the given agents only. The other arguments stand
+    in for the command line's; ``state_dir`` is where everything durable is
+    kept, as ``WACTORZ_STATE_DIR`` would say. The host keeps its signals unless
+    ``handle_signals`` says otherwise. Returns when the system has stopped.
+    """
+    if state_dir is not None:
+        os.environ["WACTORZ_STATE_DIR"] = str(state_dir)
+    for item in agents:
+        plugins.register(item)
+    for pipe in pipelines_:
+        pipelines.register(pipe)
+    args = get_args(run_argv(web, minimal, monitor_port, mqtt_broker, mqtt_port, llm))
+    await app(args, handle_signals=handle_signals)
+
+
 def run(
     agents: Iterable[Any] = (),
     *,
@@ -751,25 +793,30 @@ def run(
     llm: str | None = None,
     state_dir: str | None = None,
 ) -> None:
-    """Start Wactorz from a script, with the agents it is given.
+    """Start Wactorz from a script: :func:`serve` on a loop of its own, until stopped.
 
-    ``agents`` are Actor subclasses or functions declared with
-    :func:`wactorz.agent`; each is supervised beside the built-ins and shown on
-    the dashboard, which ``web=False`` leaves off. ``pipelines_`` are what
-    :func:`wactorz.pipeline` returned, though declaring one registers it
-    already; the argument is for a pipeline built elsewhere. ``minimal=True`` starts no
-    orchestrator, catalogue or installer, so no model is needed: the monitor,
-    the dashboard and the given agents only. The other arguments stand in for
-    the command line's; ``state_dir`` is where everything durable is kept, as
-    ``WACTORZ_STATE_DIR`` would say. Returns when the system has stopped.
+    Takes the same arguments. Ctrl-C and SIGTERM stop it the way they stop the
+    ``wactorz`` command. A program that already has an event loop awaits
+    :func:`serve` instead.
     """
-    if state_dir is not None:
-        os.environ["WACTORZ_STATE_DIR"] = str(state_dir)
-    for item in agents:
-        plugins.register(item)
-    for pipe in pipelines_:
-        pipelines.register(pipe)
-    asyncio.run(app(get_args(run_argv(web, minimal, monitor_port, mqtt_broker, mqtt_port, llm))))
+    try:
+        asyncio.run(
+            serve(
+                agents,
+                pipelines_=pipelines_,
+                web=web,
+                minimal=minimal,
+                monitor_port=monitor_port,
+                mqtt_broker=mqtt_broker,
+                mqtt_port=mqtt_port,
+                llm=llm,
+                state_dir=state_dir,
+                handle_signals=True,
+            )
+        )
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # An intentional stop; the actors were stopped on the way out.
+        pass
 
 
 def run_argv(

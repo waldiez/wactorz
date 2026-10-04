@@ -86,7 +86,7 @@ class MyAgent(Actor):
 
     async def _poll(self):
         while True:
-            await self._mqtt_publish("custom/my-agent/tick", {"ts": time.time()})
+            await self.publish("custom/my-agent/tick", {"ts": time.time()})
             await asyncio.sleep(10)
 ```
 
@@ -213,6 +213,10 @@ planner executes the approved plan, spawns required agents, and self-terminates.
 
 ## Library use
 
+The supported surface for a program that uses Wactorz as a library is the table
+at the end of [Using Wactorz as a library](library.md#stable-api); the rest of
+this page documents internals that may change between releases.
+
 ### `wactorz.agent`
 
 Declares a function as an agent; see [Bringing your own agents](agents.md#bringing-your-own-agents).
@@ -233,13 +237,27 @@ reads and `spec.build()` turns into a `FunctionAgent`.
 Declares a pipeline of agents and checks its wiring; see
 [Pipelines](agents.md#pipelines). Returns a `Pipeline` whose `agent_names`,
 `producers()`, `spawn_configs()` and `record()` describe it. Rules are
-`wactorz.agents.rule_agent.RuleConfig` objects or the dicts that build them.
+`wactorz.RuleConfig` objects, built from `RuleCondition` and `RuleAction` and
+visible to the type checker, or the equivalent dicts.
 
-### `wactorz.run(agents=(), *, pipelines_=(), web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None)`
+### `wactorz.serve(agents=(), *, pipelines_=(), web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None, handle_signals=False)`
 
-Starts the system from a script with the given agents (decorated functions or
-`Actor` subclasses) supervised beside the built-ins. `minimal=True` starts the
-monitor, the dashboard and the given agents only. Returns when the system stops.
+A coroutine: runs the system on the caller's event loop with the given agents
+(decorated functions or `Actor` subclasses) supervised beside the built-ins, for
+a notebook, a web framework or any program that already has a loop. The host
+keeps its signals; cancelling the task stops the system. `minimal=True` starts
+the monitor, the dashboard and the given agents only. Returns when the system
+stops.
+
+### `wactorz.run(...)`
+
+`asyncio.run(serve(...))` with signal handling on, for a script. Same arguments.
+
+### `Actor.publish(topic, payload, *, retain=False, qos=0)`
+
+Publishes on the broker: a dict or list as JSON, bytes as they are, anything
+else as text. The public name for what an actor sends; `_mqtt_publish` is the
+implementation.
 
 ### `Actor.subscribe(topic, callback)` and `Actor.window(topic, seconds=300, max_size=1000)`
 

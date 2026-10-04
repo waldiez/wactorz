@@ -285,7 +285,7 @@ class RuleAgent(Actor):
     async def _run(self, action: RuleAction, trigger: Any) -> None:
         body = action.body(trigger)
         if action.type == "publish":
-            await self._mqtt_publish(action.topic, body)
+            await self.publish(action.topic, body)
         elif action.type == "task":
             await self._send_task(action.agent, body)
         elif action.type == "webhook":

@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
@@ -376,6 +377,26 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td><code>WACTORZ_STATE_DIR</code></td>
 <td><code>./state</code></td>
 <td>Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins <code>/data/state</code>. <code>wactorz-reset</code> reads the same variable, so a wipe targets whatever the app is using</td>
+</tr>
+<tr>
+<td><code>WACTORZ_AGENTS</code></td>
+<td>—</td>
+<td>Agents this deployment brings, as <code>package.module:attr</code> targets (an <code>Actor</code> subclass or a function declared with <code>@wactorz.agent</code>), comma separated. Supervised at startup beside the built-ins; see <a href="../guide/agents.html#bringing-your-own-agents">Bringing your own agents</a></td>
+</tr>
+<tr>
+<td><code>WACTORZ_PIPELINES</code></td>
+<td>—</td>
+<td>Pipelines this deployment brings, as <code>package.module:attr</code> targets of what <code>wactorz.pipeline()</code> returned, comma separated; their steps, schedule and rules are supervised at startup</td>
+</tr>
+<tr>
+<td><code>WACTORZ_HA_AGENTS</code></td>
+<td><code>auto</code></td>
+<td>Whether the Home Assistant agents start: <code>auto</code> starts them when <code>HA_URL</code> and <code>HA_TOKEN</code> are set, <code>on</code> and <code>off</code> decide outright</td>
+</tr>
+<tr>
+<td><code>WACTORZ_MINIMAL</code></td>
+<td><code>0</code></td>
+<td>Start only the monitor, the dashboard and the agents this deployment brings: no orchestrator, catalogue or installer, so no model is needed. Same as <code>wactorz --minimal</code></td>
 </tr>
 <tr>
 <td><code>WACTORZ_TZ</code></td>

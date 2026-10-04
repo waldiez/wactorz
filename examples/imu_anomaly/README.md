@@ -15,6 +15,7 @@ language model.
 | `run.py` | Starts Wactorz with that agent, in the minimal profile. |
 | `pipeline.py` | The detector as one stage of a pipeline: a notifier, a report on a schedule, and a rule that alerts on a strong anomaly. |
 | `notebook.ipynb` | The same, from Jupyter: the system on the notebook's loop through `wactorz.serve()`, readings published and anomalies read from cells, the running agent inspected in-process. |
+| `fastapi_app.py` | The same, inside a FastAPI app: the system on the web app's loop, started and stopped by its lifespan, with routes that reach the running agent. |
 | `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal. |
 
 ## Run it
@@ -71,9 +72,7 @@ key is needed.
 `notebook.ipynb` runs the detector on Jupyter's own event loop:
 
 ```python
-system_task = asyncio.create_task(
-    wactorz.serve(agents=[detect], minimal=True, monitor_port=8890)
-)
+system_task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, monitor_port=8890))
 ```
 
 The dashboard goes on port 8890 because Jupyter's own server already has 8888,
@@ -84,6 +83,37 @@ the running actor through `wactorz.system().registry` to read its counters
 and persisted state, sends it a task the way chat would, and stops it by
 cancelling the task. Start Jupyter from this folder, or the first cell adds it
 to the path.
+
+## Inside a web app
+
+`fastapi_app.py` runs the detector on a FastAPI app's own event loop. The app
+owns the loop and the signals; Wactorz is a task its lifespan starts and
+cancels:
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, state_dir="./state"))
+    await asyncio.sleep(0)
+    if task.done():
+        task.result()  # a refused start fails the app now, not at shutdown
+    yield
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task  # the actors are stopped and their state written first
+```
+
+Two routes show the host reaching in: `GET /status` reads the agent's counters
+through `wactorz.system().registry`, and `POST /detect` scores a reading on
+demand with `actor.call()`, the way a task from chat would.
+
+```bash
+pip install fastapi uvicorn
+uvicorn fastapi_app:app --port 8000
+curl -X POST localhost:8000/detect -H 'content-type: application/json' -d '{"ax": 9, "ay": -7.5, "az": 1}'
+```
+
+The dashboard is still on 8888; pass `web=False` to leave it off.
 
 ## As a pipeline
 

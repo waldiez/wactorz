@@ -255,6 +255,17 @@ your agents only. The minimal profile runs no planner, no generated code and
 no runtime package install, which is the reproducible mode a pinned
 environment wants.
 
+## Examples
+
+`examples/` in the repository holds complete programs, each with a README:
+
+- `imu_anomaly/`: a trained model watching IMU readings, as a script, a
+  pipeline, a notebook and inside a FastAPI app.
+- `llm_notes/`: an agent that calls the system's language model through
+  `me.llm`, with the cost kept across restarts.
+- `yolo_watch/`: a YOLO model as an agent, as a function answering snapshots
+  on MQTT and as an `Actor` reading a camera itself.
+
 ## Testing
 
 A decorated function is tested as a function. The actor around it is built

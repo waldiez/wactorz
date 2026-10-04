@@ -39,7 +39,9 @@ from .agents import (
     ScheduledAgent,
     agent,
 )
+from .agents.function_agent import spec_of
 from .agents.rule_agent import RuleAction, RuleCondition, RuleConfig
+from .errors import StartupError
 
 __all__ += [
     "AnthropicProvider",
@@ -64,10 +66,13 @@ __all__ += [
     "RuleCondition",
     "RuleConfig",
     "ScheduledAgent",
+    "StartupError",
     "agent",
     "pipeline",
     "run",
     "serve",
+    "spec_of",
+    "system",
 ]
 
 
@@ -88,6 +93,17 @@ async def serve(*args: Any, **kwargs: Any) -> None:
     from .app import serve as _serve
 
     await _serve(*args, **kwargs)
+
+
+def system() -> ActorSystem | None:
+    """The running :class:`ActorSystem`, or ``None`` outside a run; see :func:`wactorz.app.system`.
+
+    For a host that embeds the system and wants at its actors:
+    ``wactorz.system().registry.find_by_name("imu-anomaly")``.
+    """
+    from .app import system as _system
+
+    return _system()
 
 
 def run(*args: Any, **kwargs: Any) -> None:

@@ -24,8 +24,9 @@ from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
 from wactorz.core import cancellation
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
-from wactorz.core.paths import ensure_state_dir
+from wactorz.core.paths import ensure_state_dir, set_state_dir
 from wactorz.dev_reload import start_reloader
+from wactorz.errors import StartupError
 from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_setup import setup_logging
 from wactorz.monitoring.loop_lag import LoopLagMonitor
@@ -45,6 +46,22 @@ _shutting_down = threading.Event()
 #: Watches the event loop from a thread, and says in the log where it is when it
 #: stops running.
 _loop_lag = LoopLagMonitor()
+
+#: The ActorSystem this process is running, from the moment it is built until
+#: shutdown has stopped it. What :func:`system` answers with.
+_current_system: "ActorSystem | None" = None
+
+
+def system() -> "ActorSystem | None":
+    """The running :class:`~wactorz.core.registry.ActorSystem`, or ``None`` outside a run.
+
+    For a program that embeds Wactorz and wants at its actors: the registry
+    (``system().registry.find_by_name(...)``), the supervisor, the broker
+    publisher. Set as soon as the system is built, so a host that started
+    :func:`serve` as a task can reach it once that task is under way, and
+    cleared when the run is over.
+    """
+    return _current_system
 
 
 async def _start_web_ui(
@@ -255,6 +272,8 @@ async def build_system(
         mqtt_port=args.mqtt_port or CONFIG.mqtt_port,
         state_dir=_sd,
     )
+    global _current_system
+    _current_system = system
     if on_system is not None:
         # Handed over before anything is started on it, so a stop that arrives
         # part-way through startup can still stop whatever had started by then.
@@ -511,8 +530,7 @@ async def build_system(
 
     main_actor = find_main_actor(system.registry)
     if not main_actor and not minimal:
-        logger.error("Failed to find the main actor.")
-        sys.exit(1)
+        raise StartupError("the main actor did not start; see the log above for why")
     if main_actor is not None:
         # Recorded beside the planner's rules, so `/rules` lists a declared
         # pipeline and `/rules delete` stops the whole of it.
@@ -602,6 +620,8 @@ async def _shut_down(system: "ActorSystem | None") -> None:
     # First of all, before anything is awaited: from here on the signal handler
     # stops asking, so a repeated request never lands inside the shutdown itself.
     _shutting_down.set()
+    global _current_system
+    _current_system = None
     from wactorz.core.persistence import close_persistence, maintenance
 
     # First: a scheduled job holds the connection lock while it runs, and the
@@ -621,11 +641,25 @@ async def _shut_down(system: "ActorSystem | None") -> None:
     await _stop_leftover_tasks()
 
 
-async def app(args: argparse.Namespace, *, handle_signals: bool = True):
+async def app(
+    args: argparse.Namespace, *, handle_signals: bool = True, configure_logging: bool = True
+):
+    """Run the system described by ``args`` until it is stopped.
+
+    ``handle_signals`` installs the SIGINT/SIGTERM handlers; a host with a loop
+    of its own leaves it off and cancels the task instead. ``configure_logging``
+    sets up the process's logging the way the ``wactorz`` command wants it:
+    console and file handlers on the root logger, with redaction. A library
+    caller leaves that off and keeps its own; the dashboard's log view still
+    works, since its buffer is attached either way. Raises
+    :class:`~wactorz.errors.StartupError` when the configuration cannot be
+    started as it stands.
+    """
     # First, so both cover startup as well as steady state. setup_logging builds
     # the handlers with redaction already attached, so no record reaches an
     # unfiltered console or log file.
-    setup_logging()
+    if configure_logging:
+        setup_logging()
     install_log_buffer()
     # From the start, so a startup step that blocks the loop is named too.
     _loop_lag.start()
@@ -642,8 +676,7 @@ async def app(args: argparse.Namespace, *, handle_signals: bool = True):
     # after this one too.
     refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key) or prepare_broker_files()
     if refusal:
-        logger.error("[startup] %s", refusal)
-        raise SystemExit(1)
+        raise StartupError(refusal)
 
     if args.reload:
         start_reloader(logger)
@@ -706,8 +739,7 @@ async def app(args: argparse.Namespace, *, handle_signals: bool = True):
         elif interface == "discord":
             discord_token = args.discord_token or CONFIG.discord_token
             if not discord_token:
-                logger.error("DISCORD_BOT_TOKEN not set.")
-                sys.exit(1)
+                raise StartupError("DISCORD_BOT_TOKEN not set.")
             iface = DiscordInterface(
                 main_actor,
                 token=discord_token,
@@ -728,8 +760,7 @@ async def app(args: argparse.Namespace, *, handle_signals: bool = True):
         elif interface == "telegram":
             telegram_token = args.telegram_token or CONFIG.telegram_token
             if not telegram_token:
-                logger.error("TELEGRAM_BOT_TOKEN not set.")
-                sys.exit(1)
+                raise StartupError("TELEGRAM_BOT_TOKEN not set.")
             iface = TelegramInterface(
                 main_actor,
                 token=telegram_token,
@@ -737,6 +768,10 @@ async def app(args: argparse.Namespace, *, handle_signals: bool = True):
                 allowed_user_ids=CONFIG.telegram_allowed_user_ids,
             )
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    except StartupError:
+        # The caller's to report: the command exits on it, a host program
+        # catches it. Shutdown below still runs.
+        raise
     except Exception:
         logger.exception("System error")
     finally:
@@ -753,8 +788,9 @@ async def serve(
     mqtt_broker: str | None = None,
     mqtt_port: int | None = None,
     llm: str | None = None,
-    state_dir: str | None = None,
+    state_dir: "str | os.PathLike[str] | None" = None,
     handle_signals: bool = False,
+    configure_logging: bool = False,
 ) -> None:
     """Run Wactorz inside an event loop that is already running, with the agents it is given.
 
@@ -768,17 +804,33 @@ async def serve(
     starts no orchestrator, catalogue or installer, so no model is needed: the
     monitor, the dashboard and the given agents only. The other arguments stand
     in for the command line's; ``state_dir`` is where everything durable is
-    kept, as ``WACTORZ_STATE_DIR`` would say. The host keeps its signals unless
-    ``handle_signals`` says otherwise. Returns when the system has stopped.
+    kept, as ``WACTORZ_STATE_DIR`` would say, and is set for this process only,
+    not written to the environment.
+
+    It behaves as a library call: the host keeps its signals unless
+    ``handle_signals`` says otherwise, its logging configuration is left alone
+    unless ``configure_logging`` asks for the command's, and a configuration
+    that cannot be started raises :class:`~wactorz.errors.StartupError` rather
+    than exiting the process. Returns when the system has stopped.
     """
-    if state_dir is not None:
-        os.environ["WACTORZ_STATE_DIR"] = str(state_dir)
-    for item in agents:
-        plugins.register(item)
-    for pipe in pipelines_:
-        pipelines.register(pipe)
-    args = get_args(run_argv(web, minimal, monitor_port, mqtt_broker, mqtt_port, llm))
-    await app(args, handle_signals=handle_signals)
+    previous = set_state_dir(state_dir) if state_dir is not None else None
+    try:
+        for item in agents:
+            plugins.register(item)
+        for pipe in pipelines_:
+            pipelines.register(pipe)
+        args = serve_args(
+            web=web,
+            minimal=minimal,
+            monitor_port=monitor_port,
+            mqtt_broker=mqtt_broker,
+            mqtt_port=mqtt_port,
+            llm=llm,
+        )
+        await app(args, handle_signals=handle_signals, configure_logging=configure_logging)
+    finally:
+        if state_dir is not None:
+            set_state_dir(previous)
 
 
 def run(
@@ -791,13 +843,14 @@ def run(
     mqtt_broker: str | None = None,
     mqtt_port: int | None = None,
     llm: str | None = None,
-    state_dir: str | None = None,
+    state_dir: "str | os.PathLike[str] | None" = None,
 ) -> None:
     """Start Wactorz from a script: :func:`serve` on a loop of its own, until stopped.
 
     Takes the same arguments. Ctrl-C and SIGTERM stop it the way they stop the
-    ``wactorz`` command. A program that already has an event loop awaits
-    :func:`serve` instead.
+    ``wactorz`` command, and logging is set up the way the command sets it up.
+    A program that already has an event loop awaits :func:`serve` instead.
+    Raises :class:`~wactorz.errors.StartupError` as :func:`serve` does.
     """
     try:
         asyncio.run(
@@ -812,6 +865,7 @@ def run(
                 llm=llm,
                 state_dir=state_dir,
                 handle_signals=True,
+                configure_logging=True,
             )
         )
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -819,26 +873,30 @@ def run(
         pass
 
 
-def run_argv(
-    web: bool,
-    minimal: bool,
-    monitor_port: int | None,
-    mqtt_broker: str | None,
-    mqtt_port: int | None,
-    llm: str | None,
-) -> list[str]:
-    """The command line :func:`run`'s arguments stand for, so one parser serves both."""
-    argv: list[str] = []
-    if not web:
-        argv.append("--no-monitor")
-    if minimal:
-        argv.append("--minimal")
+def serve_args(
+    *,
+    web: bool = True,
+    minimal: bool = False,
+    monitor_port: int | None = None,
+    mqtt_broker: str | None = None,
+    mqtt_port: int | None = None,
+    llm: str | None = None,
+) -> argparse.Namespace:
+    """The settings :func:`serve`'s arguments stand for, in the form :func:`app` reads.
+
+    The command line's defaults with these values set on top, so the two entry
+    points agree on every setting without the library call having to spell
+    its arguments as flags. Nothing is read from ``sys.argv``.
+    """
+    args = get_args([])
+    args.no_monitor = not web
+    args.minimal = minimal
     if monitor_port is not None:
-        argv += ["--monitor-port", str(monitor_port)]
+        args.monitor_port = monitor_port
     if mqtt_broker is not None:
-        argv += ["--mqtt-broker", mqtt_broker]
+        args.mqtt_broker = mqtt_broker
     if mqtt_port is not None:
-        argv += ["--mqtt-port", str(mqtt_port)]
+        args.mqtt_port = mqtt_port
     if llm is not None:
-        argv += ["--llm", llm]
-    return argv
+        args.llm = llm
+    return args

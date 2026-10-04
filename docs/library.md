@@ -79,17 +79,28 @@ a ROS node, await `serve` instead; the host keeps its signals, and cancelling
 the task stops the system cleanly:
 
 ```python
-# Jupyter: its own server is on 8888, the dashboard's default, so pick another port
-await wactorz.serve(agents=[detect], minimal=True, monitor_port=8890)
+# Jupyter: `serve` returns when the system stops, so it runs as a task, and the
+# notebook's own server is on 8888, the dashboard's default, so pick another port.
+system_task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True, monitor_port=8890))
+await asyncio.sleep(4)  # the broker connection, the dashboard and the agent come up
+actor = wactorz.system().registry.find_by_name("imu-anomaly")
+...
+system_task.cancel()  # to stop; the actors are stopped on the way out
+```
 
+```python
 # FastAPI
-@app.on_event("startup")
-async def start_agents() -> None:
-    app.state.wactorz = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True))
+from contextlib import asynccontextmanager, suppress
 
-@app.on_event("shutdown")
-async def stop_agents() -> None:
-    app.state.wactorz.cancel()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(wactorz.serve(agents=[detect], minimal=True))
+    yield
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task  # the system is stopped, and its state written, before the host exits
+
+app = FastAPI(lifespan=lifespan)
 ```
 
 `run()` is `asyncio.run(serve(...))` with signal handling on; the two take the
@@ -97,6 +108,15 @@ same arguments: `web`, `minimal`, `monitor_port`, `mqtt_broker`, `mqtt_port`,
 `llm`, `state_dir`. The dashboard's default port is 8888, which Jupyter also
 uses; inside a notebook, or beside any other server on that port, pass
 `monitor_port` or set `MONITOR_PORT`.
+
+`serve` behaves as a library call inside someone else's program: it leaves the
+host's logging configuration alone (`configure_logging=True` asks for the
+command's console and file handlers, which `run()` does), `state_dir` is set
+for the run rather than written to the environment, and a configuration that
+cannot be started, an exposed bind address with no API key, a chat interface
+whose token is missing, raises `wactorz.StartupError` with the reason instead
+of exiting the process. `wactorz.system()` is the running `ActorSystem`, with
+the registry your actors are in, and `None` outside a run.
 
 ## Or register it, and start `wactorz` as usual
 
@@ -232,17 +252,18 @@ A decorated function is tested as a function. The actor around it is built
 without a broker and exercised directly:
 
 ```python
-from wactorz.agents.function_agent import spec_of
+import wactorz
 
 def test_a_jolt_is_flagged(tmp_path):
-    actor = spec_of(detect).build(persistence_dir=str(tmp_path))
+    actor = wactorz.spec_of(detect).build(persistence_dir=str(tmp_path))
     assert detect({"ax": 9.0, "ay": -7.5, "az": 1.0}, actor)["score"] > 4
     assert detect({"ax": 0.1, "ay": 0.0, "az": 1.0}, actor) is None
 ```
 
 `actor.call(payload)` runs it the way a message would, on a thread for a plain
 function; `actor.handle_message(...)` answers a task. Nothing connects until
-`on_start`.
+`on_start`. `spec_of` is the `AgentSpec` the decorator recorded: `name`,
+`subscribes`, `publishes`, `options`, and `build()` for the actor.
 
 ## Where things go
 
@@ -266,6 +287,9 @@ What this guide uses is the surface you can rely on:
 | `wactorz.agent` | declare a function as an agent |
 | `wactorz.pipeline` | declare steps, a schedule and rules together |
 | `wactorz.run`, `wactorz.serve` | start the system from a script, or on a running loop |
+| `wactorz.system` | the running `ActorSystem` (`registry`, `supervisor`), `None` outside a run |
+| `wactorz.spec_of` | the `AgentSpec` behind a decorated function, with `build()` for tests |
+| `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message` | the base class |
 | `wactorz.FunctionAgent` | the actor behind a decorated function: `call`, `options`, `log` |
 | `wactorz.RuleConfig`, `RuleCondition`, `RuleAction`, `wactorz.RuleAgent` | typed rules |

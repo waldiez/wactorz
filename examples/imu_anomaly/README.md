@@ -80,7 +80,7 @@ The dashboard goes on port 8890 because Jupyter's own server already has 8888,
 the dashboard's default; the notebook prints the address it used.
 
 then publishes readings from a cell, collects anomalies from another, reaches
-the running actor through `wactorz.web.runtime.registry` to read its counters
+the running actor through `wactorz.system().registry` to read its counters
 and persisted state, sends it a task the way chat would, and stops it by
 cancelling the task. Start Jupyter from this folder, or the first cell adds it
 to the path.

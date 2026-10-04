@@ -240,18 +240,39 @@ Declares a pipeline of agents and checks its wiring; see
 `wactorz.RuleConfig` objects, built from `RuleCondition` and `RuleAction` and
 visible to the type checker, or the equivalent dicts.
 
-### `wactorz.serve(agents=(), *, pipelines_=(), web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None, handle_signals=False)`
+### `wactorz.serve(agents=(), *, pipelines_=(), web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None, handle_signals=False, configure_logging=False)`
 
 A coroutine: runs the system on the caller's event loop with the given agents
 (decorated functions or `Actor` subclasses) supervised beside the built-ins, for
 a notebook, a web framework or any program that already has a loop. The host
-keeps its signals; cancelling the task stops the system. `minimal=True` starts
-the monitor, the dashboard and the given agents only. Returns when the system
-stops.
+keeps its signals and its logging configuration; cancelling the task stops the
+system. `state_dir` is set for the run, not written to the environment.
+`minimal=True` starts the monitor, the dashboard and the given agents only.
+Raises `wactorz.StartupError` for a configuration that cannot be started.
+Returns when the system stops.
 
 ### `wactorz.run(...)`
 
-`asyncio.run(serve(...))` with signal handling on, for a script. Same arguments.
+`asyncio.run(serve(...))` with signal handling and the command's logging on,
+for a script. Same arguments.
+
+### `wactorz.system()`
+
+The running `ActorSystem`, from the moment it is built until shutdown, or
+`None` outside a run: `wactorz.system().registry.find_by_name("imu-anomaly")`.
+
+### `wactorz.spec_of(fn)`
+
+The `AgentSpec` a `@wactorz.agent` decorator recorded on `fn`: `name`,
+`subscribes`, `publishes`, `options`, `build(**actor_kwargs)` for the
+`FunctionAgent`. `None` for an undecorated function.
+
+### `wactorz.StartupError`
+
+A `RuntimeError` for a configuration that cannot start: an exposed bind address
+without an API key, a broker certificate that cannot be loaded, a chat interface
+whose token is missing. The `wactorz` command logs it and exits with status 1;
+a host program catches it.
 
 ### `Actor.publish(topic, payload, *, retain=False, qos=0)`
 

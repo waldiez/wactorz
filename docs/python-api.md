@@ -247,9 +247,10 @@ A coroutine: runs the system on the caller's event loop with the given agents
 a notebook, a web framework or any program that already has a loop. The host
 keeps its signals and its logging configuration; cancelling the task stops the
 system. `state_dir` is set for the run, not written to the environment.
-`minimal=True` starts the monitor, the dashboard and the given agents only.
-Raises `wactorz.StartupError` for a configuration that cannot be started.
-Returns when the system stops.
+`minimal=True` starts the monitor, the dashboard and the given agents only, and
+builds no model unless `llm` names one. Raises `wactorz.StartupError` for a
+configuration that cannot be started, with what it started undone; the host's
+own tasks are left running at shutdown. Returns when the system stops.
 
 ### `wactorz.run(...)`
 

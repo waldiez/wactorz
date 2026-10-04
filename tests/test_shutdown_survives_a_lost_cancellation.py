@@ -301,7 +301,7 @@ class TestAStopDuringStartup:
     def shut_down_fixture(self, monkeypatch: pytest.MonkeyPatch) -> list[object]:
         calls: list[object] = []
 
-        async def record(system: object) -> None:
+        async def record(system: object, spare: object = None) -> None:
             calls.append(system)
 
         monkeypatch.setattr(app_mod, "_shut_down", record)
@@ -395,7 +395,7 @@ class TestTheShutdownSequence:
         def close_persistence() -> None:
             calls.append("database")
 
-        async def stop_leftovers() -> None:
+        async def stop_leftovers(spare: object = None) -> None:
             calls.append("leftovers")
 
         monkeypatch.setattr(maintenance, "stop", stop_maintenance)

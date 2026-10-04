@@ -69,7 +69,9 @@ wactorz.run(agents=[detect], minimal=True)        # http://localhost:8888/
 ```
 
 `minimal=True` starts the monitor, the dashboard and your agents: no
-orchestrator, no catalogue, no installer, so no model API key. Leave it out to
+orchestrator, no catalogue, no installer, so no model, no API key and no
+provider SDK; a plain `pip install wactorz` is enough. A model is built under
+it only when one is named (`llm="ollama"`). Leave it out to
 run beside the full system, where chat can ask your agent questions
 (`@imu-anomaly {"ax": 9, "ay": 0, "az": 1}`) and the planner can wire new
 agents to what it publishes.
@@ -114,9 +116,13 @@ host's logging configuration alone (`configure_logging=True` asks for the
 command's console and file handlers, which `run()` does), `state_dir` is set
 for the run rather than written to the environment, and a configuration that
 cannot be started, an exposed bind address with no API key, a chat interface
-whose token is missing, raises `wactorz.StartupError` with the reason instead
-of exiting the process. `wactorz.system()` is the running `ActorSystem`, with
-the registry your actors are in, and `None` outside a run.
+whose token is missing, a provider whose SDK is not installed, raises
+`wactorz.StartupError` with the reason instead of exiting the process, and
+leaves the process as it found it: no thread of ours left watching the loop,
+no handler of ours on the root logger. Tasks the host already had running
+when `serve` started are its own and are left alone at shutdown.
+`wactorz.system()` is the running `ActorSystem`, with the registry your actors
+are in, and `None` outside a run.
 
 ## Or register it, and start `wactorz` as usual
 

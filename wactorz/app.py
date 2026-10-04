@@ -28,12 +28,14 @@ from wactorz.core.paths import ensure_state_dir, set_state_dir
 from wactorz.dev_reload import start_reloader
 from wactorz.errors import StartupError
 from wactorz.monitoring.log_buffer import install as install_log_buffer
+from wactorz.monitoring.log_buffer import uninstall as uninstall_log_buffer
 from wactorz.monitoring.log_setup import setup_logging
 from wactorz.monitoring.loop_lag import LoopLagMonitor
 from wactorz.web import runtime
 from wactorz.web.auth import exposure_refusal
 
 if TYPE_CHECKING:
+    from wactorz.agents.llm_agent import LLMProvider
     from wactorz.core.registry import ActorSystem
 
 logger = logging.getLogger(__name__)
@@ -118,7 +120,7 @@ async def _stop_web_ui() -> None:
 LEFTOVER_STOP_TIMEOUT_S = 10.0
 
 
-async def _stop_leftover_tasks() -> None:
+async def _stop_leftover_tasks(spare: "set[asyncio.Task[Any]] | None" = None) -> None:
     """Stop every task still running, asking again for any that lose the request.
 
     What ``asyncio.run`` does once ``app()`` returns, done here with
@@ -126,9 +128,16 @@ async def _stop_leftover_tasks() -> None:
     wait. A broker connection an agent opened and nothing closed, such as a topic
     stream window, can lose that one request on Python 3.10 and 3.11 and hold the
     process open.
+
+    ``spare`` are the tasks that were already running when the system started:
+    a host program's own, on a loop it shares with us, which are not ours to
+    stop.
     """
     current = asyncio.current_task()
-    await _stop_tasks([task for task in asyncio.all_tasks() if task is not current])
+    keep = spare or set()
+    await _stop_tasks(
+        [task for task in asyncio.all_tasks() if task is not current and task not in keep]
+    )
 
 
 async def _stop_tasks(
@@ -195,6 +204,80 @@ def home_assistant_agents_enabled(settings: AppConfig) -> bool:
     return bool(settings.ha_url and settings.ha_token)
 
 
+#: The extra that installs each provider's SDK, for the message when it is missing.
+_PROVIDER_EXTRAS = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "nim": "openai",
+    "gemini": "google",
+}
+
+
+def _missing_sdk_message(llm: str, exc: ImportError) -> str:
+    """Why the provider cannot be built, and the two ways out."""
+    extra = _PROVIDER_EXTRAS.get(llm)
+    install = f"pip install 'wactorz[{extra}]'" if extra else f"install {exc.name or 'its SDK'}"
+    return (
+        f"LLM provider {llm!r} needs an SDK that is not installed ({exc}). "
+        f"Either {install}, or run without a model: LLM_PROVIDER=none, "
+        f'--llm none, or wactorz.run(..., llm="none").'
+    )
+
+
+async def _build_provider(args: argparse.Namespace, minimal: bool) -> "LLMProvider | None":
+    """The model the system runs on, as the arguments and the profile say, or ``None``.
+
+    The minimal profile runs nothing that needs a model, so one is built only
+    when asked for by name: the default provider's SDK is an optional extra,
+    and a deployment that brought its own agents need not have it. A provider
+    whose SDK is not installed is a :class:`StartupError` that says what to
+    install, or how to run without one.
+    """
+    from wactorz.llm_factory import create_provider, parse_overrides
+
+    llm = args.llm or ("none" if minimal else CONFIG.llm_provider)
+    model_flag = {
+        "ollama": args.ollama_model,
+        "nim": args.nim_model,
+        "gemini": args.gemini_model,
+    }.get(llm)
+    try:
+        # In a thread: building a provider imports its SDK, which on a small
+        # machine with a cold disk takes seconds, and nothing else of the
+        # start-up has to wait behind it.
+        provider = await asyncio.to_thread(create_provider, llm, model_flag)
+    except ValueError:
+        provider = None
+    except ImportError as exc:
+        raise StartupError(_missing_sdk_message(llm, exc)) from exc
+    if provider is None:
+        if minimal:
+            logger.info("Minimal profile: no model; the agents run on their own.")
+        else:
+            logger.warning("No LLM provider set. Agents will have limited capabilities.")
+        return None
+    # One deterministic startup line so the active model and sampling
+    # settings are visible without digging through provider dashboards.
+    temperature = "provider default" if CONFIG.llm_temperature is None else CONFIG.llm_temperature
+    # The parsed table rather than the raw string: what a site resolves to
+    # is the thing worth seeing, and an entry that was dropped as malformed
+    # or unknown is visible by its absence.
+    overrides = parse_overrides(CONFIG.llm_overrides)
+    logger.info(
+        "LLM: %s/%s | temperature=%s%s",
+        llm,
+        getattr(provider, "model", None) or getattr(provider, "model_name", "?"),
+        temperature,
+        (
+            " | overrides: "
+            + ", ".join(f"{site}={spec}" for site, spec in sorted(overrides.items()))
+            if overrides
+            else ""
+        ),
+    )
+    return provider
+
+
 async def build_system(
     args: argparse.Namespace, on_system: "Callable[[ActorSystem], object] | None" = None
 ):
@@ -209,46 +292,11 @@ async def build_system(
     from wactorz.core.actor import Actor, SupervisorStrategy
     from wactorz.core.mqtt import broker_exposure_warning
     from wactorz.core.registry import ActorSystem
-    from wactorz.llm_factory import create_provider, parse_overrides, provider_for
+    from wactorz.llm_factory import provider_for
     from wactorz.web import auth
 
-    llm = args.llm or CONFIG.llm_provider
-    model_flag = {
-        "ollama": args.ollama_model,
-        "nim": args.nim_model,
-        "gemini": args.gemini_model,
-    }.get(llm)
-    try:
-        # In a thread: building a provider imports its SDK, which on a small
-        # machine with a cold disk takes seconds, and nothing else of the
-        # start-up has to wait behind it.
-        provider = await asyncio.to_thread(create_provider, llm, model_flag)
-    except ValueError:
-        provider = None
-    if provider is None:
-        logger.warning("No LLM provider set. Agents will have limited capabilities.")
-    else:
-        # One deterministic startup line so the active model and sampling
-        # settings are visible without digging through provider dashboards.
-        temperature = (
-            "provider default" if CONFIG.llm_temperature is None else CONFIG.llm_temperature
-        )
-        # The parsed table rather than the raw string: what a site resolves to
-        # is the thing worth seeing, and an entry that was dropped as malformed
-        # or unknown is visible by its absence.
-        overrides = parse_overrides(CONFIG.llm_overrides)
-        logger.info(
-            "LLM: %s/%s | temperature=%s%s",
-            llm,
-            getattr(provider, "model", None) or getattr(provider, "model_name", "?"),
-            temperature,
-            (
-                " | overrides: "
-                + ", ".join(f"{site}={spec}" for site, spec in sorted(overrides.items()))
-                if overrides
-                else ""
-            ),
-        )
+    minimal = bool(getattr(args, "minimal", False) or CONFIG.minimal)
+    provider = await _build_provider(args, minimal)
 
     # ── Resolve the durable state directory (honours WACTORZ_STATE_DIR) ───────
     _sd = ensure_state_dir()
@@ -410,7 +458,6 @@ async def build_system(
 
         return make
 
-    minimal = bool(getattr(args, "minimal", False) or CONFIG.minimal)
     if minimal:
         logger.info("Minimal profile: starting the monitor and this deployment's agents only.")
     else:
@@ -593,7 +640,9 @@ def _install_signal_handlers() -> None:
             signal.signal(sig, _request_stop)
 
 
-async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any]:
+async def _build_system_or_stop(
+    args: argparse.Namespace, spare: "set[asyncio.Task[Any]] | None" = None
+) -> tuple[Any, Any, Any]:
     """Build the system, and stop what had started if startup does not finish.
 
     A stop requested during startup arrives as a cancellation inside build_system,
@@ -606,16 +655,21 @@ async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any
     try:
         return await build_system(args, on_system=started.append)
     except BaseException:
-        await _shut_down(started[0] if started else None)
+        await _shut_down(started[0] if started else None, spare)
         raise
 
 
-async def _shut_down(system: "ActorSystem | None") -> None:
+async def _shut_down(
+    system: "ActorSystem | None", spare: "set[asyncio.Task[Any]] | None" = None
+) -> None:
     """Stop everything, in the order that keeps state intact.
 
-    Shared by both ways out: a stop once the system is running, and one that
-    arrives part-way through startup, when some of it never started. Each step
-    copes with what did not.
+    Shared by every way out: a stop once the system is running, one that
+    arrives part-way through startup, when some of it never started, and a
+    start refused before anything was built. Each step copes with what did
+    not happen. Leaves the process as it was found: no thread of ours watching
+    the loop, no handler of ours on the root logger, and the tasks in
+    ``spare``, the host's, still running.
     """
     # First of all, before anything is awaited: from here on the signal handler
     # stops asking, so a repeated request never lands inside the shutdown itself.
@@ -638,7 +692,9 @@ async def _shut_down(system: "ActorSystem | None") -> None:
     close_persistence()
     _loop_lag.stop()
     # Last, rather than left to asyncio.run: see _stop_leftover_tasks.
-    await _stop_leftover_tasks()
+    await _stop_leftover_tasks(spare)
+    # After everything that might still log a line worth seeing on the dashboard.
+    uninstall_log_buffer()
 
 
 async def app(
@@ -663,7 +719,25 @@ async def app(
     install_log_buffer()
     # From the start, so a startup step that blocks the loop is named too.
     _loop_lag.start()
+    # The tasks that are not ours: a host's, on the loop it lent us. Taken
+    # before anything of ours is started, so shutdown can tell the two apart.
+    current = asyncio.current_task()
+    spare = {task for task in asyncio.all_tasks() if task is not current}
 
+    try:
+        _check_startable(args, handle_signals=handle_signals)
+    except BaseException:
+        # Refused, or stopped, before the system was built: what was started
+        # above is still undone. From here on each stage shuts down its own.
+        await _shut_down(None, spare)
+        raise
+
+    system, main_actor, _db = await _build_system_or_stop(args, spare)
+    await _run(args, system, main_actor, spare)
+
+
+def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
+    """What is settled before anything is built; see :func:`app`."""
     # Before anything binds, and at the *process* root rather than in one
     # server's startup. Three servers read `CONFIG.bind_host` — the monitor, the
     # REST API and the WhatsApp webhook — so a check that lived in the monitor
@@ -676,7 +750,7 @@ async def app(
     # after this one too.
     refusal = exposure_refusal(CONFIG.bind_host, CONFIG.api_key) or prepare_broker_files()
     if refusal:
-        raise StartupError(refusal)
+        raise StartupError(refusal)  # app() shuts down what it started
 
     if args.reload:
         start_reloader(logger)
@@ -687,8 +761,14 @@ async def app(
     if handle_signals:
         _install_signal_handlers()
 
-    system, main_actor, _db = await _build_system_or_stop(args)
 
+async def _run(
+    args: argparse.Namespace,
+    system: "ActorSystem",
+    main_actor: Any,
+    spare: "set[asyncio.Task[Any]]",
+) -> None:
+    """Run the built system under the chosen interface until stopped, then shut it down."""
     if not getattr(args, "no_monitor", False):
         _print_ready_banner(args.monitor_port)
 
@@ -775,7 +855,7 @@ async def app(
     except Exception:
         logger.exception("System error")
     finally:
-        await _shut_down(system)
+        await _shut_down(system, spare)
 
 
 async def serve(

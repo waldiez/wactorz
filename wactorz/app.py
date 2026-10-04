@@ -21,7 +21,7 @@ from wactorz.agents.lookup import find_main_actor
 from wactorz.broker_certificates import prepare_broker_files
 from wactorz.cli import get_args
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
-from wactorz.core import cancellation
+from wactorz.core import cancellation, own_tasks
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
 from wactorz.core.paths import ensure_state_dir, set_state_dir
@@ -120,8 +120,8 @@ async def _stop_web_ui() -> None:
 LEFTOVER_STOP_TIMEOUT_S = 10.0
 
 
-async def _stop_leftover_tasks(spare: "set[asyncio.Task[Any]] | None" = None) -> None:
-    """Stop every task still running, asking again for any that lose the request.
+async def _stop_leftover_tasks() -> None:
+    """Stop every task of ours still running, asking again for any that lose the request.
 
     What ``asyncio.run`` does once ``app()`` returns, done here with
     :func:`cancel_until_done` instead of a single cancellation and an open-ended
@@ -129,15 +129,12 @@ async def _stop_leftover_tasks(spare: "set[asyncio.Task[Any]] | None" = None) ->
     stream window, can lose that one request on Python 3.10 and 3.11 and hold the
     process open.
 
-    ``spare`` are the tasks that were already running when the system started:
-    a host program's own, on a loop it shares with us, which are not ours to
-    stop.
+    Ours, not every task on the loop: a host program that lent us its loop has
+    tasks of its own on it, started before or during the run, and those are
+    left alone. See :mod:`wactorz.core.own_tasks`.
     """
     current = asyncio.current_task()
-    keep = spare or set()
-    await _stop_tasks(
-        [task for task in asyncio.all_tasks() if task is not current and task not in keep]
-    )
+    await _stop_tasks([task for task in own_tasks.own_tasks() if task is not current])
 
 
 async def _stop_tasks(
@@ -640,9 +637,7 @@ def _install_signal_handlers() -> None:
             signal.signal(sig, _request_stop)
 
 
-async def _build_system_or_stop(
-    args: argparse.Namespace, spare: "set[asyncio.Task[Any]] | None" = None
-) -> tuple[Any, Any, Any]:
+async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any]:
     """Build the system, and stop what had started if startup does not finish.
 
     A stop requested during startup arrives as a cancellation inside build_system,
@@ -655,21 +650,19 @@ async def _build_system_or_stop(
     try:
         return await build_system(args, on_system=started.append)
     except BaseException:
-        await _shut_down(started[0] if started else None, spare)
+        await _shut_down(started[0] if started else None)
         raise
 
 
-async def _shut_down(
-    system: "ActorSystem | None", spare: "set[asyncio.Task[Any]] | None" = None
-) -> None:
+async def _shut_down(system: "ActorSystem | None") -> None:
     """Stop everything, in the order that keeps state intact.
 
     Shared by every way out: a stop once the system is running, one that
     arrives part-way through startup, when some of it never started, and a
     start refused before anything was built. Each step copes with what did
     not happen. Leaves the process as it was found: no thread of ours watching
-    the loop, no handler of ours on the root logger, and the tasks in
-    ``spare``, the host's, still running.
+    the loop, no handler of ours on the root logger, and a host's own tasks
+    still running.
     """
     # First of all, before anything is awaited: from here on the signal handler
     # stops asking, so a repeated request never lands inside the shutdown itself.
@@ -692,7 +685,7 @@ async def _shut_down(
     close_persistence()
     _loop_lag.stop()
     # Last, rather than left to asyncio.run: see _stop_leftover_tasks.
-    await _stop_leftover_tasks(spare)
+    await _stop_leftover_tasks()
     # After everything that might still log a line worth seeing on the dashboard.
     uninstall_log_buffer()
 
@@ -719,21 +712,22 @@ async def app(
     install_log_buffer()
     # From the start, so a startup step that blocks the loop is named too.
     _loop_lag.start()
-    # The tasks that are not ours: a host's, on the loop it lent us. Taken
-    # before anything of ours is started, so shutdown can tell the two apart.
-    current = asyncio.current_task()
-    spare = {task for task in asyncio.all_tasks() if task is not current}
-
+    # Before the first task of ours, so shutdown can tell ours from a host's on
+    # the loop it lent us; kept until the shutdown has stopped them.
+    tagger = own_tasks.start()
     try:
-        _check_startable(args, handle_signals=handle_signals)
-    except BaseException:
-        # Refused, or stopped, before the system was built: what was started
-        # above is still undone. From here on each stage shuts down its own.
-        await _shut_down(None, spare)
-        raise
+        try:
+            _check_startable(args, handle_signals=handle_signals)
+        except BaseException:
+            # Refused, or stopped, before the system was built: what was started
+            # above is still undone. From here on each stage shuts down its own.
+            await _shut_down(None)
+            raise
 
-    system, main_actor, _db = await _build_system_or_stop(args, spare)
-    await _run(args, system, main_actor, spare)
+        system, main_actor, _db = await _build_system_or_stop(args)
+        await _run(args, system, main_actor)
+    finally:
+        own_tasks.stop(tagger)
 
 
 def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
@@ -762,12 +756,7 @@ def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
         _install_signal_handlers()
 
 
-async def _run(
-    args: argparse.Namespace,
-    system: "ActorSystem",
-    main_actor: Any,
-    spare: "set[asyncio.Task[Any]]",
-) -> None:
+async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any) -> None:
     """Run the built system under the chosen interface until stopped, then shut it down."""
     if not getattr(args, "no_monitor", False):
         _print_ready_banner(args.monitor_port)
@@ -855,7 +844,7 @@ async def _run(
     except Exception:
         logger.exception("System error")
     finally:
-        await _shut_down(system, spare)
+        await _shut_down(system)
 
 
 async def serve(

@@ -301,7 +301,7 @@ class TestAStopDuringStartup:
     def shut_down_fixture(self, monkeypatch: pytest.MonkeyPatch) -> list[object]:
         calls: list[object] = []
 
-        async def record(system: object, spare: object = None) -> None:
+        async def record(system: object) -> None:
             calls.append(system)
 
         monkeypatch.setattr(app_mod, "_shut_down", record)
@@ -395,7 +395,7 @@ class TestTheShutdownSequence:
         def close_persistence() -> None:
             calls.append("database")
 
-        async def stop_leftovers(spare: object = None) -> None:
+        async def stop_leftovers() -> None:
             calls.append("leftovers")
 
         monkeypatch.setattr(maintenance, "stop", stop_maintenance)
@@ -590,3 +590,42 @@ class TestStoppingSeveralTasksTogether:
         failed = asyncio.ensure_future(fails())
         await asyncio.sleep(0)
         assert await cancellation.cancel_all_until_done([failed], timeout=1.0) == []
+
+
+class TestRunForever:
+    """A cancellation stops the system and is then raised on, so a host can see it."""
+
+    async def test_a_cancelled_run_forever_stops_and_re_raises(self) -> None:
+        from wactorz.core.registry import ActorSystem
+
+        system = ActorSystem.__new__(ActorSystem)
+        stopped: list[bool] = []
+
+        async def stop_all() -> None:
+            stopped.append(True)
+
+        system._running = True  # pyright: ignore[reportPrivateUsage]
+        system.stop_all = stop_all  # pyright: ignore[reportAttributeAccessIssue]
+
+        running = asyncio.ensure_future(system.run_forever())
+        await asyncio.sleep(0)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        assert stopped == [True]
+
+    async def test_a_timeout_around_it_is_seen_as_one(self) -> None:
+        """What `asyncio.wait_for` and a task group rely on."""
+        from wactorz.core.registry import ActorSystem
+
+        system = ActorSystem.__new__(ActorSystem)
+
+        async def stop_all() -> None:
+            return None
+
+        system._running = True  # pyright: ignore[reportPrivateUsage]
+        system.stop_all = stop_all  # pyright: ignore[reportAttributeAccessIssue]
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(system.run_forever(), timeout=0.01)

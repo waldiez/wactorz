@@ -242,10 +242,10 @@ class TestAppAsALibraryCall:
         fake_system, fake_main = FakeSystem(), object()
         stopped: list[object] = []
 
-        async def built(args: object, spare: object = None) -> tuple[object, object, None]:
+        async def built(args: object) -> tuple[object, object, None]:
             return fake_system, fake_main, None
 
-        async def shut_down(system: object, spare: object = None) -> None:
+        async def shut_down(system: object) -> None:
             stopped.append(system)
 
         monkeypatch.setattr(app_module, "exposure_refusal", lambda host, key: "")

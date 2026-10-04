@@ -96,6 +96,35 @@ async def _stop_hub(actor: Actor) -> None:
     await asyncio.gather(*actor._tasks, return_exceptions=True)
 
 
+class TestAHubWithNoBroker:
+    async def test_stopping_it_while_it_waits_to_reconnect_stops_its_workers(
+        self, probe: Probe, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Where a hub spends its time with the broker down is the retry wait, and a
+        stop that lands there must still reach the workers, or the loop reports them
+        destroyed while pending at shutdown."""
+
+        def unreachable(_host: str, _port: int, **_kwargs: Any) -> Any:
+            raise ConnectionRefusedError("no broker")
+
+        monkeypatch.setattr(subscriptions_module, "mqtt_client", unreachable)
+        monkeypatch.setattr(subscriptions_module.SubscriptionHub, "RECONNECT_DELAY", 60)
+
+        async def on_reading(payload: Any) -> None:
+            return None
+
+        probe.subscribe("sensors/imu/#", on_reading)
+        await _settle()
+        hub = probe._sub_hub
+        assert hub is not None
+        workers = [b.worker for b in hub._bindings]
+        assert workers and all(w is not None and not w.done() for w in workers)
+
+        await _stop_hub(probe)
+
+        assert all(w is not None and w.done() for w in workers)
+
+
 class TestSubscribe:
     async def test_an_async_callback_gets_the_decoded_payload(
         self, broker: FakeBroker, probe: Probe

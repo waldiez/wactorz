@@ -119,8 +119,11 @@ cannot be started, an exposed bind address with no API key, a chat interface
 whose token is missing, a provider whose SDK is not installed, raises
 `wactorz.StartupError` with the reason instead of exiting the process, and
 leaves the process as it found it: no thread of ours left watching the loop,
-no handler of ours on the root logger. Tasks the host already had running
-when `serve` started are its own and are left alone at shutdown.
+no handler of ours on the root logger. The host's own tasks, started before
+`serve` or while it runs, are left alone at shutdown: Wactorz marks the tasks
+it creates and stops only those. Cancelling the `serve` task raises
+`CancelledError` once the system has stopped, so a timeout or a task group
+around it sees the cancellation as one.
 `wactorz.system()` is the running `ActorSystem`, with the registry your actors
 are in, and `None` outside a run.
 

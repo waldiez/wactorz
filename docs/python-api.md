@@ -250,7 +250,8 @@ system. `state_dir` is set for the run, not written to the environment.
 `minimal=True` starts the monitor, the dashboard and the given agents only, and
 builds no model unless `llm` names one. Raises `wactorz.StartupError` for a
 configuration that cannot be started, with what it started undone; the host's
-own tasks are left running at shutdown. Returns when the system stops.
+own tasks, whenever started, are left running at shutdown. Returns when the
+system stops, and raises `CancelledError` when cancelled, once it has.
 
 ### `wactorz.run(...)`
 

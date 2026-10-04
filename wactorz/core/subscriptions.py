@@ -268,39 +268,45 @@ class SubscriptionHub:
 
     async def run(self) -> None:
         """Hold the connection open and dispatch what arrives, reconnecting for ever."""
-        while True:
-            try:
+        try:
+            while True:
                 # Workers are cancelled when this task is, so a hub that is
                 # restarted -- `bind` revives it once the task has ended -- would
                 # otherwise re-subscribe and queue into queues nobody drains.
                 self._ensure_workers()
-                async with self._connect() as client:
-                    self._client = client
-                    for topic in self._topics():
-                        await client.subscribe(topic, qos=self._qos())
-                    logger.info(
-                        "[%s] Subscribed to %d topic(s) on one connection",
+                try:
+                    async with self._connect() as client:
+                        self._client = client
+                        for topic in self._topics():
+                            await client.subscribe(topic, qos=self._qos())
+                        logger.info(
+                            "[%s] Subscribed to %d topic(s) on one connection",
+                            self._actor.name,
+                            len(self._topics()),
+                        )
+                        async for message in client.messages:
+                            self._dispatch(message)
+                    continue
+                except Exception as e:
+                    self._client = None
+                    logger.warning(
+                        "[%s] MQTT subscribe error: %s — retrying in %ss",
                         self._actor.name,
-                        len(self._topics()),
+                        e,
+                        self.RECONNECT_DELAY,
                     )
-                    async for message in client.messages:
-                        self._dispatch(message)
-            except asyncio.CancelledError:
-                self._client = None
-                # The workers belong to this connection: stopping the actor
-                # cancels the hub task, and nothing else would reach them.
-                for binding in list(self._bindings):
-                    self._stop_worker(binding)
-                break
-            except Exception as e:
-                self._client = None
-                logger.warning(
-                    "[%s] MQTT subscribe error: %s — retrying in %ss",
-                    self._actor.name,
-                    e,
-                    self.RECONNECT_DELAY,
-                )
+                # Outside the handler: a cancellation that lands in this wait,
+                # which is where a hub with no broker to reach spends its time,
+                # must reach the cleanup below like one that lands anywhere else.
                 await asyncio.sleep(self.RECONNECT_DELAY)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            self._client = None
+            # The workers belong to this connection: stopping the actor cancels
+            # the hub task, and nothing else would reach them.
+            for binding in list(self._bindings):
+                self._stop_worker(binding)
 
     def _dispatch(self, message: Any) -> None:
         """Queue one message for every binding whose filter matches it.

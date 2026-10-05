@@ -50,8 +50,10 @@ updates:
       - dependency-name: "python"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
-  # The images compose.yaml and compose.dev.yaml run: the broker, pinned by
-  # digest to the same release the broker tests use, and the rest by tag.
+  # The images compose.yaml and compose.dev.yaml run, pinned by digest: the
+  # broker, at the same release the broker tests use, and the monitoring stack.
+  # Home Assistant follows its `stable` tag on purpose, and the app's own image
+  # is built from the checkout.
   - package-ecosystem: docker-compose
     directory: /
     target-branch: dev

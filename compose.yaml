@@ -374,7 +374,7 @@ services:
 
   prometheus:
     profiles: [python]
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     container_name: wactorz-prometheus
@@ -412,9 +412,7 @@ services:
         sh /etc/prometheus/render-config.sh /etc/prometheus/prometheus.yml
         exec /bin/prometheus \
           --config.file=/etc/prometheus/prometheus.yml \
-          --storage.tsdb.path=/prometheus \
-          --web.console.libraries=/etc/prometheus/console_libraries \
-          --web.console.templates=/etc/prometheus/consoles
+          --storage.tsdb.path=/prometheus
     depends_on:
       api-key:
         condition: service_completed_successfully
@@ -471,7 +469,7 @@ services:
 
   blackbox-exporter:
     profiles: [python]
-    image: prom/blackbox-exporter:v0.25.0
+    image: prom/blackbox-exporter:v0.28.0@sha256:e753ff9f3fc458d02cca5eddab5a77e1c175eee484a8925ac7d524f04366c2fc
     cap_drop: [ALL]
     read_only: true
     security_opt: [no-new-privileges:true]

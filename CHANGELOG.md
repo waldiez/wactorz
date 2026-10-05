@@ -3,6 +3,12 @@
 All notable changes to Wactorz are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — pending
+
+### Changed
+
+- **The compose stacks run Prometheus 3.** Prometheus moves from v2.54.1 to v3.15.0 and the blackbox exporter from v0.25.0 to v0.28.0, both now pinned by digest like the other images. The configuration and the alert rules carry over unchanged. Prometheus 3 no longer ships the old console pages, so the two flags that pointed at them are gone. **Prometheus 3 rewrites the data in the `prometheus-data` volume, and only Prometheus 2.55 or later can read it back:** going back to the earlier version afterwards means removing that volume (`docker volume rm`), losing the history it held.
+
 ## [0.7.0] - 2026-10-03
 
 Wactorz 0.7.0 is about trust and visibility: edge nodes now run the real Wactorz package over an authenticated, encrypted link, every install is locked down by default, and an operator can see when something is stuck, down or failing. A short summary comes first; the full account of each change follows it.

@@ -75,8 +75,8 @@ docs      = [
     # particular classifies box-drawing characters differently between minor
     # versions, so a floating floor makes the freshness check fail on every pull
     # request the day a new one is released, for a page nobody touched.
-    "markdown==3.10.2",
-    "pygments==2.20.0",
+    "markdown==3.10.3",
+    "pygments==2.21.0",
     "watchdog>=6.0.0",
     "pdoc>=16.0.0",
 ]
@@ -114,7 +114,7 @@ dev       = [
 # suite - and with no dependency lock in this project, nothing else would catch
 # that. Same reasoning as the `docs` extra above pins markdown and pygments: the
 # dependency decides the thing being compared.
-e2e       = ["playwright==1.62.0"]
+e2e       = ["playwright==1.63.0"]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [
@@ -153,6 +153,14 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # is what the `ultra` image installs. On macOS and Windows the PyPI build is
 # the CPU one already. A machine with a GPU installs with pip, or names the
 # CUDA index for itself.
+[tool.uv]
+# Releases younger than a week are not locked, as Dependabot's cooldown does
+# not propose them: a compromised release is usually found and pulled within
+# days. Without it, `make lock` takes yesterday's releases, and Dependabot then
+# proposes older ones in their place. Kept in the lockfile as a span, so
+# `uv sync --locked` holds as the days pass.
+exclude-newer = "7 days"
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"

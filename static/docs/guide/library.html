@@ -242,7 +242,9 @@ uses; inside a notebook, or beside any other server on that port, pass
 <code>monitor_port</code> or set <code>MONITOR_PORT</code>.</p>
 <p><code>serve</code> behaves as a library call inside someone else's program: it leaves the
 host's logging configuration alone (<code>configure_logging=True</code> asks for the
-command's console and file handlers, which <code>run()</code> does), <code>state_dir</code> is set
+command's console and file handlers, which <code>run()</code> does; a host that has
+configured no logging at all still sees warnings and errors on stderr, as it
+would without Wactorz), <code>state_dir</code> is set
 for the run rather than written to the environment, and a configuration that
 cannot be started, an exposed bind address with no API key, a chat interface
 whose token is missing, a provider whose SDK is not installed, raises
@@ -255,6 +257,12 @@ it creates and stops only those. Cancelling the <code>serve</code> task raises
 around it sees the cancellation as one.
 <code>wactorz.system()</code> is the running <code>ActorSystem</code>, with the registry your actors
 are in, and <code>None</code> outside a run.</p>
+<p>On Windows the loop matters: the broker client needs a selector loop, and a
+proactor loop, which uvicorn builds there by default, cannot serve it. <code>serve</code>
+refuses to start on one with a <code>StartupError</code> that says what to do: start
+uvicorn with <code>--loop asyncio:SelectorEventLoop</code>, or set
+<code>asyncio.WindowsSelectorEventLoopPolicy()</code> before the loop is made. Jupyter's
+kernel already uses the selector loop.</p>
 <h2 id="or-register-it-and-start-wactorz-as-usual">Or register it, and start <code>wactorz</code> as usual</h2>
 <p>For a deployment that runs the <code>wactorz</code> command, name the agent instead of
 writing a script. Three ways, all equivalent:</p>
@@ -386,6 +394,16 @@ start; <code>WACTORZ_HA_AGENTS=on|off</code> decides outright. <code>wactorz --m
 your agents only. The minimal profile runs no planner, no generated code and
 no runtime package install, which is the reproducible mode a pinned
 environment wants.</p>
+<h2 id="examples">Examples</h2>
+<p><code>examples/</code> in the repository holds complete programs, each with a README:</p>
+<ul>
+<li><code>imu_anomaly/</code>: a trained model watching IMU readings, as a script, a
+  pipeline, a notebook and inside a FastAPI app.</li>
+<li><code>llm_notes/</code>: an agent that calls the system's language model through
+  <code>me.llm</code>, with the cost kept across restarts.</li>
+<li><code>yolo_watch/</code>: a YOLO model as an agent, as a function answering snapshots
+  on MQTT and as an <code>Actor</code> reading a camera itself.</li>
+</ul>
 <h2 id="testing">Testing</h2>
 <p>A decorated function is tested as a function. The actor around it is built
 without a broker and exercised directly:</p>

@@ -431,8 +431,8 @@ folder, reloads for a new account, and restarts itself if the access list or the
 certificate appeared for the first time, since mosquitto reads those only at
 startup.</p>
 <p>Before any node is deployed, two lines in the broker log are expected:</p>
-<div class="highlight"><pre><span></span><code>Warning: ACL pattern &#39;#&#39; does not contain &#39;%c&#39; or &#39;%u&#39;.
-Warning: ACL pattern &#39;$SYS/#&#39; does not contain &#39;%c&#39; or &#39;%u&#39;.
+<div class="highlight"><pre><span></span><code><span class="n">Warning</span><span class="o">:</span><span class="w"> </span><span class="n">ACL</span><span class="w"> </span><span class="n">pattern</span><span class="w"> </span><span class="s1">&#39;#&#39;</span><span class="w"> </span><span class="n">does</span><span class="w"> </span><span class="n">not</span><span class="w"> </span><span class="n">contain</span><span class="w"> </span><span class="s1">&#39;%c&#39;</span><span class="w"> </span><span class="n">or</span><span class="w"> </span><span class="s1">&#39;%u&#39;</span><span class="o">.</span>
+<span class="n">Warning</span><span class="o">:</span><span class="w"> </span><span class="n">ACL</span><span class="w"> </span><span class="n">pattern</span><span class="w"> </span><span class="s1">&#39;$SYS/#&#39;</span><span class="w"> </span><span class="n">does</span><span class="w"> </span><span class="n">not</span><span class="w"> </span><span class="n">contain</span><span class="w"> </span><span class="s1">&#39;%c&#39;</span><span class="w"> </span><span class="n">or</span><span class="w"> </span><span class="s1">&#39;%u&#39;</span><span class="o">.</span>
 </code></pre></div>
 
 <p>They are the two lines that give every account the whole broker while there is

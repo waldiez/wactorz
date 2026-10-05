@@ -11,8 +11,10 @@
 # from `main` too, so a change here takes effect once it is released.
 version: 2
 updates:
+  # The workflows, and the local action they set up uv with, which pins an
+  # action of its own.
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/.github/actions/setup-uv"]
     target-branch: dev
     schedule:
       interval: weekly

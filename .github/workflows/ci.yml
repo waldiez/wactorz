@@ -29,11 +29,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # The uv every job installs with. Bumped by hand: Dependabot updates the
-  # setup-uv action, not the uv it is told to install.
-  UV_VERSION: "0.12.21"
-
 jobs:
   test-python:
     name: Python ${{ matrix.python-version }}
@@ -51,12 +46,9 @@ jobs:
       # The environment is exactly what uv.lock says, in .venv, which is
       # activated so `python` and the Makefile both use it. No cache: this
       # workflow also runs for a release, which restores nothing.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: ./.github/actions/setup-uv
         with:
-          version: ${{ env.UV_VERSION }}
           python-version: ${{ matrix.python-version }}
-          activate-environment: true
-          enable-cache: false
 
       - name: Install
         run: uv sync --locked --extra all --extra dev
@@ -88,12 +80,9 @@ jobs:
       # The environment is exactly what uv.lock says, in .venv, which is
       # activated so `python` and the Makefile both use it. No cache: this
       # workflow also runs for a release, which restores nothing.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: ./.github/actions/setup-uv
         with:
-          version: ${{ env.UV_VERSION }}
           python-version: '3.13'
-          activate-environment: true
-          enable-cache: false
 
       - name: Install
         run: uv sync --locked --extra all --extra dev
@@ -112,12 +101,9 @@ jobs:
       # The environment is exactly what uv.lock says, in .venv, which is
       # activated so `python` and the Makefile both use it. No cache: this
       # workflow also runs for a release, which restores nothing.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: ./.github/actions/setup-uv
         with:
-          version: ${{ env.UV_VERSION }}
           python-version: '3.12'
-          activate-environment: true
-          enable-cache: false
 
       - name: Install
         run: uv sync --locked --extra all --extra dev
@@ -154,12 +140,9 @@ jobs:
       # The environment is exactly what uv.lock says, in .venv, which is
       # activated so `python` and the Makefile both use it. No cache: this
       # workflow also runs for a release, which restores nothing.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: ./.github/actions/setup-uv
         with:
-          version: ${{ env.UV_VERSION }}
           python-version: '3.12'
-          activate-environment: true
-          enable-cache: false
 
       - name: Install
         # vision as well: the type checker gates on this job, and the camera
@@ -231,12 +214,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: ./.github/actions/setup-uv
         with:
-          version: ${{ env.UV_VERSION }}
           python-version: '3.13'
-          activate-environment: true
-          enable-cache: false
 
       - name: Install
         run: uv sync --locked --extra all --extra dev

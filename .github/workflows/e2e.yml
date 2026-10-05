@@ -13,10 +13,6 @@ on:
 permissions:
   contents: read
 
-env:
-  # The uv CI installs with; a test keeps this and ci.yml on the same version.
-  UV_VERSION: "0.12.21"
-
 jobs:
   e2e:
     name: Journeys
@@ -27,12 +23,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: ./.github/actions/setup-uv
         with:
-          version: ${{ env.UV_VERSION }}
           python-version: '3.13'
-          activate-environment: true
-          enable-cache: false
 
       - name: Install
         run: uv sync --locked --extra all --extra dev --extra e2e

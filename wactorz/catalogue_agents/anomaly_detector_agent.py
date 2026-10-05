@@ -671,7 +671,13 @@ def _mqtt_tls_kwargs():
     if ca.lower() == "system":
         context = ssl.create_default_context()
     else:
-        state = os.environ.get("WACTORZ_STATE_DIR", "").strip() or "./state"
+        # The host says where its state is, since a program embedding it may
+        # have set that in code rather than in the environment.
+        state = (
+            globals().get("WACTORZ_STATE_DIR")
+            or os.environ.get("WACTORZ_STATE_DIR", "").strip()
+            or "./state"
+        )
         cafile = os.path.expanduser(ca) if ca else os.path.join(state, "mqtt_tls", "ca.crt")
         context = ssl.create_default_context(cafile=cafile)
     override = os.environ.get("MQTT_TLS_CHECK_HOSTNAME", "").strip().lower()

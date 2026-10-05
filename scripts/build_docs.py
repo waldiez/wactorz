@@ -58,6 +58,7 @@ NAV = [
             ("Docker Hub", "dockerhub.md"),
             ("Architecture", "architecture.md"),
             ("Agents", "agents.md"),
+            ("Library", "library.md"),
             ("Auto-Wiring", "mqtt_auto_wiring.md"),
             ("Interfaces", "interfaces.md"),
             ("Pipelines", "pipelines.md"),

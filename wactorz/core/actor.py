@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
+import inspect
 import json
 import logging
 import pickle
@@ -24,6 +26,8 @@ import psutil
 from .atomic_io import quarantine_unreadable, write_pickle
 from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
+from .subscriptions import SubscriptionHub, is_durable_actor
+from .topic_bus import StreamWindow, get_topic_bus
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
@@ -216,6 +220,42 @@ class ActorMetrics:
         return time.time() - self.start_time
 
 
+def is_coroutine_callable(fn: Any) -> bool:
+    """Whether calling ``fn`` is known to return a coroutine: an async function or method,
+    or an object whose ``__call__`` is one.
+    """
+    # The class's `__call__`, as Python itself looks it up when calling `fn`.
+    call = inspect.getattr_static(type(fn), "__call__", None)
+    return inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(call)
+
+
+async def run_callable(fn: Callable[..., Any], *args: Any) -> Any:
+    """Call ``fn`` with ``args`` and return its result, whatever kind of callable it is.
+
+    A coroutine callable is awaited on the loop. Anything else runs on a worker
+    thread, so a call that blocks -- a model's `predict`, a file read -- does not
+    hold the event loop every other actor in the process shares. What a plain
+    callable returns may still be awaitable -- a lambda around a coroutine
+    function, an async function behind a plain decorator -- and is then awaited
+    on the loop, rather than dropped unawaited.
+    """
+    if is_coroutine_callable(fn):
+        return await fn(*args)
+    result = await asyncio.to_thread(fn, *args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _as_coroutine_callback(callback: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """``callback`` as something the hub can await, whatever kind it was given; see
+    :func:`run_callable`.
+    """
+    if is_coroutine_callable(callback):
+        return callback
+    return functools.partial(run_callable, callback)
+
+
 class Actor(ABC):
     """Base Actor class. All agents inherit from this.
     Actors are fully async and communicate only through messages.
@@ -258,6 +298,14 @@ class Actor(ABC):
         #: claimed it. The empty string is what the rest of the framework means
         #: by local — see main's `is_target_local`.
         self._node: str = ""
+
+        #: The one broker connection this actor's subscriptions share, made on
+        #: the first `subscribe`. None until then, so an actor that never
+        #: subscribes never connects for it.
+        self._sub_hub: SubscriptionHub | None = None
+        #: Rolling windows by topic, from `window`. One per topic: a second call
+        #: for the same topic returns the window that has been filling.
+        self._windows: dict[str, StreamWindow] = {}
 
         # Persistence
         # Use name as persistence folder so it survives restarts with same name
@@ -364,6 +412,9 @@ class Actor(ABC):
         """What stopping does: wind down, clean up, save, and say so."""
         self.state = ActorState.STOPPED
         await self._wind_down_tasks()
+        # Each window holds a broker connection of its own, and a restart builds
+        # a new actor with windows of its own.
+        self._close_windows()
         # Shield cleanup from CancelledError — chat tasks run as fire-and-forget
         # asyncio tasks outside actor._tasks and get cancelled by asyncio.run()
         # cleanup BEFORE these awaits if we don't shield them.
@@ -1188,7 +1239,80 @@ class Actor(ABC):
         # Legacy pickle path
         return self._persistent_state.get(key, default)
 
+    # ─── Subscriptions ────────────────────────────────────────────────────────
+
+    def _make_hub(self) -> SubscriptionHub:
+        """The hub that carries this actor's subscriptions.
+
+        A method so a subclass can hand out one with its own failure policy: a
+        generated program's hub asks the model to repair a failing callback.
+        """
+        return SubscriptionHub(self, durable=is_durable_actor(self))
+
+    def subscribe(self, topic: str, callback: Callable[[Any], Any]) -> None:
+        """Call ``callback(payload)`` for every message matching ``topic``.
+
+        ``topic`` is an MQTT filter, so ``sensors/#`` and ``sensors/+/temp``
+        work. The payload is the message decoded as JSON, or ``{"raw": text}``
+        when it is not JSON. The callback may be a coroutine function or a
+        plain one; messages on one topic are handled one at a time, in order,
+        so a callback that keeps state between calls is never run against
+        itself. Every subscription of this actor shares one broker connection,
+        opened by the first call and closed when the actor stops.
+
+        A callback that keeps raising marks the actor FAILED after a few
+        failures in a row, which is the supervisor's cue to restart it.
+        """
+        if not callable(callback):
+            raise TypeError(f"subscribe({topic!r}) needs a callable callback, got {callback!r}")
+        if self._sub_hub is None:
+            self._sub_hub = self._make_hub()
+        task = self._sub_hub.bind(topic, _as_coroutine_callback(callback))
+        if task is not None:
+            self._tasks.append(task)
+
+    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+        """A rolling window over the last ``seconds`` of messages on ``topic``.
+
+        Returns a :class:`~wactorz.core.topic_bus.StreamWindow`, with ``mean``,
+        ``min``, ``max``, ``rising``, ``falling``, ``absent_for`` and the rest,
+        fed from the broker from the moment it is made. One window per topic:
+        asking again for the same topic returns the one that has been filling.
+        """
+        existing = self._windows.get(topic)
+        if existing is not None:
+            return existing
+        bus = get_topic_bus()
+        if bus is not None:
+            made = bus.make_window(topic, seconds=seconds, max_size=max_size)
+        else:
+            made = StreamWindow(topic, seconds=seconds, max_size=max_size)
+            made.start(self._mqtt_broker, self._mqtt_port)
+        self._windows[topic] = made
+        return made
+
+    def _close_windows(self) -> None:
+        """Stop every window this actor opened."""
+        for topic, made in list(self._windows.items()):
+            try:
+                made.stop()
+            except Exception as exc:
+                logger.debug("[%s] Window on %s would not stop: %s", self.name, topic, exc)
+        self._windows.clear()
+
     # ─── MQTT ─────────────────────────────────────────────────────────────────
+
+    async def publish(
+        self, topic: str, payload: Any, *, retain: bool = False, qos: int = 0
+    ) -> None:
+        """Publish ``payload`` on ``topic`` for anything on the broker to read.
+
+        A dict or list goes out as JSON, bytes as they are, anything else as
+        text. ``retain`` keeps the last message on the broker for whoever
+        subscribes later; ``qos=1`` asks for at-least-once delivery, for a
+        message that must not be lost while the broker is away.
+        """
+        await self._mqtt_publish(topic, payload, retain=retain, qos=qos)
 
     async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
         if self._mqtt_client:
@@ -1274,6 +1398,7 @@ class Actor(ABC):
         capabilities: list[str] | None = None,
         input_schema: dict[str, Any] | None = None,
         output_schema: dict[str, Any] | None = None,
+        subscribes: list[str] | None = None,
     ) -> None:
         """Publish a capability manifest so main's topic registry can discover this actor.
         Call from on_start() in any actor that wants to be discoverable.
@@ -1288,6 +1413,7 @@ class Actor(ABC):
             "actor_id": self.actor_id,
             "description": description,
             "publishes": publishes or [],
+            "subscribes": subscribes or [],
             "capabilities": capabilities or [],
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},

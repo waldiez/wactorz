@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="active">Pipelines</a>
@@ -166,6 +167,10 @@
 
 <hr />
 <h2 id="creating-a-pipeline">Creating a pipeline</h2>
+<p>A pipeline can also be declared in code with <code>wactorz.pipeline(...)</code>, steps,
+schedule and rules together, with the wiring checked before anything starts;
+see <a href="../guide/library.html#a-pipeline">Using Wactorz as a library</a>. What follows is the
+chat path, where the planner builds one from a request.</p>
 <p>Just describe what you want. The intent classifier recognises pipeline requests from natural language:</p>
 <div class="highlight"><pre><span></span><code><span class="s2">&quot;send me a Discord message if the lamp is on&quot;</span>
 <span class="s2">&quot;turn on the hallway light when motion is detected&quot;</span>

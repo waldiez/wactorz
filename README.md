@@ -113,6 +113,29 @@ python -m wactorz --llm ollama --ollama-model llama3
 
 Windows setup is in [docs/windows.md](https://github.com/waldiez/wactorz/blob/main/docs/windows.md); the full set of deployment options lives in [docs/deployment.md](https://docs.waldiez.io/wactorz/guide/deployment.html).
 
+## Use it as a library
+
+Bring an agent you already have — a trained model, a class with its own loop — and
+Wactorz supervises it, restarts it, persists its state and shows it on the dashboard.
+One decorator is enough:
+
+```python
+import wactorz
+
+@wactorz.agent(subscribes="sensors/imu/#", publishes="anomalies/imu")
+def detect(reading: dict) -> dict | None:
+    return reading if MODEL.score(reading) > 4.0 else None
+
+wactorz.run(agents=[detect], minimal=True)   # monitor + dashboard + your agent, no LLM needed
+# or, inside a program that already has an event loop:  await wactorz.serve(agents=[detect], minimal=True)
+```
+
+Or name it in `WACTORZ_AGENTS=mypkg.agent:detect` for a normal `wactorz` start, or list it
+as a `wactorz.agents` entry point in your package. `wactorz.pipeline(...)` groups several
+such agents with a schedule and rules, wiring checked up front. The Home Assistant agents start only
+when Home Assistant is configured. See [Using Wactorz as a library](https://docs.waldiez.io/wactorz/guide/library.html)
+and [`examples/imu_anomaly/`](examples/imu_anomaly/README.md).
+
 ---
 
 ## Example prompts
@@ -298,6 +321,7 @@ rather than opening a public issue.
 | [Docker Hub](https://docs.waldiez.io/wactorz/guide/dockerhub.html) | Run from Docker without cloning the repo |
 | [Architecture](https://docs.waldiez.io/wactorz/guide/architecture.html) | Actor system, supervision, MQTT flow |
 | [Agents](https://docs.waldiez.io/wactorz/guide/agents.html) | Built-in agents, recipes, and dynamic agents |
+| [Library](https://docs.waldiez.io/wactorz/guide/library.html) | Your own agents, pipelines and models, with examples |
 | [Pipelines](https://docs.waldiez.io/wactorz/guide/pipelines.html) | Reactive automation patterns |
 | [Remote nodes](https://docs.waldiez.io/wactorz/guide/remote-nodes.html) | Edge deployment over SSH |
 | [Interfaces](https://docs.waldiez.io/wactorz/guide/interfaces.html) | CLI, REST, chat platforms, dashboard, MCP |

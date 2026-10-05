@@ -48,6 +48,12 @@ def mqtt_dial_port(tls: str, plain_port: int, tls_port: int) -> int:
     return tls_port if tls.strip().lower() in _MQTT_TLS_ON else plain_port
 
 
+def _env_choice(name: str, default: str, choices: tuple[str, ...]) -> str:
+    """The variable's value when it is one of ``choices`` (any case), else ``default``."""
+    value = os.getenv(name, "").strip().lower()
+    return value if value in choices else default
+
+
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
 
@@ -538,6 +544,18 @@ class AppConfig:
     telegram_allowed_user_ids: frozenset[int]
     whatsapp_allowed_numbers: frozenset[str]
     social_rate_limit_per_min: int
+    #: ``package.module:attr`` targets of agents this deployment brings, comma
+    #: separated; the value of WACTORZ_AGENTS as given. See wactorz/plugins.py.
+    agents_env: str
+    #: ``package.module:attr`` targets of pipelines this deployment brings; the
+    #: value of WACTORZ_PIPELINES as given. See wactorz/pipelines.py.
+    pipelines_env: str
+    #: Whether the Home Assistant agents start: ``auto`` (when HA_URL and
+    #: HA_TOKEN are set), ``on``, or ``off``.
+    ha_agents: str
+    #: Start only the monitor and the agents this deployment brings: no
+    #: orchestrator, catalogue or installer, so no model is needed.
+    minimal: bool
 
 
 CONFIG = AppConfig(
@@ -616,6 +634,10 @@ CONFIG = AppConfig(
         if n.strip()
     ),
     social_rate_limit_per_min=_env_int("SOCIAL_RATE_LIMIT_PER_MIN", 12),
+    agents_env=os.getenv("WACTORZ_AGENTS", ""),
+    pipelines_env=os.getenv("WACTORZ_PIPELINES", ""),
+    ha_agents=_env_choice("WACTORZ_HA_AGENTS", "auto", ("auto", "on", "off")),
+    minimal=_env_truthy("WACTORZ_MINIMAL"),
 )
 
 

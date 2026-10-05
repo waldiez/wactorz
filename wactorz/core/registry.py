@@ -1081,10 +1081,16 @@ class ActorSystem:
         logger.info("[ActorSystem] All actors stopped.")
 
     async def run_forever(self):
-        """Block until the system is stopped or interrupted."""
+        """Block until the system is stopped or interrupted.
+
+        A cancellation stops everything and is then raised on: the caller
+        asked for it, and a host wrapping this in a timeout or a task group
+        has to see the cancellation to tell a stop from a normal finish.
+        """
         try:
             while self._running:
                 await asyncio.sleep(1)
         except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("[ActorSystem] Shutdown signal received.")
             await self.stop_all()
+            raise

@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="active">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
@@ -1098,47 +1099,152 @@ LLM_COST_LIMIT_PERIOD=daily   # daily | weekly | monthly | total
 <p><strong>💡 Adding a recipe</strong> — Create <code>wactorz/catalogue_agents/my_agent.py</code> exporting <code>AGENT_CODE = r'''...'''</code>, then add an entry to <code>_build_catalog()</code> in <code>wactorz/agents/catalog_agent.py</code>. The recipe is available on the next restart without any other changes.</p>
 </blockquote>
 <hr />
-<h2 id="writing-a-new-core-agent">Writing a new core agent</h2>
-<p>For agents that need to be part of the supervision tree (always running, not spawnable from chat), subclass <code>Actor</code> directly:</p>
+<h2 id="bringing-your-own-agents">Bringing your own agents</h2>
+<p>Wactorz is a library as much as an application: an agent you already have — a
+trained model, a class with its own loop — runs supervised beside the built-in
+ones, with persistence, heartbeats and a dashboard card, without forking
+<code>app.py</code>. The full walkthrough with examples is <a href="../guide/library.html">Using Wactorz as a library</a>;
+this section is the reference.</p>
+<h3 id="one-function-one-decorator">One function, one decorator</h3>
+<p>The smallest agent is a function. <code>@wactorz.agent</code> gives it a name, topics and
+a manifest, and leaves it a plain function you can still call and test:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">wactorz</span>
+
+<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;imu-anomaly&quot;</span><span class="p">,</span>
+    <span class="n">subscribes</span><span class="o">=</span><span class="s2">&quot;sensors/imu/#&quot;</span><span class="p">,</span>
+    <span class="n">publishes</span><span class="o">=</span><span class="s2">&quot;anomalies/imu&quot;</span><span class="p">,</span>
+    <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Flags IMU readings the trained model calls abnormal.&quot;</span><span class="p">,</span>
+    <span class="n">requires</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;ram_mb&quot;</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s2">&quot;packages&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;numpy&quot;</span><span class="p">]},</span>
+<span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">detect</span><span class="p">(</span><span class="n">reading</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">reading</span> <span class="k">if</span> <span class="n">MODEL</span><span class="o">.</span><span class="n">score</span><span class="p">(</span><span class="n">reading</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mf">4.0</span> <span class="k">else</span> <span class="kc">None</span>
+</code></pre></div>
+
+<p>The function is called once per message with the decoded payload, and once per
+task sent to the agent by chat (<code>@imu-anomaly {...}</code>) or by another agent.
+What it returns is published to <code>publishes</code>, or sent back as the task's
+result; <code>None</code> publishes nothing. A plain function runs on a worker thread, so
+a slow model never holds the event loop; a coroutine function runs on the
+loop. A function that takes a second parameter is given the actor, for
+<code>persist</code>, <code>recall</code>, <code>publish</code> and the <code>options</code> a spawn config passed it.</p>
+<h3 id="an-actor-subclass">An <code>Actor</code> subclass</h3>
+<p>For an agent with its own lifecycle, subclass <code>Actor</code>. The base class now
+subscribes and keeps windows for you, on one shared broker connection that is
+closed when the actor stops:</p>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.core.actor</span><span class="w"> </span><span class="kn">import</span> <span class="n">Actor</span><span class="p">,</span> <span class="n">Message</span><span class="p">,</span> <span class="n">MessageType</span>
 
 <span class="k">class</span><span class="w"> </span><span class="nc">MyAgent</span><span class="p">(</span><span class="n">Actor</span><span class="p">):</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-        <span class="n">kwargs</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;name&quot;</span><span class="p">,</span> <span class="s2">&quot;my-agent&quot;</span><span class="p">)</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+    <span class="n">DESCRIPTION</span> <span class="o">=</span> <span class="s2">&quot;Watches the pump.&quot;</span>
+    <span class="n">CAPABILITIES</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;pump&quot;</span><span class="p">]</span>
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_start</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">asyncio</span><span class="o">.</span><span class="n">create_task</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_my_loop</span><span class="p">())</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="s2">&quot;sensors/pump/#&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">on_reading</span><span class="p">)</span>        <span class="c1"># async or plain callback</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">flow</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window</span><span class="p">(</span><span class="s2">&quot;sensors/pump/flow&quot;</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>  <span class="c1"># rolling window</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_reading</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">payload</span><span class="p">:</span> <span class="nb">dict</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">flow</span><span class="o">.</span><span class="n">falling</span><span class="p">(</span><span class="n">threshold</span><span class="o">=</span><span class="mf">2.0</span><span class="p">):</span>
+            <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">&quot;alerts/pump&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;flow&quot;</span><span class="p">:</span> <span class="n">payload</span><span class="p">})</span>
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">Message</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">msg</span><span class="o">.</span><span class="n">type</span> <span class="o">!=</span> <span class="n">MessageType</span><span class="o">.</span><span class="n">TASK</span><span class="p">:</span>
             <span class="k">return</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;echo&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="p">}</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;flow_mean&quot;</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">flow</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">)}</span>
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
             <span class="n">result</span><span class="p">[</span><span class="s2">&quot;_task_id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;_task_id&quot;</span><span class="p">)</span>
         <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">reply_to</span> <span class="ow">or</span> <span class="n">msg</span><span class="o">.</span><span class="n">sender_id</span><span class="p">,</span> <span class="n">MessageType</span><span class="o">.</span><span class="n">RESULT</span><span class="p">,</span> <span class="n">result</span><span class="p">)</span>
-
-    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">_my_loop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
-            <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_mqtt_publish</span><span class="p">(</span><span class="s2">&quot;custom/my-agent/tick&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">time</span><span class="o">.</span><span class="n">time</span><span class="p">()})</span>
-            <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span>
 </code></pre></div>
 
-<p>Then register it in <code>app.py</code> inside <code>build_system()</code>. <code>_sd</code> there is the state directory
-resolved at startup, and <code>_wire_persistence</code> attaches the persistence API:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.agents.my_agent</span><span class="w"> </span><span class="kn">import</span> <span class="n">MyAgent</span>
-
-<span class="k">def</span><span class="w"> </span><span class="nf">make_my_agent</span><span class="p">():</span>
-    <span class="k">return</span> <span class="n">_wire_persistence</span><span class="p">(</span>
-        <span class="n">MyAgent</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">&quot;my-agent&quot;</span><span class="p">,</span> <span class="n">persistence_dir</span><span class="o">=</span><span class="n">_sd</span><span class="p">))</span>
-
-<span class="n">system</span><span class="o">.</span><span class="n">supervisor</span><span class="o">.</span><span class="n">supervise</span><span class="p">(</span>
-    <span class="s2">&quot;my-agent&quot;</span><span class="p">,</span> <span class="n">make_my_agent</span><span class="p">,</span>
-    <span class="n">strategy</span><span class="o">=</span><span class="n">SupervisorStrategy</span><span class="o">.</span><span class="n">ONE_FOR_ONE</span><span class="p">,</span>
-    <span class="n">max_restarts</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">restart_delay</span><span class="o">=</span><span class="mf">1.0</span>
+<p><code>DESCRIPTION</code>, <code>CAPABILITIES</code>, <code>REQUIRES</code>, <code>INPUT_SCHEMA</code> and <code>OUTPUT_SCHEMA</code> on
+the class are read into the catalogue entry; <code>AGENT_NAME</code> names the agent
+(default: the class name, <code>MyAgent</code> → <code>my-agent</code>); <code>AUTOSTART = False</code> keeps it
+in the catalogue until asked for.</p>
+<h3 id="registering-it">Registering it</h3>
+<p>Three ways in, all equivalent once the system is up:</p>
+<table>
+<thead>
+<tr>
+<th>How</th>
+<th>Where</th>
+<th>For</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wactorz.run(agents=[detect, MyAgent], web=True)</code></td>
+<td>a script</td>
+<td>development, a single deployment</td>
+</tr>
+<tr>
+<td><code>WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:MyAgent wactorz</code></td>
+<td>the environment</td>
+<td>a configured deployment</td>
+</tr>
+<tr>
+<td><code>[project.entry-points."wactorz.agents"]</code> in your package's <code>pyproject.toml</code></td>
+<td>the package</td>
+<td>anything <code>pip install</code>ed</td>
+</tr>
+</tbody>
+</table>
+<p>A registered agent is supervised at startup, listed by <code>@catalog list</code>, and
+restored from the spawn registry after a restart. A spawn config may also name
+it by path, <code>{"type": "module", "target": "mypkg.agents:detect", "name":
+"imu-left", "options": {...}}</code>, which is how one function runs under several
+names — but only a registered target is accepted, because a spawn config can be
+model-authored.</p>
+<h3 id="profiles">Profiles</h3>
+<p>Without Home Assistant configured (<code>HA_URL</code> and <code>HA_TOKEN</code>) the Home Assistant
+agents do not start; <code>WACTORZ_HA_AGENTS=on|off</code> decides outright.
+<code>wactorz --minimal</code> (or <code>WACTORZ_MINIMAL=1</code>, or <code>wactorz.run(..., minimal=True)</code>)
+starts the monitor, the dashboard and your agents only — no orchestrator,
+catalogue or installer, so no model API key is needed.</p>
+<h3 id="pipelines">Pipelines</h3>
+<p>Steps that work together are declared together. Each step stays an agent of
+its own; the pipeline groups them, adds a schedule and rules, and records
+itself beside the planner's pipelines so <code>/rules</code> lists it and <code>/rules delete</code>
+stops the whole of it:</p>
+<div class="highlight"><pre><span></span><code><span class="n">watch</span> <span class="o">=</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">pipeline</span><span class="p">(</span>
+    <span class="s2">&quot;imu-watch&quot;</span><span class="p">,</span>
+    <span class="n">steps</span><span class="o">=</span><span class="p">[</span><span class="n">detect</span><span class="p">,</span> <span class="n">notify</span><span class="p">,</span> <span class="n">report</span><span class="p">],</span>              <span class="c1"># decorated functions, Actor classes or targets</span>
+    <span class="n">inputs</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;sensors/imu/#&quot;</span><span class="p">],</span>                    <span class="c1"># what comes from outside (the first step may omit it)</span>
+    <span class="n">schedule</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;interval&quot;</span><span class="p">,</span> <span class="s2">&quot;seconds&quot;</span><span class="p">:</span> <span class="mi">300</span><span class="p">},</span>   <span class="c1"># a scheduled agent ticking pipelines/imu-watch/tick</span>
+    <span class="n">rules</span><span class="o">=</span><span class="p">[{</span><span class="s2">&quot;triggers&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;anomalies/imu&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;conditions&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;field&quot;</span><span class="p">:</span> <span class="s2">&quot;score&quot;</span><span class="p">,</span> <span class="s2">&quot;op&quot;</span><span class="p">:</span> <span class="s2">&quot;gt&quot;</span><span class="p">,</span> <span class="s2">&quot;value&quot;</span><span class="p">:</span> <span class="mi">20</span><span class="p">}],</span>
+            <span class="s2">&quot;actions&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;publish&quot;</span><span class="p">,</span> <span class="s2">&quot;topic&quot;</span><span class="p">:</span> <span class="s2">&quot;alerts/imu&quot;</span><span class="p">,</span> <span class="s2">&quot;payload&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;level&quot;</span><span class="p">:</span> <span class="s2">&quot;high&quot;</span><span class="p">}}],</span>
+            <span class="s2">&quot;cooldown_seconds&quot;</span><span class="p">:</span> <span class="mi">30</span><span class="p">}],</span>
 <span class="p">)</span>
 </code></pre></div>
+
+<p>Wiring is checked when the pipeline is declared: a step or rule listening on a
+topic nothing in the pipeline publishes, and not named in <code>inputs</code>, is a
+<code>ValueError</code> before anything starts. A pipeline declared at module level is
+found through <code>WACTORZ_PIPELINES=mypkg.flows:watch</code>, a <code>wactorz.pipelines</code>
+entry point, or <code>wactorz.run(pipelines_=[watch])</code>; its agents are supervised
+at startup like any plugin. The schedule takes every form <code>ScheduledAgent</code>
+accepts. In the minimal profile there is no main, so the rule record is
+skipped and the agents simply run.</p>
+<h3 id="ruleagent-spawned">RuleAgent <code>[spawned]</code></h3>
+<p>The glue between stages without a program per rule: trigger topics, conditions
+on the payload, a cooldown, and actions. Spawnable on its own with
+<code>"type": "rule"</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;rule&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;imu-alert&quot;</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">&quot;triggers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;anomalies/imu&quot;</span><span class="p">],</span>
+<span class="w"> </span><span class="nt">&quot;conditions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;field&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;score&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;op&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;gt&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;value&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">10</span><span class="p">}],</span>
+<span class="w"> </span><span class="nt">&quot;actions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;publish&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;topic&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;alerts/imu&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;payload&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;level&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;high&quot;</span><span class="p">}},</span>
+<span class="w">             </span><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;task&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;agent&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;notify&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;payload&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;text&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;IMU anomaly {score}&quot;</span><span class="p">}},</span>
+<span class="w">             </span><span class="p">{</span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;webhook&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://hooks.example/imu&quot;</span><span class="p">}],</span>
+<span class="w"> </span><span class="nt">&quot;cooldown_seconds&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">30</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Conditions take <code>eq</code>, <code>ne</code>, <code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>, <code>in</code>, <code>contains</code>,
+<code>exists</code> and <code>absent</code> (or <code>==</code>, <code>&gt;</code>, and so on), with dotted fields such as
+<code>reading.ax</code>. An action's payload may name trigger fields in braces and carries
+the trigger payload under <code>trigger</code> unless <code>include_trigger</code> is false. A task
+sent to a rule is a trial run: the payload is judged as a trigger and the
+verdict returned. Home Assistant service calls stay with <code>ha_actuator</code>.</p>
+<p>A complete example, a trained model over IMU readings on MQTT, is in
+<a href="https://github.com/waldiez/wactorz/tree/main/examples/imu_anomaly"><code>examples/imu_anomaly/</code></a>.</p>
   </main>
 </div>
 

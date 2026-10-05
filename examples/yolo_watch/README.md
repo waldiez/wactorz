@@ -95,3 +95,11 @@ wactorz.pipeline(
     ],
 )
 ```
+
+## Licence
+
+This example builds on [Ultralytics](https://github.com/ultralytics/ultralytics), which is
+AGPL-3.0, and its files are AGPL-3.0 to match. The rest of Wactorz is Apache-2.0. A
+closed-source product or a hosted service built on it meets the AGPL-3.0 or holds an
+[Ultralytics licence](https://www.ultralytics.com/license); the YOLO weights it downloads
+come under the same terms.

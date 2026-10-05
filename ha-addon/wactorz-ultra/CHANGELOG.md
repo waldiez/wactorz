@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Changed: the add-on states that it contains Ultralytics, which is AGPL-3.0, in its documentation ("Licences") and its image label. Nothing installed changes.
+
 ## 0.7.0
 
 - Changed: `/share/wactorz/mosquitto-logins.yaml` is written readable by its owner alone. It holds password hashes.

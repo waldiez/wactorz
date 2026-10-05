@@ -123,7 +123,8 @@ jobs:
           labels: |
             org.opencontainers.image.title=${{ matrix.variant == 'wactorz' && 'Wactorz' || 'Wactorz Ultra' }} Home Assistant add-on
             org.opencontainers.image.source=https://github.com/waldiez/wactorz
-            org.opencontainers.image.licenses=Apache-2.0
+            # The ultra add-on carries Ultralytics, which is AGPL-3.0; see its DOCS.md.
+            org.opencontainers.image.licenses=${{ matrix.variant == 'wactorz-ultra' && 'Apache-2.0 AND AGPL-3.0-only' || 'Apache-2.0' }}
             org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
 
       # tempio is Home Assistant's templating binary, shipped in its base images

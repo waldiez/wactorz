@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# This example uses Ultralytics (AGPL-3.0); see its README.
 """Object detection with a YOLO model, two ways.
 
 `detect_in_snapshot` is a function: a JPEG arrives on MQTT, it answers with

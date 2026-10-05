@@ -46,6 +46,8 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 | `retention_outbox_days` | `7` | Days a message the MQTT broker never accepted is kept and retried before it is dropped; `0` keeps retrying for ever. |
 | `deploy_targets` | `[]` | Remote machines `/deploy <name>` may bootstrap over SSH. A list of objects; each node needs a broker it can reach over the network — see [Remote edge nodes](#remote-edge-nodes) below. |
 | `node_accounts` | `false` | Give each deployed node its own broker account instead of sharing this addon's. On automatically with `mosquitto_embedded`; with the official Mosquitto addon it writes a `logins:` block for you to paste. See [An account per node](#an-account-per-node). |
+| `node_topics` | *(empty)* | Extra data topics every node's agents may use on the embedded broker, beyond `custom/`, `sensors/`, `home/`, `schedule/` and reading `homeassistant/state_changes/`. Comma-separated topic filters; `read:` before one makes it read-only, e.g. `zigbee2mqtt/#, read:weather/#`. |
+| `broker_accounts` | *(empty)* | Other accounts on the embedded broker that keep all of it once a node is deployed, comma-separated. An account not named there, other than this addon's own, then has no access. |
 | `node_signing` | `enforce` | What a deployed node does with a command that is not signed for it: `enforce` refuses it, `warn` acts on it and tells you in chat. Applies to a node from its next `/deploy` — see [Signed commands](#signed-commands). |
 
 > **`api_key` and publishing a port.** Nothing is published to your network by
@@ -71,6 +73,17 @@ Actor-model multi-agent AI framework. Spawn, coordinate, and monitor AI agents t
 > allow-lists are required because a bot that answers strangers would let them control your home
 > and spend your LLM budget.
 
+## What the addon can reach
+
+Wactorz runs code that a model wrote, so the addon keeps it to its own data.
+
+- **It runs as an ordinary user, not root.** The start script does what needs root — reading your options, starting the embedded broker, writing the broker certificate into `/ssl` — and then hands over to an unprivileged user that cannot regain it.
+- **Home Assistant's configuration folder is mapped read-only**, at `/config`. Agents can read `configuration.yaml`; they cannot change anything there, and files Home Assistant keeps private to root, such as its login storage, cannot be read at all.
+- **`/share` and `/ssl` are written by the start script only**: `/share/wactorz/mosquitto-logins.yaml`, and `wactorz-mqtt.crt` / `wactorz-mqtt.key` in `/ssl`. Wactorz itself can write neither folder.
+- **Everything Wactorz keeps is under `/data`**, which is private to the addon and survives updates: its state, its home directory, and the Python packages agents install at runtime.
+
+An agent that used to write into `/config` or `/share` — a snapshot into `/config/www`, say — can no longer do so. Have it keep the file in its own state instead, or publish it over MQTT.
+
 ## Remote edge nodes
 
 Wactorz can bootstrap a Raspberry Pi or other machine as an edge node over SSH, running agents there that appear in the dashboard alongside local ones. The machines it may connect to are listed in `deploy_targets`, and each entry carries its own credentials:
@@ -95,7 +108,7 @@ Per-entry fields: `name` and `host` (omit `host` to resolve `<name>.local` over 
 `broker_password` are the node's **broker** account, and are separate on
 purpose — see below.
 
-Private keys go under `/config` or `/share` — both are mapped into the addon — and the path is given as the addon sees it, e.g. `/config/ssh/rpi_kitchen`. Then, from the chat:
+Private keys go under `/config` or `/share` — both are mapped into the addon — and the path is given as the addon sees it, e.g. `/config/ssh/rpi_kitchen`. Keep the key private to root, as Home Assistant leaves it: Wactorz runs as an ordinary user inside the addon and is handed a copy of each key at start, so the original never has to be readable by it. Then, from the chat:
 
 ```text
 /deploy rpi-kitchen
@@ -144,12 +157,17 @@ Set `node_accounts: true` and every deployed node authenticates as itself, with
 a password derived for it rather than stored anywhere.
 
 - **`mosquitto_embedded: true`** — on automatically, since that broker is
-  configured here. It also loads an access list: a node may publish and read its
-  own `nodes/<name>/...` and the shared agent traffic, and is refused every other
-  node's topics, `agents/+/commands` and `system/`. Two warnings in the log when
-  that list loads — `ACL pattern '#' does not contain '%c' or '%u'` and the same
-  for `$SYS/#` — are expected: those are the lines that leave every other account
-  on the broker, Home Assistant's included, working as before.
+  configured here. Once a node is deployed it also loads an access list. A node
+  may use its own `nodes/<name>/...`, the agent traffic every host shares, and
+  the data topics agents use by convention: `custom/`, `sensors/`, `home/`,
+  `schedule/`, and `homeassistant/state_changes/` to read. It may write to main's
+  request and reply topics and not read them, and everything else on the broker
+  is closed to it — another node's topics, `agents/+/commands`, and any other
+  system's, such as `zigbee2mqtt/`. An agent on a node that uses a topic outside
+  those is refused by the broker without an error: add the prefix to
+  `node_topics`. This addon's own account keeps the whole broker; **any other
+  account on the embedded broker has no access unless `broker_accounts` names
+  it.**
 - **Official Mosquitto addon** — Wactorz writes
   `/share/wactorz/mosquitto-logins.yaml`. Paste its `logins:` entries into that
   addon's configuration, keeping any already there, and restart it. Accounts
@@ -244,6 +262,17 @@ Two connection modes exist — the Supervisor token only authenticates against t
 Set `ha_connection` to `supervisor` or `custom` only if you want to force a mode explicitly; `auto` infers it from `ha_token` presence as above.
 
 On startup the add-on probes the connection and logs one line with the mode, URL, and auth result (e.g. `HA connection OK — mode=supervisor ...` or `HA auth FAILED (401) ...`) — check the add-on log first if HA integration misbehaves.
+
+## Licences
+
+Wactorz is Apache-2.0. This add-on also contains
+[Ultralytics](https://github.com/ultralytics/ultralytics), used by vision agents, which is
+licensed under the **AGPL-3.0**: the add-on as a whole is distributed under its terms.
+Building a closed-source product or a hosted service on it means meeting the AGPL-3.0 or
+holding an [Ultralytics licence](https://www.ultralytics.com/license). The standard
+**Wactorz** add-on contains no such component.
+
+The corresponding source is the source of this release at <https://github.com/waldiez/wactorz> (its tag, with the files in `ha-addon/wactorz-ultra/` that build this add-on) and Ultralytics' own at <https://github.com/ultralytics/ultralytics>.
 
 ## Support
 

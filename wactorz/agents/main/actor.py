@@ -1311,7 +1311,7 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
 
         yield (
             f"[deploy] Deploying to {target.user}@{host} as node '{node_name}'...\n"
-            f"(This may take 20-60 seconds while packages install on the remote machine)"
+            f"(This may take 20-60 seconds while packages install on the remote machine)\n"
         )
         try:
             result = await self.delegate_to_installer(
@@ -1339,9 +1339,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         else:
             yield f"[FAIL] Deploy failed: {result.get('error', result)}"
 
-    async def migrate_agent(self, agent_name: str, target_node: str) -> dict[str, Any]:
+    async def migrate_agent(
+        self, agent_name: str, target_node: str, *, force: bool = False
+    ) -> dict[str, Any]:
         """Move a running agent to a different node. Owned by `self.migration`."""
-        return await self.migration.migrate_agent(agent_name, target_node)
+        return await self.migration.migrate_agent(agent_name, target_node, force=force)
 
     async def _node_heartbeat_listener(self) -> None:
         """Follow node heartbeats. Owned by `self.nodes`."""

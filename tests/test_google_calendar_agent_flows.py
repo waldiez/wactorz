@@ -204,6 +204,59 @@ class TestServing:
         assert agent._pending_create == {}
 
     @pytest.mark.parametrize(
+        ("answer", "day_offset"),
+        [("tomorrow 6pm to 7pm", 1), ("today 6pm to 7pm", 0), ("6pm to 7pm this week", 0)],
+    )
+    async def test_an_answer_that_names_a_day_completes_it_too(
+        self, tmp_path: Path, answer: str, day_offset: int
+    ) -> None:
+        # On its own "tomorrow 6pm to 7pm" reads as "show me tomorrow", and
+        # that is what it was taken for: the event stayed held and tomorrow's
+        # events were listed instead.
+        agent, client = _agent(tmp_path)
+        await agent._process({"text": "add an event called Gym"})
+
+        done = await agent._process({"text": answer})
+
+        ((tool, args),) = client.calls
+        assert (tool, args["summary"]) == ("create_event", "Gym")
+        day = (datetime.now(timezone.utc) + timedelta(days=day_offset)).date().isoformat()
+        assert args["startTime"].startswith(f"{day}T18:00:00")
+        assert args["endTime"].startswith(f"{day}T19:00:00")
+        assert done == {"result": "ok"}
+        assert agent._pending_create == {}
+
+    @pytest.mark.parametrize(
+        ("request_text", "listed"),
+        [("what's on today?", "today"), ("show this week", "week"), ("tomorrow", "tomorrow")],
+    )
+    async def test_a_new_request_is_not_taken_for_the_answer(
+        self, tmp_path: Path, request_text: str, listed: str
+    ) -> None:
+        # Any text at all used to be merged into the held event, so asking
+        # something else while one was held only got the question repeated.
+        agent, client = _agent(tmp_path)
+        await agent._process({"text": "add an event called Gym"})
+
+        answer = await agent._process({"text": request_text})
+
+        assert [tool for tool, _ in client.calls] == ["list_events"]
+        assert "missing" not in answer
+        assert agent._pending_create == {"action": "create_event", "summary": "Gym"}
+
+    async def test_the_held_event_can_still_be_completed_after_another_request(
+        self, tmp_path: Path
+    ) -> None:
+        agent, client = _agent(tmp_path)
+        await agent._process({"text": "add an event called Gym"})
+        await agent._process({"text": "what's on today?"})
+
+        await agent._process({"text": "6pm to 7pm"})
+
+        assert [tool for tool, _ in client.calls] == ["list_events", "create_event"]
+        assert client.calls[-1][1]["summary"] == "Gym"
+
+    @pytest.mark.parametrize(
         ("payload", "message"),
         [
             (

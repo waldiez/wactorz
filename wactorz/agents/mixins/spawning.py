@@ -33,17 +33,19 @@ Everything the mixin touches beyond those hooks is on the ``Actor`` base class
 import asyncio
 import hashlib
 import logging
-import pickle
 import time
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ...core.actor import Actor, ActorState, MessageType
 from ...core.paths import agent_state_dir
+from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.pip import install_wait_s, missing_requirements
 from ...core.topics import topic_name_error
+from ...plugins import for_target
 from ..dependency_install import InstallOutcome, outcome_from_result
 from ..lookup import find_main_actor
+from ..rule_agent import RuleAgent, RuleConfig
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +116,16 @@ class SpawnMixin(_Host):
             # outbox cannot send used to stall every message behind it.
             logger.error("[%s] Cannot spawn %r: %s", self.name, name, problem)
             return None
+        try:
+            agent_state_dir(self._persistence_dir.parent, str(name))
+        except ValueError as exc:
+            # The name is also where the agent's state is kept, and one that
+            # would climb out of the state directory is refused there. Refused
+            # here first, before anything is written under it: a state shipped
+            # with a migration would otherwise be half applied and then lost
+            # when the agent failed to start.
+            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
+            return None
         return await self._spawn_local_named(
             config,
             name,
@@ -167,6 +179,10 @@ class SpawnMixin(_Host):
             actor = await self._spawn_ha_actuator(config, name)
         elif agent_type == "scheduled":
             actor = await self._spawn_scheduled_agent(config, name)
+        elif agent_type == "rule":
+            actor = await self._spawn_rule_agent(config, name)
+        elif agent_type == "module":
+            actor = await self._spawn_module_agent(config, name)
         elif agent_type == "llm" or (not code and system_prompt):
             # Implicit-llm route: a config with a system prompt but no code is
             # an LLM agent even if 'type' was left at the "dynamic" default.
@@ -322,6 +338,54 @@ class SpawnMixin(_Host):
         except Exception:
             logger.exception("[%s] Failed to spawn ScheduledAgent '%s'", self.name, name)
             return None
+
+    async def _spawn_rule_agent(self, config: dict, name: str) -> Actor | None:
+        """Spawn a rule: triggers, conditions and actions, as `rule_agent` describes."""
+        try:
+            rule = RuleConfig.from_dict(config)
+        except ValueError as exc:
+            # An expected rejection of the config, reported in full by its message.
+            logger.error("[%s] Cannot spawn rule %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
+            return None
+        logger.info("[%s] Spawning rule %r on %s", self.name, name, ", ".join(rule.triggers))
+        return await self.spawn(
+            RuleAgent,
+            config=rule,
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
+        )
+
+    async def _spawn_module_agent(self, config: dict, name: str) -> Actor | None:
+        """Spawn an agent this deployment brings, named by its ``target`` import path.
+
+        Only a target registered as a plugin -- a ``wactorz.agents`` entry
+        point, ``WACTORZ_AGENTS``, or ``wactorz.run(agents=...)`` -- is spawned.
+        A spawn config can be model-authored, and resolving an arbitrary
+        ``package.module:attr`` from one would run whatever that path reached.
+        ``options`` in the config reach the actor's constructor, or a decorated
+        function through ``agent.options``.
+        """
+        target = str(config.get("target") or "").strip()
+        plugin = for_target(target) if target else None
+        if plugin is None:
+            logger.error(
+                "[%s] Cannot spawn %r: target %r is not a registered agent. Name it in "
+                "WACTORZ_AGENTS, list it as a wactorz.agents entry point, or pass it to "
+                "wactorz.run(agents=...).",
+                self.name,
+                name,
+                target,
+            )
+            return None
+        options = config.get("options")
+        logger.info("[%s] Spawning %r from %s", self.name, name, target)
+        return await self.spawn(
+            cast("type[Actor]", plugin.build),
+            name=name,
+            persistence_dir=str(self._persistence_dir.parent),
+            llm_provider=self.llm,
+            options=dict(options) if isinstance(options, dict) else {},
+        )
 
     async def _spawn_llm_agent(self, config: dict, name: str) -> Actor | None:
         """Spawn an LLMAgent — chat, Q&A, reasoning. Applies any migrated state
@@ -510,7 +574,7 @@ class SpawnMixin(_Host):
         self._result_futures[task_id] = future
         try:
             logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
-            await self.send(
+            taken = await self.send(
                 installer.actor_id,
                 MessageType.TASK,
                 {
@@ -523,6 +587,15 @@ class SpawnMixin(_Host):
                     "reply_to": self.actor_id,
                 },
             )
+            if taken is False:
+                # Its mailbox had no room, so no result is coming to wait for.
+                logger.warning(
+                    "[%s] installer is not taking messages — cannot install %s for '%s'",
+                    self.name,
+                    needed,
+                    agent_name,
+                )
+                return InstallOutcome(busy=True)
             try:
                 result = await asyncio.wait_for(future, timeout=install_wait_s(len(needed)))
             except asyncio.TimeoutError:
@@ -567,37 +640,6 @@ class SpawnMixin(_Host):
         """
         snapshot = config.pop("_initial_state", None)
         if not snapshot or not isinstance(snapshot, dict):
-            return
-
-        try:
-            from ...core.persistence import (
-                PersistenceAPI,
-                get_db,
-                get_pickle_store,
-            )
-        except Exception as e:
-            logger.debug(
-                "[%s] PersistenceAPI not importable — legacy state injection for '%s': %s",
-                self.name,
-                name,
-                e,
-            )
-            try:
-                pdir = agent_state_dir(self._persistence_dir.parent, name)
-                pdir.mkdir(parents=True, exist_ok=True)
-                with open(pdir / "state.pkl", "wb") as fh:
-                    pickle.dump(snapshot, fh)
-                logger.info(
-                    "[%s] Wrote %s migrated key(s) to %s for '%s' (legacy path)",
-                    self.name,
-                    len(snapshot),
-                    pdir / "state.pkl",
-                    name,
-                )
-            except Exception as e2:
-                logger.warning(
-                    "[%s] Legacy state injection failed for '%s': %s", self.name, name, e2
-                )
             return
 
         db, pkl = get_db(), get_pickle_store()
@@ -648,6 +690,12 @@ class SpawnMixin(_Host):
         logger.info("[%s] Replacing '%s' with updated code…", self.name, name)
         try:
             if self._registry:
+                # Forgotten before the stop: the replacement takes a fresh entry
+                # when it is spawned, and if that spawn fails, an entry left
+                # holding the stopped agent would stop it again at shutdown.
+                supervisor = getattr(self._registry, "_supervisor_ref", None)
+                if supervisor is not None:
+                    supervisor.drop_supervised(name)
                 await self._registry.unregister(existing.actor_id)
             await existing.stop()
             # Drop the cached manifest so a list query in the brief window before

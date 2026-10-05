@@ -22,8 +22,10 @@ from wactorz.agents.catalog_agent import _build_native_catalog, get_native_facto
 from wactorz.agents.llm_agent import LLMProvider
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.spawns import SpawnService
+from wactorz.agents.mixins import spawning
 from wactorz.agents.mixins.spawning import SpawnMixin, SpawnPlaceholder
 from wactorz.core.actor import ActorState
+from wactorz.core.persistence import PickleStore, WactorzDB
 
 
 def run(coro):
@@ -44,10 +46,21 @@ class FakeActor:
         self.stopped = True
 
 
+class FakeSupervisor:
+    """Records the entries it is told to forget, and when, against the actors' stops."""
+
+    def __init__(self, log: list[str]) -> None:
+        self._specs: dict = {}
+        self._log = log
+
+    def drop_supervised(self, name: str) -> None:
+        self._log.append(f"forget {name}")
+
+
 class FakeRegistry:
     def __init__(self):
         self._by_name = {}
-        self._supervisor_ref = None
+        self._supervisor_ref: FakeSupervisor | None = None
 
     def add(self, actor):
         self._by_name[actor.name] = actor
@@ -292,6 +305,30 @@ def test_existing_with_replace(main_host):
     )
     assert pre.stopped
     assert main_host.spawn_calls and actor is not pre
+
+
+def test_a_replaced_agent_leaves_supervision_before_it_stops(main_host):
+    # The replacement takes a fresh entry when it is spawned. If that spawn
+    # fails, an entry left holding the stopped agent would be stopped again at
+    # shutdown; and forgetting it first keeps the watch loop off the agent while
+    # it stops.
+    log: list[str] = []
+    main_host._registry._supervisor_ref = FakeSupervisor(log)
+    pre = FakeActor("dup")
+
+    async def _stop() -> None:
+        log.append("stop dup")
+
+    pre.stop = _stop  # pyright: ignore[reportAttributeAccessIssue]  # records the order
+    main_host._registry.add(pre)
+
+    run(
+        main_host._spawn_local_from_config(
+            {"name": "dup", "type": "dynamic", "code": "x", "replace": True}
+        )
+    )
+
+    assert log == ["forget dup", "stop dup"]
 
 
 # ── Install models ───────────────────────────────────────────────────────────
@@ -650,8 +687,6 @@ def test_without_an_installer_the_install_is_reported_unavailable(main_host):
 
 
 def test_an_installer_that_never_answers_times_out(main_host, monkeypatch):
-    from wactorz.agents.mixins import spawning
-
     main_host._registry.add(FakeActor("installer"))
     monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 0.05)
 
@@ -662,3 +697,54 @@ def test_an_installer_that_never_answers_times_out(main_host, monkeypatch):
     outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d11"))
     assert outcome.timed_out
     assert main_host._result_futures == {}
+
+
+def test_an_installer_with_no_room_is_not_waited_for(main_host, monkeypatch):
+    main_host._registry.add(FakeActor("installer"))
+    monkeypatch.setattr(spawning, "install_wait_s", lambda _count: 600.0)
+
+    async def refused_send(target_id, msg_type, payload):
+        return False  # its mailbox was full
+
+    main_host.send = refused_send
+    outcome = run(main_host._install_packages(["totally_missing_pkg_zzz"], agent_name="d12"))
+    assert outcome.busy
+    assert not outcome.ok
+    assert main_host._result_futures == {}
+
+
+# ── A name the state directory refuses ───────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ["..", ".", "../outside", "..hidden"])
+def test_a_name_that_would_climb_out_of_the_state_directory_is_not_spawned(main_host, name, caplog):
+    # An agent's name is also the directory its state is kept in. Such a name
+    # was refused only when the agent was built, after a state shipped with a
+    # migration had been written under it -- and then quietly gone.
+    applied = []
+
+    async def _apply(agent_name, config):
+        applied.append(agent_name)
+
+    main_host._apply_initial_state = _apply
+    config = {"name": name, "type": "llm", "_initial_state": {"conversation_history": ["x"]}}
+
+    actor = run(main_host._spawn_local_from_config(config))
+
+    assert actor is None
+    assert main_host.spawn_calls == []
+    assert applied == [], "nothing is written for an agent that will not exist"
+    assert "unsafe agent name" in caplog.text
+
+
+def test_a_migrated_state_is_applied_through_the_stores(main_host, tmp_path, monkeypatch):
+    db, store = WactorzDB(tmp_path / "wactorz.db"), PickleStore(str(tmp_path))
+    monkeypatch.setattr(spawning, "get_db", lambda: db)
+    monkeypatch.setattr(spawning, "get_pickle_store", lambda: store)
+    config = {"name": "mover", "_initial_state": {"conversation_history": ["x"], "count": 3}}
+
+    run(main_host._apply_initial_state("mover", config))
+
+    assert "_initial_state" not in config, "the snapshot is not kept in the spawn registry"
+    assert db.kv_get("mover", "conversation_history") == ["x"]
+    assert store.load("mover") == {"count": 3}

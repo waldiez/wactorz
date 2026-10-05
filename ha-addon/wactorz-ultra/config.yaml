@@ -1,5 +1,5 @@
 name: Wactorz Ultra
-version: "0.6.1"
+version: "0.7.0"
 slug: wactorz-ultra
 description: Actor-model multi-agent AI framework — spawn, coordinate and monitor AI agents at runtime. Also run machine learning models for data analysis, like image recognition.
 url: https://github.com/waldiez/wactorz
@@ -45,12 +45,22 @@ ports_description:
 
 # ── Persistent state ───────────────────────────────────────────────────────────
 map:
-  - config:rw
-  - share:rw
-  # Home Assistant's certificate folder. Wactorz writes wactorz-mqtt.crt and
-  # wactorz-mqtt.key there, for the official Mosquitto add-on to serve TLS with,
-  # and touches nothing else in it.
-  - ssl:rw
+  # Home Assistant's own configuration folder, to read and never to write: SSH
+  # keys for deploy targets are kept under it. Mounted at /config, which is
+  # where option values that name a file there already point.
+  - type: homeassistant_config
+    read_only: true
+    path: /config
+  # Writable for the start script alone, which runs as root and writes
+  # /share/wactorz/mosquitto-logins.yaml. Wactorz itself runs as an ordinary
+  # user and can write neither this folder nor the next.
+  - type: share
+    read_only: false
+  # Home Assistant's certificate folder. The start script writes
+  # wactorz-mqtt.crt and wactorz-mqtt.key there, for the official Mosquitto
+  # add-on to serve TLS with, and touches nothing else in it.
+  - type: ssl
+    read_only: false
 
 # ── User-configurable options ──────────────────────────────────────────────────
 options:
@@ -123,6 +133,16 @@ options:
   # its account up on its next /deploy.
   node_accounts: false
 
+  # With the embedded broker and at least one deployed node, a node's account may
+  # use its own topics, the agent traffic every host shares, and the data topics
+  # agents use by convention (custom/, sensors/, home/, schedule/, and reading
+  # homeassistant/state_changes/). node_topics adds more for every node: topic
+  # filters separated by commas, with `read:` before one to make it read-only,
+  # e.g. "zigbee2mqtt/#, read:weather/#". broker_accounts names other accounts
+  # on that broker that keep all of it; one not named has no access.
+  node_topics: ""
+  broker_accounts: ""
+
   # Home Assistant connection (used by HA agents inside Wactorz)
   # auto (default): supervisor proxy when ha_token is blank, custom URL otherwise.
   ha_connection: auto
@@ -194,6 +214,8 @@ schema:
   retention_outbox_days: int
   node_signing: list(warn|enforce)?
   node_accounts: bool?
+  node_topics: str?
+  broker_accounts: str?
   deploy_targets:
     - name: str
       host: str?

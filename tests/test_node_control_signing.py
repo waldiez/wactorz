@@ -146,13 +146,19 @@ class TestMainSigns:
     ) -> None:
         _fresh_install.mkdir(parents=True, exist_ok=True)
         (_fresh_install / node_signing.KEY_FILE).write_text("not a key", encoding="ascii")
-        assert node_signing.node_control_properties("nodes/rpi/stop", b"{}") is None
+        pairs = node_signing.node_control_properties("nodes/rpi/stop", b"{}")
+        assert pairs is not None
+        assert node_signing.SIGNATURE_PROPERTY not in dict(pairs)
         assert "Could not sign" in caplog.text
 
     def test_aiomqtt_gets_the_signature_as_properties(self) -> None:
         kwargs = node_signing.signed_publish_kwargs("nodes/rpi/stop_all", '{"reason": "x"}')
         names = [name for name, _value in kwargs["properties"].UserProperty]
-        assert names == [node_signing.SEQUENCE_PROPERTY, node_signing.SIGNATURE_PROPERTY]
+        assert names == [
+            node_signing.SEQUENCE_PROPERTY,
+            node_signing.SIGNATURE_PROPERTY,
+            node_signing.VERSION_PROPERTY,
+        ]
         assert node_signing.signed_publish_kwargs("agents/x/logs", "{}") == {}
 
 

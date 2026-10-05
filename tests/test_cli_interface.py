@@ -54,6 +54,7 @@ class _MainActor:
         self.nodes: list[dict[str, Any]] = []
         self.stream_chunks: list[Any] = ["hel", "lo"]
         self.migrate_result: dict[str, Any] = {"success": True, "message": "moved"}
+        self.migrate_forced: bool | None = None
         self.installer_result: dict[str, Any] = {"success": True}
         self.installer_calls: list[dict[str, Any]] = []
 
@@ -66,7 +67,8 @@ class _MainActor:
     def list_nodes(self) -> list[dict[str, Any]]:
         return self.nodes
 
-    async def migrate_agent(self, _name: str, _node: str) -> dict[str, Any]:
+    async def migrate_agent(self, _name: str, _node: str, *, force: bool = False) -> dict[str, Any]:
+        self.migrate_forced = force
         return self.migrate_result
 
     async def delegate_to_installer(self, payload: dict[str, Any], timeout: float) -> Any:
@@ -214,6 +216,13 @@ class TestMigrate:
         out = await drive(CLIInterface(actor), ["/migrate temp nope"], capsys)  # type: ignore[arg-type]
 
         assert "[FAIL] no such node" in out
+
+    async def test_force_is_passed_on(
+        self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        await drive(CLIInterface(actor), ["/migrate temp rpi --force"], capsys)  # type: ignore[arg-type]
+
+        assert actor.migrate_forced is True
 
 
 class TestDeployPkg:

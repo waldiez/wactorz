@@ -56,6 +56,26 @@ def write_pickle(path: Path, obj: Any) -> None:
         raise
 
 
+def write_bytes(path: Path, data: bytes) -> None:
+    """Write ``data`` into ``path``, replacing it in one step.
+
+    For content that was encoded earlier, somewhere else: what is left to do
+    here is the part that waits on the disk.
+    """
+    tmp = _temporary(path)
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+            # See `write_pickle`: the rename only orders against data the
+            # filesystem has been handed.
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     """Write ``text`` into ``path``, replacing it in one step.
 

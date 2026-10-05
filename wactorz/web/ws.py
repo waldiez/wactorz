@@ -42,6 +42,12 @@ HEARTBEAT_SECONDS = 30.0
 # enough that a stuck socket cannot pin unbounded memory.
 _CLIENT_QUEUE_DEPTH = 256
 
+#: How long a closing channel waits for a frame that is already on its way out.
+#: Long enough for the socket to finish compressing it, which is the part that
+#: must not be abandoned. A write that is waiting for a client that has stopped
+#: reading can be cancelled safely, and is, once this has passed.
+CLOSE_WAIT_S = 0.5
+
 
 class Channel:
     """One client's outbound queue and the task that drains it.
@@ -57,6 +63,10 @@ class Channel:
         self._queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=_CLIENT_QUEUE_DEPTH)
         self._writer = asyncio.create_task(self._drain())
         self.dropped = 0
+        #: Whether the writer is inside a write to the socket now, and whether
+        #: the channel has been asked to stop. See :meth:`close`.
+        self._sending = False
+        self._closing = False
 
     def send(self, payload: str) -> None:
         """Queue a frame. Never blocks, never raises.
@@ -99,11 +109,21 @@ class Channel:
                     # writer is a client that silently stops updating.
                     logger.warning("[broadcast] could not build resync snapshot: %s", exc)
                     continue
+            self._sending = True
             try:
                 await self.ws.send_str(payload)
             except Exception as exc:
+                if self._closing:
+                    # The client went while this frame was being written to it,
+                    # which is how a write to a closing socket ends.
+                    logger.debug("[broadcast] a frame to a closing socket was not sent: %s", exc)
+                    return
                 logger.warning("[broadcast] WS send failed: %s", exc)
                 await self._retire()
+                return
+            finally:
+                self._sending = False
+            if self._closing:
                 return
 
     async def _retire(self) -> None:
@@ -121,7 +141,19 @@ class Channel:
             logger.debug("[broadcast] closing a failed socket raised: %s", exc)
 
     async def close(self) -> None:
-        """Stop the writer. Never raises into the caller's cleanup path."""
+        """Stop the writer. Never raises into the caller's cleanup path.
+
+        A frame that is being written is given a moment to end before the writer
+        is cancelled. The write of a compressed frame runs in a task of the
+        socket's own, shielded from cancellation: cancelled from here it goes
+        on alone, fails against the closing socket, and has nobody left to take
+        its error, which the event loop then logs as one of ours with a
+        traceback. Left to end, the write fails into the writer, which expects
+        that.
+        """
+        self._closing = True
+        if self._sending and not self._writer.done():
+            await asyncio.wait({self._writer}, timeout=CLOSE_WAIT_S)
         self._writer.cancel()
         # gather rather than a bare await: it hands back the writer's own
         # CancelledError as a value, so it can be ignored without also

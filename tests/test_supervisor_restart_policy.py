@@ -330,6 +330,56 @@ class TestAStrategyHoldsItsGroup:
         assert supervisor._specs["b"].crash_streak == 0
 
 
+class TestTheCrashedActorIsStoppedFirst:
+    async def test_it_is_stopped_before_the_wait_not_after_it(self, supervisor: Supervisor) -> None:
+        # A FAILED actor's subscriptions, windows and command listener run on
+        # until it is stopped, and a wait in slow retry is minutes to an hour.
+        spec = _spec(supervisor, restart_delay=30)
+        _crashed(spec)
+        old = spec.actor
+        assert old is not None
+        await supervisor._registry.register(old)
+
+        _watch(supervisor)
+        try:
+            # Cleared last, once the actor is stopped and unregistered.
+            await _until(lambda: spec.actor is None)
+
+            assert old.state == ActorState.STOPPED
+            assert supervisor._registry.find_by_name("w") is None
+            assert spec.restarting is True  # still waiting out its delay
+        finally:
+            await supervisor.stop()
+
+    async def test_an_actor_started_again_during_the_wait_is_left_running(
+        self, supervisor: Supervisor
+    ) -> None:
+        # The old actor is gone during the wait, so one found in the entry after
+        # it was started by someone else -- a start from the dashboard puts it
+        # back through resupervise(). Spawning another would stop that one.
+        spec = _spec(supervisor, restart_delay=0.3)
+        _crashed(spec)
+        old = spec.actor
+        assert old is not None
+        await supervisor._registry.register(old)
+
+        _watch(supervisor)
+        try:
+            await _until(lambda: spec.actor is None)
+            started = _Worker(name="w")
+            started.state = ActorState.RUNNING
+            await supervisor._registry.register(started)
+            supervisor.resupervise("w", started)
+
+            await _until(lambda: not spec.restarting)
+
+            assert spec.actor is started
+            assert started.state == ActorState.RUNNING
+            assert supervisor._registry.find_by_name("w") is started
+        finally:
+            await supervisor.stop()
+
+
 class TestRestartsRunOnTheirOwn:
     async def test_a_long_delay_does_not_hold_up_the_others(self, supervisor: Supervisor) -> None:
         waiting = _spec(supervisor, "waiting", restart_delay=30)

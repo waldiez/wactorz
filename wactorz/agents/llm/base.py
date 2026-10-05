@@ -3,16 +3,21 @@
 The three public methods check the spend cap, apply the retry and timeout policy
 in ``retry.py``, and delegate to the ``_``-prefixed implementation a provider
 supplies -- so no provider can be reached without either, and a new one inherits
-both.
+both. They also record how each request ended and how long it took, for
+``/metrics``.
 """
 
 import logging
-from collections.abc import AsyncGenerator
+import time
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypeVar
 
+from ...monitoring import llm_metrics
 from .cost import check_cost_limit
-from .retry import call_with_retry, stream_with_retry
+from .retry import ProviderUnavailable, call_with_retry, stream_with_retry
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +63,38 @@ class LLMProvider:
         """How this provider names itself in a retry log line."""
         return f"{type(self).__name__}.{call}"
 
+    def _record(self, started: float, failure: Exception | None) -> None:
+        """Count a request that has ended, as answered or by how it failed."""
+        if failure is None:
+            outcome = llm_metrics.OK
+        elif isinstance(failure, ProviderUnavailable):
+            outcome = llm_metrics.UNAVAILABLE
+        else:
+            outcome = llm_metrics.ERROR
+        llm_metrics.record(type(self).__name__, outcome, time.perf_counter() - started)
+
+    async def _measured(self, request: Callable[[], Awaitable[T]]) -> T:
+        """Await ``request()``, recording how it ended and how long it took.
+
+        A cancelled request is not recorded: nobody was refused an answer, the
+        caller stopped waiting for one.
+        """
+        started = time.perf_counter()
+        try:
+            result = await request()
+        except Exception as exc:
+            self._record(started, exc)
+            raise
+        self._record(started, None)
+        return result
+
     async def complete(self, messages: list[dict], system: str = "", **kwargs) -> tuple[str, dict]:
         """Returns (text, usage) where usage = {input_tokens, output_tokens, cost_usd}"""
         check_cost_limit()
-        return await call_with_retry(
-            lambda: self._complete(messages, system, **kwargs), self._label("complete")
+        return await self._measured(
+            lambda: call_with_retry(
+                lambda: self._complete(messages, system, **kwargs), self._label("complete")
+            )
         )
 
     async def complete_with_tools(
@@ -73,9 +105,11 @@ class LLMProvider:
         **kwargs: Any,
     ) -> "ToolCompletion":
         check_cost_limit()
-        return await call_with_retry(
-            lambda: self._complete_with_tools(messages, tools, system, **kwargs),
-            self._label("complete_with_tools"),
+        return await self._measured(
+            lambda: call_with_retry(
+                lambda: self._complete_with_tools(messages, tools, system, **kwargs),
+                self._label("complete_with_tools"),
+            )
         )
 
     async def stream(
@@ -87,13 +121,21 @@ class LLMProvider:
         that is when the request is actually made — and it is where a caller
         that builds the generator early still gets an honest answer. The same
         goes for a retry: it can only cover the part of the stream nobody has
-        read yet.
+        read yet. The request is recorded when the stream ends or fails, so its
+        duration is the time to the last chunk; one the reader abandons part
+        way is not recorded.
         """
         check_cost_limit()
-        async for chunk in stream_with_retry(
-            lambda: self._stream(messages, system, **kwargs), self._label("stream")
-        ):
-            yield chunk
+        started = time.perf_counter()
+        try:
+            async for chunk in stream_with_retry(
+                lambda: self._stream(messages, system, **kwargs), self._label("stream")
+            ):
+                yield chunk
+        except Exception as exc:
+            self._record(started, exc)
+            raise
+        self._record(started, None)
 
     @classmethod
     def supports_streaming(cls) -> bool:

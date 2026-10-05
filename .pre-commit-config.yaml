@@ -12,27 +12,34 @@ repos:
       # Gated Python lint + format (Ruff) and type checking (basedpyright). The
       # advisory Ruff families are intentionally NOT here — `make lint-py` reports
       # them; they never block a commit.
+      #
+      # Every Python hook runs the interpreter the Makefile picks, which is
+      # .venv's when there is one, so a commit made without the environment
+      # activated is checked with the project's own dependencies and the locked
+      # versions of the tools, as `make lint-py` and CI check it.
       - id: ruff-format
         name: ruff format
-        entry: ruff format
+        entry: bash -c '"$(make -s python-path)" -m ruff format "$@"' --
         language: system
         types: [python]
       - id: ruff-check
         name: ruff check
-        entry: ruff check --fix
+        entry: bash -c '"$(make -s python-path)" -m ruff check --fix "$@"' --
         language: system
         types: [python]
-      # The whole configured tree, not the staged files: a changed signature in
-      # the package breaks the tests and scripts that call it, unstaged or not.
+      # Every file git knows about, not the staged ones: a changed signature in
+      # the package breaks the tests and scripts that call it, staged or not.
+      # Without the files git does not know about: see the target.
       - id: basedpyright
         name: basedpyright
-        entry: python3 -m basedpyright
+        entry: make typecheck-tracked
         language: system
         pass_filenames: false
         files: \.py$
+      # Without the test files git does not know about: see the target.
       - id: python-tests
         name: python tests
-        entry: python3 -m pytest tests -n auto
+        entry: make test-py-tracked
         language: system
         pass_filenames: false
         files: \.py$

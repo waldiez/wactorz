@@ -48,6 +48,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .._version import __version__
 from .mqtt import publish_properties
 from .paths import ensure_state_dir
 
@@ -74,6 +75,12 @@ CONTROL_LEAVES = frozenset(
 #: The user properties a signed message carries.
 SEQUENCE_PROPERTY = "wactorz-seq"
 SIGNATURE_PROPERTY = "wactorz-sig"
+
+#: The user property naming the version of the server that sent a command, so a
+#: node can tell one it cannot work with. Beside the signature rather than under
+#: it: it guards against a mistake, an upgrade that left a node behind, and
+#: whoever could alter it in transit could as easily drop the message.
+VERSION_PROPERTY = "wactorz-version"
 
 #: The install's signing secret, under the state directory.
 KEY_FILE = "node_signing.key"
@@ -191,10 +198,11 @@ def request_signed_for(request: dict[str, Any], node: str) -> bool:
 
 
 def node_control_properties(topic: str, payload: Any) -> list[tuple[str, str]] | None:
-    """The user properties that sign ``payload`` on ``topic``, or None if it needs none.
+    """The user properties ``payload`` carries on ``topic``, or None if it needs none.
 
-    None for any topic that is not a node's control topic, and for the empty payload
-    that clears a retained message, which instructs nothing. ``payload`` is taken as
+    They sign it, and name the version of the server sending it. None for any
+    topic that is not a node's control topic, and for the empty payload that
+    clears a retained message, which instructs nothing. ``payload`` is taken as
     it will be published: bytes as they are, anything else as its UTF-8 text.
     """
     if control_leaf(topic) is None:
@@ -202,6 +210,7 @@ def node_control_properties(topic: str, payload: Any) -> list[tuple[str, str]] |
     raw = _as_bytes(payload)
     if not raw:
         return None
+    version = (VERSION_PROPERTY, __version__)
     try:
         key = bytes.fromhex(node_key(topic.split("/")[1]))
         sequence = next_sequence()
@@ -212,13 +221,13 @@ def node_control_properties(topic: str, payload: Any) -> list[tuple[str, str]] |
             "[nodes] Could not sign %s; sending it unsigned, which a node holding a key reports",
             topic,
         )
-        return None
+        return [version]
     signature = hmac.new(key, signing_input(topic, sequence, raw), hashlib.sha256).hexdigest()
-    return [(SEQUENCE_PROPERTY, str(sequence)), (SIGNATURE_PROPERTY, signature)]
+    return [(SEQUENCE_PROPERTY, str(sequence)), (SIGNATURE_PROPERTY, signature), version]
 
 
 def signed_publish_kwargs(topic: str, payload: Any) -> dict[str, Any]:
-    """Keyword arguments for an aiomqtt publish of ``payload``: its signature, if it needs one."""
+    """Keyword arguments for an aiomqtt publish of ``payload``: its properties, if it needs any."""
     pairs = node_control_properties(topic, payload)
     return {"properties": publish_properties(pairs)} if pairs else {}
 

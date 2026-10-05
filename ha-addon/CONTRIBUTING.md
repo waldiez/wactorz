@@ -38,9 +38,9 @@ Options are defined in three places that must stay in sync:
 
 ## Updating the Dockerfile
 
-- **Base image**: Keep `aarch64-base-python` and `amd64-base-python` in sync. The `BUILD_FROM` ARG is resolved by the Supervisor build matrix; only one Dockerfile is needed.
+- **Base image**: pinned by digest in `ha-addon/bases/Dockerfile`, one line per add-on and architecture, which Dependabot keeps current and the image workflow builds on. Each add-on's `build.yaml` (`build_from`, for a Supervisor source build) and its Dockerfile's `BUILD_FROM` default (which may be the floating tag of that line, such as `trixie`) name the same bases, and `tests/test_addon_bases.py` fails if they drift apart; only one Dockerfile per add-on is needed.
 - **System packages** (`apk add`): Add to the existing `RUN apk add --no-cache` line — avoid extra layers.
-- **Wactorz version**: the pip install takes a git ref through the `WACTORZ_REF` ARG, and never touches PyPI — the release workflow publishes to PyPI on the same tag, so a PyPI install would race its own publish. A **tag push** builds that tag (`@v0.5.3`), so a released image is reproducible. A **`workflow_dispatch`** takes whatever ref you give it, defaulting to `main`; that is the path for an add-on-only rebuild, where the add-on version gains a fourth component (`0.5.3.1`) and the library stays put.
+- **Wactorz version**: the pip install takes a git ref through the `WACTORZ_REF` ARG, which has no default: a build without one stops rather than installing whatever a branch holds that day. A **release** builds its own tag (`@v0.5.3`), after its tests pass, so a released image is reproducible; `build.yaml` names the same tag for a source build, kept in step by `scripts/sync_versions.py`. A manual run of **Add-on Image** takes the ref and the image tag you give it, and is a dry run unless you untick it; that is the path for an add-on-only rebuild, where the add-on version gains a fourth component (`0.5.3.1`) and the library stays put.
 - **New binaries/services**: Add them to the same Alpine RUN block or a dedicated RUN block. If the service needs a config file, `COPY` it alongside `run.sh` and reference it in the entrypoint.
 
 ## Modifying run.sh
@@ -56,11 +56,12 @@ Options are defined in three places that must stay in sync:
 
 The quickest loop without a real HA install:
 
-1. Build the image:
+1. Build the image, on the pinned base and from a pushed branch, tag or sha:
    ```bash
    docker build \
-     --build-arg BUILD_FROM=ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.20 \
-     -t wactorz-addon-dev ha-addon/
+     --build-arg BUILD_FROM="$(sed -n 's/^FROM \(.*\) AS wactorz-amd64$/\1/p' ha-addon/bases/Dockerfile)" \
+     --build-arg WACTORZ_REF=dev \
+     -t wactorz-addon-dev ha-addon/wactorz/
    ```
 2. Run with a mock options file:
    ```bash

@@ -39,6 +39,13 @@ python3 -m venv ~/wactorz/venv
 
 Install the same version main is running, and at least the one these docs ship with — earlier releases have no node runtime. The two exchange spawn configs, manifests and signed control messages, and a node a release apart from main is the kind of mismatch that surfaces days later as an agent that will not start. A deploy from the dashboard pins the version for you.
 
+Both sides hold each other to it. Main and a node work together when they are on the same release series, the same major and minor number: `1.4.0` and `1.4.3` do, `1.4.3` and `1.5.0` do not, so a patch release of the server does not mean deploying every node again.
+
+- Main reads the version in each node's heartbeat and refuses to spawn an agent on, or migrate one to, a node on another series. `/nodes` marks such a node.
+- Main states its own version on every command it sends a node, and a node refuses a new agent from a server on another series, with an error in the dashboard's log. That covers the moments main's check cannot: it has not yet heard the node's version, or heard it before the node was installed again.
+
+Either way the message names the fix, `/deploy <node>`. The agents a node is already running are left alone, they come back after a reboot, and a stop is always obeyed.
+
 No extra is needed: everything a node uses — `aiomqtt`, `psutil`, `aiohttp` — is a core dependency. An agent that needs more says so in its spawn config's `install` list, and the node installs it on the spot.
 
 #### 2. Start it as a node
@@ -83,9 +90,12 @@ Type=simple
 User=pi
 WorkingDirectory=/home/pi/wactorz
 EnvironmentFile=/home/pi/wactorz/.env
-ExecStart=/home/pi/wactorz/venv/bin/wactorz --mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}
+ExecStart=/home/pi/wactorz/venv/bin/wactorz-node --mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}
 Restart=on-failure
 RestartSec=5
+WatchdogSec=300
+NotifyAccess=main
+WatchdogSignal=SIGKILL
 RestartPreventExitStatus=2
 
 [Install]
@@ -95,11 +105,19 @@ WantedBy=multi-user.target
 A user unit is the same minus `User=`, with `WantedBy=default.target`, and lives
 at `~/.config/systemd/user/wactorz-node.service`.
 
-Three details worth knowing if you write one by hand:
+Four details worth knowing if you write one by hand:
 
 - **`Restart=on-failure`, not `always`.** `/nodes shutdown` exits cleanly on
   purpose. Under `Restart=always` that command restarts the node instead of
   stopping it.
+- **`WatchdogSec=300`.** The node tells systemd, from its event loop, that
+  the loop is running, and systemd restarts it when it has not heard for five
+  minutes. Without it a node frozen in blocking code is a process that exists
+  and does nothing, which `Restart=` never sees. `WatchdogSignal=SIGKILL`
+  because systemd's default aborts the process and writes a core dump each
+  time. Before it gets that far the node's own log says where the loop is
+  stuck, in a line starting `[loop]`. A node not started by systemd sends
+  nothing.
 - **`RestartPreventExitStatus=2`.** Exit 2 means a node name that can never
   work — it contains an MQTT wildcard — or a malformed `ExecStart`. Neither
   succeeds on retry, so restarting is just noise.
@@ -236,35 +254,63 @@ key, and `/deploy` writes it into the node's `~/wactorz/.env` as before. A
 
 For the broker Wactorz configures — compose's, and the add-on's embedded one —
 it also writes an access list into `MQTT_BROKER_DIR`, beside the TLS
-certificate. With it, a node may:
+certificate. The list names what a node may use, and a topic it does not name is
+refused. A node may:
 
-- publish and read its own `nodes/<name>/...`, and the shared agent traffic
-  (`agents/#`, `sensors/#`, `homeassistant/#`, whatever your agents use);
+- publish and read its own `nodes/<name>/...`;
+- publish and read the agent traffic every host shares, `agents/#` — except
+  `agents/+/commands`, which stops agents on the server;
+- write, and not read, `main/llm_request` and `main/reply/#`: it asks main's
+  model and answers main's tasks, without seeing what another node asks or
+  answers;
+- publish and read the data topics agents use by convention — `custom/#`,
+  `sensors/#`, `home/#`, `schedule/#` — and read
+  `homeassistant/state_changes/#`.
 
-and may not:
+Everything else is closed to it: another node's `nodes/<other>/...` in either
+direction, so it can neither drive, impersonate nor watch another node;
+`system/`; and whatever else shares the broker, such as `zigbee2mqtt/` or Home
+Assistant's discovery topics.
 
-- touch another node's `nodes/<other>/...`, in either direction — so it can
-  neither drive, impersonate nor watch another node;
-- write `agents/+/commands`, which stops agents on the server;
-- write anything under `system/`.
+Two settings shape the list, both read by whatever writes it (the server, and
+compose's `mqtt-certs`; the add-ons offer them as `node_topics` and
+`broker_accounts`):
+
+| Setting | What it does |
+| ------- | ------------ |
+| `WACTORZ_NODE_TOPICS` | More data topics for every node, comma-separated: `zigbee2mqtt/#, read:weather/#`. A filter prefixed `read:` may be read and not written. One under `nodes/`, `agents/`, `main/`, `system/` or `$` is refused, with a message, because it would open for every node what the list exists to close. |
+| `WACTORZ_BROKER_ACCOUNTS` | Other accounts on this broker that keep all of it, comma-separated: `homeassistant, zigbee2mqtt`. The server's own account (`MQTT_USERNAME`) is always one of them. |
+
+**An agent on a node that uses a topic outside the list gets no error.** The
+broker drops the publish and delivers nothing to the subscription, which is how
+MQTT refuses, so the agent looks idle rather than broken. If an agent that works
+on the server goes quiet on a node, add its topic prefix to
+`WACTORZ_NODE_TOPICS`.
+
+**List every other account once a node is deployed.** Mosquitto gives an account
+the list does not mention no access at all, so with a node deployed, Home
+Assistant's or zigbee2mqtt's account on this broker stops working until it is in
+`WACTORZ_BROKER_ACCOUNTS`. The server names the accounts that keep the whole
+broker in its log whenever it writes the list. With no node deployed nothing is
+closed: the list gives every account the whole broker.
 
 The compose broker picks up a new node's account on its own: it watches that
 folder, reloads for a new account, and restarts itself if the access list or the
 certificate appeared for the first time, since mosquitto reads those only at
 startup.
 
-Two lines in the broker log when that list loads are expected:
+Before any node is deployed, two lines in the broker log are expected:
 
 ```
 Warning: ACL pattern '#' does not contain '%c' or '%u'.
 Warning: ACL pattern '$SYS/#' does not contain '%c' or '%u'.
 ```
 
-They are the two lines that give every account the commons, the server's own and
-Home Assistant's included. Mosquitto notes that neither names a client, which is
-the point — "everything" is not something `%u` can spell — and the alternative
-spelling (`topic` instead of `pattern`) applies to anonymous clients only, which
-would leave every named account with no access at all.
+They are the two lines that give every account the whole broker while there is
+no node to keep out of anything. Mosquitto notes that neither names a client,
+which is the point — "everything" is not something `%u` can spell — and the
+alternative spelling (`topic` instead of `pattern`) applies to anonymous clients
+only, which would leave every named account with no access at all.
 
 **Only turn this on where the broker has those accounts.** On a broker you run
 yourself, create them there first (or keep using `DEPLOY_<NODE>_BROKER_USER`).
@@ -401,8 +447,8 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/list` | → runner | Request the list of running agents. Response on `nodes/{name}/agents`. |
 | `nodes/{name}/agents` | ← runner | Response to `list`. Contains agent names and actor IDs. |
 | `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, and whether the node checks signed commands. |
-| `nodes/{name}/migrate` | → runner | Migrate a running agent to another node. Payload: `{"name": "...", "target_node": "..."}`. Signed. |
-| `nodes/{name}/migrate_result` | ← runner | Result of a migration request. |
+| `nodes/{name}/migrate` | → runner | Hand a running agent back to main, which places it. Payload: `{"name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608}`. Signed. |
+| `nodes/{name}/migrate_result` | ← runner | Result of a migration request. A failure, including a refusal, is shown on the dashboard. |
 | `nodes/{name}/code_changed` | ← runner | An agent here repaired its own program. Carries the agent's name and no code. |
 | `nodes/{name}/code_request` | → runner | Asks for the program an agent is actually running. Payload: `{"agent": "...", "token": "..."}`. Signed. |
 | `nodes/{name}/code_return` | ← runner | The program, quoting the token it was asked with. |
@@ -486,15 +532,24 @@ The `agent` object available inside remote agent code mirrors the local DynamicA
 
 ## Agent migration
 
-A running agent can be moved from one node to another without stopping it manually. The runner on the source node captures the agent's config, publishes it as a spawn command to the target node, then stops the local instance.
+A running agent can be moved between main and a node, or from one node to another, from the chat:
 
-```bash
-# From the main machine, publish to MQTT:
-mosquitto_pub -h localhost -t "nodes/rpi-livingroom/migrate" \
-  -m '{"name": "temp-sensor-agent", "target_node": "rpi-bedroom"}'
+```text
+/migrate temp-sensor rpi-bedroom     # to a node
+/migrate temp-sensor local           # back to main
+/migrate temp-sensor rpi-bedroom --force
 ```
 
-Or trigger it from agent code using `agent.send_to()` if you build a migration manager. The result is published to `nodes/{source_node}/migrate_result`.
+Main routes every migration; a node never spawns on another node. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
+
+The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
+
+State travels as JSON. A migration is refused, and the agent keeps running where it is, when:
+
+- **its state holds a value that cannot be written as JSON** (a numpy array, a model object, an open capture). The refusal names the keys. `--force` moves the agent without them, and the announcement when it arrives names what was left behind;
+- **its state is larger than `WACTORZ_MIGRATION_MAX_STATE_BYTES`** (8 MiB by default, set on main). `--force` does not change this.
+
+A node checks its own agents against the same two terms, which main sends with the request. A node running an earlier release does not check them: it sends what it can, and main names the keys it could not send.
 
 ---
 

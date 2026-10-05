@@ -9,17 +9,35 @@ from pathlib import Path
 
 _DEFAULT = "./state"
 
+#: What :func:`set_state_dir` was given, consulted before the environment.
+_override: str | None = None
+
+
+def set_state_dir(path: "str | os.PathLike[str] | None") -> str | None:
+    """Make ``path`` the state directory for this process, ahead of ``WACTORZ_STATE_DIR``.
+
+    For a program that embeds the system and says in code where state goes,
+    so it need not write to its own environment to be heard. ``None`` clears
+    the override. Returns the previous override, so a caller can put it back.
+    """
+    global _override
+    previous = _override
+    _override = None if path is None else os.fspath(path)
+    return previous
+
 
 def resolve_state_dir(explicit: str | None = None) -> str:
-    """Explicit argument, else ``WACTORZ_STATE_DIR``, else ``./state``. No side effects.
+    """Explicit argument, else :func:`set_state_dir`'s, else ``WACTORZ_STATE_DIR``, else ``./state``.
 
-    An empty or whitespace-only env var counts as unset, matching how
-    ``config.py`` reads its own numeric vars — otherwise a blank
+    No side effects. An empty or whitespace-only env var counts as unset,
+    matching how ``config.py`` reads its own numeric vars — otherwise a blank
     ``WACTORZ_STATE_DIR=`` in a ``.env`` file resolves to ``""`` and every
     store silently lands in the process's working directory.
     """
     if explicit:
         return explicit
+    if _override:
+        return _override
     return os.environ.get("WACTORZ_STATE_DIR", "").strip() or _DEFAULT
 
 

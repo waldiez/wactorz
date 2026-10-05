@@ -1,14 +1,21 @@
-# Proposes new releases of what CI and the images pin. Python dependencies are
-# ranges in pyproject.toml and are not listed here until a lockfile exists.
+# Proposes new releases of what CI and the images pin, and of the Python
+# dependencies locked in uv.lock.
 #
 # `cooldown` holds each release back for a week: a compromised release is
 # usually found and pulled within days, and should not be proposed the day it
 # appears. `groups` makes each ecosystem one pull request a week, not one per
 # package.
+#
+# Every update targets `dev`, where all work lands; `main` takes only releases.
+# Left unset, Dependabot targets the default branch, `main`. It reads this file
+# from `main` too, so a change here takes effect once it is released.
 version: 2
 updates:
+  # The workflows, and the local action they set up uv with, which pins an
+  # action of its own.
   - package-ecosystem: github-actions
-    directory: /
+    directories: ["/", "/.github/actions/setup-uv"]
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
@@ -17,10 +24,13 @@ updates:
       actions:
         patterns: ["*"]
 
-  # The app image's base, and the tool images CI runs (.github/tools/Dockerfile).
-  # The add-on images take their base as a build argument, which this cannot read.
+  # The app image's base, the tool images CI runs (.github/tools/Dockerfile),
+  # the machine the end-to-end suite deploys a node to (e2e/stack/node/Dockerfile),
+  # and the add-ons' bases (ha-addon/bases/Dockerfile). A base bump there must reach
+  # each add-on's build.yaml and Dockerfile default too; a test says which.
   - package-ecosystem: docker
-    directories: ["/", "/.github/tools"]
+    directories: ["/", "/.github/tools", "/ha-addon/bases", "/e2e/stack/node"]
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
@@ -28,13 +38,60 @@ updates:
     groups:
       images:
         patterns: ["*"]
+    ignore:
+      # A new digest of the same Python is proposed; a new Python is not. The
+      # app Dockerfile has two bases on two Python releases, and the `ultra` one
+      # stays where the Reachy Mini SDK's PyGObject still builds. Moving either
+      # is done by hand, with the CI matrix and the lockfile.
+      #
+      # By name, so it reaches only the official `python` image, which among
+      # these directories is the app Dockerfile's alone: the add-on bases are
+      # Home Assistant's images under other names, and are proposed as before.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
-  - package-ecosystem: bun
-    directory: /frontend
+  # The images compose.yaml and compose.dev.yaml run, pinned by digest: the
+  # broker, at the same release the broker tests use, and the monitoring stack.
+  # Home Assistant follows its `stable` tag on purpose, and the app's own image
+  # is built from the checkout.
+  - package-ecosystem: docker-compose
+    directory: /
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
       default-days: 7
     groups:
-      frontend:
+      compose:
         patterns: ["*"]
+
+  # The frontend is not here: Dependabot's bun updater reads bun.lock up to
+  # lockfile version 1, and bun 1.4 writes version 2, so a run can propose
+  # nothing and fails. Every frontend dependency is a development tool;
+  # `bun outdated` in frontend/ lists what is newer. Put the bun entry back once
+  # https://github.com/dependabot/dependabot-core/issues/16026 is fixed.
+
+  # uv.lock, and pyproject.toml where a range must widen for a new release.
+  - package-ecosystem: uv
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    # Minor and patch releases in one weekly PR; a major release in a PR of its
+    # own, so one that needs code changed cannot hold back the rest.
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # 2.x renamed the server class and replaced the client API: moving to it
+      # is a change of our own, not a version bump.
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
+      # Pinned exactly in the docs extra so the committed static/docs is
+      # reproducible: a bump changes the generated HTML, so it is made by hand
+      # together with `make docs-build`.
+      - dependency-name: "markdown"
+      - dependency-name: "pygments"

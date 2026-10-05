@@ -98,7 +98,8 @@ class TestCancelUntilDone:
         await asyncio.sleep(0)
         started = time.monotonic()
         assert await cancel_until_done(task, timeout=30.0, recancel_after=10.0)
-        assert time.monotonic() - started < 1.0
+        # Kept waiting, it would be for the ten seconds before the next cancel.
+        assert time.monotonic() - started < 5.0
 
     async def test_a_task_that_will_not_stop_is_given_up_on(self) -> None:
         give_up = asyncio.Event()
@@ -589,3 +590,42 @@ class TestStoppingSeveralTasksTogether:
         failed = asyncio.ensure_future(fails())
         await asyncio.sleep(0)
         assert await cancellation.cancel_all_until_done([failed], timeout=1.0) == []
+
+
+class TestRunForever:
+    """A cancellation stops the system and is then raised on, so a host can see it."""
+
+    async def test_a_cancelled_run_forever_stops_and_re_raises(self) -> None:
+        from wactorz.core.registry import ActorSystem
+
+        system = ActorSystem.__new__(ActorSystem)
+        stopped: list[bool] = []
+
+        async def stop_all() -> None:
+            stopped.append(True)
+
+        system._running = True  # pyright: ignore[reportPrivateUsage]
+        system.stop_all = stop_all  # pyright: ignore[reportAttributeAccessIssue]
+
+        running = asyncio.ensure_future(system.run_forever())
+        await asyncio.sleep(0)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        assert stopped == [True]
+
+    async def test_a_timeout_around_it_is_seen_as_one(self) -> None:
+        """What `asyncio.wait_for` and a task group rely on."""
+        from wactorz.core.registry import ActorSystem
+
+        system = ActorSystem.__new__(ActorSystem)
+
+        async def stop_all() -> None:
+            return None
+
+        system._running = True  # pyright: ignore[reportPrivateUsage]
+        system.stop_all = stop_all  # pyright: ignore[reportAttributeAccessIssue]
+
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(system.run_forever(), timeout=0.01)

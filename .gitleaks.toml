@@ -1,0 +1,24 @@
+# What gitleaks looks for here: its own rules, minus the placeholders this
+# repository carries on purpose. Read by the commit hook and by `make lint-ci`,
+# so a commit and CI agree on what a secret is.
+[extend]
+useDefault = true
+
+# Each entry is a value written out in documentation or a test because it is
+# not a secret: an example, a published sample, or a fixture cut short. Listed
+# by value, not by file and line, so the entry holds when the file is edited
+# and nothing else in that file is excused with it.
+[[allowlists]]
+description = "Example values in the documentation, and fixtures in tests"
+regexTarget = "match"
+regexes = [
+    # The key every curl example in the docs sends.
+    '''X-API-Key: my-secret-key''',
+    # A made-up Discord user id, in the docs' sample .env.
+    '''123456789012345678''',
+    # The sample handshake nonce from the WebSocket specification (RFC 6455).
+    '''dGhlIHNhbXBsZSBub25jZQ==''',
+    # Truncated, invented key bodies the log-redaction tests scrub.
+    '''b3BlbnNzaC1rZXktdjEAAAAA''',
+    '''MIIEowIBAAKCAQEA9f3a''',
+]

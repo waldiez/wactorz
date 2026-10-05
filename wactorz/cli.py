@@ -7,7 +7,6 @@ System assembly and the run loop live in :mod:`wactorz.app`; the dev reloader in
 import argparse
 import asyncio
 import logging
-import os
 import sys
 
 # pylint: disable=unused-import
@@ -15,8 +14,8 @@ import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + conso
 from wactorz.config import CONFIG
 
 
-def get_args() -> argparse.Namespace:
-    """Parse the cli args."""
+def get_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse the cli args: the process's own, or ``argv`` when given."""
     parser = argparse.ArgumentParser(description="Wactorz - Multi-Agent Framework")
     parser.add_argument("--interface", choices=["cli", "rest", "discord", "whatsapp", "telegram"])
     parser.add_argument("--port", type=int)
@@ -46,11 +45,20 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         "--monitor-port",
         type=int,
-        default=int(os.getenv("MONITOR_PORT", str(CONFIG.ws_port))),
+        default=CONFIG.ws_port,
         help="Port for the background web UI / monitor server (default: 8888)",
     )
     parser.add_argument(
         "--no-monitor", action="store_true", help="Disable the background web UI server"
+    )
+    parser.add_argument(
+        "--minimal",
+        action="store_true",
+        help=(
+            "Start only the monitor and the agents this deployment brings (WACTORZ_AGENTS, "
+            "wactorz.agents entry points): no orchestrator, catalogue or installer, so no "
+            "model is needed. Same as WACTORZ_MINIMAL=1."
+        ),
     )
     parser.add_argument(
         "--reload",
@@ -82,7 +90,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--name", help=argparse.SUPPRESS)
     parser.add_argument("--broker", help=argparse.SUPPRESS)
     parser.add_argument("--loglevel", default="INFO", help=argparse.SUPPRESS)
-    args, _ = parser.parse_known_args()
+    args, _ = parser.parse_known_args(argv)
     _warn_about_tokens_on_the_command_line(args)
 
     return args
@@ -116,7 +124,7 @@ def _warn_about_tokens_on_the_command_line(args: argparse.Namespace) -> None:
 def _run_as_node(args: argparse.Namespace) -> None:
     """Run as an edge node, with logging a node's operator can read.
 
-    ``basicConfig`` rather than the server's log setup: a node writes to its
+    The console alone rather than the server's log setup: a node writes to its
     journal or to `~/wactorz/<name>.log`, has no monitor to forward to, and
     should say something the moment it starts rather than after the app's
     startup sequence would have configured logging.
@@ -126,10 +134,7 @@ def _run_as_node(args: argparse.Namespace) -> None:
     # not have to wait for it.
     from wactorz.node import cli as node_cli
 
-    logging.basicConfig(
-        level=getattr(logging, str(args.loglevel).upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    node_cli.configure_logging(args)
     node_cli.run(args)
 
 
@@ -143,9 +148,15 @@ def main() -> None:
         return
 
     from wactorz.app import app
+    from wactorz.errors import StartupError
 
     try:
         asyncio.run(app(args))
+    except StartupError as exc:
+        # Said once, as the last line, and the status a supervisor reads as
+        # "do not simply restart me": the configuration has to change first.
+        logging.getLogger(__name__).error("[startup] %s", exc)
+        sys.exit(1)
     except (KeyboardInterrupt, asyncio.CancelledError):
         # A signal shuts down by cancelling the app task, which unwinds through
         # its own `finally` — the actors are already stopped by the time the

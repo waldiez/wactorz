@@ -202,8 +202,14 @@ class DelegationManager:
                     "reply_to": self.host.actor_id,
                 }
             )
-            await self.host.send(target.actor_id, MessageType.TASK, payload)
             try:
+                taken = await self.host.send(target.actor_id, MessageType.TASK, payload)
+                if taken is False:
+                    # Its mailbox had no room, so no answer is coming: the same
+                    # as an agent that never replies, without the wait. Only an
+                    # explicit False: a `send` put in its place to observe the
+                    # traffic may return nothing.
+                    return None
                 return await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:
                 return None

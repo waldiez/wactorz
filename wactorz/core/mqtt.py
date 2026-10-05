@@ -15,6 +15,7 @@ here re-enters the half-initialised package and causes a circular import.
 
 import logging
 import os
+import random
 import time
 import uuid
 from collections.abc import Sequence
@@ -171,6 +172,18 @@ def client_id(role: str, scope: str, detail: str | None = None) -> str:
     if detail:
         parts.append(detail)
     return "-".join(parts)
+
+
+def reconnect_wait(delay: float) -> float:
+    """How long to wait before trying the broker again: ``delay``, and a little more.
+
+    Every actor holds a connection of its own, and a broker that restarts
+    drops them all in the same instant. Waiting the same time, they would all
+    come back in the same instant too, and again at each retry after. With up
+    to half the delay added, differently for each, they arrive a few at a time.
+    Never less than ``delay``: that is the pause the broker was promised.
+    """
+    return delay * random.uniform(1.0, 1.5)  # noqa: S311  # spreading retries, not a secret
 
 
 def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:

@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Any
 
 from ..core.atomic_io import write_text
+from ..core.compatibility import compatible
 from ..core.node_signing import (
     SEQUENCE_PROPERTY,
     SIGNATURE_PROPERTY,
+    VERSION_PROPERTY,
     sign_request,
     signing_input,
 )
@@ -50,6 +52,24 @@ def message_bytes(payload: Any) -> bytes:
     if isinstance(payload, (bytes, bytearray)):
         return bytes(payload)
     return str(payload).encode("utf-8")
+
+
+def user_properties(msg: Any) -> dict[str, str]:
+    """The MQTT user properties a received message carries, by name."""
+    pairs = getattr(getattr(msg, "properties", None), "UserProperty", None) or []
+    return {str(name): str(value) for name, value in pairs}
+
+
+def server_mismatch(properties: dict[str, str], own: str) -> str | None:
+    """The version of the server that sent a command, when this node cannot work with it.
+
+    None when it can, and when the command names no version: that is a server
+    from before commands carried one, and it judges this node by its heartbeat.
+    """
+    stated = properties.get(VERSION_PROPERTY)
+    if not stated or compatible(stated, own):
+        return None
+    return stated
 
 
 class ControlGuard:

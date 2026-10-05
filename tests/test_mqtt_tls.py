@@ -88,8 +88,13 @@ class TestTheRule:
 # ── The copies follow it ───────────────────────────────────────────────────────
 
 
-def _catalogue_helper(module: str) -> Callable[[], dict[str, Any]]:
-    """The TLS helper a catalogue program carries, executed on its own."""
+def _catalogue_helper(
+    module: str, injected: dict[str, Any] | None = None
+) -> Callable[[], dict[str, Any]]:
+    """The TLS helper a catalogue program carries, executed on its own.
+
+    ``injected`` is what the host puts in the program's namespace.
+    """
     source = next(
         node.value.value
         for node in ast.parse(
@@ -110,7 +115,7 @@ def _catalogue_helper(module: str) -> Callable[[], dict[str, Any]]:
         for node in program.body
         if isinstance(node, ast.FunctionDef) and node.name == "_mqtt_tls_kwargs"
     )
-    namespace: dict[str, Any] = {"os": os, "ssl": ssl}
+    namespace: dict[str, Any] = {"os": os, "ssl": ssl, **(injected or {})}
     exec(compile(ast.Module(body=[helper], type_ignores=[]), module, "exec"), namespace)
     return namespace["_mqtt_tls_kwargs"]
 
@@ -152,6 +157,37 @@ def test_every_copy_decides_as_the_rule_does(
             assert copy is not None
             assert copy.check_hostname == expected.check_hostname
             assert _ca_subjects(copy) == _ca_subjects(expected)
+
+
+@pytest.mark.parametrize("module", CATALOGUE)
+def test_every_copy_reads_the_state_directory_the_host_resolved(
+    module: str, issued: broker_tls.BrokerFiles, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A host that set the state directory in code is heard over the environment.
+
+    The program cannot import wactorz, so the host hands the resolved directory
+    to its namespace under the variable's own name; the environment is the
+    fallback, for a node.
+    """
+    from wactorz.agents.dynamic.agent import DynamicAgent
+    from wactorz.core import paths
+
+    monkeypatch.setenv("MQTT_TLS", "1")
+    monkeypatch.delenv("MQTT_TLS_CA", raising=False)
+    monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "nowhere"))
+    state_dir = str(issued.ca.parent.parent)
+    monkeypatch.setattr(paths, "_override", state_dir)
+
+    expected = mqtt_tls.client_context("")
+    agent = DynamicAgent(name="probe", code="", persistence_dir=str(tmp_path / "probe"))
+    assert agent._compile_code("") is None  # pyright: ignore[reportPrivateUsage]
+    injected = {"WACTORZ_STATE_DIR": agent._ns["WACTORZ_STATE_DIR"]}  # pyright: ignore[reportPrivateUsage]
+    assert injected["WACTORZ_STATE_DIR"] == state_dir
+
+    copy = _catalogue_helper(module, injected)()["tls_context"]
+    assert _ca_subjects(copy) == _ca_subjects(expected)
+    with pytest.raises(OSError):  # the environment alone would miss the CA
+        _catalogue_helper(module)()
 
 
 class TestTheNode:

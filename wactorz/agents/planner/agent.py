@@ -590,15 +590,15 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
 
         await self._log("Self-terminating.")
 
-        # ── Release from the Supervisor FIRST ──────────────────────────────
+        # ── Leave the Supervisor FIRST ─────────────────────────────────────
         # spawn() auto-registers every child under the Supervisor, which pins a
         # strong reference (spec.actor) and keeps the name in _order. Without
-        # releasing, unregister()+stop() only removes us from the message
+        # forgetting it, unregister()+stop() only removes us from the message
         # registry — the Supervisor still holds the object, so it is never
         # garbage-collected and _specs grows one entry per planner until the app
-        # restarts. release() drops the actor reference and marks the spec
-        # retired (which also prevents any restart race). This mirrors main's
-        # own delete path: release() → unregister() → stop().
+        # restarts. drop_supervised() removes the entry outright, which also
+        # rules out a restart race. This mirrors main's own delete path:
+        # drop_supervised() → unregister() → stop().
         await self._release_from_registry()
         try:
             await self.stop()

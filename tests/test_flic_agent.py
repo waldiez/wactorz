@@ -24,6 +24,7 @@ from typing import Any, ClassVar, cast
 
 import pytest
 
+from tests.waiting import until
 from wactorz.catalogue_agents import flic_agent
 from wactorz.catalogue_agents.flic_agent import (
     GESTURES,
@@ -1668,7 +1669,7 @@ class TestConnectionsTheLibraryMakes:
         await asyncio.sleep(0.1)
         assert lookups == []
 
-        await asyncio.sleep(0.2)
+        await until(lambda: lookups, "the search looking for the button")
         assert lookups == ["AA:BB:CC:DD:EE:FF"]
         assert client.devices_given
         await agent.on_stop()
@@ -2255,11 +2256,10 @@ class TestWhenBluetoothFails:
 
         monkeypatch.setattr(flic_agent, "find_button", no_adapter)
         agent._watch_all()
-        await asyncio.sleep(0.3)
 
-        # Backing off from 0.01 doubles past 0.3 in a handful of rounds; a
-        # steady interval fits many more.
-        assert lookups > 10
+        # At a steady interval this many rounds take a moment. Backing off,
+        # each wait doubles, and they would take longer than the limit here.
+        await until(lambda: lookups > 10, "the search trying again and again", timeout=5.0)
         await agent._stop(remember=False)
 
     async def test_the_button_comes_back_with_the_adapter(

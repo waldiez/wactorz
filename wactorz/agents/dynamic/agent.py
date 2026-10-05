@@ -27,11 +27,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ...core.actor import Actor, ActorState, Message, MessageType
 from ...core.cancellation import cancel_all_until_done
+from ...core.paths import resolve_state_dir
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
 from .api import AgentAPI
 from .carryover import carry_over_globals
 from .cv2_shim import resilient_cv2_module
+from .listener import hub_for
 from .resources import release_open_resources
 from .safety import extract_function_body, validate_code_safety
 from .sanitize import sanitize_code
@@ -167,6 +169,10 @@ class DynamicAgent(Actor):
         #: strings the planner searches; the manifest carries them.
         self.capabilities: list[Any] = []
         self._api = AgentAPI(self)
+
+    def _make_hub(self) -> Any:
+        """The repair-aware hub, so `Actor.subscribe` on this agent repairs too."""
+        return hub_for(self)
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
@@ -470,6 +476,11 @@ class DynamicAgent(Actor):
         self._ns["get_llm"] = _get_llm_shim
         self._ns["setup_llm"] = _get_llm_shim
         self._ns["create_llm"] = _get_llm_shim
+        # Where this process keeps its state, for a program that opens a broker
+        # connection of its own and needs the generated CA under it. The
+        # program cannot import wactorz, and the environment alone does not
+        # know what a host set in code.
+        self._ns["WACTORZ_STATE_DIR"] = resolve_state_dir()
 
         # ── cv2 shim: wrap VideoCapture with retry + release-before-reopen ──
         # Only injected when the agent code actually references cv2 — no-op for

@@ -17,6 +17,7 @@ from ..openai_shape import (
     openai_messages,
 )
 from ..pricing import calc_cost
+from ..retry import attempt_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +32,15 @@ class OpenAIProvider(LLMProvider):
         # unknown keys means a type checker cannot tell which parameter each
         # value lands on, so it reports the conflict against every one of them
         # — eight errors for a line that was always correct.
+        # No retries of the SDK's own: `LLMProvider` retries, with one policy
+        # for every provider, and the two would multiply. The timeout is the
+        # configured one for the same reason: left to the SDK's default, a
+        # setting of "no limit" would still be cut off at the SDK's.
+        timeout = attempt_timeout()
         self.client = (
-            openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+            openai.AsyncOpenAI(api_key=api_key, base_url=base_url, max_retries=0, timeout=timeout)
             if base_url
-            else openai.AsyncOpenAI(api_key=api_key)
+            else openai.AsyncOpenAI(api_key=api_key, max_retries=0, timeout=timeout)
         )
         self.model = model
         self.base_url = base_url or None

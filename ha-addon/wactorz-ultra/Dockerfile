@@ -7,9 +7,11 @@ ENV DEBCONF_NONINTERACTIVE_SEEN=true
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 # Unpinned on purpose: a pinned Debian version stops resolving once a security
-# update replaces it.
+# update replaces it. The upgrade brings in Debian's security updates since the
+# base was published; a release build takes no cache, so it runs fresh each time.
 # hadolint ignore=DL3008
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get -y upgrade --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
     curl git jq gcc linux-libc-dev libffi-dev libssl-dev python3-pip python3-dev python3-venv locales \
     pkg-config libcairo2-dev libgirepository1.0-dev \
     mosquitto mosquitto-clients build-essential cmake libjpeg62-turbo-dev libpng-dev libopenblas-dev \
@@ -30,7 +32,23 @@ ENV LANG=en_US.UTF-8 \
 # that needs a newer version of one fails. It is first on PATH, so `wactorz`,
 # `python3` and `pip3` (the installer agent's `sys.executable -m pip` too) all
 # resolve here.
+# The user Wactorz runs as. run.sh starts as root, for what needs it, and hands
+# over to this one.
+RUN groupadd --system --gid 1000 wactorz \
+    && useradd --system --uid 1000 --gid wactorz --no-create-home \
+        --home-dir /data/state/home --shell /usr/sbin/nologin wactorz
+
+# The virtualenv is that user's, built by it from the start: agents install
+# packages into it at runtime, and a virtualenv has no per-user directory to
+# send those to instead. Built as the user rather than handed over afterwards,
+# which would store every file in it a second time.
 ENV VIRTUAL_ENV=/opt/venv
+RUN install -d -o wactorz -g wactorz "$VIRTUAL_ENV"
+# The wactorz user, by number: a name is only as good as the passwd file of
+# whoever reads this line.
+USER 1000:1000
+# The user's home is under /data, which does not exist while the image is built.
+ENV HOME=/tmp
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
@@ -38,14 +56,26 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 # version is the one `wactorz[all,ml]` below accepts, which that install enforces.
 # hadolint ignore=DL3013
 RUN pip3 install --no-cache-dir ultralytics
-# Git ref of wactorz to install.
-ARG WACTORZ_REF=main
-ARG BUILD_VERSION=main
+# The wactorz tag, branch or sha to install. Required, with no default: a
+# default would let a build quietly ship whatever that ref pointed at that day.
+# The release workflow passes the tag, and build.yaml the release this add-on
+# version belongs to.
+ARG WACTORZ_REF
+ARG BUILD_VERSION=local
+RUN test -n "${WACTORZ_REF}" \
+    || { echo "WACTORZ_REF is required: the wactorz tag, branch or sha to install" >&2; exit 1; }
 RUN pip3 install --no-cache-dir \
     "wactorz[all,ml] @ git+https://github.com/waldiez/wactorz.git@${WACTORZ_REF}" \
     && test "$(command -v wactorz)" = "$VIRTUAL_ENV/bin/wactorz" \
     && python3 -c "import wactorz" \
     && echo "wactorz addon ${BUILD_VERSION} (ref ${WACTORZ_REF}) installed"
+
+# Back to root for the start script, which reads the options, starts the
+# embedded broker and then drops to the user above. Deliberate, and the reason
+# the image does not end as that user.
+# hadolint ignore=DL3002
+USER 0:0
+ENV HOME=/root
 
 COPY run.sh /run.sh
 RUN chmod +x /run.sh

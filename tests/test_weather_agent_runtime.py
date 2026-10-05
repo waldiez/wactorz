@@ -449,6 +449,25 @@ class TestLlmLocationRecovery:
 
         assert await agent._llm_location("how is it over at the city of light") == "Paris"
 
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            # A quoted name with more after it: the closing quote is not at the
+            # end of the reply, and must still come off the name.
+            '"Paris"\nThat is the city of light.',
+            "\n\n  Paris  \n",
+            "'Paris'",
+            "Paris\r\nFrance is the country.",
+        ],
+        ids=["quoted, then more text", "blank lines first", "single quotes", "windows newlines"],
+    )
+    async def test_the_name_is_taken_from_a_reply_that_says_more(
+        self, agent: WeatherAgent, reply: str
+    ) -> None:
+        agent._llm = _Llm(reply)  # pyright: ignore[reportAttributeAccessIssue]
+
+        assert await agent._llm_location("how is it over at the city of light") == "Paris"
+
     @pytest.mark.parametrize("reply", ["NONE", "", "x" * 90, "Atlantis", RuntimeError("down")])
     async def test_an_unusable_answer_recovers_nothing(
         self, agent: WeatherAgent, reply: str | Exception

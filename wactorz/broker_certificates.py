@@ -60,9 +60,10 @@ def _write_node_accounts() -> None:
     if not (CONFIG.node_accounts and CONFIG.mqtt_broker_dir):
         return
     directory = Path(CONFIG.mqtt_broker_dir).expanduser()
-    nodes = [target.name for target in CONFIG.deploy_targets]
+    nodes = account_nodes()
     try:
-        changed = broker_accounts.write_files(directory, nodes)
+        full_access = full_access_accounts()
+        changed = broker_accounts.write_files(directory, nodes, full_access, node_data_topics())
     except (OSError, ValueError) as exc:
         logger.warning(
             "[mqtt-accounts] Could not write the node accounts to %s: %s", directory, exc
@@ -76,6 +77,45 @@ def _write_node_accounts() -> None:
             len(nodes),
             directory,
         )
+        if nodes:
+            logger.warning(
+                "[mqtt-accounts] On that broker, %s keep%s every topic, each node has its own "
+                "and the shared agent and data topics, and any other account has none. List "
+                "another system's account in WACTORZ_BROKER_ACCOUNTS, and a data topic a node's "
+                "agents use in WACTORZ_NODE_TOPICS.",
+                " and ".join(full_access) if full_access else "clients with no account",
+                "s" if len(full_access) == 1 else "",
+            )
+
+
+def account_nodes() -> list[str]:
+    """The deploy targets that can have a broker account, having named those that cannot.
+
+    A node's name is its account's name, and a broker does not take every name:
+    one with a space in it, say. That node is left out and said so, rather than
+    refusing them all: the others still get their accounts, and `/deploy`
+    refuses the one that has none, with the same reason.
+    """
+    usable = []
+    for target in CONFIG.deploy_targets:
+        problem = broker_accounts.name_error(target.name)
+        if problem:
+            logger.warning("[mqtt-accounts] %s Until then it has no broker account.", problem)
+        else:
+            usable.append(target.name)
+    return usable
+
+
+def full_access_accounts() -> list[str]:
+    """The accounts the access list gives the whole broker: this server's, and those listed."""
+    listed = broker_accounts.parse_accounts(CONFIG.broker_accounts)
+    own = [CONFIG.mqtt_username] if CONFIG.mqtt_username else []
+    return sorted({*own, *listed})
+
+
+def node_data_topics() -> list[tuple[str, str]]:
+    """The data topics a node may use: the conventional ones, and those the setting adds."""
+    return [*broker_accounts.NODE_TOPICS, *broker_accounts.parse_node_topics(CONFIG.node_topics)]
 
 
 def _prepare_server_tls() -> str:
@@ -200,14 +240,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The same folder carries the accounts, so one call leaves a broker of ours
         # everything it reads.
         if CONFIG.node_accounts:
-            broker_accounts.write_files(
-                args.export, [target.name for target in CONFIG.deploy_targets]
-            )
+            _export_accounts(args.export)
     if args.logins is not None:
-        nodes = [target.name for target in CONFIG.deploy_targets]
+        nodes = account_nodes()
         args.logins.parent.mkdir(parents=True, exist_ok=True)
         args.logins.write_text(broker_accounts.home_assistant_logins(nodes), encoding="utf-8")
+        # Password hashes, for whoever administers the broker and nobody else
+        # with an account on the machine.
+        args.logins.chmod(0o600)
     return 0
+
+
+def _export_accounts(directory: Path) -> None:
+    """Write the node accounts beside an exported certificate, when they can be written.
+
+    A setting that cannot be used -- a data topic that would open what the
+    access list exists to close -- costs the accounts and is said, and nothing
+    else: the certificate beside them is already there, and whoever called this
+    reads a failure as there being no certificate to serve.
+    """
+    try:
+        broker_accounts.write_files(
+            directory, account_nodes(), full_access_accounts(), node_data_topics()
+        )
+    except ValueError as exc:
+        logger.warning("[mqtt-accounts] The node accounts were not written: %s", exc)
 
 
 if __name__ == "__main__":

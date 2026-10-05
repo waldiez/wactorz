@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from wactorz import config
-from wactorz.config import _env_int, _env_truthy
+from wactorz import cli, config
+from wactorz.config import _dashboard_port, _env_int, _env_truthy
 
 
 class TestAMalformedInteger:
@@ -141,3 +141,42 @@ class TestTheFileIsLoadedFirst:
         )
 
         assert loaded_at < read_at
+
+
+class TestTheDashboardPort:
+    """One setting under two names, and one answer."""
+
+    def test_the_documented_name_is_read(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MONITOR_PORT", "9001")
+        monkeypatch.delenv("WS_PORT", raising=False)
+
+        assert _dashboard_port() == 9001
+
+    def test_the_older_name_is_read_when_the_other_is_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("MONITOR_PORT", raising=False)
+        monkeypatch.setenv("WS_PORT", "9002")
+
+        assert _dashboard_port() == 9002
+
+    def test_the_documented_name_wins_when_both_are_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("MONITOR_PORT", "9001")
+        monkeypatch.setenv("WS_PORT", "9002")
+
+        assert _dashboard_port() == 9001
+
+    def test_neither_set_is_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MONITOR_PORT", raising=False)
+        monkeypatch.delenv("WS_PORT", raising=False)
+
+        assert _dashboard_port() == 8888
+
+    def test_the_command_line_takes_its_default_from_the_same_place(self) -> None:
+        # Read separately, the two could name different ports for one server.
+        source = (Path(cli.__file__)).read_text(encoding="utf-8")
+
+        assert "default=CONFIG.ws_port," in source
+        assert "MONITOR_PORT" not in source

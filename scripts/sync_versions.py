@@ -71,6 +71,25 @@ def update_ha_addon_config(new_version: str) -> None:
             print(f"Updated {ha_file}")
 
 
+_ADDON_BUILD_REF = re.compile(r"^(\s*WACTORZ_REF:\s*)\S+", re.MULTILINE)
+
+
+def update_ha_addon_build_ref(new_version: str) -> None:
+    """Point each add-on's source build at the release tag of ``new_version``.
+
+    ``build.yaml`` is what Home Assistant uses to build an add-on from source, and
+    the Dockerfile has no default ref on purpose, so this is the ref such a build
+    installs. It is the library's tag even for an add-on rebuild (0.5.3.1), which
+    ships the same library and has no tag of its own.
+    """
+    for build_file in sorted((ROOT_DIR / "ha-addon").glob("*/build.yaml")):
+        content = build_file.read_text()
+        new_content, found = _ADDON_BUILD_REF.subn(rf"\g<1>v{new_version}", content, count=1)
+        if found and new_content != content:
+            build_file.write_text(new_content)
+            print(f"Updated {build_file}")
+
+
 def update_docs_landing(new_version: str) -> None:
     landing_file = ROOT_DIR / "docs" / "_landing.html"
     if landing_file.exists():
@@ -125,6 +144,7 @@ def main() -> None:
     update_python_version(new_version)
     update_package_json(new_version)
     update_ha_addon_config(new_version)
+    update_ha_addon_build_ref(new_version)
     update_docs_landing(new_version)
     update_docs_versions_json(new_version)
 

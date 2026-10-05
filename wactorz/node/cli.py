@@ -21,6 +21,7 @@ import uuid
 
 from ..config import CONFIG, deploy_name_error
 from ..core.mqtt_tls import client_context, tls_enabled
+from ..monitoring.log_setup import setup_console_logging
 from .runner import NodeRunner
 
 logger = logging.getLogger(__name__)
@@ -160,11 +161,13 @@ def get_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+def configure_logging(args: argparse.Namespace) -> None:
+    """Log to the console at the level the command line asked for."""
+    setup_console_logging(getattr(logging, str(args.loglevel).upper(), logging.INFO))
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the ``wactorz-node`` console script."""
     args = get_args(sys.argv[1:] if argv is None else argv)
-    logging.basicConfig(
-        level=getattr(logging, str(args.loglevel).upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    configure_logging(args)
     run(args)

@@ -12,6 +12,7 @@ import inspect
 import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -160,20 +161,23 @@ class ActorRegistry:
                 logger.info("[Registry] Unregistered %s", actor_id[:8])
 
     async def deliver(self, target_id: str, msg: Message) -> bool:
-        """Put a message in one actor's mailbox. False if no such actor."""
+        """Put a message in one actor's mailbox. False if no such actor, or no room in it."""
         actor = self._actors.get(target_id)
         if actor is None:
             logger.warning("[Registry] Unknown target: %s", target_id[:8])
             return False
-        await actor.receive(msg)
-        return True
+        return await actor.receive(msg)
 
     async def broadcast(self, sender_id: str, msg_type: MessageType, payload: Any = None) -> None:
-        """Send a message to every registered actor except the sender."""
+        """Send a message to every registered actor except the sender.
+
+        Each actor is given the wait a single delivery gets, all at once rather
+        than one after another: an actor whose mailbox is full then costs the
+        broadcast that wait once, however many of them there are.
+        """
         msg = Message(type=msg_type, sender_id=sender_id, payload=payload)
-        for actor_id, actor in list(self._actors.items()):
-            if actor_id != sender_id:
-                await actor.receive(msg)
+        others = [actor for actor_id, actor in list(self._actors.items()) if actor_id != sender_id]
+        await asyncio.gather(*(actor.receive(msg) for actor in others))
 
     def get(self, actor_id: str) -> Actor | None:
         """The actor with this id, or None."""
@@ -202,6 +206,10 @@ class ActorRegistry:
         would neither register its first child nor put it under supervision.
         """
         return True
+
+
+#: How many reports for main the supervisor keeps while main has no room for them.
+HELD_REPORTS = 100
 
 
 class Supervisor:
@@ -240,6 +248,11 @@ class Supervisor:
         self._order: list[str] = []  # insertion order for REST_FOR_ONE
         self._watch_task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        #: Reports main's mailbox had no room for, oldest first, handed over
+        #: again at each check. Bounded: a main that never reads must not be a
+        #: way to grow this without limit, and the newest reports are the ones
+        #: worth keeping.
+        self._held_reports: deque[Message] = deque(maxlen=HELD_REPORTS)
 
     # ── Registration ──────────────────────────────────────────────────────────
 
@@ -264,6 +277,12 @@ class Supervisor:
             restart_window=restart_window,
             restart_delay=restart_delay,
         )
+        # A restart still waiting on the entry being replaced would find it gone
+        # and do nothing, but only after its delay -- and once the entry is
+        # replaced, stop() cannot reach it to cancel it.
+        replaced = self._specs.get(name)
+        if replaced is not None:
+            self._cancel_own_restart(replaced)
         self._specs[name] = spec
         if name not in self._order:
             self._order.append(name)
@@ -410,10 +429,23 @@ class Supervisor:
         # A restart waiting out its delay would find the spec gone and do
         # nothing, but only after the delay -- and once the spec is out of
         # _specs, stop() cannot reach it to cancel it.
-        task = spec._restart_task
-        if task is not None and not task.done() and task is not asyncio.current_task():
-            task.cancel()
+        self._cancel_own_restart(spec)
         logger.info("[Supervisor] Forgot '%s'.", name)
+
+    def _cancel_own_restart(self, spec: SupervisedSpec) -> None:
+        """Cancel a restart waiting on ``spec``, unless entries still here share it.
+
+        A group strategy (ONE_FOR_ALL, REST_FOR_ONE) restarts its members in one
+        task; cancelling it for one of them would abort the others' restarts as
+        well. A shared one is left to run, and skips this entry when it reaches
+        it, since the entry is no longer the live one for its name.
+        """
+        task = spec._restart_task
+        if task is None or task.done() or task is asyncio.current_task():
+            return
+        if any(other is not spec and other._restart_task is task for other in self._specs.values()):
+            return
+        task.cancel()
 
     # ── Startup ───────────────────────────────────────────────────────────────
 
@@ -455,6 +487,7 @@ class Supervisor:
         while True:
             try:
                 await asyncio.sleep(self._poll_interval)
+                self._hand_over_held_reports()
                 failures, recovered = await self._detect_failures()
                 for name in recovered:
                     await self._notify_main(
@@ -674,6 +707,11 @@ class Supervisor:
     async def _restart_one(self, name: str, spec: SupervisedSpec, crashed: bool = True):
         """Restart one actor, after a delay that grows while it keeps crashing.
 
+        The old actor is stopped before the wait, not after it. A FAILED actor
+        has ended its message loop, but its subscriptions, stream windows and
+        command listener run on until it is stopped, and a delay in slow retry
+        is long enough for them to go on acting on whatever arrives.
+
         A failed respawn leaves the spec without an actor, which the watch loop
         reads as a crash on its next poll: it waits out the next, longer delay
         rather than retrying at the poll's pace.
@@ -690,6 +728,12 @@ class Supervisor:
                     severity="critical",
                 )
 
+        # Stopped before the wait, so that nothing of it keeps running through
+        # the delay; the spec holds the restart task, which is what tells the
+        # watch loop that an entry with no actor is being seen to.
+        if spec.actor:
+            await self._stop_actor(name, spec)
+
         delay = self._restart_delay(spec, crashed)
         if delay > 0:
             logger.info("[Supervisor] Restarting '%s' in %.0fs.", name, delay)
@@ -701,12 +745,15 @@ class Supervisor:
         if not self._still_supervised(name, spec):
             logger.info("[Supervisor] Not restarting '%s': it left supervision meanwhile.", name)
             return
+        if spec.actor is not None:
+            # The old actor was stopped before the wait, so this one was started
+            # by someone else meanwhile -- a start from the dashboard or a
+            # command puts it back through resupervise(). Spawning another would
+            # stop it, since both answer to the same actor id.
+            logger.info("[Supervisor] Not restarting '%s': it was started again meanwhile.", name)
+            return
 
         logger.info("[Supervisor] Restarting '%s' (crash %s in a row).", name, spec.crash_streak)
-
-        # Stop the old actor cleanly if possible
-        if spec.actor:
-            await self._stop_actor(name, spec)
 
         # Spawn a fresh one. A failure leaves the spec with no actor, which the
         # watch loop reads as another crash and retries after a longer delay.
@@ -788,6 +835,25 @@ class Supervisor:
             pass
         spec.actor = None
 
+    def _hold_report(self, msg: Message) -> None:
+        """Keep a report for a later check, saying so when an older one is pushed out."""
+        if len(self._held_reports) == self._held_reports.maxlen:
+            logger.warning(
+                "[Supervisor] main has taken no report for a while; dropping the oldest of %d held",
+                len(self._held_reports),
+            )
+        self._held_reports.append(msg)
+
+    def _hand_over_held_reports(self) -> None:
+        """Give main the reports it had no room for, in the order they were made."""
+        if not self._held_reports or not self._registry:
+            return
+        main = self._registry.find_by_name("main")
+        if main is None:
+            return
+        while self._held_reports and main.offer(self._held_reports[0]):
+            self._held_reports.popleft()
+
     async def _notify_main(self, message: str, severity: str = "critical"):
         """Send a supervision event to MainActor via the actor message queue.
 
@@ -828,7 +894,11 @@ class Supervisor:
                     },
                     message_id=str(uuid.uuid4()),
                 )
-                await main.receive(msg)
+                # Offered, never waited on: this runs between a failure and its
+                # restart. A main too busy to take the report gets it at a
+                # later check, with the time it was made.
+                if self._held_reports or not main.offer(msg):
+                    self._hold_report(msg)
             else:
                 # No running actor to send from — fall back to direct append
                 if hasattr(main, "_pending_notifications"):
@@ -1011,10 +1081,16 @@ class ActorSystem:
         logger.info("[ActorSystem] All actors stopped.")
 
     async def run_forever(self):
-        """Block until the system is stopped or interrupted."""
+        """Block until the system is stopped or interrupted.
+
+        A cancellation stops everything and is then raised on: the caller
+        asked for it, and a host wrapping this in a timeout or a task group
+        has to see the cancellation to tell a stop from a normal finish.
+        """
         try:
             while self._running:
                 await asyncio.sleep(1)
         except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("[ActorSystem] Shutdown signal received.")
             await self.stop_all()
+            raise

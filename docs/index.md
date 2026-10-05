@@ -30,6 +30,7 @@ pip install wactorz[all]
 - **[MQTT Topics](mqtt_topics.md)** — Full topic reference with payload schemas
 - **[Remote Nodes](remote-nodes.md)** — Edge deployment: install wactorz, start it with `--node`
 - **[Extensions](extensions.md)** — How to write backend/frontend extensions
+- **[Using Wactorz as a library](library.md)** — Your own agents, pipelines and models, with examples
 - **[Python API](python-api.md)** — Core classes, supervision, persistence
 - **[Evaluation harness](evaluation.md)** — Compare models per LLM call site (accuracy, latency, cost)
 - **[Home Assistant Addon](../ha-addon/DOCS.md)** — Install and configure the HA Supervisor addon (requires HAOS or Supervised)

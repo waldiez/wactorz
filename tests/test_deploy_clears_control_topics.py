@@ -11,6 +11,7 @@ against topics main has just emptied.
 republishes it as soon as the node's heartbeat reports that it checks signatures.
 """
 
+import inspect
 from typing import Any
 
 import pytest
@@ -73,7 +74,5 @@ class TestClearingThem:
 def test_the_deploy_clears_them_before_it_starts_the_runner() -> None:
     # After that, the node is running and subscribed: a message cleared then has
     # already been delivered.
-    import inspect
-
     source = inspect.getsource(InstallerAgent._node_deploy)
     assert source.index("_clear_planted_control") < source.index("node_service.install")

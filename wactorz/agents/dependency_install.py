@@ -31,11 +31,15 @@ class InstallOutcome:
     timed_out: bool = False
     unavailable: bool = False
     """No installer to ask: the packages were not installed."""
+    busy: bool = False
+    """The installer's mailbox had no room: the packages were not installed."""
 
     @property
     def ok(self) -> bool:
         """Whether the agent can be spawned in this process now."""
-        return not (self.failed or self.restart_required or self.timed_out or self.unavailable)
+        return not (
+            self.failed or self.restart_required or self.timed_out or self.unavailable or self.busy
+        )
 
     def problem(self, agent_name: str) -> str:
         """The user-facing reason `agent_name` was not started, or ``""``."""
@@ -43,6 +47,11 @@ class InstallOutcome:
             return (
                 f"Could not install the packages {agent_name} needs: the installer "
                 "agent is not running."
+            )
+        if self.busy:
+            return (
+                f"Could not install the packages {agent_name} needs: the installer "
+                "is not taking requests right now. Try spawning it again shortly."
             )
         if self.timed_out:
             return (
@@ -100,7 +109,7 @@ async def install_for_agent(
     future: asyncio.Future = asyncio.get_running_loop().create_future()
     main._result_futures[task_id] = future
     try:
-        await installer.receive(
+        taken = await installer.receive(
             Message(
                 type=MessageType.TASK,
                 sender_id=requester.actor_id,
@@ -115,6 +124,14 @@ async def install_for_agent(
                 },
             )
         )
+        if taken is False:
+            # Its mailbox had no room, so no result is coming to wait for.
+            logger.warning(
+                "Installer is not taking messages — cannot install %s for '%s'",
+                packages,
+                agent_name,
+            )
+            return InstallOutcome(busy=True)
         try:
             result = await asyncio.wait_for(future, timeout=install_wait_s(len(packages)))
         except asyncio.TimeoutError:

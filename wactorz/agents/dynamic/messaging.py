@@ -22,6 +22,11 @@ else:
 
 logger = logging.getLogger(__name__)
 
+#: How long `send_to` waits for its reply subscription before sending anyway.
+#: The same bound, and the same choice, as main's delegation: the task still
+#: gets done when the subscription is slow, which beats not sending it at all.
+REPLY_SUBSCRIBE_TIMEOUT_S = 5.0
+
 
 class MessagingMixin(_Host):
     """Mixed into AgentAPI; reads the actor through `self._actor`."""
@@ -169,17 +174,24 @@ class MessagingMixin(_Host):
         payload["_reply_topic"] = reply_topic
         payload["_remote_task"] = True
 
-        future = asyncio.get_event_loop().create_future()
+        future = asyncio.get_running_loop().create_future()
         if not hasattr(self._actor, "_result_futures"):
             self._actor._result_futures = {}
         self._actor._result_futures[reply_topic] = future
 
-        await self._actor._mqtt_publish(f"agents/by-name/{agent_name}/task", payload)
-
+        # Subscribed before the task goes out: the broker drops a reply nobody
+        # is subscribed to yet, so a node that answers at once would answer into
+        # nothing and the caller would wait out its timeout for work that
+        # succeeded.
+        subscribed = asyncio.Event()
         reply_task = asyncio.create_task(
-            await_remote_reply(future, reply_topic, self._actor, agent_name, timeout)
+            await_remote_reply(
+                future, reply_topic, self._actor, agent_name, timeout, subscribed=subscribed
+            )
         )
         try:
+            await _until_subscribed(subscribed, self.name, agent_name)
+            await self._actor._mqtt_publish(f"agents/by-name/{agent_name}/task", payload)
             return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
         except asyncio.TimeoutError:
             logger.warning(
@@ -190,6 +202,12 @@ class MessagingMixin(_Host):
                 timeout,
             )
             return {"error": f"Timeout waiting for remote '{agent_name}'"}
+        except Exception as exc:
+            # The reply channel failed -- a refused or dropped connection, which
+            # the waiter puts on the future. Told as a result, like a timeout,
+            # rather than raised into the agent's code.
+            logger.warning("[%s] send_to '%s': no reply can arrive: %s", self.name, agent_name, exc)
+            return {"error": f"Could not receive a reply from remote '{agent_name}': {exc}"}
         finally:
             reply_task.cancel()
             self._actor._result_futures.pop(reply_topic, None)
@@ -228,8 +246,13 @@ class MessagingMixin(_Host):
             payload = dict(payload)
             payload["_task_id"] = task_id
             payload["_reply_to"] = self._actor.actor_id
-            await self._actor.send(target.actor_id, MessageType.TASK, payload)
             try:
+                taken = await self._actor.send(target.actor_id, MessageType.TASK, payload)
+                if taken is False:
+                    # Its mailbox had no room, so no answer is coming. Only an
+                    # explicit False: a `send` put in its place to observe the
+                    # traffic may return nothing.
+                    return {"error": f"'{agent_name}' is not taking messages: its mailbox is full"}
                 return await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError:
                 logger.warning(
@@ -262,15 +285,46 @@ class MessagingMixin(_Host):
         return await self.send_to(agent_name, payload, timeout=timeout)
 
 
+async def _until_subscribed(subscribed: asyncio.Event, name: str, agent_name: str) -> None:
+    """Wait for the reply subscription, but never past `REPLY_SUBSCRIBE_TIMEOUT_S`.
+
+    The task is sent either way; a slow subscription only risks the reply, and
+    the warning explains a timeout that follows.
+    """
+    try:
+        await asyncio.wait_for(subscribed.wait(), timeout=REPLY_SUBSCRIBE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[%s] send_to '%s': the reply subscription did not come up in %.0fs; "
+            "sending anyway, so the reply may be missed",
+            name,
+            agent_name,
+            REPLY_SUBSCRIBE_TIMEOUT_S,
+        )
+
+
 async def await_remote_reply(
-    future: asyncio.Future, reply_topic: str, actor: Any, agent_name: str, timeout: float
+    future: asyncio.Future,
+    reply_topic: str,
+    actor: Any,
+    agent_name: str,
+    timeout: float,
+    *,
+    subscribed: asyncio.Event | None = None,
 ) -> dict[str, Any] | None:
-    """Wait for a remote agent's reply, cleaning up the pending future either way."""
+    """Wait for a remote agent's reply, cleaning up the pending future either way.
+
+    ``subscribed`` is set once the reply topic is subscribed, so the caller can
+    publish the task only then -- and set as well if that never happens, so the
+    caller is not left waiting on a subscription that is not coming.
+    """
     try:
         broker = getattr(actor, "_mqtt_broker", "localhost")
         port = getattr(actor, "_mqtt_port", 1883)
         async with mqtt_client(broker, port) as client:
             await client.subscribe(reply_topic)
+            if subscribed is not None:
+                subscribed.set()
             async for msg in client.messages:
                 try:
                     data = json.loads(msg.payload.decode())
@@ -282,3 +336,8 @@ async def await_remote_reply(
     except Exception as e:
         if not future.done():
             future.set_exception(e)
+    finally:
+        # Whatever happened, stop the caller waiting on a subscription that is
+        # no longer going to be made.
+        if subscribed is not None:
+            subscribed.set()

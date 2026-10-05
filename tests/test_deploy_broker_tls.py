@@ -28,6 +28,8 @@ from wactorz.core import broker_tls
 
 HOME = "/home/pi"
 NODE_CA = f"{HOME}/wactorz/{installer_agent.NODE_CA_FILE}"
+#: Where a deploy uploads it, until the node is about to be restarted with it.
+UPLOADED_CA = NODE_CA + installer_agent.NOT_YET_IN_USE
 
 
 class FakeConn:
@@ -121,7 +123,7 @@ class TestChecked:
         assert tls.enabled
         assert tls.port == 8883
         assert tls.ca == NODE_CA
-        assert sftp.uploaded == {NODE_CA: str(generated.ca)}
+        assert sftp.uploaded == {UPLOADED_CA: str(generated.ca)}
         # This install's own CA signs nothing else, so the hostname is not checked.
         assert tls.check_hostname is False
         assert len(conn.commands) == 1
@@ -212,7 +214,7 @@ class TestWhichCA:
 
         tls = await _decide(_target(), FakeConn(), sftp)
 
-        assert sftp.uploaded == {NODE_CA: str(own.ca)}
+        assert sftp.uploaded == {UPLOADED_CA: str(own.ca)}
         assert tls.check_hostname is True
 
     async def test_the_system_store_hands_over_no_file(self, server: Any) -> None:
@@ -234,6 +236,69 @@ class TestWhichCA:
         tls = await _decide(_target(), FakeConn(), FakeSftp())
 
         assert tls.check_hostname is True
+
+
+# ── The CA a running node is reading ───────────────────────────────────────────
+
+
+class TestTheCaTheNodeAlreadyHas:
+    """A node being redeployed is running, and reads its CA at every restart.
+
+    A deploy that stops before it restarts the node must leave that file as it
+    was: with another server's CA under its name, the node's next restart cannot
+    reach the broker its environment still names.
+    """
+
+    async def test_the_check_reads_the_upload_not_the_file_in_use(
+        self, generated: broker_tls.BrokerFiles
+    ) -> None:
+        conn, sftp = FakeConn(), FakeSftp()
+
+        await _decide(_target(), conn, sftp)
+
+        assert NODE_CA not in sftp.uploaded
+        assert shlex.split(conn.commands[0])[5] == UPLOADED_CA
+
+    async def test_a_node_about_to_start_on_tls_gets_it_under_the_name_it_reads(self) -> None:
+        conn = FakeConn()
+        tls = NodeTls(enabled=True, port=8883, ca=NODE_CA)
+
+        await _agent()._settle_node_ca(conn, HOME, tls)
+
+        assert shlex.split(conn.commands[0])[:4] == ["mv", "-f", UPLOADED_CA, NODE_CA]
+
+    @pytest.mark.parametrize(
+        "tls",
+        [NodeTls(enabled=False, port=1883), NodeTls(enabled=True, port=8883, ca="system")],
+        ids=["a node on plain MQTT", "a node on the system store"],
+    )
+    async def test_a_node_that_will_not_read_it_has_the_upload_removed(self, tls: NodeTls) -> None:
+        conn = FakeConn()
+
+        await _agent()._settle_node_ca(conn, HOME, tls)
+
+        assert [shlex.split(command) for command in conn.commands] == [["rm", "-f", UPLOADED_CA]]
+
+    async def test_a_deploy_giving_up_removes_the_upload_and_leaves_the_file(self) -> None:
+        conn = FakeConn()
+
+        await _agent()._discard_uploaded_ca(conn, HOME)
+
+        assert [shlex.split(command) for command in conn.commands] == [["rm", "-f", UPLOADED_CA]]
+
+    async def test_a_connection_that_has_gone_does_not_hide_why_it_gave_up(self) -> None:
+        class _Gone(FakeConn):
+            async def run(self, command: str, check: bool = False) -> Any:
+                raise ConnectionResetError("connection lost")
+
+        await _agent()._discard_uploaded_ca(_Gone(), HOME)
+
+    async def test_a_ca_that_cannot_be_put_in_place_fails_the_deploy(self) -> None:
+        conn = FakeConn(ok=False, output="mv: cannot move: Read-only file system")
+        tls = NodeTls(enabled=True, port=8883, ca=NODE_CA)
+
+        with pytest.raises(installer_agent.CaNotPutInPlaceError, match="Read-only file system"):
+            await _agent()._settle_node_ca(conn, HOME, tls)
 
 
 # ── What the node is given ─────────────────────────────────────────────────────

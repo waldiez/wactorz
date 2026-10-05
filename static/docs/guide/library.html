@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Using Wactorz as a library — Wactorz</title>
+  <meta name="description" content="Wactorz — Actor-model multi-agent AI framework"/>
+  <link rel="icon" href="https://waldiez.io/images/wactorz/favicon.svg" type="image/svg+xml" />
+  <link rel="icon" href="https://waldiez.github.io/media/images/wactorz/icon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#05080e;--bg2:#080d1a;--bg3:#0d1426;
+      --border:#1a2140;--border-hi:#2a3560;
+      --blue:#4f8ef7;--cyan:#00d4ff;
+      --text:#dde3f0;--muted:#5a6890;--muted-hi:#8899bb;
+      --mono:'JetBrains Mono',monospace;
+      --display:'Chakra Petch',sans-serif;
+    }
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:.9rem;line-height:1.75;display:flex;flex-direction:column;min-height:100vh}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:var(--border-hi);border-radius:3px}
+
+    /* ── Nav bar ── */
+    .topbar{position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;padding:0 1.5rem;height:52px;border-bottom:1px solid var(--border);background:rgba(5,8,14,.88);backdrop-filter:blur(10px)}
+    .topbar-logo{font-family:var(--display);font-weight:600;font-size:.95rem;letter-spacing:.06em;color:#fff;text-decoration:none;display:flex;align-items:center;gap:.5rem}
+    .topbar-links{display:flex;gap:.1rem}
+    .topbar-links a{font-family:var(--mono);font-size:.75rem;color:var(--muted-hi);text-decoration:none;padding:.3rem .65rem;border-radius:3px;border:1px solid transparent;transition:all .15s}
+    .topbar-links a:hover,.topbar-links a.active{color:var(--text);border-color:var(--border-hi);background:rgba(79,142,247,.07)}
+
+    /* ── Layout ── */
+    .layout{display:flex;flex:1}
+
+    /* ── Sidebar ── */
+    .sidebar{width:220px;flex-shrink:0;border-right:1px solid var(--border);padding:1.5rem 0;overflow-y:auto;position:sticky;top:52px;height:calc(100vh - 52px);background:var(--bg2)}
+    .sidebar-group{margin-bottom:1.25rem}
+    .sidebar-label{font-family:var(--display);font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:.1rem 1.25rem .4rem;font-weight:500}
+    /* Collapsible groups: only the active section is open by default */
+    details.sidebar-group > summary.sidebar-label{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;transition:color .15s}
+    details.sidebar-group > summary.sidebar-label::-webkit-details-marker{display:none}
+    details.sidebar-group > summary.sidebar-label::after{content:'▸';font-size:.6rem;color:var(--muted);transition:transform .15s;transform:translateY(-1px)}
+    details.sidebar-group[open] > summary.sidebar-label::after{content:'▾'}
+    details.sidebar-group > summary.sidebar-label:hover{color:var(--muted-hi)}
+    .sidebar a{display:block;font-size:.8rem;color:var(--muted-hi);text-decoration:none;padding:.32rem 1.25rem;border-left:2px solid transparent;transition:all .15s}
+    .sidebar a:hover{color:var(--text);border-left-color:var(--border-hi);background:rgba(79,142,247,.04)}
+    .sidebar a.active{color:var(--blue);border-left-color:var(--blue);background:rgba(79,142,247,.06)}
+    .sidebar a.external{color:var(--muted);font-size:.76rem}
+
+    /* ── Content ── */
+    .content{flex:1;padding:3rem 3.5rem 5rem;max-width:860px;min-width:0}
+
+    /* ── Typography ── */
+    .content h1{font-family:var(--display);font-size:2rem;font-weight:700;letter-spacing:-.02em;color:#fff;margin-bottom:1rem;line-height:1.15}
+    .content h2{font-family:var(--display);font-size:1.35rem;font-weight:600;color:#fff;margin:2.5rem 0 .75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+    .content h3{font-family:var(--display);font-size:1.05rem;font-weight:500;color:var(--text);margin:1.75rem 0 .5rem}
+    .content h4{font-family:var(--display);font-size:.9rem;font-weight:500;color:var(--muted-hi);margin:1.25rem 0 .35rem}
+    .content p{margin-bottom:1rem;color:var(--text)}
+    .content a{color:var(--blue);text-decoration:none}
+    .content a:hover{text-decoration:underline}
+    .content ul,.content ol{margin:.5rem 0 1rem 1.5rem}
+    .content li{margin:.25rem 0}
+    .content strong{color:#fff;font-weight:500}
+    .content em{color:var(--muted-hi)}
+    .content hr{border:none;border-top:1px solid var(--border);margin:2rem 0}
+
+    /* ── Code ── */
+    .content code{font-family:var(--mono);font-size:.82em;background:var(--bg3);color:var(--cyan);padding:.15em .4em;border-radius:3px;border:1px solid var(--border)}
+    .content pre{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:1.25rem 1.5rem;overflow-x:auto;margin:1rem 0 1.5rem;position:relative}
+    .content pre code{background:none;border:none;padding:0;color:var(--text);font-size:.83rem;line-height:1.7}
+
+    /* ── Pygments syntax highlight overrides ── */
+    .highlight .hll{background:#1a2140}
+    .highlight .c,.highlight .ch,.highlight .cm,.highlight .cp,.highlight .cpf,.highlight .cs{color:#546e7a;font-style:italic}
+    .highlight .k,.highlight .kc,.highlight .kd,.highlight .kn,.highlight .kp,.highlight .kr,.highlight .kt{color:#c792ea}
+    .highlight .s,.highlight .s1,.highlight .s2,.highlight .sb,.highlight .sc,.highlight .dl,.highlight .sd,.highlight .se,.highlight .sh,.highlight .si,.highlight .sx,.highlight .sr,.highlight .ss{color:#c3e88d}
+    .highlight .n{color:var(--text)}
+    .highlight .na,.highlight .nb,.highlight .nc,.highlight .nd,.highlight .ne,.highlight .nf,.highlight .nl,.highlight .nn{color:#82aaff}
+    .highlight .mi,.highlight .mf,.highlight .mh,.highlight .mo{color:#f78c6c}
+    .highlight .o,.highlight .ow{color:#89ddff}
+    .highlight .p{color:var(--text)}
+
+    /* ── Blockquote / admonition ── */
+    .content blockquote{border-left:3px solid var(--blue);margin:1rem 0;padding:.75rem 1.25rem;background:rgba(79,142,247,.05);color:var(--muted-hi)}
+
+    /* ── Tables ── */
+    .content table{width:100%;border-collapse:collapse;margin:1rem 0 1.5rem;font-size:.83rem}
+    .content th{background:var(--bg3);color:var(--text);font-weight:500;padding:.6rem 1rem;border:1px solid var(--border);text-align:left}
+    .content td{padding:.5rem 1rem;border:1px solid var(--border);color:var(--muted-hi)}
+    .content tr:hover td{background:rgba(79,142,247,.03)}
+
+    /* ── Footer ── */
+    footer{border-top:1px solid var(--border);padding:1.25rem 2rem;font-family:var(--mono);font-size:.75rem;color:var(--muted);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+    footer a{color:var(--muted-hi);text-decoration:none}
+    footer a:hover{color:var(--text)}
+
+    /* ── Responsive ── */
+    @media(max-width:768px){
+      .sidebar{display:none}
+      .content{padding:2rem 1.25rem 4rem}
+    }
+  </style>
+</head>
+<body>
+<header class="topbar">
+  <a href="../index.html" class="topbar-logo">Wactorz</a>
+  <nav class="topbar-links">
+    <a href="https://github.com/waldiez/wactorz">GitHub</a>
+    <a href="https://pypi.org/project/wactorz/">PyPI</a>
+  </nav>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <details class="sidebar-group" open>
+      <summary class="sidebar-label">Guide</summary>
+      <a href="../guide/development.html" class="">Installation</a>
+      <a href="../guide/dockerhub.html" class="">Docker Hub</a>
+      <a href="../guide/architecture.html" class="">Architecture</a>
+      <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="active">Library</a>
+      <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
+      <a href="../guide/interfaces.html" class="">Interfaces</a>
+      <a href="../guide/pipelines.html" class="">Pipelines</a>
+      <a href="../guide/remote-nodes.html" class="">Remote Nodes</a>
+      <a href="../guide/security.html" class="">Security</a>
+      <a href="../guide/prometheus.html" class="">Prometheus</a>
+      <a href="../guide/extensions.html" class="">Extensions</a>
+      <a href="../guide/deployment.html" class="">Deployment</a>
+    </details>
+    <details class="sidebar-group">
+      <summary class="sidebar-label">Catalogue agents</summary>
+      <a href="../catalogue/catalogue-agents.html" class="">Overview</a>
+      <a href="../catalogue/catalogue-google-setup.html" class="">Google — setup & login</a>
+      <a href="../catalogue/catalogue-google-calendar.html" class="">Google Calendar</a>
+      <a href="../catalogue/catalogue-gmail.html" class="">Gmail</a>
+      <a href="../catalogue/catalogue-weather.html" class="">Weather</a>
+      <a href="../catalogue/catalogue-smart-energy.html" class="">Smart Energy</a>
+      <a href="../catalogue/catalogue-reachy-mini.html" class="">Reachy Mini</a>
+      <a href="../catalogue/catalogue-anomaly-detector.html" class="">Anomaly Detector</a>
+      <a href="../catalogue/catalogue-manual.html" class="">Device Manuals</a>
+      <a href="../catalogue/catalogue-doc-to-pptx.html" class="">Doc → PPTX</a>
+      <a href="../catalogue/catalogue-timeseries.html" class="">Time-Series Collector</a>
+    </details>
+  </aside>
+  <main class="content">
+<h1 id="using-wactorz-as-a-library">Using Wactorz as a library</h1>
+<p>Wactorz is an application, the <code>wactorz</code> command with its dashboard, planner
+and catalogue, and it is a library: the supervision, persistence, MQTT wiring
+and dashboard underneath, for agents you write yourself. This guide is the
+library side, from one function to a declared pipeline, with no Home Assistant
+and no language model required.</p>
+<p>Everything here is in <code>examples/imu_anomaly/</code>, runnable end to end.</p>
+<h2 id="install">Install</h2>
+<div class="highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>wactorz
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>mosquitto<span class="w">     </span><span class="c1"># or any MQTT broker on localhost:1883</span>
+</code></pre></div>
+
+<h2 id="one-function-is-an-agent">One function is an agent</h2>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">wactorz</span>
+
+<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">"imu-anomaly"</span><span class="p">,</span>
+    <span class="n">subscribes</span><span class="o">=</span><span class="s2">"sensors/imu/#"</span><span class="p">,</span>
+    <span class="n">publishes</span><span class="o">=</span><span class="s2">"anomalies/imu"</span><span class="p">,</span>
+    <span class="n">description</span><span class="o">=</span><span class="s2">"Flags IMU readings the trained model calls abnormal."</span><span class="p">,</span>
+    <span class="n">requires</span><span class="o">=</span><span class="p">{</span><span class="s2">"ram_mb"</span><span class="p">:</span> <span class="mi">128</span><span class="p">,</span> <span class="s2">"packages"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"numpy"</span><span class="p">]},</span>
+<span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">detect</span><span class="p">(</span><span class="n">reading</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">score</span> <span class="o">=</span> <span class="n">MODEL</span><span class="o">.</span><span class="n">score</span><span class="p">(</span><span class="n">reading</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"score"</span><span class="p">:</span> <span class="n">score</span><span class="p">,</span> <span class="s2">"reading"</span><span class="p">:</span> <span class="n">reading</span><span class="p">}</span> <span class="k">if</span> <span class="n">score</span> <span class="o">&gt;</span> <span class="mf">4.0</span> <span class="k">else</span> <span class="kc">None</span>
+</code></pre></div>
+
+<p><code>detect</code> is still a function: call it in a test, import it elsewhere. As an
+agent it is called once per message on <code>sensors/imu/#</code> with the decoded
+payload, and once per task sent to it by chat or by another agent. What it
+returns is published to <code>anomalies/imu</code>; <code>None</code> publishes nothing. A plain
+function runs on a worker thread, so a slow model never holds the event loop
+every other agent shares; a coroutine function runs on the loop.</p>
+<p>A function that wants the actor takes it as a second parameter, for state,
+options and publishing elsewhere:</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="s2">"sensors/imu/#"</span><span class="p">,</span> <span class="n">publishes</span><span class="o">=</span><span class="s2">"anomalies/imu"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">detect</span><span class="p">(</span><span class="n">reading</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">me</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"_model"</span><span class="p">)</span>           <span class="c1"># loaded once, kept on the actor</span>
+    <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">model</span> <span class="o">=</span> <span class="n">load</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">options</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model"</span><span class="p">,</span> <span class="s2">"imu.onnx"</span><span class="p">))</span>
+        <span class="n">me</span><span class="o">.</span><span class="n">options</span><span class="p">[</span><span class="s2">"_model"</span><span class="p">]</span> <span class="o">=</span> <span class="n">model</span>
+    <span class="n">score</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">score</span><span class="p">(</span><span class="n">reading</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">score</span> <span class="o">&lt;</span> <span class="mf">4.0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="n">me</span><span class="o">.</span><span class="n">persist</span><span class="p">(</span><span class="s2">"anomalies_total"</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">"anomalies_total"</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"score"</span><span class="p">:</span> <span class="n">score</span><span class="p">,</span> <span class="s2">"reading"</span><span class="p">:</span> <span class="n">reading</span><span class="p">}</span>
+</code></pre></div>
+
+<p><code>persist</code> and <code>recall</code> keep small values across restarts and migrations:
+counters, thresholds, calibration. Keep the model itself in a file and load it;
+do not persist the model object.</p>
+<h2 id="start-it">Start it</h2>
+<p>From a script, the dashboard on, nothing else:</p>
+<div class="highlight"><pre><span></span><code><span class="n">wactorz</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">agents</span><span class="o">=</span><span class="p">[</span><span class="n">detect</span><span class="p">],</span> <span class="n">minimal</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>        <span class="c1"># http://localhost:8888/</span>
+</code></pre></div>
+
+<p><code>minimal=True</code> starts the monitor, the dashboard and your agents: no
+orchestrator, no catalogue, no installer, so no model, no API key and no
+provider SDK; a plain <code>pip install wactorz</code> is enough. A model is built under
+it only when one is named (<code>llm="ollama"</code>). Leave it out to
+run beside the full system, where chat can ask your agent questions
+(<code>@imu-anomaly {"ax": 9, "ay": 0, "az": 1}</code>) and the planner can wire new
+agents to what it publishes.</p>
+<p>Inside a program that already has an event loop, a notebook, a web framework,
+a ROS node, await <code>serve</code> instead; the host keeps its signals, and cancelling
+the task stops the system cleanly:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Jupyter: `serve` returns when the system stops, so it runs as a task, and the</span>
+<span class="c1"># notebook's own server is on 8888, the dashboard's default, so pick another port.</span>
+<span class="n">system_task</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">create_task</span><span class="p">(</span><span class="n">wactorz</span><span class="o">.</span><span class="n">serve</span><span class="p">(</span><span class="n">agents</span><span class="o">=</span><span class="p">[</span><span class="n">detect</span><span class="p">],</span> <span class="n">minimal</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">monitor_port</span><span class="o">=</span><span class="mi">8890</span><span class="p">))</span>
+<span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>  <span class="c1"># the broker connection, the dashboard and the agent come up</span>
+<span class="n">actor</span> <span class="o">=</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">system</span><span class="p">()</span><span class="o">.</span><span class="n">registry</span><span class="o">.</span><span class="n">find_by_name</span><span class="p">(</span><span class="s2">"imu-anomaly"</span><span class="p">)</span>
+<span class="o">...</span>
+<span class="n">system_task</span><span class="o">.</span><span class="n">cancel</span><span class="p">()</span>  <span class="c1"># to stop; the actors are stopped on the way out</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="c1"># FastAPI</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">contextlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">asynccontextmanager</span><span class="p">,</span> <span class="n">suppress</span>
+
+<span class="nd">@asynccontextmanager</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">lifespan</span><span class="p">(</span><span class="n">app</span><span class="p">:</span> <span class="n">FastAPI</span><span class="p">):</span>
+    <span class="n">task</span> <span class="o">=</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">create_task</span><span class="p">(</span><span class="n">wactorz</span><span class="o">.</span><span class="n">serve</span><span class="p">(</span><span class="n">agents</span><span class="o">=</span><span class="p">[</span><span class="n">detect</span><span class="p">],</span> <span class="n">minimal</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+    <span class="k">yield</span>
+    <span class="n">task</span><span class="o">.</span><span class="n">cancel</span><span class="p">()</span>
+    <span class="k">with</span> <span class="n">suppress</span><span class="p">(</span><span class="n">asyncio</span><span class="o">.</span><span class="n">CancelledError</span><span class="p">):</span>
+        <span class="k">await</span> <span class="n">task</span>  <span class="c1"># the system is stopped, and its state written, before the host exits</span>
+
+<span class="n">app</span> <span class="o">=</span> <span class="n">FastAPI</span><span class="p">(</span><span class="n">lifespan</span><span class="o">=</span><span class="n">lifespan</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>run()</code> is <code>asyncio.run(serve(...))</code> with signal handling on; the two take the
+same arguments: <code>web</code>, <code>minimal</code>, <code>monitor_port</code>, <code>mqtt_broker</code>, <code>mqtt_port</code>,
+<code>llm</code>, <code>state_dir</code>, <code>interface</code>. <code>serve</code> runs no chat interface unless
+<code>interface</code> names one, so it never reads the host's stdin; <code>run</code> uses the
+command's (<code>INTERFACE</code>, the interactive CLI by default). The dashboard's default port is 8888, which Jupyter also
+uses; inside a notebook, or beside any other server on that port, pass
+<code>monitor_port</code> or set <code>MONITOR_PORT</code>.</p>
+<p><code>serve</code> behaves as a library call inside someone else's program: it leaves the
+host's logging configuration alone (<code>configure_logging=True</code> asks for the
+command's console and file handlers, which <code>run()</code> does; a host that has
+configured no logging at all still sees warnings and errors on stderr, as it
+would without Wactorz), <code>state_dir</code> is set
+for the run rather than written to the environment, and a configuration that
+cannot be started, an exposed bind address with no API key, a chat interface
+whose token is missing, a provider whose SDK is not installed, raises
+<code>wactorz.StartupError</code> with the reason instead of exiting the process, and
+leaves the process as it found it: no thread of ours left watching the loop,
+no handler of ours on the root logger. The host's own tasks, started before
+<code>serve</code> or while it runs, are left alone at shutdown: Wactorz marks the tasks
+it creates and stops only those. Cancelling the <code>serve</code> task raises
+<code>CancelledError</code> once the system has stopped, so a timeout or a task group
+around it sees the cancellation as one.
+<code>wactorz.system()</code> is the running <code>ActorSystem</code>, with the registry your actors
+are in, and <code>None</code> outside a run.</p>
+<p>On Windows the loop matters: the broker client needs a selector loop, and a
+proactor loop, which uvicorn builds there by default, cannot serve it. <code>serve</code>
+refuses to start on one with a <code>StartupError</code> that says what to do: start
+uvicorn with <code>--loop asyncio:SelectorEventLoop</code>, or set
+<code>asyncio.WindowsSelectorEventLoopPolicy()</code> before the loop is made. Jupyter's
+kernel already uses the selector loop.</p>
+<h2 id="or-register-it-and-start-wactorz-as-usual">Or register it, and start <code>wactorz</code> as usual</h2>
+<p>For a deployment that runs the <code>wactorz</code> command, name the agent instead of
+writing a script. Three ways, all equivalent:</p>
+<table>
+<thead>
+<tr>
+<th>How</th>
+<th>Where</th>
+<th>For</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>WACTORZ_AGENTS=mypkg.agents:detect,mypkg.agents:Sink</code></td>
+<td>the environment</td>
+<td>a configured deployment</td>
+</tr>
+<tr>
+<td><code>[project.entry-points."wactorz.agents"]</code> in <code>pyproject.toml</code></td>
+<td>your package</td>
+<td>anything <code>pip install</code>ed</td>
+</tr>
+<tr>
+<td><code>wactorz.run(agents=[...])</code> or <code>serve(...)</code></td>
+<td>a script</td>
+<td>development</td>
+</tr>
+</tbody>
+</table>
+<p>The target must be importable from where <code>wactorz</code> starts: a package that is
+installed, or a folder on <code>PYTHONPATH</code>. One that is not is reported at startup
+and left out. A registered agent is supervised, listed by <code>@catalog list</code>,
+restored after a restart, and may be spawned under another name with a
+<code>type: "module"</code> spawn config; only registered targets are accepted there,
+because a spawn config can be written by the model.</p>
+<h2 id="an-actor-subclass">An <code>Actor</code> subclass</h2>
+<p>For an agent with its own lifecycle, subclass <code>Actor</code>. The base class
+subscribes, keeps rolling windows and publishes for you, on one broker
+connection per actor that closes when the actor stops:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz</span><span class="w"> </span><span class="kn">import</span> <span class="n">Actor</span><span class="p">,</span> <span class="n">Message</span><span class="p">,</span> <span class="n">MessageType</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">PumpWatch</span><span class="p">(</span><span class="n">Actor</span><span class="p">):</span>
+    <span class="n">DESCRIPTION</span> <span class="o">=</span> <span class="s2">"Watches the pump's flow."</span>
+    <span class="n">SUBSCRIBES</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"sensors/pump/#"</span><span class="p">]</span>
+    <span class="n">PUBLISHES</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"alerts/pump"</span><span class="p">]</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_start</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="s2">"sensors/pump/#"</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">on_reading</span><span class="p">)</span>        <span class="c1"># plain or async callback</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">flow</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window</span><span class="p">(</span><span class="s2">"sensors/pump/flow"</span><span class="p">,</span> <span class="n">seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">)</span>  <span class="c1"># rolling window</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_reading</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">payload</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">flow</span><span class="o">.</span><span class="n">falling</span><span class="p">(</span><span class="n">threshold</span><span class="o">=</span><span class="mf">2.0</span><span class="p">):</span>
+            <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">publish</span><span class="p">(</span><span class="s2">"alerts/pump"</span><span class="p">,</span> <span class="p">{</span><span class="s2">"flow"</span><span class="p">:</span> <span class="n">payload</span><span class="p">})</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_message</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">msg</span><span class="p">:</span> <span class="n">Message</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">msg</span><span class="o">.</span><span class="n">type</span> <span class="o">!=</span> <span class="n">MessageType</span><span class="o">.</span><span class="n">TASK</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"flow_mean"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">flow</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="s2">"value"</span><span class="p">)}</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">"_task_id"</span> <span class="ow">in</span> <span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="p">:</span>
+            <span class="n">result</span><span class="p">[</span><span class="s2">"_task_id"</span><span class="p">]</span> <span class="o">=</span> <span class="n">msg</span><span class="o">.</span><span class="n">payload</span><span class="p">[</span><span class="s2">"_task_id"</span><span class="p">]</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">reply_to</span> <span class="ow">or</span> <span class="n">msg</span><span class="o">.</span><span class="n">sender_id</span><span class="p">,</span> <span class="n">MessageType</span><span class="o">.</span><span class="n">RESULT</span><span class="p">,</span> <span class="n">result</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>DESCRIPTION</code>, <code>CAPABILITIES</code>, <code>REQUIRES</code>, <code>SUBSCRIBES</code>, <code>PUBLISHES</code>,
+<code>INPUT_SCHEMA</code> and <code>OUTPUT_SCHEMA</code> on the class become the catalogue entry and
+the wiring a pipeline checks against; <code>AGENT_NAME</code> names it (default
+<code>PumpWatch</code> → <code>pump-watch</code>); <code>AUTOSTART = False</code> keeps it in the catalogue
+until asked for. A subclass that takes <code>llm_provider</code> in its constructor is
+given the system's model.</p>
+<p>A message on a subscribed topic arrives decoded: a dict or list when it was
+JSON, <code>{"raw": text}</code> for text, <code>{"raw": bytes}</code> for anything else, such as a
+camera frame. Messages on one topic are handled one at a time, in order.</p>
+<h2 id="a-pipeline">A pipeline</h2>
+<p>Steps that work together are declared together. Each step is still an agent
+with its own card; the pipeline groups them, adds a schedule and rules, and is
+recorded beside the planner's pipelines so <code>/rules</code> lists it:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">wactorz</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">wactorz</span><span class="w"> </span><span class="kn">import</span> <span class="n">RuleAction</span><span class="p">,</span> <span class="n">RuleCondition</span><span class="p">,</span> <span class="n">RuleConfig</span>
+
+<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="s2">"anomalies/imu"</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">notify</span><span class="p">(</span><span class="n">anomaly</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">await</span> <span class="n">me</span><span class="o">.</span><span class="n">notify_user</span><span class="p">(</span><span class="sa">f</span><span class="s2">"IMU anomaly, score </span><span class="si">{</span><span class="n">anomaly</span><span class="p">[</span><span class="s1">'score'</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="p">[</span><span class="s2">"anomalies/imu"</span><span class="p">,</span> <span class="s2">"pipelines/imu-watch/tick"</span><span class="p">],</span> <span class="n">publishes</span><span class="o">=</span><span class="s2">"reports/imu"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">report</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="s2">"fired_at"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">message</span><span class="p">:</span>  <span class="c1"># an anomaly: count it</span>
+        <span class="n">me</span><span class="o">.</span><span class="n">persist</span><span class="p">(</span><span class="s2">"total"</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">"total"</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"total"</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">"total"</span><span class="p">,</span> <span class="mi">0</span><span class="p">))}</span>  <span class="c1"># a tick: report</span>
+
+<span class="n">alert</span> <span class="o">=</span> <span class="n">RuleConfig</span><span class="p">(</span>
+    <span class="n">triggers</span><span class="o">=</span><span class="p">(</span><span class="s2">"anomalies/imu"</span><span class="p">,),</span>
+    <span class="n">conditions</span><span class="o">=</span><span class="p">(</span><span class="n">RuleCondition</span><span class="p">(</span><span class="s2">"score"</span><span class="p">,</span> <span class="s2">"gt"</span><span class="p">,</span> <span class="mi">20</span><span class="p">),),</span>
+    <span class="n">actions</span><span class="o">=</span><span class="p">(</span><span class="n">RuleAction</span><span class="p">(</span><span class="s2">"publish"</span><span class="p">,</span> <span class="n">topic</span><span class="o">=</span><span class="s2">"alerts/imu"</span><span class="p">,</span> <span class="n">payload</span><span class="o">=</span><span class="p">{</span><span class="s2">"level"</span><span class="p">:</span> <span class="s2">"high"</span><span class="p">}),),</span>
+    <span class="n">cooldown_seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">watch</span> <span class="o">=</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">pipeline</span><span class="p">(</span>
+    <span class="s2">"imu-watch"</span><span class="p">,</span>
+    <span class="n">steps</span><span class="o">=</span><span class="p">[</span><span class="n">detect</span><span class="p">,</span> <span class="n">notify</span><span class="p">,</span> <span class="n">report</span><span class="p">],</span>
+    <span class="n">schedule</span><span class="o">=</span><span class="p">{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"interval"</span><span class="p">,</span> <span class="s2">"seconds"</span><span class="p">:</span> <span class="mi">300</span><span class="p">},</span>
+    <span class="n">rules</span><span class="o">=</span><span class="p">[</span><span class="n">alert</span><span class="p">],</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>The schedule becomes a scheduled agent ticking <code>pipelines/imu-watch/tick</code>,
+which <code>report</code> listens to. <code>report</code> counts the anomalies itself: persistence is
+per agent, so one agent cannot <code>recall</code> what another <code>persist</code>ed. The rule becomes a rule agent: when a message on
+<code>anomalies/imu</code> has <code>score</code> above 20, it publishes to <code>alerts/imu</code>, at most
+every thirty seconds. Rules are the typed dataclasses above or the equivalent
+dicts, which are the spelling chat and JSON use:</p>
+<div class="highlight"><pre><span></span><code><span class="n">rules</span><span class="o">=</span><span class="p">[{</span><span class="s2">"triggers"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"anomalies/imu"</span><span class="p">],</span>
+        <span class="s2">"conditions"</span><span class="p">:</span> <span class="p">[{</span><span class="s2">"field"</span><span class="p">:</span> <span class="s2">"score"</span><span class="p">,</span> <span class="s2">"op"</span><span class="p">:</span> <span class="s2">"gt"</span><span class="p">,</span> <span class="s2">"value"</span><span class="p">:</span> <span class="mi">20</span><span class="p">}],</span>
+        <span class="s2">"actions"</span><span class="p">:</span> <span class="p">[{</span><span class="s2">"type"</span><span class="p">:</span> <span class="s2">"publish"</span><span class="p">,</span> <span class="s2">"topic"</span><span class="p">:</span> <span class="s2">"alerts/imu"</span><span class="p">,</span> <span class="s2">"payload"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"level"</span><span class="p">:</span> <span class="s2">"high"</span><span class="p">}}],</span>
+        <span class="s2">"cooldown_seconds"</span><span class="p">:</span> <span class="mi">30</span><span class="p">}]</span>
+</code></pre></div>
+
+<p>Actions are <code>publish</code>, <code>task</code> (sent to an agent by name) and <code>webhook</code>.
+Conditions take <code>eq</code>, <code>ne</code>, <code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>, <code>in</code>, <code>contains</code>,
+<code>exists</code>, <code>absent</code>, with dotted fields such as <code>reading.ax</code>; an action's
+payload may name trigger fields in braces and carries the trigger under
+<code>trigger</code>.</p>
+<p>Wiring is checked when the pipeline is declared: a step or rule listening on a
+topic nothing in the pipeline publishes, and not named in <code>inputs</code>, raises
+<code>ValueError</code> before anything starts. The first step may listen to the outside
+world without saying so. A pipeline declared at module level is found through
+<code>WACTORZ_PIPELINES=mypkg.flows:watch</code>, a <code>wactorz.pipelines</code> entry point, or
+<code>wactorz.run(pipelines_=[watch])</code>.</p>
+<h2 id="profiles">Profiles</h2>
+<p>Without Home Assistant configured (<code>HA_URL</code> and <code>HA_TOKEN</code>) its agents do not
+start; <code>WACTORZ_HA_AGENTS=on|off</code> decides outright. <code>wactorz --minimal</code>,
+<code>WACTORZ_MINIMAL=1</code> or <code>minimal=True</code> starts the monitor, the dashboard and
+your agents only. The minimal profile runs no planner, no generated code and
+no runtime package install, which is the reproducible mode a pinned
+environment wants.</p>
+<h2 id="examples">Examples</h2>
+<p><code>examples/</code> in the repository holds complete programs, each with a README:</p>
+<ul>
+<li><code>imu_anomaly/</code>: a trained model watching IMU readings, as a script, a
+  pipeline, a notebook and inside a FastAPI app.</li>
+<li><code>llm_notes/</code>: an agent that calls the system's language model through
+  <code>me.llm</code>, with the cost kept across restarts.</li>
+<li><code>yolo_watch/</code>: a YOLO model as an agent, as a function answering snapshots
+  on MQTT and as an <code>Actor</code> reading a camera itself.</li>
+</ul>
+<h2 id="testing">Testing</h2>
+<p>A decorated function is tested as a function. The actor around it is built
+without a broker and exercised directly:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">wactorz</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">test_a_jolt_is_flagged</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">):</span>
+    <span class="n">actor</span> <span class="o">=</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">spec_of</span><span class="p">(</span><span class="n">detect</span><span class="p">)</span><span class="o">.</span><span class="n">build</span><span class="p">(</span><span class="n">persistence_dir</span><span class="o">=</span><span class="nb">str</span><span class="p">(</span><span class="n">tmp_path</span><span class="p">))</span>
+    <span class="k">assert</span> <span class="n">detect</span><span class="p">({</span><span class="s2">"ax"</span><span class="p">:</span> <span class="mf">9.0</span><span class="p">,</span> <span class="s2">"ay"</span><span class="p">:</span> <span class="o">-</span><span class="mf">7.5</span><span class="p">,</span> <span class="s2">"az"</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">},</span> <span class="n">actor</span><span class="p">)[</span><span class="s2">"score"</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">4</span>
+    <span class="k">assert</span> <span class="n">detect</span><span class="p">({</span><span class="s2">"ax"</span><span class="p">:</span> <span class="mf">0.1</span><span class="p">,</span> <span class="s2">"ay"</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">,</span> <span class="s2">"az"</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">},</span> <span class="n">actor</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
+</code></pre></div>
+
+<p><code>actor.call(payload)</code> runs it the way a message would, on a thread for a plain
+function; <code>actor.handle_message(...)</code> answers a task. Nothing connects until
+<code>on_start</code>. <code>spec_of</code> is the <code>AgentSpec</code> the decorator recorded: <code>name</code>,
+<code>subscribes</code>, <code>publishes</code>, <code>options</code>, and <code>build()</code> for the actor.</p>
+<h2 id="where-things-go">Where things go</h2>
+<ul>
+<li><strong>Streams stay where they are produced.</strong> An agent that watches a camera or
+  a microphone reads it on the machine the device is attached to, with
+  OpenCV, GStreamer, WebRTC or <code>sounddevice</code>, and publishes decisions. MQTT
+  carries events; a <code>{"raw": bytes}</code> payload is for a snapshot or a clip, not
+  a feed.</li>
+<li><strong>Models live in files.</strong> Load <code>.pt</code>, <code>.onnx</code>, <code>.pkl</code> or anything else
+  yourself, once, and keep the object on the actor. <code>persist()</code> is for what
+  the agent learns or counts, in JSON-sized pieces.</li>
+<li><strong>State</strong> lives under <code>WACTORZ_STATE_DIR</code> (default <code>./state</code>), one folder
+  per agent, with the SQLite database beside them.</li>
+</ul>
+<h2 id="stable-api">Stable API</h2>
+<p>What this guide uses is the surface you can rely on:</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wactorz.agent</code></td>
+<td>declare a function as an agent</td>
+</tr>
+<tr>
+<td><code>wactorz.pipeline</code></td>
+<td>declare steps, a schedule and rules together</td>
+</tr>
+<tr>
+<td><code>wactorz.run</code>, <code>wactorz.serve</code></td>
+<td>start the system from a script, or on a running loop</td>
+</tr>
+<tr>
+<td><code>wactorz.system</code></td>
+<td>the running <code>ActorSystem</code> (<code>registry</code>, <code>supervisor</code>), <code>None</code> outside a run</td>
+</tr>
+<tr>
+<td><code>wactorz.spec_of</code></td>
+<td>the <code>AgentSpec</code> behind a decorated function, with <code>build()</code> for tests</td>
+</tr>
+<tr>
+<td><code>wactorz.StartupError</code></td>
+<td>what <code>serve</code> and <code>run</code> raise for a configuration that cannot start</td>
+</tr>
+<tr>
+<td><code>wactorz.Actor</code> with <code>subscribe</code>, <code>window</code>, <code>publish</code>, <code>persist</code>, <code>recall</code>, <code>send</code>, <code>notify_user</code>, <code>on_start</code>, <code>on_stop</code>, <code>handle_message</code></td>
+<td>the base class</td>
+</tr>
+<tr>
+<td><code>wactorz.FunctionAgent</code></td>
+<td>the actor behind a decorated function: <code>call</code>, <code>options</code>, <code>log</code></td>
+</tr>
+<tr>
+<td><code>wactorz.RuleConfig</code>, <code>RuleCondition</code>, <code>RuleAction</code>, <code>wactorz.RuleAgent</code></td>
+<td>typed rules</td>
+</tr>
+<tr>
+<td><code>wactorz.Message</code>, <code>MessageType</code></td>
+<td>what <code>handle_message</code> receives</td>
+</tr>
+<tr>
+<td><code>WACTORZ_AGENTS</code>, <code>WACTORZ_PIPELINES</code>, <code>WACTORZ_MINIMAL</code>, <code>WACTORZ_HA_AGENTS</code></td>
+<td>the settings above</td>
+</tr>
+</tbody>
+</table>
+<p>Other names the package exports, the built-in agents among them, are the
+application's own and may change between releases.</p>
+  </main>
+</div>
+
+<footer>
+  <span>Wactorz &mdash; Apache-2.0 &mdash; <a href="https://github.com/waldiez/wactorz">GitHub</a></span>
+  <span>Built with <a href="https://github.com/waldiez/wactorz/blob/main/scripts/build_docs.py">build_docs.py</a></span>
+</footer>
+</body>
+</html>

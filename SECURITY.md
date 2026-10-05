@@ -10,10 +10,10 @@ Include the version, how the deployment is exposed (loopback, LAN, Home Assistan
 
 | Version | Supported |
 | ------- | --------- |
-| 0.6.x   | Yes       |
-| < 0.6   | No        |
+| 0.7.x   | Yes       |
+| < 0.7   | No        |
 
-Security fixes are released on the current minor version. Earlier versions receive no backports. The properties described below apply from 0.6.0 onwards.
+Security fixes are released on the current minor version. Earlier versions receive no backports. The properties described below are those of 0.7.0.
 
 ## The surfaces
 
@@ -26,6 +26,7 @@ A deployment can listen on three: the dashboard and its WebSocket (`WS_PORT`, 88
 - **`API_KEY` covers every route on the dashboard and the REST interface** except the health probe and the sign-in flow.
 - **Cross-origin state changes are rejected on the dashboard.** Its state-changing routes are `POST` or `DELETE`, and `Origin` is validated on those and on the WebSocket upgrade. A page in a browser cannot suppress that header, so it cannot drive the dashboard from another site. This does not extend to the REST interface — see below.
 - **The Home Assistant add-on trusts ingress and nothing else.** A request must both carry the Supervisor's ingress marker and arrive from its address range; either alone is not enough, and the bypass does not exist unless the add-on enables it.
+- **The add-on does not run as root.** Its start script drops to an unprivileged user before Wactorz starts, with no way back, and Home Assistant's configuration folder is mapped read-only. What agent code can change is the add-on's own data.
 - **Failed sign-in attempts are throttled.**
 - **Secrets stay server-side.** The Home Assistant token, LLM and broker credentials are not sent to the browser.
 

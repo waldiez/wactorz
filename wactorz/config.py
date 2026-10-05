@@ -48,6 +48,12 @@ def mqtt_dial_port(tls: str, plain_port: int, tls_port: int) -> int:
     return tls_port if tls.strip().lower() in _MQTT_TLS_ON else plain_port
 
 
+def _env_choice(name: str, default: str, choices: tuple[str, ...]) -> str:
+    """The variable's value when it is one of ``choices`` (any case), else ``default``."""
+    value = os.getenv(name, "").strip().lower()
+    return value if value in choices else default
+
+
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
 
@@ -76,6 +82,16 @@ def _api_key() -> str:
             stacklevel=2,
         )
         return ""
+
+
+def _dashboard_port() -> int:
+    """The port the dashboard is served on, from either of the names it has had.
+
+    ``MONITOR_PORT`` is the one the documentation and the compose files use.
+    ``WS_PORT`` is the older one, read when the other is unset, so a setup that
+    only ever set that keeps its port.
+    """
+    return _env_int("MONITOR_PORT", _env_int("WS_PORT", 8888))
 
 
 def _env_int(name: str, default: int) -> int:
@@ -219,6 +235,12 @@ UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", 
 #: so a file the UI accepts is not refused by the server.
 UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
 
+#: Largest agent state a migration ships, as JSON. The snapshot goes over MQTT,
+#: waits in the outbox while the broker is away, and is parsed in one piece by
+#: the node that receives it, which may be a Raspberry Pi. A migration over the
+#: limit is refused before the agent is stopped. 0 sets no limit.
+MIGRATION_MAX_STATE_BYTES = _env_int("WACTORZ_MIGRATION_MAX_STATE_BYTES", 8 * 1024 * 1024)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:
@@ -273,6 +295,34 @@ def _node_signing_mode() -> str:
 
 
 NODE_SIGNING = _node_signing_mode()
+
+#: How a log line is written: ``text`` for a person reading it, ``json`` for a
+#: collector that parses it.
+LOG_FORMATS = ("text", "json")
+DEFAULT_LOG_FORMAT = "text"
+
+
+def log_format() -> str:
+    """The format ``WACTORZ_LOG_FORMAT`` asks for, or the default when unset or unrecognised.
+
+    Read when logging is set up rather than once at import, so it is in effect
+    for whichever process sets logging up: the server, or a node.
+    """
+    value = _unquote(os.getenv("WACTORZ_LOG_FORMAT", "") or "").strip().lower()
+    if not value:
+        return DEFAULT_LOG_FORMAT
+    if value not in LOG_FORMATS:
+        # Named rather than ignored: a collector expecting JSON would otherwise
+        # be handed text with nothing saying why.
+        warnings.warn(
+            f"WACTORZ_LOG_FORMAT={value!r} is not one of {', '.join(LOG_FORMATS)} "
+            f"— using {DEFAULT_LOG_FORMAT!r}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return DEFAULT_LOG_FORMAT
+    return value
+
 
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
@@ -457,6 +507,14 @@ class AppConfig:
     #: Whether a deployed node gets a broker account of its own, derived for it.
     #: Only for a broker Wactorz configures, which is where those accounts exist.
     node_accounts: bool
+    #: Data topics every node's agents may use, beyond the conventional ones the
+    #: access list already names. Comma-separated filters; `read:` before one
+    #: makes it read-only. See wactorz/core/broker_accounts.py.
+    node_topics: str
+    #: Other accounts on the same broker that keep all of it once nodes exist:
+    #: Home Assistant's, zigbee2mqtt's. Comma-separated; the server's own account
+    #: is always one of them.
+    broker_accounts: str
     ha_url: str
     ha_token: str
     ha_state_bridge_output_topic: str
@@ -492,6 +550,18 @@ class AppConfig:
     telegram_allowed_user_ids: frozenset[int]
     whatsapp_allowed_numbers: frozenset[str]
     social_rate_limit_per_min: int
+    #: ``package.module:attr`` targets of agents this deployment brings, comma
+    #: separated; the value of WACTORZ_AGENTS as given. See wactorz/plugins.py.
+    agents_env: str
+    #: ``package.module:attr`` targets of pipelines this deployment brings; the
+    #: value of WACTORZ_PIPELINES as given. See wactorz/pipelines.py.
+    pipelines_env: str
+    #: Whether the Home Assistant agents start: ``auto`` (when HA_URL and
+    #: HA_TOKEN are set), ``on``, or ``off``.
+    ha_agents: str
+    #: Start only the monitor and the agents this deployment brings: no
+    #: orchestrator, catalogue or installer, so no model is needed.
+    minimal: bool
 
 
 CONFIG = AppConfig(
@@ -525,6 +595,8 @@ CONFIG = AppConfig(
     mqtt_tls_port=_env_int("MQTT_TLS_PORT", 8883),
     mqtt_broker_dir=os.getenv("MQTT_BROKER_DIR", "").strip(),
     node_accounts=_env_truthy("WACTORZ_NODE_ACCOUNTS"),
+    node_topics=os.getenv("WACTORZ_NODE_TOPICS", "").strip(),
+    broker_accounts=os.getenv("WACTORZ_BROKER_ACCOUNTS", "").strip(),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_state_bridge_output_topic=os.getenv(
@@ -537,7 +609,7 @@ CONFIG = AppConfig(
     discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
-    ws_port=_env_int("WS_PORT", 8888),
+    ws_port=_dashboard_port(),
     nim_api_key=os.getenv("NIM_API_KEY", ""),
     nvidia_api_key=os.getenv("NVIDIA_API_KEY", ""),
     twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
@@ -568,6 +640,10 @@ CONFIG = AppConfig(
         if n.strip()
     ),
     social_rate_limit_per_min=_env_int("SOCIAL_RATE_LIMIT_PER_MIN", 12),
+    agents_env=os.getenv("WACTORZ_AGENTS", ""),
+    pipelines_env=os.getenv("WACTORZ_PIPELINES", ""),
+    ha_agents=_env_choice("WACTORZ_HA_AGENTS", "auto", ("auto", "on", "off")),
+    minimal=_env_truthy("WACTORZ_MINIMAL"),
 )
 
 

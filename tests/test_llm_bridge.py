@@ -428,6 +428,25 @@ class TestOnlyANodeItDeployedIsAnswered:
         assert run.only_reply == {"text": REFUSED_UNSIGNED}
         assert llm.calls == []
 
+    async def test_a_refused_request_does_not_use_up_the_nodes_own(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Anything on the broker can publish an unsigned request that names a
+        # reply topic. If that counted as the topic having been answered, the
+        # node's real request for it would be taken for a repeat and dropped.
+        monkeypatch.setattr(llm_bridge, "NODE_SIGNING", "enforce")
+        topic = "nodes/rpi-kitchen/reply/abcd1234"
+        llm = _LLM()
+
+        run = await run_bridge(
+            monkeypatch,
+            [request(signed=False, _reply_topic=topic), request(_reply_topic=topic)],
+            llm=llm,
+        )
+
+        assert [said["text"] for _topic, said in run.replies] == [REFUSED_UNSIGNED, "the answer"]
+        assert len(llm.calls) == 1
+
     async def test_a_request_signed_by_another_node_is_refused(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

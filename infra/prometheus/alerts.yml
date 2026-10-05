@@ -19,6 +19,69 @@ groups:
           summary: Wactorz actor heartbeat is stale
           description: Actor {{ $labels.actor_name }} has not emitted a heartbeat for more than 60 seconds.
 
+      - alert: WactorzActorStuck
+        expr: wactorz_actor_handling_seconds > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Wactorz actor has been on one message for a long time
+          description: Actor {{ $labels.actor_name }} has been handling the same message for over 30 minutes. Its heartbeat carries on regardless, so it looks alive, but nothing else in its mailbox is being read.
+
+      - alert: WactorzEventLoopBlocked
+        expr: (increase(wactorz_event_loop_lag_seconds_count[10m]) - increase(wactorz_event_loop_lag_seconds_bucket{le="5.0"}[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: The Wactorz event loop was blocked
+          description: The event loop took more than 5 seconds to run a callback at least once in the last 10 minutes. Every agent in the process waits while that lasts. The server log names the code that held it, under "[loop]".
+
+      - alert: WactorzBrokerDisconnected
+        expr: wactorz_mqtt_connected == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Wactorz has lost its MQTT broker
+          description: The server has had no broker connection for at least 2 minutes. Agents cannot reach each other or any node, and outgoing messages are queueing.
+
+      - alert: WactorzOutboxBacklog
+        expr: (wactorz_mqtt_outbox_queued + wactorz_mqtt_outbox_backlog) > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Wactorz messages are not reaching the broker
+          description: More than 100 outgoing messages have been waiting for 10 minutes. The broker is not keeping up, or the connection keeps dropping.
+
+      - alert: WactorzOutboxLosingMessages
+        expr: (increase(wactorz_mqtt_outbox_dropped_total[10m]) + increase(wactorz_mqtt_outbox_discarded_total[10m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Wactorz is discarding outgoing messages
+          description: Messages were dropped from a full outbox, or given up on as expired or unsendable, in the last 10 minutes. The server log names the topics.
+
+      - alert: WactorzNodeDown
+        expr: wactorz_node_up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Wactorz edge node is down
+          description: Node {{ $labels.node }} has sent no heartbeat for at least 5 minutes. Its agents are not running, or cannot reach the broker.
+
+      - alert: WactorzLlmRequestsFailing
+        expr: |
+          sum by (provider) (rate(wactorz_llm_requests_total{outcome!="ok"}[10m]))
+            / sum by (provider) (rate(wactorz_llm_requests_total[10m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Most Wactorz LLM requests are failing
+          description: More than half the requests to {{ $labels.provider }} have failed over the last 10 minutes. The outcome label tells a provider that is unavailable from requests it rejects.
+
   - name: wactorz-probes
     rules:
       - alert: OptionalDependencyProbeFailing

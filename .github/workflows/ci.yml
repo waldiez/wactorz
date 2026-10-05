@@ -43,12 +43,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: ./.github/actions/setup-uv
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Test
         run: python -m pytest tests -n auto
@@ -74,12 +77,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: ./.github/actions/setup-uv
         with:
           python-version: '3.13'
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Test
         run: python -m pytest tests -n auto
@@ -92,12 +98,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: ./.github/actions/setup-uv
         with:
           python-version: '3.12'
 
       - name: Install
-        run: pip install -e ".[all,dev]"
+        run: uv sync --locked --extra all --extra dev
 
       - name: Coverage
         run: make coverage-py
@@ -128,7 +137,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # The environment is exactly what uv.lock says, in .venv, which is
+      # activated so `python` and the Makefile both use it. No cache: this
+      # workflow also runs for a release, which restores nothing.
+      - uses: ./.github/actions/setup-uv
         with:
           python-version: '3.12'
 
@@ -136,7 +148,16 @@ jobs:
         # vision as well: the type checker gates on this job, and the camera
         # shim imports cv2, which it cannot resolve unless OpenCV is present.
         # It stays out of [all] because it is large and the shim does without.
-        run: pip install -e ".[all,dev,vision]"
+        run: uv sync --locked --extra all --extra dev --extra vision
+
+      # The lockfile says what pyproject.toml says, and nothing in it has a
+      # known vulnerability. The weekly run is what catches one published
+      # against a version already locked.
+      - name: uv.lock is current
+        run: uv lock --check
+
+      - name: Known vulnerabilities in the locked dependencies
+        run: make audit
 
       - name: Lint
         run: make lint-py
@@ -148,7 +169,7 @@ jobs:
       # asked for them, so this needs no typedoc or pdoc and costs under a
       # second. docs.yml builds those two for the published site.
       - name: Build docs
-        run: python3 scripts/build_docs.py
+        run: python scripts/build_docs.py
 
       - name: static/docs matches the documentation source
         run: |
@@ -158,6 +179,50 @@ jobs:
             exit 1
           fi
           echo "static/docs is up to date."
+
+  test-pip:
+    # The lockfile is for development and CI. People install Wactorz with pip,
+    # against the ranges in pyproject.toml, and this job does the same, so a
+    # dependency release that breaks those installs shows up here -- on a push,
+    # or in the weekly run -- rather than in someone's install.
+    name: Python 3.13 (pip, no lockfile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      - name: Install
+        run: pip install -e ".[all,dev]"
+
+      - name: Test
+        run: python -m pytest tests -n auto
+
+  test-broker:
+    # A real main and a real node, in one process, joined only by a real
+    # mosquitto. The other jobs refuse every broker connection, so this is where
+    # the two sides are shown to agree on topics, signatures, retained state and
+    # reply channels, rather than each being held to constants.
+    name: Broker (main and a node over mosquitto)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-uv
+        with:
+          python-version: '3.13'
+
+      - name: Install
+        run: uv sync --locked --extra all --extra dev
+
+      - name: Test
+        run: make test-broker
 
   lint-ci:
     # The workflows themselves (zizmor) and the shell scripts the images and
@@ -183,8 +248,15 @@ jobs:
     # root and carry no set-id binaries; then any fixable CRITICAL or HIGH
     # finding fails the job (accepted ones: .trivyignore.yaml, with expiry
     # dates). Nothing is pushed.
-    name: Image
+    #
+    # Both flavours of it (see the Dockerfile): the `ultra` one is also asked to
+    # import the vision packages it carries and to build PyGObject.
+    name: Image (${{ matrix.flavour }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavour: [default, ultra]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -196,11 +268,15 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
+          build-args: |
+            FLAVOUR=${{ matrix.flavour }}
           tags: wactorz:ci
           load: true
           push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # A cache per flavour: sharing one, each run would evict the other's
+          # layers and build from nothing.
+          cache-from: type=gha,scope=image-${{ matrix.flavour }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.flavour }}
           # Debian's security updates of the day, never a cached copy (see the
           # Dockerfile's `runtime` stage).
           no-cache-filters: runtime

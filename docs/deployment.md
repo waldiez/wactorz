@@ -16,6 +16,10 @@ The fastest way to get started — no repo clone or Python needed. See the dedic
 
 → **[Quickstart: Docker Hub](dockerhub.md)**
 
+The image comes in two sizes: `waldiez/wactorz:latest`, and `waldiez/wactorz:ultra` with
+PyTorch, Ultralytics, OpenCV and what the Reachy Mini SDK needs. [Which image](dockerhub.md#which-image)
+says when the larger one is the one to pull.
+
 ---
 
 ## Full Docker  (`compose.yaml`)
@@ -39,6 +43,14 @@ docker compose --profile python up -d
 
 Open `http://localhost:8888` (monitor UI) or `http://localhost:8000` (REST API).
 
+Compose builds the image from the checkout. For vision agents or the Reachy Mini agent,
+build the larger one ([which image](dockerhub.md#which-image)) by setting
+`WACTORZ_FLAVOUR=ultra` in `.env`, then:
+
+```bash
+docker compose --profile python up -d --build
+```
+
 Both ask for the API key. With `API_KEY` blank in `.env`, the stack generates one
 on first start and keeps it in a volume. Read it with
 `docker compose exec wactorz-python cat /run/wactorz/api_key`, or follow the
@@ -52,10 +64,24 @@ Default profile (no flag) starts Mosquitto only. Add `--profile` flags to bring 
 | Profile | Service | Internal address | External port |
 |---|---|---|---|
 | _(all)_ | mosquitto | `mosquitto:1883` | `127.0.0.1:1883`, and `:8883` (TLS) |
-| `python` | wactorz-python | `wactorz-python:8000` | `:8000` (REST API) |
-| `python` | monitor UI | `wactorz-python:8888` | `:8888` |
-| `python` | prometheus | `wactorz-prometheus:9090` | `:9090` |
-| `full` | home-assistant | `homeassistant:8123` | `:8123` |
+| `python` | wactorz-python | `wactorz-python:8000` | `127.0.0.1:8000` (REST API) |
+| `python` | monitor UI | `wactorz-python:8888` | `127.0.0.1:8888` |
+| `python` | prometheus | `wactorz-prometheus:9090` | `127.0.0.1:9090` |
+| `python` | alertmanager | `alertmanager:9093` | `127.0.0.1:9093` |
+| `full` | home-assistant | `homeassistant:8123` | `127.0.0.1:8123` |
+
+Every port except the broker's TLS one is published to this host only. Reach the
+dashboard and the API from elsewhere through a TLS proxy; `HA_EXTERNAL_BIND=0.0.0.0`
+opens Home Assistant to the network, and `MQTT_EXTERNAL_BIND=0.0.0.0` the plain
+broker port.
+
+Each container has a ceiling on memory and on process ids, so one that leaks is
+restarted instead of exhausting the host. The app's are settings, because what
+an agent loads varies: `WACTORZ_MEM_LIMIT` (default `8g`), `WACTORZ_PIDS_LIMIT`
+(`4096`, threads included) and `WACTORZ_CPUS` (cores; `0`, the default, is no
+limit). An app container that restarts under a heavy agent, with `OOMKilled` in
+`docker inspect`, needs `WACTORZ_MEM_LIMIT` raised. Home Assistant's container
+has none.
 
 ```bash
 # Python stack (most common)
@@ -121,11 +147,24 @@ See `.env.template` for the full annotated list.  The most important ones:
 | `PORT` | `8000` | Python REST API listen port |
 | `WS_PORT` / `MONITOR_PORT` | `8888` | Web UI / monitor server port |
 | `WACTORZ_STATE_DIR` | `./state` | Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins `/data/state`. `wactorz-reset` reads the same variable, so a wipe targets whatever the app is using |
+| `WACTORZ_AGENTS` | — | Agents this deployment brings, as `package.module:attr` targets (an `Actor` subclass or a function declared with `@wactorz.agent`), comma separated. Supervised at startup beside the built-ins; see [Bringing your own agents](agents.md#bringing-your-own-agents) |
+| `WACTORZ_PIPELINES` | — | Pipelines this deployment brings, as `package.module:attr` targets of what `wactorz.pipeline()` returned, comma separated; their steps, schedule and rules are supervised at startup |
+| `WACTORZ_HA_AGENTS` | `auto` | Whether the Home Assistant agents start: `auto` starts them when `HA_URL` and `HA_TOKEN` are set, `on` and `off` decide outright |
+| `WACTORZ_MINIMAL` | `0` | Start only the monitor, the dashboard and the agents this deployment brings: no orchestrator, catalogue or installer, so no model is needed. Same as `wactorz --minimal` |
 | `WACTORZ_TZ` | _(unset)_ | Override the timezone used in agents' date/time context (e.g. `Europe/Athens`). Precedence: a user's `pref_timezone` fact > `WACTORZ_TZ` > standard `TZ` > host local zone. Blank or unknown values fall through to the next candidate |
+| `WACTORZ_LOG_FORMAT` | `text` | `json` writes each log record as one JSON object on one line (JSON Lines), to the console and to `wactorz.log`, for a collector that parses logs: fields `ts` (UTC), `level`, `logger`, `message`, and `exception` holding the whole traceback. Redaction applies as in text. The dashboard's log view is unaffected. A node reads the setting from its own environment |
 | `WACTORZ_RETENTION_CHAT_DAYS` | `365` | Days chat history is kept; `0` keeps it for ever. An attached file goes with the last message that refers to it, or a day after upload if it was never sent |
 | `WACTORZ_RETENTION_TIMESERIES_DAYS` | `365` | Days sensor readings, detections, Home Assistant state changes and actuations are kept; `0` keeps them for ever. The time-series collector agent's own `retention_days` applies too, and the shorter window holds |
 | `WACTORZ_RETENTION_OUTBOX_DAYS` | `7` | Days an MQTT message the broker never accepted stays in the outbox; `0` keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under `nodes/` or `agents/by-name/`, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained `desired_state` follows this setting |
+| `WACTORZ_MIGRATION_MAX_STATE_BYTES` | `8388608` | Largest agent state a `/migrate` ships, as JSON; a larger one is refused before the agent stops, and `--force` does not override it. Set on main, which sends it to the node it asks; `0` sets no limit |
 | `PROMETHEUS_EXTERNAL_PORT` | `9090` | Prometheus host port |
+| `ALERTMANAGER_EXTERNAL_PORT` | `9093` | Alertmanager host port |
+| `ALERT_WEBHOOK_URL` | _(none)_ | Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See `prometheus.md` |
+| `ALERT_WEBHOOK_TOKEN` | _(none)_ | Compose only: sent to that webhook as a bearer token |
+| `HA_EXTERNAL_BIND` / `HA_EXTERNAL_PORT` | `127.0.0.1` / `8123` | Where compose publishes Home Assistant (profile `full`). `0.0.0.0` opens it to the network |
+| `WACTORZ_MEM_LIMIT` | `8g` | Compose only: the app container's memory ceiling |
+| `WACTORZ_PIDS_LIMIT` | `4096` | Compose only: the app container's ceiling on processes and threads |
+| `WACTORZ_CPUS` | `0` | Compose only: cores the app container may use; `0` is no limit |
 | `PROMETHEUS_SCRAPE_INTERVAL` | `15s` | Global Prometheus scrape interval |
 | `PROMETHEUS_MONITOR_MOSQUITTO` | `1` | Enable Mosquitto TCP availability probe |
 | `DEPLOY_TARGETS` | _(unset)_ | Comma-separated remote node names `/deploy` may bootstrap; each needs a `DEPLOY_<NODE>_*` block — see [Remote nodes](remote-nodes.md) |

@@ -17,12 +17,14 @@ from typing import Any
 
 from aiohttp import web
 from aiohttp.web import Response
+from aiomqtt import MqttError
 
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
+from ..core.state_snapshot import FORCE_FLAG
 from . import runtime, uploads
 
 logger = logging.getLogger(__name__)
@@ -303,15 +305,17 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/migrate":
+        force = FORCE_FLAG in parts
+        parts = [p for p in parts if p != FORCE_FLAG]
         if len(parts) < 3:
-            await reply_fn("[usage] /migrate <agent-name> <target-node>")
+            await reply_fn("[usage] /migrate <agent-name> <target-node> [--force]")
             return True
         main_actor = find_main_actor(runtime.registry)
         if main_actor is None:
             await reply_fn("[error] migrate_agent not available.")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
-        result = await main_actor.migrate_agent(parts[1], parts[2])
+        result = await main_actor.migrate_agent(parts[1], parts[2], force=force)
         sym = "OK" if result.get("success") else "FAIL"
         await reply_fn(f"[{sym}] {result.get('message', str(result))}")
         return True
@@ -533,6 +537,18 @@ async def route_chat(
                             )
                             await _end_fn()
                             return
+                except (OSError, MqttError) as exc:
+                    # The broker is not there to carry it. That is an outage,
+                    # which every listener is already reporting: a warning with
+                    # the reason, and no traceback of code that did its job.
+                    logger.warning(
+                        "[io-gateway] Could not reach @%s on %s: %s", target_name, remote_node, exc
+                    )
+                    await reply_fn(
+                        f"[error] Could not reach @{target_name} on {remote_node}: {exc}"
+                    )
+                    await _end_fn()
+                    return
                 except Exception as exc:
                     logger.exception("[io-gateway] Remote @%s routing failed", target_name)
                     await reply_fn(

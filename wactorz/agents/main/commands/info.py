@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from ...._version import __version__
+from ....core.compatibility import compatible
 from .dispatch import CommandContext, command
 
 #: Every command, as the help text lists them. Kept as data rather than one
@@ -37,7 +38,7 @@ HELP_LINES: tuple[str, ...] = (
     "                            (a target configured via DEPLOY_TARGETS;",
     "                             run bare to list them. SSH credentials",
     "                             come from the environment, not chat)",
-    "  /migrate <agent> <node> — move an agent to a different node (state preserved)",
+    "  /migrate <agent> <node> [--force] — move an agent to a different node (state preserved)",
     "  /agents restart <name>  — restart an agent (local or remote, state preserved)",
     "",
     "**Pipelines & Plans**",
@@ -86,7 +87,7 @@ def _node_version_label(node: dict[str, Any]) -> str:
     reported = node.get("version")
     if not reported:
         return "v? (older runtime)"
-    if reported == __version__:
+    if compatible(__version__, str(reported)):
         return f"v{reported}"
     return f"v{reported} ≠ server, redeploy"
 

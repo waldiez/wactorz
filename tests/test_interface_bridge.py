@@ -31,11 +31,14 @@ class DynamicHandleTaskMailboxTest(unittest.IsolatedAsyncioTestCase):
         actor.send = send  # pyright: ignore[reportAttributeAccessIssue]
         msg = Message(type=MessageType.TASK, sender_id="caller", payload={})
 
-        await asyncio.wait_for(actor.handle_message(msg), timeout=0.1)
-        await asyncio.wait_for(entered.wait(), timeout=0.1)
+        # Generous limits: what is checked is the order, not the speed. The task
+        # waits for `release`, so a handle_message that awaited it rather than
+        # running it in the background would still time out here.
+        await asyncio.wait_for(actor.handle_message(msg), timeout=5.0)
+        await asyncio.wait_for(entered.wait(), timeout=5.0)
         self.assertEqual(sent, [])
         release.set()
-        await asyncio.wait_for(replied.wait(), timeout=0.1)
+        await asyncio.wait_for(replied.wait(), timeout=5.0)
         self.assertEqual(sent[0][2]["result"], "done")
 
 

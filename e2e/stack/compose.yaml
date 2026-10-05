@@ -1,0 +1,54 @@
+# The broker this suite runs against, and nothing else's.
+#
+# It is the development stack's broker, taken from compose.dev.yaml as it is:
+# the same image, the same start script that takes the node accounts, the access
+# list and the certificate Wactorz generates, and the same watcher that reloads
+# them. What differs is only what would collide with a developer's own stack on
+# the same machine: the name, the ports, and the folder it reads from.
+#
+# Started by e2e/harness/broker.py, which supplies the three settings below.
+name: wactorz-e2e
+
+services:
+  broker:
+    extends:
+      file: ../../compose.dev.yaml
+      service: mosquitto
+    container_name: wactorz-e2e-broker
+    # The certificate is issued by the harness before this starts, with the
+    # checkout's own interpreter, so there is no container to wait for.
+    depends_on: !reset {}
+    ports: !override
+      - "127.0.0.1:${E2E_BROKER_PORT:?set by the harness}:1883"
+      - "127.0.0.1:${E2E_BROKER_TLS_PORT:?set by the harness}:8883"
+    volumes: !override
+      - ../../infra/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      # What the backend under test generates: node accounts, access list, certificate.
+      - ${E2E_BROKER_DIR:?set by the harness}:/wactorz-broker:ro
+    networks: !override
+      wactorz-e2e:
+        # The name a deployed node is told to reach the broker by.
+        aliases: [mosquitto]
+    environment:
+      MQTT_USERNAME: wactorz
+      MQTT_PASSWORD: ${E2E_BROKER_PASSWORD:?set by the harness}
+
+  # The machine a node is deployed to. See stack/node/Dockerfile.
+  node:
+    build: ./node
+    image: wactorz-e2e-node
+    container_name: wactorz-e2e-node
+    hostname: edge
+    # sshd leaves the node's process behind when the deploy's session ends, and
+    # nothing here reaps one that exits: an init does.
+    init: true
+    ports:
+      - "127.0.0.1:${E2E_NODE_SSH_PORT:?set by the harness}:22"
+    volumes:
+      - ${E2E_NODE_KEYS:?set by the harness}:/keys:ro
+    networks:
+      - wactorz-e2e
+
+networks:
+  wactorz-e2e:
+    name: wactorz-e2e

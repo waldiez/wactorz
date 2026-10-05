@@ -15,6 +15,7 @@ import time
 
 import pytest
 
+from tests.waiting import PATIENCE_S, until
 from wactorz.core.actor import Actor, ActorState, Message
 from wactorz.core.registry import ActorRegistry, Supervisor
 
@@ -127,12 +128,13 @@ class TestTheLockIsNotHeldAcrossRestarts:
         quick.actor = None
 
         restart = asyncio.create_task(supervisor._supervise_one("slow", slow))
-        await asyncio.wait_for(started.wait(), timeout=1)
+        await asyncio.wait_for(started.wait(), timeout=PATIENCE_S)
         try:
             # Held across the restart, this call never returns until the slow
             # actor finishes starting — which is how one stuck actor blinded the
-            # supervisor to every other.
-            await asyncio.wait_for(supervisor._detect_failures(), timeout=0.5)
+            # supervisor to every other. The limit only has to be shorter than
+            # for ever: the slow actor is released after it, not before.
+            await asyncio.wait_for(supervisor._detect_failures(), timeout=PATIENCE_S)
         finally:
             release.set()
             await restart
@@ -169,9 +171,11 @@ class TestTheLockIsNotHeldAcrossRestarts:
         supervisor.supervise("slow", _factory, restart_delay=0)
         await supervisor.start()
         spawned[0].state = ActorState.FAILED
-        await asyncio.sleep(0.05)  # let the watch loop begin the restart
+        # Until the watch loop has begun the restart: stopped any sooner, there
+        # is no restart in flight for the stop to abandon.
+        await until(lambda: supervisor._specs["slow"].restarting, "the restart beginning")
 
-        await asyncio.wait_for(supervisor.stop(), timeout=2)
+        await asyncio.wait_for(supervisor.stop(), timeout=PATIENCE_S)
 
         # stop() cancels the watch loop and waits for it to unwind. Without the
         # wait it returned while the restart was still running, and the actor it

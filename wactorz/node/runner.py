@@ -30,15 +30,30 @@ from .. import __version__
 from ..config import CONFIG
 from ..core.actor import Actor, SupervisorStrategy
 from ..core.cancellation import cancel_all_until_done
-from ..core.mqtt import SERVER_SESSION_EXPIRY_SECONDS, client_id, mqtt_client, session_kwargs
+from ..core.mqtt import (
+    SERVER_SESSION_EXPIRY_SECONDS,
+    client_id,
+    mqtt_client,
+    reconnect_wait,
+    session_kwargs,
+)
 from ..core.mqtt_tls import tls_enabled
 from ..core.node_signing import CONTROL_LEAVES
 from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
+from ..core.sd_notify import watchdog_loop
+from ..core.state_snapshot import json_safe, why_it_cannot_travel
+from ..monitoring.loop_lag import LoopLagMonitor
 from .agent import NodeAgent
 from .publishing import NodePublisher
-from .signing import CLEARABLE_LEAVES, ControlGuard, message_bytes
-from .state import json_safe
+from .signing import (
+    CLEARABLE_LEAVES,
+    ControlGuard,
+    message_bytes,
+    server_mismatch,
+    user_properties,
+)
+from .state import flush_states
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +103,7 @@ class NodeRunner:
         self._commands: set[asyncio.Task] = set()
         #: The long-running loops `run` owns, so a shutdown can end them.
         self._loops: list[asyncio.Task] = []
+        self._loop_lag = LoopLagMonitor()
         self.registry = ActorRegistry()
         self.supervisor = Supervisor(self.registry, self._inject)
         # The back-reference `ActorSystem` gives the registry on main. Without
@@ -446,9 +462,7 @@ class NodeRunner:
         payload = message_bytes(msg.payload)
         if not payload and leaf in CLEARABLE_LEAVES:
             return True
-        pairs = getattr(getattr(msg, "properties", None), "UserProperty", None) or []
-        properties = {str(name): str(value) for name, value in pairs}
-        return self._control.admit(leaf, topic_str, payload, properties)
+        return self._control.admit(leaf, topic_str, payload, user_properties(msg))
 
     async def _dispatch_control(self, topic_str: str, data: Any, msg: Any) -> None:
         """Route one control message to the command it names.
@@ -477,13 +491,32 @@ class NodeRunner:
             await self._on_task(topic_str, data, msg)
 
     async def _on_desired_state(self, topic_str: str, data: Any, msg: Any) -> None:
-        """Start any agent named in the desired state that is not running."""
+        """Start any agent named in the desired state that is not running.
+
+        The copy the broker retained, handed over when this node subscribes, is
+        what brings a node's agents back after a reboot: those ran here before,
+        and are started whatever server last wrote the list. One that arrives
+        while the node is up is the server changing the list now, and an agent
+        it adds is a spawn by another route, refused from a server on another
+        release as a spawn is.
+        """
         if not msg.payload or not isinstance(data, dict):
             return
         desired = data.get("agents", [])
         if not desired:
             return
         logger.info("[runner] Reconciling desired state: %s", [a.get("name") for a in desired])
+
+        if not getattr(msg, "retain", False):
+            server = server_mismatch(user_properties(msg), __version__)
+            missing = [
+                str(config.get("name"))
+                for config in desired
+                if config.get("name") and self.get(config["name"]) is None
+            ]
+            if server is not None and missing:
+                await self._refuse_agents_from(server, missing)
+                return
 
         for agent_config in desired:
             aname = agent_config.get("name")
@@ -498,7 +531,35 @@ class NodeRunner:
     async def _on_spawn(self, topic_str: str, data: Any, msg: Any) -> None:
         if not msg.payload:  # empty = retain-clear message, ignore
             return
+        server = server_mismatch(user_properties(msg), __version__)
+        if server is not None:
+            name = data.get("name") if isinstance(data, dict) else None
+            await self._refuse_agents_from(server, [str(name or "an agent")])
+            return
         self._background(self.spawn_agent(data), "spawn_agent")
+
+    async def _refuse_agents_from(self, server: str, names: list[str]) -> None:
+        """Say why agents sent by a server on another release are not started.
+
+        The server makes the same check from this node's heartbeat before it
+        sends one. This is for when it could not: it has not heard this node's
+        version, or holds one from before the node was last installed. Only a
+        new agent is refused. Those already here keep running, and a stop is
+        obeyed whoever sends it, since that is how a node is brought level.
+        """
+        listed = ", ".join(f"'{name}'" for name in names)
+        logger.error(
+            "[runner] Not starting %s: the server runs version %s and this node %s.",
+            listed,
+            server,
+            __version__,
+        )
+        await self._log_to_dashboard(
+            "error",
+            f"Refused to start {listed}: the server runs version {server}, which does not work "
+            f"with this node's {__version__}. Redeploy it with `/deploy {self.node_name}` so "
+            "both run the same release.",
+        )
 
     async def _on_stop(self, topic_str: str, data: Any, msg: Any) -> None:
         """Stop a named agent.
@@ -725,8 +786,10 @@ class NodeRunner:
                 break
             except Exception as e:
                 if self._running:
-                    logger.warning("[runner] Subscriber disconnected: %s. Reconnecting in 3s...", e)
-                    await asyncio.sleep(3)
+                    logger.warning(
+                        "[runner] Subscriber disconnected: %s. Reconnecting in about 3s...", e
+                    )
+                    await asyncio.sleep(reconnect_wait(3.0))
 
     # ── Main run loop ─────────────────────────────────────────────────────────
 
@@ -737,9 +800,14 @@ class NodeRunner:
             "[runner] Starting node '%s' → broker %s:%s", self.node_name, self.broker, self.port
         )
         publisher_ready = asyncio.Event()
+        # Says in this node's log where the event loop is when an agent's code
+        # holds it, which nothing running on the loop could.
+        self._loop_lag.start()
         tasks = self._loops = [
             asyncio.create_task(self.publisher.run(publisher_ready)),
             asyncio.create_task(self._node_heartbeat_loop()),
+            # Returns at once unless this node's service has a watchdog set.
+            asyncio.create_task(watchdog_loop()),
         ]
         # The queue has to exist before anything publishes into it, and it is
         # created inside the publisher's own task so it belongs to this loop.
@@ -764,6 +832,7 @@ class NodeRunner:
             # register a fresh agent into a node that is shutting down -- and
             # the loop is not left pending at exit.
             await self.supervisor.stop()
+            self._loop_lag.stop()
             self._configs.clear()
             self.publisher.stop()
             for t in tasks:
@@ -799,6 +868,9 @@ class NodeRunner:
         )
         # Let the queue drain before the process image is replaced.
         await asyncio.sleep(0.5)
+        # Agent state is written a moment after it changes, and replacing the
+        # process image would take what is still waiting with it.
+        flush_states()
         os.execv(sys.executable, [sys.executable, *sys.argv])
 
     async def shutdown(self) -> None:
@@ -815,6 +887,9 @@ class NodeRunner:
         """
         self._running = False
         await self.stop_all()
+        # Agent state is written a moment after it changes; what is still
+        # waiting goes out now, since nothing will write it later.
+        flush_states()
         await self.publish(
             f"nodes/{self.node_name}/heartbeat",
             {**self._node_identity(), "status": "offline", "timestamp": time.time()},
@@ -842,10 +917,11 @@ class NodeRunner:
 
         Only values that survive JSON travel — counters, calibration values,
         thresholds, timestamps, everything a typical agent stores. A numpy array
-        or a cv2 capture is dropped with a warning; neither would survive a
-        process restart either.
+        or a cv2 capture cannot, and neither would survive a process restart
+        either; see `_return_to_main` for what happens to an agent holding one.
 
-        payload: {"name": "agent-name", "target_node": "rpi-bedroom"}
+        payload: {"name": "agent-name", "target_node": "@main",
+                  "return_token": "...", "force": false, "max_state_bytes": 8388608}
         """
         name = payload.get("name")
         target_node = payload.get("target_node")
@@ -867,19 +943,10 @@ class NodeRunner:
             )
             return
 
-        safe_state, dropped = json_safe(dict(agent._persistent_state))
-        if dropped:
-            logger.warning(
-                "[runner] migrate '%s': dropping non-JSON state keys %s — they cannot "
-                "travel over MQTT",
-                name,
-                dropped,
-            )
-
         # `@main` is the sentinel from MainActor: do not spawn anywhere, stop
         # the agent and return its state, and main will place it itself.
         if target_node == "@main":
-            await self._return_to_main(agent, payload, safe_state, dropped)
+            await self._return_to_main(agent, payload)
             return
 
         # Node-to-node migration used to happen here: this runner published
@@ -906,21 +973,24 @@ class NodeRunner:
             },
         )
 
-    async def _return_to_main(
-        self,
-        agent: NodeAgent,
-        payload: dict[str, Any],
-        safe_state: dict[str, Any],
-        dropped: list[str],
-    ) -> None:
-        """Stop an agent and publish its config and state for main to re-place."""
+    async def _return_to_main(self, agent: NodeAgent, payload: dict[str, Any]) -> None:
+        """Stop an agent and publish its config and state for main to re-place.
+
+        Whether the state can travel is asked before the stop, so a refusal
+        leaves the agent running here. The snapshot itself is taken after the
+        stop: the agent's ``on_stop`` and the save that follows it are its last
+        writes, and a snapshot taken earlier would leave them behind in a file
+        that is deleted once the agent is confirmed elsewhere.
+        """
         name = agent.name
-        logger.info(
-            "[runner] Migrating '%s' from %s → local (main); returning %s state key(s)",
-            name,
-            self.node_name,
-            len(safe_state),
+        force = bool(payload.get("force", False))
+        max_bytes = _positive_int(payload.get("max_state_bytes"))
+        refusal = why_it_cannot_travel(
+            *json_safe(dict(agent._persistent_state)), force=force, max_bytes=max_bytes
         )
+        if refusal:
+            await self._refuse_return(agent, payload, refusal)
+            return
         # The config is taken before the stop, and says where it came from so
         # main can see the origin and strip it.
         return_config = dict(self._configs.get(name, agent._config))
@@ -934,6 +1004,21 @@ class NodeRunner:
         # copy, and a dropped message would lose the agent outright.
         await self.stop_agent(name)
         await asyncio.sleep(0.3)
+        safe_state, dropped = json_safe(dict(agent._persistent_state))
+        if dropped:
+            # Only what the agent wrote while stopping can land here: anything
+            # earlier was refused above unless the caller forced the move.
+            logger.warning(
+                "[runner] migrate '%s': %s cannot travel as JSON and is left behind",
+                name,
+                ", ".join(dropped),
+            )
+        logger.info(
+            "[runner] Migrating '%s' from %s → local (main); returning %s state key(s)",
+            name,
+            self.node_name,
+            len(safe_state),
+        )
         await self.publish(
             f"nodes/{self.node_name}/state_return",
             {
@@ -959,3 +1044,44 @@ class NodeRunner:
             },
         )
         logger.info("[runner] Migration of '%s' to local (main) dispatched.", name)
+
+    async def _refuse_return(self, agent: NodeAgent, payload: dict[str, Any], reason: str) -> None:
+        """Tell main the agent is staying, and why, without stopping it.
+
+        Answered on `state_return` as well as `migrate_result`, so main can let
+        go of the migration it is waiting on rather than keep it until it times
+        out and restart an agent that never stopped.
+        """
+        name = agent.name
+        _safe, dropped = json_safe(dict(agent._persistent_state))
+        logger.warning("[runner] Not migrating '%s': %s", name, reason)
+        await self.publish(
+            f"nodes/{self.node_name}/state_return",
+            {
+                "agent": name,
+                "return_token": payload.get("return_token", ""),
+                "config": {},
+                "state": {},
+                "state_keys_dropped": dropped,
+                "refused": reason,
+                "from_node": self.node_name,
+                "timestamp": time.time(),
+            },
+        )
+        await self.publish(
+            f"nodes/{self.node_name}/migrate_result",
+            {
+                "success": False,
+                "error": f"'{name}' stays on {self.node_name}: {reason}",
+                "agent": name,
+                "from_node": self.node_name,
+                "timestamp": time.time(),
+            },
+        )
+
+
+def _positive_int(value: Any) -> int | None:
+    """``value`` when it is a positive whole number, else None."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None

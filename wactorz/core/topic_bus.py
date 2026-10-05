@@ -67,6 +67,9 @@ logger = logging.getLogger(__name__)
 #: one agent cannot crowd the others out of the prompt.
 PLANNER_DESCRIPTION_CHARS = 600
 
+#: How long a stream window waits before it tries the broker again.
+WINDOW_RECONNECT_DELAY_S = 5.0
+
 
 def planner_description(text: str) -> str:
     """A description as one line for the planner, cut at `PLANNER_DESCRIPTION_CHARS`."""
@@ -630,12 +633,18 @@ class StreamWindow:
         return self
 
     async def _listen(self, broker: str, port: int):
-        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
+        from .mqtt import mqtt_client, reconnect_wait  # local: avoids core/__init__ import cycle
 
+        # Whether the connection is known to be down, so it is said when it
+        # goes and when it comes back, not at every attempt in between.
+        down = False
         while True:
             try:
                 async with mqtt_client(broker, port) as client:
                     await client.subscribe(self.topic)
+                    if down:
+                        down = False
+                        logger.info("[window] Reading %s again.", self.topic)
                     async for msg in client.messages:
                         try:
                             payload = json.loads(msg.payload.decode())
@@ -644,8 +653,17 @@ class StreamWindow:
                         self.push(payload)
             except asyncio.CancelledError:
                 break
-            except Exception:
-                await asyncio.sleep(5)
+            except Exception as exc:
+                if not down:
+                    down = True
+                    logger.warning(
+                        "[window] Lost the broker connection reading %s (%s). The window "
+                        "holds nothing newer until it is back; trying again every %gs or so.",
+                        self.topic,
+                        exc,
+                        WINDOW_RECONNECT_DELAY_S,
+                    )
+                await asyncio.sleep(reconnect_wait(WINDOW_RECONNECT_DELAY_S))
 
     def stop(self):
         if self._task:

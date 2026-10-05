@@ -7,9 +7,15 @@ the glue. Run it the way `run.py` is run:
     python pipeline.py
 """
 
+import threading
+
 from agent import detect
 
 import wactorz
+
+#: `report` counts on one thread per topic, anomalies and ticks; the lock keeps
+#: a tick from reading the count while an anomaly is adding to it.
+_count_lock = threading.Lock()
 
 
 @wactorz.agent(subscribes="anomalies/imu", description="Says what the detector found.")
@@ -19,16 +25,25 @@ async def notify(anomaly: dict, me: wactorz.FunctionAgent) -> None:
 
 
 @wactorz.agent(
-    subscribes="pipelines/imu-watch/tick",
+    subscribes=["anomalies/imu", "pipelines/imu-watch/tick"],
     publishes="reports/imu",
     description="A count of anomalies since the last tick.",
 )
-def report(tick: dict, me: wactorz.FunctionAgent) -> dict:
-    """What the tick asks for: how many anomalies the detector has flagged."""
-    seen = int(me.recall("reported", 0))
-    total = int(me.recall("anomalies_total", 0))
-    me.persist("reported", total)
-    return {"new_anomalies": total - seen, "total": total}
+def report(message: dict, me: wactorz.FunctionAgent) -> dict | None:
+    """Count each anomaly as it arrives; on each tick, report the count since the last.
+
+    The count is this agent's own: persistence is per agent, so `report` cannot
+    read what `detect` persists, and counts what `detect` publishes instead.
+    A tick is told from an anomaly by its `fired_at`.
+    """
+    with _count_lock:
+        if "fired_at" not in message:
+            me.persist("since_tick", int(me.recall("since_tick", 0)) + 1)
+            me.persist("total", int(me.recall("total", 0)) + 1)
+            return None
+        new = int(me.recall("since_tick", 0))
+        me.persist("since_tick", 0)
+        return {"new_anomalies": new, "total": int(me.recall("total", 0))}
 
 
 watch = wactorz.pipeline(

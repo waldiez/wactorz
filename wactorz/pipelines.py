@@ -32,7 +32,8 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -233,6 +234,30 @@ def register(pipe: Pipeline) -> Pipeline:
     if _pipelines is not None:
         _pipelines[pipe.name] = pipe
     return pipe
+
+
+@contextmanager
+def registered(pipes: Iterable[Pipeline]) -> Iterator[list[Pipeline]]:
+    """Register ``pipes`` for the length of a ``with`` block, then put back what was there.
+
+    The pipelines' counterpart of :func:`wactorz.plugins.registered`, for the
+    pipelines :func:`wactorz.serve` is handed. One declared at module level
+    with :func:`pipeline` registered itself when it was declared and stays.
+    """
+    global _pipelines
+    before = dict(_registered)
+    added: list[Pipeline] = []
+    try:
+        for pipe in pipes:
+            added.append(register(pipe))
+        yield added
+    finally:
+        for pipe in added:
+            if pipe.name in before:
+                _registered[pipe.name] = before[pipe.name]
+            else:
+                _registered.pop(pipe.name, None)
+        _pipelines = None
 
 
 def clear() -> None:

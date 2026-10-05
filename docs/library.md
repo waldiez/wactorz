@@ -107,7 +107,9 @@ app = FastAPI(lifespan=lifespan)
 
 `run()` is `asyncio.run(serve(...))` with signal handling on; the two take the
 same arguments: `web`, `minimal`, `monitor_port`, `mqtt_broker`, `mqtt_port`,
-`llm`, `state_dir`. The dashboard's default port is 8888, which Jupyter also
+`llm`, `state_dir`, `interface`. `serve` runs no chat interface unless
+`interface` names one, so it never reads the host's stdin; `run` uses the
+command's (`INTERFACE`, the interactive CLI by default). The dashboard's default port is 8888, which Jupyter also
 uses; inside a notebook, or beside any other server on that port, pass
 `monitor_port` or set `MONITOR_PORT`.
 
@@ -210,9 +212,12 @@ from wactorz import RuleAction, RuleCondition, RuleConfig
 async def notify(anomaly: dict, me: wactorz.FunctionAgent) -> None:
     await me.notify_user(f"IMU anomaly, score {anomaly['score']}")
 
-@wactorz.agent(subscribes="pipelines/imu-watch/tick", publishes="reports/imu")
-def report(tick: dict, me: wactorz.FunctionAgent) -> dict:
-    return {"total": int(me.recall("anomalies_total", 0))}
+@wactorz.agent(subscribes=["anomalies/imu", "pipelines/imu-watch/tick"], publishes="reports/imu")
+def report(message: dict, me: wactorz.FunctionAgent) -> dict | None:
+    if "fired_at" not in message:  # an anomaly: count it
+        me.persist("total", int(me.recall("total", 0)) + 1)
+        return None
+    return {"total": int(me.recall("total", 0))}  # a tick: report
 
 alert = RuleConfig(
     triggers=("anomalies/imu",),
@@ -230,7 +235,8 @@ watch = wactorz.pipeline(
 ```
 
 The schedule becomes a scheduled agent ticking `pipelines/imu-watch/tick`,
-which `report` listens to. The rule becomes a rule agent: when a message on
+which `report` listens to. `report` counts the anomalies itself: persistence is
+per agent, so one agent cannot `recall` what another `persist`ed. The rule becomes a rule agent: when a message on
 `anomalies/imu` has `score` above 20, it publishes to `alerts/imu`, at most
 every thirty seconds. Rules are the typed dataclasses above or the equivalent
 dicts, which are the spelling chat and JSON use:

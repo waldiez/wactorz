@@ -53,6 +53,67 @@ _loop_lag = LoopLagMonitor()
 #: shutdown has stopped it. What :func:`system` answers with.
 _current_system: "ActorSystem | None" = None
 
+#: The interface setting for no chat interface of the system's own: the
+#: dashboard and any companion channels only. What :func:`serve` runs with
+#: unless it is given an interface, so a library call never reads the host's stdin.
+HEADLESS = "none"
+
+#: The names the system's own agents go by, whether or not this run starts
+#: them. The supervisor keeps one entry per name, so a plugin or pipeline agent
+#: under one of these would replace the built-in; it is refused instead.
+BUILT_IN_AGENT_NAMES = frozenset(
+    {
+        "main",
+        "monitor",
+        "installer",
+        "catalog",
+        "home-assistant-agent",
+        "home-assistant-map-agent",
+        "home-assistant-state-bridge",
+        runtime.IO_GATEWAY_ID,
+    }
+)
+
+
+def startable_plugins(found: Iterable[plugins.AgentPlugin]) -> list[plugins.AgentPlugin]:
+    """The plugins to start with the system: those for autostart, under a name of their own.
+
+    One under a built-in agent's name is left out with an error that names it,
+    as the catalogue leaves out a plugin that a packaged recipe's name shadows.
+    """
+    chosen: list[plugins.AgentPlugin] = []
+    for plugin in found:
+        if not plugin.autostart:
+            continue
+        if plugin.name in BUILT_IN_AGENT_NAMES:
+            logger.error(
+                "[plugins] Agent %r not started: a built-in agent has that name. Rename it.",
+                plugin.name,
+            )
+            continue
+        chosen.append(plugin)
+    return chosen
+
+
+def startable_pipelines(found: Iterable[pipelines.Pipeline]) -> list[pipelines.Pipeline]:
+    """The pipelines to start: those none of whose agents takes a built-in agent's name.
+
+    A pipeline is all or nothing, since a step missing from it breaks the rest,
+    so a clash leaves out the whole pipeline, with an error naming the agents.
+    """
+    chosen: list[pipelines.Pipeline] = []
+    for pipe in found:
+        clashes = sorted(set(pipe.agent_names) & BUILT_IN_AGENT_NAMES)
+        if clashes:
+            logger.error(
+                "[pipelines] Pipeline %r not started: %s is a built-in agent's name. Rename it.",
+                pipe.name,
+                ", ".join(clashes),
+            )
+            continue
+        chosen.append(pipe)
+    return chosen
+
 
 def system() -> "ActorSystem | None":
     """The running :class:`~wactorz.core.registry.ActorSystem`, or ``None`` outside a run.
@@ -519,9 +580,7 @@ async def build_system(
     # points, wactorz.run(agents=...) -- supervised beside the built-ins, with
     # the same persistence. One that is not for autostart waits in the
     # catalogue to be asked for.
-    for plugin in plugins.discover().values():
-        if not plugin.autostart:
-            continue
+    for plugin in startable_plugins(plugins.discover().values()):
         system.supervisor.supervise(
             plugin.name,
             make_plugin_factory(plugin),
@@ -533,7 +592,8 @@ async def build_system(
     # The pipelines this deployment declares: each step, schedule and rule is
     # an agent of its own, supervised like the plugins above. The definition
     # is the record; nothing of it goes through the spawn registry.
-    for pipe in pipelines.discover().values():
+    started_pipelines = startable_pipelines(pipelines.discover().values())
+    for pipe in started_pipelines:
         for agent_name, factory in pipeline_factories(pipe):
             system.supervisor.supervise(
                 agent_name,
@@ -579,7 +639,7 @@ async def build_system(
         # Recorded beside the planner's rules, so `/rules` lists a declared
         # pipeline and `/rules delete` stops the whole of it.
         known = main_actor.get_pipeline_rules()
-        for pipe in pipelines.discover().values():
+        for pipe in started_pipelines:
             if pipe.name not in known:
                 main_actor.save_pipeline_rule(pipe.record())
 
@@ -817,18 +877,19 @@ async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any)
             # agents run until asked to stop.
             system._running = True
             await system.run_forever()
-        elif interface == "cli":
-            if sys.stdin.isatty():
-                iface = CLIInterface(main_actor)
-                await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-            else:
-                # No TTY (piped/Docker/systemd): input() would raise EOFError on
-                # the first read, finishing iface.run() instantly and — paired
-                # with run_forever() — tearing the whole system down a second
-                # after boot. Skip the interactive loop and just stay up.
+        elif interface == "cli" and sys.stdin.isatty():
+            iface = CLIInterface(main_actor)
+            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+        elif interface in ("cli", HEADLESS):
+            # No chat interface of our own: what a library call asks for, and
+            # what a CLI with no TTY (piped/Docker/systemd) falls back to, since
+            # input() would raise EOFError on the first read and, paired with
+            # run_forever(), tear the whole system down a second after boot.
+            # The dashboard and any companion channels still talk to main.
+            if interface == "cli":
                 logger.info("stdin is not a TTY — running headless (no interactive CLI)")
-                system._running = True
-                await asyncio.gather(system.run_forever(), *_run_all(companions))
+            system._running = True
+            await asyncio.gather(system.run_forever(), *_run_all(companions))
         elif interface == "rest":
             port = args.port or CONFIG.port
             iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key, system=system)
@@ -865,6 +926,11 @@ async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any)
                 allowed_user_ids=CONFIG.telegram_allowed_user_ids,
             )
             await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+        else:
+            raise StartupError(
+                f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
+                f"telegram or {HEADLESS}"
+            )
     except StartupError:
         # The caller's to report: the command exits on it, a host program
         # catches it. Shutdown below still runs.
@@ -886,6 +952,7 @@ async def serve(
     mqtt_port: int | None = None,
     llm: str | None = None,
     state_dir: "str | os.PathLike[str] | None" = None,
+    interface: str | None = None,
     handle_signals: bool = False,
     configure_logging: bool = False,
 ) -> None:
@@ -902,7 +969,14 @@ async def serve(
     monitor, the dashboard and the given agents only. The other arguments stand
     in for the command line's; ``state_dir`` is where everything durable is
     kept, as ``WACTORZ_STATE_DIR`` would say, and is set for this process only,
-    not written to the environment.
+    not written to the environment. ``interface`` is the chat interface to
+    run beside the dashboard (``"rest"``, ``"discord"``, ``"telegram"``,
+    ``"whatsapp"``, ``"cli"``); by default there is none, so the system never
+    reads the host's stdin.
+
+    The agents and pipelines it is given are registered for this run only: a
+    later ``serve`` in the same process starts what it is given, not what an
+    earlier one was.
 
     It behaves as a library call: the host keeps its signals unless
     ``handle_signals`` says otherwise, its logging configuration is left alone
@@ -912,19 +986,17 @@ async def serve(
     """
     previous = set_state_dir(state_dir) if state_dir is not None else None
     try:
-        for item in agents:
-            plugins.register(item)
-        for pipe in pipelines_:
-            pipelines.register(pipe)
-        args = serve_args(
-            web=web,
-            minimal=minimal,
-            monitor_port=monitor_port,
-            mqtt_broker=mqtt_broker,
-            mqtt_port=mqtt_port,
-            llm=llm,
-        )
-        await app(args, handle_signals=handle_signals, configure_logging=configure_logging)
+        with plugins.registered(agents), pipelines.registered(pipelines_):
+            args = serve_args(
+                web=web,
+                minimal=minimal,
+                monitor_port=monitor_port,
+                mqtt_broker=mqtt_broker,
+                mqtt_port=mqtt_port,
+                llm=llm,
+                interface=interface or HEADLESS,
+            )
+            await app(args, handle_signals=handle_signals, configure_logging=configure_logging)
     finally:
         if state_dir is not None:
             set_state_dir(previous)
@@ -941,11 +1013,14 @@ def run(
     mqtt_port: int | None = None,
     llm: str | None = None,
     state_dir: "str | os.PathLike[str] | None" = None,
+    interface: str | None = None,
 ) -> None:
     """Start Wactorz from a script: :func:`serve` on a loop of its own, until stopped.
 
     Takes the same arguments. Ctrl-C and SIGTERM stop it the way they stop the
-    ``wactorz`` command, and logging is set up the way the command sets it up.
+    ``wactorz`` command, logging is set up the way the command sets it up, and
+    the chat interface is the command's (``INTERFACE``) unless ``interface``
+    names another: a script started from a terminal owns that terminal.
     A program that already has an event loop awaits :func:`serve` instead.
     Raises :class:`~wactorz.errors.StartupError` as :func:`serve` does.
     """
@@ -961,6 +1036,7 @@ def run(
                 mqtt_port=mqtt_port,
                 llm=llm,
                 state_dir=state_dir,
+                interface=interface or CONFIG.interface,
                 handle_signals=True,
                 configure_logging=True,
             )
@@ -978,6 +1054,7 @@ def serve_args(
     mqtt_broker: str | None = None,
     mqtt_port: int | None = None,
     llm: str | None = None,
+    interface: str | None = None,
 ) -> argparse.Namespace:
     """The settings :func:`serve`'s arguments stand for, in the form :func:`app` reads.
 
@@ -996,4 +1073,6 @@ def serve_args(
         args.mqtt_port = mqtt_port
     if llm is not None:
         args.llm = llm
+    if interface is not None:
+        args.interface = interface
     return args

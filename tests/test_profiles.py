@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -97,6 +98,7 @@ class TestServe:
             seen["args"] = args
             seen["handle_signals"] = handle_signals
             seen["configure_logging"] = configure_logging
+            seen["registered"] = "probe" in plugins.discover()
 
         monkeypatch.setattr(app_module, "app", fake_app)
 
@@ -106,7 +108,7 @@ class TestServe:
 
         await app_module.serve([probe], minimal=True, web=False)
 
-        assert "probe" in plugins.discover()
+        assert seen["registered"] is True
         # A host's signals and logging are its own.
         assert seen["handle_signals"] is False
         assert seen["configure_logging"] is False
@@ -167,6 +169,249 @@ class TestServe:
         running = object()
         monkeypatch.setattr(app_module, "_current_system", running)
         assert wactorz.system() is running
+
+
+class TestTheInterfaceOfALibraryCall:
+    """`serve` takes no stdin unless asked; `run`, for a script, keeps the command's interface."""
+
+    @pytest.fixture
+    def interface_seen(self, monkeypatch: pytest.MonkeyPatch) -> list[object]:
+        seen: list[object] = []
+
+        async def fake_app(args: object, **_: object) -> None:
+            seen.append(getattr(args, "interface"))
+
+        monkeypatch.setattr(app_module, "app", fake_app)
+        return seen
+
+    async def test_serve_runs_no_interface_by_default(self, interface_seen: list[object]) -> None:
+        await app_module.serve()
+
+        assert interface_seen == [app_module.HEADLESS]
+
+    async def test_serve_runs_the_interface_it_is_given(self, interface_seen: list[object]) -> None:
+        await app_module.serve(interface="rest")
+
+        assert interface_seen == ["rest"]
+
+    def test_run_keeps_the_commands_interface(
+        self, monkeypatch: pytest.MonkeyPatch, interface_seen: list[object]
+    ) -> None:
+        monkeypatch.setattr(app_module, "CONFIG", dataclasses.replace(CONFIG, interface="cli"))
+
+        app_module.run()
+        app_module.run(interface="rest")
+
+        assert interface_seen == ["cli", "rest"]
+
+    @pytest.fixture
+    def built(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+        """`app()` with a fake system whose main exists, and a CLI that says if it was made."""
+        from wactorz.interfaces import chat_interfaces
+
+        record: dict[str, object] = {"cli": False, "ran": False}
+
+        class FakeSystem:
+            _running = False
+
+            async def run_forever(self) -> None:
+                record["ran"] = True
+
+        class RecordingCLI:
+            def __init__(self, main: object) -> None:
+                record["cli"] = True
+
+            async def run(self) -> None:
+                return None
+
+        fake_system = FakeSystem()
+
+        async def build(args: object) -> tuple[object, object, None]:
+            return fake_system, object(), None
+
+        async def shut_down(system: object) -> None:
+            return None
+
+        monkeypatch.setattr(app_module, "exposure_refusal", lambda host, key: "")
+        monkeypatch.setattr(app_module, "prepare_broker_files", lambda: "")
+        monkeypatch.setattr(app_module, "_build_system_or_stop", build)
+        monkeypatch.setattr(app_module, "_shut_down", shut_down)
+        monkeypatch.setattr(chat_interfaces, "build_social_companions", lambda main, primary: [])
+        monkeypatch.setattr(chat_interfaces, "CLIInterface", RecordingCLI)
+        # A terminal, so the CLI would start if the interface asked for it.
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+        return record
+
+    async def test_headless_reads_no_stdin_even_at_a_terminal(
+        self, built: dict[str, object]
+    ) -> None:
+        args = app_module.serve_args(web=False, interface=app_module.HEADLESS)
+
+        await app_module.app(args, configure_logging=False)
+
+        assert built == {"cli": False, "ran": True}
+
+    async def test_the_cli_still_starts_when_asked_for(self, built: dict[str, object]) -> None:
+        args = app_module.serve_args(web=False, interface="cli")
+
+        await app_module.app(args, configure_logging=False)
+
+        assert built["cli"] is True
+
+    async def test_an_unknown_interface_is_a_startup_error(self, built: dict[str, object]) -> None:
+        args = app_module.serve_args(web=False, interface="carrier-pigeon")
+
+        with pytest.raises(StartupError, match="carrier-pigeon"):
+            await app_module.app(args, configure_logging=False)
+
+
+class TestServeRegistersForTheRunOnly:
+    """A second `serve` in the same process starts what it is given, not what the first was."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self) -> Any:
+        from wactorz import pipelines, plugins
+
+        plugins.clear()
+        pipelines.clear()
+        yield
+        plugins.clear()
+        pipelines.clear()
+
+    @pytest.fixture
+    def started(self, monkeypatch: pytest.MonkeyPatch) -> list[set[str]]:
+        from wactorz import pipelines, plugins
+
+        runs: list[set[str]] = []
+
+        async def fake_app(args: object, **_: object) -> None:
+            runs.append(set(plugins.discover(env="")) | set(pipelines.discover(env="")))
+
+        monkeypatch.setattr(app_module, "app", fake_app)
+        return runs
+
+    async def test_the_second_run_starts_only_its_own_agents(self, started: list[set[str]]) -> None:
+        from wactorz import plugins
+        from wactorz.agents.function_agent import agent
+
+        @agent
+        def first(payload: dict) -> None:
+            return None
+
+        @agent
+        def second(payload: dict) -> None:
+            return None
+
+        await app_module.serve([first])
+        await app_module.serve([second])
+
+        assert started == [{"first"}, {"second"}]
+        assert plugins.discover(env="") == {}
+
+    async def test_a_name_registered_before_the_run_gets_its_plugin_back(
+        self, started: list[set[str]]
+    ) -> None:
+        from wactorz import plugins
+        from wactorz.agents.function_agent import agent
+
+        @agent(name="shared")
+        def before(payload: dict) -> None:
+            return None
+
+        @agent(name="shared")
+        def during(payload: dict) -> None:
+            return None
+
+        kept = plugins.register(before)
+        await app_module.serve([during])
+
+        assert plugins.discover(env="")["shared"] is kept
+
+    async def test_pipelines_handed_to_serve_are_for_that_run(
+        self, started: list[set[str]]
+    ) -> None:
+        from wactorz import pipelines
+        from wactorz.agents.function_agent import agent
+
+        @agent(subscribes="in/x")
+        def step(payload: dict) -> None:
+            return None
+
+        pipe = pipelines.pipeline("watch", steps=[step])
+        pipelines.clear()  # as if it were declared elsewhere and handed over
+
+        await app_module.serve(pipelines_=[pipe])
+
+        assert "watch" in started[0]
+        assert pipelines.discover(env="") == {}
+
+
+class TestBuiltInNames:
+    """An agent under a built-in's name would replace it in the supervisor; it is refused."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self) -> Any:
+        from wactorz import pipelines, plugins
+
+        plugins.clear()
+        pipelines.clear()
+        yield
+        plugins.clear()
+        pipelines.clear()
+
+    @pytest.mark.parametrize("name", ["main", "monitor", "installer", "catalog"])
+    def test_a_plugin_under_a_built_in_name_is_not_started(
+        self, name: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from wactorz import plugins
+        from wactorz.agents.function_agent import agent
+
+        @agent(name=name)
+        def impostor(payload: dict) -> None:
+            return None
+
+        @agent
+        def honest(payload: dict) -> None:
+            return None
+
+        found = [plugins.plugin_from(impostor), plugins.plugin_from(honest)]
+        with caplog.at_level(logging.ERROR):
+            chosen = app_module.startable_plugins(found)
+
+        assert [p.name for p in chosen] == ["honest"]
+        assert f"'{name}' not started" in caplog.text
+
+    def test_a_plugin_not_for_autostart_waits_as_before(self) -> None:
+        from wactorz import plugins
+        from wactorz.agents.function_agent import agent
+
+        @agent(autostart=False)
+        def later(payload: dict) -> None:
+            return None
+
+        assert app_module.startable_plugins([plugins.plugin_from(later)]) == []
+
+    def test_a_pipeline_with_a_built_in_name_inside_is_not_started(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from wactorz import pipelines
+        from wactorz.agents.function_agent import agent
+
+        @agent(name="monitor", subscribes="in/x")
+        def clashing(payload: dict) -> None:
+            return None
+
+        @agent(subscribes="in/y")
+        def fine(payload: dict) -> None:
+            return None
+
+        bad = pipelines.pipeline("bad", steps=[clashing])
+        good = pipelines.pipeline("good", steps=[fine])
+        with caplog.at_level(logging.ERROR):
+            chosen = app_module.startable_pipelines([bad, good])
+
+        assert chosen == [good]
+        assert "'bad' not started: monitor" in caplog.text
 
 
 class TestAppAsALibraryCall:

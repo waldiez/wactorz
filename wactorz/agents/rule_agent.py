@@ -21,14 +21,16 @@ A spawn config, a pipeline definition and chat all describe a rule the same way:
       "cooldown_seconds": 30
     }
 
-An action's payload may name fields of the trigger payload in braces, and
-carries the trigger payload itself under ``trigger`` unless told not to.
+An action's payload may name fields of the trigger payload in braces, by the
+same dotted path a condition uses (``{reading.score}``), and carries the
+trigger payload itself under ``trigger`` unless told not to.
 """
 
 from __future__ import annotations
 
 import logging
 import operator
+import string
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -168,19 +170,48 @@ class RuleAction:
         return rendered
 
 
-class _Fields(dict):
-    """A format map that leaves an unknown placeholder as it was."""
+class _Unfilled:
+    """A placeholder the trigger has no value for, written back as it was."""
 
-    def __missing__(self, key: str) -> str:
-        return "{" + key + "}"
+    def __init__(self, field_name: str) -> None:
+        self.field_name = field_name
+
+    def __format__(self, spec: str) -> str:
+        return "{" + self.field_name + (":" + spec if spec else "") + "}"
+
+    def __str__(self) -> str:
+        return "{" + self.field_name + "}"
+
+    __repr__ = __str__
+
+
+class _TriggerFormatter(string.Formatter):
+    """Fills ``{field}`` and ``{dotted.path}`` the way a condition reads a field.
+
+    A placeholder names a path into the trigger payload, as a condition's
+    ``field`` does, so ``{reading.score}`` is the score inside ``reading``
+    rather than an attribute lookup on a dict. A path the payload does not have
+    is left in the text as written.
+    """
+
+    def get_field(self, field_name: str, args: Any, kwargs: Any) -> tuple[Any, str]:
+        found, value = field_value(kwargs, field_name)
+        return (value if found else _Unfilled(field_name)), field_name
+
+
+_FORMATTER = _TriggerFormatter()
 
 
 def _render(value: Any, trigger: Any) -> Any:
-    """A string with ``{field}`` placeholders filled from a dict trigger; anything else as is."""
+    """A string with ``{field}`` placeholders filled from a dict trigger; anything else as is.
+
+    A string that cannot be rendered -- a stray brace, a format spec the value
+    does not take -- is sent as written: the action still runs.
+    """
     if isinstance(value, str) and "{" in value and isinstance(trigger, dict):
         try:
-            return value.format_map(_Fields(trigger))
-        except (ValueError, IndexError):
+            return _FORMATTER.vformat(value, (), trigger)
+        except (ValueError, TypeError, IndexError, KeyError, AttributeError):
             return value
     return value
 

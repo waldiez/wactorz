@@ -40,10 +40,14 @@ def published_fixture(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
     return seen
 
 
-def _build(fn: Any, tmp_path: Path, **kwargs: Any) -> FunctionAgent:
+def _spec(fn: Any) -> AgentSpec:
     spec = spec_of(fn)
     assert spec is not None
-    return spec.build(persistence_dir=str(tmp_path), **kwargs)
+    return spec
+
+
+def _build(fn: Any, tmp_path: Path, **kwargs: Any) -> FunctionAgent:
+    return _spec(fn).build(persistence_dir=str(tmp_path), **kwargs)
 
 
 class TestTheDecorator:
@@ -109,6 +113,28 @@ class TestTheDecorator:
         assert taking is not None and plain is not None
         assert taking.wants_actor
         assert not plain.wants_actor
+
+    def test_a_second_parameter_with_a_default_is_the_functions_own(self) -> None:
+        @agent
+        def detect(reading: dict, threshold: float = 4.0) -> None:
+            return None
+
+        @agent
+        def annotated(reading: dict, me: "FunctionAgent | None" = None) -> None:
+            return None
+
+        @agent
+        def by_class(reading: dict, me: FunctionAgent = None) -> None:  # pyright: ignore[reportArgumentType]
+            return None
+
+        @agent
+        def dotted(reading: dict, me: "wactorz.FunctionAgent" = None) -> None:  # pyright: ignore[reportArgumentType]
+            return None
+
+        assert not _spec(detect).wants_actor
+        assert _spec(annotated).wants_actor
+        assert _spec(by_class).wants_actor
+        assert _spec(dotted).wants_actor
 
     def test_anything_else_has_no_spec(self) -> None:
         assert spec_of(len) is None
@@ -188,6 +214,38 @@ class TestMessages:
         actor = _build(remember, tmp_path, options={"threshold": 3})
         assert await actor.call({"ax": 1}) == {"threshold": 3}
         assert actor.recall("last") == {"ax": 1}
+
+    async def test_a_default_keeps_its_value_on_every_message(
+        self, tmp_path: Path, published: list[tuple[str, Any]]
+    ) -> None:
+        @agent(subscribes="sensors/imu", publishes="anomalies/imu")
+        def detect(reading: dict, threshold: float = 4.0) -> dict | None:
+            return reading if reading["score"] > threshold else None
+
+        actor = _build(detect, tmp_path)
+        await actor._on_message({"score": 5.0})
+
+        assert ("anomalies/imu", {"score": 5.0}) in published
+
+    async def test_a_coroutine_behind_a_plain_decorator_is_awaited(
+        self, tmp_path: Path, published: list[tuple[str, Any]]
+    ) -> None:
+        def plain(fn: Any) -> Any:
+            def wrapper(reading: dict) -> Any:
+                return fn(reading)
+
+            return wrapper
+
+        async def score(reading: dict) -> dict:
+            await asyncio.sleep(0)
+            return {"score": reading["ax"] * 2}
+
+        detect = agent(subscribes="sensors/imu", publishes="scores/imu")(plain(score))
+        actor = _build(detect, tmp_path)
+
+        assert await actor.call({"ax": 1}) == {"score": 2}
+        await actor._on_message({"ax": 3})
+        assert ("scores/imu", {"score": 6}) in published
 
 
 class TestTasks:

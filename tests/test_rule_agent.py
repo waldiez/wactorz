@@ -135,6 +135,45 @@ class TestConfig:
         assert body["trigger"] == {"score": 12.5}
 
 
+class TestPlaceholders:
+    """An action's placeholders read the trigger the way a condition's ``field`` does."""
+
+    def _text(self, template: str, trigger: dict[str, Any]) -> str:
+        action = RuleAction.from_dict(
+            {"type": "publish", "topic": "t", "payload": {"text": template}}
+        )
+        return action.body(trigger)["text"]
+
+    def test_a_dotted_path_reaches_into_the_payload(self) -> None:
+        trigger = {"reading": {"score": 12.5, "axes": [1, 2]}}
+
+        assert self._text("score {reading.score}", trigger) == "score 12.5"
+        assert self._text("second {reading.axes.1}", trigger) == "second 2"
+
+    def test_a_format_spec_applies_to_the_value(self) -> None:
+        assert self._text("{reading.score:.1f}", {"reading": {"score": 12.345}}) == "12.3"
+
+    @pytest.mark.parametrize(
+        "template",
+        ["{reading.missing}", "{nowhere.at.all}", "{a[missing]}", "{reading.score.deeper}"],
+    )
+    def test_a_path_the_trigger_lacks_is_sent_as_written(self, template: str) -> None:
+        trigger = {"reading": {"score": 1}, "a": {}}
+
+        assert self._text(f"x {template} y", trigger) == f"x {template} y"
+
+    def test_known_and_unknown_fill_side_by_side(self) -> None:
+        trigger = {"reading": {"score": 3}}
+
+        assert self._text("{reading.score} of {limit}", trigger) == "3 of {limit}"
+
+    def test_a_string_that_cannot_render_is_sent_unchanged(self) -> None:
+        trigger = {"name": "pump"}
+
+        assert self._text("{name:.2f}", trigger) == "{name:.2f}"
+        assert self._text("open { brace", trigger) == "open { brace"
+
+
 class TestEvaluation:
     async def test_it_fires_when_the_conditions_hold(
         self, tmp_path: Path, published: list[tuple[str, Any]]

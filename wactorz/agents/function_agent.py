@@ -22,12 +22,12 @@ published to the output topic, or sent back as the task's result; ``None``
 publishes nothing. A plain function runs on a worker thread, so a model that
 takes a while does not hold the event loop; a coroutine function runs on the
 loop. A function that also wants the actor -- to persist, recall or publish --
-takes it as a second parameter.
+takes it as a second parameter, one without a default or annotated
+``FunctionAgent``; a second parameter with a default is the function's own.
 """
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 import logging
@@ -37,7 +37,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..core.actor import Actor, Message, MessageType
+from ..core.actor import Actor, Message, MessageType, run_callable
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,18 @@ def _summary(value: Any, limit: int = 160) -> str:
     """``value`` on one line, cut short for a feed row."""
     text = json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value)
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _names_function_agent(annotation: Any) -> bool:
+    """Whether a parameter annotation is :class:`FunctionAgent`, as a class or as text.
+
+    Text, because a module with ``from __future__ import annotations`` keeps
+    every annotation as the string it was written as: ``"FunctionAgent"``,
+    ``"wactorz.FunctionAgent"``, ``"FunctionAgent | None"``.
+    """
+    if isinstance(annotation, str):
+        return re.search(r"(?:^|[\s.|\[])FunctionAgent\b", annotation) is not None
+    return isinstance(annotation, type) and issubclass(annotation, FunctionAgent)
 
 
 def agent_name_from(identifier: str) -> str:
@@ -86,7 +98,13 @@ class AgentSpec:
 
     @property
     def wants_actor(self) -> bool:
-        """Whether the function takes the actor as its second parameter."""
+        """Whether the function takes the actor as its second parameter.
+
+        It does when that parameter has no default, or when it is annotated as a
+        :class:`FunctionAgent`. A second parameter with a default and any other
+        annotation -- ``def detect(reading, threshold=4.0)`` -- is the
+        function's own and keeps its default.
+        """
         try:
             params = [
                 p
@@ -95,7 +113,10 @@ class AgentSpec:
             ]
         except (TypeError, ValueError):
             return False
-        return len(params) >= 2
+        if len(params) < 2:
+            return False
+        second = params[1]
+        return second.default is second.empty or _names_function_agent(second.annotation)
 
     def build(
         self,
@@ -203,12 +224,14 @@ class FunctionAgent(Actor):
         return self.spec.description or f"running {self.spec.fn.__name__}()"
 
     async def call(self, payload: Any) -> Any:
-        """Run the function on ``payload``, on a thread when it is not a coroutine function."""
-        fn = self.spec.fn
+        """Run the function on ``payload``: on the loop when it is async, else on a thread.
+
+        A plain function that hands back a coroutine -- an async function behind
+        a plain decorator -- has that coroutine awaited, so its result is what
+        is published, not the coroutine object.
+        """
         args = (payload, self) if self.spec.wants_actor else (payload,)
-        if inspect.iscoroutinefunction(fn):
-            return await fn(*args)
-        return await asyncio.to_thread(fn, *args)
+        return await run_callable(self.spec.fn, *args)
 
     async def log(self, message: str, level: str = "info") -> None:
         """Say something on the dashboard feed, under this agent's name."""

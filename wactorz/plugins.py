@@ -22,6 +22,8 @@ import importlib
 import importlib.metadata
 import inspect
 import logging
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -226,6 +228,37 @@ def register_plugin(plugin: AgentPlugin) -> AgentPlugin:
     if _plugins is not None:
         _plugins[plugin.name] = plugin
     return plugin
+
+
+@contextmanager
+def registered(objs: Iterable[Any]) -> Iterator[list[AgentPlugin]]:
+    """Register ``objs`` for the length of a ``with`` block, then put back what was there.
+
+    What :func:`wactorz.serve` registers its agents with, so a second run in
+    the same process -- a notebook cell run again with other agents -- starts
+    only the agents it was given. A name the block took over gets its earlier
+    plugin back.
+    """
+    before = dict(_registered)
+    added: list[AgentPlugin] = []
+    try:
+        for obj in objs:
+            added.append(register(obj))
+        yield added
+    finally:
+        _put_back(before, {plugin.name for plugin in added})
+
+
+def _put_back(before: dict[str, AgentPlugin], names: set[str]) -> None:
+    """``names`` as they were in ``before``: restored, or forgotten if they were not there."""
+    global _plugins
+    for name in names:
+        if name in before:
+            _registered[name] = before[name]
+        else:
+            _registered.pop(name, None)
+    # Found again on the next look, so a name that was also discovered is not lost.
+    _plugins = None
 
 
 def _target_of(obj: Any) -> str:

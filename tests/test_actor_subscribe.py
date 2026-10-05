@@ -163,6 +163,42 @@ class TestSubscribe:
         assert threads and threads[0] != threading.main_thread().name
         await _stop_hub(probe)
 
+    @pytest.mark.parametrize("shape", ["lambda", "async __call__", "plain decorator"])
+    async def test_a_callback_that_hands_back_a_coroutine_has_it_run(
+        self, broker: FakeBroker, probe: Probe, shape: str
+    ) -> None:
+        """Not a coroutine function, but what it returns is one: it is awaited, not dropped."""
+        seen: list[Any] = []
+
+        async def handle(payload: Any) -> None:
+            seen.append(payload)
+
+        class Handler:
+            async def __call__(self, payload: Any) -> None:
+                await handle(payload)
+
+        def plain(fn: Any) -> Any:
+            def wrapper(payload: Any) -> Any:
+                return fn(payload)
+
+            return wrapper
+
+        callbacks = {
+            "lambda": lambda payload: handle(payload),
+            "async __call__": Handler(),
+            "plain decorator": plain(handle),
+        }
+        probe.subscribe("sensors/imu", callbacks[shape])
+        await _settle()
+        await broker.deliver("sensors/imu", b'{"ax": 2}')
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+            if seen:
+                break
+
+        assert seen == [{"ax": 2}]
+        await _stop_hub(probe)
+
     async def test_every_subscription_shares_one_connection(
         self, broker: FakeBroker, probe: Probe
     ) -> None:

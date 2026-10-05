@@ -237,7 +237,9 @@ the task stops the system cleanly:</p>
 
 <p><code>run()</code> is <code>asyncio.run(serve(...))</code> with signal handling on; the two take the
 same arguments: <code>web</code>, <code>minimal</code>, <code>monitor_port</code>, <code>mqtt_broker</code>, <code>mqtt_port</code>,
-<code>llm</code>, <code>state_dir</code>. The dashboard's default port is 8888, which Jupyter also
+<code>llm</code>, <code>state_dir</code>, <code>interface</code>. <code>serve</code> runs no chat interface unless
+<code>interface</code> names one, so it never reads the host's stdin; <code>run</code> uses the
+command's (<code>INTERFACE</code>, the interactive CLI by default). The dashboard's default port is 8888, which Jupyter also
 uses; inside a notebook, or beside any other server on that port, pass
 <code>monitor_port</code> or set <code>MONITOR_PORT</code>.</p>
 <p><code>serve</code> behaves as a library call inside someone else's program: it leaves the
@@ -346,9 +348,12 @@ recorded beside the planner's pipelines so <code>/rules</code> lists it:</p>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">notify</span><span class="p">(</span><span class="n">anomaly</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">await</span> <span class="n">me</span><span class="o">.</span><span class="n">notify_user</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;IMU anomaly, score </span><span class="si">{</span><span class="n">anomaly</span><span class="p">[</span><span class="s1">&#39;score&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
-<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="s2">&quot;pipelines/imu-watch/tick&quot;</span><span class="p">,</span> <span class="n">publishes</span><span class="o">=</span><span class="s2">&quot;reports/imu&quot;</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">report</span><span class="p">(</span><span class="n">tick</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
-    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;total&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">&quot;anomalies_total&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))}</span>
+<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;anomalies/imu&quot;</span><span class="p">,</span> <span class="s2">&quot;pipelines/imu-watch/tick&quot;</span><span class="p">],</span> <span class="n">publishes</span><span class="o">=</span><span class="s2">&quot;reports/imu&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">report</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="s2">&quot;fired_at&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">message</span><span class="p">:</span>  <span class="c1"># an anomaly: count it</span>
+        <span class="n">me</span><span class="o">.</span><span class="n">persist</span><span class="p">(</span><span class="s2">&quot;total&quot;</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">&quot;total&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;total&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">&quot;total&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))}</span>  <span class="c1"># a tick: report</span>
 
 <span class="n">alert</span> <span class="o">=</span> <span class="n">RuleConfig</span><span class="p">(</span>
     <span class="n">triggers</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;anomalies/imu&quot;</span><span class="p">,),</span>
@@ -366,7 +371,8 @@ recorded beside the planner's pipelines so <code>/rules</code> lists it:</p>
 </code></pre></div>
 
 <p>The schedule becomes a scheduled agent ticking <code>pipelines/imu-watch/tick</code>,
-which <code>report</code> listens to. The rule becomes a rule agent: when a message on
+which <code>report</code> listens to. <code>report</code> counts the anomalies itself: persistence is
+per agent, so one agent cannot <code>recall</code> what another <code>persist</code>ed. The rule becomes a rule agent: when a message on
 <code>anomalies/imu</code> has <code>score</code> above 20, it publishes to <code>alerts/imu</code>, at most
 every thirty seconds. Rules are the typed dataclasses above or the equivalent
 dicts, which are the spelling chat and JSON use:</p>

@@ -22,12 +22,12 @@ published to the output topic, or sent back as the task's result; ``None``
 publishes nothing. A plain function runs on a worker thread, so a model that
 takes a while does not hold the event loop; a coroutine function runs on the
 loop. A function that also wants the actor -- to persist, recall or publish --
-takes it as a second parameter, one without a default or annotated
-``FunctionAgent``; a second parameter with a default is the function's own.
+takes it as a second parameter.
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -37,7 +37,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..core.actor import Actor, Message, MessageType, run_callable
+from ..core.actor import Actor, Message, MessageType
 
 logger = logging.getLogger(__name__)
 
@@ -58,18 +58,6 @@ def _summary(value: Any, limit: int = 160) -> str:
     """``value`` on one line, cut short for a feed row."""
     text = json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value)
     return text if len(text) <= limit else text[: limit - 1] + "…"
-
-
-def _names_function_agent(annotation: Any) -> bool:
-    """Whether a parameter annotation is :class:`FunctionAgent`, as a class or as text.
-
-    Text, because a module with ``from __future__ import annotations`` keeps
-    every annotation as the string it was written as: ``"FunctionAgent"``,
-    ``"wactorz.FunctionAgent"``, ``"FunctionAgent | None"``.
-    """
-    if isinstance(annotation, str):
-        return re.search(r"(?:^|[\s.|\[])FunctionAgent\b", annotation) is not None
-    return isinstance(annotation, type) and issubclass(annotation, FunctionAgent)
 
 
 def agent_name_from(identifier: str) -> str:
@@ -95,16 +83,14 @@ class AgentSpec:
     requires: dict[str, Any] = field(default_factory=dict)
     #: Whether the agent is started with the system, or only when asked for.
     autostart: bool = True
+    #: How many messages, and tasks, the function handles at once. One keeps
+    #: messages on a topic in order; more is for a function that waits on a
+    #: model or a job and would otherwise queue its topic behind itself.
+    concurrency: int = 1
 
     @property
     def wants_actor(self) -> bool:
-        """Whether the function takes the actor as its second parameter.
-
-        It does when that parameter has no default, or when it is annotated as a
-        :class:`FunctionAgent`. A second parameter with a default and any other
-        annotation -- ``def detect(reading, threshold=4.0)`` -- is the
-        function's own and keeps its default.
-        """
+        """Whether the function takes the actor as its second parameter."""
         try:
             params = [
                 p
@@ -113,10 +99,7 @@ class AgentSpec:
             ]
         except (TypeError, ValueError):
             return False
-        if len(params) < 2:
-            return False
-        second = params[1]
-        return second.default is second.empty or _names_function_agent(second.annotation)
+        return len(params) >= 2
 
     def build(
         self,
@@ -148,13 +131,17 @@ def agent(
     output_schema: dict[str, Any] | None = None,
     requires: dict[str, Any] | None = None,
     autostart: bool = True,
+    concurrency: int = 1,
 ) -> Any:
     """Declare a function as an agent. Works bare, ``@agent``, or with arguments.
 
     The function is returned unchanged, with the specification attached as
     ``__wactorz_spec__``; :mod:`wactorz.plugins` reads it from there, and
-    ``spec.build()`` makes the actor.
+    ``spec.build()`` makes the actor. ``concurrency`` above one runs that many
+    messages and tasks at once, out of order; see :class:`AgentSpec`.
     """
+    if concurrency < 1:
+        raise ValueError(f"concurrency must be at least 1, got {concurrency}")
 
     def _declare(target: Callable[..., Any]) -> Callable[..., Any]:
         spec = AgentSpec(
@@ -167,6 +154,7 @@ def agent(
             input_schema=dict(input_schema or {}),
             output_schema=dict(output_schema or {}),
             requires=dict(requires or {}),
+            concurrency=concurrency,
             autostart=autostart,
         )
         setattr(target, SPEC_ATTRIBUTE, spec)
@@ -181,6 +169,50 @@ def spec_of(obj: Any) -> AgentSpec | None:
     """The specification a decorated function carries, or None for anything else."""
     spec = getattr(obj, SPEC_ATTRIBUTE, None)
     return spec if isinstance(spec, AgentSpec) else None
+
+
+class MeteredLLM:
+    """The system's provider as a decorated function sees it: every call counted on the actor.
+
+    The built-in agents keep their own ledgers; a function has none, so the
+    usage a provider returns with each answer would be lost. This wrapper
+    hands it to :meth:`~wactorz.core.actor.Actor.record_llm_cost` and passes
+    everything else through, so ``me.llm`` reads like the provider itself.
+    A stream is not metered: its usage is not reported.
+    """
+
+    def __init__(self, provider: Any, actor: Actor) -> None:
+        #: The provider itself, for code that needs its class or its settings.
+        self.provider = provider
+        self._provider = provider
+        self._actor = actor
+
+    async def complete(
+        self, messages: list[dict], system: str = "", **kwargs: Any
+    ) -> tuple[str, dict]:
+        text, usage = await self._provider.complete(messages, system, **kwargs)
+        self._record(usage)
+        return text, usage
+
+    async def complete_with_tools(
+        self, messages: list[dict], tools: list[dict[str, Any]], system: str = "", **kwargs: Any
+    ) -> Any:
+        result = await self._provider.complete_with_tools(messages, tools, system, **kwargs)
+        self._record(getattr(result, "usage", None))
+        return result
+
+    def _record(self, usage: Any) -> None:
+        usage = usage if isinstance(usage, dict) else {}
+        self._actor.record_llm_cost(
+            float(usage.get("cost_usd", 0.0) or 0.0),
+            input_tokens=int(usage.get("input_tokens", 0) or 0),
+            output_tokens=int(usage.get("output_tokens", 0) or 0),
+            model=str(getattr(self._provider, "model", "") or ""),
+            provider=type(self._provider).__name__,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._provider, name)
 
 
 class FunctionAgent(Actor):
@@ -202,8 +234,11 @@ class FunctionAgent(Actor):
         #: Whatever the spawn config passed as ``options``: a model path, a
         #: threshold. Read by a function that takes the actor.
         self.options: dict[str, Any] = dict(options or {})
-        #: Kept for a function that wants to call the model the system uses.
-        self.llm = llm_provider
+        #: The model the system uses, for a function that wants it, with every
+        #: call counted on this actor's card and against the cost limit.
+        self.llm: Any = MeteredLLM(llm_provider, self) if llm_provider is not None else None
+        #: Bounds the tasks in flight when the spec allows more than one.
+        self._slots = asyncio.Semaphore(spec.concurrency)
 
     async def on_start(self) -> None:
         publishes = [self.spec.publishes] if self.spec.publishes else []
@@ -216,7 +251,7 @@ class FunctionAgent(Actor):
             subscribes=list(self.spec.subscribes),
         )
         for topic in self.spec.subscribes:
-            self.subscribe(topic, self._on_message)
+            self.subscribe(topic, self._on_message, concurrency=self.spec.concurrency)
         if self.spec.subscribes:
             await self.log(f"Listening on {', '.join(self.spec.subscribes)}")
 
@@ -224,14 +259,12 @@ class FunctionAgent(Actor):
         return self.spec.description or f"running {self.spec.fn.__name__}()"
 
     async def call(self, payload: Any) -> Any:
-        """Run the function on ``payload``: on the loop when it is async, else on a thread.
-
-        A plain function that hands back a coroutine -- an async function behind
-        a plain decorator -- has that coroutine awaited, so its result is what
-        is published, not the coroutine object.
-        """
+        """Run the function on ``payload``, on a thread when it is not a coroutine function."""
+        fn = self.spec.fn
         args = (payload, self) if self.spec.wants_actor else (payload,)
-        return await run_callable(self.spec.fn, *args)
+        if inspect.iscoroutinefunction(fn):
+            return await fn(*args)
+        return await asyncio.to_thread(fn, *args)
 
     async def log(self, message: str, level: str = "info") -> None:
         """Say something on the dashboard feed, under this agent's name."""
@@ -258,9 +291,25 @@ class FunctionAgent(Actor):
         await self.log(f"→ {self.spec.publishes}: {_summary(result)}")
 
     async def handle_message(self, msg: Message) -> None:
-        """A task from chat or another agent: run the function, answer with the result."""
+        """A task from chat or another agent: run the function, answer with the result.
+
+        With ``concurrency`` above one the task runs beside the mailbox, so the
+        next task is not held behind it; the semaphore keeps the number in
+        flight to what the spec allows, and the actor owns the task, so a stop
+        still waits for it.
+        """
         if msg.type != MessageType.TASK:
             return
+        if self.spec.concurrency > 1:
+            self.run_detached(self._answer(msg), name=f"{self.name}:task")
+            return
+        await self._answer(msg)
+
+    async def _answer(self, msg: Message) -> None:
+        async with self._slots:
+            await self._answer_now(msg)
+
+    async def _answer_now(self, msg: Message) -> None:
         payload = msg.payload
         task_id = payload.get("_task_id") if isinstance(payload, dict) else None
         if isinstance(payload, dict):

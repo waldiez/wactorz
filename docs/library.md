@@ -107,9 +107,7 @@ app = FastAPI(lifespan=lifespan)
 
 `run()` is `asyncio.run(serve(...))` with signal handling on; the two take the
 same arguments: `web`, `minimal`, `monitor_port`, `mqtt_broker`, `mqtt_port`,
-`llm`, `state_dir`, `interface`. `serve` runs no chat interface unless
-`interface` names one, so it never reads the host's stdin; `run` uses the
-command's (`INTERFACE`, the interactive CLI by default). The dashboard's default port is 8888, which Jupyter also
+`llm`, `state_dir`. The dashboard's default port is 8888, which Jupyter also
 uses; inside a notebook, or beside any other server on that port, pass
 `monitor_port` or set `MONITOR_PORT`.
 
@@ -196,7 +194,95 @@ given the system's model.
 
 A message on a subscribed topic arrives decoded: a dict or list when it was
 JSON, `{"raw": text}` for text, `{"raw": bytes}` for anything else, such as a
-camera frame. Messages on one topic are handled one at a time, in order.
+camera frame. Messages on one topic are handled one at a time, in order,
+unless the subscription says otherwise (below).
+
+## More than one at a time
+
+By default an agent handles one message of a topic at a time, in order, and
+one task at a time, so a function that keeps state between calls is never run
+against itself. That is right for a sensor stream and wrong for a function
+that waits rather than computes: a model call, a training job, a graph with
+three model calls in it, where a twenty-second step queues every message
+behind it.
+
+```python
+@wactorz.agent(subscribes="tickets/new", publishes="tickets/triaged", concurrency=4)
+async def triage(ticket: dict, me: wactorz.FunctionAgent) -> dict:
+    return await GRAPH.ainvoke({"ticket": ticket})
+
+class Trainer(Actor):
+    async def on_start(self) -> None:
+        self.subscribe("mlops/candidates", self.train, concurrency=2)
+```
+
+`concurrency=N` runs up to N messages of the topic, and N tasks, at once.
+Order within the topic is then not kept, and the function runs against
+itself, so what it shares between calls must cope with that; a model loaded
+once and read by every call is fine, a counter updated with `persist` is a
+race. A plain `def` under concurrency runs on that many worker threads.
+
+## Your own files
+
+`me.state_dir` (or `self.state_dir` in a subclass) is the agent's own
+directory under the state directory: for model weights, a checkpoint store, a
+local experiment log, anything too large or too un-JSON for `persist()`. It
+exists from construction, survives restarts, and is removed with the agent on
+a delete. What moves with a migration to another node is the persisted
+state, not these files; an agent that needs a file on another machine ships
+it.
+
+```python
+checkpointer = SqliteSaver.from_conn_string(str(me.state_dir / "graph.sqlite"))
+```
+
+## Spend made elsewhere
+
+A call through `me.llm` is counted as it returns: tokens and cost on the
+agent's card, and against the cost limit, with nothing to write in the
+function. A model called another way, through LangChain, AG2 or an SDK
+directly, is invisible until the agent says what it spent:
+
+```python
+me.record_llm_cost(0.0012, input_tokens=300, output_tokens=40, model="gpt-4o-mini")
+```
+
+That joins the agent's card and the process-wide total the cost limit is
+checked against. Two helpers do it for the common cases:
+
+- `wactorz.core.integrations.langchain.CostCallback(me, prices={...})` is a LangChain
+  callback handler: pass it in a chain's or a graph's `config`, and every
+  model call is reported with its tokens. LangChain reports tokens, not money,
+  so `prices` maps a model name to dollars per million input and output
+  tokens; an unpriced model is counted at no cost.
+- `wactorz.core.integrations.ag2.record_usage(me, agents)` reads AG2's usage summary after
+  a chat and reports what the chat added, with AG2's own prices.
+
+## LangGraph, LangChain and AG2
+
+Wactorz does not compete with them. LangGraph and AG2 decide how an agent
+thinks: the graph, the prompts, the conversation. Wactorz keeps that running,
+wired to topics and events, restarted when it crashes, saved across restarts
+and visible on a dashboard, which is what a graph you call and a chat you
+start do not have on their own. An `async` function that invokes the graph
+is the whole integration:
+
+```python
+@wactorz.agent(subscribes="tickets/new", publishes="tickets/triaged",
+               requires={"packages": ["langgraph"]}, concurrency=4)
+async def triage(ticket: dict, me: wactorz.FunctionAgent) -> dict:
+    result = await GRAPH.ainvoke({"ticket": ticket}, config={"callbacks": [CostCallback(me)]})
+    return result["decision"]
+```
+
+The graph's nodes can call the system's model through `me.llm`, so its spend
+is counted and capped like every other call, or a LangChain model with the
+callback above. `examples/langgraph_triage/` and `examples/ag2_review/` are
+the two, runnable; `pip install 'wactorz[langgraph]'` and
+`'wactorz[ag2]'` bring the libraries. Ray is the same shape: an always-on
+agent at the edge awaits a Ray task's handle and publishes the result. Keep
+Ray's actors and Wactorz's in separate roles, compute you call and the
+control layer that calls it, rather than merging the two actor models.
 
 ## A pipeline
 
@@ -212,12 +298,9 @@ from wactorz import RuleAction, RuleCondition, RuleConfig
 async def notify(anomaly: dict, me: wactorz.FunctionAgent) -> None:
     await me.notify_user(f"IMU anomaly, score {anomaly['score']}")
 
-@wactorz.agent(subscribes=["anomalies/imu", "pipelines/imu-watch/tick"], publishes="reports/imu")
-def report(message: dict, me: wactorz.FunctionAgent) -> dict | None:
-    if "fired_at" not in message:  # an anomaly: count it
-        me.persist("total", int(me.recall("total", 0)) + 1)
-        return None
-    return {"total": int(me.recall("total", 0))}  # a tick: report
+@wactorz.agent(subscribes="pipelines/imu-watch/tick", publishes="reports/imu")
+def report(tick: dict, me: wactorz.FunctionAgent) -> dict:
+    return {"total": int(me.recall("anomalies_total", 0))}
 
 alert = RuleConfig(
     triggers=("anomalies/imu",),
@@ -235,8 +318,7 @@ watch = wactorz.pipeline(
 ```
 
 The schedule becomes a scheduled agent ticking `pipelines/imu-watch/tick`,
-which `report` listens to. `report` counts the anomalies itself: persistence is
-per agent, so one agent cannot `recall` what another `persist`ed. The rule becomes a rule agent: when a message on
+which `report` listens to. The rule becomes a rule agent: when a message on
 `anomalies/imu` has `score` above 20, it publishes to `alerts/imu`, at most
 every thirty seconds. Rules are the typed dataclasses above or the equivalent
 dicts, which are the spelling chat and JSON use:
@@ -280,6 +362,9 @@ environment wants.
   `me.llm`, with the cost kept across restarts.
 - `yolo_watch/`: a YOLO model as an agent, as a function answering snapshots
   on MQTT and as an `Actor` reading a camera itself.
+- `langgraph_triage/`: a LangGraph graph as an agent, several tickets in
+  flight at once, with the model's spend on the dashboard.
+- `ag2_review/`: an AG2 writer–critic conversation as an agent.
 
 ## Testing
 
@@ -325,7 +410,9 @@ What this guide uses is the surface you can rely on:
 | `wactorz.system` | the running `ActorSystem` (`registry`, `supervisor`), `None` outside a run |
 | `wactorz.spec_of` | the `AgentSpec` behind a decorated function, with `build()` for tests |
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
-| `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message` | the base class |
+| `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
+| `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |
+| `wactorz.core.integrations.langchain.CostCallback`, `wactorz.core.integrations.ag2.record_usage` | spend made through LangChain or AG2 |
 | `wactorz.FunctionAgent` | the actor behind a decorated function: `call`, `options`, `log` |
 | `wactorz.RuleConfig`, `RuleCondition`, `RuleAction`, `wactorz.RuleAgent` | typed rules |
 | `wactorz.Message`, `MessageType` | what `handle_message` receives |

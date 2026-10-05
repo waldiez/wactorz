@@ -240,7 +240,7 @@ Declares a pipeline of agents and checks its wiring; see
 `wactorz.RuleConfig` objects, built from `RuleCondition` and `RuleAction` and
 visible to the type checker, or the equivalent dicts.
 
-### `wactorz.serve(agents=(), *, pipelines_=(), web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None, interface=None, handle_signals=False, configure_logging=False)`
+### `wactorz.serve(agents=(), *, pipelines_=(), web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None, handle_signals=False, configure_logging=False)`
 
 A coroutine: runs the system on the caller's event loop with the given agents
 (decorated functions or `Actor` subclasses) supervised beside the built-ins, for
@@ -252,18 +252,11 @@ builds no model unless `llm` names one. Raises `wactorz.StartupError` for a
 configuration that cannot be started, with what it started undone; the host's
 own tasks, whenever started, are left running at shutdown. Returns when the
 system stops, and raises `CancelledError` when cancelled, once it has.
-`interface` names a chat interface to run (`"rest"`, `"discord"`, `"telegram"`,
-`"whatsapp"`, `"cli"`); by default there is none, so the host's stdin is never
-read. The agents and pipelines given are registered for this run only, so a
-second `serve` in the same process starts what it is given. An agent named
-like a built-in (`main`, `monitor`, `installer`, `catalog`, the Home Assistant
-agents) is not started, and the error log names it.
 
 ### `wactorz.run(...)`
 
 `asyncio.run(serve(...))` with signal handling and the command's logging on,
-for a script. Same arguments; the chat interface defaults to the command's
-(`INTERFACE`).
+for a script. Same arguments.
 
 ### `wactorz.system()`
 
@@ -282,6 +275,28 @@ A `RuntimeError` for a configuration that cannot start: an exposed bind address
 without an API key, a broker certificate that cannot be loaded, a chat interface
 whose token is missing. The `wactorz` command logs it and exits with status 1;
 a host program catches it.
+
+### `Actor.subscribe(topic, callback, *, concurrency=1)`
+
+Calls `callback(payload)` for every message matching the MQTT filter `topic`,
+on one broker connection per actor. One message at a time, in order, unless
+`concurrency` is above one, which runs that many at once, out of order. The
+same `concurrency=` on `@wactorz.agent` covers a decorated function's
+messages and tasks alike.
+
+### `Actor.state_dir`
+
+The actor's own directory under the state directory, a `Path`, for files it
+keeps: weights, checkpoints, a local experiment store. Exists from
+construction, survives restarts, is removed with the actor on a delete. Not
+migrated between nodes.
+
+### `Actor.record_llm_cost(cost_usd, *, input_tokens=0, output_tokens=0, model="", provider="")`
+
+Counts a model call made outside the system's providers on the actor's
+dashboard counters and in the process-wide total the cost limit checks.
+`wactorz.integrations.langchain.CostCallback` and `wactorz.integrations.ag2.record_usage` call
+it for LangChain and AG2.
 
 ### `Actor.publish(topic, payload, *, retain=False, qos=0)`
 

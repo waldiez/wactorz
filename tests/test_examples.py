@@ -57,7 +57,9 @@ class TestTheLLMNotesExample:
         assert "one sentence" in system
         assert messages[-1]["content"].startswith("The pump")
         assert actor.recall("notes_total") == 1
-        assert actor.recall("cost_usd_total") == pytest.approx(result["cost_usd"])
+        # The call through `me.llm` landed on the card by itself.
+        assert actor.metrics.llm_calls == 1
+        assert actor.metrics.llm_cost_usd == pytest.approx(result["cost_usd"])
 
     async def test_plain_text_is_accepted_as_it_arrives(
         self, summarise: Any, tmp_path: Path
@@ -334,3 +336,93 @@ class TestTheFastAPIExample:
         with pytest.raises(wactorz.StartupError):
             async with app_module.lifespan(app_module.app):
                 pass
+
+
+class TestTheLangGraphExample:
+    async def test_a_ticket_goes_through_the_graph_without_a_model(self, tmp_path: Path) -> None:
+        pytest.importorskip("langgraph")
+        triage = _load("langgraph_triage").triage
+        spec = spec_of(triage)
+        assert spec is not None and spec.concurrency == 4
+        actor = spec.build(persistence_dir=str(tmp_path))
+
+        result = await actor.call({"id": "T-1", "text": "The pump stopped, the line is down"})
+        again = await actor.call({"id": "T-2", "text": "How do I change a threshold?"})
+
+        assert result == {
+            "id": "T-1",
+            "category": "outage",
+            "priority": "high",
+            "reply": result["reply"],  # pyright: ignore[reportOptionalSubscript]
+        }
+        assert again is not None and (again["category"], again["priority"]) == ("question", "low")
+        assert actor.options["_graph"] is not None, "compiled once, kept on the actor"
+        assert actor.recall("tickets_total") == 2
+        assert await actor.call({"id": "T-3"}) is None
+
+    async def test_the_graph_uses_the_systems_model_when_it_has_one(self, tmp_path: Path) -> None:
+        pytest.importorskip("langgraph")
+        triage = _load("langgraph_triage").triage
+        model = FakeProvider(
+            script={"invoice": "billing", "reply": "We will refund it today. Sorry."}
+        )
+        actor = spec_of(triage).build(  # pyright: ignore[reportOptionalMemberAccess]
+            persistence_dir=str(tmp_path), llm_provider=model
+        )
+
+        result = await actor.call({"id": "T-9", "text": "Charged twice on the invoice"})
+
+        assert result is not None and result["category"] == "billing"
+        assert result["priority"] == "medium"
+        assert len(model.calls) == 2, "one call to classify, one to draft"
+        assert actor.metrics.llm_calls == 2, "both counted on the card"
+        assert actor.metrics.llm_input_tokens > 0
+
+
+class TestTheAG2Example:
+    async def test_a_draft_runs_through_the_conversation_without_a_model(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("autogen")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        review = _load("ag2_review").review
+        actor = spec_of(review).build(persistence_dir=str(tmp_path))  # pyright: ignore[reportOptionalMemberAccess]
+
+        result = await actor.call({"id": "d1", "text": "We is pleased to announce the pump."})
+
+        assert result is not None
+        assert result["id"] == "d1" and result["turns"] >= 2
+        assert result["cost_usd"] == 0.0, "no model, no spend"
+        assert await actor.call({"id": "d2", "text": "  "}) is None
+
+    def test_ag2s_configuration_follows_the_systems_model(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("autogen")
+        module = _load("ag2_review")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+        class AnthropicProvider:
+            model = "claude-sonnet-4-6"
+
+        class OllamaProvider:
+            model = "llama3"
+            base_url = "http://box:11434/"
+
+        spec = spec_of(module.review)
+        assert spec is not None
+        with_anthropic = spec.build(persistence_dir=str(tmp_path), llm_provider=AnthropicProvider())
+        config = module.llm_config(with_anthropic)
+        assert config == {
+            "config_list": [
+                {"model": "claude-sonnet-4-6", "api_key": "sk-ant-test", "api_type": "anthropic"}
+            ]
+        }
+
+        with_ollama = spec.build(persistence_dir=str(tmp_path / "b"), llm_provider=OllamaProvider())
+        entry = module.llm_config(with_ollama)["config_list"][0]
+        assert entry["base_url"] == "http://box:11434/v1" and entry["price"] == [0, 0]
+
+        without = spec.build(persistence_dir=str(tmp_path / "c"))
+        assert module.llm_config(without) is False

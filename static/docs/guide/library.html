@@ -237,9 +237,7 @@ the task stops the system cleanly:</p>
 
 <p><code>run()</code> is <code>asyncio.run(serve(...))</code> with signal handling on; the two take the
 same arguments: <code>web</code>, <code>minimal</code>, <code>monitor_port</code>, <code>mqtt_broker</code>, <code>mqtt_port</code>,
-<code>llm</code>, <code>state_dir</code>, <code>interface</code>. <code>serve</code> runs no chat interface unless
-<code>interface</code> names one, so it never reads the host's stdin; <code>run</code> uses the
-command's (<code>INTERFACE</code>, the interactive CLI by default). The dashboard's default port is 8888, which Jupyter also
+<code>llm</code>, <code>state_dir</code>. The dashboard's default port is 8888, which Jupyter also
 uses; inside a notebook, or beside any other server on that port, pass
 <code>monitor_port</code> or set <code>MONITOR_PORT</code>.</p>
 <p><code>serve</code> behaves as a library call inside someone else's program: it leaves the
@@ -336,7 +334,80 @@ until asked for. A subclass that takes <code>llm_provider</code> in its construc
 given the system's model.</p>
 <p>A message on a subscribed topic arrives decoded: a dict or list when it was
 JSON, <code>{"raw": text}</code> for text, <code>{"raw": bytes}</code> for anything else, such as a
-camera frame. Messages on one topic are handled one at a time, in order.</p>
+camera frame. Messages on one topic are handled one at a time, in order,
+unless the subscription says otherwise (below).</p>
+<h2 id="more-than-one-at-a-time">More than one at a time</h2>
+<p>By default an agent handles one message of a topic at a time, in order, and
+one task at a time, so a function that keeps state between calls is never run
+against itself. That is right for a sensor stream and wrong for a function
+that waits rather than computes: a model call, a training job, a graph with
+three model calls in it, where a twenty-second step queues every message
+behind it.</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="s2">&quot;tickets/new&quot;</span><span class="p">,</span> <span class="n">publishes</span><span class="o">=</span><span class="s2">&quot;tickets/triaged&quot;</span><span class="p">,</span> <span class="n">concurrency</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">triage</span><span class="p">(</span><span class="n">ticket</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+    <span class="k">return</span> <span class="k">await</span> <span class="n">GRAPH</span><span class="o">.</span><span class="n">ainvoke</span><span class="p">({</span><span class="s2">&quot;ticket&quot;</span><span class="p">:</span> <span class="n">ticket</span><span class="p">})</span>
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Trainer</span><span class="p">(</span><span class="n">Actor</span><span class="p">):</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">on_start</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">subscribe</span><span class="p">(</span><span class="s2">&quot;mlops/candidates&quot;</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">train</span><span class="p">,</span> <span class="n">concurrency</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>concurrency=N</code> runs up to N messages of the topic, and N tasks, at once.
+Order within the topic is then not kept, and the function runs against
+itself, so what it shares between calls must cope with that; a model loaded
+once and read by every call is fine, a counter updated with <code>persist</code> is a
+race. A plain <code>def</code> under concurrency runs on that many worker threads.</p>
+<h2 id="your-own-files">Your own files</h2>
+<p><code>me.state_dir</code> (or <code>self.state_dir</code> in a subclass) is the agent's own
+directory under the state directory: for model weights, a checkpoint store, a
+local experiment log, anything too large or too un-JSON for <code>persist()</code>. It
+exists from construction, survives restarts, and is removed with the agent on
+a delete. What moves with a migration to another node is the persisted
+state, not these files; an agent that needs a file on another machine ships
+it.</p>
+<div class="highlight"><pre><span></span><code><span class="n">checkpointer</span> <span class="o">=</span> <span class="n">SqliteSaver</span><span class="o">.</span><span class="n">from_conn_string</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">state_dir</span> <span class="o">/</span> <span class="s2">&quot;graph.sqlite&quot;</span><span class="p">))</span>
+</code></pre></div>
+
+<h2 id="spend-made-elsewhere">Spend made elsewhere</h2>
+<p>The system's own providers record what they cost, and the dashboard and the
+cost limit see it. A model called another way, through LangChain, AG2 or an
+SDK directly, is invisible until the agent says what it spent:</p>
+<div class="highlight"><pre><span></span><code><span class="n">me</span><span class="o">.</span><span class="n">record_llm_cost</span><span class="p">(</span><span class="mf">0.0012</span><span class="p">,</span> <span class="n">input_tokens</span><span class="o">=</span><span class="mi">300</span><span class="p">,</span> <span class="n">output_tokens</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<p>That joins the agent's card and the process-wide total the cost limit is
+checked against. Two helpers do it for the common cases:</p>
+<ul>
+<li><code>wactorz.integrations.langchain.CostCallback(me, prices={...})</code> is a LangChain
+  callback handler: pass it in a chain's or a graph's <code>config</code>, and every
+  model call is reported with its tokens. LangChain reports tokens, not money,
+  so <code>prices</code> maps a model name to dollars per million input and output
+  tokens; an unpriced model is counted at no cost.</li>
+<li><code>wactorz.integrations.ag2.record_usage(me, agents)</code> reads AG2's usage summary after
+  a chat and reports what the chat added, with AG2's own prices.</li>
+</ul>
+<h2 id="langgraph-langchain-and-ag2">LangGraph, LangChain and AG2</h2>
+<p>Wactorz does not compete with them. LangGraph and AG2 decide how an agent
+thinks: the graph, the prompts, the conversation. Wactorz keeps that running,
+wired to topics and events, restarted when it crashes, saved across restarts
+and visible on a dashboard, which is what a graph you call and a chat you
+start do not have on their own. An <code>async</code> function that invokes the graph
+is the whole integration:</p>
+<div class="highlight"><pre><span></span><code><span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="s2">&quot;tickets/new&quot;</span><span class="p">,</span> <span class="n">publishes</span><span class="o">=</span><span class="s2">&quot;tickets/triaged&quot;</span><span class="p">,</span>
+               <span class="n">requires</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;packages&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;langgraph&quot;</span><span class="p">]},</span> <span class="n">concurrency</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">triage</span><span class="p">(</span><span class="n">ticket</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">GRAPH</span><span class="o">.</span><span class="n">ainvoke</span><span class="p">({</span><span class="s2">&quot;ticket&quot;</span><span class="p">:</span> <span class="n">ticket</span><span class="p">},</span> <span class="n">config</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;callbacks&quot;</span><span class="p">:</span> <span class="p">[</span><span class="n">CostCallback</span><span class="p">(</span><span class="n">me</span><span class="p">)]})</span>
+    <span class="k">return</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;decision&quot;</span><span class="p">]</span>
+</code></pre></div>
+
+<p>The graph's nodes can call the system's model through <code>me.llm</code>, so its spend
+is counted and capped like every other call, or a LangChain model with the
+callback above. <code>examples/langgraph_triage/</code> and <code>examples/ag2_review/</code> are
+the two, runnable; <code>pip install 'wactorz[langgraph]'</code> and
+<code>'wactorz[ag2]'</code> bring the libraries. Ray is the same shape: an always-on
+agent at the edge awaits a Ray task's handle and publishes the result. Keep
+Ray's actors and Wactorz's in separate roles, compute you call and the
+control layer that calls it, rather than merging the two actor models.</p>
 <h2 id="a-pipeline">A pipeline</h2>
 <p>Steps that work together are declared together. Each step is still an agent
 with its own card; the pipeline groups them, adds a schedule and rules, and is
@@ -348,12 +419,9 @@ recorded beside the planner's pipelines so <code>/rules</code> lists it:</p>
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">notify</span><span class="p">(</span><span class="n">anomaly</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="k">await</span> <span class="n">me</span><span class="o">.</span><span class="n">notify_user</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;IMU anomaly, score </span><span class="si">{</span><span class="n">anomaly</span><span class="p">[</span><span class="s1">&#39;score&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
-<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;anomalies/imu&quot;</span><span class="p">,</span> <span class="s2">&quot;pipelines/imu-watch/tick&quot;</span><span class="p">],</span> <span class="n">publishes</span><span class="o">=</span><span class="s2">&quot;reports/imu&quot;</span><span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">report</span><span class="p">(</span><span class="n">message</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">if</span> <span class="s2">&quot;fired_at&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">message</span><span class="p">:</span>  <span class="c1"># an anomaly: count it</span>
-        <span class="n">me</span><span class="o">.</span><span class="n">persist</span><span class="p">(</span><span class="s2">&quot;total&quot;</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">&quot;total&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
-        <span class="k">return</span> <span class="kc">None</span>
-    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;total&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">&quot;total&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))}</span>  <span class="c1"># a tick: report</span>
+<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">subscribes</span><span class="o">=</span><span class="s2">&quot;pipelines/imu-watch/tick&quot;</span><span class="p">,</span> <span class="n">publishes</span><span class="o">=</span><span class="s2">&quot;reports/imu&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">report</span><span class="p">(</span><span class="n">tick</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;total&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">recall</span><span class="p">(</span><span class="s2">&quot;anomalies_total&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">))}</span>
 
 <span class="n">alert</span> <span class="o">=</span> <span class="n">RuleConfig</span><span class="p">(</span>
     <span class="n">triggers</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;anomalies/imu&quot;</span><span class="p">,),</span>
@@ -371,8 +439,7 @@ recorded beside the planner's pipelines so <code>/rules</code> lists it:</p>
 </code></pre></div>
 
 <p>The schedule becomes a scheduled agent ticking <code>pipelines/imu-watch/tick</code>,
-which <code>report</code> listens to. <code>report</code> counts the anomalies itself: persistence is
-per agent, so one agent cannot <code>recall</code> what another <code>persist</code>ed. The rule becomes a rule agent: when a message on
+which <code>report</code> listens to. The rule becomes a rule agent: when a message on
 <code>anomalies/imu</code> has <code>score</code> above 20, it publishes to <code>alerts/imu</code>, at most
 every thirty seconds. Rules are the typed dataclasses above or the equivalent
 dicts, which are the spelling chat and JSON use:</p>
@@ -409,6 +476,9 @@ environment wants.</p>
   <code>me.llm</code>, with the cost kept across restarts.</li>
 <li><code>yolo_watch/</code>: a YOLO model as an agent, as a function answering snapshots
   on MQTT and as an <code>Actor</code> reading a camera itself.</li>
+<li><code>langgraph_triage/</code>: a LangGraph graph as an agent, several tickets in
+  flight at once, with the model's spend on the dashboard.</li>
+<li><code>ag2_review/</code>: an AG2 writer–critic conversation as an agent.</li>
 </ul>
 <h2 id="testing">Testing</h2>
 <p>A decorated function is tested as a function. The actor around it is built
@@ -473,8 +543,16 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <td>what <code>serve</code> and <code>run</code> raise for a configuration that cannot start</td>
 </tr>
 <tr>
-<td><code>wactorz.Actor</code> with <code>subscribe</code>, <code>window</code>, <code>publish</code>, <code>persist</code>, <code>recall</code>, <code>send</code>, <code>notify_user</code>, <code>on_start</code>, <code>on_stop</code>, <code>handle_message</code></td>
+<td><code>wactorz.Actor</code> with <code>subscribe</code>, <code>window</code>, <code>publish</code>, <code>persist</code>, <code>recall</code>, <code>send</code>, <code>notify_user</code>, <code>on_start</code>, <code>on_stop</code>, <code>handle_message</code>, <code>state_dir</code>, <code>record_llm_cost</code></td>
 <td>the base class</td>
+</tr>
+<tr>
+<td><code>concurrency=</code> on <code>wactorz.agent</code> and <code>Actor.subscribe</code></td>
+<td>messages and tasks at once</td>
+</tr>
+<tr>
+<td><code>wactorz.integrations.langchain.CostCallback</code>, <code>wactorz.integrations.ag2.record_usage</code></td>
+<td>spend made through LangChain or AG2</td>
 </tr>
 <tr>
 <td><code>wactorz.FunctionAgent</code></td>

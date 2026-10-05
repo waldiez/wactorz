@@ -561,7 +561,29 @@ class TestMigration:
         (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
         assert returned["config"]["code"] == REPAIRED
 
-    async def test_state_that_cannot_travel_is_named_rather_than_dropped_silently(
+    async def test_state_that_cannot_travel_keeps_the_agent_here(
+        self, runner: RecordingRunner
+    ) -> None:
+        # Shipped without the key, the agent would arrive missing it and
+        # nothing on the other side could tell.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent._persistent_state = {"count": 3, "capture": object()}
+
+        await runner._migrate_agent(
+            {"name": "collector", "target_node": "@main", "return_token": "tok-9"}
+        )
+
+        (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
+        assert "capture" in returned["refused"]
+        assert returned["return_token"] == "tok-9", "main must be able to let go of it"
+        assert returned["state_keys_dropped"] == ["capture"]
+        (result,) = [p for t, p, _ in runner.published if t.endswith("/migrate_result")]
+        assert result["success"] is False
+        assert runner.get("collector") is agent, "a refused agent must keep running"
+
+    async def test_a_forced_move_ships_the_rest_and_names_what_it_left(
         self, runner: RecordingRunner
     ) -> None:
         await runner.spawn_agent({"name": "collector", "code": CODE})
@@ -569,11 +591,49 @@ class TestMigration:
         assert agent is not None
         agent._persistent_state = {"count": 3, "capture": object()}
 
+        await runner._migrate_agent({"name": "collector", "target_node": "@main", "force": True})
+
+        (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
+        assert "refused" not in returned
+        assert returned["state"] == {"count": 3}
+        assert returned["state_keys_dropped"] == ["capture"]
+        assert runner.get("collector") is None
+
+    async def test_state_over_the_limit_main_sets_keeps_the_agent_here(
+        self, runner: RecordingRunner
+    ) -> None:
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("history", "x" * 200)
+
+        await runner._migrate_agent(
+            {"name": "collector", "target_node": "@main", "force": True, "max_state_bytes": 100}
+        )
+
+        (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
+        assert "limit" in returned["refused"], "forcing does not make it fit"
+        assert runner.get("collector") is agent
+
+    async def test_what_the_agent_writes_while_stopping_goes_with_it(
+        self, runner: RecordingRunner
+    ) -> None:
+        # The source's file is deleted once the agent is confirmed elsewhere,
+        # so a write left in it is gone.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("turns", 1)
+
+        async def last_turn() -> None:
+            agent.persist("turns", 2)
+
+        agent.on_stop = last_turn  # pyright: ignore[reportAttributeAccessIssue]
+
         await runner._migrate_agent({"name": "collector", "target_node": "@main"})
 
         (returned,) = [p for t, p, _ in runner.published if t.endswith("/state_return")]
-        assert returned["state"] == {"count": 3}
-        assert returned["state_keys_dropped"] == ["capture"]
+        assert returned["state"] == {"turns": 2}
 
     async def test_node_to_node_migration_is_refused(self, runner: RecordingRunner) -> None:
         # It was a lateral path: generated code on one node spawning code on

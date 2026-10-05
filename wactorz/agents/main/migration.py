@@ -18,6 +18,7 @@ import secrets
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...config import MIGRATION_MAX_STATE_BYTES
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -25,6 +26,7 @@ from ...core.mqtt import (
     mqtt_client,
     session_kwargs,
 )
+from ...core.state_snapshot import json_safe, why_it_cannot_travel
 from .spawns import without_transient_keys
 
 if TYPE_CHECKING:
@@ -226,8 +228,15 @@ class Migration:
         self._save_pending()
         agent_name = data.get("agent") or started.get("agent_name", "?")
         from_node = started.get("from_node", "?")
+        if data.get("refused"):
+            # The node kept the agent running and said why on `migrate_result`
+            # too, which is what the user is told; repeating it here would be a
+            # second notice for one refusal.
+            logger.info("[main] %r stays on %r: %s", agent_name, from_node, data.get("refused"))
+            return
         cfg = data.get("config") or {}
         state = data.get("state") or {}
+        left_behind = [str(k) for k in data.get("state_keys_dropped") or []]
 
         if not cfg or not isinstance(cfg, dict):
             logger.warning(
@@ -239,9 +248,9 @@ class Migration:
 
         target_node = started.get("target_node", "")
         if target_node:
-            await self._place_on_target(agent_name, from_node, target_node, cfg, state)
+            await self._place_on_target(agent_name, from_node, target_node, cfg, state, left_behind)
             return
-        if await self._respawn_locally(agent_name, from_node, cfg, state):
+        if await self._respawn_locally(agent_name, from_node, cfg, state, left_behind):
             # Local again, and confirmed: the source may now drop its copy.
             await self._tell_source_to_delete(agent_name, from_node)
 
@@ -252,12 +261,15 @@ class Migration:
         target_node: str,
         cfg: dict[str, Any],
         state: dict[str, Any],
+        left_behind: list[str] | None = None,
     ) -> None:
         """Spawn a returned agent on another node, and wait to be told it started.
 
         The source still holds its state file: nothing is deleted until the
         target confirms, so a migration that fails here leaves the agent exactly
-        where it was rather than between two nodes.
+        where it was rather than between two nodes. That file is also why the
+        pending entry keeps the config without the snapshot: a rollback
+        restarts the agent from it, and only the spawn message needs the copy.
         """
         if self.host is None:
             return
@@ -274,7 +286,8 @@ class Migration:
             "agent_name": agent_name,
             "from_node": from_node,
             "target_node": target_node,
-            "config": config,
+            "config": without_transient_keys(config),
+            "left_behind": list(left_behind or []),
             "started_at": time.time(),
         }
         self._save_pending()
@@ -323,8 +336,9 @@ class Migration:
         await self.update_desired_state(target_node, committed)
         await self._release_source(pending)
         self._announce(
-            f"Migration of '{agent_name}' from '{from_node}' → '{target_node}' complete.",
-            "info",
+            f"Migration of '{agent_name}' from '{from_node}' → '{target_node}' complete."
+            + _left_behind_note(pending.get("left_behind")),
+            "warning" if pending.get("left_behind") else "info",
         )
 
     async def _release_source(self, pending: dict[str, Any]) -> None:
@@ -608,6 +622,7 @@ class Migration:
         from_node: str,
         cfg: dict[str, Any],
         state: dict[str, Any],
+        left_behind: list[str] | None = None,
     ) -> bool:
         """Spawn the returned agent here, and say whether it worked.
 
@@ -634,7 +649,11 @@ class Migration:
                 f"Migration of '{agent_name}' from '{from_node}' → local FAILED: {exc}", "warning"
             )
             return False
-        self._announce(f"Migration of '{agent_name}' from '{from_node}' → local succeeded.", "info")
+        self._announce(
+            f"Migration of '{agent_name}' from '{from_node}' → local succeeded."
+            + _left_behind_note(left_behind),
+            "warning" if left_behind else "info",
+        )
         return True
 
     def _announce(self, message: str, severity: str) -> None:
@@ -650,8 +669,15 @@ class Migration:
             }
         )
 
-    async def migrate_agent(self, agent_name: str, target_node: str) -> dict[str, Any]:
+    async def migrate_agent(
+        self, agent_name: str, target_node: str, *, force: bool = False
+    ) -> dict[str, Any]:
         """Move a running agent to a different node.
+
+        A move that would lose state is refused before anything stops: keys
+        that cannot travel as JSON unless ``force`` is set, and a snapshot over
+        ``MIGRATION_MAX_STATE_BYTES`` always. Main checks a local agent itself;
+        a node checks its own, from the same two values sent with the request.
 
         Sources of truth, in priority order:
           1. Spawn registry — has the full config including code.
@@ -770,7 +796,7 @@ class Migration:
             self._save_pending()
             await self.host._mqtt_publish(
                 f"nodes/{current_node}/migrate",
-                {"name": agent_name, "target_node": "@main", "return_token": return_token},
+                self._hand_back_request(agent_name, return_token, force),
                 qos=1,
             )
             # Nothing is pre-staged. The registry and both nodes' desired state
@@ -819,7 +845,7 @@ class Migration:
             self._save_pending()
             await self.host._mqtt_publish(
                 f"nodes/{current_node}/migrate",
-                {"name": agent_name, "target_node": "@main", "return_token": return_token},
+                self._hand_back_request(agent_name, return_token, force),
                 qos=1,
             )
             msg = (
@@ -847,43 +873,16 @@ class Migration:
             target_node,
         )
 
-        # Snapshot the local agent's persisted state before stopping it.
-        # Only JSON-serialisable keys survive the MQTT trip.
-        initial_state: dict[str, Any] = {}
-        if self.host._registry:
-            local = self.host._registry.find_by_name(agent_name)
-            if local and hasattr(local, "_persistence_api") and local._persistence_api:
-                try:
-                    raw = local._persistence_api.all()
-                    dropped = []
-                    for k, v in raw.items():
-                        try:
-                            json.dumps(v)
-                            initial_state[k] = v
-                        except (TypeError, ValueError):
-                            dropped.append(k)
-                    if dropped:
-                        logger.warning(
-                            "[%s] Local→remote migrate %r: dropping non-JSON state keys %s",
-                            self.host.name,
-                            agent_name,
-                            dropped,
-                        )
-                    if initial_state:
-                        logger.info(
-                            "[%s] Carrying %s state key(s) from local to %r: %s",
-                            self.host.name,
-                            len(initial_state),
-                            target_node,
-                            list(initial_state.keys()),
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "[%s] Could not snapshot local state for %r: %s",
-                        self.host.name,
-                        agent_name,
-                        e,
-                    )
+        local = self.host._registry.find_by_name(agent_name) if self.host._registry else None
+        # Asked while the agent still runs, so a refusal stops nothing. The
+        # snapshot that is shipped is taken again after the stop, below.
+        before = self._local_state(agent_name, local)
+        refusal = why_it_cannot_travel(*before, force=force, max_bytes=MIGRATION_MAX_STATE_BYTES)
+        if refusal:
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}': {refusal} It stays on 'local'.",
+            }
 
         # Snapshot the live topic contract from the TopicBus, then merge it
         # into the config we ship to the remote node. The spawn registry
@@ -922,35 +921,52 @@ class Migration:
 
         # Stop the local instance, and keep everything it persisted.
         #
-        # `initial_state` above is the copy being shipped out; this one is what
+        # The snapshot below is the copy being shipped out; this one is what
         # the migration comes back to if the target never confirms. Purging it
         # here would put the agent nowhere the moment a spawn failed on the
         # node -- the same window the other legs close by deleting only on the
         # ack -- so it is purged there instead, in `_purge_local_source`.
         stopped: Any | None = None
-        if self.host._registry:
-            local = self.host._registry.find_by_name(agent_name)
-            if local:
-                try:
-                    # Forgotten by the supervisor first, as main's delete does:
-                    # an entry left holding the stopped instance would stop it
-                    # again at shutdown, running its on_stop and saves twice. A
-                    # rollback spawns it afresh, which gives it a new entry.
-                    supervisor = getattr(self.host._registry, "_supervisor_ref", None)
-                    if supervisor is not None:
-                        supervisor.drop_supervised(agent_name)
-                    await self.host._registry.unregister(local.actor_id)
-                    await local.stop()
-                    self.host._agent_manifests.pop(agent_name, None)
-                    stopped = local
-                    await asyncio.sleep(0.3)
-                except Exception as e:
-                    logger.warning(
-                        "[%s] Could not stop local %r: %s",
-                        self.host.name,
-                        agent_name,
-                        e,
-                    )
+        if self.host._registry and local:
+            try:
+                # Forgotten by the supervisor first, as main's delete does:
+                # an entry left holding the stopped instance would stop it
+                # again at shutdown, running its on_stop and saves twice. A
+                # rollback spawns it afresh, which gives it a new entry.
+                supervisor = getattr(self.host._registry, "_supervisor_ref", None)
+                if supervisor is not None:
+                    supervisor.drop_supervised(agent_name)
+                await self.host._registry.unregister(local.actor_id)
+                await local.stop()
+                self.host._agent_manifests.pop(agent_name, None)
+                stopped = local
+                await asyncio.sleep(0.3)
+            except Exception as e:
+                logger.warning(
+                    "[%s] Could not stop local %r: %s",
+                    self.host.name,
+                    agent_name,
+                    e,
+                )
+
+        # Taken after the stop: `on_stop` and the save that follows it are the
+        # agent's last writes, and a snapshot taken before them would leave
+        # them in the local copy that is purged once the target confirms.
+        initial_state, left_behind = self._local_state(agent_name, local)
+        if left_behind:
+            # Only what the agent wrote while stopping can land here: anything
+            # earlier was refused above unless the move was forced.
+            logger.warning(
+                "[%s] Local→remote migrate %r: %s cannot travel as JSON and is left behind",
+                self.host.name,
+                agent_name,
+                ", ".join(left_behind),
+            )
+        too_large = why_it_cannot_travel(
+            initial_state, [], force=True, max_bytes=MIGRATION_MAX_STATE_BYTES
+        )
+        if too_large:
+            return await self._keep_local(agent_name, config, too_large)
 
         # Update config with new node target and inject captured state +
         # live contract data. Live values take precedence over stale spawn
@@ -972,7 +988,10 @@ class Migration:
             "agent_name": agent_name,
             "from_node": LOCAL_SOURCE,
             "target_node": target_node,
-            "config": new_config,
+            # Without the snapshot: a rollback restarts from the local copy,
+            # which is kept until the ack, so only the spawn message needs it.
+            "config": without_transient_keys(new_config),
+            "left_behind": left_behind,
             "local_actor": stopped,
             "started_at": time.time(),
         }
@@ -986,6 +1005,62 @@ class Migration:
         )
         logger.info("[%s] %s", self.host.name, msg)
         return {"success": True, "message": msg}
+
+    @staticmethod
+    def _hand_back_request(agent_name: str, return_token: str, force: bool) -> dict[str, Any]:
+        """What a source node is sent to hand an agent back to main.
+
+        Carries the terms the node checks the state against before it stops
+        the agent, so both legs refuse on main's settings. A node older than
+        these fields ignores them and ships what it can, naming what it left.
+        """
+        return {
+            "name": agent_name,
+            "target_node": "@main",
+            "return_token": return_token,
+            "force": force,
+            "max_state_bytes": MIGRATION_MAX_STATE_BYTES,
+        }
+
+    def _local_state(self, agent_name: str, local: Any) -> tuple[dict[str, Any], list[str]]:
+        """What a local agent has persisted that can travel, and the keys that cannot."""
+        api = getattr(local, "_persistence_api", None) if local is not None else None
+        if api is None:
+            return {}, []
+        try:
+            return json_safe(api.all())
+        except Exception as exc:
+            logger.warning(
+                "[%s] Could not snapshot local state for %r: %s",
+                self.host.name if self.host else "main",
+                agent_name,
+                exc,
+            )
+            return {}, []
+
+    async def _keep_local(
+        self, agent_name: str, config: dict[str, Any] | None, reason: str
+    ) -> dict[str, Any]:
+        """Start a stopped local agent again, and say why it did not move.
+
+        Reached only when the agent's last writes while stopping took its state
+        over the limit, since the size was checked before the stop. Nothing has
+        been sent and nothing purged, so starting it from its config brings it
+        back with everything it wrote.
+        """
+        if self.host is None:
+            return {}
+        message = f"Cannot migrate '{agent_name}': {reason}"
+        if config and config.get("code"):
+            await self._restore_local({"config": dict(config)})
+            return {"success": False, "message": f"{message} It is running on 'local' again."}
+        logger.warning(
+            "[%s] %r is stopped and has no config to restart from", self.host.name, agent_name
+        )
+        return {
+            "success": False,
+            "message": f"{message} It is stopped on 'local' with its state kept.",
+        }
 
     async def update_desired_state(
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
@@ -1025,3 +1100,10 @@ class Migration:
             qos=1,
         )
         logger.info("[%s] Desired state for %r: %s", self.host.name, node, list(agents.keys()))
+
+
+def _left_behind_note(keys: list[str] | None) -> str:
+    """The sentence an announcement ends with when some state did not travel."""
+    if not keys:
+        return ""
+    return f" Left behind, since they cannot travel as JSON: {', '.join(sorted(keys))}."

@@ -588,22 +588,21 @@ class NodeManager:
             monitor._last_seen[remote_actor_id(name)] = now
 
     def report_migration(self, data: dict[str, Any]) -> None:
-        """Turn a node's migration result into a notification."""
+        """Turn a node's failed migration into a notification.
+
+        A success is not announced from here. The node reports one once it has
+        handed the agent over, before main has placed it anywhere, and main
+        announces the migration itself when the agent is confirmed running --
+        so the user hears of each migration once, and only when it is true.
+        """
         host = self.host
-        if host is None:
+        if host is None or data.get("success", False):
             return
-        succeeded = data.get("success", False)
-        agent = data.get("agent", "?")
-        to_node = data.get("to_node", "?")
         host._queue_notification(
             {
                 "_monitor_notification": True,
-                "message": (
-                    f"Migration of '{agent}' to '{to_node}' succeeded."
-                    if succeeded
-                    else f"Migration of '{agent}' failed: {data.get('error', '?')}"
-                ),
-                "severity": "info" if succeeded else "warning",
+                "message": f"Migration of '{data.get('agent', '?')}' failed: {data.get('error', '?')}",
+                "severity": "warning",
                 "timestamp": time.time(),
             }
         )

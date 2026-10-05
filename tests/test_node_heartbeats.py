@@ -395,11 +395,12 @@ class TestTheProvisionalContract:
 
 
 class TestReportingAMigration:
-    async def test_a_success_is_announced(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_a_success_is_left_to_main(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The node reports one when it has handed the agent over, before it is
+        # running anywhere; main announces the migration once it is.
         run = await run_heartbeats(monkeypatch, [migrate_result(success=True)])
 
-        assert run.notifications[0]["severity"] == "info"
-        assert "succeeded" in run.notifications[0]["message"]
+        assert not run.notifications
 
     async def test_a_failure_is_announced_with_its_reason(
         self, monkeypatch: pytest.MonkeyPatch
@@ -411,13 +412,10 @@ class TestReportingAMigration:
         assert run.notifications[0]["severity"] == "warning"
         assert "no route to host" in run.notifications[0]["message"]
 
-    async def test_it_names_the_agent_and_the_destination(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        run = await run_heartbeats(monkeypatch, [migrate_result()])
+    async def test_a_failure_names_the_agent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_heartbeats(monkeypatch, [migrate_result(success=False, error="x")])
 
         assert "collector" in run.notifications[0]["message"]
-        assert "rpi-2" in run.notifications[0]["message"]
 
 
 class TestMessagesThatCannotBeUsed:

@@ -727,7 +727,7 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/clear-plans` | Wipe the planner's plan cache |
 | `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
 | `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node |
-| `/migrate <agent> <node>` | Move a running agent to a different node |
+| `/migrate <agent> <node> [--force]` | Move a running agent to a different node. Refused when its state cannot travel as JSON; `--force` moves it without those keys |
 | `/help` | Show all available commands |
 | `@agent-name` | Route your next message directly to a specific agent |
 

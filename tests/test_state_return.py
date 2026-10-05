@@ -405,3 +405,61 @@ class TestMessagesThatCannotBeUsed:
         )
 
         assert len(run.spawned) == 1
+
+
+class TestARefusedHandBack:
+    """The node kept the agent, because its state could not travel.
+
+    It says so on `state_return` so main lets go of the migration now, rather
+    than waiting it out and restarting an agent that never stopped.
+    """
+
+    @staticmethod
+    def refused() -> _Message:
+        return state_return(
+            config={}, state={}, state_keys_dropped=["capture"], refused="it holds capture"
+        )
+
+    async def test_it_spawns_and_deletes_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_listener(monkeypatch, [self.refused()], pending=waiting())
+
+        assert not run.spawned
+        assert not run.published, "the node is still running the agent"
+
+    async def test_main_stops_waiting(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_listener(monkeypatch, [self.refused()], pending=waiting())
+
+        assert not run.main.migration.pending_returns
+
+    async def test_it_is_announced_once_by_the_node_not_here(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The node's `migrate_result` carries the reason to the user.
+        run = await run_listener(monkeypatch, [self.refused()], pending=waiting())
+
+        assert not run.notifications
+
+
+class TestStateLeftBehind:
+    async def test_the_keys_a_node_could_not_send_are_named(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A forced move, or a node older than the refusal, still arrives; what
+        # it could not bring has to be said rather than found missing later.
+        run = await run_listener(
+            monkeypatch, [state_return(state_keys_dropped=["model"])], pending=waiting()
+        )
+
+        assert run.only_spawn["_initial_state"] == {"count": 7}
+        assert run.notifications[0]["severity"] == "warning"
+        assert "model" in run.messages[0]
+
+    async def test_nothing_left_behind_says_nothing_about_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_listener(
+            monkeypatch, [state_return(state_keys_dropped=[])], pending=waiting()
+        )
+
+        assert run.notifications[0]["severity"] == "info"
+        assert "Left behind" not in run.messages[0]

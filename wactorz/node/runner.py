@@ -42,6 +42,7 @@ from ..core.node_signing import CONTROL_LEAVES
 from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
+from ..core.state_snapshot import json_safe, why_it_cannot_travel
 from ..monitoring.loop_lag import LoopLagMonitor
 from .agent import NodeAgent
 from .publishing import NodePublisher
@@ -52,7 +53,7 @@ from .signing import (
     server_mismatch,
     user_properties,
 )
-from .state import flush_states, json_safe
+from .state import flush_states
 
 logger = logging.getLogger(__name__)
 
@@ -916,10 +917,11 @@ class NodeRunner:
 
         Only values that survive JSON travel — counters, calibration values,
         thresholds, timestamps, everything a typical agent stores. A numpy array
-        or a cv2 capture is dropped with a warning; neither would survive a
-        process restart either.
+        or a cv2 capture cannot, and neither would survive a process restart
+        either; see `_return_to_main` for what happens to an agent holding one.
 
-        payload: {"name": "agent-name", "target_node": "rpi-bedroom"}
+        payload: {"name": "agent-name", "target_node": "@main",
+                  "return_token": "...", "force": false, "max_state_bytes": 8388608}
         """
         name = payload.get("name")
         target_node = payload.get("target_node")
@@ -941,19 +943,10 @@ class NodeRunner:
             )
             return
 
-        safe_state, dropped = json_safe(dict(agent._persistent_state))
-        if dropped:
-            logger.warning(
-                "[runner] migrate '%s': dropping non-JSON state keys %s — they cannot "
-                "travel over MQTT",
-                name,
-                dropped,
-            )
-
         # `@main` is the sentinel from MainActor: do not spawn anywhere, stop
         # the agent and return its state, and main will place it itself.
         if target_node == "@main":
-            await self._return_to_main(agent, payload, safe_state, dropped)
+            await self._return_to_main(agent, payload)
             return
 
         # Node-to-node migration used to happen here: this runner published
@@ -980,21 +973,24 @@ class NodeRunner:
             },
         )
 
-    async def _return_to_main(
-        self,
-        agent: NodeAgent,
-        payload: dict[str, Any],
-        safe_state: dict[str, Any],
-        dropped: list[str],
-    ) -> None:
-        """Stop an agent and publish its config and state for main to re-place."""
+    async def _return_to_main(self, agent: NodeAgent, payload: dict[str, Any]) -> None:
+        """Stop an agent and publish its config and state for main to re-place.
+
+        Whether the state can travel is asked before the stop, so a refusal
+        leaves the agent running here. The snapshot itself is taken after the
+        stop: the agent's ``on_stop`` and the save that follows it are its last
+        writes, and a snapshot taken earlier would leave them behind in a file
+        that is deleted once the agent is confirmed elsewhere.
+        """
         name = agent.name
-        logger.info(
-            "[runner] Migrating '%s' from %s → local (main); returning %s state key(s)",
-            name,
-            self.node_name,
-            len(safe_state),
+        force = bool(payload.get("force", False))
+        max_bytes = _positive_int(payload.get("max_state_bytes"))
+        refusal = why_it_cannot_travel(
+            *json_safe(dict(agent._persistent_state)), force=force, max_bytes=max_bytes
         )
+        if refusal:
+            await self._refuse_return(agent, payload, refusal)
+            return
         # The config is taken before the stop, and says where it came from so
         # main can see the origin and strip it.
         return_config = dict(self._configs.get(name, agent._config))
@@ -1008,6 +1004,21 @@ class NodeRunner:
         # copy, and a dropped message would lose the agent outright.
         await self.stop_agent(name)
         await asyncio.sleep(0.3)
+        safe_state, dropped = json_safe(dict(agent._persistent_state))
+        if dropped:
+            # Only what the agent wrote while stopping can land here: anything
+            # earlier was refused above unless the caller forced the move.
+            logger.warning(
+                "[runner] migrate '%s': %s cannot travel as JSON and is left behind",
+                name,
+                ", ".join(dropped),
+            )
+        logger.info(
+            "[runner] Migrating '%s' from %s → local (main); returning %s state key(s)",
+            name,
+            self.node_name,
+            len(safe_state),
+        )
         await self.publish(
             f"nodes/{self.node_name}/state_return",
             {
@@ -1033,3 +1044,44 @@ class NodeRunner:
             },
         )
         logger.info("[runner] Migration of '%s' to local (main) dispatched.", name)
+
+    async def _refuse_return(self, agent: NodeAgent, payload: dict[str, Any], reason: str) -> None:
+        """Tell main the agent is staying, and why, without stopping it.
+
+        Answered on `state_return` as well as `migrate_result`, so main can let
+        go of the migration it is waiting on rather than keep it until it times
+        out and restart an agent that never stopped.
+        """
+        name = agent.name
+        _safe, dropped = json_safe(dict(agent._persistent_state))
+        logger.warning("[runner] Not migrating '%s': %s", name, reason)
+        await self.publish(
+            f"nodes/{self.node_name}/state_return",
+            {
+                "agent": name,
+                "return_token": payload.get("return_token", ""),
+                "config": {},
+                "state": {},
+                "state_keys_dropped": dropped,
+                "refused": reason,
+                "from_node": self.node_name,
+                "timestamp": time.time(),
+            },
+        )
+        await self.publish(
+            f"nodes/{self.node_name}/migrate_result",
+            {
+                "success": False,
+                "error": f"'{name}' stays on {self.node_name}: {reason}",
+                "agent": name,
+                "from_node": self.node_name,
+                "timestamp": time.time(),
+            },
+        )
+
+
+def _positive_int(value: Any) -> int | None:
+    """``value`` when it is a positive whole number, else None."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None

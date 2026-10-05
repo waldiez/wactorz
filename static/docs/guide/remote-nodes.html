@@ -590,12 +590,12 @@ node holding the old one.</p>
 <tr>
 <td><code>nodes/{name}/migrate</code></td>
 <td>→ runner</td>
-<td>Migrate a running agent to another node. Payload: <code>{"name": "...", "target_node": "..."}</code>. Signed.</td>
+<td>Hand a running agent back to main, which places it. Payload: <code>{"name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608}</code>. Signed.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/migrate_result</code></td>
 <td>← runner</td>
-<td>Result of a migration request.</td>
+<td>Result of a migration request. A failure, including a refusal, is shown on the dashboard.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/code_changed</code></td>
@@ -749,13 +749,20 @@ crash starts from <code>restart_delay</code> again.</p>
 </blockquote>
 <hr />
 <h2 id="agent-migration">Agent migration</h2>
-<p>A running agent can be moved from one node to another without stopping it manually. The runner on the source node captures the agent's config, publishes it as a spawn command to the target node, then stops the local instance.</p>
-<div class="highlight"><pre><span></span><code><span class="c1"># From the main machine, publish to MQTT:</span>
-mosquitto_pub<span class="w"> </span>-h<span class="w"> </span>localhost<span class="w"> </span>-t<span class="w"> </span><span class="s2">"nodes/rpi-livingroom/migrate"</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-m<span class="w"> </span><span class="s1">'{"name": "temp-sensor-agent", "target_node": "rpi-bedroom"}'</span>
+<p>A running agent can be moved between main and a node, or from one node to another, from the chat:</p>
+<div class="highlight"><pre><span></span><code>/migrate temp-sensor rpi-bedroom     # to a node
+/migrate temp-sensor local           # back to main
+/migrate temp-sensor rpi-bedroom --force
 </code></pre></div>
 
-<p>Or trigger it from agent code using <code>agent.send_to()</code> if you build a migration manager. The result is published to <code>nodes/{source_node}/migrate_result</code>.</p>
+<p>Main routes every migration; a node never spawns on another node. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.</p>
+<p>The state is taken after the agent has stopped, so what its <code>on_stop</code> writes last (a final counter, an LLM agent's last turn) goes with it.</p>
+<p>State travels as JSON. A migration is refused, and the agent keeps running where it is, when:</p>
+<ul>
+<li><strong>its state holds a value that cannot be written as JSON</strong> (a numpy array, a model object, an open capture). The refusal names the keys. <code>--force</code> moves the agent without them, and the announcement when it arrives names what was left behind;</li>
+<li><strong>its state is larger than <code>WACTORZ_MIGRATION_MAX_STATE_BYTES</code></strong> (8 MiB by default, set on main). <code>--force</code> does not change this.</li>
+</ul>
+<p>A node checks its own agents against the same two terms, which main sends with the request. A node running an earlier release does not check them: it sends what it can, and main names the keys it could not send.</p>
 <hr />
 <h2 id="debugging">Debugging</h2>
 <h4 id="verbose-diagnostics">Verbose diagnostics</h4>

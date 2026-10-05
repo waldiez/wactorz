@@ -424,6 +424,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under <code>nodes/</code> or <code>agents/by-name/</code>, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained <code>desired_state</code> follows this setting</td>
 </tr>
 <tr>
+<td><code>WACTORZ_MIGRATION_MAX_STATE_BYTES</code></td>
+<td><code>8388608</code></td>
+<td>Largest agent state a <code>/migrate</code> ships, as JSON; a larger one is refused before the agent stops, and <code>--force</code> does not override it. Set on main, which sends it to the node it asks; <code>0</code> sets no limit</td>
+</tr>
+<tr>
 <td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
 <td><code>9090</code></td>
 <td>Prometheus host port</td>

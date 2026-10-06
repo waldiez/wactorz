@@ -20,15 +20,30 @@ from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMEN
 from wactorz.agents.prompts.main_actor_prompts import (
     CORE_INTENT_TOKENS,
     DEFAULT_FRAGMENTS,
+    FACTS_EXTRACT_MARKER,
+    FACTS_EXTRACT_PROMPT,
+    FACTS_EXTRACT_TEMPLATE,
     INTENT_CLASSIFIER_MARKER,
     INTENT_CLASSIFIER_PROMPT,
     INTENT_CLASSIFIER_TEMPLATE,
     INTENT_TOKENS,
     ORCHESTRATOR_PROMPT,
     ORCHESTRATOR_TEMPLATE,
+    facts_extract_prompt,
     intent_classifier_prompt,
     intent_tokens,
     orchestrator_prompt,
+)
+from wactorz.agents.prompts.planner_prompts import (
+    DECOMPOSE_PROMPT,
+    DECOMPOSE_TEMPLATE,
+    PIPELINE_DESIGN_PROMPT,
+    PIPELINE_DESIGN_TEMPLATE,
+    RULE_CONFLICT_PROMPT,
+    RULE_CONFLICT_TEMPLATE,
+    decompose_prompt,
+    pipeline_design_prompt,
+    rule_conflict_prompt,
 )
 
 #: What a prompt for an installation without Home Assistant must not say.
@@ -40,10 +55,11 @@ HOME_ASSISTANT_TERMS = (
     "homeassistant/",
     "ha_actuator",
     "smart home",
-    "entity",
     "ACTUATE",
 )
 HA_AS_A_WORD = re.compile(r"\bHA\b")
+#: As a word, so "identity" does not count.
+ENTITY_AS_A_WORD = re.compile(r"\bentit(y|ies)\b")
 
 
 class TestWithEveryFragment:
@@ -90,6 +106,7 @@ class TestWithoutHomeAssistant:
         for term in HOME_ASSISTANT_TERMS:
             assert term not in prompt, term
         assert not HA_AS_A_WORD.search(prompt)
+        assert not ENTITY_AS_A_WORD.search(prompt)
 
     def test_the_classifier_offers_only_the_core_intents(self) -> None:
         assert intent_tokens(()) == CORE_INTENT_TOKENS
@@ -164,3 +181,81 @@ class TestRendering:
     )
     def test_one_of(self, items: tuple[str, ...], expected: str) -> None:
         assert one_of(items) == expected
+
+
+class TestThePlannerAndFactsPrompts:
+    """The same two promises, for the prompts the planner and fact extraction read."""
+
+    def test_the_constants_are_the_prompts_rendered_with_every_fragment(self) -> None:
+        assert pipeline_design_prompt(DEFAULT_FRAGMENTS) == PIPELINE_DESIGN_PROMPT
+        assert decompose_prompt(DEFAULT_FRAGMENTS) == DECOMPOSE_PROMPT
+        assert rule_conflict_prompt(DEFAULT_FRAGMENTS) == RULE_CONFLICT_PROMPT
+        assert facts_extract_prompt(DEFAULT_FRAGMENTS) == FACTS_EXTRACT_PROMPT
+
+    @pytest.mark.parametrize(
+        ("template", "attribute"),
+        [
+            (PIPELINE_DESIGN_TEMPLATE, "planner"),
+            (DECOMPOSE_TEMPLATE, "decompose"),
+            (RULE_CONFLICT_TEMPLATE, "rule_conflict"),
+            (FACTS_EXTRACT_TEMPLATE, "facts"),
+        ],
+        ids=["planner", "decompose", "rule_conflict", "facts"],
+    )
+    def test_every_slot_is_filled_by_some_fragment(self, template, attribute: str) -> None:
+        filled: set[str] = set()
+        for fragment in DEFAULT_FRAGMENTS:
+            filled |= set(getattr(fragment, attribute))
+        assert filled == slot_names(template)
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            pipeline_design_prompt(()),
+            decompose_prompt(()),
+            rule_conflict_prompt(()),
+            facts_extract_prompt(()),
+        ],
+        ids=["planner", "decompose", "rule_conflict", "facts"],
+    )
+    def test_without_home_assistant_it_is_never_mentioned(self, prompt: str) -> None:
+        for term in HOME_ASSISTANT_TERMS:
+            assert term not in prompt, term
+        assert not HA_AS_A_WORD.search(prompt)
+        assert not ENTITY_AS_A_WORD.search(prompt)
+
+    def test_without_home_assistant_the_planner_still_has_patterns_to_build_from(self) -> None:
+        """The patterns that ended in a service call are gone; the ones that end
+        in a notification, and the time-based one, are there and self-contained.
+        """
+        core = pipeline_design_prompt(())
+        for heading in (
+            "PATTERN 2 — MQTT sensor triggers notification",
+            "PATTERN 4 — Webcam detection triggers notification",
+            "PATTERN 5 — Time-based trigger",
+            'TYPE 2 — "scheduled"',
+            'TYPE 3 — "dynamic"',
+            "═══ LIVE DATA FLOWS (topic contracts) ═══",
+        ):
+            assert heading in core, heading
+        assert "same as Pattern 3" not in core
+        assert "no code fences" in core
+
+    def test_without_home_assistant_the_format_templates_still_format(self) -> None:
+        """The decomposition and rule-conflict prompts go through ``str.format``
+        with the fields their call sites pass, so the doubled braces of the JSON
+        examples must have survived the split on either profile.
+        """
+        rendered = decompose_prompt(()).format(
+            workers_desc="WORKERS", topic_schema_ctx="TOPICS", task="TASK"
+        )
+        assert "WORKERS" in rendered and "TASK" in rendered
+        assert '{"city": "str — city name to fetch weather for"}' in rendered
+        assert "{task}" not in rule_conflict_prompt(()).format(task="TASK")
+
+    def test_the_facts_prompt_keeps_its_examples_shape(self) -> None:
+        core = facts_extract_prompt(())
+        assert core.startswith(FACTS_EXTRACT_MARKER)
+        assert "  Examples: device_mqtt_broker, device_pi_node_kitchen" in core
+        assert "URLs are fine." in core
+        assert "URLs and entity IDs are fine." in FACTS_EXTRACT_PROMPT

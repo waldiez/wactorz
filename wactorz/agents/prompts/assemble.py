@@ -38,8 +38,14 @@ class PromptFragment:
     """
 
     name: str
+    #: Main's system prompt, its intent classifier and its fact extraction.
     orchestrator: Mapping[str, str] = field(default_factory=dict)
     intent_classifier: Mapping[str, str] = field(default_factory=dict)
+    facts: Mapping[str, str] = field(default_factory=dict)
+    #: The planner's pipeline design, task decomposition and rule-conflict review.
+    planner: Mapping[str, str] = field(default_factory=dict)
+    decompose: Mapping[str, str] = field(default_factory=dict)
+    rule_conflict: Mapping[str, str] = field(default_factory=dict)
     #: The intents the classifier may answer with when this fragment is present.
     #: They are listed before the core intents, and the fragment's
     #: ``intent_classifier`` inserts are expected to define them.

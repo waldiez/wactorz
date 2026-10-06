@@ -35,7 +35,11 @@ from wactorz.agents.prompts.main_actor_prompts import (
     FACTS_EXTRACT_PROMPT,
     INTENT_CLASSIFIER_PROMPT,
 )
-from wactorz.agents.prompts.planner_prompts import DECOMPOSE_PROMPT, PIPELINE_DESIGN_PROMPT
+from wactorz.agents.prompts.planner_prompts import (
+    DECOMPOSE_PROMPT,
+    PIPELINE_DESIGN_PROMPT,
+    RULE_CONFLICT_PROMPT,
+)
 
 FIXTURE_DIR = pathlib.Path(__file__).parent / "parity_fixtures" / "prompts"
 
@@ -66,6 +70,7 @@ PROMPTS: dict[str, Callable[[pathlib.Path], str]] = {
     "facts_extract": lambda _tmp: FACTS_EXTRACT_PROMPT,
     "pipeline_design": lambda _tmp: PIPELINE_DESIGN_PROMPT,
     "decompose": lambda _tmp: DECOMPOSE_PROMPT,
+    "rule_conflict": lambda _tmp: RULE_CONFLICT_PROMPT,
 }
 
 

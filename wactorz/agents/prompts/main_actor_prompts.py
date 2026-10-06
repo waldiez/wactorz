@@ -14,12 +14,7 @@ from collections.abc import Sequence
 from operator import attrgetter
 
 from .assemble import PromptFragment, Slot, Template, one_of, render
-from .home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
-
-#: Every fragment there is, in the order their text appears in the prompts.
-#: The default for a prompt built with no say in the matter, so a `MainActor`
-#: constructed on its own is told about everything.
-DEFAULT_FRAGMENTS: tuple[PromptFragment, ...] = (HOME_ASSISTANT_FRAGMENT,)
+from .fragments import DEFAULT_FRAGMENTS
 
 ORCHESTRATOR_TEMPLATE: Template = (
     """== WHO YOU ARE ==
@@ -876,8 +871,9 @@ INTENT_CLASSIFIER_PROMPT = intent_classifier_prompt()
 INTENT_TOKENS = intent_tokens()
 
 
-FACTS_EXTRACT_PROMPT = (
-    FACTS_EXTRACT_MARKER + " the assistant should remember about the user "
+FACTS_EXTRACT_TEMPLATE: Template = (
+    FACTS_EXTRACT_MARKER,
+    " the assistant should remember about the user "
     "long-term. Read the EXCHANGE below and return any new facts as JSON.\n\n"
     "## What to extract — three buckets\n"
     "Use these key prefixes so the assistant can group facts later:\n\n"
@@ -886,10 +882,12 @@ FACTS_EXTRACT_PROMPT = (
     "  pref_favorite_sport, pref_communication_style ('terse'/'detailed'),\n"
     "  pref_units ('metric'/'imperial'), pref_work_hours, pref_sleep_time,\n"
     "  pref_household_members.\n\n"
-    "**device_*** — System and device topology (the user's setup).\n"
-    "  Examples: device_ha_url, device_mqtt_broker, device_living_room_light\n"
-    "  (entity ID), device_kitchen_camera (model + entity), device_pi_node_kitchen\n"
-    "  (hardware spec), device_yolo_model_path, device_webhook_discord.\n\n"
+    "**device_*** — System and device topology (the user's setup).\n",
+    Slot(
+        "device_examples",
+        "  Examples: device_mqtt_broker, device_pi_node_kitchen (hardware spec),\n"
+        "  device_yolo_model_path, device_webhook_discord.\n\n",
+    ),
     "**policy_*** — Standing instructions / rules of engagement.\n"
     "  Examples: policy_quiet_hours ('23:00-07:00'), policy_alert_channel\n"
     "  ('telegram'), policy_temperature_unit ('celsius'),\n"
@@ -908,22 +906,29 @@ FACTS_EXTRACT_PROMPT = (
     "  - One-off questions ('what time is it?', 'how do I do X?').\n"
     "  - Transient state ('user is debugging Y right now').\n"
     "  - Speculation or 'maybe' statements ('I might get a Yale lock soon').\n"
-    "  - Plain-text passwords or full API tokens. URLs and entity IDs are fine.\n"
+    "  - Plain-text passwords or full API tokens. URLs",
+    Slot("ids_are_fine"),
+    " are fine.\n"
     "  - Facts about devices/agents that the user just deleted in this turn.\n\n"
     "## Examples\n"
     '  USER: "I am John, I like football"\n'
-    '  → {"pref_user_name": "John", "pref_favorite_sport": "football"}\n\n'
-    '  USER: "my home assistant is at http://192.168.1.10:8123"\n'
-    '  → {"device_ha_url": "http://192.168.1.10:8123"}\n\n'
-    '  USER: "use Telegram for alerts, not Discord"\n'
-    '  → {"policy_alert_channel": "telegram"}\n\n'
-    '  USER: "the living room light is light.wiz_rgbw_02cba0 and I prefer warm white"\n'
-    '  → {"device_living_room_light": "light.wiz_rgbw_02cba0", "pref_light_color": "warm white"}\n\n'
+    '  → {"pref_user_name": "John", "pref_favorite_sport": "football"}\n\n',
+    Slot("example_ha_url"),
+    '  USER: "use Telegram for alerts, not Discord"\n  → {"policy_alert_channel": "telegram"}\n\n',
+    Slot("example_entity"),
     '  USER: "actually call me Yannis"\n'
     '  → {"pref_user_name": "Yannis"}\n\n'
     '  USER: "what time is it?"\n'
     "  → {}\n\n"
     '  USER: "I might switch to Zigbee2MQTT eventually"\n'
     "  → {}\n\n"
-    "Output ONLY a valid JSON object. No prose, no markdown fences, no explanation."
+    "Output ONLY a valid JSON object. No prose, no markdown fences, no explanation.",
 )
+
+
+def facts_extract_prompt(fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS) -> str:
+    """The fact-extraction prompt for an installation with these integrations."""
+    return render(FACTS_EXTRACT_TEMPLATE, fragments, attrgetter("facts"))
+
+
+FACTS_EXTRACT_PROMPT = facts_extract_prompt()

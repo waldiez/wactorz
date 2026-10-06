@@ -16,7 +16,7 @@ from wactorz.config import CONFIG
 from wactorz.llm_factory import provider_for
 
 from ...core.actor import MessageType
-from ..prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT
+from ..prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT, INTENT_TOKENS
 
 if TYPE_CHECKING:
     from .hosts import RoutingHost
@@ -78,7 +78,7 @@ class RoutingMixin(_Host):
             self.total_cost_usd += _usage.get("cost_usd", 0.0)
             self._persist_cost()
             token = (decision or "").strip().upper().split()[0] if decision else "OTHER"
-            if token in ("HA", "PIPELINE", "OTHER", "ACTUATE"):
+            if token in INTENT_TOKENS:
                 return token
             return "OTHER"
         except asyncio.TimeoutError:

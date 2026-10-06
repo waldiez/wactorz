@@ -810,8 +810,20 @@ async def cleanup(agent):
 """
 
 
+#: The tokens the intent classifier may answer with, and the only ones the
+#: router accepts. Anything else is read as OTHER.
+INTENT_TOKENS = ("ACTUATE", "HA", "PIPELINE", "OTHER")
+
+#: The opening words of the classifier prompt. A provider that answers by
+#: contract (the fake one) recognises the call site by them, so the rest of the
+#: prompt can be assembled per installation without the recognition breaking.
+INTENT_CLASSIFIER_MARKER = "You are a routing classifier"
+
+#: The opening words of the fact-extraction prompt, for the same reason.
+FACTS_EXTRACT_MARKER = "You extract durable facts"
+
 INTENT_CLASSIFIER_PROMPT = (
-    "You are a routing classifier for a smart home AI assistant.\n"
+    INTENT_CLASSIFIER_MARKER + " for a smart home AI assistant.\n"
     "Respond with exactly one token: ACTUATE, HA, PIPELINE, or OTHER.\n\n"
     "ACTUATE = immediate one-shot device control in Home Assistant:\n"
     "  - Turn on/off a device right now\n"
@@ -843,7 +855,7 @@ INTENT_CLASSIFIER_PROMPT = (
 
 
 FACTS_EXTRACT_PROMPT = (
-    "You extract durable facts the assistant should remember about the user "
+    FACTS_EXTRACT_MARKER + " the assistant should remember about the user "
     "long-term. Read the EXCHANGE below and return any new facts as JSON.\n\n"
     "## What to extract — three buckets\n"
     "Use these key prefixes so the assistant can group facts later:\n\n"

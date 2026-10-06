@@ -57,7 +57,9 @@ class TestTheLLMNotesExample:
         assert "one sentence" in system
         assert messages[-1]["content"].startswith("The pump")
         assert actor.recall("notes_total") == 1
-        assert actor.recall("cost_usd_total") == pytest.approx(result["cost_usd"])
+        # The call through `me.llm` landed on the card by itself.
+        assert actor.metrics.llm_calls == 1
+        assert actor.metrics.llm_cost_usd == pytest.approx(result["cost_usd"])
 
     async def test_plain_text_is_accepted_as_it_arrives(
         self, summarise: Any, tmp_path: Path
@@ -334,3 +336,101 @@ class TestTheFastAPIExample:
         with pytest.raises(wactorz.StartupError):
             async with app_module.lifespan(app_module.app):
                 pass
+
+
+class TestTheLangGraphExample:
+    async def test_a_ticket_goes_through_the_graph_without_a_model(self, tmp_path: Path) -> None:
+        pytest.importorskip("langgraph")
+        triage = _load("langgraph_triage").triage
+        spec = spec_of(triage)
+        assert spec is not None and spec.concurrency == 4
+        actor = spec.build(persistence_dir=str(tmp_path))
+
+        result = await actor.call({"id": "T-1", "text": "The pump stopped, the line is down"})
+        again = await actor.call({"id": "T-2", "text": "How do I change a threshold?"})
+
+        assert result == {
+            "id": "T-1",
+            "category": "outage",
+            "priority": "high",
+            "reply": result["reply"],  # pyright: ignore[reportOptionalSubscript]
+        }
+        assert again is not None and (again["category"], again["priority"]) == ("question", "low")
+        assert actor.options["_graph"] is not None, "compiled once, kept on the actor"
+        assert actor.recall("tickets_total") == 2
+        assert await actor.call({"id": "T-3"}) is None
+
+    async def test_the_graph_uses_the_systems_model_when_it_has_one(self, tmp_path: Path) -> None:
+        pytest.importorskip("langgraph")
+        triage = _load("langgraph_triage").triage
+        model = FakeProvider(
+            script={"invoice": "billing", "reply": "We will refund it today. Sorry."}
+        )
+        actor = spec_of(triage).build(  # pyright: ignore[reportOptionalMemberAccess]
+            persistence_dir=str(tmp_path), llm_provider=model
+        )
+
+        result = await actor.call({"id": "T-9", "text": "Charged twice on the invoice"})
+
+        assert result is not None and result["category"] == "billing"
+        assert result["priority"] == "medium"
+        assert len(model.calls) == 2, "one call to classify, one to draft"
+        assert actor.metrics.llm_calls == 2, "both counted on the card"
+        assert actor.metrics.llm_input_tokens > 0
+
+
+class TestTheAG2Example:
+    async def test_without_a_model_the_draft_comes_back_after_one_round(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("ag2")
+        review = _load("ag2_review").review
+        actor = spec_of(review).build(persistence_dir=str(tmp_path))  # pyright: ignore[reportOptionalMemberAccess]
+        said: list[str] = []
+
+        async def log(message: str, level: str = "info") -> None:
+            said.append(level)
+
+        monkeypatch.setattr(actor, "log", log)
+
+        result = await actor.call({"id": "d1", "text": "We is pleased to announce the pump."})
+
+        assert result is not None
+        assert result["id"] == "d1" and result["turns"] == 2
+        assert result["cost_usd"] == 0.0, "no model, no spend"
+        assert said == ["warning"], "and it says so on the feed"
+        assert actor.recall("drafts_total") == 1
+        assert await actor.call({"id": "d2", "text": "  "}) is None
+
+    async def test_the_critic_sends_the_writer_back_until_it_approves(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AG2's test client stands in for the model, with the turns scripted."""
+        pytest.importorskip("ag2")
+        from ag2 import Agent  # pyright: ignore[reportMissingImports]
+        from ag2.testing import TestConfig  # pyright: ignore[reportMissingImports]
+
+        module = _load("ag2_review")
+
+        def scripted(config: Any) -> Any:
+            assert config == "scripted"
+            writer = Agent(
+                "writer", "You improve drafts.", config=TestConfig("Version one.", "Version two.")
+            )
+            critic = Agent(
+                "critic",
+                "You review.",
+                config=TestConfig("Too long.", f"Good now. {module.APPROVED}"),
+            )
+            return writer, critic
+
+        monkeypatch.setattr(module, "make_agents", scripted)
+        actor = spec_of(module.review).build(  # pyright: ignore[reportOptionalMemberAccess]
+            persistence_dir=str(tmp_path), options={"config": "scripted"}
+        )
+
+        result = await actor.call({"id": "d3", "text": "Draft."})
+
+        assert result is not None
+        assert result["text"] == "Version two."
+        assert result["turns"] == 4, "write, critique, rewrite, approve"

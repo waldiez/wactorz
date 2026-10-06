@@ -151,7 +151,9 @@ class TestOnStart:
 
         actor = _build(fn, tmp_path)
         subscribed: list[str] = []
-        monkeypatch.setattr(actor, "subscribe", lambda topic, cb: subscribed.append(topic))
+        monkeypatch.setattr(
+            actor, "subscribe", lambda topic, cb, concurrency=1: subscribed.append(topic)
+        )
 
         await actor.on_start()
 

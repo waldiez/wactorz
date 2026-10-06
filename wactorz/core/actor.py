@@ -215,6 +215,12 @@ class ActorMetrics:
     heartbeats: int = 0
     #: Messages this actor's mailbox had no room for and did not take.
     messages_refused: int = 0
+    #: Model calls this actor recorded itself, through :meth:`Actor.record_llm_cost`:
+    #: calls made outside the system's own providers, which record their own.
+    llm_calls: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_cost_usd: float = 0.0
 
     @property
     def uptime(self) -> float:
@@ -756,7 +762,7 @@ class Actor(ABC):
         }
 
     def _build_metrics(self) -> dict:
-        return {
+        metrics = {
             "actor_id": self.actor_id,
             "messages_processed": self.metrics.messages_processed,
             "errors": self.metrics.errors,
@@ -766,6 +772,14 @@ class Actor(ABC):
             "tasks_timed_out": self.metrics.tasks_timed_out,
             "restart_count": self.metrics.restart_count,
         }
+        if self.metrics.llm_calls:
+            # The keys the dashboard reads from an LLM agent, so a card shows
+            # spend the same way whichever way the model was called.
+            metrics["cost_usd"] = round(self.metrics.llm_cost_usd, 6)
+            metrics["input_tokens"] = self.metrics.llm_input_tokens
+            metrics["output_tokens"] = self.metrics.llm_output_tokens
+            metrics["llm_calls"] = self.metrics.llm_calls
+        return metrics
 
     LIFECYCLE_COMMANDS = ("start", "stop", "delete")
 
@@ -1268,6 +1282,56 @@ class Actor(ABC):
             f"kept at {kept}" if kept else "the file could not be preserved",
         )
 
+    @property
+    def state_dir(self) -> Path:
+        """This actor's own directory under the state directory, for files it keeps.
+
+        Model weights, a checkpoint store, a local experiment log: anything
+        too large or too un-JSON for :meth:`persist`. It exists from
+        construction, survives restarts and is removed with the actor on a
+        delete. What moves with a migration is the persisted state, not these
+        files; an agent that must find a file on another machine ships it.
+        """
+        return self._persistence_dir
+
+    def record_llm_cost(
+        self,
+        cost_usd: float,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        model: str = "",
+        provider: str = "",
+    ) -> None:
+        """Count a model call this actor made outside the system's own providers.
+
+        For a LangChain chain, an AG2 chat or an SDK called directly: the
+        system's providers record their own spend, and a call that bypasses
+        them would otherwise be invisible. The spend joins the dashboard's
+        counters for this actor and the process-wide total the cost limit is
+        checked against. ``model`` and ``provider`` are for the log line.
+        """
+        # A genuine circular import: the cost ledger lives with the LLM agents,
+        # whose package imports this module.
+        from ..agents.llm.cost import accumulate_global_cost
+
+        metrics = self.metrics
+        metrics.llm_calls += 1
+        metrics.llm_input_tokens += max(0, int(input_tokens))
+        metrics.llm_output_tokens += max(0, int(output_tokens))
+        cost = max(0.0, float(cost_usd))
+        metrics.llm_cost_usd += cost
+        accumulate_global_cost(cost)
+        logger.debug(
+            "[%s] LLM call %s%s: %d in / %d out, $%.6f",
+            self.name,
+            provider + "/" if provider else "",
+            model or "?",
+            input_tokens,
+            output_tokens,
+            cost,
+        )
+
     def persist(self, key: str, value: Any):
         """Persist a key-value pair. Routes to the correct backend:
           - Known structured keys → SQLite
@@ -1308,7 +1372,9 @@ class Actor(ABC):
         """
         return SubscriptionHub(self, durable=is_durable_actor(self))
 
-    def subscribe(self, topic: str, callback: Callable[[Any], Any]) -> None:
+    def subscribe(
+        self, topic: str, callback: Callable[[Any], Any], *, concurrency: int = 1
+    ) -> None:
         """Call ``callback(payload)`` for every message matching ``topic``.
 
         ``topic`` is an MQTT filter, so ``sensors/#`` and ``sensors/+/temp``
@@ -1319,6 +1385,10 @@ class Actor(ABC):
         itself. Every subscription of this actor shares one broker connection,
         opened by the first call and closed when the actor stops.
 
+        ``concurrency`` above one runs that many messages of the topic at once,
+        for a callback that waits on a model or a job rather than computes:
+        order is then not kept, and the callback runs against itself.
+
         A callback that keeps raising marks the actor FAILED after a few
         failures in a row, which is the supervisor's cue to restart it.
         """
@@ -1326,7 +1396,7 @@ class Actor(ABC):
             raise TypeError(f"subscribe({topic!r}) needs a callable callback, got {callback!r}")
         if self._sub_hub is None:
             self._sub_hub = self._make_hub()
-        task = self._sub_hub.bind(topic, _as_coroutine_callback(callback))
+        task = self._sub_hub.bind(topic, _as_coroutine_callback(callback), concurrency=concurrency)
         if task is not None:
             self._tasks.append(task)
 

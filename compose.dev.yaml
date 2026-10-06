@@ -327,7 +327,7 @@ services:
   prometheus:
     # depends_on wactorz, so it shares the `app` profile (can't run without it).
     profiles: [app]
-    image: prom/prometheus:v2.54.1
+    image: prom/prometheus:v3.15.0
     container_name: wactorz-prometheus
     restart: unless-stopped
     mem_limit: 1g
@@ -418,7 +418,7 @@ services:
   blackbox-exporter:
     # Feeds prometheus; shares the `app` profile.
     profiles: [app]
-    image: prom/blackbox-exporter:v0.25.0
+    image: prom/blackbox-exporter:v0.28.0
     container_name: wactorz-blackbox
     restart: unless-stopped
     mem_limit: 256m

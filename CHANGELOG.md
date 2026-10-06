@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- **How long a person waits in the chat.** Every chat turn from the dashboard is timed on the server, until the first words of its reply (`wactorz_chat_first_reply_seconds`) and until it is complete (`wactorz_chat_turn_duration_seconds`), labelled by where it went: a command, an agent in this process, one on a node, or a name nothing answers to. A turn the person stops is not counted.
+
 - **`/metrics` is served however Wactorz is started.** It was served only by the REST interface, which runs only with `INTERFACE=rest`: started from the CLI, from a library call or as the Home Assistant add-on, Wactorz had metrics and nowhere to read them. The dashboard's server, which always runs, now serves the same page at `/metrics` (port 8888 by default), behind the same key check as the rest of it; a scraper presents the key as `Authorization: Bearer`. The compose stacks keep scraping the REST port.
 
 - **The dashboard's server shows in `/metrics`.** Its requests, the chat among them, were not counted anywhere: only the REST interface recorded its own. Both now record into the same `wactorz_http_*` metrics, told apart by a new `server` label (`rest` or `dashboard`), and `wactorz_ws_connections` says how many dashboard WebSockets are open. A WebSocket is counted but not timed, since it lasts as long as the connection. A query or alert on `wactorz_http_*` that should cover only the REST interface adds `server="rest"`.

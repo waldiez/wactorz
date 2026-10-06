@@ -57,6 +57,8 @@ And, for what the dashboard does not show:
 | `wactorz_http_requests_total{server,method,route}` | HTTP requests, by `server`: `rest` (this interface) or `dashboard` (the dashboard's server, chat included). `route` is the registered pattern, never the path asked for |
 | `wactorz_http_request_duration_seconds{server,method,route}` | Time a request took to answer. A WebSocket is counted but not timed, since it lasts as long as the connection |
 | `wactorz_ws_connections` | Dashboard WebSocket connections open now |
+| `wactorz_chat_first_reply_seconds{kind}` | Time from a chat message reaching the server to the first words of its reply, what a person notices while an answer streams in. `kind` is where it went: `command`, `local` (an agent in this process, main among them), `remote` (an agent on a node) or `unrouted` |
+| `wactorz_chat_turn_duration_seconds{kind}` | Time from a chat message reaching the server to its reply being complete. A turn the person stops is not counted |
 | `wactorz_agent_task_duration_seconds{agent,outcome}` | Time a generated agent's `handle_task` took, by how it ended: `completed`, `failed` or `timed_out` |
 | `wactorz_agent_process_duration_seconds{agent}` | Time one cycle of a generated agent's `process()` took, whether it returned or raised |
 | `wactorz_agent_process_timeouts_total{agent}` | `process()` cycles still running when their time ran out |

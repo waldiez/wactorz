@@ -14,6 +14,7 @@ import pytest
 
 from wactorz.core.persistence import WactorzDB
 from wactorz.core.persistence.legacy_pickle import migrate_from_pickle
+from wactorz.core.persistence.pickle_store import encode_state
 from wactorz.core.persistence.stores import get_memory_store
 
 
@@ -72,3 +73,17 @@ def test_unreadable_and_unexpected_files_are_skipped(tmp_path: Path, db: Wactorz
     migrate_from_pickle(str(base), db)
 
     assert db.kv_get("fine", "_pipeline_rules") == {"r1": {}}
+
+
+def test_a_value_that_will_not_load_is_named_and_the_rest_moves(
+    tmp_path: Path, db: WactorzDB, caplog: pytest.LogCaptureFixture
+) -> None:
+    base = tmp_path / "state"
+    (base / "main").mkdir(parents=True)
+    data, _ = encode_state({"_user_facts": {"pref_name": "Ada"}}, {"model": b"not a pickle"})
+    (base / "main" / "state.pkl").write_bytes(data)
+
+    migrate_from_pickle(str(base), db)
+
+    assert db.kv_get("main", "_user_facts") == {"pref_name": "Ada"}
+    assert "Skipped model" in caplog.text

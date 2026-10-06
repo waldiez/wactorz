@@ -301,9 +301,10 @@ def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = Non
     """Remove the conversation keys from any legacy `state.pkl` that holds them.
 
     Clearing the database is not enough on its own. An agent's `state.pkl`
-    predates the per-key store and can hold its own `conversation_history`;
-    `Actor` loads it at start and `recall` falls back to it whenever the store
-    has nothing, so a cleared conversation came back on the next restart.
+    predates the per-key store and can hold its own `conversation_history`,
+    which the start-up migration copies into the database whenever the
+    database has none -- so a conversation cleared only there comes back on
+    the next restart.
 
     Driven off the files on disk rather than the agents with database rows: the
     case that motivated this had a pickle and no rows at all, so a
@@ -322,8 +323,8 @@ def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = Non
         if not any(key in state for key in _CHAT_KV_KEYS):
             continue
         for key in _CHAT_KV_KEYS:
-            state.pop(key, None)
-        store.save(name, state)
+            # One key at a time, so the store keeps any value it could not read.
+            store.remove(name, key)
         logger.info("[reset] conversation removed from legacy state file for %r", name)
 
 

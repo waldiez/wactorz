@@ -201,7 +201,7 @@ class TestLoadSnapshot:
         def _refuse(*_args: Any) -> bool:
             raise OSError("disk full")
 
-        monkeypatch.setattr(pickles, "save", _refuse)
+        monkeypatch.setattr(pickles, "merge", _refuse)
 
         applied = api.load_snapshot({DURABLE: "d", ARBITRARY: 1}, replace=False)
 

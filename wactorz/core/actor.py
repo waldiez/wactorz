@@ -10,7 +10,6 @@ import functools
 import inspect
 import json
 import logging
-import pickle
 import sys
 import time
 import uuid
@@ -23,9 +22,10 @@ from typing import TYPE_CHECKING, Any
 
 import psutil
 
-from .atomic_io import quarantine_unreadable, write_pickle
+from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
+from .persistence.pickle_store import encode_state, read_state_file
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
 
@@ -321,6 +321,9 @@ class Actor(ABC):
         self._persistence_dir = agent_state_dir(persistence_dir or resolve_state_dir(), self.name)
         self._persistence_dir.mkdir(parents=True, exist_ok=True)
         self._persistent_state: dict = {}
+        #: Without a persistence API: the pickled bytes of each value in the
+        #: state file that would not unpickle, written back until set again.
+        self._unreadable_state: dict[str, bytes] = {}
 
         # Unified persistence API — set by ActorSystem if available,
         # otherwise falls back to legacy pickle behavior
@@ -1150,42 +1153,53 @@ class Actor(ABC):
             # once it returns, the file holds what the agent last persisted.
             self._persistence_api.flush()
             return
-        # Legacy pickle path
-        try:
-            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
-        except Exception:
-            logger.exception("[%s] Failed to save state", self.name)
+        self._write_state_file()
 
     async def _load_persistent_state(self):
-        """Load state from disk. Called on start() before on_start()."""
+        """Load state from disk. Called on start() before on_start().
+
+        With a persistence API there is nothing to load here: the store reads
+        the agent's state file itself, a value at a time, the first time it is
+        asked. Reading it here as well would hold a second copy that `recall`
+        could fall back to after the store had dropped a key, and a single
+        value that no longer unpickles would cost the whole file.
+        """
         if self._persistence_api is not None:
-            # New path: state is loaded per-key via recall(), nothing to batch-load.
-            # But load legacy pickle for backward compat if it exists.
-            path = self._persistence_dir / "state.pkl"
-            if path.exists():
-                try:
-                    with open(path, "rb") as f:
-                        self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
-                            f
-                        )  # our own state file, under the state dir
-                    logger.info(
-                        "[%s] Loaded legacy persistent state (will migrate on first persist).",
-                        self.name,
-                    )
-                except Exception as e:
-                    self._keep_unreadable_state(path, e)
             return
-        # Legacy pickle path
         path = self._persistence_dir / "state.pkl"
-        if path.exists():
-            try:
-                with open(path, "rb") as f:
-                    self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
-                        f
-                    )  # our own state file, under the state dir
-                logger.info("[%s] Loaded persistent state.", self.name)
-            except Exception as e:
-                self._keep_unreadable_state(path, e)
+        if not path.exists():
+            return
+        try:
+            decoded = read_state_file(path)
+        except Exception as e:
+            self._keep_unreadable_state(path, e)
+            return
+        self._persistent_state = decoded.values
+        self._unreadable_state = dict(decoded.unreadable)
+        if decoded.unreadable:
+            logger.warning(
+                "[%s] Starting without %s, which could not be read: %s. Kept in %s.",
+                self.name,
+                ", ".join(sorted(decoded.unreadable)),
+                "; ".join(f"{k}: {r}" for k, r in sorted(decoded.reasons.items())),
+                path,
+            )
+        logger.info("[%s] Loaded persistent state.", self.name)
+
+    def _write_state_file(self) -> None:
+        """Write the whole state, for an actor with no persistence API."""
+        try:
+            data, unpicklable = encode_state(self._persistent_state, self._unreadable_state)
+            write_bytes(self._persistence_dir / "state.pkl", data)
+        except Exception:
+            logger.exception("[%s] Failed to save state", self.name)
+            return
+        if unpicklable:
+            logger.warning(
+                "[%s] Not writing %s: it cannot be pickled. The rest of the state was written.",
+                self.name,
+                ", ".join(unpicklable),
+            )
 
     def _keep_unreadable_state(self, path: Path, exc: Exception) -> None:
         """Move a state file we could not read out of the next save's way.
@@ -1215,28 +1229,21 @@ class Actor(ABC):
             self._persistence_api.set(key, value)
             return
 
-        # Legacy pickle path — the whole dict goes to disk on every call, so an
-        # interrupted write here would lose every key, not just this one.
+        # Without a store the whole state goes to disk on every call, written
+        # atomically, so an interrupted write cannot lose the keys beside this one.
         self._persistent_state[key] = value
-        try:
-            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
-        except Exception as e:
-            logger.warning("[%s] persist write failed for %r: %s", self.name, key, e)
+        self._unreadable_state.pop(key, None)
+        self._write_state_file()
 
     def recall(self, key: str, default: Any = None) -> Any:
         """Recall a persisted value. Routes to the correct backend.
         Returns default if the key doesn't exist.
         """
         if self._persistence_api is not None:
-            # Check new store first, then fall back to legacy in-memory dict
-            # (handles migration period where some keys are in pickle, some in new store)
+            # A stored None reads as absent, so `recall(key, [])` never hands
+            # back None to code about to append to it.
             result = self._persistence_api.get(key)
-            if result is not None:
-                return result
-            # Fallback: check legacy in-memory state (loaded from old .pkl)
-            return self._persistent_state.get(key, default)
-
-        # Legacy pickle path
+            return default if result is None else result
         return self._persistent_state.get(key, default)
 
     # ─── Subscriptions ────────────────────────────────────────────────────────

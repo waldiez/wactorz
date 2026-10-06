@@ -31,7 +31,6 @@ it's logged and skipped. Other agents are not affected.
 
 import json
 import logging
-import pickle
 import sqlite3
 import time
 from pathlib import Path
@@ -185,12 +184,10 @@ def _upgrade_baselines(db, pickle_store):
         if not pkl_path.exists():
             continue
         try:
-            with open(pkl_path, "rb") as f:
-                # Our own state file, written by this app under the state dir.
-                state = pickle.load(f)  # noqa: S301
-            if not isinstance(state, dict):
-                continue
-            baselines = state.get("baselines")
+            # Through the store: it reads the file a value at a time, and it
+            # keeps each state in memory, so a file changed behind it would be
+            # written over by what it holds.
+            baselines = pickle_store.load(agent_dir.name).get("baselines")
             if not isinstance(baselines, dict):
                 continue
             upgraded = False
@@ -202,9 +199,7 @@ def _upgrade_baselines(db, pickle_store):
                         baseline[field] = default
                         upgraded = True
             if upgraded:
-                # Through the store: it keeps each state in memory, and a file
-                # changed behind it would be written over by what it holds.
-                pickle_store.save(agent_dir.name, state)
+                pickle_store.update(agent_dir.name, "baselines", baselines)
                 logger.info("[Migration] Upgraded pickle baselines for '%s'", agent_dir.name)
         except Exception as exc:
             # One agent's unreadable pickle must not abort the whole migration —

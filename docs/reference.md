@@ -350,8 +350,10 @@ What that means in practice:
 
 - A stop, a restart of the agent, a migration and a clean shutdown (Ctrl+C included) all write what is waiting before they finish. Nothing is lost.
 - A process that is killed outright, or a machine that loses power, can lose what was persisted in the last second.
+- `recall(key, default)` returns `default` for a key that was never set and for one set to `None`, so `recall("items", [])` can be appended to straight away.
 - `recall()` returns the stored object itself, not a copy. Change it and call `persist()` again; do not rely on a recalled list or dict being private to the caller.
-- A value that cannot be pickled no longer fails the call. The agent keeps it in memory, and the log names the file that was not written.
+- A value that cannot be pickled (an open camera, a lambda) is kept in memory and left out of the file; the rest is written, and the log names the key once.
+- Each value in `state.pkl` is pickled on its own. A value that no longer unpickles — a model object after a library upgrade, a class that was renamed — is missing at the next start while the agent's other keys come back, and the log names it with the reason. Its bytes stay in the file, so it returns once the code that reads it does; persisting that key again replaces it.
 
 Used internally for:
 

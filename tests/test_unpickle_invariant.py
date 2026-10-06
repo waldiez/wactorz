@@ -34,10 +34,9 @@ PACKAGE = Path(__file__).resolve().parents[1] / "wactorz"
 #: not fail this, while a *new* call anywhere — including a sixth one in a file
 #: already listed — does.
 ALLOWED_UNPICKLE_SITES = {
-    "core/actor.py": 2,  # legacy state, and the legacy file on the new path
-    "core/persistence/legacy_pickle.py": 1,  # one-time import into SQLite
-    "core/persistence/pickle_store.py": 1,  # the store itself
-    "core/persistence/migrations.py": 1,  # baselines upgrade
+    # The store's reader, which everything else that reads a state file calls:
+    # the file itself, then each value in it.
+    "core/persistence/pickle_store.py": 2,
 }
 
 

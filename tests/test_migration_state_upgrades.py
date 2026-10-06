@@ -159,7 +159,7 @@ class TestBaselinesInPickles:
 
     @pytest.mark.parametrize(
         "state",
-        [{"no": "baselines"}, {"baselines": [1]}, {"baselines": {"s": 3}}, ["not", "a", "dict"]],
+        [{"no": "baselines"}, {"baselines": [1]}, {"baselines": {"s": 3}}],
     )
     def test_an_unexpected_shape_is_left_alone(
         self, db: WactorzDB, store: PickleStore, tmp_path: Path, state: Any
@@ -172,6 +172,20 @@ class TestBaselinesInPickles:
         _upgrade_baselines(db, store)
 
         assert path.stat().st_mtime_ns == before
+
+    def test_a_file_that_is_not_a_state_is_moved_aside_not_rewritten(
+        self, db: WactorzDB, store: PickleStore, tmp_path: Path
+    ) -> None:
+        # Read through the store, which treats it as it would at an agent's
+        # start: kept under another name, out of the next save's way.
+        path = tmp_path / "state" / "anomaly" / "state.pkl"
+        path.parent.mkdir(parents=True)
+        path.write_bytes(pickle.dumps(["not", "a", "dict"]))
+
+        _upgrade_baselines(db, store)
+
+        (kept,) = path.parent.glob("state.pkl.corrupt.*")
+        assert pickle.loads(kept.read_bytes()) == ["not", "a", "dict"]
 
     def test_an_unreadable_file_does_not_stop_the_others(
         self, db: WactorzDB, store: PickleStore, tmp_path: Path, caplog: pytest.LogCaptureFixture

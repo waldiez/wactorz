@@ -188,7 +188,7 @@ class PersistenceAPI:
             else:
                 self.pickle.delete(self.agent)
         elif values:
-            self.pickle.save(self.agent, {**self.pickle.load(self.agent), **values})
+            self.pickle.merge(self.agent, values)
 
     def flush(self) -> None:
         """Write this process's pickled states that are still waiting to be written."""

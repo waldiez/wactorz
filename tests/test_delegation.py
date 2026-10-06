@@ -192,7 +192,21 @@ class TestChoosingWhereTheTaskGoes:
 
         payload = main.sent[0][2]
         assert payload["city"] == "Athens"
-        assert "text" not in payload
+        assert json.loads(payload["text"]) == {"city": "Athens"}
+        assert payload["text"] != payload["task"]
+
+    @pytest.mark.parametrize("text", ["Turn on the light", ""])
+    async def test_a_local_structured_task_keeps_its_text(self, text: str) -> None:
+        main = _Main(running=("home-assistant-agent",))
+        task = {"entity_id": "light.x", "service": "turn_on", "text": text}
+
+        await main.actor.delegation.delegate_task("home-assistant-agent", task)
+
+        payload = main.sent[0][2]
+        assert payload["text"] == text
+        assert payload["entity_id"] == "light.x"
+        assert payload["service"] == "turn_on"
+        assert task == {"entity_id": "light.x", "service": "turn_on", "text": text}
 
     async def test_the_target_is_told_where_to_answer(self) -> None:
         main = _Main(running=("weather",))
@@ -223,7 +237,23 @@ class TestChoosingWhereTheTaskGoes:
 
         _topic, payload = main.published[0]
         assert payload["city"] == "Athens"
-        assert "text" not in payload
+        assert json.loads(payload["text"]) == {"city": "Athens"}
+
+    @pytest.mark.parametrize("text", ["Turn on the light", ""])
+    async def test_a_remote_structured_task_keeps_its_text(
+        self, monkeypatch: pytest.MonkeyPatch, text: str
+    ) -> None:
+        main = _Main(known_nodes={"rpi": {"agents": ["home-assistant-agent"]}})
+        monkeypatch.setattr("wactorz.agents.main.delegation.mqtt_client", _Broker())
+        task = {"entity_id": "light.x", "service": "turn_on", "text": text}
+
+        await main.actor.delegation.delegate_task("home-assistant-agent", task, timeout=0.05)
+
+        _topic, payload = main.published[0]
+        assert payload["text"] == text
+        assert payload["entity_id"] == "light.x"
+        assert payload["service"] == "turn_on"
+        assert task == {"entity_id": "light.x", "service": "turn_on", "text": text}
 
     async def test_a_local_agent_is_preferred_over_the_same_name_on_a_node(self) -> None:
         # The in-process mailbox is immediate and needs no broker.

@@ -195,6 +195,8 @@ class DelegationManager:
             future = asyncio.get_event_loop().create_future()
             self.host._result_futures[task_id] = future
             payload: dict[str, Any] = dict(task) if isinstance(task, dict) else {"text": str(task)}
+            if isinstance(task, dict):
+                payload.setdefault("text", json.dumps(task))
             payload.update(
                 {
                     "_task_id": task_id,
@@ -233,6 +235,8 @@ class DelegationManager:
             payload = (
                 dict(task) if isinstance(task, dict) else {"text": str(task), "payload": str(task)}
             )
+            if isinstance(task, dict):
+                payload.setdefault("text", json.dumps(task))
             payload.update({"_reply_topic": reply_topic, "_remote_task": True})
             await self.host._mqtt_publish(f"agents/by-name/{target_name}/task", payload)
             try:

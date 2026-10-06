@@ -3,11 +3,15 @@ than one message at a time, and a way to report spend made outside the system's
 providers."""
 
 import asyncio
+import sys
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from wactorz import config as config_module
 from wactorz.agents.function_agent import FunctionAgent, agent, spec_of
 from wactorz.agents.llm import cost as cost_module
 from wactorz.core import subscriptions as subscriptions_module
@@ -421,13 +425,64 @@ class TestLangChainCallback:
         assert actor.metrics.llm_cost_usd == 0.0
 
 
+class FakeConfig:
+    """What an AG2 configuration class looks like from the bridge's side: it keeps its settings."""
+
+    def __init__(self, **settings: Any) -> None:
+        self.settings = settings
+        self.model = settings.get("model")
+        self.base_url = settings.get("base_url")
+
+
+class FakeAnthropicConfig(FakeConfig):
+    pass
+
+
+class FakeGeminiConfig(FakeConfig):
+    pass
+
+
+class FakeOpenAIConfig(FakeConfig):
+    pass
+
+
+class UnusableConfig(FakeConfig):
+    """AG2's stand-in for a configuration whose provider SDK is not installed."""
+
+    def __init__(self, **settings: Any) -> None:
+        raise ImportError("OpenAIConfig requires optional dependencies")
+
+
+def _fake_ag2(monkeypatch: pytest.MonkeyPatch, openai: Any = FakeOpenAIConfig) -> Any:
+    """The bridge with AG2's classes replaced, so the mapping is tested without AG2."""
+    from wactorz.core.integrations import ag2 as bridge
+
+    monkeypatch.setattr(
+        bridge, "_config_classes", lambda: (FakeAnthropicConfig, FakeGeminiConfig, openai)
+    )
+    return bridge
+
+
+def _usage_report(**by_model: tuple[int, int]) -> Any:
+    """The shape of AG2's usage report: a total and a per-model breakdown, tokens only."""
+    records = {
+        model: SimpleNamespace(prompt_tokens=i, completion_tokens=o)
+        for model, (i, o) in by_model.items()
+    }
+    total = SimpleNamespace(
+        prompt_tokens=sum(r.prompt_tokens for r in records.values()),
+        completion_tokens=sum(r.completion_tokens for r in records.values()),
+    )
+    return SimpleNamespace(total=total, by_model=records)
+
+
 def _ag2_config_or_skip(name: str, extra: str) -> Any:
     """AG2's configuration class ``name``, or a skip when its provider SDK is absent or too old.
 
     AG2 imports each provider's SDK through an extra of its own; without it the
     class exists but refuses to build. That is the bridge's error path, tested
-    separately, not a reason for the mapping test to fail on a machine that
-    merely lacks the extra.
+    with a stand-in, not a reason for the real-classes test to fail on a
+    machine that merely lacks the extra.
     """
     config = pytest.importorskip("ag2.config")
     cls = getattr(config, name)
@@ -445,7 +500,136 @@ class TestAG2Bridge:
         monkeypatch.setattr(cost_module, "accumulate_global_cost", recorded.append)
         return recorded
 
+    def _actor(self, tmp_path: Path, provider: Any) -> Any:
+        @agent
+        def probe(payload: dict) -> None:
+            return None
+
+        spec = spec_of(probe)
+        assert spec is not None
+        return spec.build(
+            persistence_dir=str(tmp_path / type(provider).__name__), llm_provider=provider
+        )
+
     def test_the_systems_model_becomes_ag2s_configuration(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bridge = _fake_ag2(monkeypatch)
+        monkeypatch.setattr(
+            config_module,
+            "CONFIG",
+            replace(
+                config_module.CONFIG, llm_api_key="cfg-key", openai_url="", nim_api_key="nim-key"
+            ),
+        )
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("GEMINI_API_KEY", "gm-key")
+
+        class AnthropicProvider:
+            model = "claude-haiku-4-5"
+
+        class OpenAIProvider:
+            model = "gpt-4o-mini"
+
+        class OllamaProvider:
+            model = "llama3"
+            base_url = "http://box:11434/"
+
+        class NIMProvider:
+            model = "meta/llama-3.1-8b-instruct"
+
+        class GeminiProvider:
+            model = "gemini-2.5-flash"
+
+        anthropic = bridge.model_config(self._actor(tmp_path, AnthropicProvider()))
+        assert isinstance(anthropic, FakeAnthropicConfig)
+        assert anthropic.settings == {"model": "claude-haiku-4-5", "api_key": "sk-ant-test"}
+
+        openai = bridge.model_config(self._actor(tmp_path, OpenAIProvider()))
+        assert isinstance(openai, FakeOpenAIConfig)
+        assert openai.settings == {"model": "gpt-4o-mini", "api_key": "cfg-key", "base_url": None}
+
+        ollama = bridge.model_config(self._actor(tmp_path, OllamaProvider()))
+        assert isinstance(ollama, FakeOpenAIConfig)
+        assert ollama.settings == {
+            "model": "llama3",
+            "base_url": "http://box:11434/v1",
+            "api_key": "ollama",
+        }
+
+        nim = bridge.model_config(self._actor(tmp_path, NIMProvider()))
+        assert isinstance(nim, FakeOpenAIConfig)
+        assert (
+            nim.settings["base_url"] == bridge.NVIDIA_NIM_URL
+            and nim.settings["api_key"] == "nim-key"
+        )
+
+        gemini = bridge.model_config(self._actor(tmp_path, GeminiProvider()))
+        assert isinstance(gemini, FakeGeminiConfig)
+        assert gemini.settings == {"model": "gemini-2.5-flash", "api_key": "gm-key"}
+
+    def test_a_metered_provider_is_unwrapped_first(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bridge = _fake_ag2(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+        class AnthropicProvider:
+            model = "claude-haiku-4-5"
+
+        actor = self._actor(tmp_path, AnthropicProvider())
+        assert actor.llm is not None and actor.llm.provider is not actor.llm
+        assert isinstance(bridge.model_config(actor), FakeAnthropicConfig)
+
+    def test_without_a_model_or_with_an_unknown_one_there_is_no_configuration(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wactorz.core.integrations import ag2 as bridge
+
+        class FakeProvider:
+            model = "fake"
+
+        # Neither case reaches AG2: no import, so no AG2 needed.
+        monkeypatch.setattr(bridge, "_config_classes", lambda: pytest.fail("AG2 was imported"))
+        assert bridge.model_config(self._actor(tmp_path, FakeProvider())) is None
+
+        @agent
+        def probe(payload: dict) -> None:
+            return None
+
+        spec = spec_of(probe)
+        assert spec is not None
+        assert bridge.model_config(spec.build(persistence_dir=str(tmp_path / "none"))) is None
+
+    def test_a_missing_provider_sdk_is_a_plain_message(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        bridge = _fake_ag2(monkeypatch, openai=UnusableConfig)
+
+        class OllamaProvider:
+            model = "llama3"
+            base_url = "http://box:11434"
+
+        with pytest.raises(RuntimeError, match=r"pip install 'ag2\[openai\]'") as caught:
+            bridge.model_config(self._actor(tmp_path, OllamaProvider()))
+        assert isinstance(caught.value.__cause__, ImportError)
+
+    def test_without_ag2_the_bridge_says_what_to_install(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from wactorz.core.integrations import ag2 as bridge
+
+        # ``None`` in ``sys.modules`` makes the import fail whether or not AG2 is installed.
+        monkeypatch.setitem(sys.modules, "ag2.config", None)
+
+        class AnthropicProvider:
+            model = "claude-haiku-4-5"
+
+        with pytest.raises(RuntimeError, match=r"pip install 'wactorz\[ag2\]'"):
+            bridge.model_config(self._actor(tmp_path, AnthropicProvider()))
+
+    def test_ag2s_real_classes_accept_the_settings(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         AnthropicConfig = _ag2_config_or_skip("AnthropicConfig", "anthropic")
@@ -462,41 +646,22 @@ class TestAG2Bridge:
             model = "llama3"
             base_url = "http://box:11434/"
 
-        @agent
-        def probe(payload: dict) -> None:
-            return None
-
-        spec = spec_of(probe)
-        assert spec is not None
-        anthropic = bridge.model_config(
-            spec.build(persistence_dir=str(tmp_path), llm_provider=AnthropicProvider())
-        )
+        anthropic = bridge.model_config(self._actor(tmp_path, AnthropicProvider()))
         assert isinstance(anthropic, AnthropicConfig) and anthropic.model == "claude-haiku-4-5"
 
-        ollama = bridge.model_config(
-            spec.build(persistence_dir=str(tmp_path / "b"), llm_provider=OllamaProvider())
-        )
+        ollama = bridge.model_config(self._actor(tmp_path, OllamaProvider()))
         assert isinstance(ollama, OpenAIConfig)
         assert ollama.model == "llama3" and ollama.base_url == "http://box:11434/v1"
-
-        assert bridge.model_config(spec.build(persistence_dir=str(tmp_path / "c"))) is None
 
     async def test_a_reply_is_reported_once_with_its_tokens_priced_by_model(
         self, tmp_path: Path, ledger: list[float]
     ) -> None:
-        pytest.importorskip("ag2")
-        from ag2.events.types import Usage  # pyright: ignore[reportMissingImports]
-        from ag2.usage import UsageReport  # pyright: ignore[reportMissingImports]
-
         from wactorz.core.integrations import ag2 as bridge
 
-        report = UsageReport(
-            total=Usage(prompt_tokens=1000, completion_tokens=500),
-            by_model={"gpt-4o-mini": Usage(prompt_tokens=1000, completion_tokens=500)},
-        )
+        report = _usage_report(**{"gpt-4o-mini-2024-07-18": (1000, 500)})
 
         class Reply:
-            async def usage(self) -> UsageReport:
+            async def usage(self) -> Any:
                 return report
 
         actor = Probe(name="review", persistence_dir=str(tmp_path))
@@ -507,17 +672,42 @@ class TestAG2Bridge:
         assert (actor.metrics.llm_input_tokens, actor.metrics.llm_output_tokens) == (1000, 500)
         assert ledger == [pytest.approx(0.00045)]
 
-    async def test_an_empty_report_counts_nothing(
+    def test_a_report_is_priced_model_by_model(self) -> None:
+        from wactorz.core.integrations import ag2 as bridge
+
+        report = _usage_report(
+            **{"gpt-4o-mini": (1000, 0), "gpt-4o": (0, 1000), "mystery": (10, 10)}
+        )
+        prices = {"gpt-4o-mini": (0.15, 0.60), "gpt-4o": (2.50, 10.00)}
+
+        cost, input_tokens, output_tokens, model = bridge.usage_totals(report, prices)
+        assert cost == pytest.approx(0.00015 + 0.01)
+        assert (input_tokens, output_tokens) == (1010, 1010)
+        assert model == "gpt-4o-mini, gpt-4o, mystery"
+
+    async def test_tokens_without_a_price_are_still_counted(
         self, tmp_path: Path, ledger: list[float]
     ) -> None:
-        pytest.importorskip("ag2")
-        from ag2.usage import UsageReport  # pyright: ignore[reportMissingImports]
-
         from wactorz.core.integrations import ag2 as bridge
 
         class Reply:
-            async def usage(self) -> UsageReport:
-                return UsageReport()
+            async def usage(self) -> Any:
+                return _usage_report(unlisted=(30, 20))
+
+        actor = Probe(name="review", persistence_dir=str(tmp_path))
+        assert await bridge.record_reply(actor, Reply()) == 0.0
+        assert actor.metrics.llm_calls == 1
+        assert (actor.metrics.llm_input_tokens, actor.metrics.llm_output_tokens) == (30, 20)
+        assert ledger == [0.0]
+
+    async def test_an_empty_report_counts_nothing(
+        self, tmp_path: Path, ledger: list[float]
+    ) -> None:
+        from wactorz.core.integrations import ag2 as bridge
+
+        class Reply:
+            async def usage(self) -> Any:
+                return _usage_report()
 
         actor = Probe(name="review", persistence_dir=str(tmp_path))
         assert await bridge.record_reply(actor, Reply()) == 0.0

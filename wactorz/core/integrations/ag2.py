@@ -22,20 +22,39 @@ the 0.x line, ``import autogen``, is a different library.
 import os
 from typing import Any
 
-# Optional dependency: `pip install 'wactorz[ag2]'`, plus AG2's extra for the
-# provider in use (`ag2[anthropic]`, `ag2[openai]`, ...): that provider's SDK,
-# at the version AG2 asks for, which may be newer than Wactorz's own floor.
-from ag2.config import (  # pyright: ignore[reportMissingImports]
-    AnthropicConfig,
-    GeminiConfig,
-    OpenAIConfig,
-)
-
 from .pricing import Prices, cost_of
 
 __all__ = ["Prices", "cost_of", "model_config", "record_reply"]
 
 NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1"
+
+#: The provider classes :func:`model_config` knows how to map; any other gives ``None``.
+KNOWN_PROVIDERS = frozenset(
+    {"AnthropicProvider", "OpenAIProvider", "OllamaProvider", "NIMProvider", "GeminiProvider"}
+)
+
+
+def _config_classes() -> tuple[Any, Any, Any]:
+    """AG2's Anthropic, Gemini and OpenAI configuration classes, imported on first use.
+
+    Importing this module must not need AG2, so a program can be written
+    against the bridge and still start on a machine without it; only building
+    a configuration does. Each class is a stand-in that fails on construction
+    until its provider's extra (``ag2[anthropic]``, ``ag2[openai]``, ...) is
+    installed, and :func:`_build` turns that into a plain message.
+    """
+    try:
+        # Optional dependency: `pip install 'wactorz[ag2]'` is not required to import this module.
+        from ag2.config import (  # pyright: ignore[reportMissingImports]
+            AnthropicConfig,
+            GeminiConfig,
+            OpenAIConfig,
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "AG2 is not installed. Install it with: pip install 'wactorz[ag2]'"
+        ) from exc
+    return AnthropicConfig, GeminiConfig, OpenAIConfig
 
 
 def model_config(actor: Any) -> Any:
@@ -53,6 +72,9 @@ def model_config(actor: Any) -> Any:
 
     provider = getattr(actor.llm, "provider", actor.llm)
     kind = type(provider).__name__
+    if kind not in KNOWN_PROVIDERS:
+        return None
+    AnthropicConfig, GeminiConfig, OpenAIConfig = _config_classes()
     model = str(getattr(provider, "model", "") or "")
     key = CONFIG.llm_api_key
     if kind == "AnthropicProvider":
@@ -88,7 +110,7 @@ def model_config(actor: Any) -> Any:
             model=model,
             api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or key,
         )
-    return None
+    raise AssertionError(f"unmapped provider {kind}")  # KNOWN_PROVIDERS and the chain disagree
 
 
 def _build(extra: str, config_class: Any, **settings: Any) -> Any:

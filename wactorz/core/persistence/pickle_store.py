@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..atomic_io import quarantine_unreadable
-from ..deferred_write import DeferredWriter
+from ..deferred_write import LARGE_STATE_BYTES, DeferredWriter
 from ..paths import agent_state_dir, resolve_state_dir
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,8 @@ class _Held:
         #: agent name -> the keys last left out of its file for not pickling,
         #: so the warning is given when that changes rather than on every write.
         self.unpicklable: dict[str, tuple[str, ...]] = {}
+        #: The agents already told their state has grown large, told once each.
+        self.warned_large: set[str] = set()
         self.writer = DeferredWriter()
 
 
@@ -162,6 +164,7 @@ class PickleStore:
         self._states = held.states
         self._unreadable = held.unreadable
         self._unpicklable = held.unpicklable
+        self._warned_large = held.warned_large
         self._writer = held.writer
 
     def _path(self, agent_name: str) -> Path:
@@ -239,7 +242,27 @@ class PickleStore:
                     agent_name,
                 )
             self._unpicklable[agent_name] = left_out
+            self._note_if_large(agent_name, len(data))
             return data
+
+    def _note_if_large(self, agent_name: str, size: int) -> None:
+        """Say so once when an agent's state has grown expensive to write.
+
+        Every persist rewrites the agent's whole state, so what a save costs
+        follows the size of everything it remembers, not of what changed, and
+        the pickling happens on the event loop that every other agent shares. A
+        warning rather than a limit: what an agent keeps is its author's call.
+        """
+        if size < LARGE_STATE_BYTES or agent_name in self._warned_large:
+            return
+        self._warned_large.add(agent_name)
+        logger.warning(
+            "[Persistence] '%s' persists %.1fMB, and every persist rewrites all of it on "
+            "the event loop every agent shares. Keep what it remembers bounded -- a recent "
+            "slice rather than the whole history.",
+            agent_name,
+            size / 1_048_576,
+        )
 
     def load(self, agent_name: str) -> dict[str, Any]:
         """An agent's state, or an empty dict if there is none to read.
@@ -302,6 +325,7 @@ class PickleStore:
             self._states.pop(agent_name, None)
             self._unreadable.pop(agent_name, None)
             self._unpicklable.pop(agent_name, None)
+            self._warned_large.discard(agent_name)
         if path.exists():
             try:
                 path.unlink()

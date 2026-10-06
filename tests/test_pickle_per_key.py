@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from wactorz.core.actor import Actor
+from wactorz.core.deferred_write import LARGE_STATE_BYTES
 from wactorz.core.persistence import PersistenceAPI, WactorzDB
 from wactorz.core.persistence.pickle_store import (
     NotAStateFileError,
@@ -231,3 +232,20 @@ class TestAnActorWithoutAStore:
         later = _Agent(name=AGENT, persistence_dir=str(tmp_path))
         await later._load_persistent_state()
         assert later.recall("model") == Model([1])
+
+
+class TestALargeState:
+    def test_it_is_named_once(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        store = PickleStore(str(tmp_path))
+
+        for tick in range(3):
+            store.save(AGENT, {"history": "x" * LARGE_STATE_BYTES, "tick": tick})
+
+        assert caplog.text.count(f"'{AGENT}' persists") == 1
+
+    def test_a_small_one_says_nothing(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        PickleStore(str(tmp_path)).save(AGENT, {"history": "x" * 1000})
+
+        assert "persists" not in caplog.text

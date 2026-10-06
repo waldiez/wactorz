@@ -150,6 +150,30 @@ class TestTheLockedPyTorch:
         assert "pip install --no-cache-dir --require-hashes $indexes" in DOCKERFILE
 
 
+class TestTheLockedReachy:
+    def test_reachy_is_opt_in_and_its_native_dependencies_resolve_without_building(self) -> None:
+        settings = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        locked = (ROOT / "uv.lock").read_text(encoding="utf-8")
+        metadata = re.search(
+            r'^\[\[tool\.uv\.dependency-metadata\]\]\nname = "pygobject"\n'
+            r'version = "3\.46\.0"\nrequires-dist = \["pycairo>=1\.16\.0"\]',
+            settings,
+            re.MULTILINE,
+        )
+        assert metadata is not None
+        for name in ("reachy-mini", "deepgram-sdk", "pygobject", "pycairo"):
+            assert re.search(rf'^name = "{name}"$', locked, re.MULTILINE), name
+        assert re.search(
+            r'^name = "pygobject"\nversion = "3\.46\.0"\nsource = \{[^\n]*\}\n'
+            r'dependencies = \[\n    \{ name = "pycairo",',
+            locked,
+            re.MULTILINE | re.DOTALL,
+        )
+        all_extra = re.search(r"^all = \[(.*?)^\]", settings, re.MULTILINE | re.DOTALL)
+        assert all_extra is not None
+        assert "reachy" not in all_extra.group(1)
+
+
 class TestBuildingAndPublishing:
     def test_make_builds_the_flavour_it_is_asked_for(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")

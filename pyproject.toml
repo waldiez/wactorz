@@ -173,6 +173,14 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # `uv sync --locked` holds as the days pass.
 exclude-newer = "7 days"
 
+# PyGObject's metadata build requires native Cairo and introspection libraries.
+# Use its published runtime requirements so resolving the opt-in Reachy extra
+# does not require those system libraries on development or CI hosts.
+[[tool.uv.dependency-metadata]]
+name = "pygobject"
+version = "3.46.0"
+requires-dist = ["pycairo>=1.16.0"]
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"

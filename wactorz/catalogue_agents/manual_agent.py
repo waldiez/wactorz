@@ -154,11 +154,9 @@ async def setup(agent) -> None:
     agent.state.setdefault("manual_device", None)
     agent.state.setdefault("manual_url", None)
     agent.state.setdefault("manual_pages", 0)
-    # Persistent cache: device-name → list of known-good PDF URLs
-    # Survives across restarts because agent.state is persisted.
+    # Cache: device-name → list of known-good PDF URLs. Kept for as long as the
+    # agent runs; agent.state is not persisted, so a restart starts it empty.
     agent.state.setdefault("url_cache", {})
-    # Per-device conversation history (so follow-up questions can use context)
-    agent.state.setdefault("_chat_history", [])
     await agent.log(
         "Manual agent ready. Talk to me in plain English — e.g. "
         "'load the Philips 2200 manual' or 'how do I descale it?'"
@@ -265,7 +263,6 @@ async def _dispatch_action(agent, action: str, payload: dict[str, Any]) -> dict[
         agent.state["manual_device"] = None
         agent.state["manual_url"] = None
         agent.state["manual_pages"] = 0
-        agent.state["_chat_history"] = []
         return {"status": "cleared", "result": "Manual cleared."}
 
     return {

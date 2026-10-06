@@ -26,6 +26,15 @@ from .streams import StreamsMixin
 
 logger = logging.getLogger(__name__)
 
+#: Where `converse()` keeps its conversation, in `agent.state` and in what the
+#: agent persists.
+CHAT_HISTORY_KEY = "_chat_history"
+
+#: How many exchanges `converse()` keeps and sends. The same default the bridge
+#: for a remote LLM agent uses: without a bound, every turn sends every earlier
+#: one, and the prompt and the state file grow for as long as the agent lives.
+CONVERSE_MAX_TURNS = 32
+
 
 class LLMInterface:
     """Thin LLM wrapper exposed to generated code via agent.llm
@@ -35,6 +44,8 @@ class LLMInterface:
     def __init__(self, actor: DynamicAgent, agent_state: dict[str, Any]) -> None:
         self._actor = actor
         self._agent_state = agent_state  # reference to AgentAPI.state
+        #: Whether `converse()` has read back the history the agent persisted.
+        self._history_recalled = False
 
     async def chat(self, prompt: str, system: str = "") -> str:
         """Send a prompt to the LLM and return the response text."""
@@ -79,12 +90,52 @@ class LLMInterface:
         async def handle_task(agent, payload):
             reply = await agent.llm.converse(payload['text'], system="You are helpful.")
             return {"reply": reply}
+
+        The history is persisted after each reply, so it survives a restart and
+        goes with the agent when it migrates, and only the last
+        ``CONVERSE_MAX_TURNS`` exchanges are kept. The user's turn is added once
+        the reply has come back: a call that fails leaves the history as it was,
+        rather than ending in a question with no answer that the next call would
+        follow with another.
         """
-        history = self._agent_state.setdefault("_chat_history", [])
-        history.append({"role": "user", "content": user_message})
-        reply = await self.complete(messages=history, system=system)
-        history.append({"role": "assistant", "content": reply})
+        history = self._history()
+        turn = {"role": "user", "content": user_message}
+        reply = await self.complete(messages=[*history, turn], system=system)
+        history.extend([turn, {"role": "assistant", "content": reply}])
+        _keep_last_turns(history, CONVERSE_MAX_TURNS)
+        self._actor.persist(CHAT_HISTORY_KEY, history)
         return reply
+
+    def _history(self) -> list[dict[str, Any]]:
+        """The conversation `converse()` continues, read back from storage once.
+
+        `agent.state` is the live copy, so code that reads or clears
+        ``agent.state['_chat_history']`` keeps working. What was persisted is
+        taken only when that copy is still empty: a history the agent's own
+        code put there first is the one it meant.
+        """
+        history = self._agent_state.setdefault(CHAT_HISTORY_KEY, [])
+        if not self._history_recalled:
+            self._history_recalled = True
+            stored = self._actor.recall(CHAT_HISTORY_KEY, [])
+            if not history and isinstance(stored, list):
+                history.extend(m for m in stored if isinstance(m, dict))
+        return history
+
+
+def _keep_last_turns(history: list[dict[str, Any]], turns: int) -> None:
+    """Trim ``history`` in place to its last ``turns`` exchanges.
+
+    Cut at a user message, so the history never opens with a reply to a
+    question it no longer holds — which a history the agent edited itself, with
+    a message out of pairs, would otherwise do.
+    """
+    excess = len(history) - 2 * turns
+    if excess <= 0:
+        return
+    while excess < len(history) and history[excess].get("role") != "user":
+        excess += 1
+    del history[:excess]
 
 
 class AgentAPI(StreamsMixin, QueriesMixin, MessagingMixin):

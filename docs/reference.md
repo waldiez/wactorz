@@ -154,6 +154,7 @@ async def handle_task(agent, payload):
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
 | `agent.state["key"]` | In-memory dict (cleared on restart) |
 | `agent.llm.chat(prompt)` | Call the LLM |
+| `agent.llm.converse(text)` | Multi-turn chat. The conversation is kept in `agent.state["_chat_history"]`, persisted after each reply so it survives a restart and a migration, and limited to the last 32 exchanges |
 | `agent.send_to(name, payload)` | Send a task to another agent by name |
 | `agent.delegate(name, payload)` | Same, with cleaner syntax |
 | `agent.send_to_many(tasks)` | Fan-out to multiple agents in parallel |

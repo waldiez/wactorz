@@ -20,6 +20,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`agent.llm.converse()` remembers across a restart and a migration.** The conversation was kept only in `agent.state`, so a chat agent built on it forgot everything when it restarted or moved to another machine, and the history it sent grew with every turn. It is now persisted after each reply, read back on the first call after a start, and limited to the last 32 exchanges, the same limit an LLM agent on a node has. A call that fails leaves the history as it was, rather than ending in a question with no answer.
+
 - **Home Assistant state history is indexed by time.** `ha_state_changes` had no index on its timestamp alone, so each batch of the retention prune, and each query for recent changes not narrowed to an entity or a domain, read the whole table. The index is created the next time the database is opened, which takes a moment once on a large existing table.
 
 - **A value the JSON-backed stores cannot hold is refused instead of turned into text.** The keys Wactorz keeps in SQLite or in memory (conversation history, user facts, the spawn registry, agent metrics and the like) stored a `datetime`, a numpy number or a `set` as its `str()`, so it came back as a string after the next read and failed far from where it was written. Such a write now raises a `TypeError` that names the key and how to convert the value, and leaves the stored value as it was. An agent's own keys are pickled and are unaffected. The one-time import of pre-SQLite pickle state leaves such a value in the pickle and names it, rather than stopping.

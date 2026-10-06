@@ -20,6 +20,8 @@ delegation. That is enforced on the name before anything is resolved.
 import json
 from typing import Any
 
+import pytest
+
 from wactorz.agents.main.actor import MainActor, _response_delegates_to, _strip_delegate_blocks
 from wactorz.agents.main.delegation import (
     RESTRICTED_DELEGATION_ALLOW,
@@ -457,18 +459,26 @@ def test_a_malformed_or_non_object_block_names_no_agent() -> None:
 class TestStoredHistoryLosesItsBlocks:
     """A block left in history reads to the model as an example to repeat."""
 
-    def test_a_home_assistant_action_is_replaced_outright(self) -> None:
+    def test_a_home_assistant_action_keeps_the_surrounding_words(self) -> None:
         history = [
             {"role": "user", "content": "lights off"},
             {
                 "role": "assistant",
-                "content": 'Turning them off. <delegate>{"agent": "home-assistant-agent"}</delegate>',
+                "content": 'Turning them off. <delegate>{"agent": "home-assistant-agent"}</delegate> Done.',
             },
         ]
 
         assert _strip_delegate_blocks(history) is True
-        assert history[1]["content"] == "I couldn't safely complete that request."
+        assert history[1]["content"] == "Turning them off.  Done."
         assert history[0]["content"] == "lights off"
+
+    @pytest.mark.parametrize("agent", ["home-assistant-agent", "weather"])
+    def test_a_block_without_surrounding_words_gets_a_neutral_placeholder(self, agent: str) -> None:
+        history = [{"role": "assistant", "content": f'<delegate>{{"agent": "{agent}"}}</delegate>'}]
+
+        assert _strip_delegate_blocks(history) is True
+        assert history[0]["content"] == "[Delegated task]"
+        assert _strip_delegate_blocks(history) is False
 
     def test_another_agents_block_is_cut_and_the_words_kept(self) -> None:
         history = [

@@ -91,6 +91,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Fixed
 
 - Structured delegations - keep agent fields and supply JSON text when no prompt is provided.
+- Home Assistant history - remove delegation blocks while preserving surrounding conversation and outcomes.
 
 - **A migration no longer loses state.** What an agent writes while stopping, such as a final counter or an LLM agent's last turn, now goes with it: the state is taken after the agent stops, where it was taken before and the last writes stayed behind in a copy deleted once the move completed. A migration that would leave keys behind because they cannot be written as JSON (a numpy array, a model object) is refused, names them, and leaves the agent running where it is; `/migrate <agent> <node> --force` moves it without them, and the announcement when it arrives names what was left. A state larger than `WACTORZ_MIGRATION_MAX_STATE_BYTES` (8 MiB by default) is refused too. The record main keeps of a migration in progress no longer holds a copy of the agent's state. One migration now gives one notice, sent when the agent is running at its destination, where a move back to main gave two.
 

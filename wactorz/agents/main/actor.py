@@ -119,9 +119,8 @@ def _strip_delegate_blocks(history: list[dict[str, Any]]) -> bool:
 
     Executable blocks are transport syntax, not conversation. One left in
     stored history reads to the model as an example to follow, and it replays a
-    completed or failed action on later, unrelated turns. A turn that asked Home
-    Assistant to act is replaced outright, because its surrounding words still
-    describe the action as if it will happen.
+    completed or failed action on later, unrelated turns. Keep the surrounding
+    conversation without inferring whether the delegated action succeeded.
     """
     changed = False
     for item in history:
@@ -130,10 +129,7 @@ def _strip_delegate_blocks(history: list[dict[str, Any]]) -> bool:
         content = str(item.get("content") or "")
         if not _DELEGATE_BLOCK_RE.search(content):
             continue
-        if _response_delegates_to(content, "home-assistant-agent"):
-            item["content"] = "I couldn't safely complete that request."
-        else:
-            item["content"] = _DELEGATE_BLOCK_RE.sub("", content).strip()
+        item["content"] = _DELEGATE_BLOCK_RE.sub("", content).strip() or "[Delegated task]"
         changed = True
     return changed
 

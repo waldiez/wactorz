@@ -351,7 +351,11 @@ world without saying so. A pipeline declared at module level is found through
 ## Profiles
 
 Without Home Assistant configured (`HA_URL` and `HA_TOKEN`) its agents do not
-start; `WACTORZ_HA_AGENTS=on|off` decides outright. `wactorz --minimal`,
+start, and main and the planner are not told about it either: their prompts
+are assembled from a core plus what each configured integration adds, so an
+assistant for your agents never offers to dim the lights (see
+[Prompt fragments](architecture.md#prompt-fragments)).
+`WACTORZ_HA_AGENTS=on|off` decides outright. `wactorz --minimal`,
 `WACTORZ_MINIMAL=1` or `minimal=True` starts the monitor, the dashboard and
 your agents only. The minimal profile runs no planner, no generated code and
 no runtime package install, which is the reproducible mode a pinned

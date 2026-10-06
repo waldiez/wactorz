@@ -20,14 +20,16 @@ Core agents are started by the Supervisor on launch and managed with `ONE_FOR_ON
 | **restarts** | 10 |
 | **persists** | `_spawned_agents`, `_pipeline_rules`, `_user_facts`, `_notification_urls`, `conversation_history`, `history_summary` → SQLite |
 
-The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (`ACTUATE` / `HA` / `PIPELINE` / `OTHER`), routes to the right agent, and streams replies back. Intent classification has a 60s timeout; if it expires, MainActor falls back to `OTHER`.
+The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (`PIPELINE` / `OTHER`, plus `ACTUATE` / `HA` where Home Assistant is configured), routes to the right agent, and streams replies back. Intent classification has a 60s timeout; if it expires, MainActor falls back to `OTHER`.
+
+Its prompts are assembled for the installation: a core every installation shares, plus what each configured integration adds — see [Prompt fragments](architecture.md#prompt-fragments). Without Home Assistant, main is never told about devices, and a turn cannot be classified as `ACTUATE` or `HA`.
 
 #### Intent routing
 
 | Intent | Routed to | Example |
 |--------|-----------|---------|
-| `ACTUATE` | `OneOffActuatorAgent` (ephemeral) | "turn off the lamp" |
-| `HA` | `home-assistant-agent` | "list all automations" |
+| `ACTUATE` | `OneOffActuatorAgent` (ephemeral) — Home Assistant only | "turn off the lamp" |
+| `HA` | `home-assistant-agent` — Home Assistant only | "list all automations" |
 | `PIPELINE` | a new `PlannerAgent` | "notify me on Discord when the door opens" |
 | `OTHER` | `main.chat()` | "what's the weather like?" |
 | `@mention` | named actor directly | `@my-agent {"action": "status"}` |
@@ -70,7 +72,7 @@ Every DynamicAgent spawned during the session is saved to the `_spawned_agents` 
 | **name** | `planner-{hash}` (ephemeral) |
 | **lifetime** | per-request |
 
-Spawned by MainActor for every `PIPELINE`-classified request. The planner queries `home-assistant-agent` for the full list of real entity IDs, samples live topic schemas from the TopicBus, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an `ha_actuator` agent (declarative HA service call), a `scheduled` agent (first-class time trigger — see [ScheduledAgent](#scheduledagent-spawned)), or a `dynamic` agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits.
+Spawned by MainActor for every `PIPELINE`-classified request. The planner samples live topic schemas from the TopicBus and, where Home Assistant is configured, queries `home-assistant-agent` for the full list of real entity IDs and resolves camera URLs, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an `ha_actuator` agent (declarative HA service call, offered only where Home Assistant is configured), a `scheduled` agent (first-class time trigger — see [ScheduledAgent](#scheduledagent-spawned)), or a `dynamic` agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits. Its prompts follow the same [fragments](architecture.md#prompt-fragments) main's do, inherited from the main that spawned it.
 
 After spawning, the planner fires a background `_bootstrap_ha_entity_states()` task that extracts HA entity IDs from the plan (generated code, `ha_actuator` actions, MQTT topics, and the enriched task string) and sends a `get_entities_state` request to `home-assistant-agent`. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to `homeassistant/state_changes/#` fire immediately — without waiting for the next real HA state change.
 

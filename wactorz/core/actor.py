@@ -25,7 +25,9 @@ import psutil
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
+from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .persistence.pickle_store import encode_state, read_state_file
+from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
 
@@ -375,6 +377,7 @@ class Actor(ABC):
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
         await self._load_persistent_state()
+        await self._bring_state_up_to_date(self.state_version, self._class_upgrade())
         # Restore the message count from a previous run — but only into a fresh
         # instance. The supervisor restarts by building a new actor, whose count
         # is zero; the start command restarts *this* object, whose count is
@@ -1200,6 +1203,64 @@ class Actor(ABC):
                 self.name,
                 ", ".join(unpicklable),
             )
+
+    # ─── State versions ───────────────────────────────────────────────────────
+
+    #: The version of what this agent persists, for a subclass that upgrades it;
+    #: None for one that does not. See `wactorz.core.state_versions`.
+    state_version: int | None = None
+
+    def _class_upgrade(self) -> Upgrade | None:
+        """The subclass's ``upgrade_state(state, from_version)``, when it defines one."""
+        upgrade = getattr(self, "upgrade_state", None)
+        return upgrade if callable(upgrade) else None
+
+    async def _bring_state_up_to_date(self, declared: Any, upgrade: Upgrade | None) -> None:
+        """Upgrade what this agent persisted to ``declared``, before its code runs.
+
+        Raises `StateUpgradeError` when a step fails, with nothing written.
+        Nothing happens for an agent that declares no version.
+        """
+        version = declared_version(declared)
+        if declared is not None and version is None:
+            logger.warning(
+                "[%s] Its state version %r is not a whole number from 0; state left as it is.",
+                self.name,
+                declared,
+            )
+        if version is None:
+            return
+        state = self._own_state()
+        new = await upgraded(self.name, state, version, upgrade)
+        if new is not None:
+            self._replace_own_state(state, new)
+
+    def _own_state(self) -> dict[str, Any]:
+        """The keys this agent persists for itself, without the framework's own.
+
+        The keys routed to SQLite or memory are the framework's (conversation
+        history, metrics and the like) and are not the agent's to reshape.
+        """
+        if self._persistence_api is not None:
+            routed = SQLITE_KEYS | EPHEMERAL_KEYS
+            return {k: v for k, v in self._persistence_api.all().items() if k not in routed}
+        return dict(self._persistent_state)
+
+    def _replace_own_state(self, old: dict[str, Any], new: dict[str, Any]) -> None:
+        """Make ``new`` this agent's own state, where ``old`` was."""
+        if self._persistence_api is not None:
+            for key in old.keys() - new.keys():
+                self._persistence_api.delete(key)
+            for key, value in new.items():
+                self._persistence_api.set(key, value)
+            # Written now rather than a moment later, so the upgraded state is
+            # on disk before the agent's code runs against it. The store writes
+            # the whole file in one replace: a crash leaves either version.
+            self._persistence_api.flush()
+            return
+        self._persistent_state = dict(new)
+        self._unreadable_state = {k: v for k, v in self._unreadable_state.items() if k not in new}
+        self._write_state_file()
 
     def _keep_unreadable_state(self, path: Path, exc: Exception) -> None:
         """Move a state file we could not read out of the next save's way.

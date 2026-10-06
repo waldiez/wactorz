@@ -128,6 +128,14 @@ class NodeAgent(DynamicAgent):
         self._persistent_state[key] = value
         self._state_file.save(self._persistent_state)
 
+    def _own_state(self) -> dict[str, Any]:
+        """Everything in the node's state file is the agent's own."""
+        return dict(self._persistent_state)
+
+    def _replace_own_state(self, old: dict[str, Any], new: dict[str, Any]) -> None:
+        self._persistent_state = dict(new)
+        self._state_file.save(self._persistent_state)
+
     def recall(self, key: str, default: Any = None) -> Any:
         return self._persistent_state.get(key, default)
 

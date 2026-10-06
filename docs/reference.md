@@ -357,6 +357,26 @@ What that means in practice:
 - A value that cannot be pickled (an open camera, a lambda) is kept in memory and left out of the file; the rest is written, and the log names the key once.
 - Each value in `state.pkl` is pickled on its own. A value that no longer unpickles — a model object after a library upgrade, a class that was renamed — is missing at the next start while the agent's other keys come back, and the log names it with the reason. Its bytes stay in the file, so it returns once the code that reads it does; persisting that key again replaces it.
 
+**Changing what an agent stores.** When a new version of an agent keeps its state in a different shape, it declares a version and how to upgrade to it, and the state is brought up to date when the agent starts, before its own code runs:
+
+```python
+STATE_VERSION = 2
+
+def upgrade_state(state, from_version):
+    if from_version == 0:
+        state["celsius"] = state.pop("temp")       # renamed in version 1
+    elif from_version == 1:
+        state["fahrenheit"] = state["celsius"] * 9 / 5 + 32
+    return state
+```
+
+A native `Actor` subclass sets `state_version = 2` and defines the same `upgrade_state(self, state, from_version)` method. The function is called once for each version still owed, in order, and may be `async`.
+
+- The version is kept in the state, under `_state_version`, so it goes with the agent when it migrates. State without one is at version 0.
+- Only the agent's own keys are passed in. The ones Wactorz keeps in SQLite or memory are not.
+- The steps run on a copy, and the result is written once all of them have worked. A step that raises leaves the stored state as it was, and the agent does not start: a generated agent is marked failed with the step named, and a native one's `start()` raises `StateUpgradeError`.
+- State newer than the code (after going back to an older version of the agent) is left alone, with a warning.
+
 Used internally for:
 
 - Conversation history (`LLMAgent`) — sanitized on every load, with rolling summarization

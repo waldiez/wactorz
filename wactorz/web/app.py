@@ -17,6 +17,7 @@ from aiohttp.typedefs import Handler
 from .. import config
 from ..config import CONFIG, MAX_REQUEST_BYTES
 from ..core.paths import ensure_state_dir
+from ..monitoring import http_metrics
 from . import (
     api_actors,
     api_log_capture,
@@ -28,6 +29,7 @@ from . import (
     chat,
     log_stream,
     login,
+    metrics,
     mqtt,
     origins,
     probes,
@@ -95,9 +97,17 @@ def build_app() -> web.Application:
             logger.debug("[cors] Could not set headers for %s", origin, exc_info=True)
         return response
 
+    # Read when `/metrics` is rendered, so it is the count at that moment.
+    http_metrics.WS_CONNECTIONS.set_function(lambda: len(runtime.ws_clients))
     app = web.Application(
-        # Order matters only for which refusal a caller sees first; both run.
-        middlewares=[cors_middleware, auth.auth_middleware],
+        # The metrics first, so a request either check refuses is counted too.
+        # Between the other two, order matters only for which refusal a caller
+        # sees first; both run.
+        middlewares=[
+            http_metrics.middleware_for(http_metrics.DASHBOARD),
+            cors_middleware,
+            auth.auth_middleware,
+        ],
         client_max_size=MAX_REQUEST_BYTES,
     )
     # Expose the registry to extensions (via app.get) before setup_all() runs.
@@ -111,6 +121,9 @@ def build_app() -> web.Application:
         app.router.add_get(path, probes.liveness_handler)
     for path in sorted(probes.READINESS_PATHS):
         app.router.add_get(path, api_system.readiness_handler)
+    # Here as well as on the REST interface, which runs only when it is the
+    # chosen interface; behind the same key check as every other route.
+    app.router.add_get("/metrics", metrics.handler_for(metrics.build_monitor()))
     # Sign-in. Exempt from the key check and from nothing else — `POST /login`
     # stays inside the origin gate, which is what stands in for a CSRF token.
     app.router.add_get("/login", login.login_page_handler)

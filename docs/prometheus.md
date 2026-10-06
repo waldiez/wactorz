@@ -54,17 +54,21 @@ And, for what the dashboard does not show:
 | `wactorz_node_info{node,version,runtime}` | The version and runtime a node reported |
 | `wactorz_llm_requests_total{provider,outcome}` | LLM requests by how they ended: `ok`, `unavailable` (the provider kept failing through every retry) or `error` (anything else: a rejected request, a bad key) |
 | `wactorz_llm_request_duration_seconds{provider}` | Time from a request to its answer or failure, retries included; for a streamed answer, to its last chunk |
+| `wactorz_http_requests_total{server,method,route}` | HTTP requests, by `server`: `rest` (this interface) or `dashboard` (the dashboard's server, chat included). `route` is the registered pattern, never the path asked for |
+| `wactorz_http_request_duration_seconds{server,method,route}` | Time a request took to answer. A WebSocket is counted but not timed, since it lasts as long as the connection |
+| `wactorz_ws_connections` | Dashboard WebSocket connections open now |
 | `wactorz_agent_task_duration_seconds{agent,outcome}` | Time a generated agent's `handle_task` took, by how it ended: `completed`, `failed` or `timed_out` |
 | `wactorz_agent_process_duration_seconds{agent}` | Time one cycle of a generated agent's `process()` took, whether it returned or raised |
 | `wactorz_agent_process_timeouts_total{agent}` | `process()` cycles still running when their time ran out |
 
 A request counts once however many attempts it took, and one the caller cancelled is not counted. The `wactorz_agent_*` series cover the agents that are running: an agent's go when it stops, so one-off agents do not accumulate, and one started again under the same name begins afresh, which Prometheus reads as a counter reset. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.
 
-The app exposes these at:
+The app exposes these at `GET /metrics` on two ports:
 
-```text
-GET /metrics
-```
+- the dashboard's, `8888` by default (`MONITOR_PORT`), however Wactorz is started — the CLI, a library call, the Home Assistant add-on;
+- the REST interface's, `8000` by default, when `INTERFACE=rest`, as in the compose stacks, whose Prometheus scrapes this one.
+
+Both pages hold the same metrics. Once `API_KEY` is set, both ask for it, and a scraper presents it as `Authorization: Bearer`.
 
 ### Mosquitto
 
@@ -199,6 +203,9 @@ curl -fsS http://localhost:8000/metrics | head
 
 # With API_KEY set:
 curl -fsS -H "Authorization: Bearer $API_KEY" http://localhost:8000/metrics | head
+
+# Without the REST interface, from the dashboard's port:
+curl -fsS -H "Authorization: Bearer $API_KEY" http://localhost:8888/metrics | head
 ```
 
 You should see Prometheus-formatted output such as `wactorz_actors_total`, `wactorz_http_requests_total`, and process metrics.

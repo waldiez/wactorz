@@ -8,15 +8,13 @@ from aiohttp import web
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
-    Counter,
-    Histogram,
     generate_latest,
 )
 from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.platform_collector import PlatformCollector
 from prometheus_client.process_collector import ProcessCollector
 
-from . import agent_metrics, llm_metrics, loop_lag
+from . import agent_metrics, http_metrics, llm_metrics, loop_lag
 
 RegistryProvider = Callable[[], Any | None]
 
@@ -28,9 +26,6 @@ NodesProvider = Callable[[], list[dict[str, Any]]]
 
 #: The names of the nodes this install is configured to deploy.
 ExpectedNodesProvider = Callable[[], Iterable[str]]
-
-#: Route label for requests that matched no route in the routing table.
-UNMATCHED_ROUTE = "<unmatched>"
 
 
 class ActorMetricsCollector:
@@ -380,63 +375,15 @@ class PrometheusMonitor:
             *llm_metrics.COLLECTORS,
             *loop_lag.COLLECTORS,
             *agent_metrics.COLLECTORS,
+            *http_metrics.COLLECTORS,
         ):
             self._registry.register(collector)
         ProcessCollector(registry=self._registry)
         PlatformCollector(registry=self._registry)
 
-        self._requests_total = Counter(
-            "wactorz_http_requests_total",
-            "HTTP requests received by the Python REST interface.",
-            labelnames=("method", "route"),
-            registry=self._registry,
-        )
-        self._responses_total = Counter(
-            "wactorz_http_responses_total",
-            "HTTP responses returned by the Python REST interface.",
-            labelnames=("method", "route", "status"),
-            registry=self._registry,
-        )
-        self._request_duration_seconds = Histogram(
-            "wactorz_http_request_duration_seconds",
-            "HTTP request duration for the Python REST interface.",
-            labelnames=("method", "route"),
-            registry=self._registry,
-        )
-
-    @staticmethod
-    def _route_label(request: web.Request) -> str:
-        """Registered route pattern for a request, or a constant when none matched.
-
-        The label must come from the routing table, never from the request line:
-        an unrouted path is caller-supplied, so returning it would let anyone
-        open a new time series per request and grow the metric without bound.
-        """
-        route = getattr(request.match_info, "route", None)
-        resource = getattr(route, "resource", None)
-        canonical = getattr(resource, "canonical", None)
-        if canonical:
-            return canonical
-        return UNMATCHED_ROUTE
-
-    @web.middleware
-    async def middleware(self, request: web.Request, handler):
-        route = self._route_label(request)
-        method = request.method
-        start = time.perf_counter()
-        status = 500
-        self._requests_total.labels(method=method, route=route).inc()
-        try:
-            response = await handler(request)
-            status = getattr(response, "status", 200)
-            return response
-        except web.HTTPException as exc:
-            status = exc.status
-            raise
-        finally:
-            duration = time.perf_counter() - start
-            self._responses_total.labels(method=method, route=route, status=str(status)).inc()
-            self._request_duration_seconds.labels(method=method, route=route).observe(duration)
+    #: Requests to the REST interface, counted and timed in `http_metrics`
+    #: under ``server="rest"``; the dashboard's server records its own there too.
+    middleware = staticmethod(http_metrics.middleware_for(http_metrics.REST))
 
     def render(self) -> bytes:
         return generate_latest(self._registry)

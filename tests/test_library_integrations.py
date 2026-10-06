@@ -320,6 +320,48 @@ class TestConcurrency:
         assert order == ["start a", "end a", "start b", "end b"]
 
 
+class TestPricing:
+    def test_a_resolved_model_name_matches_its_family_by_longest_prefix(self) -> None:
+        from wactorz.core.integrations.pricing import cost_of, price_for
+
+        prices = {
+            "gpt-4o": (2.50, 10.00),
+            "gpt-4o-mini": (0.15, 0.60),
+            "claude-haiku-4-5": (1.0, 5.0),
+        }
+        assert price_for(prices, "gpt-4o-mini-2024-07-18") == (0.15, 0.60), "not gpt-4o"
+        assert price_for(prices, "gpt-4o-2024-08-06") == (2.50, 10.00)
+        assert price_for(prices, "claude-haiku-4-5-20251001") == (1.0, 5.0)
+        assert price_for(prices, "llama3") is None
+        assert cost_of(prices, "gpt-4o-mini-2024-07-18", 1_000_000, 0) == pytest.approx(0.15)
+        assert cost_of(prices, "llama3", 1_000_000, 1_000_000) == 0.0
+
+
+class TestATopicFailureIsSaidOnTheFeed:
+    async def test_the_function_raising_on_a_message_logs_and_still_counts_as_a_failure(
+        self, tmp_path: Path
+    ) -> None:
+        @agent(subscribes="jobs/#")
+        def explode(payload: dict) -> None:
+            raise RuntimeError("AG2's openai client is not usable")
+
+        actor = spec_of(explode).build(persistence_dir=str(tmp_path))  # pyright: ignore[reportOptionalMemberAccess]
+        said: list[tuple[str, str]] = []
+
+        async def log(message: str, level: str = "info") -> None:
+            said.append((level, message))
+
+        actor.log = log  # pyright: ignore[reportAttributeAccessIssue]
+
+        with pytest.raises(RuntimeError):
+            await actor._on_message({"id": 1}, "jobs/new")  # pyright: ignore[reportPrivateUsage]
+
+        assert said == [
+            ("error", "explode() failed on jobs/new: AG2's openai client is not usable")
+        ]
+        assert actor.metrics.tasks_failed == 1 and actor.metrics.messages_processed == 0
+
+
 class TestLangChainCallback:
     @pytest.fixture
     def ledger(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
@@ -379,29 +421,87 @@ class TestLangChainCallback:
         assert actor.metrics.llm_cost_usd == 0.0
 
 
-class TestAG2Usage:
-    def test_a_chat_is_reported_once_as_the_difference_since_the_last_report(
+class TestAG2Bridge:
+    @pytest.fixture
+    def ledger(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+        recorded: list[float] = []
+        monkeypatch.setattr(cost_module, "accumulate_global_cost", recorded.append)
+        return recorded
+
+    def test_the_systems_model_becomes_ag2s_configuration(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        pytest.importorskip("autogen")
-        from wactorz.core.integrations import ag2 as ag2_ext
+        pytest.importorskip("ag2")
+        from ag2.config import AnthropicConfig, OpenAIConfig
 
-        monkeypatch.setattr(cost_module, "accumulate_global_cost", lambda delta: None)
-        totals = {"total_cost": 0.002, "gpt-4o": {"prompt_tokens": 100, "completion_tokens": 40}}
-        monkeypatch.setattr(
-            ag2_ext,
-            "gather_usage_summary",
-            lambda agents: {"usage_including_cached_inference": dict(totals)},
+        from wactorz.core.integrations import ag2 as bridge
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+        class AnthropicProvider:
+            model = "claude-haiku-4-5"
+
+        class OllamaProvider:
+            model = "llama3"
+            base_url = "http://box:11434/"
+
+        @agent
+        def probe(payload: dict) -> None:
+            return None
+
+        spec = spec_of(probe)
+        assert spec is not None
+        anthropic = bridge.model_config(
+            spec.build(persistence_dir=str(tmp_path), llm_provider=AnthropicProvider())
         )
+        assert isinstance(anthropic, AnthropicConfig) and anthropic.model == "claude-haiku-4-5"
+
+        ollama = bridge.model_config(
+            spec.build(persistence_dir=str(tmp_path / "b"), llm_provider=OllamaProvider())
+        )
+        assert isinstance(ollama, OpenAIConfig)
+        assert ollama.model == "llama3" and ollama.base_url == "http://box:11434/v1"
+
+        assert bridge.model_config(spec.build(persistence_dir=str(tmp_path / "c"))) is None
+
+    async def test_a_reply_is_reported_once_with_its_tokens_priced_by_model(
+        self, tmp_path: Path, ledger: list[float]
+    ) -> None:
+        pytest.importorskip("ag2")
+        from ag2.events.types import Usage
+        from ag2.usage import UsageReport
+
+        from wactorz.core.integrations import ag2 as bridge
+
+        report = UsageReport(
+            total=Usage(prompt_tokens=1000, completion_tokens=500),
+            by_model={"gpt-4o-mini": Usage(prompt_tokens=1000, completion_tokens=500)},
+        )
+
+        class Reply:
+            async def usage(self) -> UsageReport:
+                return report
+
         actor = Probe(name="review", persistence_dir=str(tmp_path))
+        cost = await bridge.record_reply(actor, Reply(), prices={"gpt-4o-mini": (0.15, 0.60)})
 
-        assert ag2_ext.record_usage(actor, [object()]) == pytest.approx(0.002)
-        assert ag2_ext.record_usage(actor, [object()]) == 0.0, "nothing new since"
-        totals.update(
-            {"total_cost": 0.005, "gpt-4o": {"prompt_tokens": 250, "completion_tokens": 90}}
-        )
-        assert ag2_ext.record_usage(actor, [object()]) == pytest.approx(0.003)
+        assert cost == pytest.approx(0.00045)
+        assert actor.metrics.llm_calls == 1
+        assert (actor.metrics.llm_input_tokens, actor.metrics.llm_output_tokens) == (1000, 500)
+        assert ledger == [pytest.approx(0.00045)]
 
-        assert actor.metrics.llm_calls == 2
-        assert actor.metrics.llm_cost_usd == pytest.approx(0.005)
-        assert (actor.metrics.llm_input_tokens, actor.metrics.llm_output_tokens) == (250, 90)
+    async def test_an_empty_report_counts_nothing(
+        self, tmp_path: Path, ledger: list[float]
+    ) -> None:
+        pytest.importorskip("ag2")
+        from ag2.usage import UsageReport
+
+        from wactorz.core.integrations import ag2 as bridge
+
+        class Reply:
+            async def usage(self) -> UsageReport:
+                return UsageReport()
+
+        actor = Probe(name="review", persistence_dir=str(tmp_path))
+        assert await bridge.record_reply(actor, Reply()) == 0.0
+        assert actor.metrics.llm_calls == 0 and ledger == []

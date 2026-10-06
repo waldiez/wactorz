@@ -295,8 +295,9 @@ migrated between nodes.
 
 Counts a model call made outside the system's providers on the actor's
 dashboard counters and in the process-wide total the cost limit checks.
-`wactorz.integrations.langchain.CostCallback` and `wactorz.integrations.ag2.record_usage` call
-it for LangChain and AG2.
+`wactorz.core.integrations.langchain.CostCallback` and `wactorz.core.integrations.ag2.record_reply` call
+it for LangChain and AG2; `wactorz.core.integrations.ag2.model_config(me)` gives AG2's agents the
+system's model.
 
 ### `Actor.publish(topic, payload, *, retain=False, qos=0)`
 

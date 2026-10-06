@@ -10,6 +10,6 @@ you do not need.
 | [`llm_notes/`](llm_notes/README.md) | An agent that calls the system's language model: notes in, one-line summaries out, with the cost kept. |
 | [`yolo_watch/`](yolo_watch/README.md) | A YOLO model as an agent, two ways: a function answering snapshots on MQTT, and an `Actor` reading a camera. |
 | [`langgraph_triage/`](langgraph_triage/README.md) | A LangGraph graph as an agent: tickets in, category, priority and a draft reply out, several at once, with the model's spend on the dashboard. |
-| [`ag2_review/`](ag2_review/README.md) | An AG2 (AutoGen) writer–critic conversation as an agent, with its spend reported. |
+| [`ag2_review/`](ag2_review/README.md) | An AG2 1.x writer–critic conversation as an agent, on the system's model, with its spend reported. |
 
 Each example has a `README.md` with the commands to run it.

@@ -380,49 +380,57 @@ class TestTheLangGraphExample:
 
 
 class TestTheAG2Example:
-    async def test_a_draft_runs_through_the_conversation_without_a_model(
+    async def test_without_a_model_the_draft_comes_back_after_one_round(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        pytest.importorskip("autogen")
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        pytest.importorskip("ag2")
         review = _load("ag2_review").review
         actor = spec_of(review).build(persistence_dir=str(tmp_path))  # pyright: ignore[reportOptionalMemberAccess]
+        said: list[str] = []
+
+        async def log(message: str, level: str = "info") -> None:
+            said.append(level)
+
+        monkeypatch.setattr(actor, "log", log)
 
         result = await actor.call({"id": "d1", "text": "We is pleased to announce the pump."})
 
         assert result is not None
-        assert result["id"] == "d1" and result["turns"] >= 2
+        assert result["id"] == "d1" and result["turns"] == 2
         assert result["cost_usd"] == 0.0, "no model, no spend"
+        assert said == ["warning"], "and it says so on the feed"
+        assert actor.recall("drafts_total") == 1
         assert await actor.call({"id": "d2", "text": "  "}) is None
 
-    def test_ag2s_configuration_follows_the_systems_model(
+    async def test_the_critic_sends_the_writer_back_until_it_approves(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        pytest.importorskip("autogen")
+        """AG2's test client stands in for the model, with the turns scripted."""
+        pytest.importorskip("ag2")
+        from ag2 import Agent
+        from ag2.testing import TestConfig
+
         module = _load("ag2_review")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-        class AnthropicProvider:
-            model = "claude-sonnet-4-6"
+        def scripted(config: Any) -> Any:
+            assert config == "scripted"
+            writer = Agent(
+                "writer", "You improve drafts.", config=TestConfig("Version one.", "Version two.")
+            )
+            critic = Agent(
+                "critic",
+                "You review.",
+                config=TestConfig("Too long.", f"Good now. {module.APPROVED}"),
+            )
+            return writer, critic
 
-        class OllamaProvider:
-            model = "llama3"
-            base_url = "http://box:11434/"
+        monkeypatch.setattr(module, "make_agents", scripted)
+        actor = spec_of(module.review).build(  # pyright: ignore[reportOptionalMemberAccess]
+            persistence_dir=str(tmp_path), options={"config": "scripted"}
+        )
 
-        spec = spec_of(module.review)
-        assert spec is not None
-        with_anthropic = spec.build(persistence_dir=str(tmp_path), llm_provider=AnthropicProvider())
-        config = module.llm_config(with_anthropic)
-        assert config == {
-            "config_list": [
-                {"model": "claude-sonnet-4-6", "api_key": "sk-ant-test", "api_type": "anthropic"}
-            ]
-        }
+        result = await actor.call({"id": "d3", "text": "Draft."})
 
-        with_ollama = spec.build(persistence_dir=str(tmp_path / "b"), llm_provider=OllamaProvider())
-        entry = module.llm_config(with_ollama)["config_list"][0]
-        assert entry["base_url"] == "http://box:11434/v1" and entry["price"] == [0, 0]
-
-        without = spec.build(persistence_dir=str(tmp_path / "c"))
-        assert module.llm_config(without) is False
+        assert result is not None
+        assert result["text"] == "Version two."
+        assert result["turns"] == 4, "write, critique, rewrite, approve"

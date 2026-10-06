@@ -70,11 +70,12 @@ flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
 data      = ["pandas>=2.0.0"]
 vision    = ["opencv-python>=4.8.0"]
 # A LangGraph graph or a LangChain chain as an agent, with its spend reported
-# through `wactorz.integrations.langchain`.
+# through `wactorz.core.integrations.langchain`.
 langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
-# An AG2 (AutoGen) chat as an agent, with its spend reported through
-# `wactorz.integrations.ag2`. AG2 0.x: the 1.x line is a different package layout.
-ag2       = ["ag2>=0.9,<1"]
+# AG2 agents as a Wactorz agent, on the system's model, with their spend
+# reported through `wactorz.core.integrations.ag2`. AG2 1.x (`import ag2`);
+# the provider's own SDK comes from the matching Wactorz extra.
+ag2       = ["ag2>=1.1"]
 docs      = [
     # Pinned exactly, not floored: both decide the bytes of the HTML committed
     # under static/docs, which CI checks against the sources. Pygments in

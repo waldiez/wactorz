@@ -1,55 +1,147 @@
-"""AG2 (AutoGen) beside Wactorz: an AG2 chat's spend on the dashboard.
+"""AG2 1.x beside Wactorz: its agents on the system's model, their spend on the dashboard.
 
-AG2 agents keep their own usage ledger per model client. After a chat,
-:func:`record_usage` reports what the chat added to the actor that ran it,
-with :meth:`~wactorz.core.actor.Actor.record_llm_cost`::
+An AG2 agent takes a model configuration of AG2's own. :func:`model_config`
+builds one from the model Wactorz runs on, so ``LLM_PROVIDER`` and its key
+drive the AG2 agents too. After a reply, :func:`record_reply` reports what
+it cost to the actor that ran it, through
+:meth:`~wactorz.core.actor.Actor.record_llm_cost`::
 
-    from wactorz.core.integrations.ag2 import record_usage
+    from wactorz.core.integrations.ag2 import model_config, record_reply
 
-    result = await writer.a_initiate_chat(critic, message=text, max_turns=4)
-    record_usage(me, [writer, critic])
+    writer = Agent("writer", "You improve drafts.", config=model_config(me))
+    reply = await writer.ask(text)
+    await record_reply(me, reply, prices=PRICES)
 
-AG2 prices the models it knows itself, so the cost is AG2's figure. Written
-against AG2 0.x, whose package is ``autogen``.
+AG2 reports tokens by model, not money, so ``prices`` maps a model name to
+dollars per million input and output tokens; the name AG2 reports is the one
+the provider resolved to, so a listed family name matches it as a prefix. An
+unpriced model is counted at no cost. Written for AG2 1.x (``import ag2``);
+the 0.x line, ``import autogen``, is a different library.
 """
 
+import os
 from typing import Any
 
-# Optional dependency: `pip install 'wactorz[ag2]'`. Only the summary function
-# is needed; the agents are the caller's.
-from autogen import gather_usage_summary
+# Optional dependency: `pip install 'wactorz[ag2]'`, plus AG2's extra for the
+# provider in use (`ag2[anthropic]`, `ag2[openai]`, ...): that provider's SDK,
+# at the version AG2 asks for, which may be newer than Wactorz's own floor.
+from ag2.config import AnthropicConfig, GeminiConfig, OpenAIConfig
 
-#: Where the running total since the last report is kept on the actor.
-_RECORDED = "_ag2_usage_recorded"
+from .pricing import Prices, cost_of
 
+__all__ = ["Prices", "cost_of", "model_config", "record_reply"]
 
-def usage_totals(agents: list[Any]) -> tuple[float, int, int]:
-    """Cost, input tokens and output tokens across ``agents``, since their creation."""
-    summary = gather_usage_summary(agents).get("usage_including_cached_inference") or {}
-    cost = float(summary.get("total_cost", 0.0) or 0.0)
-    input_tokens = output_tokens = 0
-    for model, usage in summary.items():
-        if model == "total_cost" or not isinstance(usage, dict):
-            continue
-        input_tokens += int(usage.get("prompt_tokens", 0) or 0)
-        output_tokens += int(usage.get("completion_tokens", 0) or 0)
-    return cost, input_tokens, output_tokens
+NVIDIA_NIM_URL = "https://integrate.api.nvidia.com/v1"
 
 
-def record_usage(actor: Any, agents: list[Any], *, model: str = "") -> float:
-    """Report to ``actor`` what ``agents`` have spent since the last report. Returns that cost.
+def model_config(actor: Any) -> Any:
+    """AG2's model configuration for the model ``actor`` runs on, or ``None`` without one.
 
-    AG2's totals only grow, so the difference from the last call is what one
-    chat cost; the first call reports everything so far.
+    Reads the provider the system gave the actor (``me.llm``), so the agents
+    an AG2 program builds answer with the same model, key and endpoint as
+    everything else. Anthropic and Gemini use AG2's clients of the same name;
+    OpenAI, NVIDIA NIM and Ollama go through the OpenAI protocol, Ollama at
+    its ``/v1`` endpoint with no key. The settings come from where the
+    provider took them: the environment and the system's configuration.
     """
-    cost, input_tokens, output_tokens = usage_totals(agents)
-    last_cost, last_in, last_out = getattr(actor, _RECORDED, (0.0, 0, 0))
-    delta_cost = max(0.0, cost - last_cost)
-    delta_in = max(0, input_tokens - last_in)
-    delta_out = max(0, output_tokens - last_out)
-    setattr(actor, _RECORDED, (cost, input_tokens, output_tokens))
-    if delta_cost or delta_in or delta_out:
-        actor.record_llm_cost(
-            delta_cost, input_tokens=delta_in, output_tokens=delta_out, model=model, provider="ag2"
+    # Only here: the configuration module reads the environment at import.
+    from wactorz.config import CONFIG
+
+    provider = getattr(actor.llm, "provider", actor.llm)
+    kind = type(provider).__name__
+    model = str(getattr(provider, "model", "") or "")
+    key = CONFIG.llm_api_key
+    if kind == "AnthropicProvider":
+        return _build(
+            "anthropic",
+            AnthropicConfig,
+            model=model,
+            api_key=os.environ.get("ANTHROPIC_API_KEY") or key,
         )
-    return delta_cost
+    if kind == "OpenAIProvider":
+        return _build(
+            "openai",
+            OpenAIConfig,
+            model=model,
+            api_key=os.environ.get("OPENAI_API_KEY") or key,
+            base_url=CONFIG.openai_url or None,
+        )
+    if kind == "OllamaProvider":
+        base = str(getattr(provider, "base_url", "") or CONFIG.ollama_url).rstrip("/")
+        return _build("openai", OpenAIConfig, model=model, base_url=f"{base}/v1", api_key="ollama")
+    if kind == "NIMProvider":
+        return _build(
+            "openai",
+            OpenAIConfig,
+            model=model,
+            base_url=NVIDIA_NIM_URL,
+            api_key=CONFIG.nim_api_key or CONFIG.nvidia_api_key or key,
+        )
+    if kind == "GeminiProvider":
+        return _build(
+            "gemini",
+            GeminiConfig,
+            model=model,
+            api_key=os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or key,
+        )
+    return None
+
+
+def _build(extra: str, config_class: Any, **settings: Any) -> Any:
+    """One of AG2's configurations, or a plain error naming the extra it needs.
+
+    AG2 talks to each provider through that provider's SDK, and asks for it
+    through an extra of its own with a version floor of its own: a class whose
+    SDK is absent, or too old, is a stand-in that fails on construction.
+    """
+    try:
+        return config_class(**settings)
+    except Exception as exc:
+        raise RuntimeError(
+            f"AG2's {extra} client is not usable ({exc}). Install it with: "
+            f"pip install 'ag2[{extra}]'"
+        ) from exc
+
+
+def usage_totals(report: Any, prices: Prices | None = None) -> tuple[float, int, int, str]:
+    """Cost, input tokens, output tokens and the model, from an AG2 usage report.
+
+    The report's per-model breakdown is priced model by model; its total is
+    what the tokens are read from, so a run with no records still counts.
+    """
+    prices = prices or {}
+    by_model = dict(getattr(report, "by_model", {}) or {})
+    cost = 0.0
+    for model, usage in by_model.items():
+        cost += cost_of(
+            prices,
+            str(model),
+            int(getattr(usage, "prompt_tokens", 0) or 0),
+            int(getattr(usage, "completion_tokens", 0) or 0),
+        )
+    total = getattr(report, "total", report)
+    input_tokens = int(getattr(total, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(total, "completion_tokens", 0) or 0)
+    model = ", ".join(str(m) for m in by_model) if by_model else ""
+    return cost, input_tokens, output_tokens, model
+
+
+async def record_reply(actor: Any, reply: Any, *, prices: Prices | None = None) -> float:
+    """Report to ``actor`` what producing ``reply`` cost. Returns that cost.
+
+    A reply's usage covers the whole run that produced it: every model call
+    of the agent, its tools and its follow-ups on that conversation. Call it
+    once per reply you keep, with the conversation's last reply covering the
+    turns before it.
+    """
+    report = await reply.usage()
+    cost, input_tokens, output_tokens, model = usage_totals(report, prices)
+    if cost or input_tokens or output_tokens:
+        actor.record_llm_cost(
+            cost,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model=model,
+            provider="ag2",
+        )
+    return cost

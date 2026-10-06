@@ -255,8 +255,13 @@ checked against. Two helpers do it for the common cases:
   model call is reported with its tokens. LangChain reports tokens, not money,
   so `prices` maps a model name to dollars per million input and output
   tokens; an unpriced model is counted at no cost.
-- `wactorz.core.integrations.ag2.record_usage(me, agents)` reads AG2's usage summary after
-  a chat and reports what the chat added, with AG2's own prices.
+- `wactorz.core.integrations.ag2.record_reply(me, reply, prices={...})` reads
+  AG2's usage report for a reply, tokens by model, prices them and reports
+  them. `model_config(me)` in the same module gives AG2's agents the model
+  the system runs on. AG2 1.x, `import ag2`, plus AG2's extra for the
+  provider (`pip install 'ag2[anthropic]'`, `'ag2[openai]'`), which carries
+  that provider's SDK at the version AG2 asks for. A price table is keyed by
+  model family and matches the resolved name a provider reports as a prefix.
 
 ## LangGraph, LangChain and AG2
 
@@ -364,7 +369,8 @@ environment wants.
   on MQTT and as an `Actor` reading a camera itself.
 - `langgraph_triage/`: a LangGraph graph as an agent, several tickets in
   flight at once, with the model's spend on the dashboard.
-- `ag2_review/`: an AG2 writer–critic conversation as an agent.
+- `ag2_review/`: an AG2 1.x writer–critic conversation as an agent, on the
+  system's model.
 
 ## Testing
 
@@ -412,7 +418,7 @@ What this guide uses is the surface you can rely on:
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
 | `concurrency=` on `wactorz.agent` and `Actor.subscribe` | messages and tasks at once |
-| `wactorz.core.integrations.langchain.CostCallback`, `wactorz.core.integrations.ag2.record_usage` | spend made through LangChain or AG2 |
+| `wactorz.core.integrations.langchain.CostCallback`, `wactorz.core.integrations.ag2.model_config` and `record_reply` | LangChain and AG2 beside the system |
 | `wactorz.FunctionAgent` | the actor behind a decorated function: `call`, `options`, `log` |
 | `wactorz.RuleConfig`, `RuleCondition`, `RuleAction`, `wactorz.RuleAgent` | typed rules |
 | `wactorz.Message`, `MessageType` | what `handle_message` receives |

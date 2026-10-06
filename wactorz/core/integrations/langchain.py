@@ -22,8 +22,9 @@ from typing import Any
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 
-#: Dollars per million input tokens and per million output tokens, by model name.
-Prices = dict[str, tuple[float, float]]
+from .pricing import Prices, cost_of
+
+__all__ = ["CostCallback", "Prices", "cost_of", "token_usage"]
 
 
 def token_usage(response: LLMResult) -> tuple[int, int, str]:
@@ -49,15 +50,6 @@ def token_usage(response: LLMResult) -> tuple[int, int, str]:
         input_tokens = int(usage.get("prompt_tokens", 0) or 0)
         output_tokens = int(usage.get("completion_tokens", 0) or 0)
     return input_tokens, output_tokens, model
-
-
-def cost_of(prices: Prices, model: str, input_tokens: int, output_tokens: int) -> float:
-    """What the tokens cost at the price listed for ``model``, or zero when none is."""
-    price = prices.get(model)
-    if price is None:
-        return 0.0
-    per_input, per_output = price
-    return (input_tokens * per_input + output_tokens * per_output) / 1_000_000
 
 
 class CostCallback(BaseCallbackHandler):

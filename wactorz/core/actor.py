@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import inspect
 import json
 import logging
@@ -225,20 +226,40 @@ class ActorMetrics:
         return time.time() - self.start_time
 
 
-def _as_coroutine_callback(callback: Callable[[Any], Any]) -> Callable[[Any], Any]:
-    """``callback`` as something the hub can await, whatever kind it was given.
-
-    A coroutine function is used as it is. A plain function runs on a worker
-    thread, so a callback that blocks -- a model's `predict`, a file read --
-    does not hold the event loop every other actor in the process shares.
+def is_coroutine_callable(fn: Any) -> bool:
+    """Whether calling ``fn`` is known to return a coroutine: an async function or method,
+    or an object whose ``__call__`` is one.
     """
-    if inspect.iscoroutinefunction(callback):
+    # The class's `__call__`, as Python itself looks it up when calling `fn`.
+    call = inspect.getattr_static(type(fn), "__call__", None)
+    return inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(call)
+
+
+async def run_callable(fn: Callable[..., Any], *args: Any) -> Any:
+    """Call ``fn`` with ``args`` and return its result, whatever kind of callable it is.
+
+    A coroutine callable is awaited on the loop. Anything else runs on a worker
+    thread, so a call that blocks -- a model's `predict`, a file read -- does not
+    hold the event loop every other actor in the process shares. What a plain
+    callable returns may still be awaitable -- a lambda around a coroutine
+    function, an async function behind a plain decorator -- and is then awaited
+    on the loop, rather than dropped unawaited.
+    """
+    if is_coroutine_callable(fn):
+        return await fn(*args)
+    result = await asyncio.to_thread(fn, *args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _as_coroutine_callback(callback: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """``callback`` as something the hub can await, whatever kind it was given; see
+    :func:`run_callable`.
+    """
+    if is_coroutine_callable(callback):
         return callback
-
-    async def _on_thread(payload: Any) -> Any:
-        return await asyncio.to_thread(callback, payload)
-
-    return _on_thread
+    return functools.partial(run_callable, callback)
 
 
 class Actor(ABC):

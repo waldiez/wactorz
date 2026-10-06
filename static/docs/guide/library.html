@@ -384,8 +384,13 @@ checked against. Two helpers do it for the common cases:</p>
   model call is reported with its tokens. LangChain reports tokens, not money,
   so <code>prices</code> maps a model name to dollars per million input and output
   tokens; an unpriced model is counted at no cost.</li>
-<li><code>wactorz.core.integrations.ag2.record_usage(me, agents)</code> reads AG2's usage summary after
-  a chat and reports what the chat added, with AG2's own prices.</li>
+<li><code>wactorz.core.integrations.ag2.record_reply(me, reply, prices={...})</code> reads
+  AG2's usage report for a reply, tokens by model, prices them and reports
+  them. <code>model_config(me)</code> in the same module gives AG2's agents the model
+  the system runs on. AG2 1.x, <code>import ag2</code>, plus AG2's extra for the
+  provider (<code>pip install 'ag2[anthropic]'</code>, <code>'ag2[openai]'</code>), which carries
+  that provider's SDK at the version AG2 asks for. A price table is keyed by
+  model family and matches the resolved name a provider reports as a prefix.</li>
 </ul>
 <h2 id="langgraph-langchain-and-ag2">LangGraph, LangChain and AG2</h2>
 <p>Wactorz does not compete with them. LangGraph and AG2 decide how an agent
@@ -479,7 +484,8 @@ environment wants.</p>
   on MQTT and as an <code>Actor</code> reading a camera itself.</li>
 <li><code>langgraph_triage/</code>: a LangGraph graph as an agent, several tickets in
   flight at once, with the model's spend on the dashboard.</li>
-<li><code>ag2_review/</code>: an AG2 writer–critic conversation as an agent.</li>
+<li><code>ag2_review/</code>: an AG2 1.x writer–critic conversation as an agent, on the
+  system's model.</li>
 </ul>
 <h2 id="testing">Testing</h2>
 <p>A decorated function is tested as a function. The actor around it is built
@@ -552,8 +558,8 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <td>messages and tasks at once</td>
 </tr>
 <tr>
-<td><code>wactorz.core.integrations.langchain.CostCallback</code>, <code>wactorz.core.integrations.ag2.record_usage</code></td>
-<td>spend made through LangChain or AG2</td>
+<td><code>wactorz.core.integrations.langchain.CostCallback</code>, <code>wactorz.core.integrations.ag2.model_config</code> and <code>record_reply</code></td>
+<td>LangChain and AG2 beside the system</td>
 </tr>
 <tr>
 <td><code>wactorz.FunctionAgent</code></td>

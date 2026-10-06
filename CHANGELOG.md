@@ -22,6 +22,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **`io-gateway` no longer appears as an agent.** It is the transport the dashboard's messages arrive through, but the server announced it as an agent each time it reconnected to the broker, so after a broker outage it sat in the dashboard's agent list, and among the chat targets, until the next sync. Choosing it opened a thread nobody answered. The server no longer announces it, and the dashboard keeps it out of the chat targets whatever it is told.
+
 - **Main says when an agent's state has grown expensive to save.** Every persist rewrites an agent's whole state file, and the pickling runs on the event loop every agent shares. Once an agent's state passes 512 KB the log says so, once, with its size, as a node already did for its own agents.
 
 - **`agent.llm.converse()` remembers across a restart and a migration.** The conversation was kept only in `agent.state`, so a chat agent built on it forgot everything when it restarted or moved to another machine, and the history it sent grew with every turn. It is now persisted after each reply, read back on the first call after a start, and limited to the last 32 exchanges, the same limit an LLM agent on a node has. A call that fails leaves the history as it was, rather than ending in a question with no answer.

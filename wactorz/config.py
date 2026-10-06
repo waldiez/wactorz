@@ -235,6 +235,12 @@ UPLOADS_ENABLED = os.getenv("WACTORZ_UPLOADS", "1").strip().lower() not in ("", 
 #: so a file the UI accepts is not refused by the server.
 UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
 
+#: Largest agent state a migration ships, as JSON. The snapshot goes over MQTT,
+#: waits in the outbox while the broker is away, and is parsed in one piece by
+#: the node that receives it, which may be a Raspberry Pi. A migration over the
+#: limit is refused before the agent is stopped. 0 sets no limit.
+MIGRATION_MAX_STATE_BYTES = _env_int("WACTORZ_MIGRATION_MAX_STATE_BYTES", 8 * 1024 * 1024)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:

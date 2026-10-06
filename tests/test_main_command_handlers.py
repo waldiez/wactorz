@@ -148,7 +148,8 @@ class _Main:
     async def _spawn_from_config(self, config: dict[str, Any], **kwargs: Any) -> None:
         self.calls.append(("spawn", (config, kwargs)))
 
-    async def migrate_agent(self, name: str, node: str) -> Any:
+    async def migrate_agent(self, name: str, node: str, *, force: bool = False) -> Any:
+        self.calls.append(("migrate", (name, node, force)))
         if isinstance(self.migrate_result, Exception):
             raise self.migrate_result
         return self.migrate_result
@@ -522,6 +523,19 @@ class TestMigrate:
         main.migrate_result = result
 
         assert await agent_cmds.migrate_agent_cmd(_ctx(main), "sensor rpi") == reply
+
+    @pytest.mark.parametrize(
+        ("argument", "force"),
+        [("sensor rpi", False), ("sensor rpi --force", True), ("--force sensor rpi", True)],
+    )
+    async def test_force_is_passed_on_wherever_it_is_written(
+        self, main: _Main, argument: str, force: bool
+    ) -> None:
+        main.migrate_result = {"success": True, "message": "moved"}
+
+        await agent_cmds.migrate_agent_cmd(_ctx(main), argument)
+
+        assert ("migrate", ("sensor", "rpi", force)) in main.calls
 
 
 class TestRestart:

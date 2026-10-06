@@ -18,14 +18,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..core.deferred_write import DeferredWriter
+from ..core.deferred_write import LARGE_STATE_BYTES, DeferredWriter
+from ..core.state_snapshot import json_safe
 
 logger = logging.getLogger(__name__)
-
-#: When to say an agent's state has grown expensive to write. Chosen from
-#: measurement on a Raspberry Pi 5 SD card, where a save crosses ~15ms around
-#: here and climbs steeply after it.
-LARGE_STATE_BYTES = 512 * 1024
 
 
 def state_path(state_dir: Path | str, agent_name: str) -> Path:
@@ -196,17 +192,3 @@ class JsonState:
         except Exception as e:
             logger.warning("[%s] Failed to delete state file %s: %s", self._name, self.path, e)
         return False
-
-
-def json_safe(values: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-    """The part of ``values`` that can travel over MQTT, and the keys that cannot."""
-    safe: dict[str, Any] = {}
-    dropped: list[str] = []
-    for key, value in values.items():
-        try:
-            json.dumps(value)
-        except (TypeError, ValueError):
-            dropped.append(key)
-        else:
-            safe[key] = value
-    return safe, dropped

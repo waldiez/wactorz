@@ -30,6 +30,19 @@ volume is the same for both.
 The `ultra` image runs on Python 3.13, one release behind the other, because the Reachy
 Mini SDK needs it. It has no GPU support: PyTorch in it is the CPU build.
 
+### Licences
+
+Wactorz is Apache-2.0, and so is everything in the default image. The `ultra` image also
+contains [Ultralytics](https://github.com/ultralytics/ultralytics), which is licensed
+under the **AGPL-3.0**, so the `ultra` image as a whole is distributed under its terms.
+Using the `ultra` image, or Ultralytics through it, in a closed-source product or a hosted
+service means meeting the AGPL-3.0 (offering the source of the whole to its users) or
+holding an [Ultralytics licence](https://www.ultralytics.com/license). Wactorz's own
+code stays Apache-2.0 either way, and the default image has no such component.
+
+The corresponding source is the source of this release at <https://github.com/waldiez/wactorz> (its tag, with the Dockerfile that builds the image) and Ultralytics' own at <https://github.com/ultralytics/ultralytics>. Every package in an image is listed with its licence in
+`/app/THIRD_PARTY.txt`.
+
 ---
 
 ## Option A — Terminal + Compose (recommended)

@@ -24,6 +24,7 @@ from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
 from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
+from ..core.state_snapshot import FORCE_FLAG
 from . import runtime, uploads
 
 logger = logging.getLogger(__name__)
@@ -304,15 +305,17 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     if cmd == "/migrate":
+        force = FORCE_FLAG in parts
+        parts = [p for p in parts if p != FORCE_FLAG]
         if len(parts) < 3:
-            await reply_fn("[usage] /migrate <agent-name> <target-node>")
+            await reply_fn("[usage] /migrate <agent-name> <target-node> [--force]")
             return True
         main_actor = find_main_actor(runtime.registry)
         if main_actor is None:
             await reply_fn("[error] migrate_agent not available.")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
-        result = await main_actor.migrate_agent(parts[1], parts[2])
+        result = await main_actor.migrate_agent(parts[1], parts[2], force=force)
         sym = "OK" if result.get("success") else "FAIL"
         await reply_fn(f"[{sym}] {result.get('message', str(result))}")
         return True

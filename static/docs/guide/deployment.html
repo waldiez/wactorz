@@ -424,6 +424,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under <code>nodes/</code> or <code>agents/by-name/</code>, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained <code>desired_state</code> follows this setting</td>
 </tr>
 <tr>
+<td><code>WACTORZ_MIGRATION_MAX_STATE_BYTES</code></td>
+<td><code>8388608</code></td>
+<td>Largest agent state a <code>/migrate</code> ships, as JSON; a larger one is refused before the agent stops, and <code>--force</code> does not override it. Set on main, which sends it to the node it asks; <code>0</code> sets no limit</td>
+</tr>
+<tr>
 <td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
 <td><code>9090</code></td>
 <td>Prometheus host port</td>
@@ -495,7 +500,7 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <p>Wactorz reaches remote machines over SSH when bootstrapping an edge node with
 <code>/deploy</code>. Key auth is preferred over a password — generate a dedicated deploy
 key:</p>
-<div class="highlight"><pre><span></span><code>ssh-keygen<span class="w"> </span>-t<span class="w"> </span>ed25519<span class="w"> </span>-C<span class="w"> </span><span class="s2">&quot;wactorz-deploy&quot;</span><span class="w"> </span>-f<span class="w"> </span>~/.ssh/wactorz_deploy<span class="w"> </span>-N<span class="w"> </span><span class="s2">&quot;&quot;</span>
+<div class="highlight"><pre><span></span><code>ssh-keygen<span class="w"> </span>-t<span class="w"> </span>ed25519<span class="w"> </span>-C<span class="w"> </span><span class="s2">"wactorz-deploy"</span><span class="w"> </span>-f<span class="w"> </span>~/.ssh/wactorz_deploy<span class="w"> </span>-N<span class="w"> </span><span class="s2">""</span>
 
 <span class="c1"># Authorise on the target host</span>
 ssh-copy-id<span class="w"> </span>-i<span class="w"> </span>~/.ssh/wactorz_deploy.pub<span class="w"> </span>-p<span class="w"> </span><span class="m">22</span><span class="w"> </span>pi@192.168.1.50
@@ -519,12 +524,12 @@ contact unless <code>DEPLOY_STRICT_HOST_KEYS=1</code>. Full details in
 <div class="highlight"><pre><span></span><code><span class="c1"># infra/homeassistant/configuration.yaml</span>
 <span class="nt">rest_command</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">wactorz_chat</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://wactorz-python:8000/api/chat&quot;</span>
+<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">"http://wactorz-python:8000/api/chat"</span>
 <span class="w">    </span><span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">POST</span>
-<span class="w">    </span><span class="nt">content_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;application/json&quot;</span>
+<span class="w">    </span><span class="nt">content_type</span><span class="p">:</span><span class="w"> </span><span class="s">"application/json"</span>
 <span class="w">    </span><span class="c1"># The endpoint reads `message`, plus an optional `agent_name` that defaults</span>
-<span class="w">    </span><span class="c1"># to the orchestrator. Add `&quot;agent_name&quot;: &quot;&lt;name&gt;&quot;` to address one agent.</span>
-<span class="w">    </span><span class="nt">payload</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;{&quot;message&quot;:&quot;{{</span><span class="nv"> </span><span class="s">message</span><span class="nv"> </span><span class="s">}}&quot;}&#39;</span>
+<span class="w">    </span><span class="c1"># to the orchestrator. Add `"agent_name": "&lt;name&gt;"` to address one agent.</span>
+<span class="w">    </span><span class="nt">payload</span><span class="p">:</span><span class="w"> </span><span class="s">'{"message":"{{</span><span class="nv"> </span><span class="s">message</span><span class="nv"> </span><span class="s">}}"}'</span>
 </code></pre></div>
 
 <p>Set <code>HA_URL</code> and <code>HA_TOKEN</code> in <code>.env</code>.</p>

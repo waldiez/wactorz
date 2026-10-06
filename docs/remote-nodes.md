@@ -447,8 +447,8 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/list` | → runner | Request the list of running agents. Response on `nodes/{name}/agents`. |
 | `nodes/{name}/agents` | ← runner | Response to `list`. Contains agent names and actor IDs. |
 | `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, and whether the node checks signed commands. |
-| `nodes/{name}/migrate` | → runner | Migrate a running agent to another node. Payload: `{"name": "...", "target_node": "..."}`. Signed. |
-| `nodes/{name}/migrate_result` | ← runner | Result of a migration request. |
+| `nodes/{name}/migrate` | → runner | Hand a running agent back to main, which places it. Payload: `{"name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608}`. Signed. |
+| `nodes/{name}/migrate_result` | ← runner | Result of a migration request. A failure, including a refusal, is shown on the dashboard. |
 | `nodes/{name}/code_changed` | ← runner | An agent here repaired its own program. Carries the agent's name and no code. |
 | `nodes/{name}/code_request` | → runner | Asks for the program an agent is actually running. Payload: `{"agent": "...", "token": "..."}`. Signed. |
 | `nodes/{name}/code_return` | ← runner | The program, quoting the token it was asked with. |
@@ -532,15 +532,24 @@ The `agent` object available inside remote agent code mirrors the local DynamicA
 
 ## Agent migration
 
-A running agent can be moved from one node to another without stopping it manually. The runner on the source node captures the agent's config, publishes it as a spawn command to the target node, then stops the local instance.
+A running agent can be moved between main and a node, or from one node to another, from the chat:
 
-```bash
-# From the main machine, publish to MQTT:
-mosquitto_pub -h localhost -t "nodes/rpi-livingroom/migrate" \
-  -m '{"name": "temp-sensor-agent", "target_node": "rpi-bedroom"}'
+```text
+/migrate temp-sensor rpi-bedroom     # to a node
+/migrate temp-sensor local           # back to main
+/migrate temp-sensor rpi-bedroom --force
 ```
 
-Or trigger it from agent code using `agent.send_to()` if you build a migration manager. The result is published to `nodes/{source_node}/migrate_result`.
+Main routes every migration; a node never spawns on another node. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
+
+The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
+
+State travels as JSON. A migration is refused, and the agent keeps running where it is, when:
+
+- **its state holds a value that cannot be written as JSON** (a numpy array, a model object, an open capture). The refusal names the keys. `--force` moves the agent without them, and the announcement when it arrives names what was left behind;
+- **its state is larger than `WACTORZ_MIGRATION_MAX_STATE_BYTES`** (8 MiB by default, set on main). `--force` does not change this.
+
+A node checks its own agents against the same two terms, which main sends with the request. A node running an earlier release does not check them: it sends what it can, and main names the keys it could not send.
 
 ---
 

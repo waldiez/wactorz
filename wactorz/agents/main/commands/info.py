@@ -38,7 +38,7 @@ HELP_LINES: tuple[str, ...] = (
     "                            (a target configured via DEPLOY_TARGETS;",
     "                             run bare to list them. SSH credentials",
     "                             come from the environment, not chat)",
-    "  /migrate <agent> <node> — move an agent to a different node (state preserved)",
+    "  /migrate <agent> <node> [--force] — move an agent to a different node (state preserved)",
     "  /agents restart <name>  — restart an agent (local or remote, state preserved)",
     "",
     "**Pipelines & Plans**",

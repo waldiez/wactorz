@@ -117,7 +117,7 @@ Wactorz uses a three-tier persistence layer (`wactorz/core/persistence/`) that r
 
 `Actor.persist(key, value)` and `Actor.recall(key)` route automatically to the correct store based on the key name. Existing agent code works without changes.
 
-The pickle store keeps each agent's state in memory once it has read it, and writes the file about a second after a change, from a worker thread, so the disk is never waited for on the event loop. A node does the same with its agents' JSON state files. A stop, a migration and a clean shutdown write what is waiting. Anything that changes or removes a state file in a running server — a reset, a migration step — goes through the store, because the copy in memory is what gets written next.
+Each value in `state.pkl` is pickled on its own, so one that no longer unpickles after a library upgrade costs that key and not the rest of the agent's state; its bytes are kept in the file until the key is written again. The pickle store keeps each agent's state in memory once it has read it, and writes the file about a second after a change, from a worker thread, so the disk is never waited for on the event loop. A node does the same with its agents' JSON state files. A stop, a migration and a clean shutdown write what is waiting. Anything that changes or removes a state file in a running server — a reset, a migration step — goes through the store, because the copy in memory is what gets written next.
 
 The spawn registry (`_spawned_agents`) is stored in SQLite. On restart, MainActor re-spawns every entry so dynamic agents and catalog agents survive reboots.
 

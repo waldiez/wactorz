@@ -24,12 +24,15 @@ Every agent publishes to its own namespace: `agents/{actor_id}/...`
   "name":       "main",
   "timestamp":  1740000000.0,
   "state":      "running",
-  "cpu":        1.4,
   "memory_mb":  69.9,
   "task":       "idle",
-  "protected":  true
+  "protected":  true,
+  "essential":  false,
+  "node":       ""
 }
 ```
+
+`node` names the machine the agent runs on, and is empty for one running on main.
 
 ---
 
@@ -527,14 +530,14 @@ agent can read current state without a request/response round-trip.
 | `nodes/{node}/stop_all` | Main actor | `{ "reason": "..." }` |
 | `nodes/{node}/restart` | Main actor | `{ "reason": "..." }` |
 | `nodes/{node}/restart_agent` | Main actor | `{ "name": "..." }` |
-| `nodes/{node}/migrate` | Main actor | `{ "name": "...", "target_node": "..." }` |
+| `nodes/{node}/migrate` | Main actor | `{ "name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608 }` |
 | `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "version": "0.7.0", "runtime": "runner", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000 }` — `version` is the Wactorz release the node runs and `runtime` what kind of process answers; a node deployed before these fields sends neither and is recorded as `runner` at an unknown version |
 | `agents/{node}/logs` | Remote runner | `{ "type": "spawned", "message": "...", "node": "...", "timestamp": ... }` |
 | `nodes/{node}/logs` | Remote runner | `{ "type": "log", "message": "...", "timestamp": ... }` |
 | `nodes/{node}/list` | Main actor | *(request)* published to make the runner emit `nodes/{node}/agents` |
 | `nodes/{node}/agents` | Remote runner | `{ "node": "...", "agents": [...] }` |
 | `nodes/{node}/migrate_result` | Remote runner | `{ "success": true, "agent": "...", "from_node": "...", "to_node": "..." }` |
-| `nodes/{node}/state_return` | Remote runner | `{ "agent": "...", "state": {...}, "return_token": "..." }` |
+| `nodes/{node}/state_return` | Remote runner | `{ "agent": "...", "config": {...}, "state": {...}, "state_keys_dropped": [...], "return_token": "..." }`, or with `"refused": "<reason>"` and no state when the agent stays where it is |
 | `nodes/{node}/reply/#` | Remote runner | Reply payloads for node requests |
 | `agents/by-name/{agent}/task` | Main actor | `{ "text": "...", "payload": "...", "_reply_topic": "...", "_remote_task": true }` |
 

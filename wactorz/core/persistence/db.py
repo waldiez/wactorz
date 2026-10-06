@@ -14,6 +14,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from .json_value import encode
 from .schema import SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
@@ -240,13 +241,14 @@ class WactorzDB:
     def kv_set(self, agent: str, key: str, value: Any) -> None:
         """Insert or replace one key for one agent, and commit.
 
-        ``value`` is JSON-encoded, so it must be serialisable; objects that are
-        not fall back to ``str``, which round-trips as text rather than failing.
+        ``value`` is stored as JSON, and one JSON cannot represent raises
+        `NotJsonError` before anything is written.
         """
+        encoded = encode(agent, key, value)
         with self.transaction() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, ?)",
-                (agent, key, json.dumps(value, default=str), time.time()),
+                (agent, key, encoded, time.time()),
             )
 
     @_serialised
@@ -439,15 +441,6 @@ class WactorzDB:
                 if isinstance(item, dict) and item.get("id"):
                     ids.add(str(item["id"]))
         return ids
-
-    def clear_spawn_registry(self, agent_name: str | None = None) -> int:
-        """Delete spawn_registry rows. Pass agent_name to limit to one agent."""
-        with self.transaction() as conn:
-            if agent_name:
-                cur = conn.execute("DELETE FROM spawn_registry WHERE name=?", (agent_name,))
-            else:
-                cur = conn.execute("DELETE FROM spawn_registry")
-        return cur.rowcount
 
     @_serialised
     def query_chat_log(

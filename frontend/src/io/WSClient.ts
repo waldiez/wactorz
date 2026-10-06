@@ -13,7 +13,7 @@
 import { log } from "./logger";
 import { toMs } from "../time";
 import { emit } from "../events";
-import { MAIN_AGENT } from "../agents/naming";
+import { IO_GATEWAY, MAIN_AGENT } from "../agents/naming";
 import type { StatePatchAgent, SnapshotStats, LogFeedItem } from "../types/ws";
 
 export type ChatHandler = (
@@ -394,8 +394,8 @@ export class WSClient {
         // agent the user addressed. Re-attribute it to that agent so the thread,
         // feed and toasts are consistent live and after a reload. The proper fix
         // is server-side — the reply frame should carry the real agent name.
-        const rawFrom = asStr(data["from"], "io-gateway");
-        const from = rawFrom === "io-gateway" ? this._lastAgentName : rawFrom;
+        const rawFrom = asStr(data["from"], IO_GATEWAY);
+        const from = rawFrom === IO_GATEWAY ? this._lastAgentName : rawFrom;
         const ts = toMs(data["timestamp"]);
 
         if (data["type"] === "chat") {

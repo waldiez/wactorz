@@ -27,7 +27,10 @@ describe("canDirectMessage", () => {
     });
     it("never allows the non-chat system agents", () => {
         expect(canDirectMessage({ name: "monitor-agent" })).toBe(false);
-        expect(canDirectMessage({ name: "monitor-agent" })).toBe(false);
+        expect(canDirectMessage({ name: "home-assistant-state-bridge" })).toBe(false);
+    });
+    it("never offers the chat transport, which reaches the agent list on every broker reconnect", () => {
+        expect(canDirectMessage({ name: "io-gateway" })).toBe(false);
     });
     it("allows normal agents unless they are protected", () => {
         expect(canDirectMessage({ name: "worker" })).toBe(true);

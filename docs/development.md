@@ -472,12 +472,6 @@ print('User facts:', json.loads(row[0]) if row else {})
 "
 ```
 
-The `spawn_registry` table also holds spawn configs in a structured form:
-
-```bash
-sqlite3 state/wactorz.db "SELECT name, node FROM spawn_registry;"
-```
-
 #### Remove a stuck agent from the spawn registry
 
 ```python
@@ -493,7 +487,6 @@ conn.execute(
     \"UPDATE kv_store SET value=? WHERE agent='main' AND key='_spawned_agents'\",
     (json.dumps(spawned),),
 )
-conn.execute(\"DELETE FROM spawn_registry WHERE name='my-stuck-agent'\")
 conn.commit()
 print('Done. Remaining:', list(spawned.keys()))
 "

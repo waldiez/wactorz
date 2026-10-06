@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 #: go out in the same write. Also the most that a killed process can lose.
 WRITE_DELAY_S = 1.0
 
+#: When to say an agent's state has grown expensive to write. Every save
+#: rewrites the whole state, and encoding it happens on the event loop. Chosen
+#: from measurement on a Raspberry Pi 5 SD card, where a save crosses ~15ms
+#: around here and climbs steeply after it.
+LARGE_STATE_BYTES = 512 * 1024
+
 #: What a path should hold, asked for when the write is about to happen. None
 #: when it turns out to hold that already, and there is nothing to write.
 Content = Callable[[], bytes | None]

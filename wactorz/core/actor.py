@@ -10,7 +10,6 @@ import functools
 import inspect
 import json
 import logging
-import pickle
 import sys
 import time
 import uuid
@@ -21,11 +20,12 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import psutil
-
-from .atomic_io import quarantine_unreadable, write_pickle
+from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
+from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
+from .persistence.pickle_store import encode_state, read_state_file
+from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
 
@@ -327,6 +327,9 @@ class Actor(ABC):
         self._persistence_dir = agent_state_dir(persistence_dir or resolve_state_dir(), self.name)
         self._persistence_dir.mkdir(parents=True, exist_ok=True)
         self._persistent_state: dict = {}
+        #: Without a persistence API: the pickled bytes of each value in the
+        #: state file that would not unpickle, written back until set again.
+        self._unreadable_state: dict[str, bytes] = {}
 
         # Unified persistence API — set by ActorSystem if available,
         # otherwise falls back to legacy pickle behavior
@@ -359,15 +362,6 @@ class Actor(ABC):
         #: first stop, not here, and cleared by start().
         self._stopped: asyncio.Future[None] | None = None
 
-        # Cached process handle for heartbeat metrics — one per actor so each
-        # has an independent cpu_percent baseline (interval=None, non-blocking).
-        self._proc: Any | None = None
-        try:
-            self._proc = psutil.Process()
-            self._proc.cpu_percent(interval=None)  # prime the baseline
-        except Exception:  # noqa: S110  # psutil is optional; the actor runs without it
-            pass
-
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
     # ─── Lifecycle ────────────────────────────────────────────────────────────
@@ -378,6 +372,7 @@ class Actor(ABC):
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
         await self._load_persistent_state()
+        await self._bring_state_up_to_date(self.state_version, self._class_upgrade())
         # Restore the message count from a previous run — but only into a fresh
         # instance. The supervisor restarts by building a new actor, whose count
         # is zero; the start command restarts *this* object, whose count is
@@ -746,18 +741,17 @@ class Actor(ABC):
         return total / (1024 * 1024)
 
     def _build_heartbeat(self) -> dict:
-        cpu = 0.0
-        try:
-            if self._proc is not None:
-                cpu = self._proc.cpu_percent(interval=None)
-        except Exception:  # noqa: S110  # a heartbeat reports 0.0 rather than not arriving
-            pass
+        """What this actor reports every heartbeat.
+
+        No CPU figure: actors share one process, and so one CPU reading, which
+        the monitor publishes once on `system/host`. Measured per actor it was
+        that same number under every agent's name.
+        """
         return {
             "actor_id": self.actor_id,
             "name": self.name,
             "timestamp": time.time(),
             "state": self.state.value,
-            "cpu": cpu,
             "memory_mb": self._estimate_memory_mb(),
             "task": self._current_task_description(),
             "protected": self.protected,
@@ -1164,42 +1158,111 @@ class Actor(ABC):
             # once it returns, the file holds what the agent last persisted.
             self._persistence_api.flush()
             return
-        # Legacy pickle path
-        try:
-            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
-        except Exception:
-            logger.exception("[%s] Failed to save state", self.name)
+        self._write_state_file()
 
     async def _load_persistent_state(self):
-        """Load state from disk. Called on start() before on_start()."""
+        """Load state from disk. Called on start() before on_start().
+
+        With a persistence API there is nothing to load here: the store reads
+        the agent's state file itself, a value at a time, the first time it is
+        asked. Reading it here as well would hold a second copy that `recall`
+        could fall back to after the store had dropped a key, and a single
+        value that no longer unpickles would cost the whole file.
+        """
         if self._persistence_api is not None:
-            # New path: state is loaded per-key via recall(), nothing to batch-load.
-            # But load legacy pickle for backward compat if it exists.
-            path = self._persistence_dir / "state.pkl"
-            if path.exists():
-                try:
-                    with open(path, "rb") as f:
-                        self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
-                            f
-                        )  # our own state file, under the state dir
-                    logger.info(
-                        "[%s] Loaded legacy persistent state (will migrate on first persist).",
-                        self.name,
-                    )
-                except Exception as e:
-                    self._keep_unreadable_state(path, e)
             return
-        # Legacy pickle path
         path = self._persistence_dir / "state.pkl"
-        if path.exists():
-            try:
-                with open(path, "rb") as f:
-                    self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
-                        f
-                    )  # our own state file, under the state dir
-                logger.info("[%s] Loaded persistent state.", self.name)
-            except Exception as e:
-                self._keep_unreadable_state(path, e)
+        if not path.exists():
+            return
+        try:
+            decoded = read_state_file(path)
+        except Exception as e:
+            self._keep_unreadable_state(path, e)
+            return
+        self._persistent_state = decoded.values
+        self._unreadable_state = dict(decoded.unreadable)
+        if decoded.unreadable:
+            logger.warning(
+                "[%s] Starting without %s, which could not be read: %s. Kept in %s.",
+                self.name,
+                ", ".join(sorted(decoded.unreadable)),
+                "; ".join(f"{k}: {r}" for k, r in sorted(decoded.reasons.items())),
+                path,
+            )
+        logger.info("[%s] Loaded persistent state.", self.name)
+
+    def _write_state_file(self) -> None:
+        """Write the whole state, for an actor with no persistence API."""
+        try:
+            data, unpicklable = encode_state(self._persistent_state, self._unreadable_state)
+            write_bytes(self._persistence_dir / "state.pkl", data)
+        except Exception:
+            logger.exception("[%s] Failed to save state", self.name)
+            return
+        if unpicklable:
+            logger.warning(
+                "[%s] Not writing %s: it cannot be pickled. The rest of the state was written.",
+                self.name,
+                ", ".join(unpicklable),
+            )
+
+    # ─── State versions ───────────────────────────────────────────────────────
+
+    #: The version of what this agent persists, for a subclass that upgrades it;
+    #: None for one that does not. See `wactorz.core.state_versions`.
+    state_version: int | None = None
+
+    def _class_upgrade(self) -> Upgrade | None:
+        """The subclass's ``upgrade_state(state, from_version)``, when it defines one."""
+        upgrade = getattr(self, "upgrade_state", None)
+        return upgrade if callable(upgrade) else None
+
+    async def _bring_state_up_to_date(self, declared: Any, upgrade: Upgrade | None) -> None:
+        """Upgrade what this agent persisted to ``declared``, before its code runs.
+
+        Raises `StateUpgradeError` when a step fails, with nothing written.
+        Nothing happens for an agent that declares no version.
+        """
+        version = declared_version(declared)
+        if declared is not None and version is None:
+            logger.warning(
+                "[%s] Its state version %r is not a whole number from 0; state left as it is.",
+                self.name,
+                declared,
+            )
+        if version is None:
+            return
+        state = self._own_state()
+        new = await upgraded(self.name, state, version, upgrade)
+        if new is not None:
+            self._replace_own_state(state, new)
+
+    def _own_state(self) -> dict[str, Any]:
+        """The keys this agent persists for itself, without the framework's own.
+
+        The keys routed to SQLite or memory are the framework's (conversation
+        history, metrics and the like) and are not the agent's to reshape.
+        """
+        if self._persistence_api is not None:
+            routed = SQLITE_KEYS | EPHEMERAL_KEYS
+            return {k: v for k, v in self._persistence_api.all().items() if k not in routed}
+        return dict(self._persistent_state)
+
+    def _replace_own_state(self, old: dict[str, Any], new: dict[str, Any]) -> None:
+        """Make ``new`` this agent's own state, where ``old`` was."""
+        if self._persistence_api is not None:
+            for key in old.keys() - new.keys():
+                self._persistence_api.delete(key)
+            for key, value in new.items():
+                self._persistence_api.set(key, value)
+            # Written now rather than a moment later, so the upgraded state is
+            # on disk before the agent's code runs against it. The store writes
+            # the whole file in one replace: a crash leaves either version.
+            self._persistence_api.flush()
+            return
+        self._persistent_state = dict(new)
+        self._unreadable_state = {k: v for k, v in self._unreadable_state.items() if k not in new}
+        self._write_state_file()
 
     def _keep_unreadable_state(self, path: Path, exc: Exception) -> None:
         """Move a state file we could not read out of the next save's way.
@@ -1279,28 +1342,21 @@ class Actor(ABC):
             self._persistence_api.set(key, value)
             return
 
-        # Legacy pickle path — the whole dict goes to disk on every call, so an
-        # interrupted write here would lose every key, not just this one.
+        # Without a store the whole state goes to disk on every call, written
+        # atomically, so an interrupted write cannot lose the keys beside this one.
         self._persistent_state[key] = value
-        try:
-            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
-        except Exception as e:
-            logger.warning("[%s] persist write failed for %r: %s", self.name, key, e)
+        self._unreadable_state.pop(key, None)
+        self._write_state_file()
 
     def recall(self, key: str, default: Any = None) -> Any:
         """Recall a persisted value. Routes to the correct backend.
         Returns default if the key doesn't exist.
         """
         if self._persistence_api is not None:
-            # Check new store first, then fall back to legacy in-memory dict
-            # (handles migration period where some keys are in pickle, some in new store)
+            # A stored None reads as absent, so `recall(key, [])` never hands
+            # back None to code about to append to it.
             result = self._persistence_api.get(key)
-            if result is not None:
-                return result
-            # Fallback: check legacy in-memory state (loaded from old .pkl)
-            return self._persistent_state.get(key, default)
-
-        # Legacy pickle path
+            return default if result is None else result
         return self._persistent_state.get(key, default)
 
     # ─── Subscriptions ────────────────────────────────────────────────────────

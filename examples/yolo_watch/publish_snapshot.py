@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# This example uses Ultralytics (AGPL-3.0); see its README.
 """Publish an image file as a snapshot, for the detector to look at.
 
 python publish_snapshot.py photo.jpg [door]

@@ -16,6 +16,7 @@ from ...config import (
     deploy_target_names,
 )
 from ...core.mqtt import mqtt_client
+from ...core.state_snapshot import FORCE_FLAG
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
@@ -60,6 +61,7 @@ class CLIInterface:
     /nodes                      list remote nodes (online/offline) and their agents
     /migrate <agent> <node>     move a running agent to a different node
                                 e.g.  /migrate temp-sensor rpi-bedroom
+                                --force moves it even if some state cannot travel
     /deploy <node-name>         set up a remote machine as an Wactorz node
                                 e.g.  /deploy rpi-node
     /help                       show this help
@@ -341,10 +343,12 @@ class CLIInterface:
                     continue
 
                 if text.lower().startswith("/migrate"):
-                    # /migrate <agent-name> <target-node>
-                    parts = text.split()
+                    # /migrate <agent-name> <target-node> [--force]
+                    words = text.split()
+                    force = FORCE_FLAG in words
+                    parts = [w for w in words if w != FORCE_FLAG]
                     if len(parts) < 3:
-                        print("[usage] /migrate <agent-name> <target-node>")
+                        print("[usage] /migrate <agent-name> <target-node> [--force]")
                         print("        Moves a running agent to a different node.")
                         print("        Example: /migrate temp-sensor rpi-bedroom")
                         print()
@@ -354,7 +358,9 @@ class CLIInterface:
                         agent_name = parts[1]
                         target_node = parts[2]
                         print(f"[Migrating @{agent_name} to {target_node}...]")
-                        result = await self.agent.migrate_agent(agent_name, target_node)
+                        result = await self.agent.migrate_agent(
+                            agent_name, target_node, force=force
+                        )
                         ok = result.get("success", False)
                         sym = "OK" if ok else "FAIL"
                         print(f"[{sym}] {result.get('message', '')}\n")

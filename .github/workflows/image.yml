@@ -145,7 +145,9 @@ jobs:
           labels: |
             org.opencontainers.image.title=Wactorz${{ matrix.flavour != 'default' && format(' ({0})', matrix.flavour) || '' }}
             org.opencontainers.image.source=https://github.com/waldiez/wactorz
-            org.opencontainers.image.licenses=Apache-2.0
+            # The ultra flavour carries Ultralytics, which is AGPL-3.0; see
+            # docs/dockerhub.md "Licences".
+            org.opencontainers.image.licenses=${{ matrix.flavour == 'ultra' && 'Apache-2.0 AND AGPL-3.0-only' || 'Apache-2.0' }}
             org.opencontainers.image.version=${{ steps.tags.outputs.version }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.tags.outputs.created }}

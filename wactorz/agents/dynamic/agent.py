@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, cast
 from ...core.actor import Actor, ActorState, Message, MessageType
 from ...core.cancellation import cancel_all_until_done
 from ...core.paths import resolve_state_dir
+from ...core.state_versions import StateUpgradeError
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
 from .api import AgentAPI
@@ -216,11 +217,36 @@ class DynamicAgent(Actor):
             )
             return
 
+        if not await self._upgrade_program_state():
+            return
+
         self._start_program()
 
         # Publish manifest immediately so main's registry knows this agent exists
         # even if it never calls publish() (pure handle_task agents, etc.)
         await self._api._publish_manifest()
+
+    async def _upgrade_program_state(self) -> bool:
+        """Bring the state up to the program's ``STATE_VERSION``, before setup() runs.
+
+        Read from the compiled program, so this happens here rather than in
+        `Actor.start`: the version is not known until the code has compiled.
+        False when a step failed, with the agent marked FAILED and nothing
+        written -- the program would otherwise start against state it cannot read.
+        """
+        upgrade = self._ns.get("upgrade_state")
+        try:
+            await self._bring_state_up_to_date(
+                self._ns.get("STATE_VERSION"), upgrade if callable(upgrade) else None
+            )
+        except StateUpgradeError as exc:
+            logger.exception("[%s] Its state could not be upgraded", self.name)
+            self.state = ActorState.FAILED
+            await self._publish_error(
+                phase="state_upgrade", error=exc, traceback_str=str(exc), fatal=True
+            )
+            return False
+        return True
 
     def _track_program_task(self, task: asyncio.Task) -> None:
         """Track a task the generated program owns, for stop and for repair."""

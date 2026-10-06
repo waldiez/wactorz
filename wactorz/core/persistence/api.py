@@ -22,9 +22,9 @@ SQLITE_KEYS = {
     "_spawned_agents",
     # Migrations waiting on a node to confirm. Declared rather than left to fall
     # through to pickle: this has to survive the restart it exists to survive,
-    # and a per-key SQLite write is the fast path. Being here does not keep the
-    # live actor object out — `kv_set` serialises with `default=str`, which
-    # would quietly stringify one. Migration strips it before writing.
+    # and a per-key SQLite write is the fast path. The live actor object a local
+    # migration carries cannot be stored as JSON, so migration strips it before
+    # writing.
     "_pending_migrations",
     "_pipeline_rules",
     "_user_facts",
@@ -188,7 +188,7 @@ class PersistenceAPI:
             else:
                 self.pickle.delete(self.agent)
         elif values:
-            self.pickle.save(self.agent, {**self.pickle.load(self.agent), **values})
+            self.pickle.merge(self.agent, values)
 
     def flush(self) -> None:
         """Write this process's pickled states that are still waiting to be written."""

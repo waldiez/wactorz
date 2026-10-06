@@ -2,10 +2,9 @@
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Handles version upgrades when users update wactorz (e.g. 0.3 → 0.4).
 
-Three migration layers:
+Two migration layers:
   1. SQLite schema migrations — add columns, tables, indices
   2. Persistent state migrations — upgrade stored data structures
-  3. Spawn registry validation — flag/fix stale agent configs
 
 Called automatically at startup from init_persistence(). Safe to run
 multiple times — each migration checks preconditions before applying.
@@ -31,10 +30,8 @@ it's logged and skipped. Other agents are not affected.
 
 import json
 import logging
-import pickle
 import sqlite3
 import time
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -53,9 +50,7 @@ FRAMEWORK_VERSION = 3
 
 
 def migrate_sql_2(conn: sqlite3.Connection):
-    """v1 → v2: Add migration tracking table and framework_version to schema_version.
-    Also adds any missing columns/tables that may not exist in older databases.
-    """
+    """v1 → v2: Add migration tracking table and framework_version to schema_version."""
     # Add migration history table
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS migration_history (
@@ -72,19 +67,6 @@ def migrate_sql_2(conn: sqlite3.Connection):
         conn.execute("SELECT framework_version FROM schema_version LIMIT 1")
     except sqlite3.OperationalError:
         conn.execute("ALTER TABLE schema_version ADD COLUMN framework_version INTEGER DEFAULT 1")
-
-    # Ensure spawn_registry has a 'trusted' column
-    try:
-        conn.execute("SELECT trusted FROM spawn_registry LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.execute("ALTER TABLE spawn_registry ADD COLUMN trusted INTEGER DEFAULT 0")
-
-    # Ensure spawn_registry has a 'framework_version' column
-    # so we know which version the config was saved under
-    try:
-        conn.execute("SELECT framework_version FROM spawn_registry LIMIT 1")
-    except sqlite3.OperationalError:
-        conn.execute("ALTER TABLE spawn_registry ADD COLUMN framework_version INTEGER DEFAULT 1")
 
 
 def migrate_sql_3(conn: sqlite3.Connection):
@@ -119,98 +101,14 @@ _SQL_MIGRATIONS = {
 def migrate_state_2(db, pickle_store):
     """v1 → v2: Upgrade persisted state structures.
 
-    - EntityBaseline: add missing fields (is_binary, transition_freq, ready)
-    - TopicContract observed_samples: ensure proper dict structure
     - Conversation history: sanitize corrupted entries
     - User facts: no changes needed (plain dict)
+
+    An agent's own data is not upgraded here: an agent that changes the shape
+    of what it stores declares a state version and upgrades it itself, when it
+    starts (see `wactorz.core.state_versions`).
     """
-    _upgrade_baselines(db, pickle_store)
     _upgrade_conversation_history(db, pickle_store)
-    _upgrade_topic_contracts(db)
-    _stamp_spawn_registry(db)
-
-
-def _upgrade_baselines(db, pickle_store):
-    """Add missing fields to persisted EntityBaseline dicts."""
-    BASELINE_DEFAULTS = {
-        "is_binary": False,
-        "transition_freq": 0.0,
-        "ready": False,
-        "hourly_count": [0] * 24,
-        "max_rate": 0.0,
-        "mean_interval": 0.0,
-        "p1": 0.0,
-        "p99": 0.0,
-    }
-
-    # Check SQLite kv_store
-    try:
-        rows = db.conn.execute(
-            "SELECT agent, key, value FROM kv_store WHERE key = 'baselines'"
-        ).fetchall()
-        for row in rows:
-            agent_name = row[0]
-            try:
-                baselines = json.loads(row[2])
-                if not isinstance(baselines, dict):
-                    continue
-                upgraded = False
-                for _key, baseline in baselines.items():
-                    if not isinstance(baseline, dict):
-                        continue
-                    for field, default in BASELINE_DEFAULTS.items():
-                        if field not in baseline:
-                            baseline[field] = default
-                            upgraded = True
-                if upgraded:
-                    db.conn.execute(
-                        "UPDATE kv_store SET value=?, updated=? WHERE agent=? AND key='baselines'",
-                        (json.dumps(baselines), time.time(), agent_name),
-                    )
-                    logger.info("[Migration] Upgraded baselines for '%s'", agent_name)
-            except (json.JSONDecodeError, TypeError) as e:
-                logger.warning(
-                    "[Migration] Could not upgrade baselines for '%s': %s", agent_name, e
-                )
-        db.conn.commit()
-    except Exception as e:
-        logger.warning("[Migration] Baseline upgrade failed: %s", e)
-
-    # Also check pickle files
-    base = Path(pickle_store._base)
-    for agent_dir in base.iterdir():
-        if not agent_dir.is_dir():
-            continue
-        pkl_path = agent_dir / "state.pkl"
-        if not pkl_path.exists():
-            continue
-        try:
-            with open(pkl_path, "rb") as f:
-                # Our own state file, written by this app under the state dir.
-                state = pickle.load(f)  # noqa: S301
-            if not isinstance(state, dict):
-                continue
-            baselines = state.get("baselines")
-            if not isinstance(baselines, dict):
-                continue
-            upgraded = False
-            for _key, baseline in baselines.items():
-                if not isinstance(baseline, dict):
-                    continue
-                for field, default in BASELINE_DEFAULTS.items():
-                    if field not in baseline:
-                        baseline[field] = default
-                        upgraded = True
-            if upgraded:
-                # Through the store: it keeps each state in memory, and a file
-                # changed behind it would be written over by what it holds.
-                pickle_store.save(agent_dir.name, state)
-                logger.info("[Migration] Upgraded pickle baselines for '%s'", agent_dir.name)
-        except Exception as exc:
-            # One agent's unreadable pickle must not abort the whole migration —
-            # but it is logged rather than dropped. A silent pass here is how a
-            # migration appears to succeed while having done nothing.
-            logger.warning("[Migration] Skipped pickle baselines for '%s': %s", agent_dir.name, exc)
 
 
 def _upgrade_conversation_history(db, pickle_store):
@@ -258,43 +156,6 @@ def _upgrade_conversation_history(db, pickle_store):
         logger.warning("[Migration] Conversation history upgrade failed: %s", e)
 
 
-def _upgrade_topic_contracts(db):
-    """Ensure topic_contracts table entries have all required fields."""
-    try:
-        rows = db.conn.execute("SELECT name, observed_samples FROM topic_contracts").fetchall()
-        for row in rows:
-            name = row[0]
-            try:
-                samples = json.loads(row[1]) if row[1] else {}
-                if not isinstance(samples, dict):
-                    db.conn.execute(
-                        "UPDATE topic_contracts SET observed_samples='{}', updated=? WHERE name=?",
-                        (time.time(), name),
-                    )
-            except (json.JSONDecodeError, TypeError):
-                db.conn.execute(
-                    "UPDATE topic_contracts SET observed_samples='{}', updated=? WHERE name=?",
-                    (time.time(), name),
-                )
-        db.conn.commit()
-    except sqlite3.OperationalError:
-        pass  # table doesn't exist yet — will be created by schema init
-
-
-def _stamp_spawn_registry(db):
-    """Mark all existing spawn registry entries with the current framework version.
-    This lets us detect stale configs on future upgrades.
-    """
-    try:
-        db.conn.execute(
-            "UPDATE spawn_registry SET framework_version=? WHERE framework_version IS NULL OR framework_version < ?",
-            (FRAMEWORK_VERSION, FRAMEWORK_VERSION),
-        )
-        db.conn.commit()
-    except sqlite3.OperationalError:
-        pass  # column doesn't exist yet — migrate_sql_2 will add it
-
-
 # Register state migrations
 _STATE_MIGRATIONS = {
     2: migrate_state_2,
@@ -306,194 +167,6 @@ _STATE_MIGRATIONS = {
 # recognised when reading it back, so they are written in exactly one place.
 _SQL_HISTORY_PREFIX = "SQL schema migration v"
 _STATE_HISTORY_PREFIX = "State data migration v"
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 3. SPAWN REGISTRY VALIDATION
-# ══════════════════════════════════════════════════════════════════════════════
-
-# API changes between versions — methods that were renamed, removed, or
-# had their signatures changed. Used to detect stale agent code.
-_API_CHANGES = {
-    2: {
-        "removed_methods": [],
-        "renamed_methods": {},  # old_name → new_name
-        "new_methods": ["query_ts", "query_detections", "query_ha_states", "ts_stats"],
-        "signature_changes": {},
-        "description": "Added time-series query API, persistence layer, trusted flag",
-    },
-    # 3: {
-    #     "removed_methods": ["old_method"],
-    #     "renamed_methods": {"old_name": "new_name"},
-    #     "new_methods": ["new_method"],
-    #     "signature_changes": {"method": "new signature info"},
-    #     "description": "...",
-    # },
-}
-
-
-def validate_spawn_registry(db) -> list[dict]:
-    """Check all spawn registry entries for compatibility with the current version.
-
-    Returns a list of issues found:
-      [{"agent": "name", "severity": "warning|error", "message": "...", "action": "..."}]
-
-    Severity levels:
-      - "warning": agent will probably work but may not use new features
-      - "error": agent code references removed/renamed methods — will crash
-    """
-    issues = []
-
-    try:
-        rows = db.conn.execute(
-            "SELECT name, config, framework_version FROM spawn_registry"
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return issues  # table doesn't exist or missing column
-
-    for row in rows:
-        name = row[0]
-        try:
-            config = json.loads(row[1])
-        except (json.JSONDecodeError, TypeError):
-            issues.append(
-                {
-                    "agent": name,
-                    "severity": "error",
-                    "message": "Spawn config is corrupted (invalid JSON)",
-                    "action": "delete_and_respawn",
-                }
-            )
-            continue
-
-        saved_version = row[2] if len(row) > 2 else 1
-        if saved_version is None:
-            saved_version = 1
-
-        agent_type = config.get("type", "dynamic")
-        code = config.get("code", "")
-
-        # Skip non-dynamic agents (llm, ha_actuator, manual — no code to check)
-        if agent_type != "dynamic" or not code:
-            continue
-
-        # Trusted (catalog) agents are maintained by the developer — skip
-        if config.get("trusted"):
-            continue
-
-        # Check for API incompatibilities across version gap
-        for version in range(saved_version + 1, FRAMEWORK_VERSION + 1):
-            changes = _API_CHANGES.get(version, {})
-
-            # Check for removed methods in agent code
-            for method in changes.get("removed_methods", []):
-                if f"agent.{method}(" in code or f"agent.{method} " in code:
-                    issues.append(
-                        {
-                            "agent": name,
-                            "severity": "error",
-                            "message": (
-                                f"Code uses agent.{method}() which was removed in v{version}. "
-                                f"This agent will crash on startup."
-                            ),
-                            "action": "needs_respawn",
-                            "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
-                        }
-                    )
-
-            # Check for renamed methods
-            for old_name, new_name in changes.get("renamed_methods", {}).items():
-                if f"agent.{old_name}(" in code:
-                    issues.append(
-                        {
-                            "agent": name,
-                            "severity": "error",
-                            "message": (
-                                f"Code uses agent.{old_name}() which was renamed to "
-                                f"agent.{new_name}() in v{version}."
-                            ),
-                            "action": "needs_respawn",
-                            "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
-                        }
-                    )
-
-        # Version gap warning (even if no specific issues found)
-        if saved_version < FRAMEWORK_VERSION:
-            issues.append(
-                {
-                    "agent": name,
-                    "severity": "warning",
-                    "message": (
-                        f"Agent was spawned under framework v{saved_version} "
-                        f"(current: v{FRAMEWORK_VERSION}). Code may not use newer API features."
-                    ),
-                    "action": "consider_respawn",
-                    "version_gap": f"v{saved_version} → v{FRAMEWORK_VERSION}",
-                }
-            )
-
-    return issues
-
-
-def auto_fix_spawn_registry(db) -> list[str]:
-    """Attempt to auto-fix known issues in spawn registry configs.
-    Returns list of fixes applied.
-
-    Currently handles:
-      - Renamed methods: search-and-replace in code strings
-      - Missing 'trusted' field: defaults to False
-      - Missing 'framework_version': stamps current version
-    """
-    fixes = []
-
-    try:
-        rows = db.conn.execute(
-            "SELECT name, config, framework_version FROM spawn_registry"
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return fixes
-
-    for row in rows:
-        name = row[0]
-        try:
-            config = json.loads(row[1])
-        except (json.JSONDecodeError, TypeError):
-            continue
-
-        saved_version = row[2] if len(row) > 2 else 1
-        if saved_version is None:
-            saved_version = 1
-
-        code = config.get("code", "")
-        if not code or config.get("type") != "dynamic":
-            continue
-        if config.get("trusted"):
-            continue
-
-        original_code = code
-        applied = []
-
-        # Apply renames across version gap
-        for version in range(saved_version + 1, FRAMEWORK_VERSION + 1):
-            changes = _API_CHANGES.get(version, {})
-            for old_name, new_name in changes.get("renamed_methods", {}).items():
-                if f"agent.{old_name}(" in code:
-                    code = code.replace(f"agent.{old_name}(", f"agent.{new_name}(")
-                    applied.append(f"renamed agent.{old_name} → agent.{new_name}")
-
-        if code != original_code:
-            config["code"] = code
-            config["framework_version"] = FRAMEWORK_VERSION
-            db.conn.execute(
-                "UPDATE spawn_registry SET config=?, framework_version=?, updated_at=? WHERE name=?",
-                (json.dumps(config), FRAMEWORK_VERSION, time.time(), name),
-            )
-            fixes.append(f"'{name}': {', '.join(applied)}")
-
-    if fixes:
-        db.conn.commit()
-
-    return fixes
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -554,8 +227,6 @@ def run_migrations(db, pickle_store=None) -> dict:
         "to_version": int,
         "sql_migrations": int,
         "state_migrations": int,
-        "spawn_fixes": [...],
-        "spawn_issues": [...],
         "errors": [...],
       }
     """
@@ -565,8 +236,6 @@ def run_migrations(db, pickle_store=None) -> dict:
         "to_version": FRAMEWORK_VERSION,
         "sql_migrations": 0,
         "state_migrations": 0,
-        "spawn_fixes": [],
-        "spawn_issues": [],
         "errors": [],
     }
 
@@ -574,8 +243,6 @@ def run_migrations(db, pickle_store=None) -> dict:
 
     if current >= FRAMEWORK_VERSION and not pending_state:
         logger.info("[Migration] Framework v%s — no migrations needed", FRAMEWORK_VERSION)
-        # Still validate spawn registry even if no version change
-        result["spawn_issues"] = validate_spawn_registry(db)
         return result
 
     if current < FRAMEWORK_VERSION:
@@ -670,41 +337,12 @@ def run_migrations(db, pickle_store=None) -> dict:
             # framework_version column might not exist if SQL migration failed
             pass
 
-    # ── Spawn registry validation & auto-fix ───────────────────────────────
-    try:
-        fixes = auto_fix_spawn_registry(db)
-        result["spawn_fixes"] = fixes
-        if fixes:
-            logger.info("[Migration] Auto-fixed %s spawn config(s): %s", len(fixes), fixes)
-    except Exception as e:
-        logger.warning("[Migration] Spawn auto-fix failed: %s", e)
-
-    issues = validate_spawn_registry(db)
-    result["spawn_issues"] = issues
-
-    errors = [i for i in issues if i["severity"] == "error"]
-    warnings = [i for i in issues if i["severity"] == "warning"]
-    if errors:
-        logger.warning(
-            "[Migration] %s spawn registry error(s) — these agents may crash: %s",
-            len(errors),
-            [i["agent"] for i in errors],
-        )
-    if warnings:
-        logger.info(
-            "[Migration] %s spawn registry warning(s) — consider respawning: %s",
-            len(warnings),
-            [i["agent"] for i in warnings],
-        )
-
     logger.info(
-        "[Migration] Complete: v%s → v%s | SQL=%s State=%s Fixes=%s Issues=%s Errors=%s",
+        "[Migration] Complete: v%s → v%s | SQL=%s State=%s Errors=%s",
         current,
         FRAMEWORK_VERSION,
         result["sql_migrations"],
         result["state_migrations"],
-        len(result["spawn_fixes"]),
-        len(issues),
         len(result["errors"]),
     )
 

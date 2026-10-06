@@ -7,17 +7,6 @@ from harness import backend, browser, node, waiting
 from harness.probe import NODE_POLL_S
 from harness.run import NODE_NAME
 
-#: What a server starts by itself, and so what a wipe leaves running.
-A_FRESH_INSTALL_RUNS = {
-    "main",
-    "monitor",
-    "installer",
-    "catalog",
-    "home-assistant-agent",
-    "home-assistant-map-agent",
-    "home-assistant-state-bridge",
-}
-
 
 def _on_the_node(app: backend.Backend) -> set[str] | None:
     """The agents the node says it is running, or nothing if it has not been heard from."""
@@ -82,13 +71,15 @@ def test_wiping_everything_asks_first_and_says_when_it_is_done(
 def test_what_is_left_is_what_a_fresh_install_runs(
     dashboard: browser.Dashboard, app: backend.Backend
 ) -> None:
+    # What this server ran when it had just started, before any journey.
+    fresh = app.started_with
     waiting.becomes_and_stays(
-        lambda: {str(a.get("name")) for a in app.rest.agents()} == A_FRESH_INSTALL_RUNS,
-        what="only the server's own agents to be left",
+        lambda: {str(a.get("name")) for a in app.rest.agents()} == fresh,
+        what=f"only the agents a fresh install runs to be left: {sorted(fresh)}",
     )
     dashboard.show("overview")
     waiting.until(
-        lambda: dashboard.card_names() == A_FRESH_INSTALL_RUNS,
+        lambda: dashboard.card_names() == fresh,
         what="only their cards to be left",
     )
 

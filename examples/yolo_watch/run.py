@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# This example uses Ultralytics (AGPL-3.0); see its README.
 """Start Wactorz with the snapshot detector, and the camera watcher when a camera is named.
 
 python run.py              # snapshots on camera/+/snapshot only

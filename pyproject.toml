@@ -61,7 +61,7 @@ whatsapp  = ["twilio>=9.10.4"]
 # can take it from the same place as `torch` (see `[tool.uv.sources]`, which
 # reaches only what is named here): the two are built against each other.
 ml        = ["ultralytics>=8.0.0", "torch>=2.0.0", "torchvision>=0.15.0", "numpy>=1.24.0"]
-mcp       = ["mcp>=1.0.0,<2"]
+mcp       = ["mcp>=1.0.0,<3"]
 tts       = ["edge-tts>=6.1.9"]
 cron      = ["croniter>=2.0.0"]
 # Bluetooth for Flic buttons. Out of `all`: it needs 3.12, and a host with
@@ -114,7 +114,7 @@ dev       = [
 # suite - and with no dependency lock in this project, nothing else would catch
 # that. Same reasoning as the `docs` extra above pins markdown and pygments: the
 # dependency decides the thing being compared.
-e2e       = ["playwright==1.62.0"]
+e2e       = ["playwright==1.63.0"]
 
 # Everything except ML (heavy torch dep) — suitable for `pip install wactorz[all]`
 all = [

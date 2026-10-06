@@ -32,6 +32,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **An agent a node cannot run is no longer sent to one.** A node runs generated code, or an LLM agent whose code main writes for it. A native catalogue agent (such as `flic`), a Home Assistant actuator, or a scheduled, rule or module agent is a class built into the server with no program in its config: migrated or spawned onto a node, it started there as an empty agent that answered every message with "has no handle_task function", while the move was reported as done and the working copy on main was purged. Both are now refused before anything stops, with the reason, and the agent stays where it was. An agent already moved this way comes back with `/migrate <agent> local`.
+
 - **`io-gateway` no longer appears as an agent.** It is the transport the dashboard's messages arrive through, but the server announced it as an agent each time it reconnected to the broker, so after a broker outage it sat in the dashboard's agent list, and among the chat targets, until the next sync. Choosing it opened a thread nobody answered. The server no longer announces it, and the dashboard keeps it out of the chat targets whatever it is told.
 
 - **Main says when an agent's state has grown expensive to save.** Every persist rewrites an agent's whole state file, and the pickling runs on the event loop every agent shares. Once an agent's state passes 512 KB the log says so, once, with its size, as a node already did for its own agents.

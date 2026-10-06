@@ -540,7 +540,9 @@ A running agent can be moved between main and a node, or from one node to anothe
 /migrate temp-sensor rpi-bedroom --force
 ```
 
-Main routes every migration; a node never spawns on another node. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
+Main routes every migration; a node never spawns on another node.
+
+A node runs an agent whose program goes with it: generated code, or an LLM agent (`type: llm`), for which main writes the code. An agent built into the server — a native catalogue agent such as `flic` or `weather-agent`, a Home Assistant actuator, a scheduled, rule or module agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
 
 The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
 

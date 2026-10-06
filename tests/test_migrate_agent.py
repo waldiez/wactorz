@@ -697,3 +697,38 @@ class TestTheStateThatComesBack:
         assert main.spawned_remote[0][0]["_initial_state"] == {"history": "x" * 1000}
         (entry,) = main.actor.migration.pending_spawns.values()
         assert "_initial_state" not in entry["config"]
+
+
+class TestAnAgentANodeCannotRun:
+    """A built-in agent stays where it is, rather than arriving on a node empty.
+
+    The node would start an agent with nothing to run and confirm it, and the
+    migration would then purge the only copy that worked.
+    """
+
+    @staticmethod
+    def _main() -> _Main:
+        return _Main(
+            spawn_registry={"flic": {"name": "flic", "type": "native", "node": ""}},
+            nodes={"rpi": online()},
+            local=("flic",),
+        )
+
+    async def test_it_is_refused_with_the_reason(self) -> None:
+        main = self._main()
+
+        result = await main.migrate("flic", "rpi")
+
+        assert result["success"] is False
+        assert "native agent" in result["message"]
+        assert "stays on 'local'" in result["message"]
+
+    async def test_nothing_is_stopped_or_sent(self) -> None:
+        main = self._main()
+        agent = main.local("flic")
+
+        await main.migrate("flic", "rpi")
+
+        assert not agent.stopped
+        assert not main.spawned_remote
+        assert not main.actor.migration.pending_spawns

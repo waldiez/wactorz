@@ -24,12 +24,15 @@ Every agent publishes to its own namespace: `agents/{actor_id}/...`
   "name":       "main",
   "timestamp":  1740000000.0,
   "state":      "running",
-  "cpu":        1.4,
   "memory_mb":  69.9,
   "task":       "idle",
-  "protected":  true
+  "protected":  true,
+  "essential":  false,
+  "node":       ""
 }
 ```
+
+`node` names the machine the agent runs on, and is empty for one running on main.
 
 ---
 

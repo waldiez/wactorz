@@ -20,8 +20,6 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import psutil
-
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
@@ -357,15 +355,6 @@ class Actor(ABC):
         #: Resolved once this run's stop has finished; see stop(). Created by the
         #: first stop, not here, and cleared by start().
         self._stopped: asyncio.Future[None] | None = None
-
-        # Cached process handle for heartbeat metrics — one per actor so each
-        # has an independent cpu_percent baseline (interval=None, non-blocking).
-        self._proc: Any | None = None
-        try:
-            self._proc = psutil.Process()
-            self._proc.cpu_percent(interval=None)  # prime the baseline
-        except Exception:  # noqa: S110  # psutil is optional; the actor runs without it
-            pass
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
@@ -746,18 +735,17 @@ class Actor(ABC):
         return total / (1024 * 1024)
 
     def _build_heartbeat(self) -> dict:
-        cpu = 0.0
-        try:
-            if self._proc is not None:
-                cpu = self._proc.cpu_percent(interval=None)
-        except Exception:  # noqa: S110  # a heartbeat reports 0.0 rather than not arriving
-            pass
+        """What this actor reports every heartbeat.
+
+        No CPU figure: actors share one process, and so one CPU reading, which
+        the monitor publishes once on `system/host`. Measured per actor it was
+        that same number under every agent's name.
+        """
         return {
             "actor_id": self.actor_id,
             "name": self.name,
             "timestamp": time.time(),
             "state": self.state.value,
-            "cpu": cpu,
             "memory_mb": self._estimate_memory_mb(),
             "task": self._current_task_description(),
             "protected": self.protected,

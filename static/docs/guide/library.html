@@ -369,21 +369,22 @@ it.</p>
 </code></pre></div>
 
 <h2 id="spend-made-elsewhere">Spend made elsewhere</h2>
-<p>The system's own providers record what they cost, and the dashboard and the
-cost limit see it. A model called another way, through LangChain, AG2 or an
-SDK directly, is invisible until the agent says what it spent:</p>
+<p>A call through <code>me.llm</code> is counted as it returns: tokens and cost on the
+agent's card, and against the cost limit, with nothing to write in the
+function. A model called another way, through LangChain, AG2 or an SDK
+directly, is invisible until the agent says what it spent:</p>
 <div class="highlight"><pre><span></span><code><span class="n">me</span><span class="o">.</span><span class="n">record_llm_cost</span><span class="p">(</span><span class="mf">0.0012</span><span class="p">,</span> <span class="n">input_tokens</span><span class="o">=</span><span class="mi">300</span><span class="p">,</span> <span class="n">output_tokens</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="s2">&quot;gpt-4o-mini&quot;</span><span class="p">)</span>
 </code></pre></div>
 
 <p>That joins the agent's card and the process-wide total the cost limit is
 checked against. Two helpers do it for the common cases:</p>
 <ul>
-<li><code>wactorz.integrations.langchain.CostCallback(me, prices={...})</code> is a LangChain
+<li><code>wactorz.core.integrations.langchain.CostCallback(me, prices={...})</code> is a LangChain
   callback handler: pass it in a chain's or a graph's <code>config</code>, and every
   model call is reported with its tokens. LangChain reports tokens, not money,
   so <code>prices</code> maps a model name to dollars per million input and output
   tokens; an unpriced model is counted at no cost.</li>
-<li><code>wactorz.integrations.ag2.record_usage(me, agents)</code> reads AG2's usage summary after
+<li><code>wactorz.core.integrations.ag2.record_usage(me, agents)</code> reads AG2's usage summary after
   a chat and reports what the chat added, with AG2's own prices.</li>
 </ul>
 <h2 id="langgraph-langchain-and-ag2">LangGraph, LangChain and AG2</h2>
@@ -551,7 +552,7 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <td>messages and tasks at once</td>
 </tr>
 <tr>
-<td><code>wactorz.integrations.langchain.CostCallback</code>, <code>wactorz.integrations.ag2.record_usage</code></td>
+<td><code>wactorz.core.integrations.langchain.CostCallback</code>, <code>wactorz.core.integrations.ag2.record_usage</code></td>
 <td>spend made through LangChain or AG2</td>
 </tr>
 <tr>

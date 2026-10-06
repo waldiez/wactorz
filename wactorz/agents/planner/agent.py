@@ -18,15 +18,16 @@ Auto-triggered by MainActor when complexity heuristic fires.
 import asyncio
 import logging
 import time
+from collections.abc import Sequence
 from typing import Any
 
 from ...core.actor import Actor, Message, MessageType
 from ..llm_agent import LLMProvider, accumulate_global_cost
 from ..lookup import find_main_actor
 from ..mixins.spawning import SpawnMixin
-from ..prompts.planner_prompts import (
-    DECOMPOSE_PROMPT,
-)
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+from ..prompts.planner_prompts import decompose_prompt
 from .cache import PLAN_CACHE_KEY, select_cached_plan, with_plan_cached
 from .context import ContextMixin
 from .detection import is_pipeline_request
@@ -67,11 +68,15 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         plan_only: bool = False,
         approved_plan: dict[str, Any] | None = None,
         max_lifetime_s: float = DEFAULT_MAX_LIFETIME_S,
+        prompt_fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS,
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("name", "planner")
         super().__init__(**kwargs)
         self.llm = llm_provider
+        # The integrations the prompts speak of and the live context is gathered
+        # for: what main was built with, or every one for a planner built alone.
+        self._prompt_fragments: tuple[PromptFragment, ...] = tuple(prompt_fragments)
         self._task = task
         self._reply_to_id = reply_to_id
         self._reply_task_id = reply_task_id
@@ -484,7 +489,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
         # ── Gather live topic samples for schema context ──────────────────
         topic_schema_ctx = await self._topic_schema_context()
 
-        prompt = DECOMPOSE_PROMPT.format(
+        prompt = decompose_prompt(self._prompt_fragments).format(
             workers_desc=workers_desc,
             topic_schema_ctx=topic_schema_ctx,
             task=task,

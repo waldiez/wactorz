@@ -18,6 +18,9 @@ from typing import TYPE_CHECKING, Any, cast
 import wactorz._bootstrap  # noqa: F401  side effect: Windows event-loop + console encoding
 from wactorz import config, pipelines, plugins, retention
 from wactorz.agents.lookup import find_main_actor
+from wactorz.agents.prompts.assemble import PromptFragment
+from wactorz.agents.prompts.fragments import DEFAULT_FRAGMENTS
+from wactorz.agents.prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from wactorz.broker_certificates import prepare_broker_files
 from wactorz.cli import get_args
 from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
@@ -262,6 +265,22 @@ def home_assistant_agents_enabled(settings: AppConfig) -> bool:
     return bool(settings.ha_url and settings.ha_token)
 
 
+def prompt_fragments_for(settings: AppConfig) -> tuple[PromptFragment, ...]:
+    """What main's and the planner's prompts speak of on this installation.
+
+    Each integration's fragment is included exactly when its agents are part
+    of the system, so the same test decides both: a deployment whose Home
+    Assistant agents do not start is not told about lights either. Decided
+    once here and handed to main, which hands it to the planners it spawns.
+    """
+    fragments = []
+    for fragment in DEFAULT_FRAGMENTS:
+        if fragment is HOME_ASSISTANT_FRAGMENT and not home_assistant_agents_enabled(settings):
+            continue
+        fragments.append(fragment)
+    return tuple(fragments)
+
+
 #: The extra that installs each provider's SDK, for the message when it is missing.
 _PROVIDER_EXTRAS = {
     "anthropic": "anthropic",
@@ -423,12 +442,15 @@ async def build_system(
     def make_provider() -> LLMProvider | None:
         return provider  # stateless — same instance is fine
 
+    prompt_fragments = prompt_fragments_for(CONFIG)
+
     def make_main() -> MainActor:
         main_actor = _wire_persistence(
             MainActor(
                 llm_provider=provider_for("main", make_provider()),
                 name="main",
                 persistence_dir=_sd,
+                prompt_fragments=prompt_fragments,
             )
         )
         return cast(MainActor, main_actor)

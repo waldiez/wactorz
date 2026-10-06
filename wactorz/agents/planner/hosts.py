@@ -19,6 +19,7 @@ from ..mixins.host import SpawnHost
 if TYPE_CHECKING:
     from ...core.actor import Actor
     from ..mixins.spawning import SpawnPlaceholder
+    from ..prompts.assemble import PromptFragment
 
 
 class PlannerHost(SpawnHost, Protocol):
@@ -36,6 +37,8 @@ class PlannerHost(SpawnHost, Protocol):
     _auto_terminate: bool
     _spawned_by_planner: list[str]
     _spawn_results: dict[str, dict[str, Any]]
+    #: The integrations the prompts speak of and live context is gathered for.
+    _prompt_fragments: tuple[PromptFragment, ...]
 
     def _accrue_usage(self, usage: dict[str, Any]) -> None: ...
 

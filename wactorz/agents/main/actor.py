@@ -9,7 +9,7 @@ import logging
 import re
 import socket
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from typing import Any, ClassVar
 
 from ...config import (
@@ -24,9 +24,9 @@ from ...core.persistence import chat_turn_recorded
 from ..llm_agent import LLMAgent, LLMProvider
 from ..mixins import SpawnMixin, SpawnPlaceholder
 from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
-from ..prompts.main_actor_prompts import (
-    ORCHESTRATOR_PROMPT,
-)
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+from ..prompts.main_actor_prompts import orchestrator_prompt
 from .code_refresh import CodeRefresh
 from .commands import CommandContext
 from .commands import registry as command_registry
@@ -130,11 +130,20 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
     def __init__(
         self,
         llm_provider: LLMProvider | None = None,
+        prompt_fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS,
         **kwargs: Any,
     ) -> None:
+        """``prompt_fragments`` are the integrations main's prompts speak of and
+        its router accepts intents for: every one by default, so a main built
+        directly behaves as one on a fully configured installation; what the
+        configuration says when built by ``build_system``. The planners main
+        spawns inherit them.
+        """
         kwargs.setdefault("name", "main")
-        kwargs.setdefault("system_prompt", ORCHESTRATOR_PROMPT)
+        fragments = tuple(prompt_fragments)
+        kwargs.setdefault("system_prompt", orchestrator_prompt(fragments))
         super().__init__(llm_provider=llm_provider, **kwargs)
+        self._prompt_fragments = fragments
         self._result_futures: dict[str, asyncio.Future] = {}
         # Queued monitor notifications — prepended to next user response, and
         # capped at MAX_PENDING_NOTIFICATIONS: they drain only when someone

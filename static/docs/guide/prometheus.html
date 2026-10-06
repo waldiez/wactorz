@@ -266,6 +266,14 @@
 <td>Dashboard WebSocket connections open now</td>
 </tr>
 <tr>
+<td><code>wactorz_chat_first_reply_seconds{kind}</code></td>
+<td>Time from a chat message reaching the server to the first words of its reply, what a person notices while an answer streams in. <code>kind</code> is where it went: <code>command</code>, <code>local</code> (an agent in this process, main among them), <code>remote</code> (an agent on a node) or <code>unrouted</code></td>
+</tr>
+<tr>
+<td><code>wactorz_chat_turn_duration_seconds{kind}</code></td>
+<td>Time from a chat message reaching the server to its reply being complete. A turn the person stops is not counted</td>
+</tr>
+<tr>
 <td><code>wactorz_agent_task_duration_seconds{agent,outcome}</code></td>
 <td>Time a generated agent's <code>handle_task</code> took, by how it ended: <code>completed</code>, <code>failed</code> or <code>timed_out</code></td>
 </tr>

@@ -28,8 +28,10 @@ python publish_note.py                          # in another terminal
 mosquitto_sub -t 'notes/summary'
 ```
 
-The feed shows one line per summary. The dashboard's cost counter moves with
-each call, and `cost_usd_total` is kept by the agent across restarts.
+The feed shows one line per summary. Every call through `me.llm` is counted on
+the agent's card, tokens and cost, and against the system's cost limit, with
+nothing to write in the function; Ollama reports a cost of zero, a hosted
+provider its real one.
 
 ## How it works
 
@@ -50,8 +52,9 @@ names, routed through `LLM_OVERRIDES` like every other call site (set
 `LLM_OVERRIDES=dynamic=ollama:llama3` to give decorated agents a cheaper model
 than the orchestrator), and subject to the same daily cost limit, so a runaway
 topic cannot run up a bill. `complete()` returns the text and a usage dict with
-the token counts and the cost. A plain-text publish arrives as `{"raw": text}`,
-so the agent accepts both.
+the token counts and the cost, and the agent records that usage on its own
+card as the call returns. A plain-text publish arrives as `{"raw": text}`, so
+the agent accepts both.
 
 The function is `async def`, so it runs on the event loop and awaits the model
 without holding anything else up. A plain `def` would run on a worker thread,

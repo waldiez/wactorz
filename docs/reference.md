@@ -350,6 +350,7 @@ What that means in practice:
 
 - A stop, a restart of the agent, a migration and a clean shutdown (Ctrl+C included) all write what is waiting before they finish. Nothing is lost.
 - A process that is killed outright, or a machine that loses power, can lose what was persisted in the last second.
+- The keys kept in SQLite or in memory (the ones listed above) are stored as JSON. A value JSON cannot represent — a `datetime`, a numpy number, a `set` — raises a `TypeError` naming the key, and nothing is written; convert it first (`.isoformat()`, `.item()`, `list(...)`). An agent's own keys are pickled and take any Python object.
 - `recall(key, default)` returns `default` for a key that was never set and for one set to `None`, so `recall("items", [])` can be appended to straight away.
 - `recall()` returns the stored object itself, not a copy. Change it and call `persist()` again; do not rely on a recalled list or dict being private to the caller.
 - A value that cannot be pickled (an open camera, a lambda) is kept in memory and left out of the file; the rest is written, and the log names the key once.

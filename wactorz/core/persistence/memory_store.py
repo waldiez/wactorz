@@ -7,8 +7,8 @@ nothing. Anything that must survive a restart belongs in SQLite instead; see
 
 Values are JSON round-tripped even though nothing crosses a process boundary.
 That enforces the "must be JSON-serialisable" contract, so a value cannot work
-here and then fail if a key is later routed to a durable store — and it keeps
-types stable, since a datetime comes back as a string either way.
+here and then fail if a key is later routed to a durable store. One JSON cannot
+represent is refused at the write, as it is there.
 """
 
 import fnmatch
@@ -16,6 +16,8 @@ import json
 import logging
 import time
 from typing import Any
+
+from .json_value import encode
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +29,12 @@ class MemoryStore:
         self._data: dict[str, dict[str, Any]] = {}
 
     def set(self, key: str, value: Any, ttl: int | None = None) -> None:
-        """Store a JSON-serialisable value, optionally expiring after ``ttl`` seconds."""
+        """Store a JSON-serialisable value, optionally expiring after ``ttl`` seconds.
+
+        Raises `NotJsonError` for one JSON cannot represent, and stores nothing.
+        """
         self._data[key] = {
-            "value": json.dumps(value, default=str),
+            "value": encode("memory", key, value),
             "expires": time.time() + ttl if ttl else None,
         }
 

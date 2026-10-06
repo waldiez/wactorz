@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .api import EPHEMERAL_KEYS, SQLITE_KEYS
 from .db import WactorzDB
+from .json_value import NotJsonError
 from .pickle_store import read_state_file
 from .stores import get_memory_store
 
@@ -51,16 +52,21 @@ def migrate_from_pickle(state_dir: str, db: WactorzDB) -> None:
         state = decoded.values
 
         for key, value in state.items():
-            if key in SQLITE_KEYS:
-                # Skip if SQLite already has this key — SQLite wins over stale pickle
-                if db.kv_get(agent_name, key) is not None:
-                    continue
-                db.kv_set(agent_name, key, value)
-                migrated += 1
-            elif key in EPHEMERAL_KEYS:
-                get_memory_store().set(f"{agent_name}:{key}", value)
-                migrated += 1
-            # Pickle keys stay in .pkl — no migration needed
+            try:
+                if key in SQLITE_KEYS:
+                    # Skip if SQLite already has this key — SQLite wins over stale pickle
+                    if db.kv_get(agent_name, key) is not None:
+                        continue
+                    db.kv_set(agent_name, key, value)
+                    migrated += 1
+                elif key in EPHEMERAL_KEYS:
+                    get_memory_store().set(f"{agent_name}:{key}", value)
+                    migrated += 1
+                # Pickle keys stay in .pkl — no migration needed
+            except NotJsonError as exc:
+                # Left in the pickle, where it is still readable; the rest of
+                # this file and every other agent's still move.
+                logger.warning("[Migration] Not moved from %s: %s", pkl_path, exc)
 
     if migrated:
         logger.info("[Migration] Migrated %s key(s) from pickle", migrated)

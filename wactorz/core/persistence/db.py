@@ -14,6 +14,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from .json_value import encode
 from .schema import SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
@@ -240,13 +241,14 @@ class WactorzDB:
     def kv_set(self, agent: str, key: str, value: Any) -> None:
         """Insert or replace one key for one agent, and commit.
 
-        ``value`` is JSON-encoded, so it must be serialisable; objects that are
-        not fall back to ``str``, which round-trips as text rather than failing.
+        ``value`` is stored as JSON, and one JSON cannot represent raises
+        `NotJsonError` before anything is written.
         """
+        encoded = encode(agent, key, value)
         with self.transaction() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, ?)",
-                (agent, key, json.dumps(value, default=str), time.time()),
+                (agent, key, encoded, time.time()),
             )
 
     @_serialised

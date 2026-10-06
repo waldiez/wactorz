@@ -87,3 +87,16 @@ def test_a_value_that_will_not_load_is_named_and_the_rest_moves(
 
     assert db.kv_get("main", "_user_facts") == {"pref_name": "Ada"}
     assert "Skipped model" in caplog.text
+
+
+def test_a_value_json_cannot_hold_stays_in_the_pickle_and_the_rest_moves(
+    tmp_path: Path, db: WactorzDB, caplog: pytest.LogCaptureFixture
+) -> None:
+    base = tmp_path / "state"
+    _state(base, "main", {"_user_facts": {"since": {1, 2}}, "_pipeline_rules": {"r1": {}}})
+
+    migrate_from_pickle(str(base), db)
+
+    assert db.kv_get("main", "_user_facts") is None
+    assert db.kv_get("main", "_pipeline_rules") == {"r1": {}}
+    assert "'_user_facts' is kept as JSON" in caplog.text

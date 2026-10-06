@@ -1,3 +1,7 @@
+"""Prompts of the Home Assistant agents, and what Home Assistant adds to main's."""
+
+from .assemble import PromptFragment
+
 # ---------------------------------------------------------------------------
 # Home Assistant Agent prompts
 # ---------------------------------------------------------------------------
@@ -479,3 +483,87 @@ Rules:
 - If the request is unclear, unsafe, or impossible to apply, set can_edit=false and explain in result.
 - Always return a complete automation object (not a diff), even if only one field changed.
 """
+
+
+# ---------------------------------------------------------------------------
+# What Home Assistant adds to main's prompts
+# ---------------------------------------------------------------------------
+
+#: The text main and its intent classifier are given only when Home Assistant
+#: is part of the system: the devices it can control, the actuator agent type,
+#: the pipeline rule that keeps device control out of generated code, and the
+#: two intents that route a turn to the Home Assistant agents. Slot names are
+#: those of the templates in ``main_actor_prompts.py``.
+HOME_ASSISTANT_FRAGMENT = PromptFragment(
+    name="home_assistant",
+    orchestrator={
+        "channels": "Home Assistant,\n",
+        "abilities_head": (
+            "  - Control and query their smart home: turn devices on/off, set temperatures,\n"
+            "    dim lights, lock doors, and list devices, areas and existing automations\n"
+            "    (through Home Assistant).\n"
+        ),
+        "spawn_types_extra": """--- TYPE 3: HA Actuator (for reactive automations that control Home Assistant devices) ---
+Use when an agent needs to REACT to MQTT events and CONTROL Home Assistant devices.
+This is a native predefined agent — NO code needed. NO routing through home-assistant-agent.
+NEVER use home-assistant-agent as an intermediary for device control in pipelines.
+
+<spawn>
+{
+  "name": "actuator-name",
+  "type": "ha_actuator",
+  "automation_id": "unique-id",
+  "description": "what this actuator does",
+  "mqtt_topics": ["topic/to/watch"],
+  "actions": [{"domain": "light", "service": "turn_on", "entity_id": "light.xyz"}],
+  "detection_filter": {"person_detected": true},
+  "cooldown_seconds": 10
+}
+</spawn>
+
+CRITICAL HA PIPELINE RULE:
+When building a pipeline that reacts to sensor data and controls HA devices:
+  CORRECT: sensor-agent publishes to MQTT → ha_actuator subscribes and calls HA directly
+  WRONG:   sensor-agent → send_to('home-assistant-agent') — this causes LLM classification + timeout
+  WRONG:   coordinator-agent that sends tasks to home-assistant-agent — same timeout problem
+
+The home-assistant-agent is ONLY for:
+  - User asking to create/edit/delete HA automations via natural language
+  - User asking what devices are available
+  - User asking to list automations
+It is NOT a device control proxy for other agents.
+
+""",
+        "contract_example_subscribes": "subscribes=['homeassistant/state_changes/#'],",
+        "protected_names_extra": "home-assistant-agent, ",
+        "existing_agents_extra": (
+            "- home-assistant-agent    : manages all Home Assistant operations "
+            "(hardware recommendations, automation create/edit/delete/list)\n"
+        ),
+    },
+    intent_classifier={
+        "role": " for a smart home AI assistant",
+        "definitions_head": (
+            "ACTUATE = immediate one-shot device control in Home Assistant:\n"
+            "  - Turn on/off a device right now\n"
+            "  - Set temperature, dim lights, lock/unlock door\n"
+            "  - Open/close covers or blinds right now\n"
+            "  - Any direct command whose whole purpose is immediate device control\n\n"
+            "HA = Home Assistant management, listing, or changes to automations that already exist:\n"
+            "  - List devices, areas, entities, automations\n"
+            "  - Edit/rename/disable/delete an existing HA automation\n"
+            "  - Query what devices or automations exist\n\n"
+        ),
+        "new_rule_note": ", and never in Home Assistant",
+        "other_exclusions": "HA or ",
+        "rules": (
+            "\n\nImportant:\n"
+            "- Choose ACTUATE only when the entire request is immediate device control.\n"
+            "- If the request mixes device control with non-HA tasks, return OTHER.\n"
+            "- Return HA for listing or discovery, and for editing or deleting an automation\n"
+            "  that already exists. A new rule is always PIPELINE — the word 'automation'\n"
+            "  does not make it HA."
+        ),
+    },
+    intents=("ACTUATE", "HA"),
+)

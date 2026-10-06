@@ -49,9 +49,14 @@ Every agent publishes to its own namespace: `agents/{actor_id}/...`
   "uptime":             342.5,
   "tasks_completed":    5,
   "tasks_failed":       0,
-  "restart_count":      0
+  "tasks_timed_out":    0,
+  "restart_count":      0,
+  "task_p50_s":         0.042,
+  "task_p95_s":         0.31
 }
 ```
+
+`tasks_failed` includes the tasks that timed out, which `tasks_timed_out` also counts. A generated agent adds `task_p50_s`/`task_p95_s` for its `handle_task`, and `process_p50_s`/`process_p95_s` for its `process()` cycle, over its most recent calls, once it has made any. They are how an agent on a node, which serves no `/metrics`, reports what its work takes.
 
 **LLM agents additionally include:**
 ```json

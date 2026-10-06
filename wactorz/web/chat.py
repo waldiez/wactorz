@@ -13,7 +13,7 @@ import socket
 import time
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NamedTuple
 
 from aiohttp import web
 from aiohttp.web import Response
@@ -25,6 +25,7 @@ from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deplo
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from ..core.state_snapshot import FORCE_FLAG
+from ..monitoring import chat_metrics
 from . import runtime, uploads
 
 logger = logging.getLogger(__name__)
@@ -428,8 +429,69 @@ def _takes_attachments(fn: Callable[..., Any]) -> bool:
         return False
 
 
+class Destination(NamedTuple):
+    """Where a chat message is going, worked out once.
+
+    Routing acts on it and the turn metrics label the turn with its `kind`, so
+    the two cannot disagree about where a message went.
+    """
+
+    #: `chat_metrics.COMMAND`, `LOCAL`, `REMOTE` or `UNROUTED`.
+    kind: str
+    #: The agent named, and the text with the mention taken off. Empty for a command.
+    name: str = ""
+    text: str = ""
+    #: The agent in this process, when it is here.
+    target: Any = None
+    #: The node running it, when it is not here but a node is.
+    remote_node: str | None = None
+
+
+def destination_of(content: str) -> Destination:
+    """Where ``content`` is going: a command, an agent here, one on a node, or nowhere."""
+    if content.startswith("/"):
+        return Destination(chat_metrics.COMMAND)
+    name, text = parse_mention(content)
+    target = runtime.registry.find_by_name(name) if runtime.registry else None
+    if target is not None:
+        return Destination(chat_metrics.LOCAL, name, text, target)
+    # None without main, which is what relays a message to a node.
+    remote_node = remote_node_for(name)
+    if remote_node:
+        return Destination(chat_metrics.REMOTE, name, text, remote_node=remote_node)
+    return Destination(chat_metrics.UNROUTED, name, text)
+
+
 async def route_chat(
     content: str,
+    reply_fn,
+    stream_fn=None,
+    stream_end_fn=None,
+    attachments: list[dict[str, Any]] | None = None,
+) -> None:
+    """Route one chat turn, and record how long the person waited for it.
+
+    Timed here because every way a message reaches an agent from the dashboard
+    passes through, and every one of them ends by sending the reply. A turn the
+    person stops is cancelled, and not recorded; nor is one that raises, which
+    the caller reports as the failure it is.
+    """
+    destination = destination_of(content)
+    timer = chat_metrics.TurnTimer(destination.kind)
+    await _route_chat(
+        content,
+        destination,
+        timer.watch(reply_fn),
+        timer.watch(stream_fn) if stream_fn is not None else None,
+        stream_end_fn,
+        attachments,
+    )
+    timer.finish()
+
+
+async def _route_chat(
+    content: str,
+    destination: Destination,
     reply_fn,
     stream_fn=None,
     stream_end_fn=None,
@@ -476,9 +538,8 @@ async def route_chat(
                 await reply_fn("Unknown command. Type /help for available commands.")
         return
 
-    target_name, text = parse_mention(content)
-
-    target = runtime.registry.find_by_name(target_name) if runtime.registry else None
+    target_name, text = destination.name, destination.text
+    target = destination.target
 
     if target is None:
         main_actor = find_main_actor(runtime.registry)
@@ -486,7 +547,7 @@ async def route_chat(
         # Agent not in local registry — check if it's running on a remote node.
         # If so, route the message via MQTT and stream the reply back.
         if main_actor:
-            remote_node = remote_node_for(target_name)
+            remote_node = destination.remote_node
 
             if remote_node:
                 if blocks:

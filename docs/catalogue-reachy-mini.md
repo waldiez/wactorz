@@ -27,6 +27,18 @@ You need:
   `pip install 'wactorz[reachy]'` in the same environment and restart it once. For the rest
   of the setup, follow the [README quick start](https://github.com/waldiez/wactorz#readme).
 
+For an audited installation from a repository clone, use the committed lock:
+
+```bash
+uv sync --locked --extra anthropic --extra reachy
+uv run --no-sync wactorz
+```
+
+The lock keeps the pinned SDK client with patched Starlette, following the secure
+range supported upstream. Plain `pip install` follows the SDK's published dependency
+constraints and does not apply this repository's uv override. This compatibility
+check covers Wactorz's SDK client and HTTP middleware, not the SDK daemon's dashboard.
+
 Where Wactorz runs decides what Reachy can do:
 
 | Wactorz runs on… | What works |

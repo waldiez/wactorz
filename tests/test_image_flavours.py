@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
@@ -151,6 +152,13 @@ class TestTheLockedPyTorch:
 
 
 class TestTheLockedReachy:
+    def test_reachy_cannot_downgrade_the_shared_starlette_below_security_fixes(self) -> None:
+        locked = (ROOT / "uv.lock").read_text(encoding="utf-8")
+        versions = re.findall(r'^name = "starlette"\nversion = "([^"]+)"', locked, re.MULTILINE)
+
+        assert versions
+        assert all(Version("1.3.1") <= Version(version) < Version("2") for version in versions)
+
     def test_reachy_is_opt_in_and_its_native_dependencies_resolve_without_building(self) -> None:
         settings = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         locked = (ROOT / "uv.lock").read_text(encoding="utf-8")

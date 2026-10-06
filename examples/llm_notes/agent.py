@@ -36,7 +36,8 @@ async def summarise(note: dict, me: wactorz.FunctionAgent) -> dict | None:
     summary, usage = await me.llm.complete(
         [{"role": "user", "content": text}], system=SYSTEM_PROMPT
     )
+    # The call is already counted on this agent's card and against the cost
+    # limit; the figure travels with the summary for whoever reads the topic.
     cost = float(usage.get("cost_usd", 0.0))
-    me.persist("cost_usd_total", float(me.recall("cost_usd_total", 0.0)) + cost)
     me.persist("notes_total", int(me.recall("notes_total", 0)) + 1)
     return {"summary": summary.strip(), "cost_usd": round(cost, 6), "chars": len(text)}

@@ -170,6 +170,15 @@ unattended production workflows. Keep the robot within reach while testing motio
   later has nothing to install and needs no restart. Already running Wactorz? Run
   <code>pip install 'wactorz[reachy]'</code> in the same environment and restart it once. For the rest
   of the setup, follow the <a href="https://github.com/waldiez/wactorz#readme">README quick start</a>.</p>
+<p>For an audited installation from a repository clone, use the committed lock:</p>
+<div class="highlight"><pre><span></span><code>uv<span class="w"> </span>sync<span class="w"> </span>--locked<span class="w"> </span>--extra<span class="w"> </span>anthropic<span class="w"> </span>--extra<span class="w"> </span>reachy
+uv<span class="w"> </span>run<span class="w"> </span>--no-sync<span class="w"> </span>wactorz
+</code></pre></div>
+
+<p>The lock keeps the pinned SDK client with patched Starlette, following the secure
+range supported upstream. Plain <code>pip install</code> follows the SDK's published dependency
+constraints and does not apply this repository's uv override. This compatibility
+check covers Wactorz's SDK client and HTTP middleware, not the SDK daemon's dashboard.</p>
 <p>Where Wactorz runs decides what Reachy can do:</p>
 <table>
 <thead>

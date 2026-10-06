@@ -32,15 +32,6 @@
 
 ---
 
-<!--
-  TODO(promo): drop a hero demo GIF here — the highest-impact addition to this README.
-  Record a ~15s screencast of the dashboard running one end-to-end automation
-  (e.g. the "person detected on camera → office light on" example below), export
-  to GIF, commit under .github/assets/demo.gif, and uncomment:
-
-  <p align="center"><img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/demo.gif" width="720" alt="Wactorz dashboard demo"/></p>
--->
-
 Wactorz is a self-hosted runtime for AI that needs to do more than answer once.
 Describe an automation in chat and its planner can write a Python agent, run it as
 a supervised actor, and show you what it is doing in a live dashboard. Agents can

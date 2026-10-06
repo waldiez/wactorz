@@ -81,15 +81,32 @@ class Binding:
     state between calls -- counters, calibration values, persist/recall -- is
     not written to be re-entrant, and running two messages from the same topic
     concurrently would interleave at every `await` inside it.
+
+    ``concurrency`` above one asks for that many workers on the same queue, for
+    a callback that waits rather than computes -- a model call, a training
+    job -- and would otherwise queue its topic behind itself. Messages are then
+    handled as workers free up, not in order, and the callback has to cope
+    with running against itself.
     """
 
-    def __init__(self, topic: str, callback: Any, maxsize: int) -> None:
+    def __init__(self, topic: str, callback: Any, maxsize: int, concurrency: int = 1) -> None:
+        if concurrency < 1:
+            raise ValueError(f"concurrency must be at least 1, got {concurrency}")
         self.topic = topic
         self.callback = callback
+        self.concurrency = concurrency
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
-        self.worker: asyncio.Task | None = None
+        self.workers: list[asyncio.Task] = []
         #: Messages discarded because the callback fell behind, for the log.
         self.dropped = 0
+
+    @property
+    def worker(self) -> asyncio.Task | None:
+        """The first worker, for callers that know of one."""
+        return self.workers[0] if self.workers else None
+
+    def live_workers(self) -> list[asyncio.Task]:
+        return [w for w in self.workers if not w.done()]
 
     def offer(self, payload: Any) -> bool:
         """Queue a payload, discarding the oldest when the callback is behind.
@@ -147,17 +164,18 @@ class SubscriptionHub:
         #: Consecutive failures per topic, for the budget `_record_failure` keeps.
         self._failures: dict[str, int] = {}
 
-    def bind(self, topic: str, callback: Any) -> asyncio.Task | None:
+    def bind(self, topic: str, callback: Any, *, concurrency: int = 1) -> asyncio.Task | None:
         """Register a subscription, returning the hub task if this call started it.
 
         The caller tracks that task on the actor so stopping the actor stops the
         connection. It must **not** be tracked as a program task: a repair
         cancels those, and cancelling this one would take down the subscriptions
         of every other binding with it. Repair calls :meth:`clear` instead.
+        ``concurrency`` is the number of workers on the topic; see :class:`Binding`.
         """
-        binding = Binding(topic, callback, self.QUEUE_MAX)
+        binding = Binding(topic, callback, self.QUEUE_MAX, concurrency)
         self._bindings.append(binding)
-        binding.worker = asyncio.create_task(self._drain(binding))
+        self._start_workers(binding)
         if self._client is not None:
             task = asyncio.create_task(self._subscribe_now(topic))
             self._subscribing.add(task)
@@ -192,13 +210,14 @@ class SubscriptionHub:
                 logger.debug("[%s] Could not unsubscribe %s", self._actor.name, topic)
 
     def _stop_worker(self, binding: Binding) -> None:
-        worker = binding.worker
         # Never cancel the task this is running in. A host clearing every
         # binding from inside a failing callback -- a repair -- does so from
         # that binding's worker; cancelling it there would cut the work off at
         # its next await. `_drain` ends such a worker once the binding is gone.
-        if worker is not None and not worker.done() and worker is not asyncio.current_task():
-            worker.cancel()
+        current = asyncio.current_task()
+        for worker in binding.live_workers():
+            if worker is not current:
+                worker.cancel()
         if binding.dropped:
             logger.warning(
                 "[%s] %s discarded %d message(s) while its callback was behind",
@@ -208,10 +227,16 @@ class SubscriptionHub:
             )
 
     def _ensure_workers(self) -> None:
-        """Give every binding a live worker, reviving any that were cancelled."""
+        """Give every binding its workers, reviving any that were cancelled."""
         for binding in self._bindings:
-            if binding.worker is None or binding.worker.done():
-                binding.worker = asyncio.create_task(self._drain(binding))
+            self._start_workers(binding)
+
+    def _start_workers(self, binding: Binding) -> None:
+        """Bring ``binding`` up to its number of live workers."""
+        live = binding.live_workers()
+        for _ in range(binding.concurrency - len(live)):
+            live.append(asyncio.create_task(self._drain(binding)))
+        binding.workers = live
 
     def _qos(self) -> int:
         """QoS 1 only where a session exists to queue into.

@@ -27,7 +27,7 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.state_snapshot import json_safe, why_it_cannot_travel
-from .spawns import without_transient_keys
+from .spawns import why_a_node_cannot_run, without_transient_keys
 
 if TYPE_CHECKING:
     from .hosts import MigrationHost, NodeReaders
@@ -864,6 +864,17 @@ class Migration:
                 "success": False,
                 "message": f"Agent '{agent_name}' not running locally and "
                 f"no config in registry — cannot migrate.",
+            }
+
+        # Before anything stops: a node handed a config with no program starts
+        # an empty agent and confirms it, and the migration would then purge
+        # the only copy that worked.
+        unrunnable = why_a_node_cannot_run(dict(config or {}))
+        if unrunnable:
+            return {
+                "success": False,
+                "message": f"Cannot migrate '{agent_name}' to '{target_node}': {unrunnable}. "
+                f"It stays on 'local'.",
             }
 
         logger.info(

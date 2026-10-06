@@ -51,6 +51,30 @@ SPAWN_REGISTRY_KEY = "_spawned_agents"
 TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state"})
 
 
+def why_a_node_cannot_run(config: dict[str, Any]) -> str | None:
+    """Why a node could not run the agent ``config`` describes, or None if it can.
+
+    A node runs every agent as generated code: what the config's ``code`` holds,
+    or, for an agent of type ``llm``, the bridge code main writes for it. Every
+    other kind of agent is a class built into this server -- a native catalogue
+    agent, a Home Assistant actuator, a scheduled or rule agent, a registered
+    module -- and its config carries no program. Sent to a node, it starts as an
+    agent with nothing to run, answers every message with an error, and is
+    reported as started all the same.
+    """
+    if (config.get("code") or "").strip():
+        return None
+    agent_type = (config.get("type") or "dynamic").strip().lower()
+    if agent_type == "llm":
+        return None
+    if agent_type == "dynamic":
+        return "it has no program to send there"
+    return (
+        f"it is a {agent_type} agent, built into this server, and a node runs only an "
+        f"agent whose program goes with it: generated code, or an LLM agent"
+    )
+
+
 def without_transient_keys(config: dict[str, Any]) -> dict[str, Any]:
     """`config` without the keys that must not outlive the spawn they were sent with.
 
@@ -516,8 +540,8 @@ class SpawnService:
 
         No-op (returns the original config) when:
           - the config already has code (caller provided their own logic)
-          - the config isn't type "llm" (DynamicAgent, ha_actuator, etc. are
-            handled directly by the runner already)
+          - the config isn't type "llm": a node runs nothing else without code,
+            and `why_a_node_cannot_run` keeps such a config off it
 
         Why a copy: callers may pass the same config dict for multiple writes
         (spawn registry, desired_state, MQTT publish) and we don't want to
@@ -649,6 +673,21 @@ class SpawnService:
         finally:
             self.host._result_futures.pop(task_id, None)
 
+    async def _refuse_remote_spawn(self, config: dict[str, Any], node: str, reason: str) -> None:
+        """Say in the log and on the dashboard why an agent was not sent to ``node``."""
+        name = config.get("name")
+        logger.error("[%s] Cannot spawn %r on %s: %s", self.host.name, name, node, reason)
+        await self.host._mqtt_publish(
+            f"agents/{self.host.actor_id}/logs",
+            {
+                "type": "error",
+                "message": f"Cannot spawn '{name}' on '{node}': {reason}",
+                "child_name": name,
+                "node": node,
+                "timestamp": time.time(),
+            },
+        )
+
     async def _spawn_remote(self, config: dict[str, Any], node: str, save: bool) -> None:
         """Publish a spawn command to a node, which runs the agent there.
 
@@ -674,6 +713,10 @@ class SpawnService:
                 node,
                 problem,
             )
+            return
+        unrunnable = why_a_node_cannot_run(config)
+        if unrunnable:
+            await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
             return
         mismatch = self.host._node_version_mismatch(node)
         if mismatch:

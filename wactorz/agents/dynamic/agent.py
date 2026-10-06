@@ -29,6 +29,7 @@ from ...core.actor import Actor, ActorState, Message, MessageType
 from ...core.cancellation import cancel_all_until_done
 from ...core.paths import resolve_state_dir
 from ...core.state_versions import StateUpgradeError
+from ...monitoring import agent_metrics
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
 from .api import AgentAPI
@@ -136,6 +137,10 @@ class DynamicAgent(Actor):
         # take.
         self._process_fix_rounds: int = 0
         self._process_fix_errors: list[str] = []
+
+        # What recent calls took, for the percentiles in the metrics frame.
+        self._task_seconds = agent_metrics.RecentDurations()
+        self._process_seconds = agent_metrics.RecentDurations()
 
         # Tasks that belong to the generated program (setup runner, process
         # loop, subscription listeners), as opposed to the actor's own loops in
@@ -437,6 +442,7 @@ class DynamicAgent(Actor):
             )
 
         await self._publish_final_metrics()
+        agent_metrics.forget(self.name)
 
         self._unregister_from_bus()
 
@@ -950,7 +956,7 @@ class DynamicAgent(Actor):
         """
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
-                await _bounded_call(process(self._api), self._PROCESS_TIMEOUT)
+                await self._one_process_cycle(process)
                 self._reset_error_count()
             except asyncio.TimeoutError:
                 self.metrics.errors += 1
@@ -1055,11 +1061,77 @@ class DynamicAgent(Actor):
 
         Raises what the program raised, boxed by :func:`_bounded_call`, so each
         caller reports the failure the way its own transport expects.
+
+        Counted and timed here, the one place both transports pass through: a
+        task that returns is completed, one that raises failed, and one still
+        running at its timeout failed and timed out. A cancelled one is not
+        counted, since that is the agent being stopped rather than the task
+        ending.
         """
-        return await _bounded_call(
-            self._fn_handle_task(self._api, payload or {}),  # pyright: ignore[reportOptionalCall]  # callers check it is compiled
-            self._HANDLE_TASK_TIMEOUT,
-        )
+        started = time.monotonic()
+        try:
+            result = await _bounded_call(
+                self._fn_handle_task(self._api, payload or {}),  # pyright: ignore[reportOptionalCall]  # callers check it is compiled
+                self._HANDLE_TASK_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            self._task_ended(agent_metrics.TIMED_OUT, started)
+            raise
+        except BaseException:
+            self._task_ended(agent_metrics.FAILED, started)
+            raise
+        self._task_ended(agent_metrics.COMPLETED, started)
+        return result
+
+    def _task_ended(self, outcome: str, started: float) -> None:
+        """Count one finished task by how it ended, and record what it took."""
+        seconds = time.monotonic() - started
+        if outcome == agent_metrics.COMPLETED:
+            self.metrics.tasks_completed += 1
+        else:
+            self.metrics.tasks_failed += 1
+            if outcome == agent_metrics.TIMED_OUT:
+                self.metrics.tasks_timed_out += 1
+        self._task_seconds.add(seconds)
+        agent_metrics.TASK_DURATION.labels(agent=self.name, outcome=outcome).observe(seconds)
+
+    async def _one_process_cycle(self, process: Any) -> None:
+        """Run process() once under its timeout, and record what the cycle took.
+
+        A cycle that times out is counted as one and not timed: its duration is
+        the timeout, which says nothing the counter does not.
+        """
+        started = time.monotonic()
+        try:
+            await _bounded_call(process(self._api), self._PROCESS_TIMEOUT)
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            agent_metrics.PROCESS_TIMEOUTS.labels(agent=self.name).inc()
+            raise
+        except BaseException:
+            self._process_ended(started)
+            raise
+        self._process_ended(started)
+
+    def _process_ended(self, started: float) -> None:
+        seconds = time.monotonic() - started
+        self._process_seconds.add(seconds)
+        agent_metrics.PROCESS_DURATION.labels(agent=self.name).observe(seconds)
+
+    def _build_metrics(self) -> dict:
+        """The actor's counters, plus the p50 and p95 of recent tasks and cycles.
+
+        Here as well as in Prometheus because a node serves no `/metrics`: this
+        frame is how what a node's agents took reaches main and the dashboard.
+        """
+        return {
+            **super()._build_metrics(),
+            **self._task_seconds.summary("task"),
+            **self._process_seconds.summary("process"),
+        }
 
     async def _invoke_handle_task(
         self, msg: Message, _incoming: Any, _corr: Any, _with_corr: Any

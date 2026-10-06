@@ -170,7 +170,7 @@
 <li>actor restart count</li>
 <li>actor messages processed</li>
 <li>actor errors</li>
-<li>actor tasks completed and failed</li>
+<li>actor tasks completed, failed, and timed out (counted among the failed too)</li>
 <li>LLM input tokens</li>
 <li>LLM output tokens</li>
 <li>LLM cost in USD</li>
@@ -253,9 +253,21 @@
 <td><code>wactorz_llm_request_duration_seconds{provider}</code></td>
 <td>Time from a request to its answer or failure, retries included; for a streamed answer, to its last chunk</td>
 </tr>
+<tr>
+<td><code>wactorz_agent_task_duration_seconds{agent,outcome}</code></td>
+<td>Time a generated agent's <code>handle_task</code> took, by how it ended: <code>completed</code>, <code>failed</code> or <code>timed_out</code></td>
+</tr>
+<tr>
+<td><code>wactorz_agent_process_duration_seconds{agent}</code></td>
+<td>Time one cycle of a generated agent's <code>process()</code> took, whether it returned or raised</td>
+</tr>
+<tr>
+<td><code>wactorz_agent_process_timeouts_total{agent}</code></td>
+<td><code>process()</code> cycles still running when their time ran out</td>
+</tr>
 </tbody>
 </table>
-<p>A request counts once however many attempts it took, and one the caller cancelled is not counted. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.</p>
+<p>A request counts once however many attempts it took, and one the caller cancelled is not counted. The <code>wactorz_agent_*</code> series cover the agents that are running: an agent's go when it stops, so one-off agents do not accumulate, and one started again under the same name begins afresh, which Prometheus reads as a counter reset. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.</p>
 <p>The app exposes these at:</p>
 <div class="highlight"><pre><span></span><code>GET /metrics
 </code></pre></div>

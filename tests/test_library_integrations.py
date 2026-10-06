@@ -421,6 +421,23 @@ class TestLangChainCallback:
         assert actor.metrics.llm_cost_usd == 0.0
 
 
+def _ag2_config_or_skip(name: str, extra: str) -> Any:
+    """AG2's configuration class ``name``, or a skip when its provider SDK is absent or too old.
+
+    AG2 imports each provider's SDK through an extra of its own; without it the
+    class exists but refuses to build. That is the bridge's error path, tested
+    separately, not a reason for the mapping test to fail on a machine that
+    merely lacks the extra.
+    """
+    config = pytest.importorskip("ag2.config")
+    cls = getattr(config, name)
+    try:
+        cls(model="probe", api_key="k")
+    except Exception as exc:
+        pytest.skip(f"AG2's {name} is not usable here ({exc}); pip install 'ag2[{extra}]'")
+    return cls
+
+
 class TestAG2Bridge:
     @pytest.fixture
     def ledger(self, monkeypatch: pytest.MonkeyPatch) -> list[float]:
@@ -431,8 +448,8 @@ class TestAG2Bridge:
     def test_the_systems_model_becomes_ag2s_configuration(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        pytest.importorskip("ag2")
-        from ag2.config import AnthropicConfig, OpenAIConfig
+        AnthropicConfig = _ag2_config_or_skip("AnthropicConfig", "anthropic")
+        OpenAIConfig = _ag2_config_or_skip("OpenAIConfig", "openai")
 
         from wactorz.core.integrations import ag2 as bridge
 
@@ -468,8 +485,8 @@ class TestAG2Bridge:
         self, tmp_path: Path, ledger: list[float]
     ) -> None:
         pytest.importorskip("ag2")
-        from ag2.events.types import Usage
-        from ag2.usage import UsageReport
+        from ag2.events.types import Usage  # pyright: ignore[reportMissingImports]
+        from ag2.usage import UsageReport  # pyright: ignore[reportMissingImports]
 
         from wactorz.core.integrations import ag2 as bridge
 
@@ -494,7 +511,7 @@ class TestAG2Bridge:
         self, tmp_path: Path, ledger: list[float]
     ) -> None:
         pytest.importorskip("ag2")
-        from ag2.usage import UsageReport
+        from ag2.usage import UsageReport  # pyright: ignore[reportMissingImports]
 
         from wactorz.core.integrations import ag2 as bridge
 

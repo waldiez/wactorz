@@ -25,7 +25,11 @@ from typing import Any
 # Optional dependency: `pip install 'wactorz[ag2]'`, plus AG2's extra for the
 # provider in use (`ag2[anthropic]`, `ag2[openai]`, ...): that provider's SDK,
 # at the version AG2 asks for, which may be newer than Wactorz's own floor.
-from ag2.config import AnthropicConfig, GeminiConfig, OpenAIConfig
+from ag2.config import (  # pyright: ignore[reportMissingImports]
+    AnthropicConfig,
+    GeminiConfig,
+    OpenAIConfig,
+)
 
 from .pricing import Prices, cost_of
 

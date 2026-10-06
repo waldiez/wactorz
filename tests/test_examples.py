@@ -407,8 +407,8 @@ class TestTheAG2Example:
     ) -> None:
         """AG2's test client stands in for the model, with the turns scripted."""
         pytest.importorskip("ag2")
-        from ag2 import Agent
-        from ag2.testing import TestConfig
+        from ag2 import Agent  # pyright: ignore[reportMissingImports]
+        from ag2.testing import TestConfig  # pyright: ignore[reportMissingImports]
 
         module = _load("ag2_review")
 

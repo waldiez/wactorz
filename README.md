@@ -32,15 +32,6 @@
 
 ---
 
-<!--
-  TODO(promo): drop a hero demo GIF here — the highest-impact addition to this README.
-  Record a ~15s screencast of the dashboard running one end-to-end automation
-  (e.g. the "person detected on camera → office light on" example below), export
-  to GIF, commit under .github/assets/demo.gif, and uncomment:
-
-  <p align="center"><img src="https://raw.githubusercontent.com/waldiez/wactorz/main/.github/assets/demo.gif" width="720" alt="Wactorz dashboard demo"/></p>
--->
-
 Wactorz is a runtime for **physical AI**: LLM-driven agents that live next to the
 sensors, machines and spaces they act on — not in a cloud notebook. Agents run as
 long-lived, supervised actors on the hardware you already have: a Raspberry Pi in

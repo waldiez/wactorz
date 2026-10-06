@@ -6,7 +6,7 @@ chat        chat_log rows + conversation_history / history_summary kv entries,
             and the stored attachments too unless one agent was named
 state       per-agent pickle file (state/<name>/state.pkl)
 metrics     cost and message-count kv entries
-spawns      spawn_registry table
+spawns      the spawn registry main restores agents from
 logs        truncate wactorz.log and monitor.log (safe while running)
 all         everything above, plus the durable memory main keeps in the
             database: pipeline rules, user facts, notification URLs, topic
@@ -176,24 +176,13 @@ _SPAWN_REGISTRY_KV_KEY = "_spawned_agents"
 def reset_spawns(agent_name: str | None = None, db_path: str | None = None) -> None:
     """Clear the spawn registry (optionally for one agent).
 
-    There are TWO stores to clear:
-      1. the ``spawn_registry`` SQL table (legacy / vestigial), and
-      2. the AUTHORITATIVE registry the main actor actually reads, which lives
-         in ``kv_store`` under (owner, "_spawned_agents") because
-         "_spawned_agents" is routed to SQLite-kv by PersistenceAPI.
-
-    Without clearing (2), ``main._restore_spawned_agents()`` re-spawns every
-    "deleted" agent on the next restart. ``agent_name`` here is the *spawned*
-    agent's name; the registry is keyed by that name inside the owner's entry.
+    The registry lives in ``kv_store`` under (owner, "_spawned_agents"), which is
+    what ``main._restore_spawned_agents()`` reads at start, so an agent left in
+    it is spawned again on the next restart. ``agent_name`` here is the
+    *spawned* agent's name; the registry is keyed by that name inside the
+    owner's entry.
     """
     with _db(db_path) as db:
-        rows = db.clear_spawn_registry(agent_name)
-        logger.info(
-            "[reset] spawn_registry table: deleted %d rows%s",
-            rows,
-            f" for {agent_name!r}" if agent_name else "",
-        )
-
         cleared = 0
         # One transaction: each owner's entry is read, edited and written back,
         # and an agent persisting its own registry between the read and the

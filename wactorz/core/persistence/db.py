@@ -442,15 +442,6 @@ class WactorzDB:
                     ids.add(str(item["id"]))
         return ids
 
-    def clear_spawn_registry(self, agent_name: str | None = None) -> int:
-        """Delete spawn_registry rows. Pass agent_name to limit to one agent."""
-        with self.transaction() as conn:
-            if agent_name:
-                cur = conn.execute("DELETE FROM spawn_registry WHERE name=?", (agent_name,))
-            else:
-                cur = conn.execute("DELETE FROM spawn_registry")
-        return cur.rowcount
-
     @_serialised
     def query_chat_log(
         self,

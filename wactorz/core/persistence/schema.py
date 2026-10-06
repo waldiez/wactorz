@@ -32,59 +32,6 @@ CREATE TABLE IF NOT EXISTS kv_store (
     PRIMARY KEY (agent, key)
 );
 
--- Spawn registry — which agents should be running and their configs
-CREATE TABLE IF NOT EXISTS spawn_registry (
-    name       TEXT PRIMARY KEY,
-    config     TEXT NOT NULL,         -- JSON spawn config
-    node       TEXT DEFAULT '',       -- remote node name (empty = local)
-    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0),
-    updated_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- Pipeline rules — reactive rules with their agent lists
-CREATE TABLE IF NOT EXISTS pipeline_rules (
-    rule_id    TEXT PRIMARY KEY,
-    task       TEXT NOT NULL,          -- original user request
-    agents     TEXT NOT NULL,          -- JSON array of agent names
-    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- User facts — durable facts extracted from conversations
-CREATE TABLE IF NOT EXISTS user_facts (
-    key     TEXT PRIMARY KEY,
-    value   TEXT NOT NULL,
-    updated REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- Topic contracts — TopicBus registry (survives restarts without retained MQTT)
-CREATE TABLE IF NOT EXISTS topic_contracts (
-    name             TEXT PRIMARY KEY,
-    publishes        TEXT DEFAULT '[]',   -- JSON array
-    subscribes       TEXT DEFAULT '[]',   -- JSON array
-    triggers_when    TEXT DEFAULT '{}',   -- JSON dict
-    produces_schema  TEXT DEFAULT '{}',   -- JSON dict
-    consumes_schema  TEXT DEFAULT '{}',   -- JSON dict
-    observed_samples TEXT DEFAULT '{}',   -- JSON dict
-    node             TEXT DEFAULT '',
-    actor_id         TEXT DEFAULT '',
-    updated          REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- Notification webhook URLs
-CREATE TABLE IF NOT EXISTS webhook_urls (
-    service TEXT PRIMARY KEY,          -- discord, slack, telegram
-    url     TEXT NOT NULL,
-    updated REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
--- Plan cache — cached planner decompositions (with TTL)
-CREATE TABLE IF NOT EXISTS plan_cache (
-    cache_key  TEXT PRIMARY KEY,
-    plan       TEXT NOT NULL,          -- JSON array of steps
-    workers    TEXT DEFAULT '[]',      -- JSON array of worker names at cache time
-    created_at REAL NOT NULL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
-);
-
 -- ══════════════════════════════════════════════════════════════════════════
 -- TIME-SERIES TABLES — for device data collection and ML training
 -- ══════════════════════════════════════════════════════════════════════════
@@ -135,6 +82,7 @@ CREATE TABLE IF NOT EXISTS ha_state_changes (
     context   TEXT DEFAULT ''          -- HA context_id for correlation
 );
 
+CREATE INDEX IF NOT EXISTS idx_ha_ts        ON ha_state_changes (ts);
 CREATE INDEX IF NOT EXISTS idx_ha_entity_ts ON ha_state_changes (entity_id, ts);
 CREATE INDEX IF NOT EXISTS idx_ha_domain_ts ON ha_state_changes (domain, ts);
 

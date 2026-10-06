@@ -512,8 +512,8 @@ class ResetHandlerDispatchTest(unittest.IsolatedAsyncioTestCase):
 class ResetSpawnsKvRegistryTest(unittest.TestCase):
     """main reads its spawn registry from kv_store("main", "_spawned_agents").
 
-    reset_spawns must clear THAT, not only the vestigial spawn_registry table,
-    or _restore_spawned_agents() re-spawns every deleted agent on restart.
+    reset_spawns must clear that, or _restore_spawned_agents() re-spawns every
+    deleted agent on restart.
     """
 
     def _db(self, tmp: str):

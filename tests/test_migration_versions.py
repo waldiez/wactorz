@@ -12,7 +12,6 @@ paired state migration that threw is what lets failed state work be recorded as
 done and never retried.
 """
 
-import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -25,7 +24,6 @@ from wactorz.core.persistence.migrations import (
     _pending_state_versions,
     get_current_version,
     run_migrations,
-    validate_spawn_registry,
 )
 from wactorz.core.persistence.pickle_store import PickleStore
 
@@ -52,15 +50,6 @@ def migrated_fixture(tmp_path: Path) -> Iterator[WactorzDB]:
         yield database
 
 
-def add_spawn(db: WactorzDB, name: str, config: object, version: int | None = None) -> None:
-    body = config if isinstance(config, str) else json.dumps(config)
-    db.conn.execute(
-        "INSERT OR REPLACE INTO spawn_registry (name, config, framework_version) VALUES (?,?,?)",
-        (name, body, version),
-    )
-    db.conn.commit()
-
-
 class TestVersionReporting:
     def test_the_base_schema_is_version_one(self, fresh: WactorzDB) -> None:
         """Creating the tables is not the same as being up to date."""
@@ -84,15 +73,18 @@ class TestRunMigrations:
             assert result["sql_migrations"] > 0
             assert not result["errors"]
 
-    def test_the_sql_migrations_add_the_columns_the_registry_needs(self, tmp_path: Path) -> None:
+    def test_the_sql_migrations_add_what_the_bookkeeping_and_chat_log_need(
+        self, tmp_path: Path
+    ) -> None:
         with WactorzDB(str(tmp_path / "b.db")) as db:
-            before = {r[1] for r in db.conn.execute("PRAGMA table_info(spawn_registry)")}
-            assert "framework_version" not in before
-
             run_migrations(db, PickleStore(str(tmp_path / "state")))
 
-            after = {r[1] for r in db.conn.execute("PRAGMA table_info(spawn_registry)")}
-            assert {"framework_version", "trusted"} <= after
+            def columns(table: str) -> set[str]:
+                return {r[1] for r in db.conn.execute(f"PRAGMA table_info({table})")}
+
+            assert "framework_version" in columns("schema_version")
+            assert "attachments" in columns("chat_log")
+            assert columns("migration_history")
 
     def test_running_it_twice_is_a_no_op(self, tmp_path: Path) -> None:
         """Startup calls this every boot, so a second pass must apply nothing."""
@@ -152,47 +144,3 @@ class TestPendingStateVersions:
         bare = BareDB(str(tmp_path / "bare.db"))
         assert _pending_state_versions(bare)
         bare.conn.close()
-
-
-class TestValidateSpawnRegistry:
-    def test_an_empty_registry_reports_nothing(self, migrated: WactorzDB) -> None:
-        assert not validate_spawn_registry(migrated)
-
-    def test_a_schema_without_the_table_is_not_an_error(self, tmp_path: Path) -> None:
-        """Validation runs at startup against databases of any age, so an old
-        schema reports nothing rather than failing the boot.
-        """
-        bare = BareDB(str(tmp_path / "bare.db"))
-        assert not validate_spawn_registry(bare)
-        bare.conn.close()
-
-    def test_an_unmigrated_schema_is_also_tolerated(self, fresh: WactorzDB) -> None:
-        """The column it reads is added by a migration."""
-        assert not validate_spawn_registry(fresh)
-
-    def test_a_corrupt_config_is_an_error_naming_the_agent(self, migrated: WactorzDB) -> None:
-        add_spawn(migrated, "broken", "{not json", version=FRAMEWORK_VERSION)
-
-        (issue,) = validate_spawn_registry(migrated)
-        assert issue["agent"] == "broken"
-        assert issue["severity"] == "error"
-        assert issue["action"] == "delete_and_respawn"
-
-    def test_a_current_agent_reports_nothing(self, migrated: WactorzDB) -> None:
-        add_spawn(
-            migrated,
-            "fine",
-            {"name": "fine", "code": "async def setup(agent):\n    pass\n"},
-            version=FRAMEWORK_VERSION,
-        )
-        assert not [i for i in validate_spawn_registry(migrated) if i["agent"] == "fine"]
-
-    def test_every_issue_carries_the_documented_shape(self, migrated: WactorzDB) -> None:
-        """Callers render these directly, so a missing key is a broken report."""
-        add_spawn(migrated, "broken", "{not json", version=None)
-
-        issues = validate_spawn_registry(migrated)
-        assert issues
-        for issue in issues:
-            assert set(issue) >= {"agent", "severity", "message", "action"}
-            assert issue["severity"] in {"warning", "error"}

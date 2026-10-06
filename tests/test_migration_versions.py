@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from wactorz.core.persistence import WactorzDB
+from wactorz.core.persistence import WactorzDB, migrations
 from wactorz.core.persistence.migrations import (
     FRAMEWORK_VERSION,
     _pending_state_versions,
@@ -64,6 +64,21 @@ class TestVersionReporting:
         assert get_current_version(migrated) == FRAMEWORK_VERSION
 
 
+def _make_state_migrations_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _broken(_db: object, _store: object) -> None:
+        raise RuntimeError("state upgrade failed")
+
+    monkeypatch.setattr(
+        migrations, "_STATE_MIGRATIONS", dict.fromkeys(migrations._STATE_MIGRATIONS, _broken)
+    )
+
+
+@pytest.fixture(name="failing_state")
+def failing_state_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every state migration raises, as one meeting data it cannot handle would."""
+    _make_state_migrations_fail(monkeypatch)
+
+
 class TestRunMigrations:
     def test_it_reports_where_it_started_and_finished(self, tmp_path: Path) -> None:
         with WactorzDB(str(tmp_path / "a.db")) as db:
@@ -97,34 +112,43 @@ class TestRunMigrations:
             assert second["sql_migrations"] == 0
             assert second["state_migrations"] == 0
 
-    def test_a_failed_state_migration_is_reported_and_does_not_abort(self, tmp_path: Path) -> None:
-        """Without a pickle store the state pass cannot run. The schema work
-        still completes and the failure is returned rather than raised — a boot
-        that stopped here would leave the database half-upgraded.
+    def test_a_failed_state_migration_is_reported_and_does_not_abort(
+        self, tmp_path: Path, failing_state: None
+    ) -> None:
+        """The schema work still completes and the failure is returned rather
+        than raised — a boot that stopped here would leave the database
+        half-upgraded.
         """
         with WactorzDB(str(tmp_path / "d.db")) as db:
-            result = run_migrations(db, pickle_store=None)
+            result = run_migrations(db, PickleStore(str(tmp_path / "state")))
 
             assert result["errors"]
             assert result["to_version"] == FRAMEWORK_VERSION
             assert result["sql_migrations"] > 0
 
-    def test_a_failed_state_migration_stays_pending_so_it_is_retried(self, tmp_path: Path) -> None:
+    def test_a_failed_state_migration_stays_pending_so_it_is_retried(
+        self, tmp_path: Path, failing_state: None
+    ) -> None:
         """The property that matters: only successes are recorded, so the work
         is still owed on the next boot even though the schema is current.
         """
         with WactorzDB(str(tmp_path / "e.db")) as db:
-            run_migrations(db, pickle_store=None)
+            run_migrations(db, PickleStore(str(tmp_path / "state")))
 
             assert get_current_version(db) == FRAMEWORK_VERSION
             assert _pending_state_versions(db), "failed state work must remain owed"
 
-    def test_a_later_run_with_a_store_clears_the_backlog(self, tmp_path: Path) -> None:
+    def test_a_later_run_that_succeeds_clears_the_backlog(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = PickleStore(str(tmp_path / "state"))
         with WactorzDB(str(tmp_path / "f.db")) as db:
-            run_migrations(db, pickle_store=None)
+            with monkeypatch.context() as failing:
+                _make_state_migrations_fail(failing)
+                run_migrations(db, store)
             assert _pending_state_versions(db)
 
-            run_migrations(db, PickleStore(str(tmp_path / "state")))
+            run_migrations(db, store)
             assert not _pending_state_versions(db)
 
 

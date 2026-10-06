@@ -32,7 +32,6 @@ import json
 import logging
 import sqlite3
 import time
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -102,91 +101,14 @@ _SQL_MIGRATIONS = {
 def migrate_state_2(db, pickle_store):
     """v1 → v2: Upgrade persisted state structures.
 
-    - EntityBaseline: add missing fields (is_binary, transition_freq, ready)
     - Conversation history: sanitize corrupted entries
     - User facts: no changes needed (plain dict)
+
+    An agent's own data is not upgraded here: an agent that changes the shape
+    of what it stores declares a state version and upgrades it itself, when it
+    starts (see `wactorz.core.state_versions`).
     """
-    _upgrade_baselines(db, pickle_store)
     _upgrade_conversation_history(db, pickle_store)
-
-
-def _upgrade_baselines(db, pickle_store):
-    """Add missing fields to persisted EntityBaseline dicts."""
-    BASELINE_DEFAULTS = {
-        "is_binary": False,
-        "transition_freq": 0.0,
-        "ready": False,
-        "hourly_count": [0] * 24,
-        "max_rate": 0.0,
-        "mean_interval": 0.0,
-        "p1": 0.0,
-        "p99": 0.0,
-    }
-
-    # Check SQLite kv_store
-    try:
-        rows = db.conn.execute(
-            "SELECT agent, key, value FROM kv_store WHERE key = 'baselines'"
-        ).fetchall()
-        for row in rows:
-            agent_name = row[0]
-            try:
-                baselines = json.loads(row[2])
-                if not isinstance(baselines, dict):
-                    continue
-                upgraded = False
-                for _key, baseline in baselines.items():
-                    if not isinstance(baseline, dict):
-                        continue
-                    for field, default in BASELINE_DEFAULTS.items():
-                        if field not in baseline:
-                            baseline[field] = default
-                            upgraded = True
-                if upgraded:
-                    db.conn.execute(
-                        "UPDATE kv_store SET value=?, updated=? WHERE agent=? AND key='baselines'",
-                        (json.dumps(baselines), time.time(), agent_name),
-                    )
-                    logger.info("[Migration] Upgraded baselines for '%s'", agent_name)
-            except (json.JSONDecodeError, TypeError) as e:
-                logger.warning(
-                    "[Migration] Could not upgrade baselines for '%s': %s", agent_name, e
-                )
-        db.conn.commit()
-    except Exception as e:
-        logger.warning("[Migration] Baseline upgrade failed: %s", e)
-
-    # Also check pickle files
-    base = Path(pickle_store._base)
-    for agent_dir in base.iterdir():
-        if not agent_dir.is_dir():
-            continue
-        pkl_path = agent_dir / "state.pkl"
-        if not pkl_path.exists():
-            continue
-        try:
-            # Through the store: it reads the file a value at a time, and it
-            # keeps each state in memory, so a file changed behind it would be
-            # written over by what it holds.
-            baselines = pickle_store.load(agent_dir.name).get("baselines")
-            if not isinstance(baselines, dict):
-                continue
-            upgraded = False
-            for _key, baseline in baselines.items():
-                if not isinstance(baseline, dict):
-                    continue
-                for field, default in BASELINE_DEFAULTS.items():
-                    if field not in baseline:
-                        baseline[field] = default
-                        upgraded = True
-            if upgraded:
-                pickle_store.update(agent_dir.name, "baselines", baselines)
-                logger.info("[Migration] Upgraded pickle baselines for '%s'", agent_dir.name)
-        except Exception as exc:
-            # One agent's unreadable pickle must not abort the whole migration —
-            # but it is logged rather than dropped. A silent pass here is how a
-            # migration appears to succeed while having done nothing.
-            logger.warning("[Migration] Skipped pickle baselines for '%s': %s", agent_dir.name, exc)
 
 
 def _upgrade_conversation_history(db, pickle_store):

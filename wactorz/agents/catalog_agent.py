@@ -965,7 +965,7 @@ class CatalogAgent(Actor):
                     "agent": resolved,
                     "message": f"{resolved} is still installing; I'll post here when it's ready.",
                 }
-            needed = missing_requirements(recipe.get("install", []))
+            needed = await asyncio.to_thread(missing_requirements, recipe.get("install", []))
             if needed:
                 heads_up = self._install_heads_up(resolved, needed, recipe.get("install_hint", ""))
                 if background_install:

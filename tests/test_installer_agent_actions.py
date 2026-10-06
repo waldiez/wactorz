@@ -11,12 +11,14 @@ target, never from the task. `tests/test_deploy_broker_tls.py` and
 order it runs in and what it reports when a step cannot happen.
 """
 
+import asyncio
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import asyncssh
 import pytest
@@ -27,6 +29,26 @@ from wactorz.agents import installer_agent, node_service
 from wactorz.agents.installer_agent import InstallerAgent, NodeTls
 from wactorz.config import CONFIG, DeployTarget
 from wactorz.core.actor import Message, MessageType
+
+
+def _versions_off_loop() -> dict[str, str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    return {"numpy": "1.0"}
+
+
+def _stale_off_loop(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert before == after == {"numpy": "1.0"}
+    return []
+
+
+def _requirement_off_loop(requirement: str) -> bool:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert requirement == "numpy"
+    return False
 
 
 class _Conn:
@@ -209,6 +231,25 @@ class TestDispatch:
 
 
 class TestLocalInstall:
+    async def test_metadata_scans_run_off_the_event_loop(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ran = _pip(installer, monkeypatch)
+        versions = Mock(side_effect=_versions_off_loop)
+        stale = Mock(side_effect=_stale_off_loop)
+        requirement = Mock(side_effect=_requirement_off_loop)
+        monkeypatch.setattr(installer_agent, "installed_versions", versions)
+        monkeypatch.setattr(installer_agent, "stale_loaded_distributions", stale)
+        monkeypatch.setattr(installer_agent, "requirement_is_satisfied", requirement)
+
+        result = await installer._install_packages(["numpy"])
+
+        assert result["success"] is True
+        assert ran == ["numpy"]
+        assert versions.call_count == 2
+        stale.assert_called_once()
+        requirement.assert_called_once_with("numpy")
+
     async def test_nothing_to_install_is_an_error(self, installer: InstallerAgent) -> None:
         assert await installer._install_packages([]) == {"error": "No packages specified"}
 

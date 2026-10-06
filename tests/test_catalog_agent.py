@@ -32,6 +32,13 @@ from wactorz.catalogue_agents.weather_agent import WeatherAgent
 from wactorz.core.actor import Message, MessageType
 
 
+def _available_off_loop(requirements: list[str]) -> list[str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert requirements == ["aiomqtt"]
+    return []
+
+
 class _Actor:
     def __init__(self, name: str) -> None:
         self.name = name
@@ -405,6 +412,18 @@ class TestNativeSpawn:
 
 
 class TestDynamicSpawn:
+    async def test_requirement_scans_run_off_the_event_loop(
+        self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        catalog._registry = _Registry()  # pyright: ignore[reportAttributeAccessIssue]
+        monkeypatch.setattr(catalog_agent, "missing_requirements", _available_off_loop)
+        spawner = _spawner(catalog, monkeypatch)
+
+        result = await catalog._action_spawn("timeseries-collector", {})
+
+        assert result["ok"] is True
+        assert len(spawner.calls) == 1
+
     async def test_a_recipe_without_dependencies_is_spawned_trusted(
         self, catalog: CatalogAgent, main: _Main, monkeypatch: pytest.MonkeyPatch
     ) -> None:

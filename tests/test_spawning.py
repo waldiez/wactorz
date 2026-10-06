@@ -33,6 +33,13 @@ def run(coro):
     return asyncio.run(coro)
 
 
+def _available_off_loop(requirements: list[str]) -> list[str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert requirements == ["numpy"]
+    return []
+
+
 # ── Fakes ────────────────────────────────────────────────────────────────────
 
 
@@ -342,6 +349,24 @@ def test_present_packages_spawn_directly(main_host):
     )
     assert not isinstance(actor, SpawnPlaceholder)
     assert not main_host.sent  # installer never contacted
+
+
+@pytest.mark.parametrize("action", ["spawn", "install"])
+def test_requirement_scans_run_off_the_event_loop(
+    main_host: MainHost, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    monkeypatch.setattr(spawning, "missing_requirements", _available_off_loop)
+    if action == "spawn":
+        actor = run(
+            main_host._spawn_local_from_config(
+                {"name": "d", "type": "dynamic", "code": "x", "install": ["numpy"]}
+            )
+        )
+        assert actor is not None
+        assert not isinstance(actor, SpawnPlaceholder)
+    else:
+        assert run(main_host._install_packages(["numpy"])).ok
+    assert not main_host.sent
 
 
 def test_blocking_install(main_host):

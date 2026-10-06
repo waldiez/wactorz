@@ -416,7 +416,9 @@ class SpawnMixin(_Host):
         if isinstance(packages, str):
             packages = [p.strip() for p in packages.replace(",", " ").split() if p.strip()]
 
-        needed = self._packages_needing_install(packages) if packages else []
+        needed = (
+            await asyncio.to_thread(self._packages_needing_install, packages) if packages else []
+        )
 
         if not needed:
             return await self._do_spawn_dynamic(config, name, code)
@@ -552,7 +554,7 @@ class SpawnMixin(_Host):
         if not packages or not self._registry:
             return InstallOutcome()
 
-        needed = self._packages_needing_install(packages)
+        needed = await asyncio.to_thread(self._packages_needing_install, packages)
         if not needed:
             logger.info(
                 "[%s] All packages for '%s' already available: %s", self.name, agent_name, packages

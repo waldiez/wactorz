@@ -422,7 +422,7 @@ class InstallerAgent(Actor):
         failed = []
         wanted = [p.strip() for p in packages if p.strip()]
         suffix = f" for {for_agent}" if for_agent else ""
-        before = installed_versions()
+        before = await asyncio.to_thread(installed_versions)
         ran_pip = False
 
         for index, pkg in enumerate(wanted, start=1):
@@ -441,7 +441,7 @@ class InstallerAgent(Actor):
             # Installed metadata, version specifier included: a pinned
             # `name==1.2` is not "installed" just because some other version
             # imports, and a pip name need not be the module's name.
-            if requirement_is_satisfied(pip_name):
+            if await asyncio.to_thread(requirement_is_satisfied, pip_name):
                 logger.info("[%s] %s already installed.", self.name, pip_name)
                 results[pip_name] = "already_installed"
                 continue
@@ -501,9 +501,10 @@ class InstallerAgent(Actor):
         # process already imported, and then no agent that needs it will work
         # until the process restarts. Said here, where it is known, rather than
         # left to surface later as an ImportError nobody can explain.
-        restart_required = (
-            stale_loaded_distributions(before, installed_versions()) if ran_pip else []
-        )
+        restart_required = []
+        if ran_pip:
+            after = await asyncio.to_thread(installed_versions)
+            restart_required = await asyncio.to_thread(stale_loaded_distributions, before, after)
         if restart_required:
             logger.warning(
                 "[%s] Install replaced packages this process already loaded: %s — restart needed",

@@ -16,7 +16,7 @@ from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.platform_collector import PlatformCollector
 from prometheus_client.process_collector import ProcessCollector
 
-from . import llm_metrics, loop_lag
+from . import agent_metrics, llm_metrics, loop_lag
 
 RegistryProvider = Callable[[], Any | None]
 
@@ -91,7 +91,12 @@ class ActorMetricsCollector:
         )
         actor_tasks_failed = CounterMetricFamily(
             "wactorz_actor_tasks_failed",
-            "Tasks failed by each actor.",
+            "Tasks failed by each actor, the ones that timed out among them.",
+            labels=["actor_name"],
+        )
+        actor_tasks_timed_out = CounterMetricFamily(
+            "wactorz_actor_tasks_timed_out",
+            "Tasks each actor was still running when their time ran out.",
             labels=["actor_name"],
         )
         actor_messages_refused = CounterMetricFamily(
@@ -166,6 +171,9 @@ class ActorMetricsCollector:
             actor_errors.add_metric([actor_name], errors)
             actor_tasks_completed.add_metric([actor_name], tasks_completed)
             actor_tasks_failed.add_metric([actor_name], tasks_failed)
+            actor_tasks_timed_out.add_metric(
+                [actor_name], float(getattr(metrics, "tasks_timed_out", 0))
+            )
             actor_messages_refused.add_metric(
                 [actor_name], float(getattr(metrics, "messages_refused", 0))
             )
@@ -197,6 +205,7 @@ class ActorMetricsCollector:
         yield actor_errors
         yield actor_tasks_completed
         yield actor_tasks_failed
+        yield actor_tasks_timed_out
         yield actor_messages_refused
         yield actor_mailbox_depth
         yield actor_handling
@@ -367,7 +376,11 @@ class PrometheusMonitor:
         self._registry.register(self._actor_collector)
         self._registry.register(BrokerMetricsCollector(publisher_provider))
         self._registry.register(NodeMetricsCollector(nodes_provider, expected_nodes_provider))
-        for collector in (*llm_metrics.COLLECTORS, *loop_lag.COLLECTORS):
+        for collector in (
+            *llm_metrics.COLLECTORS,
+            *loop_lag.COLLECTORS,
+            *agent_metrics.COLLECTORS,
+        ):
             self._registry.register(collector)
         ProcessCollector(registry=self._registry)
         PlatformCollector(registry=self._registry)

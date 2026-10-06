@@ -208,7 +208,9 @@ class ActorMetrics:
     start_time: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
     tasks_completed: int = 0
+    #: Tasks that raised or ran out of time; the latter are also `tasks_timed_out`.
     tasks_failed: int = 0
+    tasks_timed_out: int = 0
     restart_count: int = 0  # incremented by Supervisor on each restart
     heartbeats: int = 0
     #: Messages this actor's mailbox had no room for and did not take.
@@ -761,6 +763,7 @@ class Actor(ABC):
             "uptime": self.metrics.uptime,
             "tasks_completed": self.metrics.tasks_completed,
             "tasks_failed": self.metrics.tasks_failed,
+            "tasks_timed_out": self.metrics.tasks_timed_out,
             "restart_count": self.metrics.restart_count,
         }
 

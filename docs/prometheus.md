@@ -27,7 +27,7 @@ Prometheus scrapes the Python REST service and records:
 - actor restart count
 - actor messages processed
 - actor errors
-- actor tasks completed and failed
+- actor tasks completed, failed, and timed out (counted among the failed too)
 - LLM input tokens
 - LLM output tokens
 - LLM cost in USD
@@ -54,8 +54,11 @@ And, for what the dashboard does not show:
 | `wactorz_node_info{node,version,runtime}` | The version and runtime a node reported |
 | `wactorz_llm_requests_total{provider,outcome}` | LLM requests by how they ended: `ok`, `unavailable` (the provider kept failing through every retry) or `error` (anything else: a rejected request, a bad key) |
 | `wactorz_llm_request_duration_seconds{provider}` | Time from a request to its answer or failure, retries included; for a streamed answer, to its last chunk |
+| `wactorz_agent_task_duration_seconds{agent,outcome}` | Time a generated agent's `handle_task` took, by how it ended: `completed`, `failed` or `timed_out` |
+| `wactorz_agent_process_duration_seconds{agent}` | Time one cycle of a generated agent's `process()` took, whether it returned or raised |
+| `wactorz_agent_process_timeouts_total{agent}` | `process()` cycles still running when their time ran out |
 
-A request counts once however many attempts it took, and one the caller cancelled is not counted. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.
+A request counts once however many attempts it took, and one the caller cancelled is not counted. The `wactorz_agent_*` series cover the agents that are running: an agent's go when it stops, so one-off agents do not accumulate, and one started again under the same name begins afresh, which Prometheus reads as a counter reset. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.
 
 The app exposes these at:
 

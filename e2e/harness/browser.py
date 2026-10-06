@@ -23,10 +23,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
 from . import waiting
 
 if TYPE_CHECKING:
     from playwright.sync_api import BrowserContext, ConsoleMessage, Locator, Page
+
+#: How long to look for a chat target that was on the list a moment ago before
+#: taking it as gone. Long enough for a list being redrawn; far short of the wait
+#: that a missing option otherwise costs.
+GONE_MS = 2_000
 
 WIDTH, HEIGHT = 1280, 800
 
@@ -316,10 +323,15 @@ class Dashboard:
         threads: dict[str, list[Said]] = {}
         for agent in self._targets():
             # An agent can leave the list between reading it and choosing it:
-            # one on a node goes when the node does.
+            # one on a node goes when the node does. Checking first narrows that
+            # window without closing it, so a choice that finds the option gone
+            # moves on rather than waiting out Playwright's default for it.
             if agent not in self._targets():
                 continue
-            self.read_thread_of(agent)
+            try:
+                self.page.locator(TARGET_SELECT).select_option(agent, timeout=GONE_MS)
+            except PlaywrightTimeoutError:
+                continue
             threads[agent] = self.said()
         if was in self._targets():
             self.read_thread_of(was)

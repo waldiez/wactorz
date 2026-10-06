@@ -6,7 +6,7 @@ chat        chat_log rows + conversation_history / history_summary kv entries,
             and the stored attachments too unless one agent was named
 state       per-agent pickle file (state/<name>/state.pkl)
 metrics     cost and message-count kv entries
-spawns      spawn_registry table
+spawns      the spawn registry main restores agents from
 logs        truncate wactorz.log and monitor.log (safe while running)
 all         everything above, plus the durable memory main keeps in the
             database: pipeline rules, user facts, notification URLs, topic
@@ -176,24 +176,13 @@ _SPAWN_REGISTRY_KV_KEY = "_spawned_agents"
 def reset_spawns(agent_name: str | None = None, db_path: str | None = None) -> None:
     """Clear the spawn registry (optionally for one agent).
 
-    There are TWO stores to clear:
-      1. the ``spawn_registry`` SQL table (legacy / vestigial), and
-      2. the AUTHORITATIVE registry the main actor actually reads, which lives
-         in ``kv_store`` under (owner, "_spawned_agents") because
-         "_spawned_agents" is routed to SQLite-kv by PersistenceAPI.
-
-    Without clearing (2), ``main._restore_spawned_agents()`` re-spawns every
-    "deleted" agent on the next restart. ``agent_name`` here is the *spawned*
-    agent's name; the registry is keyed by that name inside the owner's entry.
+    The registry lives in ``kv_store`` under (owner, "_spawned_agents"), which is
+    what ``main._restore_spawned_agents()`` reads at start, so an agent left in
+    it is spawned again on the next restart. ``agent_name`` here is the
+    *spawned* agent's name; the registry is keyed by that name inside the
+    owner's entry.
     """
     with _db(db_path) as db:
-        rows = db.clear_spawn_registry(agent_name)
-        logger.info(
-            "[reset] spawn_registry table: deleted %d rows%s",
-            rows,
-            f" for {agent_name!r}" if agent_name else "",
-        )
-
         cleared = 0
         # One transaction: each owner's entry is read, edited and written back,
         # and an agent persisting its own registry between the read and the
@@ -301,9 +290,10 @@ def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = Non
     """Remove the conversation keys from any legacy `state.pkl` that holds them.
 
     Clearing the database is not enough on its own. An agent's `state.pkl`
-    predates the per-key store and can hold its own `conversation_history`;
-    `Actor` loads it at start and `recall` falls back to it whenever the store
-    has nothing, so a cleared conversation came back on the next restart.
+    predates the per-key store and can hold its own `conversation_history`,
+    which the start-up migration copies into the database whenever the
+    database has none -- so a conversation cleared only there comes back on
+    the next restart.
 
     Driven off the files on disk rather than the agents with database rows: the
     case that motivated this had a pickle and no rows at all, so a
@@ -322,8 +312,8 @@ def _strip_chat_from_pickles(agent_name: str | None, state_dir: str | None = Non
         if not any(key in state for key in _CHAT_KV_KEYS):
             continue
         for key in _CHAT_KV_KEYS:
-            state.pop(key, None)
-        store.save(name, state)
+            # One key at a time, so the store keeps any value it could not read.
+            store.remove(name, key)
         logger.info("[reset] conversation removed from legacy state file for %r", name)
 
 

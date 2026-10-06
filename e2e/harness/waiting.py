@@ -42,7 +42,7 @@ class ConditionTimeout(AssertionError):
 
 
 def until(
-    condition: Callable[[], T],
+    condition: Callable[[], T | None],
     *,
     what: str,
     timeout: float = DEFAULT_TIMEOUT,

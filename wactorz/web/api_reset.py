@@ -61,15 +61,13 @@ CHAT_STATE_KEYS = ("conversation_history", "history_summary")
 
 
 def forget_legacy_state(actor: Any, keys: tuple[str, ...] | None = None) -> None:
-    """Drop the legacy pickle copy a wipe cannot otherwise reach.
+    """Drop the in-memory state a wipe cannot otherwise reach.
 
-    `Actor._load_persistent_state` loads a legacy `state.pkl` into
-    `_persistent_state` even on the new store path, and `Actor.recall` falls
-    back to that dict whenever the new store returns `None`. A reset empties the
-    store and deletes the file, so `recall` then finds nothing, falls through,
-    and returns the very value that was just destroyed — for as long as the
-    process lives. On the legacy write path the next `persist` puts the file
-    back from the same dict.
+    An actor without a persistence store holds its state in
+    `_persistent_state` and writes all of it back on every `persist`, so a key
+    a reset removed from disk returns with the next write unless it goes from
+    memory too. An actor with a store holds nothing there, and this leaves it
+    unchanged.
 
     `keys=None` clears the lot, for a factory reset: it has already deleted the
     pickle from disk, so anything left in memory is the two halves disagreeing.

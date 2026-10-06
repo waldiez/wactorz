@@ -54,7 +54,9 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item: pytest.Item) -> Iterator[None]:
     """Run the journey, then the guard, as one thing that passes or fails."""
-    watching = item.funcargs.get("unexpected") if hasattr(item, "funcargs") else None
+    watching = item.funcargs.get("unexpected") if isinstance(item, pytest.Function) else None
+    if not isinstance(watching, guard.Guard):
+        watching = None
     if watching is not None:
         watching.begin()
     result = yield

@@ -64,7 +64,6 @@ List all registered actors with live metrics.
     "state":              "running",
     "protected":          true,
     "essential":          false,
-    "cpu":                1.4,
     "mem":                69.9,
     "task":               "idle",
     "messagesProcessed":  42,
@@ -307,7 +306,6 @@ After connection the server streams every MQTT message as a JSON object. Field n
     "name":      "main",
     "state":     "running",
     "timestamp": 1709500000.0,
-    "cpu":       1.4,
     "memory_mb": 69.9
   }
 }
@@ -327,7 +325,7 @@ See [MQTT Topics](mqtt_topics.md) for the full reference. Key topics:
 
 | Topic | Direction | Notes |
 |---|---|---|
-| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, cpu, memory_mb, task, protected, essential, timestamp}` |
+| `agents/{id}/heartbeat` | actor → all | Every 10 s. `{actor_id, name, state, memory_mb, task, protected, essential, timestamp, node}`. No CPU figure: agents share one process, whose CPU is on `system/host` |
 | `agents/{id}/metrics` | actor → all | Same cadence. LLM agents add `input_tokens`, `output_tokens`, `cost_usd`. |
 | `agents/{id}/status` | actor → all | On state change. |
 | `agents/{id}/logs` | actor → dashboard | Log entries. |

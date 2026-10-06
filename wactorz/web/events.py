@@ -82,7 +82,6 @@ def record_heartbeat(agent_id: str, data: Any) -> None:
         return
     ag = runtime.state["agents"][agent_id]
     ag["name"] = data.get("name", agent_id[:8])
-    ag["cpu"] = data.get("cpu", 0)
     ag["mem"] = data.get("memory_mb", 0)
     ag["task"] = data.get("task", "idle")
     ag["state"] = data.get("state", "unknown")

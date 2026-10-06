@@ -154,6 +154,7 @@ async def handle_task(agent, payload):
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
 | `agent.state["key"]` | In-memory dict (cleared on restart) |
 | `agent.llm.chat(prompt)` | Call the LLM |
+| `agent.llm.converse(text)` | Multi-turn chat. The conversation is kept in `agent.state["_chat_history"]`, persisted after each reply so it survives a restart and a migration, and limited to the last 32 exchanges |
 | `agent.send_to(name, payload)` | Send a task to another agent by name |
 | `agent.delegate(name, payload)` | Same, with cleaner syntax |
 | `agent.send_to_many(tasks)` | Fan-out to multiple agents in parallel |
@@ -350,8 +351,31 @@ What that means in practice:
 
 - A stop, a restart of the agent, a migration and a clean shutdown (Ctrl+C included) all write what is waiting before they finish. Nothing is lost.
 - A process that is killed outright, or a machine that loses power, can lose what was persisted in the last second.
+- The keys kept in SQLite or in memory (the ones listed above) are stored as JSON. A value JSON cannot represent — a `datetime`, a numpy number, a `set` — raises a `TypeError` naming the key, and nothing is written; convert it first (`.isoformat()`, `.item()`, `list(...)`). An agent's own keys are pickled and take any Python object.
+- `recall(key, default)` returns `default` for a key that was never set and for one set to `None`, so `recall("items", [])` can be appended to straight away.
 - `recall()` returns the stored object itself, not a copy. Change it and call `persist()` again; do not rely on a recalled list or dict being private to the caller.
-- A value that cannot be pickled no longer fails the call. The agent keeps it in memory, and the log names the file that was not written.
+- A value that cannot be pickled (an open camera, a lambda) is kept in memory and left out of the file; the rest is written, and the log names the key once.
+- Each value in `state.pkl` is pickled on its own. A value that no longer unpickles — a model object after a library upgrade, a class that was renamed — is missing at the next start while the agent's other keys come back, and the log names it with the reason. Its bytes stay in the file, so it returns once the code that reads it does; persisting that key again replaces it.
+
+**Changing what an agent stores.** When a new version of an agent keeps its state in a different shape, it declares a version and how to upgrade to it, and the state is brought up to date when the agent starts, before its own code runs:
+
+```python
+STATE_VERSION = 2
+
+def upgrade_state(state, from_version):
+    if from_version == 0:
+        state["celsius"] = state.pop("temp")       # renamed in version 1
+    elif from_version == 1:
+        state["fahrenheit"] = state["celsius"] * 9 / 5 + 32
+    return state
+```
+
+A native `Actor` subclass sets `state_version = 2` and defines the same `upgrade_state(self, state, from_version)` method. The function is called once for each version still owed, in order, and may be `async`.
+
+- The version is kept in the state, under `_state_version`, so it goes with the agent when it migrates. State without one is at version 0.
+- Only the agent's own keys are passed in. The ones Wactorz keeps in SQLite or memory are not.
+- The steps run on a copy, and the result is written once all of them have worked. A step that raises leaves the stored state as it was, and the agent does not start: a generated agent is marked failed with the step named, and a native one's `start()` raises `StateUpgradeError`.
+- State newer than the code (after going back to an older version of the agent) is left alone, with a warning.
 
 Used internally for:
 

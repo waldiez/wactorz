@@ -13,7 +13,6 @@ to do it through that copy, or the next write puts back what it removed.
 """
 
 import asyncio
-import pickle
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +22,7 @@ from tests.waiting import quiet
 from wactorz import reset
 from wactorz.core import deferred_write
 from wactorz.core.persistence import PersistenceAPI, WactorzDB, stores
-from wactorz.core.persistence.pickle_store import PickleStore
+from wactorz.core.persistence.pickle_store import PickleStore, read_state_file
 
 #: The delay these tests give the store's writer, in place of the real one.
 DELAY_S = 0.1
@@ -31,7 +30,7 @@ DELAY_S = 0.1
 
 def _on_disk(tmp_path: Path, agent: str) -> dict[str, Any]:
     """What a restart would read for ``agent``."""
-    return pickle.loads((tmp_path / agent / "state.pkl").read_bytes())
+    return read_state_file(tmp_path / agent / "state.pkl").values
 
 
 def _file(tmp_path: Path, agent: str) -> Path:

@@ -18,15 +18,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..core.deferred_write import DeferredWriter
+from ..core.deferred_write import LARGE_STATE_BYTES, DeferredWriter
 from ..core.state_snapshot import json_safe
 
 logger = logging.getLogger(__name__)
-
-#: When to say an agent's state has grown expensive to write. Chosen from
-#: measurement on a Raspberry Pi 5 SD card, where a save crosses ~15ms around
-#: here and climbs steeply after it.
-LARGE_STATE_BYTES = 512 * 1024
 
 
 def state_path(state_dir: Path | str, agent_name: str) -> Path:

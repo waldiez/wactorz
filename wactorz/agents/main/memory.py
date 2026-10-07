@@ -11,7 +11,9 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..prompts.main_actor_prompts import FACTS_EXTRACT_PROMPT, ORCHESTRATOR_PROMPT
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+from ..prompts.main_actor_prompts import facts_extract_prompt, orchestrator_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,10 @@ else:
 
 class MemoryMixin(_Host):
     """User facts + live system-prompt assembly. Mix into an LLMAgent host."""
+
+    #: The integrations the system prompt and fact extraction speak of. Every
+    #: one unless the host says otherwise.
+    _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
 
     def get_user_facts(self) -> dict[str, Any]:
         return self.recall("_user_facts") or {}
@@ -189,7 +195,7 @@ class MemoryMixin(_Host):
             "on every turn. Do not pretend to perform a separate lookup.\n"
         )
 
-        prompt = override + "\n" + ORCHESTRATOR_PROMPT
+        prompt = override + "\n" + orchestrator_prompt(self._prompt_fragments)
 
         # ── Block 1: live running agents (so main knows the truth, not its memory) ──
         # Wording is deliberately strong: the LLM tends to trust earlier conversation
@@ -288,7 +294,7 @@ class MemoryMixin(_Host):
         try:
             raw, _usage = await self.llm.complete(
                 messages=[{"role": "user", "content": exchange}],
-                system=FACTS_EXTRACT_PROMPT,
+                system=facts_extract_prompt(self._prompt_fragments),
                 max_tokens=300,
             )
             self.total_input_tokens += _usage.get("input_tokens", 0)

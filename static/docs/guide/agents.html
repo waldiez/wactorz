@@ -176,7 +176,8 @@
 </tr>
 </tbody>
 </table>
-<p>The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (<code>ACTUATE</code> / <code>HA</code> / <code>PIPELINE</code> / <code>OTHER</code>), routes to the right agent, and streams replies back. Intent classification has a 60s timeout; if it expires, MainActor falls back to <code>OTHER</code>.</p>
+<p>The LLM brain of the system. Every user message — from any interface — passes through MainActor. It classifies intent with a single LLM call (<code>PIPELINE</code> / <code>OTHER</code>, plus <code>ACTUATE</code> / <code>HA</code> where Home Assistant is configured), routes to the right agent, and streams replies back. Intent classification has a 60s timeout; if it expires, MainActor falls back to <code>OTHER</code>.</p>
+<p>Its prompts are assembled for the installation: a core every installation shares, plus what each configured integration adds — see <a href="../guide/architecture.html#prompt-fragments">Prompt fragments</a>. Without Home Assistant, main is never told about devices, and a turn cannot be classified as <code>ACTUATE</code> or <code>HA</code>.</p>
 <h4 id="intent-routing">Intent routing</h4>
 <table>
 <thead>
@@ -189,12 +190,12 @@
 <tbody>
 <tr>
 <td><code>ACTUATE</code></td>
-<td><code>OneOffActuatorAgent</code> (ephemeral)</td>
+<td><code>OneOffActuatorAgent</code> (ephemeral) — Home Assistant only</td>
 <td>"turn off the lamp"</td>
 </tr>
 <tr>
 <td><code>HA</code></td>
-<td><code>home-assistant-agent</code></td>
+<td><code>home-assistant-agent</code> — Home Assistant only</td>
 <td>"list all automations"</td>
 </tr>
 <tr>
@@ -256,7 +257,7 @@
 </tr>
 </tbody>
 </table>
-<p>Spawned by MainActor for every <code>PIPELINE</code>-classified request. The planner queries <code>home-assistant-agent</code> for the full list of real entity IDs, samples live topic schemas from the TopicBus, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an <code>ha_actuator</code> agent (declarative HA service call), a <code>scheduled</code> agent (first-class time trigger — see <a href="#scheduledagent-spawned">ScheduledAgent</a>), or a <code>dynamic</code> agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits.</p>
+<p>Spawned by MainActor for every <code>PIPELINE</code>-classified request. The planner samples live topic schemas from the TopicBus and, where Home Assistant is configured, queries <code>home-assistant-agent</code> for the full list of real entity IDs and resolves camera URLs, then asks the LLM to produce a multi-agent plan as a JSON array. Each step is one of three types: an <code>ha_actuator</code> agent (declarative HA service call, offered only where Home Assistant is configured), a <code>scheduled</code> agent (first-class time trigger — see <a href="#scheduledagent-spawned">ScheduledAgent</a>), or a <code>dynamic</code> agent (Python code string). The planner spawns all agents, registers the pipeline rule with main, and exits. Its prompts follow the same <a href="../guide/architecture.html#prompt-fragments">fragments</a> main's do, inherited from the main that spawned it.</p>
 <p>After spawning, the planner fires a background <code>_bootstrap_ha_entity_states()</code> task that extracts HA entity IDs from the plan (generated code, <code>ha_actuator</code> actions, MQTT topics, and the enriched task string) and sends a <code>get_entities_state</code> request to <code>home-assistant-agent</code>. This re-publishes the current HA state over MQTT so freshly-spawned agents that subscribe to <code>homeassistant/state_changes/#</code> fire immediately — without waiting for the next real HA state change.</p>
 <h4 id="camera-url-resolution">Camera URL resolution</h4>
 <p>Before generating the plan, the planner resolves real stream and snapshot URLs for any camera entities mentioned in the task by sending <code>get_camera_stream_url</code> and <code>get_camera_snapshot_url</code> A2A requests to <code>home-assistant-agent</code>. Resolved URLs are injected into the LLM prompt so generated agents use exact, working URLs rather than guessing <code>/dev/video0</code> or inventing proxy paths.</p>

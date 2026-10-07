@@ -20,10 +20,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from ...config import CONFIG
 from ...core.actor import MessageType
 from ..lookup import find_main_actor
+from ..prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from ..prompts.planner_prompts import (
     HA_FEASIBILITY_PROMPT,
-    PIPELINE_DESIGN_PROMPT,
-    RULE_CONFLICT_PROMPT,
+    pipeline_design_prompt,
+    rule_conflict_prompt,
 )
 from .parsing import extract_json_array, extract_json_object, loads_lenient
 
@@ -263,7 +264,9 @@ class PipelineMixin(_Host):
             return ""
 
         prompt = (
-            RULE_CONFLICT_PROMPT.format(task=task) + "\n".join(existing_lines) + "\n\n"
+            rule_conflict_prompt(self._prompt_fragments).format(task=task)
+            + "\n".join(existing_lines)
+            + "\n\n"
             "Respond with ONLY a JSON object:\n"
             '{"conflict": <true|false>, "items": [{"rule_id": "<id>", '
             '"kind": "duplicate|contradiction", "reason": "<one short sentence>"}]}\n'
@@ -309,11 +312,18 @@ class PipelineMixin(_Host):
         if not self.llm:
             return []
 
-        ha_entities_text, ha_available, ha_section = await self._gather_ha_entities()
-
-        camera_section, camera_snapshot_section = await self._gather_camera_context(
-            task, ha_entities_text
-        )
+        # Home Assistant's entities and camera URLs are gathered, and shown,
+        # only where it is part of the system: on any other installation the
+        # model would be handed an empty section headed with a name it has
+        # never been told about.
+        with_home_assistant = HOME_ASSISTANT_FRAGMENT in self._prompt_fragments
+        ha_entities_text, ha_available, ha_section = "", False, ""
+        camera_section = camera_snapshot_section = ""
+        if with_home_assistant:
+            ha_entities_text, ha_available, ha_section = await self._gather_ha_entities()
+            camera_section, camera_snapshot_section = await self._gather_camera_context(
+                task, ha_entities_text
+            )
 
         topic_bus_section, topic_samples_section = await self._gather_topic_bus_context()
 
@@ -326,9 +336,25 @@ class PipelineMixin(_Host):
 
         # ── 3. Decompose into spawn configs ────────────────────────────────
 
+        home_assistant_parts = (
+            [
+                "═══ HOME ASSISTANT ENTITIES ═══",
+                ha_section,
+                "",
+                "═══ CAMERA STREAM URLS ═══",
+                camera_section,
+                "",
+                "═══ CAMERA SNAPSHOT URLS ═══",
+                camera_snapshot_section,
+                "",
+            ]
+            if with_home_assistant
+            else []
+        )
+
         # Build the prompt as a list of parts to avoid f-string escape issues
         prompt_parts = [
-            PIPELINE_DESIGN_PROMPT,
+            pipeline_design_prompt(self._prompt_fragments),
             topic_bus_section,
             "",
             *(  # Include live topic samples if available
@@ -345,17 +371,9 @@ class PipelineMixin(_Host):
                 if topic_samples_section
                 else []
             ),
-            "═══ HOME ASSISTANT ENTITIES ═══",
-            ha_section,
-            "",
+            *home_assistant_parts,
             "═══ NOTIFICATION URLS ═══",
             notif_section,
-            "",
-            "═══ CAMERA STREAM URLS ═══",
-            camera_section,
-            "",
-            "═══ CAMERA SNAPSHOT URLS ═══",
-            camera_snapshot_section,
             "",
             "═══ OUTPUT FORMAT ═══",
             "JSON array. Each element:",

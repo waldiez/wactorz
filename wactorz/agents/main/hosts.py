@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from ...core.actor import ActorState
     from ..llm_agent import LLMProvider
+    from ..prompts.assemble import PromptFragment
 
 from ..mixins.host import ActorHost, LLMHost
 
@@ -297,18 +298,20 @@ class MigrationHost(NodeHost, Protocol):
 
 
 class RoutingHost(LLMHost, Protocol):
-    """What `RoutingMixin` needs: the LLM surface plus in-flight task futures."""
+    """What `RoutingMixin` needs: the LLM surface, in-flight task futures, and
+    which integrations' intents to offer and accept.
+    """
 
     _result_futures: dict[str, asyncio.Future]
+    _prompt_fragments: tuple[PromptFragment, ...]
 
 
 class MemoryHost(LLMHost, Protocol):
-    """What `MemoryMixin` needs — nothing beyond the LLM host.
-
-    Named anyway rather than reusing `LLMHost` directly: the mixin should say
-    what it depends on, and if that grows the change belongs here where it is
-    visible.
+    """What `MemoryMixin` needs: the LLM host, and which integrations the
+    system prompt and fact extraction speak of.
     """
+
+    _prompt_fragments: tuple[PromptFragment, ...]
 
 
 class PlanningHost(ActorHost, Protocol):
@@ -327,6 +330,8 @@ class PlanningHost(ActorHost, Protocol):
     llm: LLMProvider | None
     _result_futures: dict[str, asyncio.Future]
     _conversation_history: list[dict]
+    #: Handed to every planner main spawns, so it plans for the same integrations.
+    _prompt_fragments: tuple[PromptFragment, ...]
 
     def get_user_facts(self) -> dict: ...
 

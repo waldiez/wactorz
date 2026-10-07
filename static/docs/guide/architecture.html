@@ -532,6 +532,30 @@ against it cannot be mistaken for a real session.</p>
 <p>The format is <code>&lt;site&gt;=&lt;provider&gt;[:&lt;model&gt;]</code>; only the first colon splits provider from model, so Ollama tags like <code>qwen3:4b</code> work. A malformed entry or a provider that fails to construct logs a warning and leaves that site on the global provider. An entry naming a site not in the table above is skipped with a warning too — nothing would read it, and a silent no-op looks exactly like an override that did not work. <code>site=none</code> disables the LLM for that site.</p>
 <p>Surrounding quotes are stripped, from the value as a whole and from each site and model, as they are from <code>LLM_PROVIDER</code> and <code>LLM_MODEL</code>. Several ways of setting an environment variable keep the quotes as part of the value — Windows <code>set VAR="…"</code>, Docker's <code>env_file</code>, an unbalanced quote in a hand-edited <code>.env</code> — and split on <code>,</code> and <code>=</code> afterwards, those quotes land on the first site name and the last model name. The site then matches nothing and the model is one character away from real, which the API answers with <code>404 … model: claude-sonnet-4-6"</code>. The startup line logs the parsed table rather than the raw string, so an entry that was dropped is visible by its absence.</p>
 <p>For Ollama, <code>system</code> is encoded as the first <code>{"role": "system"}</code> entry in the native <code>/api/chat</code> <code>messages</code> array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.</p>
+<h3 id="prompt-fragments">Prompt fragments</h3>
+<p>Main's system prompt, its intent classifier, its fact extraction and the planner's prompts are
+not fixed texts. Each is a <strong>template</strong>: a core that holds on every installation, with named slots
+that the <strong>fragments</strong> of the configured integrations fill (<code>wactorz/agents/prompts/assemble.py</code>).
+A slot shows what the fragments insert into it, or its own default when none does, so a prompt
+rendered for a given set of fragments is the same every time.</p>
+<p>Which fragments an installation gets is decided once, at startup, in <code>app.py</code>, by the same test
+that decides whether the Home Assistant agents start: <code>HA_URL</code> and <code>HA_TOKEN</code>, or
+<code>WACTORZ_HA_AGENTS=on|off</code> outright. Main is built with the result and hands it to every planner it
+spawns. Without Home Assistant, main never mentions it, the classifier offers and the router accepts
+only <code>PIPELINE</code> and <code>OTHER</code>, and the planner designs from MQTT topics and the live data flows with no
+<code>ha_actuator</code> type and no entity or camera sections. A <code>MainActor</code> or <code>PlannerAgent</code> constructed
+directly, outside <code>build_system</code>, gets every fragment, so library code and tests see no difference.</p>
+<p>Two tests guard the mechanism. <code>tests/test_prompts_are_pinned.py</code> keeps the prompts a Home Assistant
+installation sends word for word under <code>tests/parity_fixtures/prompts/</code>; a prompt change shows up as
+a fixture diff in the pull request that makes it, regenerated with
+<code>WACTORZ_UPDATE_PROMPT_FIXTURES=1 pytest tests/test_prompts_are_pinned.py</code>.
+<code>tests/test_prompt_fragments.py</code> renders every prompt with no fragments and checks that Home
+Assistant is not mentioned.</p>
+<p>An integration adds its own text by returning a <code>PromptFragment</code> (its name, a mapping of slot name to
+text per template, and the intent tokens it adds) and listing it in
+<code>wactorz/agents/prompts/fragments.py</code>; <code>home_assistant_prompts.py</code> holds the one that exists. A
+fragment naming a slot a template has not got is refused when rendered, so a misspelt slot cannot
+vanish silently.</p>
 <hr />
 <h2 id="supervision-tree">Supervision Tree</h2>
 <p>The supervisor is configured in <code>cli.py</code> inside <code>build_system()</code>. Each actor is registered with a factory function (called fresh on each restart), a strategy, and restart limits:</p>

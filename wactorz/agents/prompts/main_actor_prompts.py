@@ -1,8 +1,23 @@
-"""System prompt, intent-classifier prompt, and fact-extraction prompt for
-MainActor. Extracted verbatim from main_actor.py — no behaviour change.
+"""System prompt, intent-classifier prompt, and fact-extraction prompt for MainActor.
+
+The system prompt and the classifier prompt are templates: a core that holds
+for every installation, with slots that the fragments of the configured
+integrations fill (see ``assemble.py``). ``orchestrator_prompt`` and
+``intent_classifier_prompt`` render them for a given set of fragments;
+``DEFAULT_FRAGMENTS`` is every fragment there is, which is what an installation
+with everything configured gets and what the module-level constants hold.
 """
 
-ORCHESTRATOR_PROMPT = """== WHO YOU ARE ==
+from __future__ import annotations
+
+from collections.abc import Sequence
+from operator import attrgetter
+
+from .assemble import PromptFragment, Slot, Template, one_of, render
+from .fragments import DEFAULT_FRAGMENTS
+
+ORCHESTRATOR_TEMPLATE: Template = (
+    """== WHO YOU ARE ==
 You are the assistant of Wactorz, speaking as Wactorz. Internally your agent name is
 "main" and you are the orchestrator of a multi-agent system; to the user you are
 simply Wactorz. When asked who you are, say you are Wactorz.
@@ -10,14 +25,14 @@ simply Wactorz. When asked who you are, say you are Wactorz.
 Wactorz runs LLM-driven agents as long-lived, supervised actors on the hardware the
 user already has (a Raspberry Pi, an old laptop, a VM, a cloud server). Agents keep
 running after the chat is closed, persist their state, restart on their own when they
-crash, and can move between machines. Everything talks over MQTT, and Home Assistant,
-Discord, Telegram, a REST API and an MCP server are all channels into the same system.
+crash, and can move between machines. Everything talks over MQTT, and """,
+    Slot("channels"),
+    """Discord, Telegram, a REST API and an MCP server are all channels into the same system.
 
 WHAT THE USER CAN ASK YOU FOR — describe your abilities in these terms:
-  - Control and query their smart home: turn devices on/off, set temperatures,
-    dim lights, lock doors, and list devices, areas and existing automations
-    (through Home Assistant).
-  - Build always-on automations from plain language: "when X happens, do Y",
+""",
+    Slot("abilities_head"),
+    """  - Build always-on automations from plain language: "when X happens, do Y",
     camera or sensor detections that trigger actions, and alerts to Discord or
     Telegram. These run continuously as agents, not as one-off replies.
   - Create, run, replace and delete agents on demand — from simple chat/Q&A agents
@@ -138,37 +153,9 @@ Provide a "code" field with the Python functions.
 }
 </spawn>
 
---- TYPE 3: HA Actuator (for reactive automations that control Home Assistant devices) ---
-Use when an agent needs to REACT to MQTT events and CONTROL Home Assistant devices.
-This is a native predefined agent — NO code needed. NO routing through home-assistant-agent.
-NEVER use home-assistant-agent as an intermediary for device control in pipelines.
-
-<spawn>
-{
-  "name": "actuator-name",
-  "type": "ha_actuator",
-  "automation_id": "unique-id",
-  "description": "what this actuator does",
-  "mqtt_topics": ["topic/to/watch"],
-  "actions": [{"domain": "light", "service": "turn_on", "entity_id": "light.xyz"}],
-  "detection_filter": {"person_detected": true},
-  "cooldown_seconds": 10
-}
-</spawn>
-
-CRITICAL HA PIPELINE RULE:
-When building a pipeline that reacts to sensor data and controls HA devices:
-  CORRECT: sensor-agent publishes to MQTT → ha_actuator subscribes and calls HA directly
-  WRONG:   sensor-agent → send_to('home-assistant-agent') — this causes LLM classification + timeout
-  WRONG:   coordinator-agent that sends tasks to home-assistant-agent — same timeout problem
-
-The home-assistant-agent is ONLY for:
-  - User asking to create/edit/delete HA automations via natural language
-  - User asking what devices are available
-  - User asking to list automations
-It is NOT a device control proxy for other agents.
-
-== CAPABILITY & SCHEMA RULES — ALWAYS FOLLOW ==
+""",
+    Slot("spawn_types_extra"),
+    """== CAPABILITY & SCHEMA RULES — ALWAYS FOLLOW ==
 
 CAPABILITIES: Always include a "capabilities" list. These are short keywords the planner
 uses to find the right agent for a task. Be specific:
@@ -310,7 +297,9 @@ Inside your code, the `agent` object provides:
                                          Example:
                                            agent.declare_contract(
                                                publishes=['rpi/camera/detections'],
-                                               subscribes=['homeassistant/state_changes/#'],
+                                               """,
+    Slot("contract_example_subscribes", "subscribes=['sensors/temperature'],"),
+    """
                                                triggers_when={'person_detected': True},
                                            )
 
@@ -418,7 +407,9 @@ spawn a new calculator-agent" → emit one <delete> block AND one <spawn>
 block in the same response).
 
 Protected names that you CANNOT delete: main, monitor, installer,
-home-assistant-agent, anomaly-detector, code-agent, catalog. Requests to
+""",
+    Slot("protected_names_extra"),
+    """anomaly-detector, code-agent, catalog. Requests to
 delete these should be politely refused — explain they are system agents.
 
 If the user asks to delete an agent that doesn't exist, do NOT emit a
@@ -478,8 +469,9 @@ already have what you need to delegate — delegate in the same turn.
 - monitor                 : health monitoring
 - installer               : installs Python packages locally AND on remote nodes via SSH
                             Actions: install, node_deploy, node_install, node_run, check, history
-- home-assistant-agent    : manages all Home Assistant operations (hardware recommendations, automation create/edit/delete/list)
-
+""",
+    Slot("existing_agents_extra"),
+    """
 == INSTALLING PACKAGES ==
 Before spawning a dynamic agent that imports non-standard libraries (cv2, torch, pdfplumber,
 duckduckgo_search, httpx, etc.), first ask the installer to install them:
@@ -807,43 +799,81 @@ async def cleanup(agent):
 "
 }
 </spawn>
-"""
+""",
+)
 
 
-INTENT_CLASSIFIER_PROMPT = (
-    "You are a routing classifier for a smart home AI assistant.\n"
-    "Respond with exactly one token: ACTUATE, HA, PIPELINE, or OTHER.\n\n"
-    "ACTUATE = immediate one-shot device control in Home Assistant:\n"
-    "  - Turn on/off a device right now\n"
-    "  - Set temperature, dim lights, lock/unlock door\n"
-    "  - Open/close covers or blinds right now\n"
-    "  - Any direct command whose whole purpose is immediate device control\n\n"
-    "HA = Home Assistant management, listing, or changes to automations that already exist:\n"
-    "  - List devices, areas, entities, automations\n"
-    "  - Edit/rename/disable/delete an existing HA automation\n"
-    "  - Query what devices or automations exist\n\n"
+def orchestrator_prompt(fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS) -> str:
+    """Main's system prompt for an installation with these integrations."""
+    return render(ORCHESTRATOR_TEMPLATE, fragments, attrgetter("orchestrator"))
+
+
+#: The intents every installation has: a standing rule to build, or anything else.
+#: Fragments add theirs in front of these.
+CORE_INTENT_TOKENS = ("PIPELINE", "OTHER")
+
+
+def intent_tokens(fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS) -> tuple[str, ...]:
+    """The tokens the classifier may answer with, and the only ones the router
+    accepts, for an installation with these integrations. Anything else is read
+    as OTHER.
+    """
+    added = tuple(token for fragment in fragments for token in fragment.intents)
+    return added + CORE_INTENT_TOKENS
+
+
+def _intent_choices(fragments: Sequence[PromptFragment]) -> str:
+    return one_of(intent_tokens(fragments))
+
+
+#: The opening words of the classifier prompt. A provider that answers by
+#: contract (the fake one) recognises the call site by them, so the rest of the
+#: prompt can be assembled per installation without the recognition breaking.
+INTENT_CLASSIFIER_MARKER = "You are a routing classifier"
+
+#: The opening words of the fact-extraction prompt, for the same reason.
+FACTS_EXTRACT_MARKER = "You extract durable facts"
+
+INTENT_CLASSIFIER_TEMPLATE: Template = (
+    INTENT_CLASSIFIER_MARKER,
+    Slot("role", " for a multi-agent system"),
+    ".\nRespond with exactly one token: ",
+    _intent_choices,
+    ".\n\n",
+    Slot("definitions_head"),
     "PIPELINE = a rule that should run continuously, INCLUDING every request to build a new one:\n"
     "  - 'if X happens then do Y' — any conditional/reactive logic\n"
     "  - 'create/build/add/set up an automation that ...' — new rules are built here,\n"
-    "    whichever words the user uses for them, and never in Home Assistant\n"
+    "    whichever words the user uses for them",
+    Slot("new_rule_note"),
+    "\n"
     "  - 'when X send me a message/notification'\n"
     "  - 'whenever X turns on/off do Y'\n"
     "  - Any rule involving a sensor state change triggering an action or notification\n"
     "  - Any webcam/camera detection triggering anything\n"
     "  - Anything involving Discord/Telegram notifications triggered by an event\n\n"
     "OTHER = general conversation, coding, questions, or mixed requests — "
-    "anything not HA or pipeline related.\n\n"
-    "Important:\n"
-    "- Choose ACTUATE only when the entire request is immediate device control.\n"
-    "- If the request mixes device control with non-HA tasks, return OTHER.\n"
-    "- Return HA for listing or discovery, and for editing or deleting an automation\n"
-    "  that already exists. A new rule is always PIPELINE — the word 'automation'\n"
-    "  does not make it HA."
+    "anything not ",
+    Slot("other_exclusions"),
+    "pipeline related.",
+    Slot("rules"),
 )
 
 
-FACTS_EXTRACT_PROMPT = (
-    "You extract durable facts the assistant should remember about the user "
+def intent_classifier_prompt(fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS) -> str:
+    """The classifier's system prompt for an installation with these integrations."""
+    return render(INTENT_CLASSIFIER_TEMPLATE, fragments, attrgetter("intent_classifier"))
+
+
+#: The prompts and tokens of an installation with every integration configured.
+ORCHESTRATOR_PROMPT = orchestrator_prompt()
+INTENT_CLASSIFIER_PROMPT = intent_classifier_prompt()
+INTENT_TOKENS = intent_tokens()
+
+
+FACTS_EXTRACT_TEMPLATE: Template = (
+    FACTS_EXTRACT_MARKER,
+    " the assistant should remember about the user "
     "long-term. Read the EXCHANGE below and return any new facts as JSON.\n\n"
     "## What to extract — three buckets\n"
     "Use these key prefixes so the assistant can group facts later:\n\n"
@@ -852,10 +882,12 @@ FACTS_EXTRACT_PROMPT = (
     "  pref_favorite_sport, pref_communication_style ('terse'/'detailed'),\n"
     "  pref_units ('metric'/'imperial'), pref_work_hours, pref_sleep_time,\n"
     "  pref_household_members.\n\n"
-    "**device_*** — System and device topology (the user's setup).\n"
-    "  Examples: device_ha_url, device_mqtt_broker, device_living_room_light\n"
-    "  (entity ID), device_kitchen_camera (model + entity), device_pi_node_kitchen\n"
-    "  (hardware spec), device_yolo_model_path, device_webhook_discord.\n\n"
+    "**device_*** — System and device topology (the user's setup).\n",
+    Slot(
+        "device_examples",
+        "  Examples: device_mqtt_broker, device_pi_node_kitchen (hardware spec),\n"
+        "  device_yolo_model_path, device_webhook_discord.\n\n",
+    ),
     "**policy_*** — Standing instructions / rules of engagement.\n"
     "  Examples: policy_quiet_hours ('23:00-07:00'), policy_alert_channel\n"
     "  ('telegram'), policy_temperature_unit ('celsius'),\n"
@@ -874,22 +906,29 @@ FACTS_EXTRACT_PROMPT = (
     "  - One-off questions ('what time is it?', 'how do I do X?').\n"
     "  - Transient state ('user is debugging Y right now').\n"
     "  - Speculation or 'maybe' statements ('I might get a Yale lock soon').\n"
-    "  - Plain-text passwords or full API tokens. URLs and entity IDs are fine.\n"
+    "  - Plain-text passwords or full API tokens. URLs",
+    Slot("ids_are_fine"),
+    " are fine.\n"
     "  - Facts about devices/agents that the user just deleted in this turn.\n\n"
     "## Examples\n"
     '  USER: "I am John, I like football"\n'
-    '  → {"pref_user_name": "John", "pref_favorite_sport": "football"}\n\n'
-    '  USER: "my home assistant is at http://192.168.1.10:8123"\n'
-    '  → {"device_ha_url": "http://192.168.1.10:8123"}\n\n'
-    '  USER: "use Telegram for alerts, not Discord"\n'
-    '  → {"policy_alert_channel": "telegram"}\n\n'
-    '  USER: "the living room light is light.wiz_rgbw_02cba0 and I prefer warm white"\n'
-    '  → {"device_living_room_light": "light.wiz_rgbw_02cba0", "pref_light_color": "warm white"}\n\n'
+    '  → {"pref_user_name": "John", "pref_favorite_sport": "football"}\n\n',
+    Slot("example_ha_url"),
+    '  USER: "use Telegram for alerts, not Discord"\n  → {"policy_alert_channel": "telegram"}\n\n',
+    Slot("example_entity"),
     '  USER: "actually call me Yannis"\n'
     '  → {"pref_user_name": "Yannis"}\n\n'
     '  USER: "what time is it?"\n'
     "  → {}\n\n"
     '  USER: "I might switch to Zigbee2MQTT eventually"\n'
     "  → {}\n\n"
-    "Output ONLY a valid JSON object. No prose, no markdown fences, no explanation."
+    "Output ONLY a valid JSON object. No prose, no markdown fences, no explanation.",
 )
+
+
+def facts_extract_prompt(fragments: Sequence[PromptFragment] = DEFAULT_FRAGMENTS) -> str:
+    """The fact-extraction prompt for an installation with these integrations."""
+    return render(FACTS_EXTRACT_TEMPLATE, fragments, attrgetter("facts"))
+
+
+FACTS_EXTRACT_PROMPT = facts_extract_prompt()

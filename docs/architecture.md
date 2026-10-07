@@ -266,6 +266,35 @@ Surrounding quotes are stripped, from the value as a whole and from each site an
 
 For Ollama, `system` is encoded as the first `{"role": "system"}` entry in the native `/api/chat` `messages` array for both blocking and streaming calls. This keeps local model behavior aligned with the hosted providers, which already receive system instructions through their chat-message APIs.
 
+### Prompt fragments
+
+Main's system prompt, its intent classifier, its fact extraction and the planner's prompts are
+not fixed texts. Each is a **template**: a core that holds on every installation, with named slots
+that the **fragments** of the configured integrations fill (`wactorz/agents/prompts/assemble.py`).
+A slot shows what the fragments insert into it, or its own default when none does, so a prompt
+rendered for a given set of fragments is the same every time.
+
+Which fragments an installation gets is decided once, at startup, in `app.py`, by the same test
+that decides whether the Home Assistant agents start: `HA_URL` and `HA_TOKEN`, or
+`WACTORZ_HA_AGENTS=on|off` outright. Main is built with the result and hands it to every planner it
+spawns. Without Home Assistant, main never mentions it, the classifier offers and the router accepts
+only `PIPELINE` and `OTHER`, and the planner designs from MQTT topics and the live data flows with no
+`ha_actuator` type and no entity or camera sections. A `MainActor` or `PlannerAgent` constructed
+directly, outside `build_system`, gets every fragment, so library code and tests see no difference.
+
+Two tests guard the mechanism. `tests/test_prompts_are_pinned.py` keeps the prompts a Home Assistant
+installation sends word for word under `tests/parity_fixtures/prompts/`; a prompt change shows up as
+a fixture diff in the pull request that makes it, regenerated with
+`WACTORZ_UPDATE_PROMPT_FIXTURES=1 pytest tests/test_prompts_are_pinned.py`.
+`tests/test_prompt_fragments.py` renders every prompt with no fragments and checks that Home
+Assistant is not mentioned.
+
+An integration adds its own text by returning a `PromptFragment` (its name, a mapping of slot name to
+text per template, and the intent tokens it adds) and listing it in
+`wactorz/agents/prompts/fragments.py`; `home_assistant_prompts.py` holds the one that exists. A
+fragment naming a slot a template has not got is refused when rendered, so a misspelt slot cannot
+vanish silently.
+
 ---
 
 ## Supervision Tree

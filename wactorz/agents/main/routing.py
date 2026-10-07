@@ -16,7 +16,9 @@ from wactorz.config import CONFIG
 from wactorz.llm_factory import provider_for
 
 from ...core.actor import MessageType
-from ..prompts.main_actor_prompts import INTENT_CLASSIFIER_PROMPT
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+from ..prompts.main_actor_prompts import intent_classifier_prompt, intent_tokens
 
 if TYPE_CHECKING:
     from .hosts import RoutingHost
@@ -38,9 +40,18 @@ class RoutingMixin(_Host):
     checked that the list was true.
     """
 
+    #: The integrations whose intents this router offers and accepts. Every one
+    #: unless the host says otherwise, so a host built without a say in the
+    #: matter routes as a fully configured installation does.
+    _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
+
     async def _classify_intent(self, text: str) -> str:
-        """Classify user intent as ACTUATE, HA, PIPELINE, or OTHER using a single cheap LLM call.
-        Returns one of: 'ACTUATE', 'HA', 'PIPELINE', 'OTHER'
+        """Classify the user's intent with a single cheap LLM call.
+
+        Returns one of the tokens of ``intent_tokens(self._prompt_fragments)``:
+        PIPELINE or OTHER on every installation, ACTUATE and HA too where Home
+        Assistant is configured. Anything else the model says is read as OTHER,
+        so an installation cannot be routed to an integration it has not got.
         """
         if not text or text.startswith("/"):
             return "OTHER"
@@ -67,7 +78,7 @@ class RoutingMixin(_Host):
             decision, _usage = await asyncio.wait_for(
                 llm.complete(
                     messages=[{"role": "user", "content": classifier_text}],
-                    system=INTENT_CLASSIFIER_PROMPT,
+                    system=intent_classifier_prompt(self._prompt_fragments),
                     max_tokens=10,
                     reasoning_effort="none",
                 ),
@@ -78,7 +89,7 @@ class RoutingMixin(_Host):
             self.total_cost_usd += _usage.get("cost_usd", 0.0)
             self._persist_cost()
             token = (decision or "").strip().upper().split()[0] if decision else "OTHER"
-            if token in ("HA", "PIPELINE", "OTHER", "ACTUATE"):
+            if token in intent_tokens(self._prompt_fragments):
                 return token
             return "OTHER"
         except asyncio.TimeoutError:

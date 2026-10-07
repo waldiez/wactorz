@@ -393,6 +393,26 @@ def _install_reply_capture(target: Any) -> None:
 _REPLY_FIELDS = ("result", "reply", "text", "message", "content")
 
 
+def task_payload(text: str) -> dict[str, Any]:
+    """What a message-passing agent is handed for the text typed after its name.
+
+    A JSON object is the payload itself, so ``@imu-anomaly {"ax": 9, "ay": 0,
+    "az": 1}`` reaches a function declared with ``@wactorz.agent`` as the
+    reading its input schema describes, the way another agent's ``send_to``
+    would deliver it. Anything else travels as ``{"text": ...}``, which is what
+    an agent that reads natural language expects.
+    """
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            parsed = json.loads(stripped)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return {"text": text}
+
+
 def reply_text(payload: Any) -> str:
     """The words in an agent's reply, whatever shape the agent chose.
 
@@ -402,15 +422,18 @@ def reply_text(payload: Any) -> str:
     visibly wrong -- but the same agent moved onto a node would have started
     rendering differently, with no way to see why.
 
-    A payload with none of them is returned as it is, which reaches a person as
-    a repr. That is deliberate: it is ugly enough to get reported, where a
-    prettier rendering would hide an agent that never learned to answer.
+    A dict with none of them is shown as JSON: a function declared with
+    ``@wactorz.agent`` answers with its return value, which is data, and JSON
+    can be read and pasted on where a Python repr can be neither. It is still
+    visibly not prose, so an agent that never learned to answer still gets
+    noticed. Anything that is not a dict is returned as it is.
     """
     if isinstance(payload, dict):
         for field in _REPLY_FIELDS:
             value = payload.get(field)
             if value:
                 return str(value)
+        return json.dumps(payload, default=str)
     return str(payload)
 
 
@@ -709,7 +732,7 @@ async def _route_chat(
                 type=MessageType.TASK,
                 sender_id=correlation_id,
                 reply_to=correlation_id,
-                payload={"text": text},
+                payload=task_payload(text),
             )
             await target.handle_message(msg)
 

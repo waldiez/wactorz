@@ -11,6 +11,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ... import plugins
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import facts_extract_prompt, orchestrator_prompt
@@ -74,6 +75,32 @@ class MemoryMixin(_Host):
             lines.append(f"  {actor.name} — {desc}" if desc else f"  {actor.name}")
         if not lines:
             return ""
+        return "\n".join(lines)
+
+    def _get_registered_agents_summary(self) -> str:
+        """The deployment's own agents that are not running, one line each, or "".
+
+        A registered agent that is not running is still something main can
+        start on demand, the way it starts a catalogue recipe, and the only way
+        to start it is the spawn config named here. Nothing is listed without a
+        registry, since "not running" cannot be judged then.
+        """
+        if not self._registry:
+            return ""
+        running = {actor.name for actor in self._registry.all_actors()}
+        lines = []
+        for name in sorted(plugins.discover()):
+            if name in running:
+                continue
+            plugin = plugins.for_name(name)
+            if plugin is None:
+                continue
+            desc = " ".join(str(plugin.description or "").split())[:120]
+            line = f"  {name} — {desc}" if desc else f"  {name}"
+            if plugin.target:
+                spawn_config = {"name": name, "type": "module", "target": plugin.target}
+                line += f"\n      spawn with: {json.dumps(spawn_config)}"
+            lines.append(line)
         return "\n".join(lines)
 
     def _prefix_with_live_context(self, user_text: str) -> str:
@@ -218,6 +245,19 @@ class MemoryMixin(_Host):
             prompt += header + agents_summary
         else:
             prompt += header + "  (no user-spawned agents are currently running)"
+
+        # ── Block 1b: this deployment's own agents that are not running ──
+        # Registered but stopped, or declared not to start on their own. Main
+        # can start one with the spawn config named, and nothing else starts it.
+        registered_summary = self._get_registered_agents_summary()
+        if registered_summary:
+            prompt += (
+                "\n\n== REGISTERED BUT NOT RUNNING (this deployment's own agents) ==\n"
+                "These agents belong to this deployment and can be started on demand. To use\n"
+                'one, emit a <spawn> block with EXACTLY the spawn config shown — type "module"\n'
+                "and that target; no code, no other type. Do not write a dynamic agent that\n"
+                "does what one of these does.\n"
+            ) + registered_summary
 
         # ── Block 2: persisted user facts, grouped by bucket ──
         facts = self.get_user_facts()

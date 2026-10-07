@@ -15,10 +15,13 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Collection, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from ... import plugins
 from ...config import CONFIG
 from ...core.actor import MessageType
+from ...plugins import AgentPlugin
 from ..lookup import find_main_actor
 from ..prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
 from ..prompts.planner_prompts import (
@@ -327,6 +330,8 @@ class PipelineMixin(_Host):
 
         topic_bus_section, topic_samples_section = await self._gather_topic_bus_context()
 
+        registered_section = self._gather_registered_agents()
+
         notif_section = await self._gather_notification_urls(task)
 
         if ha_available and ha_entities_text and not skips_ha_feasibility(task):
@@ -371,6 +376,7 @@ class PipelineMixin(_Host):
                 if topic_samples_section
                 else []
             ),
+            *([registered_section, ""] if registered_section else []),
             *home_assistant_parts,
             "═══ NOTIFICATION URLS ═══",
             notif_section,
@@ -521,6 +527,20 @@ class PipelineMixin(_Host):
             topic_bus_section = f"TopicBus unavailable: {e}"
 
         return topic_bus_section, topic_samples_section
+
+    def _gather_registered_agents(self) -> str:
+        """The deployment's own agents as building blocks, or "" when it has none.
+
+        A developer's agent, declared with ``@wactorz.agent`` or registered as
+        an actor class, is something a pipeline should use rather than rewrite:
+        subscribe to what it publishes when it runs, spawn it by its registered
+        target when it does not. The model is told both, with the one spawn
+        config that is accepted for it.
+        """
+        running = set()
+        if self._registry:
+            running = {actor.name for actor in self._registry.all_actors()}
+        return registered_agents_section(plugins.discover(), running)
 
     async def _gather_camera_context(self, task: str, ha_entities_text: str) -> tuple[str, str]:
         """Real camera stream and snapshot URLs, resolved via home-assistant-agent.
@@ -1059,3 +1079,55 @@ def camera_candidates(camera_entity_ids: list[str], task: str) -> list[str]:
     if not candidates and any(kw in task.lower() for kw in ("camera", "webcam", "stream")):
         candidates = camera_entity_ids[:5]
     return candidates
+
+
+def registered_agents_section(
+    registered: Mapping[str, AgentPlugin], running: Collection[str]
+) -> str:
+    """The prompt section listing the deployment's own agents, or "" with none.
+
+    One block per agent: what it does, the topics it listens to and writes to,
+    its input and output, whether it is running, and the only spawn config that
+    will start it. The rules that follow say to prefer one of these over a
+    dynamic agent that does the same, and never to invent a target: a spawn
+    config can be model-written, and only a registered target is spawned.
+    """
+    if not registered:
+        return ""
+    lines = [
+        "═══ REGISTERED AGENTS (this deployment's own — use them, do not rewrite them) ═══",
+        "",
+    ]
+    for name in sorted(registered):
+        plugin = registered[name]
+        state = "running" if name in running else "NOT running"
+        lines.append(f"{name} — {plugin.description or '(no description)'}  [{state}]")
+        if plugin.subscribes:
+            lines.append(f"  subscribes: {', '.join(plugin.subscribes)}")
+        if plugin.publishes:
+            lines.append(f"  publishes:  {', '.join(plugin.publishes)}")
+        if plugin.input_schema:
+            lines.append(f"  input:  {json.dumps(plugin.input_schema)}")
+        if plugin.output_schema:
+            lines.append(f"  output: {json.dumps(plugin.output_schema)}")
+        if plugin.capabilities:
+            lines.append(f"  capabilities: {', '.join(plugin.capabilities)}")
+        if plugin.target:
+            spawn_config = {"name": name, "type": "module", "target": plugin.target}
+            lines.append(f"  spawn_config: {json.dumps(spawn_config)}")
+        else:
+            lines.append("  spawn_config: none — registered in code; it is started by its program")
+        lines.append("")
+    lines += [
+        "RULES FOR REGISTERED AGENTS:",
+        "- If one of these already does what a step needs, make it that step. Do not write a",
+        "  dynamic agent that duplicates it.",
+        "- When it is running, subscribe to the topic it publishes (it is a live data flow).",
+        "- When it is NOT running, its step is exactly the spawn_config shown above, with",
+        '  "type": "module" and that "target" — nothing else starts it. Downstream steps then',
+        "  subscribe to what it publishes.",
+        "- Never invent or alter a target. A target not listed here is refused.",
+        "- Send it a task with agent.send_to('<name>', {...}) using its input schema when a step",
+        "  needs an answer rather than a stream.",
+    ]
+    return "\n".join(lines)

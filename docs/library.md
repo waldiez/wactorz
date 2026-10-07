@@ -348,6 +348,43 @@ world without saying so. A pipeline declared at module level is found through
 `WACTORZ_PIPELINES=mypkg.flows:watch`, a `wactorz.pipelines` entry point, or
 `wactorz.run(pipelines_=[watch])`.
 
+## From chat
+
+A registered agent is a building block for main and the planner, with nothing
+more to declare than the decorator already says.
+
+**Ask it directly.** In the dashboard chat, the REST interface or the CLI,
+address it by name with a JSON object matching its input schema, and the
+function's return value is the reply:
+
+```text
+@imu-anomaly {"ax": 9, "ay": 0, "az": 1}
+→ {"score": 12.4, "reading": {"ax": 9, "ay": 0, "az": 1}}
+```
+
+Plain text after the name travels as `{"text": "..."}`, for an agent that
+reads natural language.
+
+**Let main start it.** Main's system prompt lists the registered agents that
+are not running, each with the one spawn config that starts it (`"type":
+"module"` and its registered target), so "start the IMU detector" is a spawn
+of yours rather than freshly written code. Registered targets only: a spawn
+config can be model-written, and `type: "module"` refuses anything not in the
+registry.
+
+**Let the planner use it.** When the planner designs a pipeline, its prompt
+carries a *registered agents* section: name, description, the topics each
+listens to and writes to, its schemas, whether it is running, and the same
+spawn config. The rules say to prefer one of yours over a dynamic agent that
+does the same, to subscribe to what it publishes when it runs, and to spawn it
+by that exact target when it does not. So "alert me when the IMU detector
+scores above 20" proposes your detector as the first step, and a notifier
+listening on `anomalies/imu` after it.
+
+To see all of this with a real agent, run the IMU example with
+`python run.py --with-main` and follow *Ask it from chat* in
+`examples/imu_anomaly/README.md`.
+
 ## Profiles
 
 Without Home Assistant configured (`HA_URL` and `HA_TOKEN`) its agents do not

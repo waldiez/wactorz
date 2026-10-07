@@ -467,3 +467,94 @@ class TestTheImuRunScript:
         _load("imu_anomaly", "run").main(["--with-main", "--llm", "fake"])
         assert called["minimal"] is False
         assert called["llm"] == "fake"
+
+
+class TestAskingTheImuDetector:
+    """`ask.py` and the FastAPI route ask through `wactorz.ask`; the system is stood in for."""
+
+    @staticmethod
+    def _stand_in(monkeypatch: pytest.MonkeyPatch, answer: Any) -> dict[str, Any]:
+        monkeypatch.syspath_prepend(str(EXAMPLES / "imu_anomaly"))
+        import wactorz
+
+        seen: dict[str, Any] = {"asked": [], "served": None, "stopped": False}
+
+        async def fake_serve(**kwargs: Any) -> None:
+            seen["served"] = kwargs
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                seen["stopped"] = True
+                raise
+
+        async def fake_ask(target: str, payload: Any, *, timeout: float = 60.0) -> Any:
+            seen["asked"].append((target, payload))
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(wactorz, "serve", fake_serve)
+        monkeypatch.setattr(wactorz, "ask", fake_ask)
+        monkeypatch.setattr(asyncio, "sleep", _no_wait(asyncio.sleep))
+        return seen
+
+    async def test_the_script_starts_asks_twice_and_stops(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        seen = self._stand_in(monkeypatch, {"result": None})
+
+        await _load("imu_anomaly", "ask").main()
+
+        assert seen["served"]["minimal"] is True
+        assert [t for t, _ in seen["asked"]] == ["imu-anomaly", "imu-anomaly"]
+        assert seen["stopped"] is True
+        assert "jolt    ->" in capsys.readouterr().out
+
+    async def test_the_route_answers_from_the_agents_reply(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pytest.importorskip("fastapi")
+        self._stand_in(monkeypatch, {"score": 39.75, "reading": {"ax": 9}})
+        app_module = _load("imu_anomaly", "fastapi_app")
+
+        assert await app_module.detect_now({"ax": 9}) == {
+            "anomaly": True,
+            "score": 39.75,
+            "reading": {"ax": 9},
+        }
+
+    async def test_a_normal_reading_is_no_anomaly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        pytest.importorskip("fastapi")
+        self._stand_in(monkeypatch, {"result": None})
+        app_module = _load("imu_anomaly", "fastapi_app")
+
+        assert await app_module.detect_now({"ax": 0.1}) == {"anomaly": False}
+
+    @pytest.mark.parametrize(
+        ("failure", "status"),
+        [
+            (LookupError("no agent named 'imu-anomaly' is running"), 503),
+            (RuntimeError("'imu-anomaly' answered with an error: boom"), 502),
+            (asyncio.TimeoutError("'imu-anomaly' did not answer within 30s"), 504),
+        ],
+        ids=["not running", "failed", "silent"],
+    )
+    async def test_each_failure_is_its_own_status(
+        self, monkeypatch: pytest.MonkeyPatch, failure: Exception, status: int
+    ) -> None:
+        fastapi = pytest.importorskip("fastapi")
+        self._stand_in(monkeypatch, failure)
+        app_module = _load("imu_anomaly", "fastapi_app")
+
+        with pytest.raises(fastapi.HTTPException) as raised:
+            await app_module.detect_now({"ax": 9})
+        assert raised.value.status_code == status
+
+
+def _no_wait(real_sleep: Any) -> Any:
+    """A sleep that yields once: the examples wait for a system that is stood in for."""
+
+    async def _sleep(_delay: float, *args: Any) -> None:
+        await real_sleep(0)
+
+    return _sleep

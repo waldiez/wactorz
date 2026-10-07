@@ -18,7 +18,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
@@ -284,6 +284,67 @@ def ask_payload(payload: Any, *, task_id: str, reply_to: str) -> dict[str, Any]:
     return body
 
 
+class ReplyError(RuntimeError):
+    """An agent answered an ask with an error, as the ``error`` of its reply says.
+
+    Raised rather than returned so a caller cannot mistake it for an answer;
+    ``reply`` is the whole payload, for a caller that reports what the agent
+    said rather than that it failed.
+    """
+
+    def __init__(self, target: str, reply: dict[str, Any]) -> None:
+        super().__init__(f"{target!r} answered with an error: {reply['error']}")
+        self.target = target
+        self.reply = reply
+
+
+class AskHost(Protocol):
+    """What :func:`ask_through` needs of the actor asking: the actor surface
+    every mixin host already declares.
+    """
+
+    name: str
+    actor_id: str
+    _registry: Any
+    _result_futures: Any
+
+    async def send(self, target_id: str, msg_type: Any, payload: Any) -> bool: ...
+
+
+async def ask_through(
+    host: AskHost, target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S
+) -> Any:
+    """Send the agent called ``target`` a task on ``host``'s behalf and wait for its reply.
+
+    The body of :meth:`Actor.ask`, callable on anything with an actor's surface,
+    so a mixin asks through its host the way the actor itself would. See
+    :meth:`Actor.ask` for the contract.
+    """
+    if host._registry is None:
+        raise RuntimeError(f"[{host.name}] cannot ask {target!r}: no registry attached")
+    actor = host._registry.find_by_name(target)
+    if actor is None:
+        raise LookupError(f"no agent named {target!r} is running")
+    task_id = f"ask_{uuid.uuid4().hex[:12]}"
+    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+    host._result_futures[task_id] = future
+    try:
+        taken = await host.send(
+            actor.actor_id,
+            MessageType.TASK,
+            ask_payload(payload, task_id=task_id, reply_to=host.actor_id),
+        )
+        if taken is False:
+            raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
+        try:
+            reply = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(f"{target!r} did not answer within {timeout:g}s") from None
+    finally:
+        host._result_futures.pop(task_id, None)
+    return reply_value(reply, task_id=task_id, target=target)
+
+
 def reply_value(reply: Any, *, task_id: str, target: str) -> Any:
     """What an ask returns from the RESULT payload it was answered with.
 
@@ -296,7 +357,7 @@ def reply_value(reply: Any, *, task_id: str, target: str) -> Any:
     if not isinstance(reply, dict):
         return reply
     if reply.get("error"):
-        raise RuntimeError(f"{target!r} answered with an error: {reply['error']}")
+        raise ReplyError(target, reply)
     cleaned = {k: v for k, v in reply.items() if k != "_task_id"}
     # "task" is the older spelling of the id, still echoed by some agents; an
     # agent that uses the key for its own text keeps it.
@@ -1009,35 +1070,12 @@ class Actor(ABC):
         agent answered, less the plumbing (see :func:`reply_value`).
 
         Raises ``LookupError`` when no agent of that name is in the registry,
-        ``RuntimeError`` when the target is not taking messages or answers
-        with an error, and ``asyncio.TimeoutError`` after ``timeout`` seconds
-        with no reply. Whatever the outcome, nothing is left waiting.
+        ``RuntimeError`` when the target is not taking messages, :class:`ReplyError`
+        (a ``RuntimeError``) when it answers with an error, and
+        ``asyncio.TimeoutError`` after ``timeout`` seconds with no reply.
+        Whatever the outcome, nothing is left waiting.
         """
-        if self._registry is None:
-            raise RuntimeError(f"[{self.name}] cannot ask {target!r}: no registry attached")
-        actor = self._registry.find_by_name(target)
-        if actor is None:
-            raise LookupError(f"no agent named {target!r} is running")
-        task_id = f"ask_{uuid.uuid4().hex[:12]}"
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        self._result_futures[task_id] = future
-        try:
-            taken = await self.send(
-                actor.actor_id,
-                MessageType.TASK,
-                ask_payload(payload, task_id=task_id, reply_to=self.actor_id),
-            )
-            if taken is False:
-                raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
-            try:
-                reply = await asyncio.wait_for(future, timeout=timeout)
-            except asyncio.TimeoutError:
-                raise asyncio.TimeoutError(
-                    f"{target!r} did not answer within {timeout:g}s"
-                ) from None
-        finally:
-            self._result_futures.pop(task_id, None)
-        return reply_value(reply, task_id=task_id, target=target)
+        return await ask_through(self, target, payload, timeout=timeout)
 
     async def broadcast(self, msg_type: MessageType, payload: Any = None):
         """Broadcast to all registered actors."""

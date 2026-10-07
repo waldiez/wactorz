@@ -434,3 +434,36 @@ class TestTheAG2Example:
         assert result is not None
         assert result["text"] == "Version two."
         assert result["turns"] == 4, "write, critique, rewrite, approve"
+
+
+class TestTheImuRunScript:
+    """`run.py` starts the minimal profile unless asked for the full system."""
+
+    @staticmethod
+    def _recorded_run(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        monkeypatch.syspath_prepend(str(EXAMPLES / "imu_anomaly"))
+        import wactorz
+
+        called: dict[str, Any] = {}
+
+        def fake_run(**kwargs: Any) -> None:
+            called.update(kwargs)
+
+        monkeypatch.setattr(wactorz, "run", fake_run)
+        return called
+
+    def test_by_default_it_is_the_minimal_profile(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        called = self._recorded_run(monkeypatch)
+        _load("imu_anomaly", "run").main([])
+        assert called["minimal"] is True
+        assert called["llm"] is None
+        specs = [spec_of(a) for a in called["agents"]]
+        assert [spec.name for spec in specs if spec is not None] == ["imu-anomaly"]
+
+    def test_with_main_starts_the_full_system_on_the_named_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        called = self._recorded_run(monkeypatch)
+        _load("imu_anomaly", "run").main(["--with-main", "--llm", "fake"])
+        assert called["minimal"] is False
+        assert called["llm"] == "fake"

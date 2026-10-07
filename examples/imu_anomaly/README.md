@@ -12,7 +12,7 @@ language model.
 | `model.py` | The model class, in a module of its own so its pickle loads from any process. |
 | `train.py` | Fits it on synthetic "normal" motion and writes `imu_model.pkl`. Stands in for your own training. |
 | `agent.py` | The agent: a function declared with `@wactorz.agent`, subscribed to `sensors/imu/#`, publishing anomalies on `anomalies/imu`. |
-| `run.py` | Starts Wactorz with that agent, in the minimal profile. |
+| `run.py` | Starts Wactorz with that agent, in the minimal profile; `--with-main` starts main, the planner and the catalogue around it. |
 | `pipeline.py` | The detector as one stage of a pipeline: a notifier, a report on a schedule, and a rule that alerts on a strong anomaly. |
 | `notebook.ipynb` | The same, from Jupyter: the system on the notebook's loop through `wactorz.serve()`, readings published and anomalies read from cells, the running agent inspected in-process. |
 | `fastapi_app.py` | The same, inside a FastAPI app: the system on the web app's loop, started and stopped by its lifespan, with routes that reach the running agent. |
@@ -39,6 +39,60 @@ anomalies themselves go out on `anomalies/imu`:
 ```bash
 mosquitto_sub -t 'anomalies/imu'
 ```
+
+## Ask it from chat
+
+The same agent, with main, the planner and the catalogue around it, so you can
+see how a registered agent is discovered. Nothing in `agent.py` changes.
+
+```bash
+python run.py --with-main --llm fake        # no API key: scripted main
+# or, with a model so main and the planner think:
+LLM_PROVIDER=ollama python run.py --with-main
+```
+
+Open the dashboard chat at `http://localhost:8888/` and try these, in order.
+
+**1. It is listed.** `@catalog list` names `imu-anomaly` among the agents that
+can be spawned by name, with the description from the decorator, and `/agents`
+shows it running. No model is involved in either.
+
+**2. Ask it directly.** Type a reading as JSON after its name; the function's
+return value is the reply:
+
+```text
+@imu-anomaly {"ax": 9, "ay": -7.5, "az": 1}
+→ {"score": 39.75, "reading": {"ax": 9, "ay": -7.5, "az": 1}}
+
+@imu-anomaly {"ax": 0.1, "ay": 0, "az": 1}
+→ {"result": null}            # a normal reading: nothing to report
+```
+
+This works with the fake model too: the message goes to the agent, not to
+main.
+
+**3. Main knows it.** With a real model, ask `what agents are running?` and
+main names `imu-anomaly` from its live list. Stop it with
+`/agents stop imu-anomaly`, ask `start the IMU detector`, and main spawns it
+with the one spawn config it was told for it (`"type": "module"` and the
+agent's registered target) rather than writing new code. Main's system prompt
+carries a *registered but not running* block for exactly this.
+
+**4. The planner uses it.** Ask
+
+```text
+alert me on Discord when the IMU detector scores above 20
+```
+
+and the planner proposes a pipeline whose first step is `imu-anomaly` itself,
+followed by a notifier that listens on `anomalies/imu`, instead of a freshly
+written detector. Its prompt carried a *registered agents* section with the
+agent's topics, schemas and spawn config; the plan is shown for approval before
+anything starts.
+
+Only a registered target can be spawned this way: a spawn config may be written
+by the model, and `type: "module"` refuses any target that is not in the
+registry.
 
 ## How it works
 

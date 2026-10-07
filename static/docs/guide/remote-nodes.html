@@ -588,6 +588,11 @@ node holding the old one.</p>
 <td>Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, whether the node checks signed commands, and how close the machine is to running out: CPU, memory (within a container's or a unit's memory limit), swap, load, free disk where the state is kept, the CPU's temperature and, on a Raspberry Pi, what is throttling it. A reading the node cannot take is <code>null</code>.</td>
 </tr>
 <tr>
+<td><code>nodes/{name}/manifest</code></td>
+<td>← runner</td>
+<td>What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, and the installed packages. Sent when the runner starts and after an install; cleared by <code>/nodes remove</code>.</td>
+</tr>
+<tr>
 <td><code>nodes/{name}/migrate</code></td>
 <td>→ runner</td>
 <td>Hand a running agent back to main, which places it. Payload: <code>{"name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608}</code>. Signed.</td>

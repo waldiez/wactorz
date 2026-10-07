@@ -95,23 +95,11 @@ def cgroup_memory(cgroup_root: Path, proc_cgroup: Path) -> tuple[int, int] | Non
     ``docker stats`` does; otherwise a node that has read a large file looks
     full. None without cgroup v2, or with no limit anywhere on the way up.
     """
-    try:
-        line = next(
-            (ln for ln in proc_cgroup.read_text().splitlines() if ln.startswith("0::")), None
-        )
-    except OSError:
-        return None
-    if line is None:
-        return None
-    relative = line[3:].strip().lstrip("/")
     tightest: tuple[int, Path] | None = None
-    directory = cgroup_root / relative if relative else cgroup_root
-    for candidate in (directory, *directory.parents):
+    for candidate in cgroup_chain(cgroup_root, proc_cgroup):
         limit = _limit_at(candidate)
         if limit is not None and (tightest is None or limit < tightest[0]):
             tightest = (limit, candidate)
-        if candidate == cgroup_root:
-            break
     if tightest is None:
         return None
     limit, where = tightest
@@ -120,6 +108,30 @@ def cgroup_memory(cgroup_root: Path, proc_cgroup: Path) -> tuple[int, int] | Non
         return None
     used -= _stat_value(where / "memory.stat", "inactive_file") or 0
     return limit, max(used, 0)
+
+
+def cgroup_chain(cgroup_root: Path, proc_cgroup: Path) -> list[Path]:
+    """This process's cgroup v2 directory and each above it, up to the root.
+
+    Empty without cgroup v2. A limit set anywhere on the chain binds this
+    process, so a reader of one looks at all of them.
+    """
+    try:
+        line = next(
+            (ln for ln in proc_cgroup.read_text().splitlines() if ln.startswith("0::")), None
+        )
+    except OSError:
+        return []
+    if line is None:
+        return []
+    relative = line[3:].strip().lstrip("/")
+    directory = cgroup_root / relative if relative else cgroup_root
+    chain = []
+    for candidate in (directory, *directory.parents):
+        chain.append(candidate)
+        if candidate == cgroup_root:
+            break
+    return chain
 
 
 def load_average() -> tuple[float, float] | None:

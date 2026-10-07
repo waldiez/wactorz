@@ -238,11 +238,43 @@ class TestTheNodeTable:
 
         assert set(run.nodes) == {"rpi", "nuc"}
 
-    async def test_it_subscribes_to_both_node_topics(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_it_subscribes_to_every_node_topic(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Subscribing to only heartbeats would leave migrations unreported.
         run = await run_heartbeats(monkeypatch, [])
 
-        assert run.subscribed == ["nodes/+/heartbeat", "nodes/+/migrate_result"]
+        assert run.subscribed == ["nodes/+/heartbeat", "nodes/+/migrate_result", "nodes/+/manifest"]
+
+
+def manifest(node: str = "rpi", payload: bytes | None = None, **over: Any) -> _Message:
+    """A node's retained manifest, or with ``payload=b""`` the clearing of it."""
+    body = {"node": node, "manifest_v": 1, "arch": "aarch64", "ram_total_mb": 8064, **over}
+    return _Message(
+        f"nodes/{node}/manifest", json.dumps(body).encode() if payload is None else payload
+    )
+
+
+class TestTheMachineANodeRunsOn:
+    async def test_its_manifest_is_kept(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_heartbeats(monkeypatch, [manifest()])
+
+        assert run.main.nodes.node_manifests["rpi"]["ram_total_mb"] == 8064
+
+    async def test_one_without_a_version_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_heartbeats(monkeypatch, [manifest(manifest_v=None)])
+
+        assert "rpi" not in run.main.nodes.node_manifests
+
+    async def test_a_cleared_manifest_is_forgotten(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run = await run_heartbeats(monkeypatch, [manifest(), manifest(payload=b"")])
+
+        assert "rpi" not in run.main.nodes.node_manifests
+
+    async def test_a_later_manifest_replaces_the_earlier_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_heartbeats(monkeypatch, [manifest(), manifest(ram_total_mb=4096)])
+
+        assert run.main.nodes.node_manifests["rpi"]["ram_total_mb"] == 4096
 
 
 class TestPruningAnAgentThatStoppedAppearing:

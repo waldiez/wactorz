@@ -162,6 +162,11 @@ class NodeManager:
         #: node -> monotonic time its desired state was last republished because of
         #: what its heartbeat said about signing.
         self.signing_republished_at: dict[str, float] = {}
+        #: node -> what its machine is, from its retained manifest. Kept apart
+        #: from `known` and not dropped with it: a node forgotten for going
+        #: quiet does not send its manifest again when it comes back -- the
+        #: broker delivers a retained message on subscribing, not on reconnects.
+        self.node_manifests: dict[str, dict[str, Any]] = {}
 
     def list_nodes(self) -> list[dict[str, Any]]:
         """Every known node, with its age resolved to an `online` flag.
@@ -183,6 +188,8 @@ class NodeManager:
                 "uptime_s": info.get("uptime_s"),
                 **{reading: info.get(reading) for reading in RESOURCE_READINGS},
                 "throttled": info.get("throttled"),
+                # What the machine is; None from a node that has not said.
+                "manifest": self.node_manifests.get(name),
             }
             for name, info in self.known.items()
         ]
@@ -316,6 +323,7 @@ class NodeManager:
                     # the two.
                     await client.subscribe("nodes/+/heartbeat", qos=0)
                     await client.subscribe("nodes/+/migrate_result", qos=1)
+                    await client.subscribe("nodes/+/manifest", qos=1)
                     logger.info("[main] Subscribed to node heartbeats.")
                     last_error = None
                     async for message in client.messages:
@@ -342,6 +350,12 @@ class NodeManager:
 
     async def receive_node_message(self, topic: str, payload: bytes | None) -> None:
         """Route one message from a node to whichever half handles it."""
+        if topic.endswith("/manifest") and not payload:
+            # The retained manifest cleared: the node was removed.
+            parts = topic.split("/")
+            if len(parts) == 3:
+                self.node_manifests.pop(parts[1], None)
+            return
         try:
             data = json.loads(payload.decode()) if payload else None
         except Exception:
@@ -356,6 +370,26 @@ class NodeManager:
             await self.receive_heartbeat(node_name, data)
         elif topic.endswith("/migrate_result"):
             self.report_migration(data)
+        elif topic.endswith("/manifest"):
+            self.receive_manifest(node_name, data)
+
+    def receive_manifest(self, node_name: str, data: dict[str, Any]) -> None:
+        """Take what a node says its machine is.
+
+        Kept as it arrived, for the readers that know the fields. One without a
+        manifest version is not a manifest this server can read, and is ignored
+        rather than half-understood.
+        """
+        version = data.get("manifest_v")
+        if isinstance(version, bool) or not isinstance(version, int):
+            logger.warning("[main] Ignoring a manifest from node %r with no version.", node_name)
+            return
+        self.node_manifests[node_name] = data
+
+    def forget(self, node_name: str) -> None:
+        """Forget a node altogether, as removing it does: its heartbeat and its machine."""
+        self.known.pop(node_name, None)
+        self.node_manifests.pop(node_name, None)
 
     async def receive_heartbeat(self, node_name: str, data: dict[str, Any]) -> None:
         """Take one heartbeat: prune what vanished, record the node, fill gaps."""

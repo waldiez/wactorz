@@ -126,6 +126,7 @@ def build_app() -> web.Application:
     # chosen interface; behind the same key check as every other route.
     app.router.add_get("/metrics", metrics.handler_for(metrics.build_monitor()))
     for prefix in ("/api", ""):
+        app.router.add_get(f"{prefix}/nodes", api_system.nodes_handler)
         app.router.add_get(
             f"{prefix}/history/agents/{{name}}", metrics_history.agent_history_handler
         )

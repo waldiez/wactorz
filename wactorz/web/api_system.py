@@ -13,6 +13,7 @@ from aiohttp import web
 from aiohttp.web import Response
 
 from . import cost, origins, probes, runtime
+from .metrics import known_nodes
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,17 @@ async def readiness_handler(_request: web.Request) -> Response:
     else:
         checks = await probes.readiness(runtime.system)
     return probes.readiness_response(checks)
+
+
+async def nodes_handler(_request: web.Request) -> Response:
+    """``GET /api/nodes``: every node main knows, its readings and what its machine is.
+
+    The dashboard hears node heartbeats as they arrive, but a node's manifest
+    is retained and reaches this server once, when it subscribes; this is where
+    a page that opens later reads it. Empty without main, which is what knows
+    the nodes.
+    """
+    return web.json_response({"nodes": known_nodes()})
 
 
 async def cost_handler(_request: web.Request) -> Response:

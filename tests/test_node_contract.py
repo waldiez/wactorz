@@ -63,6 +63,8 @@ REPORT_TOPICS = frozenset(
         "code_changed",
         # The program itself, quoting the token main asked with.
         "code_return",
+        # What the machine is. Retained; sent at start and after an install.
+        "manifest",
     }
 )
 
@@ -112,6 +114,31 @@ HEARTBEAT_FIELDS = frozenset(
         "signing_failures",
         "tls",
         "slow_retry",
+    }
+)
+
+#: Fields of a node's manifest. Whether an agent can run on a node is judged
+#: from them, so a renamed one is a placement made on nothing.
+MANIFEST_FIELDS = frozenset(
+    {
+        "node",
+        "version",
+        "runtime",
+        "timestamp",
+        "manifest_v",
+        "arch",
+        "os",
+        "os_release",
+        "python",
+        "model",
+        "container",
+        "cpu_count",
+        "ram_total_mb",
+        "swap_total_mb",
+        "disk",
+        "gpu",
+        "devices",
+        "packages",
     }
 )
 
@@ -229,6 +256,42 @@ class TestTopics:
         for path in _server_sources():
             found |= _topic_segments(path.read_text(encoding="utf-8"))
         assert not (UNUSED_TOPICS & found), UNUSED_TOPICS & found
+
+
+# ── Manifest ───────────────────────────────────────────────────────────────────
+
+
+class TestManifest:
+    async def test_the_runner_sends_every_field_retained(self, tmp_path: Path) -> None:
+        runner = _runner(tmp_path)
+        published: list[tuple[str, Any, bool]] = []
+
+        async def publish(topic: str, data: Any, retain: bool = False) -> None:
+            published.append((topic, data, retain))
+
+        runner.publish = publish  # type: ignore[method-assign]
+
+        await asyncio.wait_for(runner._publish_manifest(), timeout=5.0)
+
+        ((topic, payload, retain),) = published
+        assert (topic, retain) == ("nodes/rpi/manifest", True)
+        assert set(payload) == MANIFEST_FIELDS, set(payload) ^ MANIFEST_FIELDS
+        assert payload["version"] == wactorz.__version__
+
+    async def test_main_keeps_what_the_runner_sends(self, tmp_path: Path) -> None:
+        runner = _runner(tmp_path)
+        published: list[Any] = []
+
+        async def publish(_topic: str, data: Any, retain: bool = False) -> None:
+            published.append(json.loads(json.dumps(data)))
+
+        runner.publish = publish  # type: ignore[method-assign]
+        await asyncio.wait_for(runner._publish_manifest(), timeout=5.0)
+        nodes = NodeManager()
+
+        await nodes.receive_node_message("nodes/rpi/manifest", json.dumps(published[0]).encode())
+
+        assert nodes.node_manifests["rpi"] == published[0]
 
 
 # ── Heartbeat ──────────────────────────────────────────────────────────────────

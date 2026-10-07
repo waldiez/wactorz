@@ -95,6 +95,28 @@ Conversation history for the actor (only useful for LLM-backed actors like `main
 
 ---
 
+### `GET /api/nodes`
+
+Every remote node main knows: whether it is online, its agents, its latest readings and what its machine is. The readings are the node's last heartbeat; `manifest` is the retained manifest it publishes (`null` from a node that has not sent one). Empty when there is no main.
+
+**Response** `200 OK`
+```json
+{
+  "nodes": [
+    {"node": "raspberrypi", "online": true, "agents": ["flic"], "last_seen": 1740000000.0,
+     "version": "0.7.0", "runtime": "node", "pid": 1234, "uptime_s": 900.0,
+     "cpu_pct": 3.1, "mem_used_mb": 808, "mem_free_mb": 7249, "swap_used_mb": 0,
+     "load_1m": 0.1, "load_5m": 0.05, "disk_free_mb": 432492, "temp_c": 56.8, "throttled": [],
+     "manifest": {"manifest_v": 1, "arch": "aarch64", "python": "3.13.5", "ram_total_mb": 8058,
+                  "devices": ["bluetooth", "speaker", "gpio", "i2c"], "...": "..."}}
+  ]
+}
+```
+
+The fields of `manifest` are described with the `nodes/{node}/manifest` topic in [MQTT topics](mqtt_topics.md).
+
+---
+
 ### `GET /api/history/agents/{name}` · `GET /api/history/nodes/{name}`
 
 An agent's or a node's metrics history: one sample about every minute, oldest first, for the last `hours` (default `24`). Kept for `WACTORZ_RETENTION_METRICS_DAYS` (default `7`); an agent is sampled while the dashboard is hearing from it.

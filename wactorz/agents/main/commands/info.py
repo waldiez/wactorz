@@ -115,6 +115,37 @@ def _node_resources_label(node: dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
+def _node_machine_label(manifest: dict[str, Any] | None) -> str:
+    """What a node row says about the machine itself, from its manifest; "" without one."""
+    if not isinstance(manifest, dict):
+        return ""
+    parts = [
+        str(manifest[key])
+        for key in ("model", "arch", "os_release")
+        if isinstance(manifest.get(key), str) and manifest[key]
+    ]
+    if isinstance(manifest.get("python"), str):
+        parts.append(f"Python {manifest['python']}")
+    if _is_number(manifest.get("cpu_count")):
+        parts.append(f"{manifest['cpu_count']} CPUs")
+    if _is_number(manifest.get("ram_total_mb")):
+        parts.append(f"{_megabytes(manifest['ram_total_mb'])} memory")
+    if manifest.get("container") is True:
+        parts.append("in a container")
+    gpus = manifest.get("gpu")
+    if isinstance(gpus, list):
+        parts.extend(str(g.get("name")) for g in gpus if isinstance(g, dict) and g.get("name"))
+    devices = manifest.get("devices")
+    if isinstance(devices, list) and devices:
+        parts.append(", ".join(str(d) for d in devices))
+    return " · ".join(parts)
+
+
+def _is_number(value: object) -> bool:
+    """Whether a manifest field is a number; a JSON ``true`` is not one."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _megabytes(value: float) -> str:
     """A size given in MiB, in the unit a person reads it in."""
     return f"{value / 1024:.1f} GB" if value >= 1024 else f"{value:.0f} MB"
@@ -150,6 +181,10 @@ async def show_nodes(ctx: CommandContext, _argument: str) -> str:
             + (f"  |  {resources}" if resources else "")
             + f"  |  last heartbeat: {age}s ago"
         )
+        # Beneath, what the machine is: true whether or not it is online.
+        machine = _node_machine_label(nd.get("manifest"))
+        if machine:
+            lines.append(f"  {'':22s} {machine}")
 
     footer = ""
     if not nodes:

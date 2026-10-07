@@ -44,7 +44,7 @@ from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
 from ..core.state_snapshot import json_safe, why_it_cannot_travel
 from ..monitoring.loop_lag import LoopLagMonitor
-from . import resources
+from . import machine, resources
 from .agent import NodeAgent
 from .publishing import NodePublisher
 from .signing import (
@@ -223,6 +223,9 @@ class NodeRunner:
         packages = config.get("install", [])
         if packages:
             refused = await self._install_packages(packages)
+            if not refused:
+                # Whatever pip did, the installed packages may have changed.
+                self._background(self._publish_manifest(), "Publishing this node's manifest")
             if refused:
                 # Abort, unlike the pip-failure path below it, which warns and
                 # carries on. A pip failure can be transient and may still leave
@@ -428,6 +431,20 @@ class NodeRunner:
         main reads it as the single-file runtime at an unknown version.
         """
         return {"node": self.node_name, "version": __version__, "runtime": NODE_RUNTIME}
+
+    async def _publish_manifest(self) -> None:
+        """Say what this machine is, retained, for whatever decides where agents go.
+
+        Sent when the node starts and after an install, the two times it can
+        change. Retained, so main learns it on connecting however long ago it
+        was sent; the heartbeat carries what changes from moment to moment.
+        """
+        described = await asyncio.to_thread(machine.describe, Path(self.state_dir))
+        await self.publish(
+            f"nodes/{self.node_name}/manifest",
+            {**self._node_identity(), **described, "timestamp": time.time()},
+            retain=True,
+        )
 
     async def _node_heartbeat_loop(self, interval: float = 10.0) -> None:
         """Publish a heartbeat for the runner process itself, so the node appears."""
@@ -880,6 +897,7 @@ class NodeRunner:
         # The queue has to exist before anything publishes into it, and it is
         # created inside the publisher's own task so it belongs to this loop.
         await publisher_ready.wait()
+        self._background(self._publish_manifest(), "Publishing this node's manifest")
         await self.supervisor.start()
         tasks.append(asyncio.create_task(self._subscriber_loop()))
         logger.info("[runner] Node '%s' online.", self.node_name)

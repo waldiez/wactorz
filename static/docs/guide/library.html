@@ -492,6 +492,9 @@ does the same, to subscribe to what it publishes when it runs, and to spawn it
 by that exact target when it does not. So "alert me when the IMU detector
 scores above 20" proposes your detector as the first step, and a notifier
 listening on <code>anomalies/imu</code> after it.</p>
+<p>To see all of this with a real agent, run the IMU example with
+<code>python run.py --with-main</code> and follow <em>Ask it from chat</em> in
+<code>examples/imu_anomaly/README.md</code>.</p>
 <h2 id="profiles">Profiles</h2>
 <p>Without Home Assistant configured (<code>HA_URL</code> and <code>HA_TOKEN</code>) its agents do not
 start, and main and the planner are not told about it either: their prompts

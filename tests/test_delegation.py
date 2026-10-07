@@ -128,6 +128,7 @@ class _Main:
         registry: bool = True,
         result: dict[str, Any] | None = None,
         answers: bool = True,
+        accepts: bool = True,
     ) -> None:
         main = MainActor.__new__(MainActor)
         main.name = "main"
@@ -144,13 +145,16 @@ class _Main:
         self.sent: list[tuple[str, Any, dict[str, Any]]] = []
         self.published: list[tuple[str, Any]] = []
 
-        async def _send(actor_id: str, kind: Any, payload: dict[str, Any]) -> None:
+        async def _send(actor_id: str, kind: Any, payload: dict[str, Any]) -> bool:
             self.sent.append((actor_id, kind, payload))
+            if not accepts:
+                return False  # a full mailbox: the task was never taken
             if not answers:
-                return
+                return True
             future = main._result_futures.get(payload["_task_id"])
             if future is not None and not future.done():
                 future.set_result(result if result is not None else {"ok": True})
+            return True
 
         async def _publish(topic: str, payload: Any, **_kw: Any) -> None:
             self.published.append((topic, payload))
@@ -223,6 +227,20 @@ class TestChoosingWhereTheTaskGoes:
 
         assert await main.delegate("weather") is None
 
+    async def test_an_agents_error_reply_is_the_answer(self) -> None:
+        # The agent's own account of its failure: every caller reads the
+        # reply's fields, so it is returned rather than raised.
+        main = _Main(running=("weather",), result={"error": "no forecast for Mars"})
+
+        assert await main.delegate("weather") == {"error": "no forecast for Mars"}
+
+    async def test_an_agent_with_no_room_for_the_task_answers_nothing(self) -> None:
+        # The same as an agent that never replies, without the wait.
+        main = _Main(running=("weather",), accepts=False)
+
+        assert await main.delegate("weather") is None
+        assert not main.actor._result_futures
+
 
 class TestWaitingForTheAnswer:
     """A task that never answers ends, and leaves nothing behind."""
@@ -289,6 +307,19 @@ class TestAskingTheInstaller:
         main = _Main(registry=False)
 
         assert "error" in await main.install({"action": "node_deploy"})
+
+    async def test_a_failed_install_is_the_installers_report(self) -> None:
+        main = _Main(running=("installer",), result={"error": "pip exited with 1"})
+
+        assert await main.install({"action": "install"}) == {"error": "pip exited with 1"}
+
+    async def test_an_installer_with_no_room_is_reported_at_once(self) -> None:
+        main = _Main(running=("installer",), accepts=False)
+
+        result = await main.install({"action": "install"}, timeout=600)
+
+        assert "not taking messages" in result["error"]
+        assert not main.actor._result_futures
 
     async def test_a_slow_deploy_says_it_timed_out(self) -> None:
         # Deploys are SSH and pip, so the caller needs the difference between

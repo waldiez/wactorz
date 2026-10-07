@@ -139,6 +139,24 @@ class TestConcurrentTurns:
         assert runtime.registry._reply_slots == {}
 
 
+class TestWithoutARegistry:
+    async def test_a_turn_routed_before_the_registry_went_says_so(self, agent: _Worker) -> None:
+        # The reply slot is the registry's. A turn whose destination was
+        # resolved while there was one, and runs after it is gone, is told
+        # rather than left waiting or crashed.
+        destination = chat.destination_of("@worker hello")
+        assert destination.target is agent
+        runtime.registry = None
+        replies: list[str] = []
+
+        async def _reply(message: str) -> None:
+            replies.append(message)
+
+        await chat._route_chat("@worker hello", destination, _reply)
+
+        assert replies == ["[error] registry not available"]
+
+
 class TestOrdinaryResultsStillFlow:
     async def test_a_result_for_a_real_actor_is_not_taken_by_a_slot(self, agent: _Worker) -> None:
         await _turn("a turn, so a slot has been opened and closed")

@@ -169,6 +169,15 @@ class TestHostCodeAsking:
         assert live.registry._reply_slots == {}
         assert set(live.registry.all_actors()) == before
 
+    async def test_a_full_mailbox_is_refused_rather_than_waited_on(self, live: Live) -> None:
+        async def refuse(*_args: Any, **_kwargs: Any) -> bool:
+            return False
+
+        live.actors["doubler"].receive = refuse  # pyright: ignore[reportAttributeAccessIssue]
+        with pytest.raises(RuntimeError, match="'doubler' is not taking messages"):
+            await wactorz.ask("doubler", {"n": 1}, timeout=600)
+        assert live.registry._reply_slots == {}
+
     async def test_two_asks_in_flight_each_get_their_own_answer(self, live: Live) -> None:
         a, b = await asyncio.gather(
             wactorz.ask("doubler", {"n": 1}), wactorz.ask("doubler", {"n": 2})

@@ -3,7 +3,7 @@
 from typing import Any
 
 from ._version import __version__
-from .core.actor import Actor, ActorState, Message, MessageType
+from .core.actor import DEFAULT_ASK_TIMEOUT_S, Actor, ActorState, Message, MessageType
 from .core.registry import ActorRegistry, ActorSystem
 
 __all__ = [
@@ -68,6 +68,7 @@ __all__ += [
     "ScheduledAgent",
     "StartupError",
     "agent",
+    "ask",
     "pipeline",
     "run",
     "serve",
@@ -104,6 +105,27 @@ def system() -> ActorSystem | None:
     from .app import system as _system
 
     return _system()
+
+
+async def ask(target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S) -> Any:
+    """Send the running agent called ``target`` a task and wait for its reply.
+
+    For host code beside the system -- a notebook cell, a web handler, a test
+    that started :func:`serve` in the background::
+
+        score = await wactorz.ask("imu-anomaly", {"ax": 9, "ay": 0, "az": 1})
+
+    Returns what the agent answered: a decorated function's return value (a
+    non-dict wrapped as ``{"result": ...}``), less the correlation id. Raises
+    ``RuntimeError`` when no system is running or the agent answered with an
+    error, ``LookupError`` when no agent of that name is running, and
+    ``asyncio.TimeoutError`` after ``timeout`` seconds. An agent asks another
+    the same way with :meth:`Actor.ask`.
+    """
+    running = system()
+    if running is None:
+        raise RuntimeError("wactorz.ask: no system is running; start one with run() or serve()")
+    return await running.registry.ask(target, payload, timeout=timeout)
 
 
 def run(*args: Any, **kwargs: Any) -> None:

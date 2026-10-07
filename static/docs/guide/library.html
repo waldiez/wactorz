@@ -495,6 +495,30 @@ listening on <code>anomalies/imu</code> after it.</p>
 <p>To see all of this with a real agent, run the IMU example with
 <code>python run.py --with-main</code> and follow <em>Ask it from chat</em> in
 <code>examples/imu_anomaly/README.md</code>.</p>
+<h2 id="asking-an-agent">Asking an agent</h2>
+<p>An agent that needs another agent's answer, and a program that needs one from
+the running system, use the same call:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># inside an agent: the actor is the second parameter</span>
+<span class="nd">@wactorz</span><span class="o">.</span><span class="n">agent</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"relay"</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">relay</span><span class="p">(</span><span class="n">payload</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">me</span><span class="p">:</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">FunctionAgent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+    <span class="n">score</span> <span class="o">=</span> <span class="k">await</span> <span class="n">me</span><span class="o">.</span><span class="n">ask</span><span class="p">(</span><span class="s2">"imu-anomaly"</span><span class="p">,</span> <span class="p">{</span><span class="s2">"ax"</span><span class="p">:</span> <span class="mi">9</span><span class="p">,</span> <span class="s2">"ay"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">"az"</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">"score"</span><span class="p">:</span> <span class="n">score</span><span class="p">[</span><span class="s2">"score"</span><span class="p">]}</span>
+
+<span class="c1"># beside the system: a notebook cell, a web handler, a test</span>
+<span class="n">score</span> <span class="o">=</span> <span class="k">await</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">ask</span><span class="p">(</span><span class="s2">"imu-anomaly"</span><span class="p">,</span> <span class="p">{</span><span class="s2">"ax"</span><span class="p">:</span> <span class="mi">9</span><span class="p">,</span> <span class="s2">"ay"</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">"az"</span><span class="p">:</span> <span class="mi">1</span><span class="p">},</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The request goes to the agent as a task, the way chat or a pipeline step would
+send it, and the reply is what the agent answered: a function's return value,
+with a plain value wrapped as <code>{"result": ...}</code>. Three things go wrong loudly
+rather than quietly. No agent of that name is running: <code>LookupError</code>. The
+agent answered with an error, which is what a function that raised reports:
+<code>RuntimeError</code> carrying the message. No reply within <code>timeout</code> seconds, 60 by
+default: <code>asyncio.TimeoutError</code>. In every case nothing is left waiting.</p>
+<p><code>wactorz.ask</code> needs a running system, from <code>run()</code> or <code>serve()</code>; it raises
+<code>RuntimeError</code> otherwise. Its reply address is a slot of the registry rather
+than an actor, so nothing is registered, listed or supervised on the caller's
+behalf.</p>
 <h2 id="profiles">Profiles</h2>
 <p>Without Home Assistant configured (<code>HA_URL</code> and <code>HA_TOKEN</code>) its agents do not
 start, and main and the planner are not told about it either: their prompts
@@ -573,6 +597,10 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <tr>
 <td><code>wactorz.system</code></td>
 <td>the running <code>ActorSystem</code> (<code>registry</code>, <code>supervisor</code>), <code>None</code> outside a run</td>
+</tr>
+<tr>
+<td><code>wactorz.ask</code>, <code>Actor.ask</code></td>
+<td>send an agent a task and wait for its reply, from host code or from another agent</td>
 </tr>
 <tr>
 <td><code>wactorz.spec_of</code></td>

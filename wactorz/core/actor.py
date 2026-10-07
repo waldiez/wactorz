@@ -264,6 +264,47 @@ def _as_coroutine_callback(callback: Callable[[Any], Any]) -> Callable[[Any], An
     return functools.partial(run_callable, callback)
 
 
+#: How long an ask waits for its reply when the caller names no limit. The bug
+#: this prevents is an unbounded wait, so the limit is generous: an agent that
+#: calls a model or a device is slow and still healthy.
+DEFAULT_ASK_TIMEOUT_S = 60.0
+
+
+def ask_payload(payload: Any, *, task_id: str, reply_to: str) -> dict[str, Any]:
+    """The TASK payload of an ask: the request, tagged so the reply finds its way back.
+
+    A request that is not a dict travels as ``{"text": ...}``, which is what an
+    agent that reads natural language expects. The two tags are the convention
+    every agent already honours: ``_task_id`` is echoed on the RESULT, and
+    ``_reply_to`` says where the RESULT goes.
+    """
+    body = dict(payload) if isinstance(payload, dict) else {"text": str(payload)}
+    body["_task_id"] = task_id
+    body["_reply_to"] = reply_to
+    return body
+
+
+def reply_value(reply: Any, *, task_id: str, target: str) -> Any:
+    """What an ask returns from the RESULT payload it was answered with.
+
+    The correlation id is stripped, so the caller sees the agent's answer and
+    nothing of the plumbing. A reply whose ``error`` is set is an agent saying
+    it failed -- the shape a decorated function's exception takes, and what
+    the dynamic agents' ``send_to`` returns on failure -- and is raised rather
+    than handed back as a value, so a caller cannot mistake it for an answer.
+    """
+    if not isinstance(reply, dict):
+        return reply
+    if reply.get("error"):
+        raise RuntimeError(f"{target!r} answered with an error: {reply['error']}")
+    cleaned = {k: v for k, v in reply.items() if k != "_task_id"}
+    # "task" is the older spelling of the id, still echoed by some agents; an
+    # agent that uses the key for its own text keeps it.
+    if cleaned.get("task") == task_id:
+        del cleaned["task"]
+    return cleaned
+
+
 class Actor(ABC):
     """Base Actor class. All agents inherit from this.
     Actors are fully async and communicate only through messages.
@@ -353,8 +394,9 @@ class Actor(ABC):
         # Handlers
         self._handlers: dict[MessageType, Callable] = {}
         #: Correlation id → the future waiting on that request's RESULT.
-        #: Populated by whoever sends a TASK carrying `_task_id`; drained by
-        #: `_resolve_pending_result` before the message reaches a handler.
+        #: Populated by whoever sends a TASK carrying `_task_id`; settled by
+        #: `_resolve_pending_result` as the RESULT is received, ahead of the
+        #: mailbox, so a handler waiting on it is not in its own way.
         self._result_futures: dict[str, asyncio.Future] = {}
         self._setup_default_handlers()
 
@@ -632,9 +674,10 @@ class Actor(ABC):
 
         It belongs here, ahead of every handler, so that any actor can receive a
         reply without opting in — a per-agent implementation makes the ability
-        depend on which agent is receiving. Returns True when the message was a
-        reply someone was waiting for, in which case there is nothing left to
-        dispatch: the caller already has it.
+        depend on which agent is receiving. Called on receipt, before the
+        mailbox, and again at dispatch for a reply handed in by another route.
+        Returns True when the message was a reply someone was waiting for, in
+        which case there is nothing left to dispatch: the caller already has it.
         """
         if msg.type != MessageType.RESULT or not isinstance(msg.payload, dict):
             return False
@@ -955,6 +998,47 @@ class Actor(ABC):
         msg = Message(type=msg_type, sender_id=self.actor_id, payload=payload)
         return await self._registry.deliver(target_id, msg)
 
+    async def ask(
+        self, target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S
+    ) -> Any:
+        """Send the agent called ``target`` a task and wait for its reply.
+
+        The one way for an agent to ask another a question: the request goes
+        as a TASK with a correlation id and this actor as the reply address,
+        and the RESULT that echoes the id settles the wait. Returns what the
+        agent answered, less the plumbing (see :func:`reply_value`).
+
+        Raises ``LookupError`` when no agent of that name is in the registry,
+        ``RuntimeError`` when the target is not taking messages or answers
+        with an error, and ``asyncio.TimeoutError`` after ``timeout`` seconds
+        with no reply. Whatever the outcome, nothing is left waiting.
+        """
+        if self._registry is None:
+            raise RuntimeError(f"[{self.name}] cannot ask {target!r}: no registry attached")
+        actor = self._registry.find_by_name(target)
+        if actor is None:
+            raise LookupError(f"no agent named {target!r} is running")
+        task_id = f"ask_{uuid.uuid4().hex[:12]}"
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._result_futures[task_id] = future
+        try:
+            taken = await self.send(
+                actor.actor_id,
+                MessageType.TASK,
+                ask_payload(payload, task_id=task_id, reply_to=self.actor_id),
+            )
+            if taken is False:
+                raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
+            try:
+                reply = await asyncio.wait_for(future, timeout=timeout)
+            except asyncio.TimeoutError:
+                raise asyncio.TimeoutError(
+                    f"{target!r} did not answer within {timeout:g}s"
+                ) from None
+        finally:
+            self._result_futures.pop(task_id, None)
+        return reply_value(reply, task_id=task_id, target=target)
+
     async def broadcast(self, msg_type: MessageType, payload: Any = None):
         """Broadcast to all registered actors."""
         if self._registry:
@@ -980,7 +1064,14 @@ class Actor(ABC):
         bounded: a notification is dropped on the spot, and anything else waits
         ``MAILBOX_WAIT_S`` for room and is then refused. Either way the sender
         is told, and can report that rather than hang.
+
+        A RESULT this actor is waiting for settles its future here, on receipt,
+        and never enters the mailbox. The wait is usually inside a handler, and
+        a handler runs on the message loop: a reply that had to go through the
+        mailbox would wait for the very handler that is waiting for it.
         """
+        if self._resolve_pending_result(msg):
+            return True
         if self.offer(msg):
             return True
         if msg.is_notification:

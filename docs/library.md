@@ -385,6 +385,35 @@ To see all of this with a real agent, run the IMU example with
 `python run.py --with-main` and follow *Ask it from chat* in
 `examples/imu_anomaly/README.md`.
 
+## Asking an agent
+
+An agent that needs another agent's answer, and a program that needs one from
+the running system, use the same call:
+
+```python
+# inside an agent: the actor is the second parameter
+@wactorz.agent(name="relay")
+async def relay(payload: dict, me: wactorz.FunctionAgent) -> dict:
+    score = await me.ask("imu-anomaly", {"ax": 9, "ay": 0, "az": 1})
+    return {"score": score["score"]}
+
+# beside the system: a notebook cell, a web handler, a test
+score = await wactorz.ask("imu-anomaly", {"ax": 9, "ay": 0, "az": 1}, timeout=30)
+```
+
+The request goes to the agent as a task, the way chat or a pipeline step would
+send it, and the reply is what the agent answered: a function's return value,
+with a plain value wrapped as `{"result": ...}`. Three things go wrong loudly
+rather than quietly. No agent of that name is running: `LookupError`. The
+agent answered with an error, which is what a function that raised reports:
+`RuntimeError` carrying the message. No reply within `timeout` seconds, 60 by
+default: `asyncio.TimeoutError`. In every case nothing is left waiting.
+
+`wactorz.ask` needs a running system, from `run()` or `serve()`; it raises
+`RuntimeError` otherwise. Its reply address is a slot of the registry rather
+than an actor, so nothing is registered, listed or supervised on the caller's
+behalf.
+
 ## Profiles
 
 Without Home Assistant configured (`HA_URL` and `HA_TOKEN`) its agents do not
@@ -455,6 +484,7 @@ What this guide uses is the surface you can rely on:
 | `wactorz.pipeline` | declare steps, a schedule and rules together |
 | `wactorz.run`, `wactorz.serve` | start the system from a script, or on a running loop |
 | `wactorz.system` | the running `ActorSystem` (`registry`, `supervisor`), `None` outside a run |
+| `wactorz.ask`, `Actor.ask` | send an agent a task and wait for its reply, from host code or from another agent |
 | `wactorz.spec_of` | the `AgentSpec` behind a decorated function, with `build()` for tests |
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |

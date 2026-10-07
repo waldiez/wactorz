@@ -18,7 +18,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .actor import Actor, ActorState, Message, MessageType, SupervisorStrategy
+from .actor import (
+    DEFAULT_ASK_TIMEOUT_S,
+    Actor,
+    ActorState,
+    Message,
+    MessageType,
+    SupervisorStrategy,
+    ask_payload,
+    reply_value,
+)
 from .mqtt_publisher import MQTTPublisher
 from .paths import resolve_state_dir
 
@@ -98,6 +107,10 @@ class ActorRegistry:
     def __init__(self) -> None:
         self._actors: dict[str, Actor] = {}
         self._lock = asyncio.Lock()
+        #: Reply address -> the future an ask from outside any actor waits on.
+        #: A caller that is not an actor still needs an address a RESULT can
+        #: be delivered to; these are those addresses, for as long as the wait.
+        self._reply_slots: dict[str, asyncio.Future[Any]] = {}
         # Back-reference to the Supervisor — set by ActorSystem after creating both.
         # Allows Actor.spawn() to auto-register children under supervision.
         self._supervisor_ref: Supervisor | None = None
@@ -161,7 +174,16 @@ class ActorRegistry:
                 logger.info("[Registry] Unregistered %s", actor_id[:8])
 
     async def deliver(self, target_id: str, msg: Message) -> bool:
-        """Put a message in one actor's mailbox. False if no such actor, or no room in it."""
+        """Put a message in one actor's mailbox. False if no such actor, or no room in it.
+
+        A RESULT addressed to a reply slot settles that slot instead: the
+        caller behind it is not an actor and has no mailbox.
+        """
+        slot = self._reply_slots.get(target_id)
+        if slot is not None:
+            if msg.type == MessageType.RESULT and not slot.done():
+                slot.set_result(msg.payload)
+            return True
         actor = self._actors.get(target_id)
         if actor is None:
             logger.warning("[Registry] Unknown target: %s", target_id[:8])
@@ -178,6 +200,46 @@ class ActorRegistry:
         msg = Message(type=msg_type, sender_id=sender_id, payload=payload)
         others = [actor for actor_id, actor in list(self._actors.items()) if actor_id != sender_id]
         await asyncio.gather(*(actor.receive(msg) for actor in others))
+
+    async def ask(
+        self, target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S
+    ) -> Any:
+        """Send the agent called ``target`` a task and wait for its reply, from
+        outside any actor.
+
+        What host code -- a notebook, a web handler, a test -- uses, and what
+        :func:`wactorz.ask` is. The same contract as :meth:`Actor.ask`: the
+        answer less the plumbing, ``LookupError`` for an unknown agent,
+        ``RuntimeError`` for a full mailbox or an error reply,
+        ``asyncio.TimeoutError`` after ``timeout`` seconds. The reply address is
+        a slot of this registry rather than an actor, so nothing is registered,
+        listed or supervised on the caller's behalf.
+        """
+        actor = self.find_by_name(target)
+        if actor is None:
+            raise LookupError(f"no agent named {target!r} is running")
+        task_id = f"ask_{uuid.uuid4().hex[:12]}"
+        slot_id = f"ask-reply:{task_id}"
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._reply_slots[slot_id] = future
+        try:
+            msg = Message(
+                type=MessageType.TASK,
+                sender_id=slot_id,
+                reply_to=slot_id,
+                payload=ask_payload(payload, task_id=task_id, reply_to=slot_id),
+            )
+            if not await actor.receive(msg):
+                raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
+            try:
+                reply = await asyncio.wait_for(future, timeout=timeout)
+            except asyncio.TimeoutError:
+                raise asyncio.TimeoutError(
+                    f"{target!r} did not answer within {timeout:g}s"
+                ) from None
+        finally:
+            self._reply_slots.pop(slot_id, None)
+        return reply_value(reply, task_id=task_id, target=target)
 
     def get(self, actor_id: str) -> Actor | None:
         """The actor with this id, or None."""

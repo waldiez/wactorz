@@ -17,6 +17,7 @@ language model.
 | `notebook.ipynb` | The same, from Jupyter: the system on the notebook's loop through `wactorz.serve()`, readings published and anomalies read from cells, the running agent inspected in-process. |
 | `fastapi_app.py` | The same, inside a FastAPI app: the system on the web app's loop, started and stopped by its lifespan, with routes that reach the running agent. |
 | `publish_imu.py` | A fake sensor: publishes readings, a few of them abnormal. |
+| `ask.py` | Starts the detector and asks it two questions with `wactorz.ask`, then stops. |
 
 ## Run it
 
@@ -94,6 +95,50 @@ Only a registered target can be spawned this way: a spawn config may be written
 by the model, and `type: "module"` refuses any target that is not in the
 registry.
 
+## Ask it from code
+
+The same question from a program, with `wactorz.ask`: the reading goes to the
+agent as a task and the function's return value comes back, with a plain value
+wrapped as `{"result": ...}`. Three things to try, each needing only the broker
+and a trained model.
+
+**1. A script.** `ask.py` starts the system on its own loop, asks twice, stops:
+
+```bash
+python ask.py
+```
+
+```text
+jolt    -> {'score': 39.75, 'reading': {'ax': 9.0, 'ay': -7.5, 'az': 1.0}}
+resting -> {'result': None}
+```
+
+The script asks for the selector event loop on Windows before it starts, as
+`publish_imu.py` does; a program that runs Wactorz on the proactor loop there
+is refused with a message naming that line.
+
+**2. A web app.** Start `fastapi_app.py` and ask through its route, which calls
+`wactorz.ask` behind it:
+
+```bash
+curl -X POST localhost:8000/detect -H 'content-type: application/json' -d '{"ax": 9, "ay": -7.5, "az": 1}'
+# {"anomaly": true, "score": 39.75, "reading": {"ax": 9, "ay": -7.5, "az": 1}}
+curl -X POST localhost:8000/detect -H 'content-type: application/json' -d '{"ax": 0.1, "ay": 0, "az": 1}'
+# {"anomaly": false}
+```
+
+**3. A notebook.** Section 7 of `notebook.ipynb` is one line per question:
+
+```python
+await wactorz.ask("imu-anomaly", {"ax": 9.0, "ay": -7.5, "az": 1.0})
+```
+
+What goes wrong goes wrong loudly: asking an agent that is not running raises
+`LookupError`, one whose function raised raises `RuntimeError` with the message,
+and one that does not answer within the timeout (60 seconds by default) raises
+`asyncio.TimeoutError`. Nothing is left waiting in any case. Inside an agent
+the call is the same on the actor, `await me.ask("imu-anomaly", {...})`.
+
 ## How it works
 
 `agent.py` is the whole integration:
@@ -134,8 +179,8 @@ the dashboard's default; the notebook prints the address it used.
 
 then publishes readings from a cell, collects anomalies from another, reaches
 the running actor through `wactorz.system().registry` to read its counters
-and persisted state, sends it a task the way chat would, and stops it by
-cancelling the task. Start Jupyter from this folder, or the first cell adds it
+and persisted state, asks it for a verdict with `wactorz.ask` the way chat
+would, and stops it by cancelling the task. Start Jupyter from this folder, or the first cell adds it
 to the path.
 
 ## Inside a web app
@@ -158,8 +203,9 @@ async def lifespan(app: FastAPI):
 ```
 
 Two routes show the host reaching in: `GET /status` reads the agent's counters
-through `wactorz.system().registry`, and `POST /detect` scores a reading on
-demand with `actor.call()`, the way a task from chat would.
+through `wactorz.system().registry`, and `POST /detect` asks the agent for a
+verdict with `wactorz.ask()`, the way a task from chat would; an agent that is
+not running is a 503, one that fails a 502, one that does not answer a 504.
 
 ```bash
 pip install fastapi uvicorn

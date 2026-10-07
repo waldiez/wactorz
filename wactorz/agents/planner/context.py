@@ -9,10 +9,9 @@ import asyncio
 import json
 import logging
 import re
-import uuid
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import MessageType
+from ...core.actor import ask_through
 from ...core.mqtt import mqtt_client
 
 if TYPE_CHECKING:
@@ -133,37 +132,23 @@ class ContextMixin(_Host):
         Bounded by a short timeout: this runs while the user waits for a plan,
         so an unresponsive HA agent costs a fallback rather than the request.
         """
-        if not self._registry:
-            return []
-        ha_agent = self._registry.find_by_name("home-assistant-agent")
-        if not ha_agent:
-            return []
-
-        task_id = f"resolve_{uuid.uuid4().hex[:6]}"
-        future = asyncio.get_running_loop().create_future()
-        self._result_futures[task_id] = future
-        await self.send(
-            ha_agent.actor_id,
-            MessageType.TASK,
-            {"text": "list entities", "_task_id": task_id, "task": task_id},
-        )
         try:
-            result = await asyncio.wait_for(future, timeout=8.0)
-            # home-assistant-agent returns {"entities": [...]} — a flat list of
-            # entity dicts with entity_id, name, state, etc. NOT a nested
-            # devices-to-entities structure.
-            entities_raw = (
-                result.get("entities", [])
-                or result.get("result", [])
-                or result.get("devices", [])  # legacy fallback
+            result = await ask_through(
+                self, "home-assistant-agent", {"text": "list entities"}, timeout=8.0
             )
-            if isinstance(entities_raw, str):
-                entities_raw = []
-        except (asyncio.TimeoutError, Exception):
-            entities_raw = []
-        finally:
-            self._result_futures.pop(task_id, None)
-        return entities_raw
+        except (LookupError, RuntimeError, asyncio.TimeoutError):
+            return []
+        if not isinstance(result, dict):
+            return []
+        # home-assistant-agent returns {"entities": [...]} — a flat list of
+        # entity dicts with entity_id, name, state, etc. NOT a nested
+        # devices-to-entities structure.
+        entities_raw = (
+            result.get("entities", [])
+            or result.get("result", [])
+            or result.get("devices", [])  # legacy fallback
+        )
+        return [] if isinstance(entities_raw, str) else entities_raw
 
     async def _sample_live_topics(self, bus: Any) -> list[str]:
         """Peek at one live MQTT message from each registered publish topic.

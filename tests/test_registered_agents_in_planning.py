@@ -26,6 +26,7 @@ from wactorz.agents.main.actor import MainActor
 from wactorz.agents.planner.agent import PlannerAgent
 from wactorz.agents.planner.pipeline import registered_agents_section
 from wactorz.core.actor import Actor, ActorState
+from wactorz.core.registry import ActorRegistry
 from wactorz.web import chat, runtime
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -255,6 +256,13 @@ class TestMain:
         assert "REGISTERED BUT NOT RUNNING" not in main.system_prompt
 
 
+async def _registered(actor: Actor) -> ActorRegistry:
+    """A real registry holding the actor: a chat turn's reply comes back through it."""
+    registry = ActorRegistry()
+    await registry.register(actor)
+    return registry
+
+
 class TestFromChat:
     @staticmethod
     async def _say(text: str) -> list[str]:
@@ -274,7 +282,7 @@ class TestFromChat:
             persistence_dir=str(tmp_path), options={"model": str(model_path)}
         )
         detector.state = ActorState.RUNNING
-        runtime.registry = _Registry(detector)
+        runtime.registry = await _registered(detector)
 
         replies = await self._say('@imu-anomaly {"ax": 9, "ay": 0, "az": 1}')
 
@@ -291,7 +299,7 @@ class TestFromChat:
             persistence_dir=str(tmp_path), options={"model": str(model_path)}
         )
         detector.state = ActorState.RUNNING
-        runtime.registry = _Registry(detector)
+        runtime.registry = await _registered(detector)
 
         replies = await self._say('@imu-anomaly {"ax": 0, "ay": 0, "az": 9.8}')
 

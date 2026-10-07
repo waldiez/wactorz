@@ -29,7 +29,6 @@ import logging
 import pathlib
 import re
 import time
-import uuid
 from typing import TYPE_CHECKING, Any
 
 from .. import plugins
@@ -935,44 +934,28 @@ class CatalogAgent(Actor):
                         logger.info(
                             "[%s] Installing missing deps for '%s': %s", self.name, name, needed
                         )
-                        task_id = f"cat_install_{uuid.uuid4().hex[:8]}"
-                        future = asyncio.get_running_loop().create_future()
-                        main = find_main_actor(self._registry)
-                        if main:
-                            main._result_futures[task_id] = future
-                        # Send with reply_to=main.actor_id so the installer's RESULT goes
-                        # directly to main where the future is registered.
-                        install_msg = Message(
-                            type=MessageType.TASK,
-                            sender_id=self.actor_id,
-                            reply_to=main.actor_id if main else self.actor_id,
-                            payload={
-                                "action": "install",
-                                "packages": needed,
-                                "task": task_id,
-                                "_task_id": task_id,
-                            },
-                        )
+                        # Asked by the catalogue itself: a reply it waits for is
+                        # settled as it arrives, so its own busy mailbox loop is
+                        # not in the way.
                         try:
-                            if await installer.receive(install_msg) is False:
-                                # Its mailbox had no room, so no result is
-                                # coming to wait for.
-                                logger.warning(
-                                    "[%s] installer is not taking messages — skipping dep "
-                                    "install for '%s'",
-                                    self.name,
-                                    name,
-                                )
-                            else:
-                                await asyncio.wait_for(future, timeout=INSTALL_WAIT_S)
+                            await self.ask(
+                                "installer",
+                                {"action": "install", "packages": needed},
+                                timeout=INSTALL_WAIT_S,
+                            )
                         except asyncio.TimeoutError:
                             logger.warning(
                                 "[%s] Install timeout for '%s' — proceeding anyway", self.name, name
                             )
-                        finally:
-                            # Answered or not, nothing waits on it any more.
-                            if main:
-                                main._result_futures.pop(task_id, None)
+                        except RuntimeError as exc:
+                            # Not taking messages, or a failed install: the agent
+                            # is spawned either way and reports an import it lacks.
+                            logger.warning(
+                                "[%s] installer: %s — proceeding with '%s' anyway",
+                                self.name,
+                                exc,
+                                name,
+                            )
                     else:
                         logger.warning(
                             "[%s] installer not found — skipping dep install for '%s'",

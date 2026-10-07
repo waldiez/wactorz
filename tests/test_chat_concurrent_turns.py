@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from wactorz.core.actor import Actor, Message, MessageType
+from wactorz.core.registry import ActorRegistry
 from wactorz.web import chat, runtime
 
 
@@ -49,29 +50,21 @@ class _Worker(Actor):
         await self.send(target, MessageType.RESULT, {"reply": message.payload["text"]})
 
 
-class _Registry:
-    def __init__(self, actor: Actor) -> None:
-        self._actor = actor
-
-    def find_by_name(self, name: str) -> Actor | None:
-        return self._actor if self._actor.name == name else None
-
-    def get(self, actor_id: str) -> Actor | None:
-        return self._actor if self._actor.actor_id == actor_id else None
-
-
 @pytest.fixture(autouse=True)
 def _restore_runtime() -> Any:
     registry = runtime.registry
     yield
     runtime.registry = registry
-    chat._PENDING_REPLIES.clear()
 
 
 @pytest.fixture(name="agent")
-def agent_fixture() -> _Worker:
+async def agent_fixture() -> _Worker:
+    """The worker on a real registry: its reply goes through the registry to
+    the turn's reply slot, which is what the chat relies on."""
     actor = _Worker()
-    runtime.registry = _Registry(actor)  # type: ignore[assignment]
+    registry = ActorRegistry()
+    await registry.register(actor)
+    runtime.registry = registry
     return actor
 
 
@@ -103,9 +96,10 @@ class TestOneTurn:
     async def test_nothing_is_left_pending_afterwards(self, agent: _Worker) -> None:
         await _turn("hello")
 
-        # A leaked entry is a queue nobody will ever read, held for the life of
+        # A leaked slot is a future nobody will ever read, held for the life of
         # the process.
-        assert chat._PENDING_REPLIES == {}
+        assert runtime.registry is not None
+        assert runtime.registry._reply_slots == {}
 
 
 class TestConcurrentTurns:
@@ -141,18 +135,37 @@ class TestConcurrentTurns:
         agent.gate.set()
         await asyncio.gather(*turns)
 
-        assert chat._PENDING_REPLIES == {}
+        assert runtime.registry is not None
+        assert runtime.registry._reply_slots == {}
+
+
+class TestWithoutARegistry:
+    async def test_a_turn_routed_before_the_registry_went_says_so(self, agent: _Worker) -> None:
+        # The reply slot is the registry's. A turn whose destination was
+        # resolved while there was one, and runs after it is gone, is told
+        # rather than left waiting or crashed.
+        destination = chat.destination_of("@worker hello")
+        assert destination.target is agent
+        runtime.registry = None
+        replies: list[str] = []
+
+        async def _reply(message: str) -> None:
+            replies.append(message)
+
+        await chat._route_chat("@worker hello", destination, _reply)
+
+        assert replies == ["[error] registry not available"]
 
 
 class TestOrdinaryResultsStillFlow:
-    async def test_a_result_for_a_real_actor_is_not_captured(self, agent: _Worker) -> None:
-        await _turn("install the interceptor")
+    async def test_a_result_for_a_real_actor_is_not_taken_by_a_slot(self, agent: _Worker) -> None:
+        await _turn("a turn, so a slot has been opened and closed")
 
-        agent._registry = None  # so the wrapped send has a distinguishable answer
         delivered = await agent.send("not-a-chat-turn", MessageType.RESULT, {"x": 1})
 
-        # False is what the real Actor.send returns with no registry, so the
-        # call reached it — a RESULT addressed to something other than a waiting
-        # chat turn must fall through rather than be swallowed by the capture.
+        # False is what the registry answers for a target it does not know, so
+        # the RESULT went looking for an actor rather than into a slot: only an
+        # address a turn is waiting on takes a reply, and none is left open.
         assert delivered is False
-        assert chat._PENDING_REPLIES == {}
+        assert runtime.registry is not None
+        assert runtime.registry._reply_slots == {}

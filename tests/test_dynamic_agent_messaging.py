@@ -287,6 +287,38 @@ class TestSendToLocal:
         assert msg.payload["_reply_to"] == api.actor_id
         assert api._actor._result_futures == {}
 
+    async def test_an_error_reply_is_returned_not_raised(
+        self, api: AgentAPI, tmp_path: Path
+    ) -> None:
+        # Generated code is written against error dicts, so the agent's
+        # account of its failure comes back as the result.
+        target = _Worker(name="weather", persistence_dir=str(tmp_path))
+        assert api._actor._registry is not None
+        await api._actor._registry.register(target)
+
+        call = asyncio.create_task(api.send_to("weather", {"city": "Atlantis"}))
+        await _until(lambda: not target._mailbox.empty())
+        msg = target._mailbox.get_nowait()
+        api._actor._result_futures[msg.payload["_task_id"]].set_result({"error": "unknown city"})
+
+        assert await _finish(call) == {"error": "unknown city"}
+        assert api._actor._result_futures == {}
+
+    async def test_an_actor_without_a_futures_table_is_given_one(
+        self, api: AgentAPI, tmp_path: Path
+    ) -> None:
+        target = _Worker(name="weather", persistence_dir=str(tmp_path))
+        assert api._actor._registry is not None
+        await api._actor._registry.register(target)
+        del api._actor._result_futures
+
+        call = asyncio.create_task(api.send_to("weather", {"city": "Athens"}))
+        await _until(lambda: not target._mailbox.empty())
+        msg = target._mailbox.get_nowait()
+        api._actor._result_futures[msg.payload["_task_id"]].set_result({"temp": 30})
+
+        assert await _finish(call) == {"temp": 30}
+
     async def test_a_bare_payload_is_wrapped(self, api: AgentAPI, tmp_path: Path) -> None:
         target = _Worker(name="echo", persistence_dir=str(tmp_path))
         assert api._actor._registry is not None

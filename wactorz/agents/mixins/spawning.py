@@ -35,10 +35,9 @@ import hashlib
 import importlib
 import logging
 import time
-import uuid
 from typing import TYPE_CHECKING, cast
 
-from ...core.actor import Actor, ActorState, MessageType
+from ...core.actor import Actor, ActorState, ask_through
 from ...core.paths import agent_state_dir
 from ...core.persistence import PersistenceAPI, get_db, get_pickle_store
 from ...core.topics import topic_name_error
@@ -561,46 +560,35 @@ class SpawnMixin(_Host):
             )
             return
 
-        task_id = f"install_{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_event_loop().create_future()
-        self._result_futures[task_id] = future
+        logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
         try:
-            logger.info("[%s] Installing %s for '%s' via installer…", self.name, needed, agent_name)
-            await self.send(
-                installer.actor_id,
-                MessageType.TASK,
-                {
-                    "action": "install",
-                    "packages": needed,
-                    "task": task_id,
-                    "_task_id": task_id,
-                    "reply_to": self.actor_id,
-                },
+            result = await ask_through(
+                self, "installer", {"action": "install", "packages": needed}, timeout=120.0
             )
-            try:
-                result = await asyncio.wait_for(future, timeout=120.0)
-                logger.info(
-                    "[%s] Install result for '%s': %s",
-                    self.name,
-                    agent_name,
-                    result.get("message", result),
-                )
-                if result.get("failed"):
-                    logger.warning(
-                        "[%s] Failed to install: %s — '%s' may not work correctly",
-                        self.name,
-                        result["failed"],
-                        agent_name,
-                    )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
-                    self.name,
-                    needed,
-                    agent_name,
-                )
-        finally:
-            self._result_futures.pop(task_id, None)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[%s] Install timed out for %s — proceeding anyway; '%s' may crash on import",
+                self.name,
+                needed,
+                agent_name,
+            )
+            return
+        except RuntimeError as exc:
+            # A failed install, or an installer not taking messages: either way
+            # the agent is spawned and says so itself if the import fails.
+            logger.warning(
+                "[%s] Install failed: %s — '%s' may not work correctly", self.name, exc, agent_name
+            )
+            return
+        reported = result.get("message", result) if isinstance(result, dict) else result
+        logger.info("[%s] Install result for '%s': %s", self.name, agent_name, reported)
+        if isinstance(result, dict) and result.get("failed"):
+            logger.warning(
+                "[%s] Failed to install: %s — '%s' may not work correctly",
+                self.name,
+                result["failed"],
+                agent_name,
+            )
 
     # ── Migrated state ─────────────────────────────────────────────────────
 

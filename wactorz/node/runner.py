@@ -15,6 +15,7 @@ through the registry, and there is no second supervisor to keep in step.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -39,6 +40,7 @@ from ..core.mqtt import (
 )
 from ..core.mqtt_tls import tls_enabled
 from ..core.node_signing import CONTROL_LEAVES
+from ..core.paths import agent_state_dir
 from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
@@ -53,7 +55,7 @@ from .signing import (
     server_mismatch,
     user_properties,
 )
-from .state import flush_states
+from .state import JsonState, flush_states, state_path
 
 logger = logging.getLogger(__name__)
 
@@ -292,6 +294,8 @@ class NodeRunner:
         """
         agent = self.get(name)
         if agent is None:
+            if delete:
+                await self._delete_leftovers(name)
             return
         # Remembered before the stop, in case the agent clears attributes.
         actor_id = agent.actor_id
@@ -305,6 +309,29 @@ class NodeRunner:
             agent.delete_state()
             await self._purge_agent_retained(actor_id)
             logger.info("[runner] Agent '%s' permanently deleted from this node.", name)
+
+    async def _delete_leftovers(self, name: str) -> None:
+        """Erase the files an agent that is no longer running left here.
+
+        The delete that ends a migration always meets one: the agent was stopped
+        when it was handed back, and kept its state file so a failed migration
+        had something to return to. The file and the agent's empty directory go.
+
+        Its retained topics stay. An actor id comes from the name, so they are
+        the topics of the copy now running elsewhere too: cleared from here, its
+        manifest reads as that copy withdrawing, and main forgets it.
+        """
+        removed = JsonState(state_path(self.state_dir, name), name).delete()
+        with contextlib.suppress(OSError, ValueError):
+            # Empty only, as `NodeAgent.delete_state` does: anything unexpected
+            # inside survives to be looked at. ValueError: a name that cannot be
+            # a directory never had one.
+            agent_state_dir(self.state_dir, name).rmdir()
+        logger.info(
+            "[runner] '%s' was not running; deleted what it left here%s.",
+            name,
+            "" if removed else " (no state file)",
+        )
 
     async def _purge_agent_retained(self, actor_id: str) -> None:
         """Clear the retained topics of an agent that has just been deleted.
@@ -491,7 +518,7 @@ class NodeRunner:
             await self._on_task(topic_str, data, msg)
 
     async def _on_desired_state(self, topic_str: str, data: Any, msg: Any) -> None:
-        """Start any agent named in the desired state that is not running.
+        """Make what runs here what the desired state lists.
 
         The copy the broker retained, handed over when this node subscribes, is
         what brings a node's agents back after a reboot: those ran here before,
@@ -499,10 +526,23 @@ class NodeRunner:
         while the node is up is the server changing the list now, and an agent
         it adds is a spawn by another route, refused from a server on another
         release as a spawn is.
+
+        An agent running here that the list leaves out is stopped, its state
+        kept: the server moved it elsewhere or let it go, and a copy left running
+        answers beside the real one. The exception is an agent a migration placed
+        here that the server has not yet confirmed, which the list may leave out
+        until it does; see `_confirm_migrations`.
         """
         if not msg.payload or not isinstance(data, dict):
             return
-        desired = data.get("agents", [])
+        listed = data.get("agents")
+        if not isinstance(listed, list):
+            # Malformed: nothing to act on, and nothing to stop on its say-so.
+            logger.warning("[runner] Ignoring a desired state with no list of agents.")
+            return
+        desired = [c for c in listed if isinstance(c, dict)]
+        self._confirm_migrations(desired)
+        await self._stop_unlisted({str(c["name"]) for c in desired if c.get("name")})
         if not desired:
             return
         logger.info("[runner] Reconciling desired state: %s", [a.get("name") for a in desired])
@@ -527,6 +567,29 @@ class NodeRunner:
             else:
                 logger.info("[runner] Reconcile: starting missing agent '%s'", aname)
                 self._background(self.spawn_agent(agent_config), "reconcile")
+
+    def _confirm_migrations(self, desired: list[dict[str, Any]]) -> None:
+        """Forget the migration token of each agent the server now lists without one.
+
+        An agent a migration placed here is spawned with a token, and the server
+        lists it with that token too until this node confirms it started; then it
+        lists the committed config, without. Until that point the agent is the
+        server's to roll back, so `_stop_unlisted` leaves it alone; from it, the
+        agent is an ordinary one, stopped like any other when it is left out.
+        """
+        for config in desired:
+            name = config.get("name")
+            held = self._configs.get(str(name)) if name else None
+            if held is not None and not config.get("_migration_token"):
+                held.pop("_migration_token", None)
+
+    async def _stop_unlisted(self, listed: set[str]) -> None:
+        """Stop every agent running here that ``listed`` leaves out, keeping its state."""
+        for name, config in list(self._configs.items()):
+            if name in listed or config.get("_migration_token") or self.get(name) is None:
+                continue
+            logger.info("[runner] '%s' is no longer in the desired state; stopping it.", name)
+            await self.stop_agent(name)
 
     async def _on_spawn(self, topic_str: str, data: Any, msg: Any) -> None:
         if not msg.payload:  # empty = retain-clear message, ignore

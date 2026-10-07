@@ -251,7 +251,11 @@ class Migration:
             await self._place_on_target(agent_name, from_node, target_node, cfg, state, left_behind)
             return
         if await self._respawn_locally(agent_name, from_node, cfg, state, left_behind):
-            # Local again, and confirmed: the source may now drop its copy.
+            # Local again, and confirmed: the source may now drop its copy, and
+            # its desired state must stop listing it. That list is retained and
+            # read again whenever the node reconnects, so an agent left in it
+            # comes back there beside this one.
+            await self.update_desired_state(from_node, remove_name=agent_name)
             await self._tell_source_to_delete(agent_name, from_node)
 
     async def _place_on_target(
@@ -1077,8 +1081,14 @@ class Migration:
         self, node: str, new_config: dict[str, Any] | None = None, remove_name: str | None = None
     ) -> None:
         """Maintain nodes/{node}/desired_state as a retained MQTT message containing
-        ALL agents that should run on this node. The runner reads this on startup
-        and reconciles — spawning missing agents, ignoring already-running ones.
+        ALL agents that should run on this node.
+
+        **The list must be complete.** The node starts what it names and stops
+        what it leaves out, so a list that is short by accident stops agents
+        that should be running. It is built from the whole spawn registry for
+        the node, which is read from storage when asked for rather than loaded
+        after startup; anything that ever publishes it another way has to be
+        just as complete.
         """
         if self.host is None:
             return

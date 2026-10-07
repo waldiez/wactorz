@@ -879,7 +879,7 @@ class Actor(ABC):
         # local: avoids core/__init__ import cycle
         from .mqtt import (
             AGENT_SESSION_EXPIRY_SECONDS,
-            client_id,
+            agent_client_id,
             mqtt_client,
             reconnect_wait,
             session_kwargs,
@@ -891,10 +891,10 @@ class Actor(ABC):
         # connects clean rather than leaving one behind per incarnation.
         durable = has_derived_id(self.name, self.actor_id)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
-        # A `commands` detail, not the bare actor id: SubscriptionHub already
-        # connects as `wactorz-agent-<actor id>`, and two connections sharing an
-        # id kick each other off the broker for ever.
-        identifier = client_id("agent", str(self.actor_id), "commands")
+        # A `commands` purpose: SubscriptionHub already holds this agent's
+        # unqualified id, and two connections sharing an id kick each other off
+        # the broker for ever.
+        identifier = agent_client_id(str(self.actor_id), self._node, "commands")
         # Whether the connection is known to be down, so it is said when it
         # goes and when it comes back, not at every attempt in between.
         down = False

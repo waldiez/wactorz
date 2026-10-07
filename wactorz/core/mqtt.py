@@ -174,6 +174,21 @@ def client_id(role: str, scope: str, detail: str | None = None) -> str:
     return "-".join(parts)
 
 
+def agent_client_id(actor_id: str, node: str = "", purpose: str | None = None) -> str:
+    """The client id of a connection an agent holds: scoped to where it runs.
+
+    Actor ids come from the agent's name, so the same agent has the same id on
+    every machine. Scoped by the id alone, a copy on a node and a copy on main --
+    the two sides of a migration, or a node still running what main took back --
+    took each other's connection in a loop, each one's connect the other's
+    disconnect. The scope is the node's name on a node and this install on main,
+    as it is for every other connection; ``purpose`` separates the connections
+    one agent holds.
+    """
+    detail = f"{actor_id}-{purpose}" if purpose else actor_id
+    return client_id("agent", node or install_id(), detail)
+
+
 def reconnect_wait(delay: float) -> float:
     """How long to wait before trying the broker again: ``delay``, and a little more.
 

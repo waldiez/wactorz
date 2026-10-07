@@ -28,7 +28,7 @@ import aiomqtt
 from paho.mqtt.packettypes import PacketTypes
 from paho.mqtt.properties import Properties
 
-from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client
+from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, agent_client_id, mqtt_client
 from .topic_bus import topic_matches
 
 logger = logging.getLogger(__name__)
@@ -275,7 +275,9 @@ class SubscriptionHub:
         return mqtt_client(
             self._actor._mqtt_broker,
             self._actor._mqtt_port,
-            identifier=client_id("agent", str(self._actor.actor_id)),
+            identifier=agent_client_id(
+                str(self._actor.actor_id), getattr(self._actor, "_node", "") or ""
+            ),
             **self._session_kwargs(),
         )
 

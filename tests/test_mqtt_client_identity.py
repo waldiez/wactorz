@@ -18,6 +18,7 @@ from wactorz.core.actor import derive_actor_id, has_derived_id
 from wactorz.core.mqtt import (
     AGENT_SESSION_EXPIRY_SECONDS,
     SERVER_SESSION_EXPIRY_SECONDS,
+    agent_client_id,
     client_id,
     install_id,
 )
@@ -111,6 +112,36 @@ class TestClientId:
         # by the install id, because several nodes share one install.
         assert client_id("node", "rpi") != client_id("nodepub", "rpi")
         assert client_id("node", "rpi") != client_id("node", "nuc")
+
+
+class TestAnAgentsConnections:
+    """An agent's id comes from its name, so it is the same on every machine.
+
+    Scoped by it alone, a copy of an agent on a node and one on main -- the two
+    sides of a migration, or a node still running what main took back -- took
+    each other's connection in a loop. Scoped like every other connection, they
+    cannot.
+    """
+
+    def test_on_main_it_is_scoped_to_the_install(self, state_dir: Path) -> None:
+        actor_id = derive_actor_id("flic")
+
+        assert agent_client_id(actor_id) == f"wactorz-agent-{install_id()}-{actor_id}"
+
+    def test_on_a_node_to_the_nodes_name(self) -> None:
+        actor_id = derive_actor_id("flic")
+
+        assert agent_client_id(actor_id, "rpi") == f"wactorz-agent-rpi-{actor_id}"
+
+    def test_one_agent_on_main_and_on_a_node_do_not_collide(self, state_dir: Path) -> None:
+        actor_id = derive_actor_id("flic")
+
+        assert agent_client_id(actor_id) != agent_client_id(actor_id, "rpi")
+
+    def test_its_two_connections_are_told_apart(self) -> None:
+        actor_id = derive_actor_id("flic")
+
+        assert agent_client_id(actor_id, "rpi") != agent_client_id(actor_id, "rpi", "commands")
 
 
 class TestThePublisher:

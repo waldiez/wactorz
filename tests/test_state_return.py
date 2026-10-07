@@ -138,6 +138,10 @@ async def run_listener(
     setattr(main, "_spawn_from_config", _spawn)
     setattr(main, "_queue_notification", run.notifications.append)
     setattr(main, "_restore_earned_trust", lambda name, cfg: False)
+    # The registry the source node's desired state is rebuilt from: empty, as
+    # it is for an agent coming home, whose entry no longer names the node.
+    setattr(main, "_get_spawn_registry", dict)
+    setattr(main, "_inject_llm_bridge_code", lambda cfg: cfg)
 
     def _stop() -> None:
         main.state = ActorState.STOPPED
@@ -170,6 +174,27 @@ class TestTheSourcesCopy:
         run = await run_listener(monkeypatch, [state_return()], pending=waiting())
 
         assert ("nodes/rpi/stop", {"name": "collector", "delete": True}) in run.published
+
+    async def test_the_source_stops_listing_it_once_it_is_local(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The list is retained and read again whenever the node reconnects: an
+        # agent left in it came back there, beside the copy now running here.
+        run = await run_listener(monkeypatch, [state_return()], pending=waiting())
+
+        desired = [p for t, p in run.published if t == "nodes/rpi/desired_state"]
+        assert desired, "the source's desired state was never rewritten"
+        assert [a.get("name") for a in desired[-1]["agents"]] == []
+
+    async def test_a_failed_spawn_leaves_the_source_listing_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The source's stopped copy is the only one left, and what brings it back.
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        assert not [t for t, _ in run.published if t.endswith("/desired_state")]
 
     async def test_a_rejected_hand_back_deletes_nothing(
         self, monkeypatch: pytest.MonkeyPatch

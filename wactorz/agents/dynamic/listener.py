@@ -16,7 +16,7 @@ import time
 import traceback
 from typing import Any
 
-from ...core.mqtt import client_id, mqtt_client
+from ...core.mqtt import agent_client_id, mqtt_client
 from ...core.subscriptions import Binding, is_durable_actor, safe_invoke
 from ...core.subscriptions import SubscriptionHub as SharedSubscriptionHub
 
@@ -54,7 +54,9 @@ class SubscriptionHub(SharedSubscriptionHub):
         return mqtt_client(
             self._actor._mqtt_broker,
             self._actor._mqtt_port,
-            identifier=client_id("agent", str(self._actor.actor_id)),
+            identifier=agent_client_id(
+                str(self._actor.actor_id), getattr(self._actor, "_node", "") or ""
+            ),
             **self._session_kwargs(),
         )
 

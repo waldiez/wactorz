@@ -311,4 +311,5 @@ class TestFromChat:
         assert chat.task_payload('  {"a": 1}  ') == {"a": 1}
         assert chat.task_payload("[1, 2]") == {"text": "[1, 2]"}
         assert chat.task_payload('{"not json"') == {"text": '{"not json"'}
+        assert chat.task_payload('{"not": json}') == {"text": '{"not": json}'}
         assert chat.task_payload("is it raining?") == {"text": "is it raining?"}

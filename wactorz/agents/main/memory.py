@@ -89,11 +89,8 @@ class MemoryMixin(_Host):
             return ""
         running = {actor.name for actor in self._registry.all_actors()}
         lines = []
-        for name in sorted(plugins.discover()):
+        for name, plugin in sorted(plugins.discover().items()):
             if name in running:
-                continue
-            plugin = plugins.for_name(name)
-            if plugin is None:
                 continue
             desc = " ".join(str(plugin.description or "").split())[:120]
             line = f"  {name} — {desc}" if desc else f"  {name}"

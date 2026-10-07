@@ -565,7 +565,7 @@ node holding the old one.</p>
 <tr>
 <td><code>nodes/{name}/stop</code></td>
 <td>→ runner</td>
-<td>Stop a named agent. Payload: <code>{"name": "agent-name"}</code>. Signed.</td>
+<td>Stop a named agent. Payload: <code>{"name": "agent-name"}</code>; <code>"delete": true</code> also removes its state file and clears its retained topics, and <code>"keep_topics": true</code> keeps those for an agent that lives on elsewhere under the same id, as a rolled-back migration does. Signed.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/stop_all</code></td>

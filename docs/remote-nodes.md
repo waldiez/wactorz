@@ -442,7 +442,7 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 |-------|-----------|-------------|
 | `nodes/{name}/spawn` | → runner | Spawn a new agent. Payload: full agent config dict. Not retained — a node that was away catches up from `desired_state`. Signed. |
 | `nodes/{name}/desired_state` | → runner | Every agent the node should be running. Retained; the runner starts any that are missing when it connects, and stops (keeping its state) any it runs that the list leaves out, except one a migration placed there and main has not confirmed yet. Signed. |
-| `nodes/{name}/stop` | → runner | Stop a named agent. Payload: `{"name": "agent-name"}`. Signed. |
+| `nodes/{name}/stop` | → runner | Stop a named agent. Payload: `{"name": "agent-name"}`; `"delete": true` also removes its state file and clears its retained topics, and `"keep_topics": true` keeps those for an agent that lives on elsewhere under the same id, as a rolled-back migration does. Signed. |
 | `nodes/{name}/stop_all` | → runner | Stop all agents and shut down the runner. Signed. |
 | `nodes/{name}/list` | → runner | Request the list of running agents. Response on `nodes/{name}/agents`. |
 | `nodes/{name}/agents` | ← runner | Response to `list`. Contains agent names and actor IDs. |

@@ -44,6 +44,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **A rolled-back migration no longer loses the agent it restores.** When a target node never confirmed a migration, main stopped and deleted the agent there, and the node cleared the agent's retained topics. An agent's id comes from its name, so those were the topics of the copy main was putting back too, and its emptied manifest read as that copy withdrawing: main dropped it from the spawn registry, and it was gone at the next restart. The rollback's delete now keeps the topics.
+
 - **An agent moved back to main no longer stays on its node.** Moving an agent home left it in the node's retained desired state, so the node started it again the next time it reconnected, and nothing stopped it: the node only ever started agents from that list. Main now takes the agent out of the list once it is running at home, and a node stops (keeping its state) any agent it runs that the list leaves out, except one a migration has placed there and main has not confirmed yet. The delete that ends a migration also now removes the state file the node kept, which it skipped because the agent had already stopped.
 
 - **Two copies of one agent no longer knock each other off the broker.** An agent's connections were named after its id alone, and the id comes from its name, so the same agent on main and on a node took each other's connection in a loop, reconnecting every few seconds. Each is now scoped to where it runs, the install on main and the node's name on a node, as every other connection already was. An agent with a broker session starts a fresh one once, under its new name.

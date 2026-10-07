@@ -2,8 +2,9 @@
 
 The web app owns the loop and the signals. Wactorz runs on that loop as a
 task started in the app's lifespan and cancelled when the app stops; the
-actors are stopped and their state written before the process exits. The
-routes reach the running agent through `wactorz.system()`.
+actors are stopped and their state written before the process exits. One
+route reads the running agent through `wactorz.system()`, the other asks it
+through `wactorz.ask()`.
 
     pip install fastapi uvicorn
     python fastapi_app.py                                        # any platform
@@ -67,9 +68,23 @@ async def status() -> dict:
 
 @app.post("/detect")
 async def detect_now(reading: dict) -> dict:
-    """Score one reading on demand, the way a task from chat would."""
-    result = await _actor().call(reading)
-    return {"anomaly": result is not None, **(result or {})}
+    """Score one reading on demand.
+
+    The reading goes to the agent as a task, the way chat sends one, and the
+    function's result is the answer.
+    """
+    try:
+        result = await wactorz.ask(AGENT, reading, timeout=30)
+    except LookupError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(504, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    # A reading that scores as normal returns nothing, which arrives as {"result": None}.
+    if not isinstance(result, dict) or "score" not in result:
+        return {"anomaly": False}
+    return {"anomaly": True, **result}
 
 
 if __name__ == "__main__":

@@ -11,12 +11,14 @@ target, never from the task. `tests/test_deploy_broker_tls.py` and
 order it runs in and what it reports when a step cannot happen.
 """
 
+import asyncio
 import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import asyncssh
 import pytest
@@ -27,6 +29,26 @@ from wactorz.agents import installer_agent, node_service
 from wactorz.agents.installer_agent import InstallerAgent, NodeTls
 from wactorz.config import CONFIG, DeployTarget
 from wactorz.core.actor import Message, MessageType
+
+
+def _versions_off_loop() -> dict[str, str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    return {"numpy": "1.0"}
+
+
+def _stale_off_loop(before: dict[str, str], after: dict[str, str]) -> list[str]:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert before == after == {"numpy": "1.0"}
+    return []
+
+
+def _requirement_off_loop(requirement: str) -> bool:
+    with pytest.raises(RuntimeError, match="no running event loop"):
+        asyncio.get_running_loop()
+    assert requirement == "numpy"
+    return False
 
 
 class _Conn:
@@ -105,7 +127,7 @@ def _pip(
         )
 
     monkeypatch.setattr(installer, "_pip_install", _install)
-    monkeypatch.setattr(installer, "_is_installed", lambda name: name in installed)
+    monkeypatch.setattr(installer_agent, "requirement_is_satisfied", lambda name: name in installed)
     return ran
 
 
@@ -119,7 +141,7 @@ class TestDispatch:
             reached.append((name, payload))
             return {}
 
-        monkeypatch.setattr(installer, "_install_packages", lambda p: _async("install", p))
+        monkeypatch.setattr(installer, "_install_packages", lambda p, **_kw: _async("install", p))
         monkeypatch.setattr(
             installer, "_node_install", lambda p: _async("node_install", p["action"])
         )
@@ -209,13 +231,32 @@ class TestDispatch:
 
 
 class TestLocalInstall:
+    async def test_metadata_scans_run_off_the_event_loop(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        ran = _pip(installer, monkeypatch)
+        versions = Mock(side_effect=_versions_off_loop)
+        stale = Mock(side_effect=_stale_off_loop)
+        requirement = Mock(side_effect=_requirement_off_loop)
+        monkeypatch.setattr(installer_agent, "installed_versions", versions)
+        monkeypatch.setattr(installer_agent, "stale_loaded_distributions", stale)
+        monkeypatch.setattr(installer_agent, "requirement_is_satisfied", requirement)
+
+        result = await installer._install_packages(["numpy"])
+
+        assert result["success"] is True
+        assert ran == ["numpy"]
+        assert versions.call_count == 2
+        stale.assert_called_once()
+        requirement.assert_called_once_with("numpy")
+
     async def test_nothing_to_install_is_an_error(self, installer: InstallerAgent) -> None:
         assert await installer._install_packages([]) == {"error": "No packages specified"}
 
     async def test_each_package_is_reported_on_its_own(
         self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        ran = _pip(installer, monkeypatch, installed={"PIL"}, failing={"broken-pkg"})
+        ran = _pip(installer, monkeypatch, installed={"pillow"}, failing={"broken-pkg"})
 
         result = await installer._install_packages(
             ["cv2", "pillow", "", "--index-url=http://evil", "broken-pkg"]
@@ -232,6 +273,84 @@ class TestLocalInstall:
             "opencv-python",
             "broken-pkg",
         ]
+
+    async def test_a_pinned_requirement_is_checked_as_written(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The pin reaches the check intact: "some version imports" is not
+        # "the pinned version is installed".
+        ran = _pip(installer, monkeypatch, installed={"reachy-mini==1.8.4"})
+
+        result = await installer._install_packages(["reachy-mini==1.8.4", "deepgram-sdk>=3,<4"])
+
+        assert ran == ["deepgram-sdk>=3,<4"]
+        assert result["results"]["reachy-mini==1.8.4"] == "already_installed"
+
+    async def test_with_notify_each_install_is_announced_in_chat(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _pip(installer, monkeypatch, installed={"numpy"})
+        told: list[str] = []
+
+        async def _notify(text: str, **_extra: Any) -> None:
+            told.append(text)
+
+        monkeypatch.setattr(installer, "notify_user", _notify)
+
+        await installer._install_packages(
+            ["reachy-mini==1.8.4", "numpy", "edge-tts"], for_agent="reachy-mini", notify=True
+        )
+
+        assert told == [
+            "Installing reachy-mini==1.8.4 (1/3) for reachy-mini…",
+            "Installing edge-tts (3/3) for reachy-mini…",
+        ]
+
+    async def test_without_notify_the_chat_is_left_alone(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _pip(installer, monkeypatch)
+        told: list[str] = []
+
+        async def _notify(text: str, **_extra: Any) -> None:
+            told.append(text)
+
+        monkeypatch.setattr(installer, "notify_user", _notify)
+
+        await installer._install_packages(["edge-tts"])
+
+        assert told == []
+
+    async def test_a_loaded_package_the_install_replaced_asks_for_a_restart(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _pip(installer, monkeypatch)
+        snapshots = iter([{"websockets": "17.1"}, {"websockets": "15.0.1"}])
+        monkeypatch.setattr(installer_agent, "installed_versions", lambda: next(snapshots))
+        monkeypatch.setattr(
+            installer_agent,
+            "stale_loaded_distributions",
+            lambda before, after: [f"websockets {before['websockets']} -> {after['websockets']}"],
+        )
+
+        result = await installer._install_packages(["reachy-mini==1.8.4"])
+
+        assert result["success"] is True
+        assert result["restart_required"] == ["websockets 17.1 -> 15.0.1"]
+
+    async def test_nothing_installed_means_nothing_to_restart_for(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _pip(installer, monkeypatch, installed={"numpy"})
+
+        def _unexpected(_before: Any, _after: Any) -> list[str]:
+            raise AssertionError("no pip ran, so nothing can be stale")
+
+        monkeypatch.setattr(installer_agent, "stale_loaded_distributions", _unexpected)
+
+        result = await installer._install_packages(["numpy"])
+
+        assert result["restart_required"] == []
 
     @pytest.mark.parametrize(
         ("requested", "alternative"),
@@ -272,10 +391,75 @@ class TestLocalInstall:
             "requests",
         ]
 
+    async def test_an_environment_without_pip_uses_uv(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        commands: list[list[str]] = []
+
+        def _run(cmd: list[str], **_kwargs: Any) -> Any:
+            commands.append(cmd)
+            return SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        monkeypatch.setattr(
+            installer_agent, "installer_command", lambda: ["uv", "pip", "install", "--python", "py"]
+        )
+
+        assert (await installer._pip_install("requests"))[0] is True
+        # pip's --break-system-packages is not passed to uv.
+        assert commands == [["uv", "pip", "install", "--python", "py", "requests", "--quiet"]]
+
+    async def test_an_environment_with_neither_says_how_to_get_pip(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _unexpected(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("there is nothing to run")
+
+        monkeypatch.setattr(subprocess, "run", _unexpected)
+        monkeypatch.setattr(installer_agent, "installer_command", lambda: None)
+
+        ok, message = await installer._pip_install("requests")
+
+        assert ok is False
+        assert "ensurepip" in message
+
+    async def test_a_successful_install_is_made_importable_at_once(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # In the Docker image pip writes to a user site that did not exist when
+        # the process started, so Python never put it on the path.
+        calls: list[str] = []
+
+        def _run(_cmd: list[str], **_kwargs: Any) -> Any:
+            return SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        monkeypatch.setattr(
+            installer_agent, "make_user_site_importable", lambda: calls.append("added") or True
+        )
+
+        await installer._pip_install("requests")
+
+        assert calls == ["added"]
+
+    async def test_a_failed_install_changes_nothing_on_the_path(
+        self, installer: InstallerAgent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _run(_cmd: list[str], **_kwargs: Any) -> Any:
+            return SimpleNamespace(returncode=1, stdout=b"", stderr=b"ERROR")
+
+        def _unexpected() -> bool:
+            raise AssertionError("nothing was installed")
+
+        monkeypatch.setattr(subprocess, "run", _run)
+        monkeypatch.setattr(installer_agent, "make_user_site_importable", _unexpected)
+
+        assert (await installer._pip_install("requests"))[0] is False
+
     @pytest.mark.parametrize(
         ("error", "message"),
         [
-            (subprocess.TimeoutExpired("pip", 180), "pip timed out after 180s"),
+            (subprocess.TimeoutExpired("pip", 900), "pip timed out after 900s"),
             (FileNotFoundError("python"), "Python executable not found"),
             (PermissionError("denied"), "PermissionError: denied"),
         ],

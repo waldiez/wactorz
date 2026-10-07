@@ -77,11 +77,14 @@ class FakeAgent:
             "motors_enabled": False,
             "awake": False,
             "last_cmd": None,
+            # What setup() stores from the SDK; a marker is enough to see it used.
+            "create_head_pose": lambda *_a, **_k: "home-pose",
         }
         self.published: list[tuple[str, Any]] = []
         self.logs: list[str] = []
         self.alerts: list[str] = []
         self.persisted: dict = {}
+        self.background: list[asyncio.Task] = []
 
     async def publish(self, topic, payload):
         self.published.append((topic, payload))
@@ -98,6 +101,11 @@ class FakeAgent:
     def persist(self, key, value):
         self.persisted[key] = value
 
+    def run_in_background(self, coro):
+        task = asyncio.create_task(coro)
+        self.background.append(task)
+        return task
+
     def events(self):
         return [p for t, p in self.published if t == "custom/reachy/events"]
 
@@ -111,6 +119,7 @@ def _fake_mini():
     mini = types.SimpleNamespace()
     mini.connected = True
     mini.wake_up = mock.Mock()
+    mini.goto_target = mock.Mock()
     mini.__exit__ = mock.Mock(return_value=False)
     mini.media = types.SimpleNamespace(
         audio=types.SimpleNamespace(
@@ -151,9 +160,7 @@ class ReconnectCommandTest(unittest.TestCase):
 
         self.assertFalse(configured)
         self.assertFalse(agent.state["conversation_echo_control"])
-        self.assertTrue(
-            any("automatic voice interruption is disabled" in line for line in agent.logs)
-        )
+        self.assertTrue(any("Voice interruption is unavailable" in line for line in agent.logs))
 
     def test_reconnect_opens_link_and_brings_robot_up(self):
         agent = FakeAgent(mini=None)
@@ -401,3 +408,382 @@ class ConcurrentReconnectTest(unittest.TestCase):
         self.assertTrue(first["ok"])
         self.assertFalse(second["ok"])
         self.assertIn("already in progress", second["error"])
+
+
+class AutomaticReconnectTest(unittest.IsolatedAsyncioTestCase):
+    async def test_motion_only_reconnect_preserves_media_handle(self):
+        mini = _fake_mini()
+        old_client = types.SimpleNamespace(
+            host="192.168.68.64",
+            port=8000,
+            disconnect=mock.Mock(),
+        )
+        new_client = types.SimpleNamespace(disconnect=mock.Mock())
+        mini.client = old_client
+        mini._connect_single = mock.Mock(return_value=new_client)
+        agent = FakeAgent(mini=mini)
+        agent.state["motion_link_error"] = "Lost connection with the server"
+
+        recovered = await NS["_reconnect_motion_client"](agent)
+
+        self.assertTrue(recovered)
+        self.assertIs(mini.client, new_client)
+        mini._connect_single.assert_called_once_with(host="192.168.68.64", port=8000, timeout=5.0)
+        old_client.disconnect.assert_called_once()
+        self.assertTrue(agent.state["awake"])
+        self.assertNotIn("motion_link_error", agent.state)
+
+    async def test_an_automatic_recovery_wakes_without_a_sound(self):
+        # wake_up() plays a sound, and the daemon stops whatever is playing to
+        # start it: a recovery run while Reachy talks would cut him off.
+        mini = _fake_mini()
+        mini.client = types.SimpleNamespace(host="robot", port=8000, disconnect=mock.Mock())
+        mini._connect_single = mock.Mock(return_value=types.SimpleNamespace(disconnect=mock.Mock()))
+        agent = FakeAgent(mini=mini)
+
+        await NS["_reconnect_motion_client"](agent)
+
+        mini.wake_up.assert_not_called()
+        mini.goto_target.assert_called_once()
+        self.assertEqual(mini.goto_target.call_args.kwargs["head"], "home-pose")
+
+    async def test_the_full_reconnect_fallback_is_quiet_too(self):
+        agent = FakeAgent(mini=_fake_mini())
+        payloads = []
+
+        async def fake_reconnect(_agent, payload):
+            payloads.append(payload)
+            _agent.state.pop("motion_link_error", None)
+            return {"connected": True}
+
+        async def no_motion_client(_agent):
+            return False
+
+        with mock.patch.dict(
+            NS, {"_reconnect": fake_reconnect, "_reconnect_motion_client": no_motion_client}
+        ):
+            await NS["_motion_reconnect_loop"](agent)
+
+        self.assertEqual(payloads, [{"force": True, "quiet": True}])
+
+    async def test_a_quiet_bring_up_never_plays_the_wake_sound(self):
+        mini = _fake_mini()
+        agent = FakeAgent(mini=mini)
+
+        await NS["_bring_up_robot"](agent, quiet=True)
+
+        mini.wake_up.assert_not_called()
+        mini.goto_target.assert_called_once()
+        self.assertTrue(agent.state["awake"])
+
+    async def test_recovery_waits_for_the_current_speech_to_end(self):
+        agent = FakeAgent(mini=_fake_mini())
+        agent.state["_speaking"] = True
+        order = []
+
+        async def fake_reconnect(_agent, _payload):
+            order.append("reconnect")
+            _agent.state.pop("motion_link_error", None)
+            return {"connected": True}
+
+        async def no_motion_client(_agent):
+            return False
+
+        async def finish_speaking():
+            await asyncio.sleep(0.2)
+            order.append("speech ended")
+            agent.state["_speaking"] = False
+
+        with mock.patch.dict(
+            NS, {"_reconnect": fake_reconnect, "_reconnect_motion_client": no_motion_client}
+        ):
+            await asyncio.gather(NS["_motion_reconnect_loop"](agent), finish_speaking())
+
+        self.assertEqual(order, ["speech ended", "reconnect"])
+
+    async def test_waiting_for_quiet_gives_up_after_its_limit(self):
+        agent = FakeAgent(mini=_fake_mini())
+        agent.state["_speaking"] = True  # never ends
+
+        await asyncio.wait_for(NS["_wait_until_quiet"](agent, limit=0.2), timeout=2)
+
+    async def test_forced_failure_classification_covers_changed_sdk_wording(self):
+        agent = FakeAgent(mini=_fake_mini())
+        release = asyncio.Event()
+
+        async def blocked_reconnect(_agent, _payload):
+            await release.wait()
+            return {"connected": True}
+
+        with mock.patch.dict(NS, {"_reconnect": blocked_reconnect}):
+            task = NS["_note_motion_link_failure"](
+                agent, RuntimeError("unexpected SDK wake failure"), force=True
+            )
+            self.assertIsNotNone(task)
+            self.assertFalse(agent.state["awake"])
+            self.assertIn("unexpected SDK wake failure", agent.state["motion_link_error"])
+            release.set()
+            await task
+
+    async def test_motion_failure_retries_until_reconnected(self):
+        agent = FakeAgent(mini=_fake_mini())
+        attempts = 0
+
+        async def fake_reconnect(_agent, _payload):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("robot still unavailable")
+            _agent.state.pop("motion_link_error", None)
+            return {"connected": True}
+
+        with mock.patch.dict(
+            NS,
+            {
+                "_reconnect": fake_reconnect,
+                "_MOTION_RECONNECT_INITIAL_S": 0.0,
+                "_MOTION_RECONNECT_MAX_S": 0.0,
+            },
+        ):
+            NS["_note_motion_link_failure"](agent, RuntimeError("Lost connection with the server"))
+            await agent.background[-1]
+
+        self.assertEqual(attempts, 2)
+        self.assertNotIn("motion_link_error", agent.state)
+        self.assertTrue(any("animations resumed" in line for line in agent.logs))
+
+    async def test_repeated_failed_frames_start_one_reconnect_task(self):
+        agent = FakeAgent(mini=_fake_mini())
+        release = asyncio.Event()
+
+        async def blocked_reconnect(_agent, _payload):
+            await release.wait()
+            _agent.state.pop("motion_link_error", None)
+            return {"connected": True}
+
+        with mock.patch.dict(NS, {"_reconnect": blocked_reconnect}):
+            NS["_note_motion_link_failure"](agent, RuntimeError("Lost connection with the server"))
+            first = agent.state["_motion_reconnect_task"]
+            NS["_note_motion_link_failure"](agent, RuntimeError("Task did not complete in time"))
+            self.assertIs(agent.state["_motion_reconnect_task"], first)
+            self.assertEqual(len(agent.background), 1)
+            release.set()
+            await first
+
+
+class PresenterPhraseTest(unittest.IsolatedAsyncioTestCase):
+    async def test_set_volume_presenter_mode_stays_local(self):
+        agent = FakeAgent(mini=_fake_mini())
+        seen = {}
+
+        async def fake_dispatch(_agent, cmd, payload, return_result=False):
+            seen.update({"cmd": cmd, "payload": payload, "return_result": return_result})
+            return {"ok": True, "level": 100, "result": "presenter"}
+
+        async def forbidden_planner(*_args, **_kwargs):
+            raise AssertionError("presenter mode must not require an LLM call")
+
+        with mock.patch.dict(
+            NS,
+            {"_dispatch": fake_dispatch, "_nl_to_commands": forbidden_planner},
+        ):
+            await NS["handle_task"](agent, {"text": "set volume presenter mode"})
+
+        self.assertEqual(seen["cmd"], "volume")
+        self.assertEqual(seen["payload"]["preset"], "presenter")
+
+
+_NO_PLUGIN = "Failed to create webrtcsrc element. Is the GStreamer webrtc rust plugin installed?"
+
+
+def _sdk_without_webrtc_plugin(mini, opened):
+    """An SDK that reaches the robot but cannot build the WebRTC media link.
+
+    As on a Linux host without gst-plugins-rs: asking for media fails on the
+    missing plugin, discovery without an address fails differently, and a
+    connection without media succeeds.
+    """
+
+    def construct(**kwargs):
+        opened.append(kwargs)
+
+        def enter(*_args):
+            if kwargs.get("media_backend") == "no_media":
+                return mini
+            if kwargs.get("host"):
+                raise RuntimeError(_NO_PLUGIN)
+            raise RuntimeError("Network connection attempt failed.")
+
+        return types.SimpleNamespace(__enter__=enter)
+
+    sdk = types.ModuleType("reachy_mini")
+    sdk.ReachyMini = construct  # pyright: ignore[reportAttributeAccessIssue]
+    return sdk
+
+
+class MediaUnavailableTest(unittest.TestCase):
+    """A host that can reach Reachy but not build its media link still moves and speaks."""
+
+    def test_the_robot_is_opened_without_media_when_the_plugin_is_missing(self):
+        agent = FakeAgent(mini=None, robot_host="192.168.0.186", connection_mode="network")
+        mini, opened = _fake_mini(), []
+
+        with mock.patch.dict(
+            "sys.modules", {"reachy_mini": _sdk_without_webrtc_plugin(mini, opened)}
+        ):
+            got, _err, _tried = _run(NS["_open_robot"](agent))
+
+        self.assertIs(got, mini)
+        self.assertIn("webrtcsrc", agent.state["media_unavailable"])
+        # The retry reuses the attempt that reached the robot, not the one that did not.
+        self.assertEqual(
+            opened[-1],
+            {"host": "192.168.0.186", "connection_mode": "network", "media_backend": "no_media"},
+        )
+        self.assertTrue(any("Movement and speech work" in line for line in agent.logs))
+
+    def test_other_connection_failures_do_not_fall_back(self):
+        agent = FakeAgent(mini=None, robot_host="", connection_mode="network")
+        opened = []
+
+        with mock.patch.dict(
+            "sys.modules", {"reachy_mini": _sdk_without_webrtc_plugin(_fake_mini(), opened)}
+        ):
+            got, err, _tried = _run(NS["_open_robot"](agent))
+
+        self.assertIsNone(got)
+        self.assertIn("Network connection attempt failed", str(err))
+        self.assertNotIn("media_unavailable", agent.state)
+        self.assertFalse(any(kw.get("media_backend") == "no_media" for kw in opened))
+
+    def test_the_daemon_is_found_through_the_control_connection(self):
+        mini = _fake_mini()
+        mini.media = None
+        mini.client = types.SimpleNamespace(host="192.168.0.186", port=8000)
+        agent = FakeAgent(mini=mini)
+        agent.state["media_unavailable"] = _NO_PLUGIN
+
+        self.assertEqual(NS["_daemon_url"](agent), "http://192.168.0.186:8000")
+
+    def test_with_media_the_control_connection_is_not_consulted(self):
+        mini = _fake_mini()
+        mini.client = types.SimpleNamespace(host="elsewhere", port=1)
+        agent = FakeAgent(mini=mini)
+
+        self.assertIsNone(NS["_daemon_url"](agent))  # media has no daemon_url here
+
+    def test_the_microphone_and_camera_explain_what_is_missing(self):
+        agent = FakeAgent(mini=_fake_mini())
+        agent.state["media_unavailable"] = _NO_PLUGIN
+
+        with self.assertRaises(RuntimeError) as raised:
+            NS["_media"](agent)
+
+        self.assertIn("gst-plugins-rs", str(raised.exception))
+        self.assertIn("Movement and speech work", str(raised.exception))
+
+    def test_speech_goes_to_the_daemon_without_media(self):
+        mini = _fake_mini()
+        mini.media = None
+        agent = FakeAgent(mini=mini)
+        agent.state.update({"media_unavailable": _NO_PLUGIN, "life_enabled": False})
+        played = []
+
+        async def prepare(_agent, _text, _payload):
+            return {
+                "raw_path": "/tmp/a.mp3",
+                "play_path": "/tmp/a.mp3",
+                "voice": "v",
+                "speech_seconds": 0.0,
+                "trim_db": 0.0,
+                "beats": [],
+            }
+
+        async def via_daemon(_agent, path):
+            played.append(path)
+
+        with mock.patch.dict(NS, {"_prepare_speech": prepare, "_play_via_daemon": via_daemon}):
+            result = _run(NS["_say"](agent, {"text": "Hello from Linux."}))
+
+        self.assertEqual(played, ["/tmp/a.mp3"])
+        self.assertEqual(result["said"], "Hello from Linux.")
+
+
+class MediaUnavailableCommandsTest(unittest.TestCase):
+    """What a person sees when a command needs the camera or microphone that are not there."""
+
+    def _agent(self):
+        agent = FakeAgent(mini=_fake_mini())
+        agent.state["media_unavailable"] = _NO_PLUGIN
+        return agent
+
+    def test_a_conversation_is_refused_before_it_announces_itself(self):
+        agent = self._agent()
+
+        async def must_not_start(_agent, _payload):
+            raise AssertionError("the conversation should not start")
+
+        with mock.patch.dict(NS, {"_conversation_start": must_not_start}):
+            res = _run(NS["_dispatch"](agent, "conversation_start", {}, return_result=True))
+
+        self.assertFalse(res["ok"])
+        self.assertIn("Movement and speech work", res["result"])
+
+    def test_every_camera_and_microphone_command_is_refused_the_same_way(self):
+        for cmd in (
+            "camera",
+            "describe",
+            "look_around",
+            "look_behind",
+            "listen",
+            "ask_voice",
+            "doa",
+        ):
+            with self.subTest(cmd=cmd):
+                res = _run(NS["_dispatch"](self._agent(), cmd, {}, return_result=True))
+
+                self.assertFalse(res["ok"])
+                self.assertIn("gst-plugins-rs", res["result"])
+
+    def test_a_failed_command_answers_in_a_sentence(self):
+        agent = FakeAgent(mini=_fake_mini())
+
+        res = _run(NS["_dispatch"](agent, "no_such_command", {}, return_result=True))
+
+        self.assertTrue(res["result"].startswith("I couldn't do that: unknown cmd"))
+
+    def test_a_dropped_motor_link_says_the_reconnect_is_already_happening(self):
+        agent = FakeAgent(mini=_fake_mini())
+
+        async def dropped(_agent, _payload):
+            raise RuntimeError("Task did not complete in time.")
+
+        async def recovering(_agent):
+            return None
+
+        with mock.patch.dict(NS, {"_pose": dropped, "_motion_reconnect_loop": recovering}):
+            res = _run(NS["_dispatch"](agent, "pose", {"yaw": 10}, return_result=True))
+
+        self.assertIn("reconnecting on my own", res["result"])
+        self.assertNotIn('Say "reconnect"', res["result"])
+
+    def test_waking_without_media_still_plays_the_chime(self):
+        agent = self._agent()
+        agent.state["motion_lock"] = asyncio.Lock()
+        chimes = []
+
+        async def daemon_sound(_agent, sound):
+            chimes.append(sound)
+
+        async def motors_on(_agent):
+            return True
+
+        with mock.patch.dict(
+            NS, {"_play_daemon_sound": daemon_sound, "_ensure_motors_enabled": motors_on}
+        ):
+            res = _run(NS["_dispatch"](agent, "wake", {}, return_result=True))
+
+        self.assertEqual(res["result"], "I'm awake.")
+        self.assertEqual(chimes, ["wake_up.wav"])
+        # The SDK's wake_up plays through the missing media and logs a warning.
+        agent.state["mini"].wake_up.assert_not_called()

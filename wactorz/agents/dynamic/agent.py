@@ -96,10 +96,15 @@ class DynamicAgent(Actor):
         output_schema: dict[str, Any] | None = None,  # returned result fields
         llm_provider: Any = None,  # optional LLM for agent.llm.chat()
         trusted: bool = False,  # True = catalog agent, skip safety validator
+        task_timeout_s: float | None = None,  # recipe's own handle_task() limit
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._code = code
+        if task_timeout_s is not None:
+            # A recipe whose tasks legitimately run long (real-time playback, a
+            # hardware move) declares so; every other agent keeps the default.
+            self._HANDLE_TASK_TIMEOUT = float(task_timeout_s)
         self.poll_interval = poll_interval
         self.description = description
         self.input_schema = input_schema or {}
@@ -634,6 +639,15 @@ class DynamicAgent(Actor):
                 if attempt >= self._MAX_SETUP_RETRIES:
                     break  # exhausted retries
 
+                if isinstance(e, ModuleNotFoundError):
+                    # A package that is not installed is not a bug in the code,
+                    # and the model cannot install it. Asked anyway, it rewrites
+                    # working code around the import, and a rewrite that happens
+                    # to start is saved over the original — for a catalogue
+                    # agent, over code that was reviewed.
+                    await self._report_missing_module(e)
+                    break
+
                 # Ask LLM to fix the runtime error
                 fixed = await self._fix_runtime_with_llm(current_code, str(e), err)
                 if fixed is None:
@@ -673,6 +687,21 @@ class DynamicAgent(Actor):
                     attempt + 1,
                 )
         return last_error
+
+    async def _report_missing_module(self, error: ModuleNotFoundError) -> None:
+        """Tell the user which package this agent could not import, and what to do."""
+        module = error.name or str(error)
+        logger.error(
+            "[%s] setup() needs module %r, which is not installed — not asking the model "
+            "to rewrite the code",
+            self.name,
+            module,
+        )
+        await self.notify_user(
+            f"{self.name} could not start: the Python module '{module}' is not installed. "
+            f"Spawn {self.name} again to install its packages, or install the package that "
+            f"provides '{module}' on this machine and then run /agents restart {self.name}."
+        )
 
     async def _run_setup(self) -> None:
         """Run setup() as a background task with LLM self-correction on failure.

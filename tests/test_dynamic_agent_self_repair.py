@@ -350,3 +350,35 @@ class TestRepairingSetup:
         assert agent._api.state.get("repaired_setup") is True
         assert agent.state is not ActorState.FAILED
         assert agent._code == REPAIRED_SETUP.strip()
+
+    async def test_a_missing_package_is_reported_not_rewritten(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The model cannot install a package; asked, it rewrites working code."""
+        llm = ScriptedLLM(REPAIRED_SETUP)
+        agent = make_agent(tmp_path, MISSING_MODULE_SETUP, llm)
+        told: list[str] = []
+
+        async def _notify(text: str, **_extra: Any) -> None:
+            told.append(text)
+
+        monkeypatch.setattr(agent, "notify_user", _notify)
+        await agent.on_start()
+
+        await until(lambda: agent.state is ActorState.FAILED)
+        await shut_down(agent)
+
+        assert llm.prompts == []
+        assert agent._code.strip() == MISSING_MODULE_SETUP.strip()
+        (notice,) = told
+        assert "'definitely_not_installed_zzz' is not installed" in notice
+        assert "/agents restart crashy" in notice
+
+
+MISSING_MODULE_SETUP = """
+async def setup(agent):
+    import definitely_not_installed_zzz  # noqa: F401
+
+async def process(agent):
+    agent.state["process_runs"] = agent.state.get("process_runs", 0) + 1
+"""

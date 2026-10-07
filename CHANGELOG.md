@@ -21,6 +21,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **Room for a LangGraph graph, an AG2 conversation or a training job inside an agent.** `concurrency=N` on `@wactorz.agent` and on `Actor.subscribe` runs that many messages of a topic, and that many tasks, at once, for a function that waits on a model or a job rather than computes; the default stays one at a time, in order. `Actor.state_dir` is the agent's own directory for the files `persist()` is not for: weights, a checkpointer's database, an experiment store. a decorated function's calls through `me.llm` are counted on its card and against the cost limit as they return, `Actor.record_llm_cost(...)` does the same for a model call made outside the system's providers, and two helpers do it for the common cases: `wactorz.core.integrations.langchain.CostCallback` for a LangChain chain or LangGraph graph, `wactorz.core.integrations.ag2.record_reply` for an AG2 1.x reply, with `model_config` giving AG2's agents the system's model (`pip install 'wactorz[langgraph]'` / `'wactorz[ag2]'`). `examples/langgraph_triage/` and `examples/ag2_review/` run each as an agent.
 
+- **Pipelines declared in code, and a rule agent for the glue.** `wactorz.pipeline(name, steps=[...], schedule=..., rules=[...])` declares what the planner otherwise builds from a request: each step is an agent of its own, a schedule becomes a scheduled agent ticking `pipelines/<name>/tick`, and each rule becomes a rule agent. Wiring is checked when the pipeline is declared, so a step listening on a topic nothing publishes is refused before anything starts. A declared pipeline is found through `WACTORZ_PIPELINES`, a `wactorz.pipelines` entry point or `wactorz.run(pipelines_=[...])`, its agents are supervised at startup, and it is recorded beside the planner's pipelines so `/rules` lists it and `/rules delete` stops it. The new `rule` agent type acts when a message on a trigger topic satisfies its conditions: publish a message, send a task to an agent, or call a webhook, with a cooldown, and with the trigger's fields available to the action's payload by the same dotted path a condition uses (`{reading.score}`); a placeholder the trigger lacks is sent as written, and the action still runs. A Home Assistant service call stays with `ha_actuator`. `examples/imu_anomaly/pipeline.py` shows the detector as one stage with a notifier, a scheduled report and an alert rule. Rules are `wactorz.RuleConfig`, `RuleCondition` and `RuleAction` dataclasses the type checker sees, or the equivalent dicts. A new guide, *Using Wactorz as a library*, walks through all of it with examples and names the supported surface.
+
+- **Reachy now has built-in, topic-aware help.** Typed or spoken requests such as `help`,
+  `what can you do?`, and `how do I use the camera?` return commands and keywords without
+  an LLM call or robot connection. Focused guides cover movement, voice, camera, connection,
+  volume, and Wactorz/Home Assistant.
+- **The Ultra add-on can build Reachy Mini's graphics dependencies** when its SDK is installed.
+- **Reachy has opt-in ambient life and speech-matched gestures.** The `life` command provides
+  `calm`, `antennas`, `alive`, and `showtime` presets, additive breathing and gaze motion,
+  occasional attract beats, and word-timed movement while speaking. Ambient motion remains off
+  until explicitly enabled so motor noise cannot interfere with microphone capture.
+
+
 - **Pipelines declared in code, and a rule agent for the glue.** `wactorz.pipeline(name, steps=[...], schedule=..., rules=[...])` declares what the planner otherwise builds from a request: each step is an agent of its own, a schedule becomes a scheduled agent ticking `pipelines/<name>/tick`, and each rule becomes a rule agent. Wiring is checked when the pipeline is declared, so a step listening on a topic nothing publishes is refused before anything starts. A declared pipeline is found through `WACTORZ_PIPELINES`, a `wactorz.pipelines` entry point or `wactorz.run(pipelines_=[...])`, its agents are supervised at startup, and it is recorded beside the planner's pipelines so `/rules` lists it and `/rules delete` stops it. The new `rule` agent type acts when a message on a trigger topic satisfies its conditions: publish a message, send a task to an agent, or call a webhook, with a cooldown, and with the trigger's fields available to the action's payload. A Home Assistant service call stays with `ha_actuator`. `examples/imu_anomaly/pipeline.py` shows the detector as one stage with a notifier, a scheduled report and an alert rule. Rules are `wactorz.RuleConfig`, `RuleCondition` and `RuleAction` dataclasses the type checker sees, or the equivalent dicts. A new guide, *Using Wactorz as a library*, walks through all of it with examples and names the supported surface.
 ### Changed
 
@@ -40,7 +53,73 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - **The compose stacks run Prometheus 3.** Prometheus moves from v2.54.1 to v3.15.0 and the blackbox exporter from v0.25.0 to v0.28.0, both now pinned by digest like the other images. The configuration and the alert rules carry over unchanged. Prometheus 3 no longer ships the old console pages, so the two flags that pointed at them are gone. **Prometheus 3 rewrites the data in the `prometheus-data` volume, and only Prometheus 2.55 or later can read it back:** going back to the earlier version afterwards means removing that volume (`docker volume rm`), losing the history it held.
 
+- **The Reachy documentation now starts with a beginner path.** Wireless and Lite setup,
+  first-run installation, connection checks, first commands, and recovery steps are presented
+  before the advanced MQTT, media, and motion reference. It says what to expect before
+  starting, which systems Reachy works on and what each supports, how to prepare Linux,
+  what the chat shows during a first install and what each outcome means, how to add voice
+  input, and what to do about the common problems. It also corrects two claims: an edited
+  `.env` needs Wactorz restarted, not just the agent; and streaming voice input handles
+  English and Greek together by default. Reachy is not supported in the Docker image or the
+  Home Assistant add-ons, whose images cannot install the robot SDK.
+- **The Reachy template now includes its Deepgram setup.** A copied `.env` names the required
+  API-key variable, Nova-3 bilingual English/Greek settings, streaming controls, and a local
+  faster-whisper alternative without including any credential.
+- **Reachy distinguishes working audio from failed motor commands.** A movement-task timeout now
+  directs the user to reconnect instead of implying the robot is offline, animation presets say
+  when they are only saved for later, and health reports whether its live motor-fault monitor is
+  actually connected. “Overheating status” now reaches Reachy's local health check.
+- **Reachy understands natural volume adjustments locally.** “Raise,” “increase,” “lower,” and
+  “decrease” volume or voice wording now controls the robot speaker without falling through to
+  the general chat agent.
+- **The README now has a maker-first onboarding path.** It states the intended audience,
+  removes product comparisons, and gives a Docker Compose quick start that includes the
+  broker password required by current releases.
+- **Reachy routes framework, health, and Home Assistant questions more reliably.** Questions about
+  running Wactorz agents now bypass smart-home planning, natural connection-health wording reads
+  live robot diagnostics, and device-state questions use Home Assistant's information path rather
+  than an actuator. Reachy no longer claims to perform gestures with hands or arms it does not have,
+  and dashboard-formatted answers are cleaned before speech.
+- **Reachy's network media failures recover locally.** A dropped WebRTC microphone or speaker link
+  gets one bounded reconnect-and-retry with a cooldown. Empty Deepgram results no longer trigger a
+  second language request, Home Assistant status tables are reduced to their answer for speech,
+  repeated verified unknown device requests use a short-lived negative cache, and health replies
+  use conversational wording.
+- **Long Reachy speech is no longer canceled at the generated-agent timeout.** A catalogue
+  recipe can now declare its own `task_timeout_s`, and Reachy's allows for real-time playback
+  while staying below the dashboard gateway's own deadline. Every other agent keeps the default
+  limit.
+- **Structured agent delegations remain structured end to end.** Dictionary payloads such as a
+  weather city are no longer converted into JSON text before local or remote dispatch, preventing
+  an agent from silently falling back to its default input.
+- **Reachy's lifecycle messages are concise and actionable.** The startup log collapses
+  connection, audio, and ambient-motion details into one ready message with the next voice
+  action. Setup-only internals now stay in debug logs; a failed connection names the recovery
+  action first.
+
+- **Reachy voice input uses Deepgram Nova-3 by default on the experimental test branch.** Voice
+  conversations stream Reachy's WebRTC microphone while local VAD guards speech onset, motor
+  noise, cancellation, and timeouts; Deepgram endpointing closes a turn sooner and interim text is
+  published as it arrives. A broken stream falls back to prerecorded transcription of the same
+  captured audio. Set `DEEPGRAM_API_KEY` before using `ask_voice` or a conversation. Local
+  `faster-whisper`, Whisper, and OpenAI transcription remain available through
+  `REACHY_STT_BACKEND`.
+- **Reachy's bilingual voice-control path is safer and more responsive.** Nova-3 streaming uses
+  multilingual English/Greek recognition, explicitly flushes a locally-ended turn before closing
+  the socket, and keeps prerecorded recognition as a same-audio fallback. A low-confidence
+  multilingual result gets one Greek retry using the same recording, while confident English stays
+  on the fast single-pass path. Greek device words now survive the post-resolution actuation guard.
+  Raw delegation blocks are removed from durable conversation history, and an unrelated voice turn
+  cannot replay an older Home Assistant action. Conversation state antenna cues can be enabled
+  independently from continuous listening motion, which remains opt-in because servo noise can
+  reach the live microphone.
+
 ### Fixed
+
+- Reachy dependencies - keep patched Starlette in the shared uv lock without changing the SDK version.
+
+- Structured delegations - keep agent fields and supply JSON text when no prompt is provided.
+- Home Assistant history - remove delegation blocks while preserving surrounding conversation and outcomes.
 
 - **An agent a node cannot run is no longer sent to one.** A node runs generated code, or an LLM agent whose code main writes for it. A native catalogue agent (such as `flic`), a Home Assistant actuator, or a scheduled, rule or module agent is a class built into the server with no program in its config: migrated or spawned onto a node, it started there as an empty agent that answered every message with "has no handle_task function", while the move was reported as done and the working copy on main was purged. Both are now refused before anything stops, with the reason, and the agent stays where it was. An agent already moved this way comes back with `/migrate <agent> local`.
 
@@ -57,6 +136,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **One value that no longer loads no longer costs an agent its whole state.** Each value in an agent's `state.pkl` is now pickled on its own. A model object that will not unpickle after a library upgrade, or an object whose class was renamed, is missing at the next start while the counters and settings stored beside it come back, and the log names it with the reason; before, the whole file was moved aside and the agent started with nothing. Its bytes stay in the file, so the value returns once the code that reads it does, and persisting that key again replaces it. A value that cannot be pickled at all is left out of the file and named once, where before it kept every other key from being written. Existing files are read as they are and written the new way on the next save. **A state file written by this release cannot be read by an earlier one**, so going back to one starts each agent's own keys afresh. With a persistence store, `recall` now reads the store alone, and an actor no longer keeps a second copy of its state file that could return a value the store had dropped.
 
 - **A migration no longer loses state.** What an agent writes while stopping, such as a final counter or an LLM agent's last turn, now goes with it: the state is taken after the agent stops, where it was taken before and the last writes stayed behind in a copy deleted once the move completed. A migration that would leave keys behind because they cannot be written as JSON (a numpy array, a model object) is refused, names them, and leaves the agent running where it is; `/migrate <agent> <node> --force` moves it without them, and the announcement when it arrives names what was left. A state larger than `WACTORZ_MIGRATION_MAX_STATE_BYTES` (8 MiB by default) is refused too. The record main keeps of a migration in progress no longer holds a copy of the agent's state. One migration now gives one notice, sent when the agent is running at its destination, where a move back to main gave two.
+
+- Fix Reachy Mini presenter deployments getting stuck after a transient motor-link failure: failed animations now trigger continuous automatic reconnection with backoff, use a fast motion-only recovery while preserving live WebRTC media, health no longer reports a stale motor connection as live, and common presenter-volume phrasing is handled locally.
+
+- **Reachy moves and speaks when Wactorz runs on Linux.** The robot SDK streams Reachy's camera and microphone over WebRTC through a GStreamer plugin that Linux distributions do not package, so on Linux every connection attempt failed and Reachy did nothing at all. The agent now connects without the camera and microphone when that plugin is what is missing, says so once, and speaks through the robot daemon's own HTTP API, which needs no GStreamer. Movement, speech, volume and health work, and waking plays its chime through the daemon too; listening, conversation and the camera are refused up front with what is missing, rather than a conversation that announces itself and then ends. Tested end to end on Ubuntu 26.04 with Python 3.13 against a Reachy Mini Wireless: first spawn, install, restart, and commands from chat. The SDK itself needs Python 3.13 or older on Linux.
+
+- **Every Reachy command answers in a sentence.** Commands that returned no text, `go to sleep` among them, reached chat as a raw dictionary, and so did any command that failed. A dropped motor link now says Reachy is already reconnecting instead of asking for a reconnect, and a planned move that wakes the robot first no longer answers "I'm awake."
+
+- **`pip install 'wactorz[reachy]'` installs Reachy with Wactorz, and its first spawn needs no restart.** The Reachy Mini SDK requires an older `websockets` than the one Wactorz loads at startup, so installing its packages from a running Wactorz meant one restart before Reachy could start. The new `reachy` extra lists the same packages the catalogue installs, so they resolve together with Wactorz's own before it starts; the first spawn then finds nothing to install. It stays out of `all`, because the Docker image and the Home Assistant add-ons cannot build the robot SDK. A spawn that does install at runtime says how to avoid it next time, and the Reachy guide now installs this way.
+
+- **Agents can install packages into an environment made by `uv venv`.** Such an environment has no pip, so every install an agent asked for failed, once per package, with pip's own error. Wactorz now installs with `uv` when the environment has no pip and `uv` is on the `PATH`; with neither, it says once how to add pip.
+
+- **A reply to `@agent` in chat shows the answer, not the dictionary it came in.** Asked through main, as the REST API, Discord and Telegram do, an agent's reply was shown only when it put its text in `result` or `response`; the catalog and most built-in agents use `message`, so `@catalog spawn` answered with a Python dictionary. Main now reads the same fields in the same order as the dashboard. `@catalog list` names the agents in its text, and `@catalog info` gives the agent's description and, for Reachy, its setup steps. Reachy answers `wake up` with "I'm awake.", understands `start listening`, which its own ready message suggests, and no longer shows an internal reason code when a conversation stops.
+
+- **A package an agent installs in the Docker image can be imported straight away.** The image points pip at a user site-packages folder in the state directory, and Python adds that folder to its path at startup only if it already exists. On a new container it did not, so the first agent to install anything got a successful install it could not import until Wactorz restarted. The folder is now added once an install creates it. Where a package is installed both there and in the image, the copy Python imports is the one Wactorz reports.
+
+- **Reachy explains a quiet voice, and is louder without ffmpeg.** Reachy's loudness boost needs the `ffmpeg` program, and when it was missing the only sign was one line in the log. Reachy now says once in chat, the first time it speaks, that its voice is quieter and why, with the install command for the system Wactorz runs on, the reminder to restart, and on the Home Assistant add-on, which cannot install it, how to turn Reachy up instead. `health` reports whether the boost is on. Without `ffmpeg`, speech is also synthesized at the loudest level the speech service offers, so it is louder than before even without the boost.
+
+- **Catalog agents pick up fixes after an update.** The spawn registry kept each catalog agent's whole recipe, code included, as it was on the day it was spawned, and a restart restored exactly that, so an agent spawned before an upgrade kept running the old release's code until it was deleted and spawned again. On restore, a catalog agent now takes its code and settings from the recipe that ships with the running version, keeping only what the recipe does not define, such as the node it runs on. Agents a model wrote are untouched, even under a catalog name.
+
+- **Reachy no longer stops talking when its motor link recovers.** An automatic recovery from a dropped motor link ended by waking the robot, and waking plays a sound on the robot; the robot stops whatever it is playing to start a new sound, so a recovery that landed mid-sentence cut Reachy off with a chime and a head jerk. Recovery now waits for the current speech to end and brings the head and antennas to rest without the sound. Saying `wake up` or `reconnect` still plays it.
+
+- **A first `@catalog spawn reachy-mini` no longer needs a mystery restart, and says what it is doing.** Spawning an agent that declares packages waited two minutes for the installer and then started the agent regardless, but the Reachy Mini SDK alone takes about 2.5 minutes to install on a fast connection with no pip cache, and the installer gave each package only 3 minutes. The agent started against a half-finished install and crashed, while the chat stayed silent and then reported that the catalog did not respond. Installing the SDK also downgrades `websockets` (it requires `<16`), which Wactorz has already loaded, so even a finished install left Deepgram voice input failing with `cannot import name 'Proxy' from 'websockets.uri'` until a restart. Now the catalog replies at once that it is installing, the installer posts each package to chat as it starts, and spawning waits for the installer's actual answer: a package that failed is named with pip's error, and an install that replaced a package this process had loaded asks for one restart and keeps the agent, so it starts by itself afterwards. Each package may take up to 15 minutes. Installed packages are recognised by their metadata, version pins and ranges included, so `reachy-mini==1.8.4` and `pillow` are no longer sent to pip on every spawn and restore. A generated agent whose `setup()` fails because a module is not installed is no longer handed to the model to rewrite; the user is told which module is missing.
 
 ## [0.7.0] - 2026-10-03
 

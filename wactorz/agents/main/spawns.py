@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from ...core.actor import MessageType
 from ...core.topics import topic_name_error
+from ..catalog_agent import current_recipe_config
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -327,6 +328,7 @@ class SpawnService:
         Never saves: this is reading the registry to rebuild from it, and
         writing as it goes would rewrite every entry on every startup.
         """
+        config = current_recipe_config(config)
         node = config.get("node", "").strip()
         if node:
             logger.info("[%s] Re-spawning remote agent %r on node %r", self.host.name, name, node)

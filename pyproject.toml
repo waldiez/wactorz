@@ -69,6 +69,19 @@ cron      = ["croniter>=2.0.0"]
 flic      = ["pyflic-ble>=0.2.5; python_version >= '3.12'"]
 data      = ["pandas>=2.0.0"]
 vision    = ["opencv-python>=4.8.0"]
+# The Reachy Mini catalogue agent's packages, the same list its recipe installs
+# on first spawn. Installed up front they resolve together with Wactorz's own,
+# so that spawn has nothing to install and needs no restart. Out of `all`: on
+# Linux the robot SDK compiles part of itself and needs system GStreamer.
+reachy    = [
+    "reachy-mini==1.8.4",
+    "numpy",
+    "edge-tts",
+    "pillow",
+    "webrtcvad-wheels",
+    "deepgram-sdk>=3,<4",
+]
+
 # A LangGraph graph or a LangChain chain as an agent, with its spend reported
 # through `wactorz.core.integrations.langchain`.
 langgraph = ["langgraph>=1.0", "langchain-core>=1.0"]
@@ -169,6 +182,19 @@ Documentation = "https://docs.waldiez.io/wactorz/"
 # proposes older ones in their place. Kept in the lockfile as a span, so
 # `uv sync --locked` holds as the days pass.
 exclude-newer = "7 days"
+
+# Reachy's SDK client uses the Starlette APIs retained in the patched releases.
+# Follow upstream's secure range without changing the robot SDK version; the
+# catalogue client's imports and FastAPI endpoints are covered by compatibility tests.
+override-dependencies = ["starlette>=1.3.1,<2.0.0"]
+
+# PyGObject's metadata build requires native Cairo and introspection libraries.
+# Use its published runtime requirements so resolving the opt-in Reachy extra
+# does not require those system libraries on development or CI hosts.
+[[tool.uv.dependency-metadata]]
+name = "pygobject"
+version = "3.46.0"
+requires-dist = ["pycairo>=1.16.0"]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

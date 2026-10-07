@@ -1,0 +1,232 @@
+"""Whether an agent's declared packages are installed, and what an install broke.
+
+Agents declare pip requirements, not module names: `reachy-mini==1.8.4`,
+`deepgram-sdk>=3,<4`, `pillow`. The check reads installed metadata, so a pin or
+a range is honoured and a pip name need not match the module it provides.
+
+An install can also replace a package this process has already imported. That
+is reported, because nothing but a restart makes the new version usable.
+"""
+
+import importlib.metadata
+import site
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+from wactorz.core import pip
+from wactorz.core.pip import (
+    install_wait_s,
+    installed_versions,
+    make_user_site_importable,
+    missing_requirements,
+    requirement_is_satisfied,
+    requirement_name,
+    stale_loaded_distributions,
+)
+
+
+class TestRequirementName:
+    @pytest.mark.parametrize(
+        ("requirement", "name"),
+        [
+            ("reachy-mini==1.8.4", "reachy-mini"),
+            ("deepgram-sdk>=3,<4", "deepgram-sdk"),
+            ("Pillow[extra]>=1", "pillow"),
+            ("typing_extensions", "typing-extensions"),
+            ("pytest; python_version >= '3.8'", "pytest"),
+        ],
+    )
+    def test_extras_versions_and_markers_are_dropped(self, requirement: str, name: str) -> None:
+        assert requirement_name(requirement) == name
+
+
+class TestRequirementIsSatisfied:
+    def test_an_installed_distribution_is_satisfied(self) -> None:
+        assert requirement_is_satisfied("pytest")
+
+    def test_a_missing_distribution_is_not(self) -> None:
+        assert not requirement_is_satisfied("definitely-not-installed-anywhere>=1.0")
+
+    def test_an_exact_pin_must_match_the_installed_version(self) -> None:
+        installed = importlib.metadata.version("pytest")
+
+        assert requirement_is_satisfied(f"pytest=={installed}")
+        assert not requirement_is_satisfied("pytest==0.0.1")
+
+    def test_a_range_is_checked_against_the_installed_version(self) -> None:
+        assert requirement_is_satisfied("pytest>=1,<1000")
+        assert not requirement_is_satisfied("pytest>=1000")
+
+    def test_extras_and_markers_do_not_stop_the_check(self) -> None:
+        assert requirement_is_satisfied("pytest[testing]>=1; python_version >= '3.8'")
+
+    def test_a_pip_name_unlike_its_module_is_found_by_metadata(self) -> None:
+        # The distribution is `pluggy`-style metadata, whatever it imports as;
+        # typing-extensions installs the module `typing_extensions`.
+        assert requirement_is_satisfied("typing-extensions")
+
+    def test_a_module_without_metadata_falls_back_to_importing(self) -> None:
+        # The standard library has no distribution metadata.
+        assert requirement_is_satisfied("json")
+
+    def test_a_pin_on_a_module_without_metadata_is_not_satisfied(self) -> None:
+        assert not requirement_is_satisfied("json==1.0")
+
+    def test_the_fallback_maps_a_pip_name_to_its_module(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        imported: list[str] = []
+
+        def _no_metadata(_name: str) -> str:
+            raise importlib.metadata.PackageNotFoundError
+
+        def _import(name: str) -> object:
+            imported.append(name)
+            return object()
+
+        monkeypatch.setattr(importlib.metadata, "version", _no_metadata)
+        monkeypatch.setattr("importlib.import_module", _import)
+
+        assert requirement_is_satisfied("webrtcvad-wheels")
+        assert requirement_is_satisfied("some-package")
+        assert imported == ["webrtcvad", "some_package"]
+
+
+def test_missing_requirements_keeps_order_and_skips_blanks() -> None:
+    assert missing_requirements(["pytest", "", "nope-not-here", "json", "nope-two==1"]) == [
+        "nope-not-here",
+        "nope-two==1",
+    ]
+
+
+def test_the_wait_covers_every_package_the_installer_may_take() -> None:
+    assert install_wait_s(6) > 6 * pip.PIP_INSTALL_TIMEOUT_S
+    assert install_wait_s(0) > pip.PIP_INSTALL_TIMEOUT_S
+
+
+class TestStaleLoadedDistributions:
+    """The Reachy Mini SDK pins websockets<16; a fresh Wactorz install has 17."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_package(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(sys.modules, "fakews", types.ModuleType("fakews"))
+        monkeypatch.setattr(
+            importlib.metadata,
+            "packages_distributions",
+            lambda: {"fakews": ["FakeWS"], "notloaded": ["not-loaded"]},
+        )
+
+    def test_a_loaded_package_pip_replaced_is_reported(self) -> None:
+        before = {"fakews": "17.1", "not-loaded": "1.0"}
+        after = {"fakews": "15.0.1", "not-loaded": "1.0"}
+
+        assert stale_loaded_distributions(before, after) == ["fakews 17.1 -> 15.0.1"]
+
+    def test_a_removed_loaded_package_is_reported(self) -> None:
+        assert stale_loaded_distributions({"fakews": "17.1"}, {}) == ["fakews 17.1 -> removed"]
+
+    def test_a_package_this_process_never_imported_is_fine(self) -> None:
+        before = {"fakews": "17.1", "not-loaded": "1.0"}
+        after = {"fakews": "17.1", "not-loaded": "2.0"}
+
+        assert stale_loaded_distributions(before, after) == []
+
+    def test_new_packages_alone_need_no_restart(self) -> None:
+        before = {"fakews": "17.1"}
+        after = {"fakews": "17.1", "brand-new": "1.0"}
+
+        assert stale_loaded_distributions(before, after) == []
+
+
+class _Dist:
+    def __init__(self, name: str, version: str) -> None:
+        self.metadata = {"Name": name}
+        self.version = version
+
+
+def test_the_copy_import_would_load_is_the_version_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A user-site copy earlier on sys.path shadows the system one.
+    dists = [_Dist("websockets", "15.0.1"), _Dist("websockets", "17.1")]
+    monkeypatch.setattr(importlib.metadata, "distributions", lambda: iter(dists))
+
+    assert installed_versions() == {"websockets": "15.0.1"}
+
+
+class TestMakeUserSiteImportable:
+    """Python adds the user site at startup only if it already exists."""
+
+    @pytest.fixture(autouse=True)
+    def _own_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "path", list(sys.path))
+        monkeypatch.setattr(site, "ENABLE_USER_SITE", True)
+
+    def test_a_user_site_created_by_an_install_is_added(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(site, "getusersitepackages", lambda: str(tmp_path))
+
+        assert make_user_site_importable() is True
+        assert str(tmp_path) in sys.path
+        assert make_user_site_importable() is False  # already there
+
+    def test_a_user_site_that_does_not_exist_is_left_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        missing = tmp_path / "not-yet"
+        monkeypatch.setattr(site, "getusersitepackages", lambda: str(missing))
+
+        assert make_user_site_importable() is False
+        assert str(missing) not in sys.path
+
+    def test_nothing_changes_where_user_sites_are_off(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A virtualenv turns them off; its own site-packages is already on the path.
+        monkeypatch.setattr(site, "ENABLE_USER_SITE", False)
+        monkeypatch.setattr(site, "getusersitepackages", lambda: str(tmp_path))
+
+        assert make_user_site_importable() is False
+        assert str(tmp_path) not in sys.path
+
+
+class TestInstallerCommand:
+    """pip when the environment has it; uv for one made by `uv venv`, which has none."""
+
+    def test_pip_is_used_where_it_is_installed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(pip.importlib.util, "find_spec", lambda name: object())
+
+        assert pip.installer_command() == [sys.executable, "-m", "pip", "install"]
+
+    def test_uv_installs_into_this_interpreter_without_pip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(pip.importlib.util, "find_spec", lambda name: None)
+        monkeypatch.setattr(pip.shutil, "which", lambda name: "/usr/bin/uv")
+
+        assert pip.installer_command() == [
+            "/usr/bin/uv",
+            "pip",
+            "install",
+            "--python",
+            sys.executable,
+        ]
+
+    def test_with_neither_there_is_nothing_to_run(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(pip.importlib.util, "find_spec", lambda name: None)
+        monkeypatch.setattr(pip.shutil, "which", lambda name: None)
+
+        assert pip.installer_command() is None
+        assert "ensurepip" in pip.NO_INSTALLER_MESSAGE
+
+
+def test_a_specifier_that_cannot_be_read_is_not_met() -> None:
+    assert pip._version_matches("1.0", "=>1") is False
+
+
+def test_an_empty_requirement_is_never_met() -> None:
+    assert requirement_is_satisfied("") is False

@@ -87,6 +87,37 @@ class TestWhatIsSampled:
         ]
         assert samples[0]["cpu_pct"] == 12.0
 
+    def test_a_nodes_readings(self) -> None:
+        nodes = [
+            {
+                "node": "rpi",
+                "online": True,
+                "swap_used_mb": 12,
+                "load_1m": 0.5,
+                "disk_free_mb": 3000,
+                "temp_c": 61.2,
+                "throttled": ["under_voltage", "throttled"],
+            }
+        ]
+
+        (sample,) = node_samples(nodes, time.time())
+
+        assert (sample["swap_used_mb"], sample["load_1m"], sample["disk_free_mb"]) == (
+            12.0,
+            0.5,
+            3000.0,
+        )
+        assert sample["temp_c"] == 61.2
+        assert sample["throttled"] == '["under_voltage", "throttled"]'
+
+    @pytest.mark.parametrize(("flags", "stored"), [([], "[]"), (None, None)])
+    def test_no_throttling_is_not_the_same_as_not_knowing(
+        self, flags: list[str] | None, stored: str | None
+    ) -> None:
+        (sample,) = node_samples([{"node": "rpi", "throttled": flags}], time.time())
+
+        assert sample["throttled"] == stored
+
 
 class TestRecording:
     async def test_a_sample_is_written_and_read_back_oldest_first(
@@ -148,6 +179,27 @@ class TestReadingIt:
         body = await (await client.get("/history/nodes/rpi")).json()
 
         assert [s["online"] for s in body["samples"]] == [1]
+
+    @pytest.mark.parametrize(
+        ("stored", "served"),
+        [
+            ('["under_voltage"]', ["under_voltage"]),
+            ("[]", []),
+            (None, None),
+            # Whatever a node sent is kept whole, a comma included.
+            ('["a,b"]', ["a,b"]),
+        ],
+    )
+    async def test_a_nodes_throttling_comes_back_as_it_went_in(
+        self, client: TestClient, db: WactorzDB, stored: str | None, served: list[str] | None
+    ) -> None:
+        db.write_metrics_history(
+            [], [{"ts": time.time(), "node": "rpi", "online": 1, "throttled": stored}]
+        )
+
+        body = await (await client.get("/history/nodes/rpi")).json()
+
+        assert [s["throttled"] for s in body["samples"]] == [served]
 
     @pytest.mark.parametrize("hours", ["soon", "0", "-1", "inf", "nan"])
     async def test_a_window_that_is_not_one_is_refused(

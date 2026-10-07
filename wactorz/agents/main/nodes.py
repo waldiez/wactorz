@@ -78,6 +78,36 @@ def _as_names(value: object) -> list[str]:
     return [name for name in value if isinstance(name, str)]
 
 
+def _as_number(value: object) -> float | int | None:
+    """A reading a heartbeat reported, or None for anything that is not a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _as_flags(value: object) -> list[str] | None:
+    """The throttle flags a heartbeat reported; None when it could not tell."""
+    if not isinstance(value, list):
+        return None
+    return [flag for flag in value if isinstance(flag, str)]
+
+
+#: What a node says about how close it is to running out, under the names it
+#: says it. Copied as they arrive into what main knows and what it lists; a
+#: heartbeat from a runner older than a reading leaves it None, which is "not
+#: known" -- never zero, which would read as nothing left.
+RESOURCE_READINGS = (
+    "cpu_pct",
+    "mem_used_mb",
+    "mem_free_mb",
+    "swap_used_mb",
+    "load_1m",
+    "load_5m",
+    "disk_free_mb",
+    "temp_c",
+)
+
+
 #: How long a node may stay silent before its agents are treated as lost.
 #:
 #: Longer than the window above on purpose. That one drives the indicator in the
@@ -151,9 +181,8 @@ class NodeManager:
                 "version": info.get("version"),
                 "runtime": info.get("runtime", DEFAULT_NODE_RUNTIME),
                 "uptime_s": info.get("uptime_s"),
-                "cpu_pct": info.get("cpu_pct"),
-                "mem_used_mb": info.get("mem_used_mb"),
-                "mem_free_mb": info.get("mem_free_mb"),
+                **{reading: info.get(reading) for reading in RESOURCE_READINGS},
+                "throttled": info.get("throttled"),
             }
             for name, info in self.known.items()
         ]
@@ -345,9 +374,8 @@ class NodeManager:
             "runtime": data.get("runtime") or DEFAULT_NODE_RUNTIME,
             "pid": data.get("pid"),
             "uptime_s": data.get("uptime_s"),
-            "cpu_pct": data.get("cpu_pct"),
-            "mem_used_mb": data.get("mem_used_mb"),
-            "mem_free_mb": data.get("mem_free_mb"),
+            **{reading: _as_number(data.get(reading)) for reading in RESOURCE_READINGS},
+            "throttled": _as_flags(data.get("throttled")),
             # Whether the node checks what main sends it. A heartbeat without it
             # comes from a runner older than signing, which checks nothing.
             "signing": data.get("signing") or "off",

@@ -90,7 +90,32 @@ AGENT_HISTORY_COLUMNS = (
 )
 
 #: The columns of one node's metrics sample.
-NODE_HISTORY_COLUMNS = ("ts", "node", "online", "cpu_pct", "mem_used_mb", "mem_free_mb", "agents")
+NODE_HISTORY_COLUMNS = (
+    "ts",
+    "node",
+    "online",
+    "cpu_pct",
+    "mem_used_mb",
+    "mem_free_mb",
+    "agents",
+    "swap_used_mb",
+    "load_1m",
+    "disk_free_mb",
+    "temp_c",
+    "throttled",
+)
+
+
+def _node_sample(row: sqlite3.Row) -> dict[str, Any]:
+    """One stored node sample, its throttle flags a list again (None where not known)."""
+    sample = dict(row)
+    flags = sample.get("throttled")
+    if isinstance(flags, str):
+        try:
+            sample["throttled"] = json.loads(flags)
+        except ValueError:
+            sample["throttled"] = None
+    return sample
 
 
 def _insert_sql(table: str, columns: tuple[str, ...]) -> str:
@@ -708,7 +733,7 @@ class WactorzDB:
             "WHERE node = ? AND ts >= ? ORDER BY ts DESC LIMIT ?",
             (node, float(since), int(limit)),
         ).fetchall()
-        return [dict(r) for r in reversed(rows)]
+        return [_node_sample(r) for r in reversed(rows)]
 
     def clear_metrics_history(self, agent: str | None = None) -> int:
         """Delete ``agent``'s samples, or with none every agent's and node's. Returns rows removed."""

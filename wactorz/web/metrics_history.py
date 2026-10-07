@@ -15,6 +15,7 @@ sampled rather than being written down unchanged for as long as it is listed.
 """
 
 import asyncio
+import json
 import logging
 import math
 import time
@@ -82,9 +83,21 @@ def node_samples(nodes: list[dict[str, Any]], now: float) -> list[dict[str, Any]
             "mem_used_mb": _number(node.get("mem_used_mb")),
             "mem_free_mb": _number(node.get("mem_free_mb")),
             "agents": len(node.get("agents") or []),
+            "swap_used_mb": _number(node.get("swap_used_mb")),
+            "load_1m": _number(node.get("load_1m")),
+            "disk_free_mb": _number(node.get("disk_free_mb")),
+            "temp_c": _number(node.get("temp_c")),
+            "throttled": _flags(node.get("throttled")),
         }
         for node in nodes
     ]
+
+
+def _flags(value: Any) -> str | None:
+    """Throttle flags as stored: a JSON list, ``[]`` for none, None where not known."""
+    if not isinstance(value, list):
+        return None
+    return json.dumps([str(flag) for flag in value])
 
 
 async def record_once() -> int:

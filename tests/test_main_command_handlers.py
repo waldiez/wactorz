@@ -391,6 +391,57 @@ class TestHelpAndNodes:
         assert f"|  v{__version__}  |" in rows["same"]
         assert "v0.0.1 ≠ server, redeploy" in rows["behind"]
 
+    async def test_an_online_node_says_how_close_it_is_to_running_out(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "rpi",
+                "online": True,
+                "agents": [],
+                "last_seen": time.time(),
+                "cpu_pct": 12.4,
+                "load_1m": 0.5,
+                "mem_free_mb": 700,
+                "disk_free_mb": 3277,
+                "temp_c": 61.0,
+                "throttled": ["under_voltage"],
+            }
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert (
+            "cpu 12% · load 0.50 · 700 MB memory free · 3.2 GB disk free · 61°C · ⚠ under voltage"
+        ) in text
+
+    async def test_a_reading_the_node_did_not_send_is_left_out(self, main: _Main) -> None:
+        # Not shown as zero: "0 MB free" would read as a node about to fall over.
+        main._registry = None
+        main.node_list = [
+            {"node": "old", "online": True, "agents": [], "last_seen": time.time(), "cpu_pct": 3.0}
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert "cpu 3%  |  last heartbeat" in text
+        assert "free" not in text
+
+    async def test_an_offline_nodes_last_readings_are_not_shown(self, main: _Main) -> None:
+        main._registry = None
+        main.node_list = [
+            {
+                "node": "gone",
+                "online": False,
+                "agents": [],
+                "last_seen": time.time() - 90,
+                "mem_free_mb": 700,
+            }
+        ]
+
+        text = await info.show_nodes(_ctx(main), "")
+
+        assert "memory free" not in text
+
     async def test_no_remote_nodes_suggests_deploying_one(self, main: _Main) -> None:
         main._registry = None
 

@@ -115,7 +115,7 @@ An agent's or a node's metrics history: one sample about every minute, oldest fi
 }
 ```
 
-A node's samples carry `node`, `online`, `cpu_pct`, `mem_used_mb`, `mem_free_mb` and `agents` (how many it ran). `400` when `hours` is not a finite number above 0; `503` when there is no database to keep the history in.
+A node's samples carry `node`, `online`, `cpu_pct`, `mem_used_mb`, `mem_free_mb`, `agents` (how many it ran), `swap_used_mb`, `load_1m`, `disk_free_mb`, `temp_c` and `throttled` (a list of flags, `[]` for none; `null` where the node could not tell, as for any reading it did not send). `400` when `hours` is not a finite number above 0; `503` when there is no database to keep the history in.
 
 ---
 

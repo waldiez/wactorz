@@ -190,6 +190,42 @@ class TestTheNodeTable:
         assert entry["node_id"] == "rpi-id"
         assert entry["uptime_s"] == 900
 
+    async def test_it_records_how_close_the_node_is_to_running_out(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        readings = {
+            "swap_used_mb": 12,
+            "load_1m": 0.5,
+            "load_5m": 0.25,
+            "disk_free_mb": 3000,
+            "temp_c": 61.2,
+            "throttled": ["under_voltage"],
+        }
+        run = await run_heartbeats(monkeypatch, [heartbeat(**readings)])
+
+        entry = run.nodes["rpi"]
+        assert {key: entry[key] for key in readings} == readings
+
+    async def test_a_runner_older_than_the_readings_leaves_them_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Unknown, not zero: admission would read zero as nothing left.
+        run = await run_heartbeats(monkeypatch, [heartbeat()])
+
+        entry = run.nodes["rpi"]
+        assert (entry["disk_free_mb"], entry["load_1m"], entry["throttled"]) == (None, None, None)
+
+    async def test_a_reading_that_is_not_one_is_left_unknown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run = await run_heartbeats(
+            monkeypatch,
+            [heartbeat(disk_free_mb="lots", temp_c=True, throttled="under_voltage")],
+        )
+
+        entry = run.nodes["rpi"]
+        assert (entry["disk_free_mb"], entry["temp_c"], entry["throttled"]) == (None, None, None)
+
     async def test_a_later_heartbeat_replaces_the_earlier_one(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

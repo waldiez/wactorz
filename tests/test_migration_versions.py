@@ -168,3 +168,37 @@ class TestPendingStateVersions:
         bare = BareDB(str(tmp_path / "bare.db"))
         assert _pending_state_versions(bare)
         bare.conn.close()
+
+
+class TestNodeHistoryReadings:
+    """A database made before nodes reported their readings gains the columns."""
+
+    @staticmethod
+    def _columns(db: WactorzDB) -> set[str]:
+        return {row[1] for row in db.conn.execute("PRAGMA table_info(node_metrics_history)")}
+
+    def test_an_older_table_gains_them(self, tmp_path: Path) -> None:
+        store = PickleStore(str(tmp_path / "state"))
+        with WactorzDB(str(tmp_path / "old.db")) as db:
+            # Up to date, then the table put back as version 3 made it.
+            run_migrations(db, store)
+            db.conn.executescript(
+                "DROP TABLE node_metrics_history;"
+                "CREATE TABLE node_metrics_history (ts REAL NOT NULL, node TEXT NOT NULL,"
+                " online INTEGER NOT NULL, cpu_pct REAL, mem_used_mb REAL, mem_free_mb REAL,"
+                " agents INTEGER);"
+            )
+            db.conn.execute("UPDATE schema_version SET framework_version = 3")
+            db.conn.commit()
+
+            run_migrations(db, store)
+
+            assert {name for name, _ in migrations.NODE_HISTORY_READINGS} <= self._columns(db)
+            # And a sample with them is taken, where it was refused before.
+            db.write_metrics_history(
+                [], [{"ts": 1.0, "node": "rpi", "online": 1, "disk_free_mb": 3000.0}]
+            )
+            assert db.query_node_history("rpi", 0)[0]["disk_free_mb"] == 3000.0
+
+    def test_a_new_table_already_has_them(self, migrated: WactorzDB) -> None:
+        assert {name for name, _ in migrations.NODE_HISTORY_READINGS} <= self._columns(migrated)

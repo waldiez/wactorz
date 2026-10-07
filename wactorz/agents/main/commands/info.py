@@ -92,6 +92,34 @@ def _node_version_label(node: dict[str, Any]) -> str:
     return f"v{reported} ≠ server, redeploy"
 
 
+def _node_resources_label(node: dict[str, Any]) -> str:
+    """What a node row says about how close it is to running out.
+
+    Only what the node reported: a reading it could not take is left out rather
+    than shown as zero. Throttling comes last and loud, since it is what takes
+    a board down.
+    """
+    parts = []
+    if isinstance(node.get("cpu_pct"), (int, float)):
+        parts.append(f"cpu {node['cpu_pct']:.0f}%")
+    if isinstance(node.get("load_1m"), (int, float)):
+        parts.append(f"load {node['load_1m']:.2f}")
+    if isinstance(node.get("mem_free_mb"), (int, float)):
+        parts.append(f"{_megabytes(node['mem_free_mb'])} memory free")
+    if isinstance(node.get("disk_free_mb"), (int, float)):
+        parts.append(f"{_megabytes(node['disk_free_mb'])} disk free")
+    if isinstance(node.get("temp_c"), (int, float)):
+        parts.append(f"{node['temp_c']:.0f}°C")
+    if node.get("throttled"):
+        parts.append("⚠ " + ", ".join(str(f).replace("_", " ") for f in node["throttled"]))
+    return " · ".join(parts)
+
+
+def _megabytes(value: float) -> str:
+    """A size given in MiB, in the unit a person reads it in."""
+    return f"{value / 1024:.1f} GB" if value >= 1024 else f"{value:.0f} MB"
+
+
 @command(
     "/nodes",
     exact=("main.list_nodes", "list_nodes", "/nodes"),
@@ -115,9 +143,12 @@ async def show_nodes(ctx: CommandContext, _argument: str) -> str:
         agents = ", ".join("@" + a for a in nd["agents"]) or "(no agents)"
         age = int(time.time() - nd["last_seen"])
         version = _node_version_label(nd)
+        # Only an online node's readings describe the machine as it is now.
+        resources = _node_resources_label(nd) if nd["online"] else ""
         lines.append(
             f"  {nd['node']:22s} {status}  |  {version}  |  agents: {agents}"
-            f"  |  last heartbeat: {age}s ago"
+            + (f"  |  {resources}" if resources else "")
+            + f"  |  last heartbeat: {age}s ago"
         )
 
     footer = ""

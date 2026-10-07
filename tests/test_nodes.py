@@ -69,6 +69,12 @@ class TestWhatTheNodeListingReports:
             "cpu_pct",
             "mem_used_mb",
             "mem_free_mb",
+            "swap_used_mb",
+            "load_1m",
+            "load_5m",
+            "disk_free_mb",
+            "temp_c",
+            "throttled",
         }
 
     def test_the_name_comes_from_the_key_not_the_value(self) -> None:

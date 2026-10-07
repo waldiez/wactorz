@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # ── Current version ────────────────────────────────────────────────────────
 # Increment this when adding new migrations.
 # The startup sequence runs all migrations between the stored version and this.
-FRAMEWORK_VERSION = 3
+FRAMEWORK_VERSION = 4
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -81,12 +81,36 @@ def migrate_sql_3(conn: sqlite3.Connection):
         conn.execute("ALTER TABLE chat_log ADD COLUMN attachments TEXT DEFAULT ''")
 
 
+#: The columns node samples gained once nodes reported how close they are to
+#: running out, with their types.
+NODE_HISTORY_READINGS = (
+    ("swap_used_mb", "REAL"),
+    ("load_1m", "REAL"),
+    ("disk_free_mb", "REAL"),
+    ("temp_c", "REAL"),
+    ("throttled", "TEXT"),
+)
+
+
+def migrate_sql_4(conn: sqlite3.Connection):
+    """v3 → v4: node samples keep swap, load, free disk, temperature and throttling.
+
+    A database whose ``node_metrics_history`` has none of them would refuse
+    every sample, and the agents' samples are written in the same transaction.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(node_metrics_history)")}
+    for column, kind in NODE_HISTORY_READINGS:
+        if column not in present:
+            conn.execute(f"ALTER TABLE node_metrics_history ADD COLUMN {column} {kind}")
+
+
 # Register SQL migrations: version → function
 # Each migration upgrades FROM (version-1) TO (version)
 _SQL_MIGRATIONS = {
     2: migrate_sql_2,
     3: migrate_sql_3,
-    # 3: migrate_sql_3,  ← add future migrations here
+    4: migrate_sql_4,
+    # 5: migrate_sql_5,  ← add future migrations here
 }
 
 

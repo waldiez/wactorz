@@ -25,8 +25,6 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-import psutil
-
 from .. import __version__
 from ..config import CONFIG
 from ..core.actor import Actor, SupervisorStrategy
@@ -46,6 +44,7 @@ from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
 from ..core.state_snapshot import json_safe, why_it_cannot_travel
 from ..monitoring.loop_lag import LoopLagMonitor
+from . import resources
 from .agent import NodeAgent
 from .publishing import NodePublisher
 from .signing import (
@@ -436,13 +435,9 @@ class NodeRunner:
         while self._running:
             try:
                 agent_names = list(self.agents)
-                try:
-                    cpu_pct = psutil.cpu_percent(interval=None)
-                    vm = psutil.virtual_memory()
-                    mem_used = vm.used // (1024 * 1024)
-                    mem_free = vm.available // (1024 * 1024)
-                except Exception:
-                    cpu_pct = mem_used = mem_free = 0
+                # How close this machine is to running out, read off the loop:
+                # some of it is files, and on a Pi a firmware command.
+                readings = await asyncio.to_thread(resources.read, Path(self.state_dir))
                 await self.publish(
                     f"nodes/{self.node_name}/heartbeat",
                     {
@@ -454,9 +449,7 @@ class NodeRunner:
                         "broker": self.broker,
                         "pid": os.getpid(),
                         "uptime_s": round(time.time() - self._start_time, 1),
-                        "cpu_pct": cpu_pct,
-                        "mem_used_mb": mem_used,
-                        "mem_free_mb": mem_free,
+                        **readings,
                         # Whether this node checks what main sends it, and how
                         # often something arrived that was not signed for it.
                         "signing": self._control.mode,

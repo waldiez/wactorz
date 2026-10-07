@@ -147,7 +147,12 @@ CREATE TABLE IF NOT EXISTS node_metrics_history (
     cpu_pct     REAL,
     mem_used_mb REAL,
     mem_free_mb REAL,
-    agents      INTEGER
+    agents      INTEGER,
+    swap_used_mb REAL,
+    load_1m      REAL,
+    disk_free_mb REAL,
+    temp_c       REAL,
+    throttled    TEXT      -- a JSON list of flags, '[]' for none, NULL where not known
 );
 
 CREATE INDEX IF NOT EXISTS idx_node_history_ts      ON node_metrics_history (ts);

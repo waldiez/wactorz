@@ -585,7 +585,7 @@ node holding the old one.</p>
 <tr>
 <td><code>nodes/{name}/heartbeat</code></td>
 <td>← runner</td>
-<td>Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, and whether the node checks signed commands.</td>
+<td>Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, whether the node checks signed commands, and how close the machine is to running out: CPU, memory (within a container's or a unit's memory limit), swap, load, free disk where the state is kept, the CPU's temperature and, on a Raspberry Pi, what is throttling it. A reading the node cannot take is <code>null</code>.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/migrate</code></td>

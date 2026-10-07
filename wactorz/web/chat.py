@@ -291,18 +291,13 @@ async def handle_slash(text: str, reply_fn) -> bool:
         await reply_fn("Agents:\n" + "\n".join(lines) if lines else "No agents running.")
         return True
 
-    if cmd == "/nodes":
-        main_actor = find_main_actor(runtime.registry)
-        remote_nodes = main_actor.list_nodes() if (main_actor) else []
+    if cmd == "/nodes" and find_main_actor(runtime.registry) is None:
+        # Main answers /nodes, remote nodes included. Without it (the minimal
+        # profile) there are no remote nodes, and this process is the one node.
         local = [a.name for a in runtime.registry.all_actors()] if runtime.registry else []
-        lines = [f"  {'local':20s} online   {', '.join('@' + n for n in local) or '(none)'}"]
-        for nd in sorted(remote_nodes, key=lambda x: x["node"]):
-            st = "online" if nd["online"] else "OFFLINE"
-            names = ", ".join("@" + n for n in nd["agents"]) or "(no agents)"
-            lines.append(f"  {nd['node']:20s} {st:6s}   {names}")
-        if not remote_nodes:
-            lines.append("  (no remote nodes — /deploy <node-name>)")
-        await reply_fn("Nodes:\n" + "\n".join(lines))
+        await reply_fn(
+            f"Nodes:\n  local    online   {', '.join('@' + n for n in local) or '(none)'}"
+        )
         return True
 
     if cmd == "/migrate":

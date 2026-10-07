@@ -712,6 +712,28 @@ class WactorzDB:
                 )
 
     @_serialised
+    def query_agents_field(
+        self, column: str, since: float, limit: int = 50_000
+    ) -> dict[str, list[list[float | None]]]:
+        """One column of every agent's samples since ``since``: ``{agent: [[ts, value], ...]}``.
+
+        What a row of agent cards draws from, in one query rather than one per
+        agent. ``column`` is checked against `AGENT_HISTORY_COLUMNS` before it
+        reaches the query, and one that is not there finds nothing.
+        """
+        if column not in AGENT_HISTORY_COLUMNS:
+            return {}
+        rows = self.conn.execute(
+            f"SELECT ts, agent, {column} FROM agent_metrics_history "  # noqa: S608  # checked against the constant column list above
+            "WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
+            (float(since), int(limit)),
+        ).fetchall()
+        found: dict[str, list[list[float | None]]] = {}
+        for ts, agent, value in reversed(rows):
+            found.setdefault(agent, []).append([ts, value])
+        return found
+
+    @_serialised
     def query_agent_history(
         self, agent: str, since: float, limit: int = 10_000
     ) -> list[dict[str, Any]]:

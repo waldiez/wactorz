@@ -52,6 +52,8 @@ LOGIN_KEY = "#key"
 LOGIN_SUBMIT = "button[type=submit]"
 NAV_BUTTON = ".af-view-btn[data-view='{view}']"
 AGENT_CARD = ".af-card[data-id]"
+HISTORY_BUTTON = "button:has-text('History')"
+HISTORY_PANEL = ".af-trend-panel"
 CHAT_INPUT = "#af-iobar-input"
 SEND_BUTTON = ".af-send-btn"
 TARGET_SELECT = "#af-target-select"
@@ -256,6 +258,40 @@ class Dashboard:
     def node_names(self) -> set[str]:
         names = self.page.locator(f"{NODE_LIST} .af-node-name").all_inner_texts()
         return {name.strip() for name in names}
+
+    def node_machine(self, name: str) -> str:
+        """What the node's card says its machine is, or "" before its manifest arrives."""
+        self.show("overview")
+        machine = self.page.locator(f'.af-node-card[data-node="{name}"] .af-node-machine')
+        return machine.inner_text().strip() if machine.count() else ""
+
+    # ── History ─────────────────────────────────────────────────────────────
+
+    def open_history(self, name: str, *, node: bool = False) -> str:
+        """Open an agent's or a node's history from its card's History button.
+
+        Returns what the panel shows once it has loaded: the titles of its
+        charts, or the sentence it says instead when there is nothing to draw.
+        """
+        self.show("overview")
+        card = self.page.locator(f'.af-node-card[data-node="{name}"]') if node else self._card(name)
+        card.locator(HISTORY_BUTTON).click()
+        self.page.wait_for_selector(HISTORY_PANEL, state="visible")
+        self.page.wait_for_function(
+            "() => !document.querySelector('.af-trend-body')?.textContent?.startsWith('Loading')"
+        )
+        titles = self.page.locator(f"{HISTORY_PANEL} figcaption").all_inner_texts()
+        return ", ".join(titles) or self.page.locator(".af-trend-body").inner_text().strip()
+
+    def history_title(self) -> str:
+        """The name the open history panel is about."""
+        return self.page.locator(f"{HISTORY_PANEL} h3").inner_text().strip()
+
+    def close_history(self) -> Dashboard:
+        """Close the history panel as a person would, with Escape."""
+        self.page.keyboard.press("Escape")
+        self.page.wait_for_selector(HISTORY_PANEL, state="detached")
+        return self
 
     # ── The chat ────────────────────────────────────────────────────────────
 

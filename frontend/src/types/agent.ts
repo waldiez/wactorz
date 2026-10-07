@@ -71,6 +71,42 @@ export interface NodeHeartbeatPayload {
     node: string;
     agents: string[];
     nodeId?: string;
+    /** How close the node is to running out, as its heartbeat said. */
+    readings?: NodeReadings;
+}
+
+/** A node's readings, under the names its heartbeat uses. Absent where the node did not say. */
+export interface NodeReadings {
+    /** CPU in use, in percent. */
+    cpu_pct?: number;
+    /** Memory in use, in MiB. */
+    mem_used_mb?: number;
+    /** Memory available, in MiB, within any limit on the node. */
+    mem_free_mb?: number;
+    /** Swap in use, in MiB. */
+    swap_used_mb?: number;
+    /** One-minute load average. */
+    load_1m?: number;
+    /** Five-minute load average. */
+    load_5m?: number;
+    /** Free disk where the node keeps agent state, in MiB. */
+    disk_free_mb?: number;
+    /** The CPU's temperature in °C. */
+    temp_c?: number;
+    /** What holds the board back now; empty for nothing, absent where it cannot tell. */
+    throttled?: string[];
+}
+
+/** What the dashboard knows of one remote node. */
+export interface RemoteNode {
+    /** The agents its last heartbeat listed. */
+    agents: string[];
+    /** When it was last heard from, in milliseconds. */
+    lastSeen: number;
+    /** Its latest readings. */
+    readings?: NodeReadings;
+    /** What its machine is, from its manifest; null from a node that has not said. */
+    manifest?: Record<string, unknown> | null;
 }
 
 /** Status update payload. */

@@ -54,6 +54,17 @@ def test_every_view_draws(dashboard: browser.Dashboard) -> None:
         dashboard.show(view)
 
 
+def test_an_agents_history_opens_from_its_card(dashboard: browser.Dashboard) -> None:
+    # A fresh server has sampled nothing yet, or a minute at most: either the
+    # panel says there is nothing in the window, or it draws what there is.
+    # What it must not say is that there is no history to read.
+    shown = dashboard.open_history("main")
+
+    assert dashboard.history_title() == "main"
+    assert "not available" not in shown, shown
+    dashboard.close_history()
+
+
 def test_starting_wrote_none_of_its_secrets_down(app: backend.Backend, run: Run) -> None:
     for log in (app.console_log, app.app_log):
         logs.assert_no_secrets(log, run)

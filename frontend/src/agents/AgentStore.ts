@@ -8,7 +8,7 @@
  * every mutation here forwards the relevant add/update/remove to the dashboard.
  */
 
-import type { AgentInfo, HeartbeatPayload, AlertPayload, SpawnPayload } from "../types/agent";
+import type { AgentInfo, HeartbeatPayload, AlertPayload, SpawnPayload, NodeReadings } from "../types/agent";
 import { CardDashboard } from "../ui/CardDashboard";
 import { STALE_MS } from "../ui/dashboard/agentState";
 
@@ -85,8 +85,8 @@ export class AgentStore {
      * Refresh a remote node's agent list, tracking its last-seen time and
      * evicting remote agents this node no longer reports.
      */
-    updateRemoteNode(name: string, agents: string[]): void {
-        this.cardDashboard?.updateRemoteNode(name, agents);
+    updateRemoteNode(name: string, agents: string[], readings?: NodeReadings): void {
+        this.cardDashboard?.updateRemoteNode(name, agents, readings);
         if (agents.length > 0) {
             this._remoteNodeLastSeen.set(name, Date.now());
         } else {

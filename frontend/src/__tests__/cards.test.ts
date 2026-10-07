@@ -8,6 +8,7 @@ import {
     buildStatCards,
     appendActionBtns,
     buildWactorCard,
+    paintCardTrend,
     type WactorCardCallbacks,
 } from "../ui/dashboard/cards";
 import type { AgentInfo } from "../types/agent";
@@ -16,7 +17,7 @@ function agent(name: string, over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: name, name, state: "running", protected: false, ...over };
 }
 
-const cb = (): WactorCardCallbacks => ({ onChat: vi.fn(), onCommand: vi.fn() });
+const cb = (): WactorCardCallbacks => ({ onChat: vi.fn(), onCommand: vi.fn(), onHistory: vi.fn() });
 const actions = (el: HTMLElement) =>
     [...el.querySelectorAll<HTMLElement>("[data-action]")].map(b => b.dataset["action"]);
 
@@ -257,5 +258,60 @@ describe("buildWactorCard", () => {
         const card = buildWactorCard(agent("ha", { inputTokens: 0, outputTokens: 0, costUsd: 0 }), 0, cb());
         expect(card.querySelector(".af-card-tokens")).toBeNull();
         expect(card.querySelector(".af-card-meta")!.textContent).not.toContain("$");
+    });
+});
+
+describe("a card's history and trend", () => {
+    it("opens the history from the card and from its History button, once each", () => {
+        const callbacks = cb();
+        const a = agent("weather");
+        const card = buildWactorCard(a, 0, callbacks);
+
+        card.click();
+        card.querySelector<HTMLButtonElement>(".af-history-btn")!.click();
+
+        expect(callbacks.onHistory).toHaveBeenCalledTimes(2);
+        expect(callbacks.onHistory).toHaveBeenCalledWith(a);
+    });
+
+    it("does not open the history from the card's other buttons", () => {
+        const callbacks = cb();
+        const card = buildWactorCard(agent("weather"), 0, callbacks);
+
+        card.querySelector<HTMLButtonElement>(".af-chat-btn")!.click();
+        card.querySelector<HTMLButtonElement>('[data-action="stop"]')!.click();
+
+        expect(callbacks.onHistory).not.toHaveBeenCalled();
+    });
+
+    it("paints messages per minute with the latest rate", () => {
+        const card = buildWactorCard(agent("weather"), 0, cb());
+        paintCardTrend(card, [
+            { t: 0, v: 2 },
+            { t: 60_000, v: 3.5 },
+        ]);
+        const slot = card.querySelector<HTMLElement>(".af-card-trend")!;
+        expect(slot.querySelector("svg")?.getAttribute("aria-label")).toBe(
+            "weather: messages per minute over the last hour",
+        );
+        expect(slot.querySelector(".af-card-trend-value")?.textContent).toBe("3.5/min");
+    });
+
+    it.each([
+        [[{ t: 0, v: 0 }], "idle"],
+        [[{ t: 0, v: 12 }], "12/min"],
+        [[{ t: 0, v: null }], "—"],
+    ])("says the latest rate in words", (points, label) => {
+        const card = buildWactorCard(agent("weather"), 0, cb());
+        paintCardTrend(card, points);
+        expect(card.querySelector(".af-card-trend-value")?.textContent).toBe(label);
+    });
+
+    it("leaves the slot empty with nothing fetched, and ignores a card without one", () => {
+        const card = buildWactorCard(agent("weather"), 0, cb());
+        paintCardTrend(card, [{ t: 0, v: 1 }]);
+        paintCardTrend(card, undefined);
+        expect(card.querySelector(".af-card-trend")?.childElementCount).toBe(0);
+        expect(() => paintCardTrend(document.createElement("div"), [])).not.toThrow();
     });
 });

@@ -14,7 +14,8 @@
  * belong to `DashboardChat` and `AppLogFeed`, which wire their own.
  */
 
-import type { AgentInfo } from "../types/agent";
+import type { AgentInfo, NodeReadings, RemoteNode } from "../types/agent";
+import { readingsFrom } from "../agents/nodeReadings";
 import { safeStorage } from "../safeStorage";
 import {
     buildHeader,
@@ -31,6 +32,8 @@ import { ActivityFeed } from "./dashboard/activityFeed";
 import { Heartbeats } from "./dashboard/heartbeats";
 import { DashboardChat } from "./dashboard/DashboardChat";
 import { OverviewView } from "./dashboard/overview";
+import { OverviewData } from "./dashboard/overviewData";
+import { TrendPanel } from "./dashboard/trendPanel";
 import type { AgentAction } from "./dashboard/cards";
 import { el } from "./dom";
 import { MetricsController } from "./dashboard/metrics";
@@ -59,7 +62,11 @@ export class CardDashboard {
     private view: View = "overview";
     private connState: ConnState = "connecting";
     private tickTimer: ReturnType<typeof setInterval> | null = null;
-    private _remoteNodes = new Map<string, { agents: string[]; lastSeen: number }>();
+    private _remoteNodes = new Map<string, RemoteNode>();
+    /** The trends and node manifests the overview fetches on a timer. */
+    private _data: OverviewData;
+    /** An agent's or a node's history, opened from its card. */
+    private _trendPanel = new TrendPanel();
     private _removingIds = new Set<string>();
 
     /** Cost / message totals + host-resource telemetry live in their own controller. */
@@ -117,6 +124,14 @@ export class CardDashboard {
                 this._setView("chat");
             },
             onCommand: (id, action, btn) => this._sendCommand(id, action, btn),
+            agentTrend: name => this._data.agentRates.get(name),
+            nodeTrend: name => this._data.nodeTrends.get(name),
+            onOpenTrend: (kind, name) => void this._trendPanel.open(kind, name),
+        });
+        this._data = new OverviewData({
+            isOverview: () => this.view === "overview",
+            nodeNames: () => [...this._remoteNodes.keys()],
+            onUpdate: () => this._onDataUpdate(),
         });
         this._activity = new ActivityFeed({
             root: this.root,
@@ -139,6 +154,7 @@ export class CardDashboard {
             }
         }, 5000);
         this._metrics.startPolling();
+        this._data.start();
     }
 
     /** Hide the dashboard, unwire events, release the mic, and stop timers. */
@@ -152,11 +168,14 @@ export class CardDashboard {
             this.tickTimer = null;
         }
         this._metrics.stopPolling();
+        this._data.stop();
+        this._trendPanel.close();
     }
 
     /** Hide and remove the dashboard from the DOM. */
     destroy(): void {
         this.hide();
+        this._trendPanel.destroy();
         releaseHeaderPopovers();
         releaseBottomNav();
         this.root.remove();
@@ -240,10 +259,17 @@ export class CardDashboard {
         this._chat.updateTargetSelect();
     }
 
-    /** Record a remote node's agent list and refresh the nodes panel. */
-    updateRemoteNode(name: string, agents: string[]): void {
+    /** Record a remote node's agent list and readings, and refresh the nodes panel. */
+    updateRemoteNode(name: string, agents: string[], readings?: NodeReadings): void {
         const now = Date.now();
-        this._remoteNodes.set(name, { agents, lastSeen: now });
+        // The manifest comes from the server's listing, not the heartbeat; keep it.
+        const manifest = this._remoteNodes.get(name)?.manifest;
+        this._remoteNodes.set(name, {
+            agents,
+            lastSeen: now,
+            ...(readings !== undefined && { readings }),
+            ...(manifest !== undefined && { manifest }),
+        });
         // Nodes announce themselves and never say goodbye, so without this the
         // map only ever grows. Going quiet is not enough to be dropped — the
         // panel renders quiet nodes as offline, which is information — but a
@@ -254,6 +280,37 @@ export class CardDashboard {
             }
         }
         if (this.view === "overview") {
+            this._overview.renderNodes();
+        }
+    }
+
+    /**
+     * Fold what the overview fetched into the nodes it knows, then repaint.
+     *
+     * The server's listing carries each node's manifest, and also names nodes
+     * this page has not heard a heartbeat from yet -- it opened after their
+     * last one -- which it then shows from the listing until one arrives.
+     */
+    private _onDataUpdate(): void {
+        for (const [name, listing] of this._data.listings) {
+            const known = this._remoteNodes.get(name);
+            const manifest = listing.manifest ?? null;
+            if (known) {
+                known.manifest = manifest;
+            } else {
+                const agents = Array.isArray(listing["agents"])
+                    ? (listing["agents"] as unknown[]).filter((a): a is string => typeof a === "string")
+                    : [];
+                this._remoteNodes.set(name, {
+                    agents,
+                    lastSeen: (listing.last_seen ?? 0) * 1000,
+                    readings: readingsFrom(listing),
+                    manifest,
+                });
+            }
+        }
+        if (this.view === "overview") {
+            this._overview.paintTrends();
             this._overview.renderNodes();
         }
     }

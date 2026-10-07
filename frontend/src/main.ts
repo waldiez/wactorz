@@ -376,7 +376,7 @@ router.on("completed", payload => {
 });
 
 router.on("node-heartbeat", payload => {
-    agentStore.updateRemoteNode(payload.node, payload.agents);
+    agentStore.updateRemoteNode(payload.node, payload.agents, payload.readings);
     pushFeed(nodeHeartbeatFeedItem(payload));
 });
 

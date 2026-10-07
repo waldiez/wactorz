@@ -222,6 +222,14 @@
 <td>How long an actor has been on the message it is handling; <code>0</code> when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck</td>
 </tr>
 <tr>
+<td><code>wactorz_actor_queue_wait_seconds{actor_name}</code></td>
+<td>Time from a message being made to the actor taking it: in the mailbox, or with its sender for room in a full one. An actor takes one message at a time, so a slow handler shows here as the wait of everything behind it, and a high wait beside <code>wactorz_actor_messages_refused_total</code> is a full mailbox</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_message_duration_seconds{actor_name}</code></td>
+<td>Time an actor's handler took over one message. A generated agent hands each task to a task of its own, so its handling time is in <code>wactorz_agent_task_duration_seconds</code> instead</td>
+</tr>
+<tr>
 <td><code>wactorz_event_loop_lag_seconds</code></td>
 <td>Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting</td>
 </tr>

@@ -46,6 +46,8 @@ And, for what the dashboard does not show:
 | `wactorz_actor_mailbox_depth{actor_name}` | Messages waiting in an actor's mailbox |
 | `wactorz_actor_messages_refused_total{actor_name}` | Messages a full mailbox had no room for: notifications dropped, anything else refused after a wait |
 | `wactorz_actor_handling_seconds{actor_name}` | How long an actor has been on the message it is handling; `0` when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck |
+| `wactorz_actor_queue_wait_seconds{actor_name}` | Time from a message being made to the actor taking it: in the mailbox, or with its sender for room in a full one. An actor takes one message at a time, so a slow handler shows here as the wait of everything behind it, and a high wait beside `wactorz_actor_messages_refused_total` is a full mailbox |
+| `wactorz_actor_message_duration_seconds{actor_name}` | Time an actor's handler took over one message. A generated agent hands each task to a task of its own, so its handling time is in `wactorz_agent_task_duration_seconds` instead |
 | `wactorz_event_loop_lag_seconds` | Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting |
 | `wactorz_nodes{state}` | Edge nodes that are `up` and `down` |
 | `wactorz_node_up{node}` | `1` while a node's heartbeat is recent |

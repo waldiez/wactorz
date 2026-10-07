@@ -56,7 +56,7 @@ Every agent publishes to its own namespace: `agents/{actor_id}/...`
 }
 ```
 
-`tasks_failed` includes the tasks that timed out, which `tasks_timed_out` also counts. A generated agent adds `task_p50_s`/`task_p95_s` for its `handle_task`, and `process_p50_s`/`process_p95_s` for its `process()` cycle, over its most recent calls, once it has made any. They are how an agent on a node, which serves no `/metrics`, reports what its work takes.
+`tasks_failed` includes the tasks that timed out, which `tasks_timed_out` also counts. Every actor adds `queue_wait_p50_s`/`queue_wait_p95_s` (how long its messages waited in its mailbox) and `message_p50_s`/`message_p95_s` (how long it took over them) once it has handled any. A generated agent also adds `task_p50_s`/`task_p95_s` for its `handle_task`, and `process_p50_s`/`process_p95_s` for its `process()` cycle, over its most recent calls, once it has made any. They are how an agent on a node, which serves no `/metrics`, reports what its work takes.
 
 **LLM agents additionally include:**
 ```json

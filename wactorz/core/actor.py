@@ -20,6 +20,8 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..monitoring import actor_metrics
+from ..monitoring.agent_metrics import RecentDurations
 from .atomic_io import quarantine_unreadable, write_bytes
 from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
@@ -292,6 +294,10 @@ class Actor(ABC):
         #: When the message being handled was taken up, on the monotonic clock;
         #: None between messages.
         self._handling_since: float | None = None
+        #: What recent messages waited and took, for the percentiles in the
+        #: metrics frame. See `wactorz.monitoring.actor_metrics`.
+        self._queue_waits = RecentDurations()
+        self._message_durations = RecentDurations()
         self._outbox: dict[str, asyncio.Queue] = {}  # actor_id -> queue ref
 
         # Registry reference (set by ActorSystem)
@@ -493,6 +499,7 @@ class Actor(ABC):
                 bus.unregister(self.name)
         except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
+        actor_metrics.forget(self.name)
         logger.info("[%s] Actor stopped.", self.name)
         # Deferred to here rather than raised where it arrived: the shield exists
         # so cleanup completes, and stopping half way through would defeat it.
@@ -606,12 +613,16 @@ class Actor(ABC):
                     MessageType.STATUS_RESPONSE,
                     MessageType.STOP,
                 }
-                if msg.type not in _noise:
+                counted = msg.type not in _noise
+                if counted:
                     self.metrics.messages_processed += 1
+                    self._message_waited(msg)
                 self._handling_since = time.monotonic()
                 try:
                     await self._dispatch(msg)
                 finally:
+                    if counted:
+                        self._message_handled(time.monotonic() - self._handling_since)
                     self._handling_since = None
                 self._mailbox.task_done()
 
@@ -622,6 +633,17 @@ class Actor(ABC):
             except Exception:
                 self.metrics.errors += 1
                 logger.exception("[%s] Error in message loop", self.name)
+
+    def _message_waited(self, msg: Message) -> None:
+        """Record how long ``msg`` sat in the mailbox, from when it was made."""
+        waited = max(0.0, time.time() - msg.timestamp)
+        self._queue_waits.add(waited)
+        actor_metrics.QUEUE_WAIT.labels(actor_name=self.name).observe(waited)
+
+    def _message_handled(self, seconds: float) -> None:
+        """Record how long the handler took over one message."""
+        self._message_durations.add(seconds)
+        actor_metrics.MESSAGE_DURATION.labels(actor_name=self.name).observe(seconds)
 
     def _resolve_pending_result(self, msg: Message) -> bool:
         """Settle a waiting future from a RESULT's correlation id.
@@ -779,6 +801,10 @@ class Actor(ABC):
             metrics["input_tokens"] = self.metrics.llm_input_tokens
             metrics["output_tokens"] = self.metrics.llm_output_tokens
             metrics["llm_calls"] = self.metrics.llm_calls
+        # The recent p50 and p95, once there are any: how a node's actors, which
+        # serve no `/metrics`, report what waiting and handling take.
+        metrics.update(self._queue_waits.summary("queue_wait"))
+        metrics.update(self._message_durations.summary("message"))
         return metrics
 
     LIFECYCLE_COMMANDS = ("start", "stop", "delete")

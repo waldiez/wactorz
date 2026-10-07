@@ -14,7 +14,7 @@ from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
 from prometheus_client.platform_collector import PlatformCollector
 from prometheus_client.process_collector import ProcessCollector
 
-from . import agent_metrics, chat_metrics, http_metrics, llm_metrics, loop_lag
+from . import actor_metrics, agent_metrics, chat_metrics, http_metrics, llm_metrics, loop_lag
 
 RegistryProvider = Callable[[], Any | None]
 
@@ -377,6 +377,7 @@ class PrometheusMonitor:
             *agent_metrics.COLLECTORS,
             *http_metrics.COLLECTORS,
             *chat_metrics.COLLECTORS,
+            *actor_metrics.COLLECTORS,
         ):
             self._registry.register(collector)
         ProcessCollector(registry=self._registry)

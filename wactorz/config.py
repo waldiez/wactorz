@@ -257,6 +257,10 @@ RETENTION_TIMESERIES_DAYS = _env_int("WACTORZ_RETENTION_TIMESERIES_DAYS", 365)
 #: replayed on every start — for ever, for one that never can be. A week outlasts
 #: any outage worth waiting for, and each one expired is logged with its topic.
 RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
+#: The per-minute samples of every agent and node the dashboard's trends read.
+#: A week shows a pattern across days; with a few dozen agents it is a few tens
+#: of megabytes, which a Raspberry Pi's card holds without noticing.
+RETENTION_METRICS_DAYS = _env_int("WACTORZ_RETENTION_METRICS_DAYS", 7)
 
 #: What a node does with a control message not signed for it, once it holds a key.
 #:

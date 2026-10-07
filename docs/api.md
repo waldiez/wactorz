@@ -95,6 +95,30 @@ Conversation history for the actor (only useful for LLM-backed actors like `main
 
 ---
 
+### `GET /api/history/agents/{name}` · `GET /api/history/nodes/{name}`
+
+An agent's or a node's metrics history: one sample about every minute, oldest first, for the last `hours` (default `24`). Kept for `WACTORZ_RETENTION_METRICS_DAYS` (default `7`); an agent is sampled while the dashboard is hearing from it.
+
+**Response** `200 OK`
+```json
+{
+  "agent":          "weather",
+  "hours":          24,
+  "kept_days":      7,
+  "sample_every_s": 60,
+  "samples": [
+    {"ts": 1740000000.0, "agent": "weather", "node": "", "state": "running",
+     "memory_mb": 42.5, "messages_processed": 7, "errors": 0,
+     "tasks_completed": 5, "tasks_failed": 0, "cost_usd": 0.0012,
+     "queue_wait_p95_s": 0.01, "message_p95_s": 0.2, "task_p95_s": null}
+  ]
+}
+```
+
+A node's samples carry `node`, `online`, `cpu_pct`, `mem_used_mb`, `mem_free_mb` and `agents` (how many it ran). `400` when `hours` is not a finite number above 0; `503` when there is no database to keep the history in.
+
+---
+
 ### `POST /api/actors/{actor_id}/message`
 
 Send a content message to an actor.

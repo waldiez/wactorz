@@ -22,7 +22,7 @@ from ..monitoring.prometheus import PrometheusMonitor
 from . import runtime
 
 
-def _known_nodes() -> list[dict[str, Any]]:
+def known_nodes() -> list[dict[str, Any]]:
     """The nodes main knows; none before main is up, or without a node manager."""
     nodes = getattr(find_main_actor(runtime.registry), "nodes", None)
     return nodes.list_nodes() if nodes is not None else []
@@ -37,7 +37,7 @@ def build_monitor() -> PrometheusMonitor:
     return PrometheusMonitor(
         lambda: runtime.registry,
         publisher_provider=lambda: getattr(runtime.system, "_mqtt_client", None),
-        nodes_provider=_known_nodes,
+        nodes_provider=known_nodes,
         expected_nodes_provider=lambda: [target.name for target in CONFIG.deploy_targets],
     )
 

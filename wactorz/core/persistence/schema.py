@@ -117,4 +117,39 @@ CREATE TABLE IF NOT EXISTS chat_log (
 
 CREATE INDEX IF NOT EXISTS idx_chatlog_ts          ON chat_log (ts);
 CREATE INDEX IF NOT EXISTS idx_chatlog_agent_ts    ON chat_log (agent_name, ts);
+
+-- Metrics history — a sample of every agent and node, about once a minute, so
+-- a trend survives a restart and an install without Prometheus has one at all.
+-- Pruned by the retention job (WACTORZ_RETENTION_METRICS_DAYS).
+CREATE TABLE IF NOT EXISTS agent_metrics_history (
+    ts                 REAL NOT NULL,
+    agent              TEXT NOT NULL,
+    node               TEXT DEFAULT '',      -- empty for an agent on main
+    state              TEXT DEFAULT '',
+    memory_mb          REAL,
+    messages_processed INTEGER,
+    errors             INTEGER,
+    tasks_completed    INTEGER,
+    tasks_failed       INTEGER,
+    cost_usd           REAL,
+    queue_wait_p95_s   REAL,
+    message_p95_s      REAL,
+    task_p95_s         REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_history_ts       ON agent_metrics_history (ts);
+CREATE INDEX IF NOT EXISTS idx_agent_history_agent_ts ON agent_metrics_history (agent, ts);
+
+CREATE TABLE IF NOT EXISTS node_metrics_history (
+    ts          REAL NOT NULL,
+    node        TEXT NOT NULL,
+    online      INTEGER NOT NULL,
+    cpu_pct     REAL,
+    mem_used_mb REAL,
+    mem_free_mb REAL,
+    agents      INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_history_ts      ON node_metrics_history (ts);
+CREATE INDEX IF NOT EXISTS idx_node_history_node_ts ON node_metrics_history (node, ts);
 """

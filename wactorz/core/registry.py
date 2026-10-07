@@ -13,7 +13,7 @@ import logging
 import time
 import uuid
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -219,10 +219,7 @@ class ActorRegistry:
         if actor is None:
             raise LookupError(f"no agent named {target!r} is running")
         task_id = f"ask_{uuid.uuid4().hex[:12]}"
-        slot_id = f"ask-reply:{task_id}"
-        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        self._reply_slots[slot_id] = future
-        try:
+        async with self.reply_slot() as (slot_id, future):
             msg = Message(
                 type=MessageType.TASK,
                 sender_id=slot_id,
@@ -237,9 +234,25 @@ class ActorRegistry:
                 raise asyncio.TimeoutError(
                     f"{target!r} did not answer within {timeout:g}s"
                 ) from None
+        return reply_value(reply, task_id=task_id, target=target)
+
+    @contextlib.asynccontextmanager
+    async def reply_slot(self) -> AsyncIterator[tuple[str, asyncio.Future[Any]]]:
+        """A reply address for a caller that is not an actor, for the length of a wait.
+
+        Yields the address and the future a RESULT sent to it settles. Put the
+        address in a message's ``reply_to`` (and ``sender_id``, for agents that
+        answer the sender), hand the message to the agent, await the future.
+        The slot is gone when the block ends, however it ends, so a reply that
+        arrives late is dropped rather than kept for nobody.
+        """
+        slot_id = f"reply-slot:{uuid.uuid4().hex[:12]}"
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._reply_slots[slot_id] = future
+        try:
+            yield slot_id, future
         finally:
             self._reply_slots.pop(slot_id, None)
-        return reply_value(reply, task_id=task_id, target=target)
 
     def get(self, actor_id: str) -> Actor | None:
         """The actor with this id, or None."""

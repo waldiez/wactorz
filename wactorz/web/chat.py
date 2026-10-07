@@ -342,50 +342,6 @@ async def handle_slash(text: str, reply_fn) -> bool:
     return False
 
 
-#: Correlation id → the queue waiting for that request's RESULT. One entry per
-#: in-flight chat turn; the interceptor below routes by this rather than
-#: assuming there is only ever one.
-_PENDING_REPLIES: dict[str, asyncio.Queue] = {}
-
-
-def _install_reply_capture(target: Any) -> None:
-    """Teach an agent's ``send`` to hand RESULTs back to the waiting chat turn.
-
-    Agents reply to ``msg.reply_to or msg.sender_id``, and a chat turn is not a
-    real actor, so the reply has nowhere to go unless it is intercepted.
-
-    Installed **once per agent and never removed**. It used to be patched in and
-    restored around each turn, which broke under two concurrent turns to the
-    same agent: the second saved the first's interceptor as "the original", the
-    first restored the real method — so the second's replies stopped being
-    captured — and the second then restored the first's interceptor, leaving
-    the agent permanently sending its results into an abandoned queue.
-
-    Correlating by id also fixes the other half: the old interceptor captured
-    *any* RESULT, so a reply meant for one turn could be handed to another.
-    """
-    if getattr(target, "_io_gateway_capture_installed", False):
-        return
-    original_send = target.send
-
-    async def _capture_send(
-        target_id: str,
-        msg_type: MessageType,
-        payload: Any = None,
-        **kw: Any,
-    ) -> bool:
-        if msg_type == MessageType.RESULT:
-            queue = _PENDING_REPLIES.get(target_id)
-            if queue is not None:
-                await queue.put(payload)
-                return True
-            # Not for a chat turn — an ordinary actor-to-actor result.
-        return await original_send(target_id, msg_type, payload, **kw)
-
-    target.send = _capture_send
-    target._io_gateway_capture_installed = True
-
-
 #: Where a reply keeps its words, most likely first. `result` leads because that
 #: is the field the prompts tell a generated agent to fill -- "for agents that
 #: return plain text, use {"result": ...}" -- and what every other reader in the
@@ -700,9 +656,8 @@ async def _route_chat(
         # - dynamic agents (sinergym-collector, sinergym-optimizer, etc.)
         # - manual-agent (fallback if chat() not present)
         #
-        # Strategy: call handle_message() directly and intercept the reply by
-        # temporarily monkey-patching target.send() to capture the RESULT
-        # payload instead of trying to route it to a non-existent actor ID.
+        # Strategy: call handle_message() directly, with a reply slot of the
+        # registry as the address the RESULT is sent to.
 
         # manual-agent: prefer its native chat() — it handles plain text well
         if hasattr(target, "chat") and not hasattr(target, "_fn_handle_task"):
@@ -717,26 +672,28 @@ async def _route_chat(
             await _end_fn()
             return
 
-        # All other message-passing agents: intercept send() to capture the
-        # RESULT, since it is addressed to a correlation id rather than a real
-        # actor. The interceptor is installed once per agent and correlates by
-        # that id; it is never swapped back.
+        # All other message-passing agents: a chat turn is not an actor, so the
+        # reply address is a slot of the registry, which a RESULT sent to it
+        # settles; the slot is gone when the turn ends, however it ends.
         if blocks:
             await _say_files_not_sent(f"@{target.name} cannot read attachments")
-        correlation_id = f"io-gateway:{uuid.uuid4().hex[:12]}"
-        reply_queue: asyncio.Queue = asyncio.Queue()
-        _install_reply_capture(target)
-        _PENDING_REPLIES[correlation_id] = reply_queue
+        # The target came out of this registry, so it is there; said for the
+        # type checker, which only knows the attribute may be unset.
+        registry = runtime.registry
+        if registry is None:
+            await reply_fn("[error] registry not available")
+            await _end_fn()
+            return
         try:
-            msg = Message(
-                type=MessageType.TASK,
-                sender_id=correlation_id,
-                reply_to=correlation_id,
-                payload=task_payload(text),
-            )
-            await target.handle_message(msg)
-
-            payload = await asyncio.wait_for(reply_queue.get(), timeout=150.0)
+            async with registry.reply_slot() as (slot_id, reply):
+                msg = Message(
+                    type=MessageType.TASK,
+                    sender_id=slot_id,
+                    reply_to=slot_id,
+                    payload=task_payload(text),
+                )
+                await target.handle_message(msg)
+                payload = await asyncio.wait_for(reply, timeout=150.0)
 
             text_out = reply_text(payload)
             if (
@@ -754,7 +711,6 @@ async def _route_chat(
             logger.exception("[io-gateway] task dispatch to %s failed", target.name)
             await reply_fn(f"[error] {target.name}: {exc}")
         finally:
-            _PENDING_REPLIES.pop(correlation_id, None)
             await _end_fn()
 
 

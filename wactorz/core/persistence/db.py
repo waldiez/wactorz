@@ -72,6 +72,35 @@ def _with_attachments(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+#: The columns of one agent's metrics sample, as `write_metrics_history` takes them.
+AGENT_HISTORY_COLUMNS = (
+    "ts",
+    "agent",
+    "node",
+    "state",
+    "memory_mb",
+    "messages_processed",
+    "errors",
+    "tasks_completed",
+    "tasks_failed",
+    "cost_usd",
+    "queue_wait_p95_s",
+    "message_p95_s",
+    "task_p95_s",
+)
+
+#: The columns of one node's metrics sample.
+NODE_HISTORY_COLUMNS = ("ts", "node", "online", "cpu_pct", "mem_used_mb", "mem_free_mb", "agents")
+
+
+def _insert_sql(table: str, columns: tuple[str, ...]) -> str:
+    """An INSERT for ``columns`` of ``table``; both are constants of this module."""
+    return (
+        f"INSERT INTO {table} ({', '.join(columns)}) "  # noqa: S608  # constants, never input
+        f"VALUES ({', '.join('?' for _ in columns)})"
+    )
+
+
 class WactorzDB:
     """SQLite connection manager. One instance per process, created at startup.
 
@@ -634,6 +663,71 @@ class WactorzDB:
         if total:
             logger.info("[Persistence] Pruned %s rows older than %sd", total, days)
         return total
+
+    # ── Metrics history ─────────────────────────────────────────────────────
+
+    def write_metrics_history(
+        self, agents: list[dict[str, Any]], nodes: list[dict[str, Any]]
+    ) -> None:
+        """Store one sample of every agent and node, in one transaction.
+
+        Each dict holds the columns named in `AGENT_HISTORY_COLUMNS` or
+        `NODE_HISTORY_COLUMNS`; a missing one is stored as NULL.
+        """
+        with self.transaction() as conn:
+            if agents:
+                conn.executemany(
+                    _insert_sql("agent_metrics_history", AGENT_HISTORY_COLUMNS),
+                    [tuple(row.get(c) for c in AGENT_HISTORY_COLUMNS) for row in agents],
+                )
+            if nodes:
+                conn.executemany(
+                    _insert_sql("node_metrics_history", NODE_HISTORY_COLUMNS),
+                    [tuple(row.get(c) for c in NODE_HISTORY_COLUMNS) for row in nodes],
+                )
+
+    @_serialised
+    def query_agent_history(
+        self, agent: str, since: float, limit: int = 10_000
+    ) -> list[dict[str, Any]]:
+        """``agent``'s samples since ``since``, oldest first."""
+        rows = self.conn.execute(
+            f"SELECT {', '.join(AGENT_HISTORY_COLUMNS)} FROM agent_metrics_history "  # noqa: S608  # the column list is a constant
+            "WHERE agent = ? AND ts >= ? ORDER BY ts DESC LIMIT ?",
+            (agent, float(since), int(limit)),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    @_serialised
+    def query_node_history(
+        self, node: str, since: float, limit: int = 10_000
+    ) -> list[dict[str, Any]]:
+        """``node``'s samples since ``since``, oldest first."""
+        rows = self.conn.execute(
+            f"SELECT {', '.join(NODE_HISTORY_COLUMNS)} FROM node_metrics_history "  # noqa: S608  # the column list is a constant
+            "WHERE node = ? AND ts >= ? ORDER BY ts DESC LIMIT ?",
+            (node, float(since), int(limit)),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def clear_metrics_history(self, agent: str | None = None) -> int:
+        """Delete ``agent``'s samples, or with none every agent's and node's. Returns rows removed."""
+        with self.transaction() as conn:
+            if agent:
+                cur = conn.execute("DELETE FROM agent_metrics_history WHERE agent = ?", (agent,))
+                return cur.rowcount
+            removed = conn.execute("DELETE FROM agent_metrics_history").rowcount
+            removed += conn.execute("DELETE FROM node_metrics_history").rowcount
+            return removed
+
+    def prune_metrics_history(self, days: float) -> int:
+        """Delete metrics samples older than ``days``. Returns rows removed."""
+        cutoff = time.time() - (days * 86400)
+        removed = self._delete_before("agent_metrics_history", cutoff)
+        removed += self._delete_before("node_metrics_history", cutoff)
+        if removed:
+            logger.info("[Persistence] Pruned %s metrics samples older than %sd", removed, days)
+        return removed
 
     def prune_chat_log(self, days: float) -> int:
         """Delete chat turns older than N days, in batches. Returns rows removed."""

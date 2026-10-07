@@ -30,6 +30,7 @@ from . import (
     log_stream,
     login,
     metrics,
+    metrics_history,
     mqtt,
     origins,
     probes,
@@ -124,6 +125,11 @@ def build_app() -> web.Application:
     # Here as well as on the REST interface, which runs only when it is the
     # chosen interface; behind the same key check as every other route.
     app.router.add_get("/metrics", metrics.handler_for(metrics.build_monitor()))
+    for prefix in ("/api", ""):
+        app.router.add_get(
+            f"{prefix}/history/agents/{{name}}", metrics_history.agent_history_handler
+        )
+        app.router.add_get(f"{prefix}/history/nodes/{{name}}", metrics_history.node_history_handler)
     # Sign-in. Exempt from the key check and from nothing else — `POST /login`
     # stays inside the origin gate, which is what stands in for a CSRF token.
     app.router.add_get("/login", login.login_page_handler)
@@ -279,15 +285,19 @@ async def main(exit_on_failure: bool = False) -> None:
     # broadcaster — a sleep and a broadcast — so it unwinds on cancel just as
     # quickly.
     log_task = asyncio.create_task(log_stream.log_push_loop())
+    # The metrics history: a sleep and a write handed to a worker thread.
+    history_task = asyncio.create_task(metrics_history.record_loop())
     try:
         await mqtt.mqtt_listener()
     finally:
         # cancel() only requests it; awaiting is what makes shutdown mean the
         # task has actually unwound. No timeout needed here — unlike an actor's
-        # tasks, these are a sleep and a broadcast, so they stop immediately.
+        # tasks, these are a sleep and a broadcast or a write, so they stop
+        # immediately.
         totals_task.cancel()
         log_task.cancel()
-        await asyncio.gather(totals_task, log_task, return_exceptions=True)
+        history_task.cancel()
+        await asyncio.gather(totals_task, log_task, history_task, return_exceptions=True)
         # Closes the listening socket and every open connection. Without it the
         # port stays bound until the process exits, so an embedding application
         # that stops the monitor cannot start it again.

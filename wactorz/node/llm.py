@@ -13,6 +13,7 @@ in both places, and only what sits underneath it differs.
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -47,11 +48,20 @@ class BridgeProvider(LLMProvider):
         without touching a node.
         """
         timeout = float(kwargs.get("timeout", REQUEST_TIMEOUT_S))
-        reply = await self._agent.ask_main(
-            "main/llm_request",
-            {"messages": messages, "system": system},
-            timeout=timeout,
-        )
+        started = time.monotonic()
+        try:
+            reply = await self._agent.ask_main(
+                "main/llm_request",
+                {"messages": messages, "system": system},
+                timeout=timeout,
+            )
+        except Exception:
+            # It never left this node -- the broker was not there to take it --
+            # which is not main failing to answer, and is counted apart.
+            self._agent.llm_unsent()
+            raise
+        # None is what a request main never answered comes back as.
+        self._agent.llm_round_trip(time.monotonic() - started, answered=reply is not None)
         if not isinstance(reply, dict):
             return (str(reply) if reply is not None else ""), {}
         usage = reply.get("usage")

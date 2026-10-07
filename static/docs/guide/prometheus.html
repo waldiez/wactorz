@@ -222,6 +222,26 @@
 <td>How long an actor has been on the message it is handling; <code>0</code> when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck</td>
 </tr>
 <tr>
+<td><code>wactorz_actor_queue_wait_seconds{actor_name}</code></td>
+<td>Time from a message being made to the actor taking it: in the mailbox, or with its sender for room in a full one. An actor takes one message at a time, so a slow handler shows here as the wait of everything behind it, and a high wait beside <code>wactorz_actor_messages_refused_total</code> is a full mailbox</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_message_duration_seconds{actor_name}</code></td>
+<td>Time an actor's handler took over one message. A generated agent hands each task to a task of its own, so its handling time is in <code>wactorz_agent_task_duration_seconds</code> instead</td>
+</tr>
+<tr>
+<td><code>wactorz_ha_requests_total{command,outcome}</code></td>
+<td>Home Assistant WebSocket requests by command (<code>get_states</code>, <code>call_service</code>, the registry lists, <code>subscribe_events</code>) and how they ended: <code>ok</code>, <code>error</code> or <code>timeout</code>. The events a subscription then waits for are not requests, and are not counted</td>
+</tr>
+<tr>
+<td><code>wactorz_ha_request_duration_seconds{command}</code></td>
+<td>Time from a Home Assistant request to its answer, or to giving up on it</td>
+</tr>
+<tr>
+<td><code>wactorz_ha_connect_duration_seconds</code> / <code>wactorz_ha_connect_failures_total</code></td>
+<td>Time to open and authenticate a WebSocket to Home Assistant, and the attempts that failed (unreachable, or a refused token)</td>
+</tr>
+<tr>
 <td><code>wactorz_event_loop_lag_seconds</code></td>
 <td>Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting</td>
 </tr>

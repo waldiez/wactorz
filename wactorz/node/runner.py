@@ -282,8 +282,13 @@ class NodeRunner:
                 retain=False,
             )
 
-    async def stop_agent(self, name: str, delete: bool = False) -> None:
+    async def stop_agent(self, name: str, delete: bool = False, keep_topics: bool = False) -> None:
         """Stop an agent, and with ``delete`` erase everything it leaves behind.
+
+        ``keep_topics`` keeps its retained topics through a delete, for an agent
+        that lives on elsewhere: its actor id comes from its name, so those
+        topics are the other copy's too, and clearing them reads as it
+        withdrawing. A rolled-back migration sends it.
 
         A plain stop flushes the agent's state to disk and leaves it there, so
         the next spawn or runner restart picks it back up. A delete also removes
@@ -307,7 +312,8 @@ class NodeRunner:
             # After the agent is fully stopped: its own shutdown writes the
             # state file, and a supervisor restart could recreate it.
             agent.delete_state()
-            await self._purge_agent_retained(actor_id)
+            if not keep_topics:
+                await self._purge_agent_retained(actor_id)
             logger.info("[runner] Agent '%s' permanently deleted from this node.", name)
 
     async def _delete_leftovers(self, name: str) -> None:
@@ -631,16 +637,22 @@ class NodeRunner:
           {"name": "foo"}                 plain stop, state preserved
           {"name": "foo", "delete": true} permanent delete: wipes the state file
                                           and the retained MQTT topics
+          {"name": "foo", "delete": true, "keep_topics": true}
+                                          wipes the state file only: the agent
+                                          lives on elsewhere, and shares them
           "foo"                           legacy bare name, plain stop
         """
         if isinstance(data, dict):
             name = data.get("name")
             do_delete = bool(data.get("delete", False))
+            keep_topics = bool(data.get("keep_topics", False))
         else:
             name = str(data)
-            do_delete = False
+            do_delete = keep_topics = False
         if name:
-            self._background(self.stop_agent(name, delete=do_delete), "stop_agent")
+            self._background(
+                self.stop_agent(name, delete=do_delete, keep_topics=keep_topics), "stop_agent"
+            )
 
     async def _on_migrate(self, topic_str: str, data: Any, msg: Any) -> None:
         """Move a running agent to another node.

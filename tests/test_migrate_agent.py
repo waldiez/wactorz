@@ -536,6 +536,18 @@ class TestGoingOut:
         assert stops, "the target was never told to drop the agent"
         assert all(o.get("qos") == 1 for o in stops)
 
+    async def test_the_rollback_keeps_the_topics_the_restored_copy_shares(self) -> None:
+        # An actor id comes from the name: cleared on the target, the topics
+        # are the restored copy's too, and its empty manifest read as it
+        # withdrawing -- which dropped it from the registry.
+        main, token, _pending = await self._migrated()
+        main.actor.migration.pending_spawns[token]["started_at"] = 0.0
+
+        await main.actor.migration.expire_pending_spawns()
+
+        ((_topic, stop),) = main.published_to("nodes/nuc/stop")
+        assert stop == {"name": "collector", "delete": True, "keep_topics": True}
+
     async def test_what_comes_home_carries_no_stale_snapshot(self) -> None:
         # Local state was never purged, so it is both intact and newer than the
         # snapshot that was shipped out.

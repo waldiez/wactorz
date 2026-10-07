@@ -468,9 +468,14 @@ class Migration:
             # agent and putting it back on the source would leave two -- the
             # duplicate this whole choreography exists to avoid. An agent that
             # never started ignores the stop.
+            #
+            # Its retained topics are kept. An actor id comes from the name, so
+            # they are the topics of the copy being restored below: cleared, its
+            # manifest reads as that copy withdrawing, and the registry forgets
+            # the agent this rollback exists to keep.
             await self.host._mqtt_publish(
                 f"nodes/{target_node}/stop",
-                {"name": agent_name, "delete": True},
+                {"name": agent_name, "delete": True, "keep_topics": True},
                 qos=1,
             )
             # The stop is a one-off, but placing the agent added it to the

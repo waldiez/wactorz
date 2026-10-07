@@ -1,12 +1,24 @@
 """Agents on the node: started there, moved home and out again, and asking the model.
 
 The agent that is moved counts what it is sent and keeps the count, so each
-answer says whether its memory came with it.
+answer says whether its memory came with it. Moved home, it must leave nothing
+on the node: not its state file, and not a place in the node's desired state,
+which the node reads again whenever it reconnects to the broker.
 """
 
-from harness import backend, browser, waiting
+import time
+
+from harness import backend, broker, browser, node, waiting
 from harness.probe import NODE_POLL_S
-from harness.run import NODE_NAME
+from harness.run import NODE_NAME, Run
+
+LIVE = "● live"
+
+#: Where the node keeps the moved agent's state.
+COUNTER_STATE = f"{node.HOME}/wactorz/state/counter_state.json"
+
+#: Long enough for a node that started an agent to report it: a heartbeat or two.
+REPORTED_WITHIN_S = 25.0
 
 #: The notice main gives of one move home, once the agent is running here.
 HOME = rf"✅ System: Migration of 'counter' from '{NODE_NAME}' → local succeeded\."
@@ -18,6 +30,14 @@ def _on_the_node(app: backend.Backend) -> set[str]:
         if (listed.get("node") or listed.get("name")) == NODE_NAME:
             return set(listed.get("agents") or [])
     return set()
+
+
+def _last_seen(app: backend.Backend) -> float:
+    """When main last heard from the node, as a Unix time; 0 when it has not."""
+    for listed in app.rest.nodes():
+        if (listed.get("node") or listed.get("name")) == NODE_NAME:
+            return float(listed.get("last_seen") or 0)
+    return 0.0
 
 
 def _on_the_server(app: backend.Backend) -> set[str]:
@@ -61,6 +81,42 @@ def test_moved_home_it_remembers(dashboard: browser.Dashboard, app: backend.Back
 
     dashboard.say("two", to="counter")
     dashboard.expect("counter", "counted 2")
+
+
+def test_the_node_keeps_nothing_of_it(dashboard: browser.Dashboard) -> None:
+    # It kept the file while the move could still fail; once the agent runs
+    # here, the delete that follows takes it.
+    waiting.until(
+        lambda: node.run_on(f"test -e {COUNTER_STATE}").returncode != 0,
+        what="the node to delete the moved agent's state file",
+    )
+
+
+def test_a_node_that_reconnects_does_not_take_it_back(
+    dashboard: browser.Dashboard, app: backend.Backend, run: Run
+) -> None:
+    # The node reads its retained desired state again when it reconnects. One
+    # that still listed the agent started it there again, beside the copy here.
+    broker.stop(run)
+    back_at = time.time()
+    broker.start(run)
+    waiting.until(lambda: dashboard.connection() == LIVE, what="the header to say live again")
+    waiting.until(
+        lambda: app.rest.raw("GET", "/ready").status == 200, what="the server to be ready again"
+    )
+    waiting.until(
+        lambda: _last_seen(app) > back_at,
+        what="a heartbeat from the node after the broker came back",
+        interval=NODE_POLL_S,
+    )
+
+    waiting.holds_for(
+        lambda: "counter" not in _on_the_node(app),
+        what="the node not running the agent moved home",
+        window=REPORTED_WITHIN_S,
+        interval=NODE_POLL_S,
+    )
+    assert "counter" in _on_the_server(app)
 
 
 def test_moved_out_again_it_still_remembers(

@@ -431,7 +431,7 @@ class TestTheNodeChecksToo:
         node, _published, _spawned = runner
         stopped: list[Any] = []
 
-        async def _stop(name: str, delete: bool = False) -> None:
+        async def _stop(name: str, delete: bool = False, keep_topics: bool = False) -> None:
             stopped.append(name)
 
         node.stop_agent = _stop  # type: ignore[method-assign]

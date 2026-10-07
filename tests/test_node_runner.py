@@ -14,9 +14,11 @@ from typing import Any
 
 import pytest
 
+from tests.waiting import until
 from wactorz.core.actor import ActorState
 from wactorz.node.agent import NodeAgent
 from wactorz.node.runner import NodeRunner
+from wactorz.node.state import flush_states
 
 CODE = "async def process(agent):\n    pass\n"
 REPAIRED = "async def process(agent):\n    pass  # repaired by the LLM\n"
@@ -434,6 +436,33 @@ class TestDeletingWhatIsNotRunning:
             topic
             for topic, _payload, _retain in runner.published[before:]
             if topic.startswith(f"agents/{actor_id}/")
+        ]
+
+    async def test_a_delete_that_keeps_topics_wipes_the_state_only(
+        self, runner: RecordingRunner
+    ) -> None:
+        # A rolled-back migration: the agent lives on elsewhere, under the same
+        # actor id, so its retained topics are not this node's to clear.
+        await runner.spawn_agent({"name": "collector", "code": CODE})
+        agent = runner.get("collector")
+        assert agent is not None
+        agent.persist("count", 3)
+        flush_states()
+        assert agent._state_file.path.exists()
+        actor_id = agent.actor_id
+        before = len(runner.published)
+
+        await runner._on_stop(
+            "nodes/rpi/stop",
+            {"name": "collector", "delete": True, "keep_topics": True},
+            _Message(),
+        )
+        await until(lambda: runner.get("collector") is None, "the agent to be stopped")
+        await until(lambda: not agent._state_file.path.exists(), "its state to be wiped")
+        assert not [
+            topic
+            for topic, _payload, _retain in runner.published[before:]
+            if topic.startswith(f"agents/{actor_id}/") and _payload == b""
         ]
 
     async def test_one_never_seen_here_is_not_an_error(self, runner: RecordingRunner) -> None:

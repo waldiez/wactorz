@@ -396,7 +396,7 @@ class TestWhatACommandSchedules:
         await runner._on_stop("nodes/rpi/stop", {"name": "collector"}, _Message("x"))
         await _settle()
 
-        assert calls == [(("collector",), {"delete": False})]
+        assert calls == [(("collector",), {"delete": False, "keep_topics": False})]
 
     async def test_a_stop_can_ask_for_a_delete(self, runner: NodeRunner) -> None:
         calls: list[Any] = []
@@ -405,7 +405,21 @@ class TestWhatACommandSchedules:
         await runner._on_stop("nodes/rpi/stop", {"name": "c", "delete": True}, _Message("x"))
         await _settle()
 
-        assert calls == [(("c",), {"delete": True})]
+        assert calls == [(("c",), {"delete": True, "keep_topics": False})]
+
+    async def test_a_delete_can_keep_the_topics(self, runner: NodeRunner) -> None:
+        # What a rolled-back migration sends: the agent lives on elsewhere.
+        calls: list[Any] = []
+        self._capture(runner, "stop_agent", calls)
+
+        await runner._on_stop(
+            "nodes/rpi/stop",
+            {"name": "c", "delete": True, "keep_topics": True},
+            _Message("x"),
+        )
+        await _settle()
+
+        assert calls == [(("c",), {"delete": True, "keep_topics": True})]
 
     async def test_a_bare_name_is_still_a_stop(self, runner: NodeRunner) -> None:
         # What an older main sends. Dropping it would make its command vanish.
@@ -415,7 +429,7 @@ class TestWhatACommandSchedules:
         await runner._on_stop("nodes/rpi/stop", "collector", _Message("x"))
         await _settle()
 
-        assert calls == [(("collector",), {"delete": False})]
+        assert calls == [(("collector",), {"delete": False, "keep_topics": False})]
 
     async def test_a_stop_with_no_name_does_nothing(self, runner: NodeRunner) -> None:
         calls: list[Any] = []

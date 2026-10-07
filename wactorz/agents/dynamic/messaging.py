@@ -7,7 +7,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import MessageType
+from ...core.actor import ReplyError, ask_through
 from ...core.mqtt import mqtt_client
 from ..lookup import find_main_actor
 
@@ -237,30 +237,24 @@ class MessagingMixin(_Host):
 
         if target:
             # ── Local path ────────────────────────────────────────────────────
-
-            task_id = str(uuid.uuid4())[:8]
-            future = asyncio.get_event_loop().create_future()
-            self._actor._result_futures[task_id] = future
+            # Generated code reads "text" or "message" from a plain value.
             if not isinstance(payload, dict):
                 payload = {"message": payload, "text": str(payload)}
-            payload = dict(payload)
-            payload["_task_id"] = task_id
-            payload["_reply_to"] = self._actor.actor_id
+            if not hasattr(self._actor, "_result_futures"):
+                self._actor._result_futures = {}
             try:
-                taken = await self._actor.send(target.actor_id, MessageType.TASK, payload)
-                if taken is False:
-                    # Its mailbox had no room, so no answer is coming. Only an
-                    # explicit False: a `send` put in its place to observe the
-                    # traffic may return nothing.
-                    return {"error": f"'{agent_name}' is not taking messages: its mailbox is full"}
-                return await asyncio.wait_for(future, timeout=timeout)
+                return await ask_through(self._actor, agent_name, payload, timeout=timeout)
+            except ReplyError as exc:
+                # This API answers with error dicts, never raises: generated
+                # code is written against that.
+                return exc.reply
+            except RuntimeError:
+                return {"error": f"'{agent_name}' is not taking messages: its mailbox is full"}
             except asyncio.TimeoutError:
                 logger.warning(
                     "[%s] send_to '%s' timed out after %ss", self.name, agent_name, timeout
                 )
                 return {"error": f"Timeout waiting for '{agent_name}'"}
-            finally:
-                self._actor._result_futures.pop(task_id, None)
 
         return await self._send_to_remote(agent_name, payload, timeout)
 

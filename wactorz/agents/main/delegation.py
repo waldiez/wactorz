@@ -28,7 +28,7 @@ import uuid
 from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ...core.actor import MessageType
+from ...core.actor import ReplyError, ask_through
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -186,31 +186,16 @@ class DelegationManager:
         target = self.host._registry.find_by_name(target_name)
         if target:
             # ── Local path (fast, in-process) ────────────────────────────────
-            task_id = uuid.uuid4().hex
-            future = asyncio.get_event_loop().create_future()
-            self.host._result_futures[task_id] = future
             try:
-                taken = await self.host.send(
-                    target.actor_id,
-                    MessageType.TASK,
-                    {
-                        "text": task,
-                        "_task_id": task_id,
-                        "task": task_id,
-                        "reply_to": self.host.actor_id,
-                    },
-                )
-                if taken is False:
-                    # Its mailbox had no room, so no answer is coming: the same
-                    # as an agent that never replies, without the wait. Only an
-                    # explicit False: a `send` put in its place to observe the
-                    # traffic may return nothing.
-                    return None
-                return await asyncio.wait_for(future, timeout=timeout)
-            except asyncio.TimeoutError:
+                return await ask_through(self.host, target_name, {"text": task}, timeout=timeout)
+            except ReplyError as exc:
+                # The agent's own account of its failure is the answer here;
+                # every caller reads the reply's fields and says what it finds.
+                return exc.reply
+            except (asyncio.TimeoutError, RuntimeError, LookupError):
+                # No answer is coming: a mailbox with no room is the same as an
+                # agent that never replies, without the wait.
                 return None
-            finally:
-                self.host._result_futures.pop(task_id, None)
 
         # ── Remote path: check if agent is on a known node ───────────────────
         remote_node = None
@@ -251,25 +236,17 @@ class DelegationManager:
         """
         if not self.host._registry:
             return {"error": "No registry available"}
-        installer = self.host._registry.find_by_name("installer")
-        if not installer:
-            return {"error": "installer agent not found"}
-
-        task_id = f"inst_{uuid.uuid4().hex[:8]}"
-        future: asyncio.Future = asyncio.get_event_loop().create_future()
-        self.host._result_futures[task_id] = future
-
-        payload = dict(payload)
-        payload["_task_id"] = task_id
-        payload["task"] = task_id
-
-        await self.host.send(installer.actor_id, MessageType.TASK, payload)
         try:
-            return await asyncio.wait_for(future, timeout=timeout)
+            return await ask_through(self.host, "installer", payload, timeout=timeout)
+        except LookupError:
+            return {"error": "installer agent not found"}
+        except ReplyError as exc:
+            # A failed install is the installer's report, read by the caller.
+            return exc.reply
         except asyncio.TimeoutError:
             return {"error": f"Installer timed out after {timeout}s"}
-        finally:
-            self.host._result_futures.pop(task_id, None)
+        except RuntimeError as exc:
+            return {"error": str(exc)}
 
     async def _run_delegation(self, agent_name: str, payload: Any) -> str:
         """Dispatch one already-resolved delegation and format the result string.

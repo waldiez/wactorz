@@ -14,13 +14,12 @@ import json
 import logging
 import re
 import time
-import uuid
 from collections.abc import Collection, Mapping
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ... import plugins
 from ...config import CONFIG
-from ...core.actor import MessageType
+from ...core.actor import ask_through
 from ...plugins import AgentPlugin
 from ..lookup import find_main_actor
 from ..prompts.home_assistant_prompts import HOME_ASSISTANT_FRAGMENT
@@ -813,27 +812,19 @@ class PipelineMixin(_Host):
         entity_list = " ".join(entity_ids)
         await self._log(f"Bootstrap — sending get_entities_state to HA agent for: {entity_ids}")
 
-        task_id = str(uuid.uuid4())[:8]
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._result_futures[task_id] = future
         try:
-            await self.send(
-                ha_actor.actor_id,
-                MessageType.TASK,
-                {
-                    "text": f"get_entities_state {entity_list}",
-                    "_task_id": task_id,
-                    "_reply_to": self.actor_id,
-                },
+            result = await ask_through(
+                self,
+                "home-assistant-agent",
+                {"text": f"get_entities_state {entity_list}"},
+                timeout=15.0,
             )
-            result = await asyncio.wait_for(future, timeout=15.0)
-            await self._log(f"Bootstrap — HA agent responded: {result.get('result', '')[:120]}")
+            said = result.get("result", "") if isinstance(result, dict) else result
+            await self._log(f"Bootstrap — HA agent responded: {str(said)[:120]}")
         except asyncio.TimeoutError:
             await self._log("Bootstrap — HA agent timed out")
         except Exception as exc:
             await self._log(f"Bootstrap — error: {exc}")
-        finally:
-            self._result_futures.pop(task_id, None)
 
 
 def active_rule_lines(

@@ -19,10 +19,9 @@ import json
 import logging
 import re
 import time
-import uuid
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import MessageType
+from ...core.actor import ReplyError, ask_through
 from ...core.topics import topic_name_error
 
 if TYPE_CHECKING:
@@ -640,36 +639,29 @@ class SpawnService:
             node,
             address,
         )
-        task_id = f"remote_install_{uuid.uuid4().hex[:8]}"
-        future = asyncio.get_running_loop().create_future()
-        self.host._result_futures[task_id] = future
         # The node's name rather than its credentials: the installer already
         # holds those, and putting them in a message would spread them.
-        await self.host.send(
-            installer.actor_id,
-            MessageType.TASK,
-            {
-                "action": "node_install",
-                "host": address,
-                "packages": packages,
-                "node_name": node,
-                "_task_id": task_id,
-                "task": task_id,
-            },
-        )
+        request = {
+            "action": "node_install",
+            "host": address,
+            "packages": packages,
+            "node_name": node,
+        }
         try:
-            result = await asyncio.wait_for(future, timeout=INSTALL_TIMEOUT_S)
+            result = await ask_through(self.host, "installer", request, timeout=INSTALL_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.warning("[%s] Remote install timed out — spawning anyway", self.host.name)
+        except ReplyError as exc:
+            logger.warning(
+                "[%s] Remote install issue: %s", self.host.name, exc.reply.get("error", "?")
+            )
+        except RuntimeError as exc:
+            logger.warning("[%s] Remote install not sent: %s", self.host.name, exc)
         else:
-            if result.get("success"):
+            if isinstance(result, dict) and result.get("success"):
                 logger.info("[%s] Remote install OK: %s", self.host.name, packages)
             else:
-                logger.warning(
-                    "[%s] Remote install issue: %s", self.host.name, result.get("error", "?")
-                )
-        finally:
-            self.host._result_futures.pop(task_id, None)
+                logger.warning("[%s] Remote install issue: %s", self.host.name, result)
 
     async def _refuse_remote_spawn(self, config: dict[str, Any], node: str, reason: str) -> None:
         """Say in the log and on the dashboard why an agent was not sent to ``node``."""

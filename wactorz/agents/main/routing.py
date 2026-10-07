@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 from wactorz.config import CONFIG
 from wactorz.llm_factory import provider_for
 
-from ...core.actor import MessageType
+from ...core.actor import ask_through
 from ..prompts.assemble import PromptFragment
 from ..prompts.fragments import DEFAULT_FRAGMENTS
 from ..prompts.main_actor_prompts import intent_classifier_prompt, intent_tokens
@@ -125,26 +125,12 @@ class RoutingMixin(_Host):
             if self._registry:
                 ha_agent = self._registry.find_by_name("home-assistant-agent")
                 if ha_agent:
-                    # Use a unique task_id so the future resolves correctly
-                    _ha_task_id = f"actuate_entities_{uuid.uuid4().hex[:8]}"
-                    _ha_future: asyncio.Future = asyncio.get_running_loop().create_future()
-                    self._result_futures[_ha_task_id] = _ha_future
-                    await self.send(
-                        ha_agent.actor_id,
-                        MessageType.TASK,
-                        {
-                            "text": "list_entities",
-                            "_task_id": _ha_task_id,
-                            "task": _ha_task_id,
-                            "reply_to": self.actor_id,
-                        },
-                    )
                     try:
-                        ha_result = await asyncio.wait_for(_ha_future, timeout=10.0)
-                    except asyncio.TimeoutError:
+                        ha_result = await ask_through(
+                            self, "home-assistant-agent", {"text": "list_entities"}, timeout=10.0
+                        )
+                    except (asyncio.TimeoutError, RuntimeError, LookupError):
                         ha_result = None
-                    finally:
-                        self._result_futures.pop(_ha_task_id, None)
 
                     entities = []
                     if ha_result and isinstance(ha_result, dict):

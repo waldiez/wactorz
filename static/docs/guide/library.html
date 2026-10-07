@@ -513,8 +513,9 @@ send it, and the reply is what the agent answered: a function's return value,
 with a plain value wrapped as <code>{"result": ...}</code>. Three things go wrong loudly
 rather than quietly. No agent of that name is running: <code>LookupError</code>. The
 agent answered with an error, which is what a function that raised reports:
-<code>RuntimeError</code> carrying the message. No reply within <code>timeout</code> seconds, 60 by
-default: <code>asyncio.TimeoutError</code>. In every case nothing is left waiting.</p>
+<code>RuntimeError</code> carrying the message, a <code>wactorz.core.actor.ReplyError</code> whose
+<code>reply</code> holds the agent's whole answer. No reply within <code>timeout</code> seconds, 60
+by default: <code>asyncio.TimeoutError</code>. In every case nothing is left waiting.</p>
 <p><code>wactorz.ask</code> needs a running system, from <code>run()</code> or <code>serve()</code>; it raises
 <code>RuntimeError</code> otherwise. Its reply address is a slot of the registry rather
 than an actor, so nothing is registered, listed or supervised on the caller's

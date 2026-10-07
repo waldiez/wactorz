@@ -6,10 +6,9 @@ final synthesis is always handed back to main rather than a domain agent.
 
 import asyncio
 import logging
-import uuid
 from typing import TYPE_CHECKING, Any
 
-from ...core.actor import Actor, MessageType
+from ...core.actor import Actor, ReplyError, ask_through
 from ..mixins.spawning import SpawnPlaceholder
 
 if TYPE_CHECKING:
@@ -242,27 +241,20 @@ class ExecutionMixin(_Host):
     ) -> dict[str, Any] | None:
         if not self._registry:
             return None
-        target = self._registry.find_by_name(agent_name)
-        if not target:
+        try:
+            return await ask_through(self, agent_name, payload, timeout=timeout)
+        except LookupError:
             logger.warning("[%s] Agent '%s' not found for delegation", self.name, agent_name)
             return {"error": f"Agent '{agent_name}' not found"}
-
-        task_id = str(uuid.uuid4())[:8]
-        future: asyncio.Future = asyncio.get_running_loop().create_future()
-        self._result_futures[task_id] = future
-
-        await self.send(
-            target.actor_id,
-            MessageType.TASK,
-            {**payload, "_task_id": task_id, "_reply_to": self.actor_id},
-        )
-        try:
-            return await asyncio.wait_for(future, timeout=timeout)
+        except ReplyError as exc:
+            # The step's failure is part of the plan's result, not an exception
+            # here: the caller decides whether a fallback stands in for it.
+            return exc.reply
         except asyncio.TimeoutError:
             logger.warning("[%s] Timeout from '%s'", self.name, agent_name)
             return {"error": f"Timeout from {agent_name}"}
-        finally:
-            self._result_futures.pop(task_id, None)
+        except RuntimeError as exc:
+            return {"error": str(exc)}
 
     async def _synthesize(
         self, task: str, plan: list[dict[str, Any]], results: dict[str | int, Any]

@@ -190,7 +190,7 @@ class TestChoosingWhereTheTaskGoes:
 
         await main.delegate("weather")
 
-        assert main.sent[0][2]["reply_to"] == "main-id"
+        assert main.sent[0][2]["_reply_to"] == "main-id"
 
     async def test_an_agent_on_a_node_is_reached_over_mqtt(
         self, monkeypatch: pytest.MonkeyPatch
@@ -268,7 +268,7 @@ class TestAskingTheInstaller:
         payload = main.sent[0][2]
         assert payload["action"] == "node_deploy"
         assert payload["_task_id"]
-        assert payload["task"] == payload["_task_id"]
+        assert payload["_reply_to"] == "main-id"
 
     async def test_the_callers_payload_is_left_alone(self) -> None:
         # The caller may reuse it, and finding a task id in it later would make

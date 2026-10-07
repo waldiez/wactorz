@@ -560,7 +560,7 @@ node holding the old one.</p>
 <tr>
 <td><code>nodes/{name}/desired_state</code></td>
 <td>→ runner</td>
-<td>Every agent the node should be running. Retained; the runner starts any that are missing when it connects. Signed.</td>
+<td>Every agent the node should be running. Retained; the runner starts any that are missing when it connects, and stops (keeping its state) any it runs that the list leaves out, except one a migration placed there and main has not confirmed yet. Signed.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/stop</code></td>

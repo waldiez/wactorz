@@ -16,10 +16,10 @@ describe("event bus", () => {
 
     it("emits detail-less events without a detail argument", () => {
         const handler = vi.fn();
-        const fn = listen("af-wipe-all", handler);
-        emit("af-wipe-all");
+        const fn = listen("af-clear-feed", handler);
+        emit("af-clear-feed");
         expect(handler).toHaveBeenCalledTimes(1);
-        document.removeEventListener("af-wipe-all", fn);
+        document.removeEventListener("af-clear-feed", fn);
     });
 
     it("returns a listener that can be removed to stop delivery", () => {

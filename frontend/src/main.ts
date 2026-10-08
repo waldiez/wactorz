@@ -440,7 +440,16 @@ listen("af-send-message", detail => {
 });
 
 // wipe all
-listen("af-wipe-all", () => {
+listen("af-wipe-all", ({ survivors }) => {
+    // A wipe deletes: every agent it took away is tombstoned as a deleted one
+    // is, so a heartbeat still on its way cannot put its card back. Cards are
+    // otherwise kept until a delete says so, and a wipe sends none per agent.
+    const kept = new Set(survivors);
+    for (const agent of agentStore.getAgents()) {
+        if (!kept.has(agent.id)) {
+            markDeleted(agent.id);
+        }
+    }
     agentStore.clearAll();
     _logFeedState.maxTs = 0;
 });

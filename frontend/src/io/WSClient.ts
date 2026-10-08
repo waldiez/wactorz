@@ -350,7 +350,9 @@ export class WSClient {
     private _handleReset(data: Record<string, unknown>): void {
         const scope = asStr(data["scope"]);
         if (scope === "all") {
-            emit("af-wipe-all");
+            const patch = data["state"] as StatePatch | undefined;
+            const survivors = (patch?.agents ?? []).map(a => a.agent_id).filter((id): id is string => !!id);
+            emit("af-wipe-all", { survivors });
             // The reset frame carries the survivors itself — the server rebuilds
             // from the registry before broadcasting — so apply it rather than
             // sitting on an empty list until the next heartbeat.

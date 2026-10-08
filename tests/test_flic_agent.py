@@ -613,6 +613,8 @@ class TestKeepingAPairing:
         # Refusing to start over a damaged file leaves nothing working at all,
         # and a button can always be paired again.
         agent, _published = make_agent(tmp_path, monkeypatch)
+        # Left by an earlier run, whose start made the directory.
+        agent._buttons_json.parent.mkdir(parents=True, exist_ok=True)
         agent._buttons_json.write_text("{ not json", encoding="utf-8")
 
         assert await agent._restore() == []

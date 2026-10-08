@@ -19,7 +19,17 @@ SCHEMA_VERSION = 1
 SCHEMA_SQL = """
 -- Schema version tracking
 CREATE TABLE IF NOT EXISTS schema_version (
-    version INTEGER NOT NULL
+    version           INTEGER NOT NULL,
+    framework_version INTEGER DEFAULT 1   -- how far the migrations have brought it
+);
+
+-- Every migration that has succeeded, SQL and state alike. Only successes are
+-- written, which makes it the record of what is done.
+CREATE TABLE IF NOT EXISTS migration_history (
+    version     INTEGER NOT NULL,
+    applied_at  REAL NOT NULL,
+    description TEXT DEFAULT '',
+    duration_ms INTEGER DEFAULT 0
 );
 
 -- Key-value store for structured agent data (replaces most pickle usage)

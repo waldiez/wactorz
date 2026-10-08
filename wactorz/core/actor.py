@@ -434,8 +434,10 @@ class Actor(ABC):
         # omitted the argument wrote somewhere nothing else would look.
         # Through `agent_state_dir`, so a name like `..` is refused rather than
         # walking out of the state directory it was given.
+        # Only named here: the directory is made when the actor starts, or when
+        # `state_dir` is first asked for, so an actor can be built without
+        # touching the disk.
         self._persistence_dir = agent_state_dir(persistence_dir or resolve_state_dir(), self.name)
-        self._persistence_dir.mkdir(parents=True, exist_ok=True)
         self._persistent_state: dict = {}
         #: Without a persistence API: the pickled bytes of each value in the
         #: state file that would not unpickle, written back until set again.
@@ -482,6 +484,7 @@ class Actor(ABC):
         self._stopped = None
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
+        await asyncio.to_thread(self._persistence_dir.mkdir, parents=True, exist_ok=True)
         await self._load_persistent_state()
         await self._bring_state_up_to_date(self.state_version, self._class_upgrade())
         # Restore the message count from a previous run — but only into a fresh
@@ -1353,6 +1356,7 @@ class Actor(ABC):
         """Write the whole state, for an actor with no persistence API."""
         try:
             data, unpicklable = encode_state(self._persistent_state, self._unreadable_state)
+            self._persistence_dir.mkdir(parents=True, exist_ok=True)
             write_bytes(self._persistence_dir / "state.pkl", data)
         except Exception:
             logger.exception("[%s] Failed to save state", self.name)
@@ -1442,11 +1446,12 @@ class Actor(ABC):
         """This actor's own directory under the state directory, for files it keeps.
 
         Model weights, a checkpoint store, a local experiment log: anything
-        too large or too un-JSON for :meth:`persist`. It exists from
-        construction, survives restarts and is removed with the actor on a
+        too large or too un-JSON for :meth:`persist`. It exists whenever it is
+        asked for, survives restarts and is removed with the actor on a
         delete. What moves with a migration is the persisted state, not these
         files; an agent that must find a file on another machine ships it.
         """
+        self._persistence_dir.mkdir(parents=True, exist_ok=True)
         return self._persistence_dir
 
     def record_llm_cost(

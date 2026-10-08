@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.old_database import as_first_release
 from wactorz.core.persistence import WactorzDB, migrations
 from wactorz.core.persistence.migrations import (
     FRAMEWORK_VERSION,
@@ -51,9 +52,32 @@ def migrated_fixture(tmp_path: Path) -> Iterator[WactorzDB]:
 
 
 class TestVersionReporting:
-    def test_the_base_schema_is_version_one(self, fresh: WactorzDB) -> None:
-        """Creating the tables is not the same as being up to date."""
-        assert get_current_version(fresh) == 1
+    def test_a_new_database_is_created_current(self, fresh: WactorzDB) -> None:
+        """Today's schema has everything the migrations add, and no data to change."""
+        assert get_current_version(fresh) == FRAMEWORK_VERSION
+        assert not _pending_state_versions(fresh)
+
+    def test_a_new_database_has_no_upgrade_to_make(self, tmp_path: Path) -> None:
+        with WactorzDB(str(tmp_path / "new.db")) as db:
+            result = run_migrations(db, PickleStore(str(tmp_path / "state")))
+
+        assert (result["from_version"], result["sql_migrations"]) == (FRAMEWORK_VERSION, 0)
+        assert result["state_migrations"] == 0
+
+    def test_an_existing_file_without_a_version_is_not_taken_for_new(self, tmp_path: Path) -> None:
+        # Tables there before this schema arrived: an older database, whatever
+        # its version row says, and the migrations must run over it.
+        path = tmp_path / "old.db"
+        with sqlite3.connect(path) as conn:
+            conn.execute("CREATE TABLE kv_store (agent TEXT, key TEXT, value TEXT)")
+        conn.close()
+
+        with WactorzDB(str(path)) as db:
+            assert get_current_version(db) < FRAMEWORK_VERSION
+
+    def test_the_first_releases_database_is_version_one(self, tmp_path: Path) -> None:
+        with WactorzDB(str(tmp_path / "v1.db")) as db:
+            assert get_current_version(as_first_release(db)) == 1
 
     def test_a_database_with_no_schema_at_all_is_version_zero(self, tmp_path: Path) -> None:
         bare = BareDB(str(tmp_path / "bare.db"))
@@ -81,7 +105,8 @@ def failing_state_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestRunMigrations:
     def test_it_reports_where_it_started_and_finished(self, tmp_path: Path) -> None:
-        with WactorzDB(str(tmp_path / "a.db")) as db:
+        with WactorzDB(str(tmp_path / "a.db")) as fresh_db:
+            db = as_first_release(fresh_db)
             result = run_migrations(db, PickleStore(str(tmp_path / "state")))
             assert result["from_version"] == 1
             assert result["to_version"] == FRAMEWORK_VERSION
@@ -91,7 +116,8 @@ class TestRunMigrations:
     def test_the_sql_migrations_add_what_the_bookkeeping_and_chat_log_need(
         self, tmp_path: Path
     ) -> None:
-        with WactorzDB(str(tmp_path / "b.db")) as db:
+        with WactorzDB(str(tmp_path / "b.db")) as fresh_db:
+            db = as_first_release(fresh_db)
             run_migrations(db, PickleStore(str(tmp_path / "state")))
 
             def columns(table: str) -> set[str]:
@@ -103,7 +129,8 @@ class TestRunMigrations:
 
     def test_running_it_twice_is_a_no_op(self, tmp_path: Path) -> None:
         """Startup calls this every boot, so a second pass must apply nothing."""
-        with WactorzDB(str(tmp_path / "c.db")) as db:
+        with WactorzDB(str(tmp_path / "c.db")) as fresh_db:
+            db = as_first_release(fresh_db)
             store = PickleStore(str(tmp_path / "state"))
             run_migrations(db, store)
             second = run_migrations(db, store)
@@ -119,7 +146,8 @@ class TestRunMigrations:
         than raised — a boot that stopped here would leave the database
         half-upgraded.
         """
-        with WactorzDB(str(tmp_path / "d.db")) as db:
+        with WactorzDB(str(tmp_path / "d.db")) as fresh_db:
+            db = as_first_release(fresh_db)
             result = run_migrations(db, PickleStore(str(tmp_path / "state")))
 
             assert result["errors"]
@@ -132,7 +160,8 @@ class TestRunMigrations:
         """The property that matters: only successes are recorded, so the work
         is still owed on the next boot even though the schema is current.
         """
-        with WactorzDB(str(tmp_path / "e.db")) as db:
+        with WactorzDB(str(tmp_path / "e.db")) as fresh_db:
+            db = as_first_release(fresh_db)
             run_migrations(db, PickleStore(str(tmp_path / "state")))
 
             assert get_current_version(db) == FRAMEWORK_VERSION
@@ -142,7 +171,8 @@ class TestRunMigrations:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         store = PickleStore(str(tmp_path / "state"))
-        with WactorzDB(str(tmp_path / "f.db")) as db:
+        with WactorzDB(str(tmp_path / "f.db")) as fresh_db:
+            db = as_first_release(fresh_db)
             with monkeypatch.context() as failing:
                 _make_state_migrations_fail(failing)
                 run_migrations(db, store)

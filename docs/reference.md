@@ -980,7 +980,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 **Direct (from CLI):**
 
 ```text
-@catalog spawn image-gen-agent
+@catalog spawn weather-agent
 @catalog spawn doc-to-pptx-agent
 @catalog list
 @catalog info doc-to-pptx-agent
@@ -989,7 +989,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 **Natural language via main:**
 
 ```text
-"spawn the image generation agent"
+"spawn the weather agent"
 "what agents can you spawn for me?"
 "I need to convert a PDF to PowerPoint"
 ```
@@ -1008,10 +1008,7 @@ Spawned agents are registered in main's spawn registry — they survive restarts
 
 ### Built-in Recipes
 
-| Recipe | Description | Key Dependencies |
-|--------|-------------|-----------------|
-| `image-gen-agent` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path. | `requests`, NIM API key |
-| `doc-to-pptx-agent` | Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from the PDF first; falls back to NIM FLUX generation for slides without images. | `pymupdf`, `pdfplumber`, `pptxgenjs` (Node.js) |
+Every recipe, what it does and what it needs, is listed in [Catalogue agents](catalogue-agents.md), with a page per recipe.
 
 ### Adding New Recipes
 
@@ -1034,30 +1031,6 @@ if code:
 ```
 
 No changes to `cli.py` or any other file needed. On next restart the recipe is available system-wide.
-
-### image-gen-agent
-
-Generates images from text prompts via NVIDIA NIM FLUX.1-dev and saves them as PNG files. Requires a free NIM API key (1000 credits/month at [build.nvidia.com](https://build.nvidia.com)).
-
-**Setup:**
-
-```text
-@main remember nim_api_key = nvapi-xxxxxxxxxxxxxxxx
-```
-
-**Task payload:**
-
-```json
-{
-  "prompt": "minimalist flat illustration of renewable energy",
-  "output_path": "C:/Users/you/Documents/slide.png",
-  "width": 1024,
-  "height": 576,
-  "steps": 20
-}
-```
-
-**Result:** `{ "image_path": "...", "width": 1024, "height": 576, "size_kb": 312, "error": null }`
 
 ### doc-to-pptx-agent
 
@@ -1401,14 +1374,17 @@ wactorz/
 │   ├── home_assistant_agent.py                HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)
 │   ├── home_assistant_map_agent.py            HomeAssistantMapAgent — live entity/location map via HA WebSocket
 │   ├── home_assistant_state_bridge_agent.py   HomeAssistantStateBridgeAgent — HA state_changed → MQTT bridge
-│   ├── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
-│   └── timeseries_collector.py                TimeSeriesCollector — buffered MQTT → SQLite time-series tables
+│   └── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
 │
 ├── catalogue_agents/                          Pre-built recipe files (loaded by CatalogAgent at startup)
-│   ├── image_gen_agent.py                     NIM FLUX.1-dev image generation
-│   ├── doc_to_pptx_agent.py                   PDF/TXT → PowerPoint conversion with real image extraction
 │   ├── anomaly_detector_agent.py              Statistical anomaly detection over HA + Sinergym streams
-│   └── manual_agent.py                        Device-manual search + PDF Q&A
+│   ├── doc_to_pptx_agent.py                   PDF/TXT → PowerPoint conversion with real image extraction
+│   ├── flic_agent.py                          Flic 2 buttons over Bluetooth
+│   ├── manual_agent.py                        Device-manual search + PDF Q&A
+│   ├── reachy_mini_agent.py                   Reachy Mini robot: voice, gestures, camera
+│   ├── smart_energy_agent.py                  Smart-plug power, energy and guarded power-down rules
+│   ├── timeseries_collector_agent.py          Buffered MQTT → SQLite time-series tables
+│   └── weather_agent.py                       Weather by place, no API key
 │
 └── interfaces/
     ├── chat_interfaces.py                     CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface

@@ -15,6 +15,7 @@ from types import TracebackType
 from typing import Any
 
 from .json_value import encode
+from .migrations import stamp_new_database
 from .schema import SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
@@ -195,10 +196,13 @@ class WactorzDB:
         logger.info("[Persistence] SQLite opened: %s", self._path)
 
     def _init_schema(self) -> None:
+        # Told apart before the schema creates anything: a file with tables in
+        # it is an existing database, whatever its version row says.
+        new = not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'").fetchone()
         self.conn.executescript(SCHEMA_SQL)
-        # Check/set version
-        row = self.conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-        if not row:
+        if new:
+            stamp_new_database(self.conn)
+        elif not self.conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone():
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
         # Direct, not via transaction(): this runs from __init__, before the
         # instance is reachable by anything that could contend for the lock.
@@ -304,6 +308,20 @@ class WactorzDB:
                 "INSERT OR REPLACE INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, ?)",
                 (agent, key, encoded, time.time()),
             )
+
+    @_serialised
+    def kv_sizes(self) -> dict[str, int]:
+        """How many bytes each agent keeps in `kv_store`, largest first.
+
+        `kv_store` is not pruned by the retention job: what is there is what
+        agents chose to keep, and it grows only as far as they let it. This is
+        how to see who has let it grow.
+        """
+        rows = self.conn.execute(
+            "SELECT agent, SUM(LENGTH(value)) AS size FROM kv_store "
+            "GROUP BY agent ORDER BY size DESC"
+        ).fetchall()
+        return {str(agent): int(size or 0) for agent, size in rows}
 
     @_serialised
     def kv_get(self, agent: str, key: str, default: Any = None) -> Any:

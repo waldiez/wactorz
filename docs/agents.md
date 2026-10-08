@@ -324,7 +324,7 @@ Maintains a live map of entity IDs to friendly names and domains. Used by Planne
 |---|---|
 | **name** | set at spawn time (e.g. `evening-lights-trigger`) |
 | **spawned by** | PlannerAgent (pattern 5 — scheduled trigger) |
-| **persists** | `_schedule_state` (last fire time, fire count) → SQLite |
+| **persists** | `_schedule_state` (last fire time, fire count) → the agent's `state.pkl` |
 
 First-class scheduled trigger primitive. Sleeps until the next fire time, publishes to its topic, then loops. Replaces the broken `while True: if datetime.now()…` patterns that LLM-generated dynamic agents kept producing for time-based rules.
 
@@ -367,7 +367,7 @@ The internal sleep is bounded to 5 minutes so DST transitions, system clock jump
 
 ### TimeSeriesCollector `[core]`
 
-**File:** `wactorz/agents/timeseries_collector.py`
+**File:** `wactorz/catalogue_agents/timeseries_collector_agent.py`
 
 | | |
 |---|---|
@@ -564,10 +564,7 @@ Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `
 
 | Recipe name | File | Description | Deps |
 |-------------|------|-------------|------|
-| `image-gen-agent` | `image_gen_agent.py` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns the absolute path to the saved PNG. | `requests` |
 | `doc-to-pptx-agent` | `doc_to_pptx_agent.py` | Converts PDF or TXT documents into PowerPoint presentations. Extracts embedded images from PDF; optionally uses NIM FLUX for slides without images. | `pymupdf`, `pdfplumber`, `pillow` |
-| `sinergym-collector` | `sinergym_collector_agent.py` | Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on `sinergym/env/{env_id}/observation`, buffers transitions per-episode, persists episode blobs, and signals the optimizer on collection complete. | `aiomqtt`, `numpy` |
-| `sinergym-optimizer` | `sinergym_optimizer_agent.py` | Env-aware GP-UCB Q(s,a) optimizer with RBC warm-start. Trains from collected episodes (RL PPO/SAC or Bayesian GP), then publishes actions to `sinergym/env/{env_id}/action` during deployment. Auto-introspects obs/action variable names and comfort models. | `stable-baselines3`, `scikit-learn`, `numpy`, `torch`, `aiomqtt`, `gymnasium` |
 | `anomaly-detector` | `anomaly_detector_agent.py` | Learns normal patterns from time-series data (HA sensors and Sinergym), detects anomalies in real-time. Statistical z-score, percentile range, rate-of-change, and absence detection. Works with both real-world HA devices and simulated building data. | `aiomqtt`, `numpy` |
 | `smart-energy` | `smart_energy_agent.py` | Conversational Home Assistant smart-plug helper. Imports power-reporting plugs, tracks live watts plus kWh/cost, publishes energy summaries, and only powers down plugs through explicit guarded rules. | none |
 | `manual-agent` | `manual_agent.py` | Searches the web for device manuals, downloads PDFs, extracts text, and answers questions about them using the agent's LLM. | `httpx`, `pdfplumber`, `duckduckgo_search` |

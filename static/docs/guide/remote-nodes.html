@@ -725,7 +725,7 @@ crash starts from <code>restart_delay</code> again.</p>
 </tr>
 <tr>
 <td><code>agent.persist(key, value)</code></td>
-<td>Write to <code>/tmp/agentflow_{name}_state.json</code> (JSON, not pickle — portable).</td>
+<td>Write to <code>~/wactorz/state/&lt;name&gt;_state.json</code> (JSON, not pickle — portable, and what a migration carries). A value that cannot be written as JSON is not kept: it is dropped with a warning naming it, and the rest is saved.</td>
 </tr>
 <tr>
 <td><code>agent.recall(key)</code></td>

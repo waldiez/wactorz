@@ -155,8 +155,9 @@ class PickleStore:
     """
 
     def __init__(self, base_dir: str | None = None) -> None:
+        # Made when a state is first written, not here: a store can be built,
+        # and read from, without creating anything.
         self._base = Path(base_dir or resolve_state_dir()).resolve()
-        self._base.mkdir(parents=True, exist_ok=True)
         held = _held_for(self._base)
         #: Kept, so the shared states live for as long as this store does.
         self._held = held
@@ -176,9 +177,7 @@ class PickleStore:
         way a name can climb out, which matters because these files are
         unpickled, and unpickling a file an attacker placed is code execution.
         """
-        p = agent_state_dir(self._base, agent_name)
-        p.mkdir(parents=True, exist_ok=True)
-        return p / "state.pkl"
+        return agent_state_dir(self._base, agent_name) / "state.pkl"
 
     def save(self, agent_name: str, state: dict[str, Any]) -> bool:
         """Make ``state`` the agent's state, replacing any previous one.

@@ -198,6 +198,28 @@ _STATE_HISTORY_PREFIX = "State data migration v"
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def stamp_new_database(conn: sqlite3.Connection) -> None:
+    """Record a database made from today's schema as already current.
+
+    The schema creates everything the SQL migrations add, and a new database
+    holds no data a state migration could change, so there is nothing to apply.
+    Without this it read as the first release and was walked through every
+    migration on empty tables, logging an upgrade that never was.
+    """
+    conn.execute(
+        "INSERT INTO schema_version (version, framework_version) VALUES (1, ?)",
+        (FRAMEWORK_VERSION,),
+    )
+    now = time.time()
+    conn.executemany(
+        "INSERT INTO migration_history (version, applied_at, description) VALUES (?, ?, ?)",
+        [
+            (version, now, f"{_STATE_HISTORY_PREFIX}{version} (new database: nothing to migrate)")
+            for version in sorted(_STATE_MIGRATIONS)
+        ],
+    )
+
+
 def get_current_version(db) -> int:
     """Get the current framework version from the database."""
     try:

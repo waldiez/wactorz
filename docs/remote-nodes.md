@@ -520,7 +520,7 @@ The `agent` object available inside remote agent code mirrors the local DynamicA
 | `await agent.publish(topic, data)` | Publish to any MQTT topic via the shared broker. |
 | `await agent.log(message)` | Log to `agents/{id}/logs` — visible in the central dashboard. |
 | `await agent.alert(message, severity)` | Publish an alert. Levels: `info`, `warning`, `error`. |
-| `agent.persist(key, value)` | Write to `/tmp/agentflow_{name}_state.json` (JSON, not pickle — portable). |
+| `agent.persist(key, value)` | Write to `~/wactorz/state/<name>_state.json` (JSON, not pickle — portable, and what a migration carries). A value that cannot be written as JSON is not kept: it is dropped with a warning naming it, and the rest is saved. |
 | `agent.recall(key)` | Read a persisted value. |
 | `agent.state` | In-memory dict, not persisted. |
 | `await agent.send_to(name, payload)` | Send a task to any agent (local or remote) via MQTT request/reply. Times out after 30 s by default. |

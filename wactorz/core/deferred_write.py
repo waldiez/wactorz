@@ -224,6 +224,9 @@ class DeferredWriter:
                     if self._settled.get(path, 0) > number:
                         continue
                 try:
+                    # Its directory is made here, off the event loop, the first
+                    # time anything is written into it.
+                    path.parent.mkdir(parents=True, exist_ok=True)
                     write_bytes(path, data)
                 except OSError as exc:
                     logger.warning("[deferred-write] %s was not written: %s", path, exc)

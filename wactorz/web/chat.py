@@ -648,7 +648,7 @@ async def _route_chat(
     else:
         # Agents that only speak via handle_task/TASK+RESULT message passing:
         # - catalog-agent (no LLM)
-        # - dynamic agents (sinergym-collector, sinergym-optimizer, etc.)
+        # - dynamic agents (generated code, timeseries-collector, etc.)
         # - manual-agent (fallback if chat() not present)
         #
         # Strategy: call handle_message() directly, with a reply slot of the

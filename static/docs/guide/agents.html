@@ -677,7 +677,7 @@
 </tr>
 <tr>
 <td><strong>persists</strong></td>
-<td><code>_schedule_state</code> (last fire time, fire count) → SQLite</td>
+<td><code>_schedule_state</code> (last fire time, fire count) → the agent's <code>state.pkl</code></td>
 </tr>
 </tbody>
 </table>
@@ -711,7 +711,7 @@
 <p>The internal sleep is bounded to 5 minutes so DST transitions, system clock jumps, and laptop sleep don't strand the agent.</p>
 <hr />
 <h3 id="timeseriescollector-core">TimeSeriesCollector <code>[core]</code></h3>
-<p><strong>File:</strong> <code>wactorz/agents/timeseries_collector.py</code></p>
+<p><strong>File:</strong> <code>wactorz/catalogue_agents/timeseries_collector_agent.py</code></p>
 <table>
 <thead>
 <tr>
@@ -1053,28 +1053,10 @@ LLM_COST_LIMIT_PERIOD=daily   # daily | weekly | monthly | total
 </thead>
 <tbody>
 <tr>
-<td><code>image-gen-agent</code></td>
-<td><code>image_gen_agent.py</code></td>
-<td>Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns the absolute path to the saved PNG.</td>
-<td><code>requests</code></td>
-</tr>
-<tr>
 <td><code>doc-to-pptx-agent</code></td>
 <td><code>doc_to_pptx_agent.py</code></td>
 <td>Converts PDF or TXT documents into PowerPoint presentations. Extracts embedded images from PDF; optionally uses NIM FLUX for slides without images.</td>
 <td><code>pymupdf</code>, <code>pdfplumber</code>, <code>pillow</code></td>
-</tr>
-<tr>
-<td><code>sinergym-collector</code></td>
-<td><code>sinergym_collector_agent.py</code></td>
-<td>Collects Sinergym episode data via MQTT for RL/Bayesian training. Listens on <code>sinergym/env/{env_id}/observation</code>, buffers transitions per-episode, persists episode blobs, and signals the optimizer on collection complete.</td>
-<td><code>aiomqtt</code>, <code>numpy</code></td>
-</tr>
-<tr>
-<td><code>sinergym-optimizer</code></td>
-<td><code>sinergym_optimizer_agent.py</code></td>
-<td>Env-aware GP-UCB Q(s,a) optimizer with RBC warm-start. Trains from collected episodes (RL PPO/SAC or Bayesian GP), then publishes actions to <code>sinergym/env/{env_id}/action</code> during deployment. Auto-introspects obs/action variable names and comfort models.</td>
-<td><code>stable-baselines3</code>, <code>scikit-learn</code>, <code>numpy</code>, <code>torch</code>, <code>aiomqtt</code>, <code>gymnasium</code></td>
 </tr>
 <tr>
 <td><code>anomaly-detector</code></td>

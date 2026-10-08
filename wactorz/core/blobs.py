@@ -126,7 +126,7 @@ def _is_module(value: Any) -> bool:
 
 
 def _torch_bytes(value: Any) -> bytes:
-    import torch  # optional dependency, present whenever a tensor or module is
+    import torch  # pyright: ignore[reportMissingImports]  # optional, present with any tensor
 
     buffer = io.BytesIO()
     torch.save(value, buffer)
@@ -134,7 +134,7 @@ def _torch_bytes(value: Any) -> bytes:
 
 
 def _torch_load(data: bytes, *, weights_only: bool) -> Any:
-    import torch  # optional dependency, needed only to read a tensor or module back
+    import torch  # pyright: ignore[reportMissingImports]  # optional, only to read one back
 
     # Onto the GPU it was saved from only where there is one; a model saved on
     # a GPU machine still loads on one without.

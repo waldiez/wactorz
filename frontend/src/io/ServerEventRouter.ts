@@ -151,12 +151,7 @@ export class ServerEventRouter {
 
         const logs = topic.match(/^agents\/(.+)\/logs$/);
         if (logs?.[1]) {
-            const message = optStr(p["message"] ?? p["text"]);
-            this.emit("logs", {
-                agentId: logs[1],
-                agentName: this._agentName(p, logs[1]),
-                ...(message !== undefined && { message }),
-            });
+            this._emitLogs(logs[1], p);
             return true;
         }
 
@@ -182,6 +177,18 @@ export class ServerEventRouter {
         }
 
         return false;
+    }
+
+    /** An agent's log event, with the turn it was working on when it logged it. */
+    private _emitLogs(agentId: string, p: Record<string, unknown>): void {
+        const message = optStr(p["message"] ?? p["text"]);
+        const turn = optStr(p["turn"]);
+        this.emit("logs", {
+            agentId,
+            agentName: this._agentName(p, agentId),
+            ...(message !== undefined && { message }),
+            ...(turn !== undefined && { turn }),
+        });
     }
 
     /** host-level CPU + memory snapshot, accepting both snake_case and camelCase keys. */

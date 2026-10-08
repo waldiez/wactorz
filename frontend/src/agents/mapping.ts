@@ -331,7 +331,16 @@ export function logMessage(p: LogPayload): string {
 /** Feed row for a non-empty log entry, or null when there's nothing to show. */
 export function logFeedItem(p: LogPayload, now = Date.now()): FeedItem | null {
     const msg = logMessage(p);
-    return msg ? { type: "chat", label: msg, agentName: p.agentName, timestamp: now } : null;
+    if (!msg) {
+        return null;
+    }
+    return {
+        type: "chat",
+        label: msg,
+        agentName: p.agentName,
+        timestamp: now,
+        ...(p.turn && { turn: p.turn }),
+    };
 }
 
 /** Feed row for a completed task. */

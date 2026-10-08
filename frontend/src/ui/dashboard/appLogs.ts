@@ -49,6 +49,8 @@ export function toEntry(raw: unknown): AppLogItem | null {
         level: (LEVELS.includes(level) ? level : "INFO") as LogLevel,
         origin: typeof e["origin"] === "string" ? e["origin"] : "?",
         text: e["text"],
+        ...(typeof e["turn"] === "string" && e["turn"] && { turn: e["turn"] }),
+        ...(typeof e["agent"] === "string" && e["agent"] && { agent: e["agent"] }),
     };
 }
 

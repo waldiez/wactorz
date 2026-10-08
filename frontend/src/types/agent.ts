@@ -64,6 +64,8 @@ export interface LogPayload {
     agentName: string;
     message?: string;
     text?: string;
+    /** The chat turn the agent was working on when it logged this, if any. */
+    turn?: string;
 }
 
 /** Node heartbeat — a remote Wactorz node phoning home. */

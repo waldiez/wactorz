@@ -175,6 +175,27 @@ See `.env.template` for the full annotated list.  The most important ones:
 
 ---
 
+## Backing up and moving an install
+
+`wactorz-state` writes a state directory to one archive, and puts one back:
+
+```bash
+wactorz-state export                       # wactorz-state-<date>-<time>.tar.gz, here
+wactorz-state export backup.tar.gz --no-secrets
+wactorz-state import backup.tar.gz         # into WACTORZ_STATE_DIR, or ./state
+wactorz-state import backup.tar.gz --replace
+```
+
+Both read `WACTORZ_STATE_DIR` as the server does; `--state-dir` names another directory.
+
+- **What it holds:** the database, each agent's state file and blobs, uploads, the install's id, the nodes' SSH host keys and, unless `--no-secrets` is given, the install's keys: `node_signing.key`, which every node checks main's messages against, and the broker's TLS keys in `mqtt_tls/`. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.
+- **What it leaves out:** logs, the MQTT outbox (what it holds would be stale by the time it was restored), dashboard sign-in sessions, files part way through being written or received, and files moved aside as unreadable.
+- **Export while it runs.** The database is copied with SQLite's own backup, consistent however busy it is, and every other file is replaced in one step whenever it is written. What was persisted in the last second may be missing.
+- **Import with it stopped.** A running server or node holds a lock on its state directory, and an import refuses while it is held; so does a second server started on the same directory by mistake. Import refuses a directory with anything in it unless `--replace` is given, which keeps what was there beside it as `<directory>.before-import-<date>-<time>`.
+- **An archive is code.** Agents' state files are pickles, unpickled when the system starts: importing an archive runs whatever its maker put in it. Import only archives you made. Import checks that an archive holds exactly the files its manifest lists, each matching its SHA-256, at a path inside the directory, which catches a damaged archive, not a forged one.
+
+A node's state is moved the same way, on the node: `wactorz-state export --state-dir ~/wactorz/state`, and an import there with the node stopped. The Home Assistant add-on's state is in `/data/state`, which Home Assistant's own backups already include.
+
 ## SSH key management
 
 Wactorz reaches remote machines over SSH when bootstrapping an edge node with

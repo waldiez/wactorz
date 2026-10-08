@@ -27,7 +27,8 @@ from wactorz.config import CONFIG, RETENTION_OUTBOX_DAYS, AppConfig
 from wactorz.core import cancellation, own_tasks
 from wactorz.core.cancellation import cancel_all_until_done, cancel_until_done
 from wactorz.core.mqtt_publisher import MQTTPublisher
-from wactorz.core.paths import ensure_state_dir, set_state_dir
+from wactorz.core.paths import ensure_state_dir, resolve_state_dir, set_state_dir
+from wactorz.core.state_lock import StateInUseError, StateLock
 from wactorz.dev_reload import start_reloader
 from wactorz.errors import StartupError
 from wactorz.monitoring.log_buffer import install as install_log_buffer
@@ -51,6 +52,8 @@ _shutting_down = threading.Event()
 #: Watches the event loop from a thread, and says in the log where it is when it
 #: stops running.
 _loop_lag = LoopLagMonitor()
+#: Held while the system runs, so nothing else runs on its state directory.
+_state_lock = StateLock(".")
 
 #: The ActorSystem this process is running, from the moment it is built until
 #: shutdown has stopped it. What :func:`system` answers with.
@@ -814,6 +817,7 @@ async def app(
         system, main_actor, _db = await _build_system_or_stop(args)
         await _run(args, system, main_actor)
     finally:
+        _state_lock.release()
         own_tasks.stop(tagger)
 
 
@@ -842,6 +846,13 @@ def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
     refused = loop_refusal(asyncio.get_running_loop())
     if refused:
         raise StartupError(refused)
+    # Before anything reads the state directory: a second process on it would
+    # write back over the first, and an import into it would be undone.
+    _state_lock.directory = Path(resolve_state_dir())
+    try:
+        _state_lock.acquire()
+    except StateInUseError as exc:
+        raise StartupError(str(exc)) from None
     # Before anything binds, and at the *process* root rather than in one
     # server's startup. Three servers read `CONFIG.bind_host` — the monitor, the
     # REST API and the WhatsApp webhook — so a check that lived in the monitor

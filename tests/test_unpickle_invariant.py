@@ -13,9 +13,12 @@ three reasons rather than one:
    names the server generates.
 
 Layers 1 and 2 are code, and code that is already tested. Layer 3 is a *convention*,
-and it is the one a future feature can break without noticing: a backup import, a
-state-restore endpoint, an SFTP pull — anything that writes a caller-influenced path
-under the state directory. So does adding a *new* unpickle site somewhere less
+and it is the one a future feature can break without noticing: a state-restore
+endpoint, an SFTP pull — anything that writes a caller-influenced path under the
+state directory. The one that exists, `wactorz-state import`, is deliberate about
+it: only into a directory nothing runs on, only the files its manifest lists, each
+matching its hash, at a path inside the directory, and it says an archive is code
+(`tests/test_state_archive.py`). So does adding a *new* unpickle site somewhere less
 guarded. A blob in a format that loads by unpickling -- joblib, a whole torch
 module -- is the same thing by another name, so its loaders are counted too.
 

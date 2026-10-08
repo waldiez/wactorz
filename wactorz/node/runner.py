@@ -56,6 +56,7 @@ from ..core.paths import agent_state_dir
 from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
+from ..core.state_lock import StateLock
 from ..core.state_snapshot import why_it_cannot_travel
 from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
@@ -134,6 +135,8 @@ class NodeRunner:
         self.state_dir = str(state_path)
         #: Where the blobs of an agent main is placing here arrive, before the
         #: spawn that names them uses them.
+        #: Held from `run` until it returns, so nothing else runs on this state.
+        self._state_lock = StateLock(self.state_dir)
         self.inbox = Inbox(
             Path(self.state_dir) / INBOX_DIRNAME, MIGRATION_MAX_BLOB_BYTES or sys.maxsize
         )
@@ -963,8 +966,11 @@ class NodeRunner:
     # ── Main run loop ─────────────────────────────────────────────────────────
 
     async def run(self) -> None:
+        # Before anything reads the state directory: a second node on it would
+        # write back over the first, and an import into it would be undone.
+        # Raises `StateInUseError` when another process holds it.
+        self._state_lock.acquire()
         self._running = True
-        Path(self.state_dir).mkdir(parents=True, exist_ok=True)
         logger.info(
             "[runner] Starting node '%s' → broker %s:%s", self.node_name, self.broker, self.port
         )
@@ -1005,6 +1011,7 @@ class NodeRunner:
             self._loop_lag.stop()
             self._configs.clear()
             self.publisher.stop()
+            self._state_lock.release()
             for t in tasks:
                 t.cancel()
             self._loops = []

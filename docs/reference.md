@@ -355,6 +355,7 @@ What that means in practice:
 - `recall(key, default)` returns `default` for a key that was never set and for one set to `None`, so `recall("items", [])` can be appended to straight away.
 - `recall()` returns the stored object itself, not a copy. Change it and call `persist()` again; do not rely on a recalled list or dict being private to the caller.
 - A value that cannot be pickled (an open camera, a lambda) is kept in memory and left out of the file; the rest is written, and the log names the key once.
+- Bytes, numpy arrays, torch tensors, `state_dict()`s and modules, and scikit-learn-family models are kept as files of their own under `blobs/` in the agent's directory, written when their key is persisted rather than with every other key. A value changed in place is saved by persisting it again. A blob that cannot be read back — its library not installed, its file gone — is missing at the next start like an unpicklable value, and kept for when it can be.
 - Each value in `state.pkl` is pickled on its own. A value that no longer unpickles — a model object after a library upgrade, a class that was renamed — is missing at the next start while the agent's other keys come back, and the log names it with the reason. Its bytes stay in the file, so it returns once the code that reads it does; persisting that key again replaces it.
 
 **Changing what an agent stores.** When a new version of an agent keeps its state in a different shape, it declares a version and how to upgrade to it, and the state is brought up to date when the agent starts, before its own code runs:
@@ -1393,7 +1394,9 @@ wactorz/
 state/                                         Persisted agent state (auto-created, never commit to git)
 ├── wactorz.db                                 SQLite — spawn registry, pipeline rules, user facts, conversation, time-series
 ├── mqtt_outbox.db                             SQLite — durable MQTT publish queue
-└── {agent-name}/state.pkl                     Per-agent pickle fallback (large/binary state)
+└── {agent-name}/
+    ├── state.pkl                              Per-agent pickle (the agent's own keys)
+    └── blobs/                                 One file per model, array or bytes value
 ```
 
 ---

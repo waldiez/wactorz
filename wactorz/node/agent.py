@@ -29,7 +29,7 @@ from ..core.actor import forbidden
 from ..core.topic_bus import TopicContract
 from ..monitoring.agent_metrics import RecentDurations
 from .llm import BridgeProvider, request_over_mqtt
-from .state import JsonState, flush_states, state_path
+from .state import agent_state, flush_states
 
 if TYPE_CHECKING:
     from .runner import NodeRunner
@@ -74,7 +74,7 @@ class NodeAgent(DynamicAgent):
         #: the agent's own code has declared or published anything.
         self.capabilities = list(config.get("capabilities") or [])
         self._spawn_contract = TopicContract.from_spawn_config({**config, "node": self._node})
-        self._state_file = JsonState(state_path(directory, str(name)), str(name))
+        self._state_file = agent_state(directory, str(name))
         #: What this agent's model requests took, there through main and back,
         #: and how many main never answered in time. Reported in the metrics
         #: frame, since a node serves no `/metrics`.
@@ -153,12 +153,12 @@ class NodeAgent(DynamicAgent):
         state and keeps this file to roll back to, and a stop is rare enough
         to wait for the disk.
         """
-        self._state_file.save(self._persistent_state)
+        self._state_file.save(self._persistent_state, changed=())
         flush_states()
 
     def persist(self, key: str, value: Any) -> None:
         self._persistent_state[key] = value
-        self._state_file.save(self._persistent_state)
+        self._state_file.save(self._persistent_state, changed=(key,))
 
     def _own_state(self) -> dict[str, Any]:
         """Everything in the node's state file is the agent's own."""

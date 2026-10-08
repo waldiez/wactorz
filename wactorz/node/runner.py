@@ -55,7 +55,7 @@ from .signing import (
     server_mismatch,
     user_properties,
 )
-from .state import JsonState, flush_states, state_path
+from .state import JsonState, agent_state, flush_states, state_path
 
 logger = logging.getLogger(__name__)
 
@@ -330,7 +330,11 @@ class NodeRunner:
         the topics of the copy now running elsewhere too: cleared from here, its
         manifest reads as that copy withdrawing, and main forgets it.
         """
-        removed = JsonState(state_path(self.state_dir, name), name).delete()
+        try:
+            removed = agent_state(self.state_dir, name).delete()
+        except ValueError:
+            # A name that cannot be a directory: it never had blobs either.
+            removed = JsonState(state_path(self.state_dir, name), name).delete()
         with contextlib.suppress(OSError, ValueError):
             # Empty only, as `NodeAgent.delete_state` does: anything unexpected
             # inside survives to be looked at. ValueError: a name that cannot be

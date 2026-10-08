@@ -10,15 +10,22 @@ node that was redeployed from a newer release.
 The same trade-off is why a migration drops what it cannot serialise rather than
 failing: a counter, a calibration value or a threshold travels, and a cv2 capture
 does not survive a process restart either way.
+
+A model, an array or raw bytes is the exception: it is kept as a blob of its own
+beside the file (see `wactorz.core.blobs`), and the file holds a marker in its
+place, which is JSON like everything else in it.
 """
 
 import json
 import logging
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from ..core.blobs import Blobs, is_marker, marker_for
 from ..core.deferred_write import LARGE_STATE_BYTES, DeferredWriter
+from ..core.paths import agent_state_dir
 from ..core.state_snapshot import json_safe
 
 logger = logging.getLogger(__name__)
@@ -36,6 +43,12 @@ def state_path(state_dir: Path | str, agent_name: str) -> Path:
     return Path(state_dir) / f"{safe}_state.json"
 
 
+def agent_state(state_dir: Path | str, agent_name: str) -> "JsonState":
+    """This agent's state file, with its blobs in the agent's own directory."""
+    blobs = agent_state_dir(state_dir, agent_name) / "blobs"
+    return JsonState(state_path(state_dir, agent_name), agent_name, blobs)
+
+
 #: Writes every agent's state file on this node, a moment after it changes and
 #: off the event loop. One for the process, so one call at shutdown covers all.
 _WRITER = DeferredWriter()
@@ -49,9 +62,18 @@ def flush_states() -> None:
 class JsonState:
     """One agent's state file: read it, write it, and remove it for good."""
 
-    def __init__(self, path: Path, agent_name: str) -> None:
+    def __init__(self, path: Path, agent_name: str, blob_dir: Path | None = None) -> None:
         self.path = path
         self._name = agent_name
+        #: Where values kept as blobs go; without one, they are dropped like
+        #: anything else that is not JSON.
+        self._blobs = Blobs(blob_dir, _WRITER) if blob_dir is not None else None
+        #: The keys whose value is kept as a blob, so a key that stops being
+        #: one has its file removed.
+        self._blob_keys: set[str] = set()
+        #: The marker of each blob that could not be read back, written back
+        #: until its key is set again so the blob is not lost.
+        self._unreadable: dict[str, Any] = {}
         #: What the agent remembers, as last handed to :meth:`save`. The dict
         #: itself, so the file is written from what it holds when it is written.
         self._values: dict[str, Any] = {}
@@ -69,16 +91,36 @@ class JsonState:
         #: when it appears rather than at every write.
         self._reported_dropped: tuple[str, ...] = ()
 
-    def save(self, values: dict[str, Any]) -> None:
+    def save(self, values: dict[str, Any], changed: Iterable[str] | None = None) -> None:
         """Have the file hold what the agent remembers, shortly.
 
         The agent's memory is ``values`` itself, in the process; the file is
         what a restart reads, and it is written a moment later, off the event
         loop. Saving on every tick therefore costs the loop nothing but this
         call, and the ticks inside that moment become one write.
+
+        ``changed`` names the keys set since the last save, whose blobs are
+        written again; None means any may have been, as when the whole state
+        is replaced.
         """
         self._values = values
+        if self._blobs is not None:
+            self._stow(self._blobs, values, changed)
         _WRITER.submit(self.path, self._content, self._landed)
+
+    def _stow(self, blobs: Blobs, values: dict[str, Any], changed: Iterable[str] | None) -> None:
+        if changed is None:
+            blobs.stow_all(values)
+            self._blob_keys = {k for k, v in values.items() if marker_for(v) is not None}
+            self._unreadable.clear()
+            return
+        for key in changed:
+            self._unreadable.pop(key, None)
+            if key in values and blobs.stow(key, values[key]):
+                self._blob_keys.add(key)
+            elif key in self._blob_keys:
+                self._blob_keys.discard(key)
+                blobs.forget(key)
 
     def _landed(self, data: bytes) -> None:
         """The file now holds ``data``."""
@@ -101,7 +143,8 @@ class JsonState:
         for the same reason — a counter or a calibration is worth keeping, and a
         capture object would not survive a restart either way.
         """
-        keepable, dropped = json_safe(self._values)
+        marked = {**self._unreadable, **self._marked(self._values)}
+        keepable, dropped = json_safe(marked)
         if dropped and tuple(dropped) != self._reported_dropped:
             logger.warning(
                 "[%s] Not persisting %s: nothing there can be written as JSON, which is "
@@ -120,6 +163,12 @@ class JsonState:
         self._note_if_large(encoded)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         return data
+
+    def _marked(self, values: dict[str, Any]) -> dict[str, Any]:
+        """``values`` with each one kept as a blob replaced by its marker."""
+        if self._blobs is None:
+            return values
+        return {key: marker_for(value) or value for key, value in values.items()}
 
     def _note_if_large(self, encoded: str) -> None:
         """Say so once when this agent's state has grown expensive to write.
@@ -170,7 +219,27 @@ class JsonState:
             logger.exception("[%s] State load failed — %s", self._name, preserved)
             return {}
         logger.info("[%s] Loaded persistent state.", self._name)
-        return loaded if isinstance(loaded, dict) else {}
+        if not isinstance(loaded, dict):
+            return {}
+        if self._blobs is None:
+            return loaded
+        return self._unpack(self._blobs, loaded)
+
+    def _unpack(self, blobs: Blobs, loaded: dict[str, Any]) -> dict[str, Any]:
+        """``loaded`` with each blob's value where its marker was."""
+        unpacked = blobs.unpack(loaded)
+        self._blob_keys = {key for key, value in loaded.items() if is_marker(value)}
+        self._unreadable = dict(unpacked.unreadable)
+        if unpacked.unreadable:
+            logger.warning(
+                "[%s] Starting without %s: %s. Kept in %s as they were, and read again on "
+                "the next start; persisting one of them replaces it.",
+                self._name,
+                ", ".join(sorted(unpacked.unreadable)),
+                "; ".join(f"{k}: {r}" for k, r in sorted(unpacked.reasons.items())),
+                blobs.directory,
+            )
+        return unpacked.values
 
     def delete(self) -> bool:
         """Remove the file for good. True when there was one to remove.
@@ -184,6 +253,10 @@ class JsonState:
         _WRITER.discard(self.path)
         self._values = {}
         self._written = None
+        if self._blobs is not None:
+            self._blobs.delete()
+            self._blob_keys.clear()
+            self._unreadable.clear()
         try:
             if self.path.exists():
                 self.path.unlink()

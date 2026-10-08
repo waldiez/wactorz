@@ -113,11 +113,14 @@ Wactorz uses a three-tier persistence layer (`wactorz/core/persistence/`) that r
 |-------|----------|----------|
 | **SQLite** | `state/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, topic contracts, conversation history, time-series sensor/detection/HA-state data |
 | **Process memory** | in-process, lost on restart | Ephemeral fast-access data: observed topic samples, agent metrics, heartbeat state |
-| **Pickle** | `state/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state dicts, ML models, numpy arrays, cv2 captures |
+| **Pickle** | `state/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state dicts, cv2 captures |
+| **Blobs** | `state/{actor_name}/blobs/` | Bytes, numpy arrays, torch tensors and modules, scikit-learn-family models, one file per key |
 
 `Actor.persist(key, value)` and `Actor.recall(key)` route automatically to the correct store based on the key name. Existing agent code works without changes.
 
-Each value in `state.pkl` is pickled on its own, so one that no longer unpickles after a library upgrade costs that key and not the rest of the agent's state; its bytes are kept in the file until the key is written again. The pickle store keeps each agent's state in memory once it has read it, and writes the file about a second after a change, from a worker thread, so the disk is never waited for on the event loop. A node does the same with its agents' JSON state files. A stop, a migration and a clean shutdown write what is waiting. Anything that changes or removes a state file in a running server — a reset, a migration step — goes through the store, because the copy in memory is what gets written next.
+Each value in `state.pkl` is pickled on its own, so one that no longer unpickles after a library upgrade costs that key and not the rest of the agent's state; its bytes are kept in the file until the key is written again. The pickle store keeps each agent's state in memory once it has read it, and writes the file about a second after a change, from a worker thread, so the disk is never waited for on the event loop. A node does the same with its agents' JSON state files.
+
+A value stored directly under a key that is bytes, a numpy array (not one of objects), a torch tensor, a `state_dict()`, a torch module, or a scikit-learn, XGBoost, LightGBM or CatBoost model is kept as a blob: a file of its own in `blobs/` beside the state file, which holds a marker in its place. It is written when its key is persisted, not with every other key, so a model persisted once costs nothing when a counter beside it changes; and it is written only then, so a value changed in place is saved by persisting it again. Nodes keep blobs the same way, beside their JSON state. A stop, a migration and a clean shutdown write what is waiting. Anything that changes or removes a state file in a running server — a reset, a migration step — goes through the store, because the copy in memory is what gets written next.
 
 The spawn registry (`_spawned_agents`) is stored in SQLite. On restart, MainActor re-spawns every entry so dynamic agents and catalog agents survive reboots.
 

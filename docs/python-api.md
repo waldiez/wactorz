@@ -333,7 +333,8 @@ Three-tier persistence layer routed automatically by key name:
 |---|---|---|
 | **SQLite** | `{state_dir}/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, contracts, time-series |
 | **Process memory** | in-process, lost on restart | Ephemeral fast-access: observed samples, metrics, heartbeat state |
-| **Pickle** | `{state_dir}/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state, ML models |
+| **Pickle** | `{state_dir}/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state |
+| **Blobs** | `{state_dir}/{actor_name}/blobs/` | Bytes, numpy arrays, torch tensors and modules, scikit-learn-family models |
 
 `state_dir` defaults to `WACTORZ_STATE_DIR`, else `./state` — see
 [Deployment](deployment.md#environment-variables).

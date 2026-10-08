@@ -16,6 +16,11 @@ releases wrote, is still read, and written the new way on its next save. One
 consequence of pickling values apart: two keys that held the same object hold
 equal copies of it after a restart.
 
+A model, an array or raw bytes is not pickled into the file at all: it is kept
+as a blob of its own beside it (see `wactorz.core.blobs`), written when its key
+is persisted rather than with every other key, and the file holds a marker in
+its place.
+
 That makes the copy in memory the one thing that must not be bypassed. Two
 stores over one directory therefore share it, and whatever changes or removes a
 state file in a running process does so through a store, or the next write
@@ -30,6 +35,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from ..atomic_io import quarantine_unreadable
+from ..blobs import ENCODERS, Blobs, marker, marker_for
 from ..deferred_write import LARGE_STATE_BYTES, DeferredWriter
 from ..paths import agent_state_dir, resolve_state_dir
 
@@ -179,6 +185,10 @@ class PickleStore:
         """
         return agent_state_dir(self._base, agent_name) / "state.pkl"
 
+    def _blobs(self, agent_name: str) -> Blobs:
+        """The agent's blobs, in its directory beside the state file."""
+        return Blobs(agent_state_dir(self._base, agent_name) / "blobs", self._writer)
+
     def save(self, agent_name: str, state: dict[str, Any]) -> bool:
         """Make ``state`` the agent's state, replacing any previous one.
 
@@ -191,15 +201,21 @@ class PickleStore:
         with self._lock:
             self._states[agent_name] = state
             self._unreadable.pop(agent_name, None)
+            self._blobs(agent_name).stow_all(state)
         self._schedule(agent_name)
         return True
 
     def merge(self, agent_name: str, values: dict[str, Any]) -> None:
         """Set each key in ``values``, leaving the agent's other keys as they are."""
         with self._lock:
-            self.load(agent_name).update(values)
+            state = self.load(agent_name)
             kept = self._unreadable.get(agent_name, {})
-            for key in values:
+            blobs = self._blobs(agent_name)
+            for key, value in values.items():
+                was_blob = _is_blob(state.get(key), kept.get(key))
+                if not blobs.stow(key, value) and was_blob:
+                    blobs.forget(key)
+                state[key] = value
                 kept.pop(key, None)
         self._schedule(agent_name)
 
@@ -210,8 +226,10 @@ class PickleStore:
     def remove(self, agent_name: str, key: str) -> None:
         """Drop one key of the agent's state, if it is there."""
         with self._lock:
-            self.load(agent_name).pop(key, None)
-            self._unreadable.get(agent_name, {}).pop(key, None)
+            value = self.load(agent_name).pop(key, None)
+            raw = self._unreadable.get(agent_name, {}).pop(key, None)
+            if _is_blob(value, raw):
+                self._blobs(agent_name).forget(key)
         self._schedule(agent_name)
 
     def flush(self) -> None:
@@ -229,8 +247,10 @@ class PickleStore:
         kept in memory, and said once each time the set of such keys changes.
         """
         with self._lock:
+            state = self._states[agent_name]
             data, unpicklable = encode_state(
-                self._states[agent_name], self._unreadable.get(agent_name)
+                {key: marker_for(value) or value for key, value in state.items()},
+                self._unreadable.get(agent_name),
             )
             left_out = tuple(unpicklable)
             if left_out and left_out != self._unpicklable.get(agent_name):
@@ -297,17 +317,21 @@ class PickleStore:
                 f"kept at {kept}" if kept else "the file could not be preserved",
             )
             return {}
-        if decoded.unreadable:
-            self._unreadable[agent_name] = dict(decoded.unreadable)
+        unpacked = self._blobs(agent_name).unpack(decoded.values)
+        unreadable = dict(decoded.unreadable)
+        unreadable.update({k: pickle.dumps(m) for k, m in unpacked.unreadable.items()})
+        reasons = {**decoded.reasons, **unpacked.reasons}
+        if unreadable:
+            self._unreadable[agent_name] = unreadable
             logger.warning(
                 "[Persistence] '%s' starts without %s: %s. Kept in %s as they were, "
                 "and read again on the next start; persisting one of them replaces it.",
                 agent_name,
-                ", ".join(sorted(decoded.unreadable)),
-                "; ".join(f"{k}: {r}" for k, r in sorted(decoded.reasons.items())),
-                path,
+                ", ".join(sorted(unreadable)),
+                "; ".join(f"{k}: {r}" for k, r in sorted(reasons.items())),
+                path.parent,
             )
-        return decoded.values
+        return unpacked.values
 
     def delete(self, agent_name: str) -> None:
         """Remove the agent's state.pkl AND its containing directory.
@@ -320,6 +344,7 @@ class PickleStore:
         # Before the file goes: a write of this state still on its way out
         # would otherwise put the file back.
         self._writer.discard(path)
+        self._blobs(agent_name).delete()
         with self._lock:
             self._states.pop(agent_name, None)
             self._unreadable.pop(agent_name, None)
@@ -339,3 +364,13 @@ class PickleStore:
                 parent.rmdir()
         except Exception as e:
             logger.debug("[Persistence] Pickle rmdir skipped for %s: %s", parent, e)
+
+
+#: The pickled marker of each format, as a blob that could not be read back is
+#: kept among the unreadable values: told apart by its bytes, without unpickling.
+_PICKLED_MARKERS = frozenset(pickle.dumps(marker(encoder)) for encoder in ENCODERS)
+
+
+def _is_blob(value: Any, raw: bytes | None) -> bool:
+    """Whether a key held a blob: a value kept as one, or the marker of one not read."""
+    return marker_for(value) is not None or raw in _PICKLED_MARKERS

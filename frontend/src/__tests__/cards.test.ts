@@ -262,15 +262,16 @@ describe("buildWactorCard", () => {
 });
 
 describe("a card's history and trend", () => {
-    it("opens the history from the card and from its History button, once each", () => {
+    it("opens the history from its History button, and only from there", () => {
         const callbacks = cb();
         const a = agent("weather");
         const card = buildWactorCard(a, 0, callbacks);
 
         card.click();
-        card.querySelector<HTMLButtonElement>(".af-history-btn")!.click();
+        expect(callbacks.onHistory).not.toHaveBeenCalled();
 
-        expect(callbacks.onHistory).toHaveBeenCalledTimes(2);
+        card.querySelector<HTMLButtonElement>(".af-history-btn")!.click();
+        expect(callbacks.onHistory).toHaveBeenCalledOnce();
         expect(callbacks.onHistory).toHaveBeenCalledWith(a);
     });
 

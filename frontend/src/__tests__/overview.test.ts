@@ -213,10 +213,10 @@ describe("OverviewView trends", () => {
         expect(value()).toBe("5.0/min");
     });
 
-    it("opens an agent's history from its card", () => {
+    it("opens an agent's history from its card's History button", () => {
         const host = makeHost([agent("worker")]);
         mount(host);
-        host.root.querySelector<HTMLElement>('[data-id="worker"]')!.click();
+        host.root.querySelector<HTMLButtonElement>('[data-id="worker"] .af-history-btn')!.click();
         expect(host.onOpenTrend).toHaveBeenCalledWith("agents", "worker");
     });
 
@@ -236,7 +236,7 @@ describe("OverviewView trends", () => {
         expect(card.querySelector(".af-node-readings")?.textContent).toBe("CPU 7%");
         expect(card.querySelectorAll(".af-node-trend").length).toBe(2);
 
-        card.click();
+        card.querySelector<HTMLButtonElement>(".af-node-history")!.click();
         expect(host.onOpenTrend).toHaveBeenCalledWith("nodes", "rpi");
     });
 });

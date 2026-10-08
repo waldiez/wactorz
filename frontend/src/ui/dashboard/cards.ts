@@ -184,7 +184,7 @@ export type AgentAction = "start" | "stop" | "delete";
 export interface WactorCardCallbacks {
     onChat: (agent: AgentInfo) => void;
     onCommand: (agentId: string, action: AgentAction, btn: HTMLButtonElement) => void;
-    /** Open the agent's history; from the card itself or its History button. */
+    /** Open the agent's history, from the card's History button. */
     onHistory: (agent: AgentInfo) => void;
 }
 
@@ -231,10 +231,7 @@ function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLEleme
         controls.appendChild(chatBtn);
     }
     const history = button("af-mini-btn af-history-btn", "History");
-    history.addEventListener("click", e => {
-        e.stopPropagation();
-        cb.onHistory(agent);
-    });
+    history.addEventListener("click", () => cb.onHistory(agent));
     controls.appendChild(history);
     appendActionBtns(controls, agent);
     controls.addEventListener("click", e => {
@@ -306,7 +303,6 @@ export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCa
     // Filled with the agent's activity trend once it has been fetched.
     card.appendChild(el("div", "af-card-trend"));
     card.appendChild(buildCardControls(agent, cb));
-    card.addEventListener("click", () => cb.onHistory(agent));
 
     if (agent.protected) {
         const shield = el("div", "af-card-protected", "🔒");

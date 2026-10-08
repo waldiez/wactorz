@@ -173,9 +173,7 @@ function nowParts(readings: NodeReadings | undefined): HTMLElement[] {
 /**
  * Build one remote node's card.
  *
- * ``onOpen`` is called with the node's name when its history is asked for —
- * from the card itself or from its History button, which is the way there
- * from a keyboard.
+ * ``onOpen`` is called with the node's name when its History button is pressed.
  */
 export function buildNodeCard(data: NodeCardData, onOpen: (name: string) => void): HTMLElement {
     const card = el("div", "af-node-card");
@@ -209,11 +207,7 @@ export function buildNodeCard(data: NodeCardData, onOpen: (name: string) => void
     );
 
     const history = button("af-mini-btn af-node-history", "History");
-    history.addEventListener("click", e => {
-        e.stopPropagation();
-        onOpen(data.name);
-    });
+    history.addEventListener("click", () => onOpen(data.name));
     card.appendChild(history);
-    card.addEventListener("click", () => onOpen(data.name));
     return card;
 }

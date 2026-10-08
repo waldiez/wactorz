@@ -45,14 +45,6 @@
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
-  cursor: pointer;
-  transition:
-    border-color 0.15s,
-    background 0.15s;
-}
-.af-node-card:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(37, 99, 235, 0.45);
 }
 .af-node-card-head {
   display: flex;

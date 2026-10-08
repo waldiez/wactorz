@@ -144,7 +144,7 @@ describe("CardDashboard behaviour", () => {
 
         it("opens and closes an agent's history from its card", async () => {
             cd.show([agent("main")]);
-            cd.root.querySelector('[data-id="main"]').click();
+            cd.root.querySelector('[data-id="main"] .af-history-btn').click();
             await vi.waitFor(() => expect(document.querySelector(".af-trend-overlay")).not.toBeNull());
             cd.hide();
             expect(document.querySelector(".af-trend-overlay")).toBeNull();

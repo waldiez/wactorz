@@ -148,12 +148,13 @@ describe("buildNodeCard", () => {
         ]);
     });
 
-    it("opens the history from the card and from its button, once each", () => {
+    it("opens the history from its History button, and only from there", () => {
         const onOpen = vi.fn();
         const card = buildNodeCard(data(), onOpen);
         card.click();
+        expect(onOpen).not.toHaveBeenCalled();
         card.querySelector<HTMLButtonElement>(".af-node-history")!.click();
-        expect(onOpen.mock.calls).toEqual([["rpi"], ["rpi"]]);
+        expect(onOpen.mock.calls).toEqual([["rpi"]]);
     });
 
     it("sets a hostile name and manifest as text", () => {

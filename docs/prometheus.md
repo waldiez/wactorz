@@ -67,6 +67,9 @@ And, for what the dashboard does not show:
 | `wactorz_agent_task_duration_seconds{agent,outcome}` | Time a generated agent's `handle_task` took, by how it ended: `completed`, `failed` or `timed_out` |
 | `wactorz_agent_process_duration_seconds{agent}` | Time one cycle of a generated agent's `process()` took, whether it returned or raised |
 | `wactorz_agent_process_timeouts_total{agent}` | `process()` cycles still running when their time ran out |
+| `wactorz_actor_slow_restarts{actor_name,node}` | `1` for an agent that crashed so often in a row that its supervisor now restarts it slowly; `node` is empty for one on this server, and a node's come from its heartbeat |
+| `wactorz_llm_spend_usd{period}` | Spent on models so far this spend period (`daily`, `weekly` or `monthly`), as Settings shows it |
+| `wactorz_llm_spend_limit_usd{period}` | The spend limit for the period; absent when none is set. At it, model requests pause until the period ends or the limit is raised |
 
 A request counts once however many attempts it took, and one the caller cancelled is not counted. The `wactorz_agent_*` series cover the agents that are running: an agent's go when it stops, so one-off agents do not accumulate, and one started again under the same name begins afresh, which Prometheus reads as a counter reset. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.
 
@@ -250,6 +253,9 @@ Basic Prometheus alert rules are included for:
 - outgoing messages dropped or given up on
 - an edge node down for 5 minutes
 - more than half the requests to an LLM provider failing for 10 minutes
+- an agent recording more than 10 errors in 15 minutes
+- an agent restarted slowly after repeated crashes, for 5 minutes, on the server or a node
+- model spend past 80% of its limit, and at the limit (critical: model requests are paused)
 - optional dependency probe failing
 
 They live in `infra/prometheus/alerts.yml`. Prometheus evaluates them and hands the ones that fire to Alertmanager, which the compose stack starts beside it.

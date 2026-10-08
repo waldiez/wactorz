@@ -12,6 +12,7 @@ import time
 from aiohttp import web
 from aiohttp.web import Response
 
+from ..agents.llm.cost import get_global_cost_info, reset_global_cost, set_cost_limit
 from . import cost, origins, probes, runtime
 from .metrics import known_nodes
 
@@ -44,15 +45,11 @@ async def nodes_handler(_request: web.Request) -> Response:
 
 async def cost_handler(_request: web.Request) -> Response:
     """Return spend and message totals for the cost widget."""
-    from ..agents.llm_agent import get_global_cost_info
-
     return web.json_response(get_global_cost_info())
 
 
 async def cost_limit_handler(request: web.Request) -> Response:
     """Set the spend ceiling that pauses LLM calls once exceeded."""
-    from ..agents.llm_agent import set_cost_limit
-
     try:
         body = await request.json()
         limit_usd = float(body.get("limit_usd", 0))
@@ -76,8 +73,6 @@ async def cost_limit_handler(request: web.Request) -> Response:
 
 async def cost_reset_handler(_request: web.Request) -> Response:
     """Zero the current spend period without touching the lifetime ledger."""
-    from ..agents.llm_agent import reset_global_cost
-
     try:
         info = reset_global_cost()
         # Clear the in-memory lifetime ledger so max() doesn't pin the display

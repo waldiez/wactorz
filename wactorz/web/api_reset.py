@@ -16,6 +16,7 @@ from typing import Any
 from aiohttp import web
 from aiohttp.web import Response
 
+from ..agents.llm import cost as llm_cost
 from ..agents.lookup import find_main_actor
 from ..core.node_signing import signed_publish_kwargs
 from . import cost, events, lifecycle, runtime, ws
@@ -265,9 +266,7 @@ async def reset_handler(request: web.Request) -> Response:
             # clears and heartbeats resume (mirrors /api/cost/reset).
             cost.lifetime_cost.clear()
             try:
-                from ..agents.llm_agent import reset_global_cost
-
-                reset_global_cost()
+                llm_cost.reset_global_cost()
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
             runtime.state["agents"].clear()
@@ -347,9 +346,7 @@ async def reset_handler(request: web.Request) -> Response:
         else:
             cost.lifetime_cost.clear()
             try:
-                from ..agents.llm_agent import reset_global_cost
-
-                reset_global_cost()
+                llm_cost.reset_global_cost()
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
     elif scope == "spawns":

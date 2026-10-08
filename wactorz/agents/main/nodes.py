@@ -188,6 +188,8 @@ class NodeManager:
                 "uptime_s": info.get("uptime_s"),
                 **{reading: info.get(reading) for reading in RESOURCE_READINGS},
                 "throttled": info.get("throttled"),
+                # Agents whose restarts the node's supervisor has slowed down.
+                "slow_retry": info.get("slow_retry", []),
                 # What the machine is; None from a node that has not said.
                 "manifest": self.node_manifests.get(name),
             }

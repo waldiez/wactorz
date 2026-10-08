@@ -16,6 +16,7 @@ from typing import Any
 
 from aiohttp import web
 
+from ..agents.llm.cost import get_global_cost_info
 from ..agents.lookup import find_main_actor
 from ..config import CONFIG
 from ..monitoring.prometheus import PrometheusMonitor
@@ -39,6 +40,8 @@ def build_monitor() -> PrometheusMonitor:
         publisher_provider=lambda: getattr(runtime.system, "_mqtt_client", None),
         nodes_provider=known_nodes,
         expected_nodes_provider=lambda: [target.name for target in CONFIG.deploy_targets],
+        supervisor_provider=lambda: getattr(runtime.system, "supervisor", None),
+        spend_provider=get_global_cost_info,
     )
 
 
@@ -46,6 +49,7 @@ def handler_for(monitor: PrometheusMonitor) -> Any:
     """The `/metrics` route's handler, rendering ``monitor``."""
 
     async def metrics_handler(_request: web.Request) -> web.Response:
+        await monitor.refresh()
         return monitor.metrics_response()
 
     return metrics_handler

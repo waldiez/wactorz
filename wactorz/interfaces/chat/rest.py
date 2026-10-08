@@ -14,6 +14,7 @@ from aiohttp import web
 from aiohttp.web_request import Request
 from aiohttp.web_response import Response
 
+from ...agents.llm.cost import get_global_cost_info
 from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...core.actor import forbidden
 from ...monitoring import PrometheusMonitor
@@ -97,6 +98,8 @@ class RESTInterface:
             publisher_provider=lambda: getattr(self.system, "_mqtt_client", None),
             nodes_provider=self._known_nodes,
             expected_nodes_provider=lambda: [target.name for target in CONFIG.deploy_targets],
+            supervisor_provider=lambda: getattr(self.system, "supervisor", None),
+            spend_provider=get_global_cost_info,
         )
 
     def _known_nodes(self) -> list[dict[str, Any]]:
@@ -300,6 +303,7 @@ class RESTInterface:
             return probes.readiness_response(await probes.readiness(self.system))
 
         async def prometheus_metrics_endpoint(request: Request) -> Response:
+            await self._monitor.refresh()
             return self._monitor.metrics_response()
 
         async def ha_map_latest_endpoint(request: Request) -> Response:

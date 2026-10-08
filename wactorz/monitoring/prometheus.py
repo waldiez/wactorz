@@ -1,5 +1,6 @@
 """Prometheus integration for the Python Wactorz runtime."""
 
+import asyncio
 import time
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -34,6 +35,13 @@ NodesProvider = Callable[[], list[dict[str, Any]]]
 
 #: The names of the nodes this install is configured to deploy.
 ExpectedNodesProvider = Callable[[], Iterable[str]]
+
+#: The local supervisor, or None before the system has one.
+SupervisorProvider = Callable[[], Any | None]
+
+#: The spend so far this period and its limit, as `GET /api/cost` reports them;
+#: None where nothing is known. Reads the database, so it is called off the loop.
+SpendProvider = Callable[[], dict[str, Any] | None]
 
 
 class ActorMetricsCollector:
@@ -352,12 +360,84 @@ class NodeMetricsCollector:
         yield info
 
 
+class RestartLoopMetricsCollector:
+    """Which agents keep crashing, here and on every node.
+
+    A supervisor restarts a crashed agent straight away a few times, then slows
+    down and keeps trying. Slowed down is the state worth an alert: the agent
+    is not doing its job and will not fix itself. On a node the supervisor is
+    the node's, and its heartbeat names the agents it has slowed down.
+    """
+
+    def __init__(self, supervisor_provider: SupervisorProvider, nodes_provider: NodesProvider):
+        self._supervisor_provider = supervisor_provider
+        self._nodes_provider = nodes_provider
+
+    def collect(self) -> Iterable[GaugeMetricFamily]:
+        slow = GaugeMetricFamily(
+            "wactorz_actor_slow_restarts",
+            "1 for an agent its supervisor restarts slowly after repeated crashes; "
+            "node is empty for one on this server.",
+            labels=["actor_name", "node"],
+        )
+        supervisor = self._supervisor_provider()
+        slow_retrying = getattr(supervisor, "slow_retrying", None)
+        names = slow_retrying() if callable(slow_retrying) else []
+        for name in names if isinstance(names, (list, tuple, set)) else []:
+            slow.add_metric([str(name), ""], 1)
+        for node in self._nodes_provider():
+            for name in node.get("slow_retry") or []:
+                slow.add_metric([str(name), str(node.get("node") or "")], 1)
+        yield slow
+
+
+class SpendMetricsCollector:
+    """What has been spent on models this period, and the limit that pauses them.
+
+    The figures come from the database, which is not read here: `collect` runs
+    while a scrape is being answered, on the event loop. `PrometheusMonitor.refresh`
+    reads them off the loop just before, and this reports what it read.
+    """
+
+    def __init__(self) -> None:
+        self.latest: dict[str, Any] | None = None
+
+    def collect(self) -> Iterable[GaugeMetricFamily]:
+        spend = GaugeMetricFamily(
+            "wactorz_llm_spend_usd",
+            "Spent on models so far this period, in USD.",
+            labels=["period"],
+        )
+        limit = GaugeMetricFamily(
+            "wactorz_llm_spend_limit_usd",
+            "The spend limit for this period, in USD; absent when there is none. "
+            "At it, model requests pause until the period ends or it is raised.",
+            labels=["period"],
+        )
+        info = self.latest or {}
+        period = str(info.get("period") or "")
+        if isinstance(info.get("spend_usd"), (int, float)):
+            spend.add_metric([period], float(info["spend_usd"]))
+        if isinstance(info.get("limit_usd"), (int, float)):
+            limit.add_metric([period], float(info["limit_usd"]))
+        yield spend
+        yield limit
+
+
 def _no_publisher() -> None:
     return None
 
 
 def _no_nodes() -> list[dict[str, Any]]:
     return []
+
+
+def _no_supervisor() -> None:
+    return None
+
+
+def _no_spend() -> None:
+    return None
 
 
 def _no_names() -> Iterable[str]:
@@ -373,12 +453,18 @@ class PrometheusMonitor:
         publisher_provider: PublisherProvider = _no_publisher,
         nodes_provider: NodesProvider = _no_nodes,
         expected_nodes_provider: ExpectedNodesProvider = _no_names,
+        supervisor_provider: SupervisorProvider = _no_supervisor,
+        spend_provider: SpendProvider = _no_spend,
     ):
         self._registry = CollectorRegistry(auto_describe=True)
         self._actor_collector = ActorMetricsCollector(registry_provider)
         self._registry.register(self._actor_collector)
         self._registry.register(BrokerMetricsCollector(publisher_provider))
         self._registry.register(NodeMetricsCollector(nodes_provider, expected_nodes_provider))
+        self._registry.register(RestartLoopMetricsCollector(supervisor_provider, nodes_provider))
+        self._spend_provider = spend_provider
+        self._spend = SpendMetricsCollector()
+        self._registry.register(self._spend)
         for collector in (
             *llm_metrics.COLLECTORS,
             *loop_lag.COLLECTORS,
@@ -395,6 +481,17 @@ class PrometheusMonitor:
     #: Requests to the REST interface, counted and timed in `http_metrics`
     #: under ``server="rest"``; the dashboard's server records its own there too.
     middleware = staticmethod(http_metrics.middleware_for(http_metrics.REST))
+
+    async def refresh(self) -> None:
+        """Read what `render` reports but cannot read on the loop: the spend.
+
+        Called by a `/metrics` handler before it renders. A read that fails
+        leaves the spend unreported rather than failing the scrape.
+        """
+        try:
+            self._spend.latest = await asyncio.to_thread(self._spend_provider)
+        except Exception:
+            self._spend.latest = None
 
     def render(self) -> bytes:
         return generate_latest(self._registry)

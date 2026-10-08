@@ -10,6 +10,7 @@ The alert rules shipped beside the compose stack are held to the same names.
 
 import asyncio
 import re
+import threading
 import time
 import types
 from collections.abc import AsyncGenerator
@@ -329,6 +330,76 @@ class TestTheEndpoint:
         assert samples["wactorz_mqtt_connected"] == 0
 
 
+# ── Agents that keep crashing, and what models cost ────────────────────────────
+
+
+class TestRestartLoops:
+    def test_an_agent_restarted_slowly_here_and_one_on_a_node(self) -> None:
+        supervisor = types.SimpleNamespace(slow_retrying=lambda: ["flaky"])
+        monitor = PrometheusMonitor(
+            _no_actors,
+            supervisor_provider=lambda: supervisor,
+            nodes_provider=lambda: [{"node": "rpi", "slow_retry": ["camera"]}],
+        )
+
+        samples = _samples(monitor)
+
+        assert samples['wactorz_actor_slow_restarts{actor_name="flaky",node=""}'] == 1
+        assert samples['wactorz_actor_slow_restarts{actor_name="camera",node="rpi"}'] == 1
+
+    def test_without_a_supervisor_or_nodes_there_is_nothing_to_report(self) -> None:
+        rendered = PrometheusMonitor(_no_actors).render().decode()
+
+        assert "# TYPE wactorz_actor_slow_restarts gauge" in rendered
+        assert not [k for k in _samples(PrometheusMonitor(_no_actors)) if "slow_restarts" in k]
+
+
+class TestSpend:
+    async def test_the_spend_and_its_limit_are_read_before_rendering(self) -> None:
+        info = {"period": "monthly", "spend_usd": 4.2, "limit_usd": 5.0}
+        monitor = PrometheusMonitor(_no_actors, spend_provider=lambda: info)
+
+        await monitor.refresh()
+        samples = _samples(monitor)
+
+        assert samples['wactorz_llm_spend_usd{period="monthly"}'] == 4.2
+        assert samples['wactorz_llm_spend_limit_usd{period="monthly"}'] == 5.0
+
+    async def test_no_limit_reports_the_spend_alone(self) -> None:
+        monitor = PrometheusMonitor(
+            _no_actors,
+            spend_provider=lambda: {"period": "daily", "spend_usd": 0.5, "limit_usd": None},
+        )
+
+        await monitor.refresh()
+        samples = _samples(monitor)
+
+        assert samples['wactorz_llm_spend_usd{period="daily"}'] == 0.5
+        assert not [k for k in samples if k.startswith("wactorz_llm_spend_limit_usd")]
+
+    async def test_a_read_that_fails_leaves_the_spend_unreported(self) -> None:
+        def broken() -> dict[str, Any]:
+            raise RuntimeError("database is locked")
+
+        monitor = PrometheusMonitor(_no_actors, spend_provider=broken)
+
+        await monitor.refresh()
+
+        assert not [k for k in _samples(monitor) if k.startswith("wactorz_llm_spend")]
+
+    async def test_the_read_is_made_off_the_event_loop(self) -> None:
+        # It reads the database, and the loop is every agent's.
+        seen: list[int] = []
+
+        def provider() -> dict[str, Any]:
+            seen.append(threading.get_ident())
+            return {}
+
+        await PrometheusMonitor(_no_actors, spend_provider=provider).refresh()
+
+        assert seen and seen[0] != threading.get_ident()
+
+
 # ── The alert rules ────────────────────────────────────────────────────────────
 
 ALERTS = Path(__file__).resolve().parents[1] / "infra" / "prometheus" / "alerts.yml"
@@ -344,7 +415,12 @@ def _exported() -> set[str]:
     names = set()
     for line in monitor.render().decode().splitlines():
         if line.startswith("# TYPE "):
-            names.add(line.split()[2])
+            _, _, name, kind = line.split()[:4]
+            names.add(name)
+            # A counter's samples are named `<name>_total`, and a family with no
+            # samples yet (no actors here) shows only its declaration.
+            if kind == "counter":
+                names.add(f"{name}_total")
         elif line and not line.startswith("#"):
             names.add(re.split(r"[{ ]", line, maxsplit=1)[0])
     return names
@@ -375,6 +451,10 @@ class TestTheAlertRules:
             "wactorz_llm_requests_total",
             "wactorz_actor_handling_seconds",
             "wactorz_event_loop_lag_seconds",
+            "wactorz_actor_errors_total",
+            "wactorz_actor_slow_restarts",
+            "wactorz_llm_spend_usd",
+            "wactorz_llm_spend_limit_usd",
         ],
     )
     def test_what_this_file_adds_to_metrics_has_a_rule(self, metric: str) -> None:

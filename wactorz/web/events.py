@@ -10,6 +10,7 @@ import logging
 import time
 from typing import Any
 
+from ..agents.llm.cost import get_global_alltime_cost
 from . import cost, runtime
 
 logger = logging.getLogger(__name__)
@@ -489,8 +490,6 @@ def snapshot(include_totals: bool = True) -> dict[str, Any]:
     # headline never drops below money already spent — and so it can never read
     # lower than the "this period" spend shown beside it.
     try:
-        from ..agents.llm_agent import get_global_alltime_cost
-
         alltime_cost = get_global_alltime_cost()
     except Exception:
         alltime_cost = 0.0

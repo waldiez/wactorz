@@ -75,6 +75,7 @@ class TestWhatTheNodeListingReports:
             "disk_free_mb",
             "temp_c",
             "throttled",
+            "slow_retry",
             "manifest",
         }
 

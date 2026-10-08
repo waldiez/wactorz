@@ -18,13 +18,17 @@ from wactorz.core.state_lock import LOCK_FILE, StateInUseError, StateLock, in_us
 from wactorz.errors import StartupError
 from wactorz.node.runner import NodeRunner
 
-#: Holds the lock on the directory it is given until its input closes.
+#: Holds the lock on the directory it is given until its input closes, and says
+#: its process id once it has it. Its own, not the one `Popen` reports: on
+#: Windows a venv's `python.exe` is a launcher that runs the interpreter as a
+#: child, so the two differ.
 HOLDER = """
+import os
 import sys
 from wactorz.core.state_lock import StateLock
 lock = StateLock(sys.argv[1])
 lock.acquire()
-print("held", flush=True)
+print("held", os.getpid(), flush=True)
 sys.stdin.read()
 """
 
@@ -65,10 +69,11 @@ class TestTheLock:
         try:
             assert holder.stdout is not None
             # Waits for the holder to say it has it, however slow the machine.
-            assert holder.stdout.readline().strip() == "held"
+            said, pid = holder.stdout.readline().split()
+            assert said == "held"
 
             assert in_use(tmp_path)
-            with pytest.raises(StateInUseError, match=str(holder.pid)):
+            with pytest.raises(StateInUseError, match=rf"process {pid}\b"):
                 StateLock(tmp_path).acquire()
         finally:
             assert holder.stdin is not None

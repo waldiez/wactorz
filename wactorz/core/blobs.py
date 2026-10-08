@@ -29,8 +29,6 @@ has been imported by whoever made it, so each encoder looks for its library in
 `sys.modules` and stays out of the way when it is not there.
 """
 
-from __future__ import annotations
-
 import hashlib
 import io
 import logging

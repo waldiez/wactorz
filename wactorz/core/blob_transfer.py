@@ -28,8 +28,6 @@ that cannot travel. That holds for a move between two nodes as well, which goes
 through main: one node is not trusted to run code on another.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json

@@ -74,6 +74,8 @@ class _Run:
         self.notifications: list[dict[str, Any]] = []
         self.published: list[tuple[str, Any]] = []
         self.spawn_error: Exception | None = None
+        #: What was started on a node: (config, node), as a failed return restarts it.
+        self.spawned_remote: list[tuple[dict[str, Any], str]] = []
 
     @property
     def only_spawn(self) -> dict[str, Any]:
@@ -134,8 +136,12 @@ async def run_listener(
     async def _publish(topic: str, payload: Any, retain: bool = False, qos: int = 0) -> None:
         run.published.append((topic, payload))
 
+    async def _spawn_remote(cfg: dict[str, Any], node: str, save: bool = False) -> None:
+        run.spawned_remote.append((cfg, node))
+
     setattr(main, "_mqtt_publish", _publish)
     setattr(main, "_spawn_from_config", _spawn)
+    setattr(main, "_spawn_remote", _spawn_remote)
     setattr(main, "_queue_notification", run.notifications.append)
     setattr(main, "_restore_earned_trust", lambda name, cfg: False)
     # The registry the source node's desired state is rebuilt from: empty, as
@@ -195,6 +201,30 @@ class TestTheSourcesCopy:
         )
 
         assert not [t for t, _ in run.published if t.endswith("/desired_state")]
+
+    async def test_a_failed_spawn_starts_it_again_on_the_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Stopped there and running nowhere, it would wait for someone to notice.
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        ((restored, node),) = run.spawned_remote
+        assert node == "rpi" and restored["node"] == "rpi"
+        assert "_initial_state" not in restored, "the source starts from its own state file"
+
+    async def test_a_failed_spawn_that_left_a_copy_here_leaves_the_source_stopped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Started there as well, there would be two.
+        monkeypatch.setattr(Migration, "_placed", lambda _self, _name: True)
+        run = await run_listener(
+            monkeypatch, [state_return()], pending=waiting(), spawn_error=RuntimeError("boom")
+        )
+
+        assert not run.spawned_remote
+        assert "FAILED" in run.messages[0]
 
     async def test_a_rejected_hand_back_deletes_nothing(
         self, monkeypatch: pytest.MonkeyPatch

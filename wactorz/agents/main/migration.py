@@ -326,7 +326,8 @@ class Migration:
 
         Nobody awaits the task, so a failure there would end it with the agent
         stopped on its node and only a line in the log. Started again there
-        instead, as when its blobs do not arrive.
+        instead, as when its blobs do not arrive -- unless it got as far as
+        being placed, when starting it there as well would make two.
         """
         try:
             await self._place_returned(agent_name, started, cfg, state, left_behind, blobs=True)
@@ -334,9 +335,22 @@ class Migration:
             raise
         except Exception as exc:
             logger.exception("[main] Placing %r after its hand-back failed", agent_name)
-            await self._restart_on_source(
-                agent_name, started.get("from_node", "?"), cfg, f"{type(exc).__name__}: {exc}"
-            )
+            if not self._placed(agent_name):
+                await self._restart_on_source(
+                    agent_name, started.get("from_node", "?"), cfg, f"{type(exc).__name__}: {exc}"
+                )
+
+    def _placed(self, agent_name: str) -> bool:
+        """Whether a handed-back agent is running here, or waiting on a target to confirm it.
+
+        Either way it has a copy beyond the stopped one on its source, and the
+        source must not be started as well: a target that never confirms is
+        rolled back by `expire_pending_spawns`, which starts the source then.
+        """
+        registry = getattr(self.host, "_registry", None)
+        if registry is not None and registry.find_by_name(agent_name) is not None:
+            return True
+        return any(p.get("agent_name") == agent_name for p in self.pending_spawns.values())
 
     async def _place_returned(
         self,
@@ -807,9 +821,11 @@ class Migration:
     ) -> bool:
         """Spawn the returned agent here, and say whether it worked.
 
-        A failure is announced rather than logged alone, and the answer decides
-        whether the source may drop its copy: if this fails, the node's stopped
-        agent is the only one left, and deleting it would lose the agent.
+        The answer decides whether the source may drop its copy: if this fails,
+        the node's stopped agent is the only one left, and deleting it would
+        lose the agent. It is started again there instead, unless the failed
+        spawn left a copy running here; then the failure is announced, and the
+        source keeps its stopped copy.
         """
         host = self.host
         if host is None:
@@ -826,9 +842,15 @@ class Migration:
             await host._spawn_from_config(local, save=True, from_registry=earned)
         except Exception as exc:
             logger.exception("[main] Local re-spawn after state_return failed for %r", agent_name)
-            self._announce(
-                f"Migration of '{agent_name}' from '{from_node}' → local FAILED: {exc}", "warning"
-            )
+            if self._placed(agent_name):
+                self._announce(
+                    f"Migration of '{agent_name}' from '{from_node}' → local FAILED: {exc}",
+                    "warning",
+                )
+            else:
+                await self._restart_on_source(
+                    agent_name, from_node, cfg, f"it could not start here: {exc}"
+                )
             return False
         self._announce(
             f"Migration of '{agent_name}' from '{from_node}' → local succeeded."

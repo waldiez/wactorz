@@ -433,6 +433,29 @@ class TestMainTakingAnAgentBack:
         assert node == "rpi" and "_initial_state" not in restored
         assert "failed" in main.notifications[-1]["message"]
 
+    async def test_a_failure_after_it_was_placed_on_a_target_does_not_start_it_twice(
+        self, tmp_path: Path
+    ) -> None:
+        # The target is waiting for it, and a target that never confirms is
+        # rolled back -- which starts the source then.
+        main = _Main(
+            spawn_registry={"collector": with_code("rpi")},
+            nodes={"rpi": online(), "nuc": online()},
+        )
+        inbox = Inbox(tmp_path, BIG)
+        await _deliver(inbox, b"weights")
+
+        async def broken(*_args: Any, **_kw: Any) -> None:
+            raise ConnectionError("broker went away")
+
+        setattr(main.actor.migration, "_send_blobs", broken)
+
+        await self._returned(main, inbox, {"raw": reference("bytes", b"weights")}, target="nuc")
+
+        ((_config, node, _save),) = main.spawned_remote
+        assert node == "nuc", "placed on the target, and not started on the source as well"
+        assert main.actor.migration.pending_spawns
+
     async def test_on_its_way_to_another_node_the_blob_is_passed_on(self, tmp_path: Path) -> None:
         main = _Main(
             spawn_registry={"collector": with_code("rpi")},

@@ -48,6 +48,9 @@ CONTROL_TOPICS = frozenset(
         # like the rest: it commands nothing, but main acting on the answer
         # rests on main having asked.
         "code_request",
+        # An agent's blob, in chunks, as main places it here. Not signed: the
+        # signed spawn names its hash, and only a match is used.
+        "blob",
     }
 )
 
@@ -65,6 +68,9 @@ REPORT_TOPICS = frozenset(
         "code_return",
         # What the machine is. Retained; sent at start and after an install.
         "manifest",
+        # An agent's blob, in chunks, as the node hands it back. Its hash is
+        # named by the state return that follows it.
+        "blob_return",
     }
 )
 

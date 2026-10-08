@@ -123,6 +123,49 @@ class TestAnAgentMovedOutAndHome:
         assert await _ask(main, "counter") == "seen:4"
 
 
+#: An agent that keeps a blob larger than one chunk, and reports its size and hash.
+#: Random, so an agent that arrived without it and made another would answer
+#: differently.
+KEEPS_A_BLOB = """
+import hashlib
+import os
+
+
+async def setup(agent):
+    if agent.recall("weights") is None:
+        agent.persist("weights", os.urandom(1048576))
+
+
+async def handle_task(agent, payload):
+    weights = agent.recall("weights")
+    return {"result": f"{len(weights)}:{hashlib.sha256(weights).hexdigest()[:12]}"}
+"""
+
+
+class TestAnAgentMovedWithItsBlob:
+    async def test_the_blob_goes_out_and_comes_home(self, main: MainActor, node: FastNode) -> None:
+        registry = main._registry
+        assert registry is not None
+        await _on_main(main, "keeper", KEEPS_A_BLOB)
+        before = await _ask(main, "keeper")
+        assert before.startswith("1048576:")
+
+        out = await main.migrate_agent("keeper", node.node_name)
+
+        assert out["success"], out
+        await until(lambda: node.get("keeper") is not None, "the node running 'keeper'")
+        await until(
+            lambda: "keeper" in _agents_main_sees(main, node), "main seeing 'keeper' on the node"
+        )
+        assert await _ask(main, "keeper") == before
+
+        home = await main.migrate_agent("keeper", "local")
+
+        assert home["success"], home
+        await until(lambda: registry.find_by_name("keeper") is not None, "main running it again")
+        assert await _ask(main, "keeper") == before
+
+
 class TestAnAgentOnMainAsksOneOnANode:
     async def test_the_answer_comes_back_to_the_agent_that_asked(
         self, main: MainActor, node: FastNode

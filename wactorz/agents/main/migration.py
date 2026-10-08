@@ -7,18 +7,44 @@ the persistent state — and spawns the agent locally from what comes back.
 token is what makes that acceptable. Main mints one per migration it starts, and
 only a message quoting it is acted on; it is consumed on use and expires, so a
 replayed message spawns nothing.
+
+An agent's blobs -- its models, arrays and bytes -- travel beside its state, on
+topics of their own (see `wactorz.core.blob_transfer`). Main sends them with an
+agent it places on a node, and receives them with one a node hands back.
 """
 
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import secrets
+import sys
 import time
+from collections.abc import Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ...config import MIGRATION_MAX_STATE_BYTES
+from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
+from ...core.blob_transfer import (
+    INBOX_DIRNAME,
+    BlobsTooLarge,
+    BlobsUnusable,
+    Inbox,
+    blob_bytes,
+    cannot_travel,
+    is_reference,
+    json_part,
+    pack,
+    references,
+    send,
+    sha256_of_topic,
+    to_node_topic,
+    unpack,
+    wait_for,
+)
+from ...core.blobs import BLOB_MARK, encoder_named
 from ...core.mqtt import (
     SERVER_SESSION_EXPIRY_SECONDS,
     client_id,
@@ -26,7 +52,8 @@ from ...core.mqtt import (
     mqtt_client,
     session_kwargs,
 )
-from ...core.state_snapshot import json_safe, why_it_cannot_travel
+from ...core.paths import resolve_state_dir
+from ...core.state_snapshot import why_it_cannot_travel
 from .spawns import why_a_node_cannot_run, without_transient_keys
 
 if TYPE_CHECKING:
@@ -48,6 +75,9 @@ TOKEN_TTL_S = 300.0
 #: stalled one is recovered within roughly one and a half TTLs rather than
 #: waiting for a message that is never coming.
 SWEEP_INTERVAL_S = TOKEN_TTL_S / 2
+
+#: How long a blob that arrived and was never used is kept.
+INBOX_KEEP_S = 3600.0
 
 #: Identifies the code synthesized for an LLM agent sent out to a node, so it
 #: can be dropped when the agent comes back. Hand-written code never has it.
@@ -86,6 +116,19 @@ class Migration:
         self.pending_returns: dict[str, dict[str, Any]] = {}
         #: Migrations waiting for a target node to confirm the spawn started.
         self.pending_spawns: dict[str, dict[str, Any]] = {}
+        #: Where blobs from nodes arrive; made when first used.
+        self._inbox: Inbox | None = None
+        #: State returns waiting on their blobs, held so none is collected.
+        self._returns: set[asyncio.Task[None]] = set()
+
+    @property
+    def inbox(self) -> Inbox:
+        """Where the blobs a node hands back arrive, before they are used."""
+        if self._inbox is None:
+            self._inbox = Inbox(
+                Path(resolve_state_dir()) / INBOX_DIRNAME, MIGRATION_MAX_BLOB_BYTES or sys.maxsize
+            )
+        return self._inbox
 
     def _save_pending(self) -> None:
         """Record both maps. Called after every change to either.
@@ -169,13 +212,18 @@ class Migration:
                 ) as client:
                     await client.subscribe("nodes/+/state_return", qos=1)
                     await client.subscribe("nodes/+/spawn_ack", qos=1)
+                    await client.subscribe("nodes/+/blob_return/+", qos=1)
                     logger.info("[main] Subscribed to state_return topics.")
                     last_error = None
                     async for message in client.messages:
-                        if str(message.topic).endswith("/spawn_ack"):
-                            await self.receive_spawn_ack(str(message.topic), message.payload)
+                        topic = str(message.topic)
+                        if "/blob_return/" in topic:
+                            await self._accept_blob(topic, message.payload)
+                            continue
+                        if topic.endswith("/spawn_ack"):
+                            await self.receive_spawn_ack(topic, message.payload)
                         else:
-                            await self.receive_state_return(str(message.topic), message.payload)
+                            await self.receive_state_return(topic, message.payload)
                         await self.expire_pending_spawns()
             except asyncio.CancelledError:
                 break
@@ -196,6 +244,15 @@ class Migration:
                         int(RECONNECT_DELAY_S),
                     )
                 await asyncio.sleep(RECONNECT_DELAY_S)
+
+    async def _accept_blob(self, topic: str, payload: Any) -> None:
+        sha = sha256_of_topic(topic)
+        if sha is None or not isinstance(payload, (bytes, bytearray)):
+            return
+        try:
+            await self.inbox.accept(sha, bytes(payload))
+        except OSError as exc:
+            logger.warning("[main] Could not keep a blob that arrived: %s", exc)
 
     async def receive_state_return(self, topic: str, payload: bytes | None) -> None:
         """Take an agent back from the node that was running it.
@@ -246,10 +303,83 @@ class Migration:
             )
             return
 
+        if isinstance(state, dict) and references(state):
+            # Off the listener: the blobs arrive through it, and it would
+            # otherwise be waiting for itself.
+            task = asyncio.create_task(
+                self._place_returned_or_restart(agent_name, started, cfg, state, left_behind)
+            )
+            self._returns.add(task)
+            task.add_done_callback(self._returns.discard)
+            return
+        await self._place_returned(agent_name, started, cfg, state, left_behind, blobs=False)
+
+    async def _place_returned_or_restart(
+        self,
+        agent_name: str,
+        started: dict[str, Any],
+        cfg: dict[str, Any],
+        state: dict[str, Any],
+        left_behind: list[str],
+    ) -> None:
+        """Place a handed-back agent whose blobs are on their way, in a task of its own.
+
+        Nobody awaits the task, so a failure there would end it with the agent
+        stopped on its node and only a line in the log. Started again there
+        instead, as when its blobs do not arrive.
+        """
+        try:
+            await self._place_returned(agent_name, started, cfg, state, left_behind, blobs=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("[main] Placing %r after its hand-back failed", agent_name)
+            await self._restart_on_source(
+                agent_name, started.get("from_node", "?"), cfg, f"{type(exc).__name__}: {exc}"
+            )
+
+    async def _place_returned(
+        self,
+        agent_name: str,
+        started: dict[str, Any],
+        cfg: dict[str, Any],
+        state: dict[str, Any],
+        left_behind: list[str],
+        *,
+        blobs: bool,
+    ) -> None:
+        """Put a handed-back agent where it was going: here, or on another node."""
+        from_node = started.get("from_node", "?")
+        # A node does not send main, or through main another node, what runs
+        # code when it loads; one that sent it anyway has it left behind here,
+        # before anything waits for it to arrive.
+        refused = [key for key, value in state.items() if is_reference(value) and _runs_code(value)]
+        if refused:
+            state = {k: v for k, v in state.items() if k not in refused}
+            left_behind = [*left_behind, *refused]
+            blobs = bool(references(state))
+        received: dict[str, Path] = {}
+        if blobs:
+            try:
+                received = await self._receive_blobs(state)
+            except BlobsUnusable as exc:
+                await self._restart_on_source(agent_name, from_node, cfg, str(exc))
+                return
+
         target_node = started.get("target_node", "")
         if target_node:
-            await self._place_on_target(agent_name, from_node, target_node, cfg, state, left_behind)
+            await self._place_on_target(
+                agent_name, from_node, target_node, cfg, state, left_behind, received
+            )
             return
+        if received:
+            try:
+                state, _ = await asyncio.to_thread(unpack, state, received, code_allowed=False)
+            except BlobsUnusable as exc:
+                await self._restart_on_source(agent_name, from_node, cfg, str(exc))
+                return
+            finally:
+                await self.inbox.release(received)
         if await self._respawn_locally(agent_name, from_node, cfg, state, left_behind):
             # Local again, and confirmed: the source may now drop its copy, and
             # its desired state must stop listing it. That list is retained and
@@ -257,6 +387,41 @@ class Migration:
             # comes back there beside this one.
             await self.update_desired_state(from_node, remove_name=agent_name)
             await self._tell_source_to_delete(agent_name, from_node)
+
+    async def _receive_blobs(self, state: dict[str, Any]) -> dict[str, Path]:
+        """The files of the blobs ``state`` refers to, once they have all arrived."""
+        total = blob_bytes(state)
+        if MIGRATION_MAX_BLOB_BYTES and total > MIGRATION_MAX_BLOB_BYTES:
+            raise BlobsTooLarge(total, MIGRATION_MAX_BLOB_BYTES)
+        shas = {ref["sha256"] for ref in references(state).values()}
+        return await self.inbox.wait_for(shas, wait_for(total))
+
+    async def _restart_on_source(
+        self, agent_name: str, from_node: str, cfg: dict[str, Any], reason: str
+    ) -> None:
+        """Start a handed-back agent again where it was, when it cannot be placed.
+
+        The node stopped it and kept its state, so starting it there again
+        loses nothing.
+        """
+        if self.host is None:
+            return
+        restored = {k: v for k, v in cfg.items() if k not in ("_initial_state", "replace")}
+        restored["name"] = agent_name
+        restored["node"] = from_node
+        await self.host._spawn_remote(restored, from_node, save=True)
+        self._announce(
+            f"Migration of '{agent_name}' from '{from_node}' failed: {reason}. "
+            f"It is running on '{from_node}' again.",
+            "warning",
+        )
+
+    async def _send_blobs(self, blobs: Mapping[str, bytes], target_node: str) -> None:
+        """Send blobs to a node, on topics of their own."""
+        if self.host is None or not blobs:
+            return
+        publish = functools.partial(self.host._mqtt_publish, qos=1)
+        await send(blobs, functools.partial(to_node_topic, target_node), publish)
 
     async def _place_on_target(
         self,
@@ -266,6 +431,7 @@ class Migration:
         cfg: dict[str, Any],
         state: dict[str, Any],
         left_behind: list[str] | None = None,
+        received: Mapping[str, Path] | None = None,
     ) -> None:
         """Spawn a returned agent on another node, and wait to be told it started.
 
@@ -277,6 +443,9 @@ class Migration:
         """
         if self.host is None:
             return
+        blobs = await asyncio.to_thread(_read_all, received or {}, state)
+        if received:
+            await self.inbox.release(received)
         token = secrets.token_hex(8)
         config = dict(cfg)
         config["name"] = agent_name
@@ -293,9 +462,11 @@ class Migration:
             "config": without_transient_keys(config),
             "left_behind": list(left_behind or []),
             "started_at": time.time(),
+            "ttl": _ttl(sum(len(data) for data in blobs.values())),
         }
         self._save_pending()
         await self.host._spawn_remote(config, target_node, save=False)
+        await self._send_blobs(blobs, target_node)
         logger.info(
             "[%s] Placed %r on %r; waiting for it to confirm it started",
             self.host.name,
@@ -449,7 +620,7 @@ class Migration:
             return
         now = time.time()
         for token, pending in list(self.pending_spawns.items()):
-            if now - pending.get("started_at", 0) <= TOKEN_TTL_S:
+            if now - pending.get("started_at", 0) <= pending.get("ttl", TOKEN_TTL_S):
                 continue
             self.pending_spawns.pop(token, None)
             self._save_pending()
@@ -598,6 +769,7 @@ class Migration:
         """
         await self.expire_pending_returns()
         await self.expire_pending_spawns()
+        await self.inbox.sweep(older_than_s=INBOX_KEEP_S)
 
     @staticmethod
     def local_spawn_config(
@@ -684,7 +856,7 @@ class Migration:
         """Move a running agent to a different node.
 
         A move that would lose state is refused before anything stops: keys
-        that cannot travel as JSON unless ``force`` is set, and a snapshot over
+        that cannot go with it unless ``force`` is set, and a snapshot over
         ``MIGRATION_MAX_STATE_BYTES`` always. Main checks a local agent itself;
         a node checks its own, from the same two values sent with the request.
 
@@ -896,8 +1068,14 @@ class Migration:
         local = self.host._registry.find_by_name(agent_name) if self.host._registry else None
         # Asked while the agent still runs, so a refusal stops nothing. The
         # snapshot that is shipped is taken again after the stop, below.
-        before = self._local_state(agent_name, local)
-        refusal = why_it_cannot_travel(*before, force=force, max_bytes=MIGRATION_MAX_STATE_BYTES)
+        before = self._local_values(agent_name, local)
+        refusal = why_it_cannot_travel(
+            json_part(before),
+            # A node runs whatever code main sends it, so nothing is held back for that.
+            cannot_travel(before, code_allowed=True),
+            force=force,
+            max_bytes=MIGRATION_MAX_STATE_BYTES,
+        )
         if refusal:
             return {
                 "success": False,
@@ -972,18 +1150,27 @@ class Migration:
         # Taken after the stop: `on_stop` and the save that follows it are the
         # agent's last writes, and a snapshot taken before them would leave
         # them in the local copy that is purged once the target confirms.
-        initial_state, left_behind = self._local_state(agent_name, local)
+        # Encoding a model takes as long as writing it: off the loop. The
+        # values are read here, on it, since the database is not the thread's.
+        values = self._local_values(agent_name, local)
+        packed = await asyncio.to_thread(pack, values, code_allowed=True)
+        initial_state, left_behind = packed.state, packed.left_behind
         if left_behind:
             # Only what the agent wrote while stopping can land here: anything
             # earlier was refused above unless the move was forced.
             logger.warning(
-                "[%s] Local→remote migrate %r: %s cannot travel as JSON and is left behind",
+                "[%s] Local→remote migrate %r: %s cannot go with it and is left behind",
                 self.host.name,
                 agent_name,
                 ", ".join(left_behind),
             )
         too_large = why_it_cannot_travel(
-            initial_state, [], force=True, max_bytes=MIGRATION_MAX_STATE_BYTES
+            initial_state,
+            [],
+            force=True,
+            max_bytes=MIGRATION_MAX_STATE_BYTES,
+            blob_bytes=packed.blob_bytes,
+            max_blob_bytes=MIGRATION_MAX_BLOB_BYTES,
         )
         if too_large:
             return await self._keep_local(agent_name, config, too_large)
@@ -1014,11 +1201,13 @@ class Migration:
             "left_behind": left_behind,
             "local_actor": stopped,
             "started_at": time.time(),
+            "ttl": _ttl(packed.blob_bytes),
         }
         self._save_pending()
         # Nothing is committed yet: the registry still places this agent here,
         # so a restart before the ack brings it back rather than losing it.
         await self.host._spawn_remote(new_config, target_node, save=False)
+        await self._send_blobs(packed.blobs, target_node)
         msg = (
             f"Migrating '{agent_name}' from 'local' → '{target_node}' "
             f"(waiting for it to confirm it started)."
@@ -1040,15 +1229,16 @@ class Migration:
             "return_token": return_token,
             "force": force,
             "max_state_bytes": MIGRATION_MAX_STATE_BYTES,
+            "max_blob_bytes": MIGRATION_MAX_BLOB_BYTES,
         }
 
-    def _local_state(self, agent_name: str, local: Any) -> tuple[dict[str, Any], list[str]]:
-        """What a local agent has persisted that can travel, and the keys that cannot."""
+    def _local_values(self, agent_name: str, local: Any) -> dict[str, Any]:
+        """Everything a local agent has persisted, as it holds it."""
         api = getattr(local, "_persistence_api", None) if local is not None else None
         if api is None:
-            return {}, []
+            return {}
         try:
-            return json_safe(api.all())
+            return dict(api.all())
         except Exception as exc:
             logger.warning(
                 "[%s] Could not snapshot local state for %r: %s",
@@ -1056,7 +1246,7 @@ class Migration:
                 agent_name,
                 exc,
             )
-            return {}, []
+            return {}
 
     async def _keep_local(
         self, agent_name: str, config: dict[str, Any] | None, reason: str
@@ -1132,4 +1322,24 @@ def _left_behind_note(keys: list[str] | None) -> str:
     """The sentence an announcement ends with when some state did not travel."""
     if not keys:
         return ""
-    return f" Left behind, since they cannot travel as JSON: {', '.join(sorted(keys))}."
+    return f" Left behind, since they cannot go with it: {', '.join(sorted(keys))}."
+
+
+def _ttl(blob_bytes: int) -> float:
+    """How long a placement may take to be confirmed, with ``blob_bytes`` of blobs to send."""
+    return TOKEN_TTL_S + (wait_for(blob_bytes) if blob_bytes else 0.0)
+
+
+def _runs_code(reference: dict[str, Any]) -> bool:
+    """Whether the blob ``reference`` names is in a format that runs code when it loads.
+
+    A format this side does not know counts as one: nothing says it does not.
+    """
+    encoder = encoder_named(reference[BLOB_MARK])
+    return encoder is None or encoder.runs_code
+
+
+def _read_all(received: Mapping[str, Path], state: Mapping[str, Any]) -> dict[str, bytes]:
+    """The bytes of each blob ``state`` refers to, from the files they arrived in."""
+    wanted = {ref["sha256"] for ref in references(state).values()}
+    return {sha: path.read_bytes() for sha, path in received.items() if sha in wanted}

@@ -202,6 +202,7 @@ class TestTheControlConnection:
             "nodes/rpi/list",
             "nodes/rpi/code_request",
             "nodes/rpi/reply/#",
+            "nodes/rpi/blob/+",
             "agents/by-name/+/task",
         }
 

@@ -547,10 +547,13 @@ A node runs an agent whose program goes with it: generated code, or an LLM agent
 
 The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
 
-State travels as JSON. A migration is refused, and the agent keeps running where it is, when:
+State travels as JSON, and the agent's blobs — bytes, numpy arrays, torch tensors and modules, scikit-learn-family models — travel beside it, each in chunks on a topic of its own, checked against its SHA-256 when it arrives. A migration is refused, and the agent keeps running where it is, when:
 
-- **its state holds a value that cannot be written as JSON** (a numpy array, a model object, an open capture). The refusal names the keys. `--force` moves the agent without them, and the announcement when it arrives names what was left behind;
-- **its state is larger than `WACTORZ_MIGRATION_MAX_STATE_BYTES`** (8 MiB by default, set on main). `--force` does not change this.
+- **its state holds a value that can go neither way** (an open capture, a socket, an object of the agent's own class). The refusal names the keys. `--force` moves the agent without them, and the announcement when it arrives names what was left behind;
+- **it is on a node and keeps a value that runs code when it loads** — a torch module, a scikit-learn, XGBoost, LightGBM or CatBoost model saved with joblib. Main sends these to a node, which runs what main sends it anyway; it does not load them from a node, and one node does not pass them to another. They are refused like the values above, and `--force` leaves them on the node. Keep a model's `state_dict()` instead of the module, and it travels;
+- **its state is larger than `WACTORZ_MIGRATION_MAX_STATE_BYTES`** (8 MiB by default, set on main), **or its blobs together are larger than `WACTORZ_MIGRATION_MAX_BLOB_BYTES`** (64 MiB by default, read on main and on each node). `--force` does not change this. The blobs' size is known only once they are encoded, after the agent stops, so an agent over it is started again where it was.
+
+A destination waits for an agent's blobs before starting it, for at least a minute and longer for large ones. One that does not arrive leaves the agent where it was, as a destination that never confirms does.
 
 A node checks its own agents against the same two terms, which main sends with the request. A node running an earlier release does not check them: it sends what it can, and main names the keys it could not send.
 

@@ -189,6 +189,11 @@ def encoder_for(value: Any) -> Encoder | None:
     return None
 
 
+def encoder_named(name: str) -> Encoder | None:
+    """The encoder a marker or reference names, or None if there is none by that name."""
+    return _BY_NAME.get(name)
+
+
 def marker(encoder: Encoder) -> dict[str, str]:
     """What the state file holds in place of a value kept by ``encoder``."""
     return {BLOB_MARK: encoder.name}
@@ -322,7 +327,7 @@ class Blobs:
         Every blob read here is trusted, whatever its format: it is in this
         agent's own directory, written by this process or one before it.
         """
-        encoder = _BY_NAME.get(format_name)
+        encoder = encoder_named(format_name)
         if encoder is None:
             raise UnknownFormatError(format_name)
         return encoder.decode(self.path(key).read_bytes())

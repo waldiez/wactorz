@@ -241,6 +241,14 @@ UPLOAD_MAX_BYTES = _env_int("WACTORZ_UPLOAD_MAX_BYTES", 25 * 1024 * 1024)
 #: limit is refused before the agent is stopped. 0 sets no limit.
 MIGRATION_MAX_STATE_BYTES = _env_int("WACTORZ_MIGRATION_MAX_STATE_BYTES", 8 * 1024 * 1024)
 
+#: Largest total of blobs -- models, arrays, bytes -- a migration carries beside
+#: that JSON, and the largest blob a machine accepts from another. They travel
+#: in chunks and are written to disk as they arrive, so this bounds the disk a
+#: migration takes and how long it runs, not memory. Read on main and on each
+#: node alike. A migration over the limit leaves the agent where it was. 0 sets
+#: no limit.
+MIGRATION_MAX_BLOB_BYTES = _env_int("WACTORZ_MIGRATION_MAX_BLOB_BYTES", 64 * 1024 * 1024)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:

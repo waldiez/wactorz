@@ -434,6 +434,11 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Largest agent state a <code>/migrate</code> ships, as JSON; a larger one is refused before the agent stops, and <code>--force</code> does not override it. Set on main, which sends it to the node it asks; <code>0</code> sets no limit</td>
 </tr>
 <tr>
+<td><code>WACTORZ_MIGRATION_MAX_BLOB_BYTES</code></td>
+<td><code>67108864</code></td>
+<td>Largest total of an agent's blobs (models, arrays, bytes) a <code>/migrate</code> carries beside its state, and the largest blob a machine accepts from another; over it, the agent stays where it was. Read on main and on each node; <code>0</code> sets no limit</td>
+</tr>
+<tr>
 <td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
 <td><code>9090</code></td>
 <td>Prometheus host port</td>

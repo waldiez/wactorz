@@ -129,8 +129,8 @@ describe("AgentStore — removal & totals", () => {
 describe("AgentStore — remote nodes", () => {
     it("updateRemoteNode forwards, records last-seen, and evicts stale-name agents", () => {
         store.addOrUpdateAgent(agent({ id: "r1", name: "remote-1", node: "n1" }));
-        store.updateRemoteNode("n1", ["someone-else"]);
-        expect(dash.updateRemoteNode).toHaveBeenCalledWith("n1", ["someone-else"]);
+        store.updateRemoteNode("n1", ["someone-else"], { cpu_pct: 12 });
+        expect(dash.updateRemoteNode).toHaveBeenCalledWith("n1", ["someone-else"], { cpu_pct: 12 });
         // remote-1 is no longer in the live list → evicted
         expect(store.getAgents().some(a => a.id === "r1")).toBe(false);
     });

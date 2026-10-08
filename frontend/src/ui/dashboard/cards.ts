@@ -11,6 +11,7 @@ import type { AgentInfo } from "../../types/agent";
 import { stateColor, stateLabel, relTime, canDirectMessage } from "./agentState";
 import type { CostLimitInfo } from "./settings";
 import { button, el } from "../dom";
+import { buildSparkline, lastValue, type Point } from "./trend";
 
 /** Compact token count for the card meta line: 1234 → "1.2k", 1_200_000 → "1.2M". */
 function fmtTokens(n: number): string {
@@ -183,6 +184,8 @@ export type AgentAction = "start" | "stop" | "delete";
 export interface WactorCardCallbacks {
     onChat: (agent: AgentInfo) => void;
     onCommand: (agentId: string, action: AgentAction, btn: HTMLButtonElement) => void;
+    /** Open the agent's history, from the card's History button. */
+    onHistory: (agent: AgentInfo) => void;
 }
 
 /** Append the start/stop/delete action buttons appropriate to the state. */
@@ -227,6 +230,9 @@ function buildCardControls(agent: AgentInfo, cb: WactorCardCallbacks): HTMLEleme
         });
         controls.appendChild(chatBtn);
     }
+    const history = button("af-mini-btn af-history-btn", "History");
+    history.addEventListener("click", () => cb.onHistory(agent));
+    controls.appendChild(history);
     appendActionBtns(controls, agent);
     controls.addEventListener("click", e => {
         const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
@@ -284,6 +290,7 @@ function appendTokenLine(card: HTMLElement, agent: AgentInfo): void {
 export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCallbacks): HTMLElement {
     const card = el("div", "af-card");
     card.dataset["id"] = agent.id;
+    card.dataset["name"] = agent.name;
 
     appendCardHeader(card, agent, hbMs);
 
@@ -293,6 +300,8 @@ export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCa
         card.appendChild(task);
     }
 
+    // Filled with the agent's activity trend once it has been fetched.
+    card.appendChild(el("div", "af-card-trend"));
     card.appendChild(buildCardControls(agent, cb));
 
     if (agent.protected) {
@@ -302,4 +311,30 @@ export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCa
     }
 
     return card;
+}
+
+/**
+ * Paint an agent's activity over the last hour into its card's trend slot: a
+ * sparkline of messages per minute and the latest rate.
+ *
+ * ``points`` undefined means nothing was fetched for it — an agent with no
+ * history yet — and leaves the slot empty rather than drawing a flat zero.
+ */
+export function paintCardTrend(card: HTMLElement, points: Point[] | undefined): void {
+    const slot = card.querySelector<HTMLElement>(".af-card-trend");
+    if (!slot) {
+        return;
+    }
+    if (!points || points.length === 0) {
+        slot.replaceChildren();
+        return;
+    }
+    const last = lastValue(points);
+    const label =
+        last === null ? "—" : last === 0 ? "idle" : `${last >= 10 ? last.toFixed(0) : last.toFixed(1)}/min`;
+    slot.replaceChildren(
+        buildSparkline(points, `${card.dataset["name"] ?? "agent"}: messages per minute over the last hour`),
+        el("span", "af-card-trend-value", label),
+    );
+    slot.title = "messages per minute, last hour";
 }

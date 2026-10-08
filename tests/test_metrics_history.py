@@ -137,6 +137,14 @@ class TestRecording:
         assert [s["messages_processed"] for s in history] == [7, 9]
         assert len(db.query_node_history("rpi", time.time() - 60)) == 2
 
+    def test_a_column_that_is_not_one_finds_nothing(self, db: WactorzDB) -> None:
+        db.write_metrics_history([{"ts": time.time(), "agent": "a", "errors": 1}], [])
+
+        assert db.query_agents_field("errors; DROP TABLE kv_store", 0) == {}
+        assert db.query_agents_field("errors", 0) == {
+            "a": [[pytest.approx(time.time(), abs=60), 1]]
+        }
+
     async def test_nothing_known_writes_nothing(self, db: WactorzDB) -> None:
         assert await record_once() == 0
 
@@ -179,6 +187,48 @@ class TestReadingIt:
         body = await (await client.get("/history/nodes/rpi")).json()
 
         assert [s["online"] for s in body["samples"]] == [1]
+
+    async def test_one_field_of_every_agent_in_one_request(
+        self, client: TestClient, db: WactorzDB
+    ) -> None:
+        now = time.time()
+        db.write_metrics_history(
+            [
+                {"ts": now - 120, "agent": "weather", "messages_processed": 3},
+                {"ts": now - 60, "agent": "weather", "messages_processed": 5},
+                {"ts": now - 60, "agent": "flic", "messages_processed": 1},
+                {"ts": now - 7200, "agent": "flic", "messages_processed": 0},
+            ],
+            [],
+        )
+
+        body = await (await client.get("/api/history/agents?field=messages_processed")).json()
+
+        assert body["field"] == "messages_processed"
+        assert body["hours"] == metrics_history.CARD_HOURS
+        # Oldest first, within the hour the cards span by default.
+        assert {name: [v for _, v in rows] for name, rows in body["agents"].items()} == {
+            "weather": [3, 5],
+            "flic": [1],
+        }
+
+    @pytest.mark.parametrize("field", ["agent", "state", "ts; DROP TABLE x", "nope"])
+    async def test_a_field_that_is_not_a_number_series_is_refused(
+        self, client: TestClient, field: str
+    ) -> None:
+        response = await client.get("/api/history/agents", params={"field": field})
+
+        assert response.status == 400
+
+    async def test_every_agent_without_a_database_says_so(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(runtime, "db", None)
+
+        assert (await client.get("/api/history/agents")).status == 503
+
+    async def test_every_agent_refuses_a_window_that_is_not_one(self, client: TestClient) -> None:
+        assert (await client.get("/api/history/agents?hours=soon")).status == 400
 
     @pytest.mark.parametrize(
         ("stored", "served"),

@@ -38,6 +38,28 @@ DEFAULT_HOURS = 24.0
 #: The most samples one request returns: a week of one agent at one a minute.
 MAX_SAMPLES = 10_080
 
+#: How far back the every-agent request looks when it does not say: the span
+#: of a card's trend.
+CARD_HOURS = 1.0
+
+#: The most rows the every-agent request returns: a day of a few dozen agents.
+MAX_CARD_SAMPLES = 50_000
+
+#: The fields the every-agent request serves: the numbers, not the labels.
+CARD_FIELDS = frozenset(
+    {
+        "memory_mb",
+        "messages_processed",
+        "errors",
+        "tasks_completed",
+        "tasks_failed",
+        "cost_usd",
+        "queue_wait_p95_s",
+        "message_p95_s",
+        "task_p95_s",
+    }
+)
+
 #: How recently an agent must have been heard from to be sampled: two heartbeat
 #: intervals and some, so one heartbeat late is not a gap in its trend.
 HEARD_WITHIN_S = 120.0
@@ -140,17 +162,49 @@ async def node_history_handler(request: web.Request) -> web.Response:
     return await _history(request, "node")
 
 
+async def agents_field_handler(request: web.Request) -> web.Response:
+    """``GET /api/history/agents?field=messages_processed&hours=1``: one field, every agent.
+
+    What a dashboard draws a small trend on each agent card from: one request
+    however many agents there are, carrying only the field it draws.
+    """
+    db = runtime.db
+    if db is None:
+        return web.json_response({"error": "no database: the history is not kept"}, status=503)
+    hours = _hours(request, CARD_HOURS)
+    if isinstance(hours, web.Response):
+        return hours
+    field = request.query.get("field", "messages_processed")
+    if field not in CARD_FIELDS:
+        return web.json_response(
+            {"error": f"field must be one of {', '.join(sorted(CARD_FIELDS))}"}, status=400
+        )
+    since = time.time() - hours * 3600
+    agents = await asyncio.to_thread(db.query_agents_field, field, since, MAX_CARD_SAMPLES)
+    return web.json_response(
+        {"field": field, "hours": hours, "sample_every_s": SAMPLE_EVERY_S, "agents": agents}
+    )
+
+
+def _hours(request: web.Request, default: float) -> float | web.Response:
+    """The window a request asks for, in hours, or the refusal to send instead."""
+    try:
+        hours = float(request.query.get("hours", default))
+    except ValueError:
+        return web.json_response({"error": "hours must be a number"}, status=400)
+    if not (hours > 0 and math.isfinite(hours)):
+        return web.json_response({"error": "hours must be above 0 and finite"}, status=400)
+    return hours
+
+
 async def _history(request: web.Request, kind: str) -> web.Response:
     db = runtime.db
     if db is None:
         return web.json_response({"error": "no database: the history is not kept"}, status=503)
     name = request.match_info["name"]
-    try:
-        hours = float(request.query.get("hours", DEFAULT_HOURS))
-    except ValueError:
-        return web.json_response({"error": "hours must be a number"}, status=400)
-    if not (hours > 0 and math.isfinite(hours)):
-        return web.json_response({"error": "hours must be above 0 and finite"}, status=400)
+    hours = _hours(request, DEFAULT_HOURS)
+    if isinstance(hours, web.Response):
+        return hours
     since = time.time() - hours * 3600
     query = db.query_agent_history if kind == "agent" else db.query_node_history
     samples = await asyncio.to_thread(query, name, since, MAX_SAMPLES)

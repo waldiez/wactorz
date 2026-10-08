@@ -93,6 +93,63 @@ describe("CardDashboard behaviour", () => {
     });
 
     describe("remote nodes", () => {
+        it("keeps a node's readings, and the manifest a heartbeat does not carry", () => {
+            cd.show([agent("main")]);
+            cd._remoteNodes.set("edge-1", { agents: [], lastSeen: 0, manifest: { arch: "aarch64" } });
+
+            cd.updateRemoteNode("edge-1", ["alpha"], { cpu_pct: 9 });
+
+            expect(cd._remoteNodes.get("edge-1")).toMatchObject({
+                agents: ["alpha"],
+                readings: { cpu_pct: 9 },
+                manifest: { arch: "aarch64" },
+            });
+        });
+
+        it("takes manifests from the listing, and shows a listed node not heard from yet", () => {
+            cd.show([agent("main")]);
+            cd.updateRemoteNode("edge-1", ["alpha"]);
+            cd._data.listings.set("edge-1", { node: "edge-1", online: true, manifest: { arch: "x86_64" } });
+            cd._data.listings.set("rpi", {
+                node: "rpi",
+                online: true,
+                last_seen: Date.now() / 1000,
+                agents: ["flic", 3],
+                cpu_pct: 12,
+                manifest: { arch: "aarch64" },
+            });
+            cd._data.listings.set("bare", { node: "bare", online: false });
+
+            cd._onDataUpdate();
+
+            expect(cd._remoteNodes.get("edge-1").manifest).toEqual({ arch: "x86_64" });
+            expect(cd._remoteNodes.get("rpi")).toMatchObject({
+                agents: ["flic"],
+                readings: { cpu_pct: 12 },
+                manifest: { arch: "aarch64" },
+            });
+            expect(cd._remoteNodes.get("bare")).toMatchObject({ agents: [], lastSeen: 0, manifest: null });
+            expect(cd.root.querySelector('.af-node-card[data-node="rpi"] .af-node-pill')?.textContent).toBe(
+                "online",
+            );
+        });
+
+        it("repaints nothing off the overview when the data arrives", () => {
+            cd.show([agent("main")]);
+            cd._setView("feed");
+            cd._data.listings.set("rpi", { node: "rpi", online: true });
+            expect(() => cd._onDataUpdate()).not.toThrow();
+            expect(cd._remoteNodes.has("rpi")).toBe(true);
+        });
+
+        it("opens and closes an agent's history from its card", async () => {
+            cd.show([agent("main")]);
+            cd.root.querySelector('[data-id="main"] .af-history-btn').click();
+            await vi.waitFor(() => expect(document.querySelector(".af-trend-overlay")).not.toBeNull());
+            cd.hide();
+            expect(document.querySelector(".af-trend-overlay")).toBeNull();
+        });
+
         it("updateRemoteNode stores the node and renders it on the overview", () => {
             cd.show([agent("main")]);
             cd.updateRemoteNode("edge-1", ["alpha", "beta"]);

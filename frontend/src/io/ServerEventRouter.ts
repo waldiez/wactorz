@@ -5,6 +5,7 @@
 import { log } from "./logger";
 import { uid } from "../ids";
 import { resolveAgentName } from "../agents/naming";
+import { readingsFrom } from "../agents/nodeReadings";
 import type {
     AgentState,
     AlertPayload,
@@ -175,6 +176,7 @@ export class ServerEventRouter {
                 node: node[1],
                 agents: strArray(p["agents"]),
                 ...(nodeId !== undefined && { nodeId }),
+                readings: readingsFrom(p),
             });
             return true;
         }

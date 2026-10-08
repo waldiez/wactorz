@@ -7,23 +7,27 @@
  * the per-agent "wactor" card grid and the nodes panel. Reads shared state
  * through the host and routes card interactions back via `onChat` / `onCommand`.
  */
-import type { AgentInfo } from "../../types/agent";
+import type { AgentInfo, RemoteNode } from "../../types/agent";
 import { stateColor, stateLabel, sortAgents, STALE_MS } from "./agentState";
 import {
     buildHostBar,
     buildStatCards,
     buildWactorCard,
     appendActionBtns,
+    paintCardTrend,
     type StatCardData,
     type AgentAction,
 } from "./cards";
 import { el } from "../dom";
+import { buildNodeCard, type NodeTrend } from "./nodeCard";
+import type { Point } from "./trend";
+import type { TrendKind } from "./trendPanel";
 
 export interface OverviewHost {
     readonly root: HTMLElement;
     readonly agents: Map<string, AgentInfo>;
     readonly lastHb: Map<string, number>;
-    readonly remoteNodes: Map<string, { agents: string[]; lastSeen: number }>;
+    readonly remoteNodes: Map<string, RemoteNode>;
     readonly removingIds: Set<string>;
     /** [cpu, memUsedMb, memTotalMb] for the host bar. */
     hostStats(): [number | null, number | null, number | null];
@@ -33,6 +37,12 @@ export interface OverviewHost {
     onChat(name: string): void;
     /** Run a control command (start/stop/delete) on an agent. */
     onCommand(id: string, action: AgentAction, btn: HTMLButtonElement): void;
+    /** An agent's messages per minute over the last hour, once fetched. */
+    agentTrend(name: string): Point[] | undefined;
+    /** A node's trend over the last hour, once fetched. */
+    nodeTrend(name: string): NodeTrend | undefined;
+    /** Open the history of an agent or a node. */
+    onOpenTrend(kind: TrendKind, name: string): void;
 }
 
 export class OverviewView {
@@ -85,6 +95,16 @@ export class OverviewView {
         });
     }
 
+    /** Paint every mounted card's activity trend from what has been fetched. */
+    paintTrends(): void {
+        this.host.root.querySelectorAll<HTMLElement>("#af-wactor-cards [data-id]").forEach(card => {
+            const name = card.dataset["name"];
+            if (name !== undefined) {
+                paintCardTrend(card, this.host.agentTrend(name));
+            }
+        });
+    }
+
     /** Update one card's state dot/label/name/controls in place, rebuilding the grid if it's missing. */
     patchCard(agent: AgentInfo): void {
         if (this.host.removingIds.has(agent.id)) {
@@ -127,9 +147,18 @@ export class OverviewView {
         ];
         const now = Date.now();
         for (const [name, info] of this.host.remoteNodes) {
-            const online = now - info.lastSeen < STALE_MS;
-            const meta = info.agents.length > 0 ? info.agents.join(", ") : "no agents";
-            items.push(this._buildNodeItem(name, meta, online));
+            const trend = this.host.nodeTrend(name);
+            items.push(
+                buildNodeCard(
+                    {
+                        ...info,
+                        name,
+                        online: now - info.lastSeen < STALE_MS,
+                        ...(trend !== undefined && { trend }),
+                    },
+                    node => this.host.onOpenTrend("nodes", node),
+                ),
+            );
         }
         list.replaceChildren(...items);
     }
@@ -175,10 +204,13 @@ export class OverviewView {
     }
 
     private _buildCard(agent: AgentInfo): HTMLElement {
-        return buildWactorCard(agent, this.host.lastHb.get(agent.id) ?? 0, {
+        const card = buildWactorCard(agent, this.host.lastHb.get(agent.id) ?? 0, {
             onChat: a => this.host.onChat(a.name),
             onCommand: (id, action, btn) => this.host.onCommand(id, action, btn),
+            onHistory: a => this.host.onOpenTrend("agents", a.name),
         });
+        paintCardTrend(card, this.host.agentTrend(agent.name));
+        return card;
     }
 
     private _rebuildControls(card: HTMLElement, agent: AgentInfo): void {

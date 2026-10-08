@@ -92,6 +92,34 @@ describe("CardDashboard behaviour", () => {
         });
     });
 
+    describe("the Devices link", () => {
+        it("hides once the server runs without Home Assistant, though this browser saw one", async () => {
+            cd.destroy();
+            document.body.innerHTML = "";
+            localStorage.setItem("wactorz-ha-url", "http://ha.local");
+            localStorage.setItem("wactorz-ha-url__server", "http://ha.local");
+            const realFetch = globalThis.fetch;
+            globalThis.fetch = vi.fn(async () => ({
+                ok: true,
+                json: async () => ({ ha: { url: "" } }),
+            })) as unknown as typeof fetch;
+            try {
+                cd = new CardDashboard() as any;
+                cd.show([agent("main")]);
+
+                await vi.waitFor(() => {
+                    const links = [...cd.root.querySelectorAll(".af-ha-nav-link")] as HTMLAnchorElement[];
+                    expect(links.length).toBeGreaterThan(0);
+                    expect(links.every(a => a.style.display === "none" && !a.hasAttribute("href"))).toBe(
+                        true,
+                    );
+                });
+            } finally {
+                globalThis.fetch = realFetch;
+            }
+        });
+    });
+
     describe("remote nodes", () => {
         it("keeps a node's readings, and the manifest a heartbeat does not carry", () => {
             cd.show([agent("main")]);

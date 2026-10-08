@@ -52,6 +52,29 @@ LOGIN_KEY = "#key"
 LOGIN_SUBMIT = "button[type=submit]"
 NAV_BUTTON = ".af-view-btn[data-view='{view}']"
 AGENT_CARD = ".af-card[data-id]"
+
+#: Installed in the page by `Dashboard.watch_card`: records each change in
+#: whether a card for the agent is on the page. Transitions rather than DOM
+#: nodes, so the overview replacing a card with a fresh one in one step is not
+#: counted as a going and a coming.
+_WATCH_CARD = """
+name => {
+    const events = [];
+    (window.__cardEvents = window.__cardEvents || {})[name] = events;
+    const selector = `.af-card[data-name="${CSS.escape(name)}"]`;
+    let present = document.querySelector(selector) !== null;
+    if (present) {
+        events.push("present");
+    }
+    new MutationObserver(() => {
+        const now = document.querySelector(selector) !== null;
+        if (now !== present) {
+            events.push(now ? "added" : "removed");
+            present = now;
+        }
+    }).observe(document.body, { childList: true, subtree: true });
+}
+"""
 HISTORY_BUTTON = "button:has-text('History')"
 HISTORY_PANEL = ".af-trend-panel"
 CHAT_INPUT = "#af-iobar-input"
@@ -172,6 +195,21 @@ class Dashboard:
             interval=0.25,
         )
         return self
+
+    def watch_card(self, name: str) -> Dashboard:
+        """Start recording every time the agent's card appears or goes, on the overview.
+
+        Recorded in the page, on every change to it, so a card that goes and
+        comes back between two polls is caught. Read with `card_comings_and_goings`;
+        stay on the overview meanwhile, since another view takes the cards away.
+        """
+        self.show("overview")
+        self.page.evaluate(_WATCH_CARD, name)
+        return self
+
+    def card_comings_and_goings(self, name: str) -> list[str]:
+        """What `watch_card` recorded for ``name``: "present", "added" and "removed", in order."""
+        return list(self.page.evaluate("name => (window.__cardEvents || {})[name] || []", name))
 
     def wait_for_no_card(self, name: str, *, timeout: float = 60.0) -> Dashboard:
         self.show("overview")

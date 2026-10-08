@@ -240,3 +240,21 @@ describe("OverviewView trends", () => {
         expect(host.onOpenTrend).toHaveBeenCalledWith("nodes", "rpi");
     });
 });
+
+describe("a card's state for its dot", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+    });
+
+    it("is set when the card is drawn and kept current when it is patched", () => {
+        // The dot's freshness reads it: a stopped agent is expected to be quiet.
+        const host = makeHost([agent("worker")]);
+        const view = mount(host);
+        const card = (): HTMLElement => host.root.querySelector<HTMLElement>('[data-id="worker"]')!;
+        expect(card().dataset["state"]).toBe("running");
+
+        view.patchCard(agent("worker", { state: "stopped" }));
+
+        expect(card().dataset["state"]).toBe("stopped");
+    });
+});

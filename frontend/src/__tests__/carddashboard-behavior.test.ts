@@ -330,7 +330,7 @@ describe("CardDashboard behaviour", () => {
             cd._heartbeats.lastSeen.set("main", Date.now() - 200_000);
             cd._heartbeats.refresh();
             const dot = cd.root.querySelector('[data-id="main"] .af-card-state-dot');
-            expect(dot.classList.contains("af-card-stale")).toBe(true);
+            expect(dot.classList.contains("af-card-missing")).toBe(true);
         });
     });
 

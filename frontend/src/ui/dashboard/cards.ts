@@ -291,6 +291,7 @@ export function buildWactorCard(agent: AgentInfo, hbMs: number, cb: WactorCardCa
     const card = el("div", "af-card");
     card.dataset["id"] = agent.id;
     card.dataset["name"] = agent.name;
+    card.dataset["state"] = stateLabel(agent.state);
 
     appendCardHeader(card, agent, hbMs);
 

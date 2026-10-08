@@ -28,6 +28,20 @@ async def handle_task(agent, payload):
     return {"result": "counted " + str(agent.state["seen"])}
 """
 
+#: An agent that ends itself a few seconds after it starts, as a planner or a
+#: one-off actuator does once its work is done.
+FINISHER = """
+async def setup(agent):
+    agent.state["ticks"] = 0
+
+
+async def process(agent):
+    agent.state["ticks"] += 1
+    if agent.state["ticks"] >= 8:
+        await agent.stop()
+        return
+"""
+
 #: An agent that puts what it is sent to the model, and says what came back.
 ASKS_THE_MODEL = """
 async def setup(agent):
@@ -75,6 +89,25 @@ SCRIPT = {
         code=ASKS_THE_MODEL,
     ),
     "how is the tide": "The tide is in.",
+    "start a finisher here": _starts(
+        "Starting it.",
+        name="finisher",
+        type="dynamic",
+        description="Does one thing and ends itself",
+        capabilities=["finishing"],
+        poll_interval=1,
+        code=FINISHER,
+    ),
+    "start a finisher on the node": _starts(
+        "Starting it there.",
+        name="far-finisher",
+        type="dynamic",
+        node=NODE_NAME,
+        description="Does one thing and ends itself",
+        capabilities=["finishing"],
+        poll_interval=1,
+        code=FINISHER,
+    ),
 }
 
 

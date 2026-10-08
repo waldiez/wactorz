@@ -116,6 +116,7 @@ export class OverviewView {
             return;
         }
         const color = stateColor(agent.state);
+        card.dataset["state"] = stateLabel(agent.state);
         const dot = card.querySelector<HTMLElement>(".af-card-state-dot");
         const lbl = card.querySelector<HTMLElement>(".af-card-state-label");
         const nm = card.querySelector<HTMLElement>(".af-card-name");

@@ -25,7 +25,7 @@ import {
     releaseBottomNav,
 } from "./dashboard/header";
 import { setSignOutVisible } from "./dashboard/signOut";
-import { stateLabel, sortAgents, STALE_MS } from "./dashboard/agentState";
+import { NODE_EVICT_MS, stateLabel, sortAgents } from "./dashboard/agentState";
 import type { View, ConnState } from "./dashboard/types";
 import { IconName } from "./dashboard/icons";
 import { ActivityFeed } from "./dashboard/activityFeed";
@@ -41,12 +41,7 @@ import { confirmDialog } from "./dashboard/confirmDialog";
 import { seedServerConfig } from "../config/serverConfig";
 import { emit, listen } from "../events";
 
-/**
- * How long a remote node may go unheard before it is forgotten entirely.
- * Deliberately far beyond `STALE_MS`, which only decides whether the nodes panel
- * draws a node as offline — that state is worth showing for a good while.
- */
-export const NODE_EVICT_MS = STALE_MS * 10;
+export { NODE_EVICT_MS };
 
 export class CardDashboard {
     private root: HTMLElement;

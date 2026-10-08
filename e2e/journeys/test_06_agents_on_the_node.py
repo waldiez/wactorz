@@ -163,3 +163,29 @@ def test_an_agent_on_the_node_asks_the_model_through_the_server(
     dashboard.say("how is the tide today?", to="asker")
 
     dashboard.expect("asker", "the model said: The tide is in.")
+
+
+def test_an_agent_on_the_node_that_ends_itself_leaves_the_dashboard_once(
+    dashboard: browser.Dashboard, app: backend.Backend
+) -> None:
+    # The same ending as on the server, from a node: the node withdraws the
+    # agent's manifest and main forgets it. Its card must go once and stay gone,
+    # through the node's heartbeats that no longer list it.
+    dashboard.say("please start a finisher on the node", to="main")
+    dashboard.expect_like("main", r"Starting it there\.\n<spawn>\n\{.*\}\n</spawn>")
+    dashboard.watch_card("far-finisher")
+
+    waiting.until(
+        lambda: "removed" in dashboard.card_comings_and_goings("far-finisher"),
+        what="the far finisher's card to go once it has ended itself",
+        timeout=90,
+    )
+    waiting.holds_for(
+        lambda: dashboard.card_comings_and_goings("far-finisher")[-1] == "removed",
+        what="the far finisher's card staying gone",
+        window=35,
+        interval=1,
+    )
+    seen = dashboard.card_comings_and_goings("far-finisher")
+    assert seen.count("removed") == 1, seen
+    assert "far-finisher" not in _on_the_node(app)

@@ -33,6 +33,7 @@ vi.mock("../ui/CardDashboard", () => ({
 }));
 
 import { AgentStore } from "../agents/AgentStore";
+import { NODE_EVICT_MS, STALE_MS } from "../ui/dashboard/agentState";
 
 function agent(over: Partial<AgentInfo> = {}): AgentInfo {
     return { id: "id-1", name: "worker", state: "running", protected: false, ...over };
@@ -47,6 +48,12 @@ function hb(over: Partial<HeartbeatPayload> = {}): HeartbeatPayload {
         ...over,
     };
 }
+
+const ids = (): string[] =>
+    store
+        .getAgents()
+        .map(a => a.id)
+        .sort();
 
 let store: AgentStore;
 beforeEach(() => {
@@ -127,50 +134,95 @@ describe("AgentStore — removal & totals", () => {
 });
 
 describe("AgentStore — remote nodes", () => {
-    it("updateRemoteNode forwards, records last-seen, and evicts stale-name agents", () => {
-        store.addOrUpdateAgent(agent({ id: "r1", name: "remote-1", node: "n1" }));
+    it("updateRemoteNode forwards the node's list and readings", () => {
         store.updateRemoteNode("n1", ["someone-else"], { cpu_pct: 12 });
         expect(dash.updateRemoteNode).toHaveBeenCalledWith("n1", ["someone-else"], { cpu_pct: 12 });
-        // remote-1 is no longer in the live list → evicted
-        expect(store.getAgents().some(a => a.id === "r1")).toBe(false);
     });
 
-    it("updateRemoteNode with an empty list clears last-seen (node offline)", () => {
+    it("keeps a node's agent that one heartbeat did not list", () => {
+        // Restarting, or listed under a slightly different name: not gone. An
+        // agent that is gone is deleted by the server.
         store.addOrUpdateAgent(agent({ id: "r1", name: "remote-1", node: "n1" }));
+        store.updateRemoteNode("n1", ["someone-else"]);
         store.updateRemoteNode("n1", []);
-        expect(store.getAgents().some(a => a.id === "r1")).toBe(false);
+        expect(store.getAgents().map(a => a.id)).toEqual(["r1"]);
+        expect(dash.removeAgent).not.toHaveBeenCalled();
     });
 
-    it("pruneStaleRemoteAgents evicts node agents past the stale window, keeps fresh & local", () => {
+    it("lets a node's agent go only after the long silence its node leaves the panel at", () => {
         const now = 1_000_000;
         vi.spyOn(Date, "now").mockReturnValue(now);
         store.addOrUpdateAgent(agent({ id: "r1", name: "remote-1", node: "n1" }));
-        store.addOrUpdateAgent(agent({ id: "local", name: "local-1" })); // no node
-        store.updateRemoteNode("n1", ["remote-1"]); // last-seen = now
-        store.pruneStaleRemoteAgents(180_000); // not stale yet
-        expect(
-            store
-                .getAgents()
-                .map(a => a.id)
-                .sort(),
-        ).toEqual(["local", "r1"]);
+        store.addOrUpdateAgent(agent({ id: "local", name: "local-1" }));
 
-        vi.spyOn(Date, "now").mockReturnValue(now + 200_000); // past the window
-        store.pruneStaleRemoteAgents(180_000);
-        expect(store.getAgents().map(a => a.id)).toEqual(["local"]); // local untouched
+        store.pruneSilentRemoteAgents(undefined, now + STALE_MS * 2);
+        expect(ids()).toEqual(["local", "r1"]); // missing, not yet gone
+
+        store.pruneSilentRemoteAgents(undefined, now + NODE_EVICT_MS + 1);
+        expect(ids()).toEqual(["local"]); // a local agent is not this method's to judge
+    });
+
+    it("counts a heartbeat as hearing from a node's agent", () => {
+        vi.spyOn(Date, "now").mockReturnValue(1_000);
+        store.addOrUpdateAgent(agent({ id: "id-1", name: "worker", node: "n1" }));
+        vi.spyOn(Date, "now").mockReturnValue(1_000 + NODE_EVICT_MS);
+        store.onHeartbeat(hb());
+
+        store.pruneSilentRemoteAgents(undefined, 1_000 + NODE_EVICT_MS + 10);
+
+        expect(ids()).toEqual(["id-1"]);
     });
 });
 
 describe("AgentStore — reconcileAgents", () => {
-    it("evicts local agents missing from the live set, keeps remote, adds live", () => {
+    it("adds and updates what the server lists", () => {
+        store.reconcileAgents([agent({ id: "kept", name: "kept" })]);
+        expect(ids()).toEqual(["kept"]);
+    });
+
+    it("keeps an unlisted agent it has heard from lately", () => {
+        // An agent ending itself has left the server's list before its delete
+        // frame arrives; another server's agent on the same broker is never in
+        // it. Removing either on the list alone made the card blink.
+        const now = 1_000_000;
+        vi.spyOn(Date, "now").mockReturnValue(now);
+        store.addOrUpdateAgent(agent({ id: "ending", name: "ending" }));
+
+        store.reconcileAgents([], now + STALE_MS - 1);
+
+        expect(ids()).toEqual(["ending"]);
+        expect(dash.removeAgent).not.toHaveBeenCalled();
+    });
+
+    it("lets go of an unlisted local agent once it has also been silent past the stale window", () => {
+        // For the delete frame that never arrived.
+        const now = 1_000_000;
+        vi.spyOn(Date, "now").mockReturnValue(now);
         store.addOrUpdateAgent(agent({ id: "gone", name: "gone" }));
         store.addOrUpdateAgent(agent({ id: "remote", name: "remote", node: "n1" }));
-        store.reconcileAgents([agent({ id: "kept", name: "kept" })]);
-        const ids = store
-            .getAgents()
-            .map(a => a.id)
-            .sort();
-        expect(ids).toEqual(["kept", "remote"]); // "gone" evicted, "remote" kept (has node)
+
+        store.reconcileAgents([agent({ id: "kept", name: "kept" })], now + STALE_MS + 1);
+
+        expect(ids()).toEqual(["kept", "remote"]); // a node's agent is never in the list
+        expect(dash.removeAgent).toHaveBeenCalledWith("gone");
+    });
+
+    it("keeps an agent heard from again, however long ago it was first seen", () => {
+        // Another server's agent: never listed here, heartbeating all along.
+        vi.spyOn(Date, "now").mockReturnValue(1_000);
+        store.addOrUpdateAgent(agent({ id: "id-1", name: "worker" }));
+        vi.spyOn(Date, "now").mockReturnValue(1_000 + STALE_MS * 5);
+        store.onHeartbeat(hb());
+
+        store.reconcileAgents([], 1_000 + STALE_MS * 5 + 10);
+
+        expect(ids()).toEqual(["id-1"]);
+    });
+
+    it("still removes an agent at once when it is deleted", () => {
+        store.addOrUpdateAgent(agent({ id: "x", name: "x" }));
+        store.removeAgent("x");
+        expect(ids()).toEqual([]);
     });
 });
 
@@ -180,6 +232,14 @@ describe("AgentStore — heartbeat", () => {
         store.onHeartbeat(hb({ state: "stopped", cpu: 12, memory_mb: 256, task: "busy" }));
         expect(store.getAgents()[0]).toMatchObject({ state: "stopped", cpu: 12, mem: 256, task: "busy" });
         expect(dash.onHeartbeat).toHaveBeenCalledWith("id-1", 1_000, 12, 256);
+    });
+
+    it("learns where an existing agent runs from a later heartbeat", () => {
+        // A card first made from a spawn event does not know its node, and an
+        // agent without one is judged as local.
+        store.addOrUpdateAgent(agent({ id: "id-1", name: "worker" }));
+        store.onHeartbeat(hb({ node: "rpi" }));
+        expect(store.getAgents()[0]?.node).toBe("rpi");
     });
 
     it("creates a card for an unknown agent and still pulses onHeartbeat", () => {

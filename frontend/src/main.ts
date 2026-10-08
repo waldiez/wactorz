@@ -342,7 +342,7 @@ function recomputeLive(): void {
         return;
     }
     emit("af-connection-status", { status: "live" });
-    agentStore.pruneStaleRemoteAgents();
+    agentStore.pruneSilentRemoteAgents();
     if (!seeded) {
         seeded = true;
         // Startup spawn events are published before the browser connects;
@@ -461,7 +461,7 @@ const _liveActorsTimer = window.setInterval(() => {
         return;
     }
     refreshLiveActors();
-    agentStore.pruneStaleRemoteAgents();
+    agentStore.pruneSilentRemoteAgents();
 }, 15000);
 
 // Ahead of the first request this module makes — the feed seed below. A session

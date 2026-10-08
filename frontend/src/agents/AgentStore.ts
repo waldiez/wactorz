@@ -6,16 +6,24 @@
  * Agent-state store + dashboard coordinator. Owns the canonical Map of live
  * agents (keyed by WID id) and drives the CardDashboard from MQTT/WS events:
  * every mutation here forwards the relevant add/update/remove to the dashboard.
+ *
+ * An agent leaves the store when it is deleted: the server's delete frame, the
+ * user's delete, a wipe. Every ending sends one of those, so nothing here
+ * removes an agent merely because one source stopped listing it -- that
+ * guess was undone by the agent's next heartbeat, and the card blinked. Only
+ * an agent that has also gone silent for long is let go, for the delete frame
+ * that never arrived; until then its card's dot says how long it has been.
  */
 
 import type { AgentInfo, HeartbeatPayload, AlertPayload, SpawnPayload, NodeReadings } from "../types/agent";
 import { CardDashboard } from "../ui/CardDashboard";
-import { STALE_MS } from "../ui/dashboard/agentState";
+import { NODE_EVICT_MS, STALE_MS } from "../ui/dashboard/agentState";
 
 export class AgentStore {
     private agents: Map<string, AgentInfo> = new Map();
     private cardDashboard: CardDashboard | null = null;
-    private _remoteNodeLastSeen: Map<string, number> = new Map();
+    /** When each agent was last heard of, from any source: an event, or the server's list. */
+    private _lastHeard: Map<string, number> = new Map();
 
     /** Build and show the (initially empty) CardDashboard.
      *
@@ -51,6 +59,7 @@ export class AgentStore {
 
         const existing = this.agents.get(agent.id);
         const merged: AgentInfo = existing ? { ...existing, ...agent } : agent;
+        this._lastHeard.set(agent.id, Date.now());
         // protected:true and node are sticky — partial MQTT updates must not clear them.
         if (existing?.protected) {
             merged.protected = true;
@@ -68,6 +77,7 @@ export class AgentStore {
     /** Drop an agent by id and remove its card. */
     removeAgent(id: string): void {
         this.agents.delete(id);
+        this._lastHeard.delete(id);
         this.cardDashboard?.removeAgent(id);
     }
 
@@ -82,25 +92,14 @@ export class AgentStore {
     }
 
     /**
-     * Refresh a remote node's agent list, tracking its last-seen time and
-     * evicting remote agents this node no longer reports.
+     * Refresh a remote node's agent list and readings on the dashboard.
+     *
+     * The list is not used to remove agents: one missing from a single
+     * heartbeat -- restarting, or listed under a slightly different name -- is
+     * not gone, and an agent that is gone is deleted by the server.
      */
     updateRemoteNode(name: string, agents: string[], readings?: NodeReadings): void {
         this.cardDashboard?.updateRemoteNode(name, agents, readings);
-        if (agents.length > 0) {
-            this._remoteNodeLastSeen.set(name, Date.now());
-        } else {
-            this._remoteNodeLastSeen.delete(name);
-        }
-        // Evict remote agents for this node whose names are no longer in the live list.
-        const liveNames = new Set(agents);
-        const toEvict: string[] = [];
-        for (const [id, agent] of this.agents) {
-            if (agent.node === name && !liveNames.has(agent.name)) {
-                toEvict.push(id);
-            }
-        }
-        toEvict.forEach(id => this.removeAgent(id));
     }
 
     /** Push host CPU/memory stats to the dashboard. */
@@ -109,34 +108,46 @@ export class AgentStore {
     }
 
     /**
-     * Replace local (non-remote) agents with the authoritative REST list:
-     * evict any not present, then add or update the rest.
+     * Merge in the server's list of its own agents.
+     *
+     * An agent missing from it is removed only once it has also been silent
+     * past `STALE_MS`. The list is not the whole picture: an agent that is
+     * ending itself has left it before its delete frame arrives, and an agent
+     * of another server on the same broker is never in it while its heartbeats
+     * keep arriving. Removing either on the list alone put the card back on the
+     * next heartbeat. Agents on a node are never in the list and are left to
+     * `pruneSilentRemoteAgents`.
      */
-    reconcileAgents(liveAgents: AgentInfo[]): void {
+    reconcileAgents(liveAgents: AgentInfo[], now = Date.now()): void {
         const liveIds = new Set(liveAgents.map(agent => agent.id));
-        for (const [id, agent] of this.agents) {
-            // Remote agents aren't in the local REST response — evicted elsewhere.
-            if (!liveIds.has(id) && !agent.node) {
-                this.removeAgent(id);
-            }
-        }
-        liveAgents.forEach(agent => this.addOrUpdateAgent(agent));
-    }
-
-    /** Remove agents belonging to nodes whose heartbeat has gone stale (>3 min). */
-    pruneStaleRemoteAgents(staleMs = STALE_MS): void {
-        const now = Date.now();
         const toEvict: string[] = [];
         for (const [id, agent] of this.agents) {
-            if (!agent.node) {
-                continue;
-            }
-            const lastSeen = this._remoteNodeLastSeen.get(agent.node);
-            if (lastSeen !== undefined && now - lastSeen > staleMs) {
+            if (!liveIds.has(id) && !agent.node && this._silentFor(id, now) > STALE_MS) {
                 toEvict.push(id);
             }
         }
         toEvict.forEach(id => this.removeAgent(id));
+        liveAgents.forEach(agent => this.addOrUpdateAgent(agent));
+    }
+
+    /**
+     * Let go of agents on a node that have been silent past ``silentMs``.
+     *
+     * For a delete that never reached this page. The default is how long the
+     * nodes panel keeps a node it has stopped hearing from, so an agent goes
+     * when its node does; before then its card's dot shows it is missing.
+     */
+    pruneSilentRemoteAgents(silentMs = NODE_EVICT_MS, now = Date.now()): void {
+        const toEvict = [...this.agents]
+            .filter(([id, agent]) => agent.node && this._silentFor(id, now) > silentMs)
+            .map(([id]) => id);
+        toEvict.forEach(id => this.removeAgent(id));
+    }
+
+    /** How long since anything was heard of an agent; forever for one never heard of. */
+    private _silentFor(id: string, now: number): number {
+        const heard = this._lastHeard.get(id);
+        return heard === undefined ? Infinity : now - heard;
     }
 
     /**
@@ -146,7 +157,14 @@ export class AgentStore {
     onHeartbeat(payload: HeartbeatPayload): void {
         const agent = this.agents.get(payload.agentId);
         if (agent) {
+            this._lastHeard.set(payload.agentId, Date.now());
             agent.state = payload.state;
+            // A card first made from an event that did not say where the agent
+            // runs (a spawn) learns it here, so it is not taken for a local
+            // agent the server has forgotten.
+            if (payload.node !== undefined && agent.node !== payload.node) {
+                agent.node = payload.node;
+            }
             agent.lastHeartbeatAt = new Date(payload.timestampMs).toISOString();
             if (payload.cpu !== undefined) {
                 agent.cpu = payload.cpu;

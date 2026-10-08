@@ -506,6 +506,23 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 </tbody>
 </table>
 <hr />
+<h2 id="backing-up-and-moving-an-install">Backing up and moving an install</h2>
+<p><code>wactorz-state</code> writes a state directory to one archive, and puts one back:</p>
+<div class="highlight"><pre><span></span><code>wactorz-state<span class="w"> </span><span class="nb">export</span><span class="w">                       </span><span class="c1"># wactorz-state-&lt;date&gt;-&lt;time&gt;.tar.gz, here</span>
+wactorz-state<span class="w"> </span><span class="nb">export</span><span class="w"> </span>backup.tar.gz<span class="w"> </span>--no-secrets
+wactorz-state<span class="w"> </span>import<span class="w"> </span>backup.tar.gz<span class="w">         </span><span class="c1"># into WACTORZ_STATE_DIR, or ./state</span>
+wactorz-state<span class="w"> </span>import<span class="w"> </span>backup.tar.gz<span class="w"> </span>--replace
+</code></pre></div>
+
+<p>Both read <code>WACTORZ_STATE_DIR</code> as the server does; <code>--state-dir</code> names another directory.</p>
+<ul>
+<li><strong>What it holds:</strong> the database, each agent's state file and blobs, uploads, the install's id, the nodes' SSH host keys and, unless <code>--no-secrets</code> is given, the install's keys: <code>node_signing.key</code>, which every node checks main's messages against, and the broker's TLS keys in <code>mqtt_tls/</code>. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.</li>
+<li><strong>What it leaves out:</strong> logs, the MQTT outbox (what it holds would be stale by the time it was restored), dashboard sign-in sessions, files part way through being written or received, and files moved aside as unreadable.</li>
+<li><strong>Export while it runs.</strong> The database is copied with SQLite's own backup, consistent however busy it is, and every other file is replaced in one step whenever it is written. What was persisted in the last second may be missing.</li>
+<li><strong>Import with it stopped.</strong> A running server or node holds a lock on its state directory, and an import refuses while it is held; so does a second server started on the same directory by mistake. Import refuses a directory with anything in it unless <code>--replace</code> is given, which keeps what was there beside it as <code>&lt;directory&gt;.before-import-&lt;date&gt;-&lt;time&gt;</code>.</li>
+<li><strong>An archive is code.</strong> Agents' state files are pickles, unpickled when the system starts: importing an archive runs whatever its maker put in it. Import only archives you made. Import checks that an archive holds exactly the files its manifest lists, each matching its SHA-256, at a path inside the directory, which catches a damaged archive, not a forged one.</li>
+</ul>
+<p>A node's state is moved the same way, on the node: <code>wactorz-state export --state-dir ~/wactorz/state</code>, and an import there with the node stopped. The Home Assistant add-on's state is in <code>/data/state</code>, which Home Assistant's own backups already include.</p>
 <h2 id="ssh-key-management">SSH key management</h2>
 <p>Wactorz reaches remote machines over SSH when bootstrapping an edge node with
 <code>/deploy</code>. Key auth is preferred over a password — generate a dedicated deploy

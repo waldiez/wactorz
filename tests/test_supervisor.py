@@ -128,6 +128,18 @@ class DependentActor(Actor):
 # ── Test infrastructure ───────────────────────────────────────────────────────
 
 
+def running_actor(system: Any, name: str) -> Any:
+    """The actor the supervisor holds for ``name``, once it is started; else None.
+
+    What a test of a restart waits for. Not the factory having been called: the
+    supervisor records and starts the new actor after building it, so a test that
+    stopped waiting at the build read the spec while the restart was still on its
+    way, and failed on a loaded machine.
+    """
+    actor = system.supervisor._specs[name].actor
+    return actor if actor is not None and actor.state == ActorState.RUNNING else None
+
+
 async def wait_until(
     predicate: Callable[[], bool], timeout: float = 5.0, interval: float = 0.02
 ) -> bool:
@@ -240,7 +252,9 @@ async def test_one_for_one_restart() -> None:
     )
     await system.supervisor.start()
 
-    await wait_until(lambda: call_n["crash"] >= 2)
+    assert await wait_until(
+        lambda: call_n["crash"] >= 2 and running_actor(system, "crash-once") is not None
+    )
 
     new_crash_actor = system.supervisor._specs["crash-once"].actor
     assert new_crash_actor
@@ -279,7 +293,10 @@ async def test_restart_count_increments() -> None:
     )
     await system.supervisor.start()
 
-    await wait_until(lambda: crash_counter["n"] >= 3)  # initial + 2 restarts
+    # The initial start and two restarts, the last one finished.
+    assert await wait_until(
+        lambda: crash_counter["n"] >= 3 and running_actor(system, "counted") is not None
+    )
 
     final = system.supervisor._specs["counted"].actor
     assert final

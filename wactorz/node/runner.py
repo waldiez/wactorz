@@ -43,6 +43,7 @@ from ..core.pip import install_command, install_destination, is_installable_name
 from ..core.registry import ActorRegistry, Supervisor
 from ..core.sd_notify import watchdog_loop
 from ..core.state_snapshot import json_safe, why_it_cannot_travel
+from ..core.turns import turn_of, working_on
 from ..monitoring.loop_lag import LoopLagMonitor
 from . import machine, resources
 from .agent import NodeAgent
@@ -786,9 +787,14 @@ class NodeRunner:
         task.add_done_callback(lambda t, _ts=agent._tasks: _ts.remove(t) if t in _ts else None)
 
     async def _run_task(self, agent: NodeAgent, payload: Any, reply_topic: str | None) -> None:
-        """Run one task and publish the answer where the caller asked for it."""
+        """Run one task and publish the answer where the caller asked for it.
+
+        Inside the turn the task was sent in, so what the agent does about it,
+        and logs, belongs to that turn here as it would on the server.
+        """
         try:
-            result = await agent.run_task(payload)
+            with working_on(turn_of(payload), agent.name):
+                result = await agent.run_task(payload)
         except Exception as e:
             logger.exception("[runner] handle_task error for '%s'", agent.name)
             result = {"error": str(e), "agent": agent.name}

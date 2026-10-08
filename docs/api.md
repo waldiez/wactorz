@@ -282,6 +282,29 @@ Recent activity feed events.
 
 ---
 
+### `GET /api/logs`
+
+Recent application log lines, oldest first, from an in-memory buffer of the last thousand or so; the same lines the dashboard's log view shows. Redacted on the way in.
+
+Query, all optional: `limit` (default `200`, at most `500`), `level` (this level and above), `logger` (part of the logger's name), `turn` and `agent`.
+
+A line written while a person's message was being answered names its `turn`: the id given to that message where it entered, which travels with everything done to answer it, through main, the planner and the agents it asks, their model and Home Assistant calls, and a task sent to an agent on a node. `?turn=` returns the lines of one answer. A line also names the `agent` that was at work when it was written, whatever logger wrote it; `?agent=` matches the name whole.
+
+**Response** `200 OK`
+```json
+{
+  "entries": [
+    {"source": "app", "ts": 1740000000.0, "level": "INFO", "origin": "wactorz.agents.main.actor",
+     "text": "[main] Intent: PIPELINE — …", "turn": "eea5bad62007", "agent": "main"}
+  ],
+  "capacity": 1000
+}
+```
+
+An agent's own errors and log events carry the turn as well (`turn`, on `agents/{id}/errors` and `agents/{id}/logs`).
+
+---
+
 ### `POST /api/chat/stop`
 
 Cancel every in-flight generation. Takes no request body, and stops all of them

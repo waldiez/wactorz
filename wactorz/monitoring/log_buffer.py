@@ -5,6 +5,9 @@ so agent activity and application logs share one shape::
 
     {"source": "app", "ts": float, "level": str, "origin": str, "text": str}
 
+plus ``turn`` and ``agent`` when the line was written during a chat turn or
+for an agent (see `wactorz.core.turns`).
+
 Two properties to keep:
 
 * **Nothing here logs.** A handler that logs from inside its own ``emit``
@@ -19,6 +22,7 @@ import logging
 from collections import deque
 from typing import Any
 
+from ..core.turns import current_agent, current_turn
 from .log_redaction import EXC_FORMATTER, redact, redacted_message
 
 DEFAULT_CAPACITY = 1000
@@ -72,13 +76,22 @@ class LogRingBuffer(logging.Handler):
             # Redacted too — an exception's *message* can carry a credential
             # even though the frames themselves do not.
             text = f"{text}\n{redact(EXC_FORMATTER.formatException(record.exc_info))}"
-        return {
+        entry: dict[str, Any] = {
             "source": "app",
             "ts": record.created,
             "level": record.levelname,
             "origin": record.name,
             "text": text,
         }
+        # Read here, while the code that logged is still the one running: a
+        # handler is called in the caller's context, so this is the turn and
+        # the agent that line was written for.
+        turn, agent = current_turn(), current_agent()
+        if turn:
+            entry["turn"] = turn
+        if agent:
+            entry["agent"] = agent
+        return entry
 
     def snapshot(self, limit: int | None = None) -> list[dict[str, Any]]:
         """The buffered entries, oldest first; the most recent ``limit`` of them."""

@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from wactorz.core.turns import current_agent, current_turn
 from wactorz.interfaces.chat.cli import CLIInterface
 
 
@@ -47,7 +48,11 @@ class _PlainAgent:
 class _MainActor:
     """Only the surface `run()` actually touches."""
 
+    name = "main"
+
     def __init__(self) -> None:
+        #: (turn, agent) seen each time a reply was streamed.
+        self.streamed_in: list[tuple[str, str]] = []
         self._registry: _Registry | None = _Registry()
         self.persisted: dict[str, Any] = {}
         self.agents: list[dict[str, Any]] = []
@@ -76,6 +81,7 @@ class _MainActor:
         return self.installer_result
 
     async def process_user_input_stream(self, _text: str) -> Any:
+        self.streamed_in.append((current_turn(), current_agent()))
         for chunk in self.stream_chunks:
             yield chunk
 
@@ -398,3 +404,16 @@ class TestReadingAPrompt:
                 await CLIInterface._prompt("You: ")
         finally:
             builtins.input = original
+
+
+class TestTurns:
+    async def test_each_line_is_a_turn_of_its_own_and_mains_work(
+        self, actor: _MainActor, drive: Any, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Main streams its answer rather than taking it through its mailbox,
+        # so the command line marks the work as main's itself.
+        await drive(CLIInterface(actor), ["hello", "again"], capsys)  # type: ignore[arg-type]
+
+        (first_turn, first_agent), (second_turn, second_agent) = actor.streamed_in
+        assert (first_agent, second_agent) == ("main", "main")
+        assert first_turn and second_turn and first_turn != second_turn

@@ -21,6 +21,7 @@ from ...config import (
 from ...core.actor import Actor, Message, MessageType
 from ...core.node_signing import node_control_properties
 from ...core.persistence import chat_turn_recorded
+from ...core.turns import acting_as, turn_scope
 from ..llm_agent import LLMAgent, LLMProvider
 from ..mixins import SpawnMixin, SpawnPlaceholder
 from ..one_off_actuator_agent import SOCIAL_ACTUATE_DOMAINS
@@ -545,6 +546,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         self.persist("conversation_history", self._conversation_history)
 
     async def process_user_input(self, text: str) -> str:
+        """Answer one message from a person, as one turn (see `wactorz.core.turns`)."""
+        with turn_scope(), acting_as(self.name):
+            return await self._process_user_input(text)
+
+    async def _process_user_input(self, text: str) -> str:
         ts_user = time.time()
         note_prefix = self._drain_notifications()
 
@@ -702,6 +708,11 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         return cleaned.strip(), had
 
     async def process_user_input_restricted(self, text: str) -> str:
+        """Answer one message from an untrusted channel, as one turn."""
+        with turn_scope(), acting_as(self.name):
+            return await self._process_user_input_restricted(text)
+
+    async def _process_user_input_restricted(self, text: str) -> str:
         """Social-channel (Discord/Telegram) entry point — the untrusted-surface
         counterpart of process_user_input.
 

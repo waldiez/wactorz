@@ -30,6 +30,7 @@ from .persistence.pickle_store import encode_state, read_state_file
 from .state_versions import Upgrade, declared_version, upgraded
 from .subscriptions import SubscriptionHub, is_durable_actor
 from .topic_bus import StreamWindow, get_topic_bus
+from .turns import TURN_KEY, current_turn, is_task_topic, outside_any_turn, working_on
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
@@ -167,6 +168,9 @@ class Message:
     reply_to: str | None = None
     message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: float = field(default_factory=time.time)
+    #: The chat turn this message is part of, taken from where it was made;
+    #: "" for one that belongs to none. Its recipient works inside that turn.
+    turn_id: str = field(default_factory=current_turn)
 
     @property
     def is_notification(self) -> bool:
@@ -497,9 +501,10 @@ class Actor(ABC):
             if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
-        self._tasks.append(asyncio.create_task(self._message_loop()))
-        self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
-        self._tasks.append(asyncio.create_task(self._command_listener()))
+        # Outside whatever turn started this actor: each message brings its own.
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._message_loop, self.name)))
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._heartbeat_loop, self.name)))
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._command_listener, self.name)))
         await self._publish_status()
         logger.info("[%s] Actor started.", self.name)
 
@@ -777,14 +782,15 @@ class Actor(ABC):
         return True
 
     async def _dispatch(self, msg: Message):
-        """Dispatch message to the appropriate handler."""
-        if self._resolve_pending_result(msg):
-            return
-        handler = self._handlers.get(msg.type)
-        if handler:
-            await handler(msg)
-        else:
-            await self.handle_message(msg)
+        """Dispatch message to the appropriate handler, inside the turn it belongs to."""
+        with working_on(msg.turn_id, self.name):
+            if self._resolve_pending_result(msg):
+                return
+            handler = self._handlers.get(msg.type)
+            if handler:
+                await handler(msg)
+            else:
+                await self.handle_message(msg)
 
     def _setup_default_handlers(self):
         self._handlers = {
@@ -1612,6 +1618,15 @@ class Actor(ABC):
                 # always knows self.name, so the feed can attribute the row.
                 if isinstance(payload, dict) and (topic.endswith(("/logs", "/spawned"))):
                     payload.setdefault("name", self.name)
+                # The turn travels with a task to another machine, and with what
+                # an agent reports while it works on one, so both can be found
+                # by it there and on the dashboard.
+                turn = current_turn()
+                if turn and isinstance(payload, dict):
+                    if is_task_topic(topic):
+                        payload.setdefault(TURN_KEY, turn)
+                    elif topic.endswith("/logs"):
+                        payload.setdefault("turn", turn)
                 # Empty bytes = clear a retained message (MQTT spec)
                 # Must send raw empty bytes, not JSON-encoded
                 if payload == b"" or (payload is None and retain):

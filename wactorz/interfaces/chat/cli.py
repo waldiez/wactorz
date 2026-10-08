@@ -17,6 +17,7 @@ from ...config import (
 )
 from ...core.mqtt import mqtt_client
 from ...core.state_snapshot import FORCE_FLAG
+from ...core.turns import acting_as, begin_turn
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
@@ -293,6 +294,8 @@ class CLIInterface:
                 text = user_input.strip()
                 if not text:
                     continue
+                # Everything done to answer this line, wherever it is done.
+                begin_turn()
 
                 if text.lower() in ("quit", "exit"):
                     break
@@ -439,11 +442,12 @@ class CLIInterface:
                     if target is self.agent:
                         print(f"\n@{agent_name}: ", end="", flush=True)
                         system_msg = ""
-                        async for chunk in self.agent.process_user_input_stream(message):
-                            if isinstance(chunk, dict):
-                                system_msg = chunk.get("system_msg", "")
-                            else:
-                                print(chunk, end="", flush=True)
+                        with acting_as(self.agent.name):
+                            async for chunk in self.agent.process_user_input_stream(message):
+                                if isinstance(chunk, dict):
+                                    system_msg = chunk.get("system_msg", "")
+                                else:
+                                    print(chunk, end="", flush=True)
                         print()
                         if system_msg:
                             print(f"[System: {system_msg}]")
@@ -452,9 +456,10 @@ class CLIInterface:
                     # Stream if target is an LLMAgent with chat_stream support
                     if target and hasattr(target, "chat_stream"):
                         print(f"\n@{agent_name}: ", end="", flush=True)
-                        async for chunk in target.chat_stream(message):  # pyright: ignore[reportAttributeAccessIssue]
-                            if not isinstance(chunk, dict):
-                                print(chunk, end="", flush=True)
+                        with acting_as(agent_name):
+                            async for chunk in target.chat_stream(message):  # pyright: ignore[reportAttributeAccessIssue]
+                                if not isinstance(chunk, dict):
+                                    print(chunk, end="", flush=True)
                         print("\n")
                     elif target:
                         response = await self._get_agent_response(agent_name, message)
@@ -467,11 +472,15 @@ class CLIInterface:
 
                 print("\n@main: ", end="", flush=True)
                 system_msg = ""
-                async for chunk in self.agent.process_user_input_stream(text):
-                    if isinstance(chunk, dict):
-                        system_msg = chunk.get("system_msg", "")
-                    else:
-                        print(chunk, end="", flush=True)
+                # Main's own work, though it streams rather than going through
+                # its mailbox; the wrapper is here because a generator cannot
+                # safely set and reset a context variable across its yields.
+                with acting_as(self.agent.name):
+                    async for chunk in self.agent.process_user_input_stream(text):
+                        if isinstance(chunk, dict):
+                            system_msg = chunk.get("system_msg", "")
+                        else:
+                            print(chunk, end="", flush=True)
                 print()  # newline after streamed response
                 if system_msg:
                     print(f"[System: {system_msg}]")

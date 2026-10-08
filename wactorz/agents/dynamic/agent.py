@@ -29,6 +29,7 @@ from ...core.actor import Actor, ActorState, Message, MessageType
 from ...core.cancellation import cancel_all_until_done
 from ...core.paths import resolve_state_dir
 from ...core.state_versions import StateUpgradeError
+from ...core.turns import current_turn, outside_any_turn
 from ...monitoring import agent_metrics
 from ..llm_agent import accumulate_global_cost
 from ..lookup import find_main_actor
@@ -265,10 +266,15 @@ class DynamicAgent(Actor):
         subscription loop) does not block on_start() and starve the heartbeat;
         it starts the process loop itself once it returns.
         """
+        # The program's own tasks, outside whatever turn spawned the agent.
         if self._fn_setup:
-            self._track_program_task(asyncio.create_task(self._run_setup()))
+            self._track_program_task(
+                asyncio.create_task(outside_any_turn(self._run_setup, self.name))
+            )
         elif self._fn_process:
-            self._track_program_task(asyncio.create_task(self._process_loop()))
+            self._track_program_task(
+                asyncio.create_task(outside_any_turn(self._process_loop, self.name))
+            )
 
     async def end_self(self) -> None:
         """End this agent for good, at its own request.
@@ -1234,6 +1240,11 @@ class DynamicAgent(Actor):
             "degraded": self._consecutive_errors >= self._error_threshold,
             "timestamp": time.time(),
         }
+        # The chat turn that was being answered, when the error came out of one,
+        # so the error can be found beside the rest of that turn's lines.
+        turn = current_turn()
+        if turn:
+            event["turn"] = turn
         # QoS 1, for the same reason as chat: an error frame lost during a
         # monitor reconnect is the one an operator most wants to have seen.
         await self._mqtt_publish(f"agents/{self.actor_id}/errors", event, qos=1)

@@ -25,6 +25,7 @@ from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deplo
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from ..core.state_snapshot import FORCE_FLAG
+from ..core.turns import acting_as, turn_scope
 from ..monitoring import chat_metrics
 from . import runtime, uploads
 
@@ -452,14 +453,17 @@ async def route_chat(
     """
     destination = destination_of(content)
     timer = chat_metrics.TurnTimer(destination.kind)
-    await _route_chat(
-        content,
-        destination,
-        timer.watch(reply_fn),
-        timer.watch(stream_fn) if stream_fn is not None else None,
-        stream_end_fn,
-        attachments,
-    )
+    # The turn starts here for the dashboard and the REST chat route, so every
+    # agent it reaches, main or another, works inside it.
+    with turn_scope():
+        await _route_chat(
+            content,
+            destination,
+            timer.watch(reply_fn),
+            timer.watch(stream_fn) if stream_fn is not None else None,
+            stream_end_fn,
+            attachments,
+        )
     timer.finish()
 
 
@@ -625,88 +629,90 @@ async def _route_chat(
     if banner:
         await _chunk_fn(banner)
 
-    gen_fn = getattr(target, "process_user_input_stream", None) or getattr(
-        target, "chat_stream", None
-    )
-    if gen_fn:
-        if blocks and not _takes_attachments(gen_fn):
-            await _say_files_not_sent(f"@{target.name} cannot read attachments")
-        kwargs = {"attachments": blocks} if blocks and _takes_attachments(gen_fn) else {}
-        try:
-            async for chunk in gen_fn(text, **kwargs):  # pylint: disable=not-callable
-                if isinstance(chunk, dict):
-                    continue
-                await _chunk_fn(str(chunk))
-        finally:
-            await _end_fn()
-    elif hasattr(target, "process_user_input"):
-        if blocks:
-            await _say_files_not_sent(f"@{target.name} cannot read attachments")
-        result = await target.process_user_input(text)  # pyright: ignore[reportAttributeAccessIssue]
-        await reply_fn(str(result))
-        await _end_fn()
-    else:
-        # Agents that only speak via handle_task/TASK+RESULT message passing:
-        # - catalog-agent (no LLM)
-        # - dynamic agents (generated code, timeseries-collector, etc.)
-        # - manual-agent (fallback if chat() not present)
-        #
-        # Strategy: call handle_message() directly, with a reply slot of the
-        # registry as the address the RESULT is sent to.
-
-        # manual-agent: prefer its native chat() — it handles plain text well
-        if hasattr(target, "chat") and not hasattr(target, "_fn_handle_task"):
+    # The agent's work, though it does not come through its mailbox.
+    with acting_as(target.name):
+        gen_fn = getattr(target, "process_user_input_stream", None) or getattr(
+            target, "chat_stream", None
+        )
+        if gen_fn:
+            if blocks and not _takes_attachments(gen_fn):
+                await _say_files_not_sent(f"@{target.name} cannot read attachments")
+            kwargs = {"attachments": blocks} if blocks and _takes_attachments(gen_fn) else {}
+            try:
+                async for chunk in gen_fn(text, **kwargs):  # pylint: disable=not-callable
+                    if isinstance(chunk, dict):
+                        continue
+                    await _chunk_fn(str(chunk))
+            finally:
+                await _end_fn()
+        elif hasattr(target, "process_user_input"):
             if blocks:
                 await _say_files_not_sent(f"@{target.name} cannot read attachments")
+            result = await target.process_user_input(text)  # pyright: ignore[reportAttributeAccessIssue]
+            await reply_fn(str(result))
+            await _end_fn()
+        else:
+            # Agents that only speak via handle_task/TASK+RESULT message passing:
+            # - catalog-agent (no LLM)
+            # - dynamic agents (generated code, timeseries-collector, etc.)
+            # - manual-agent (fallback if chat() not present)
+            #
+            # Strategy: call handle_message() directly, with a reply slot of the
+            # registry as the address the RESULT is sent to.
+
+            # manual-agent: prefer its native chat() — it handles plain text well
+            if hasattr(target, "chat") and not hasattr(target, "_fn_handle_task"):
+                if blocks:
+                    await _say_files_not_sent(f"@{target.name} cannot read attachments")
+                try:
+                    result = await target.chat(text)  # pyright: ignore[reportAttributeAccessIssue]
+                    await reply_fn(str(result))
+                except Exception as exc:
+                    logger.exception("[io-gateway] chat() on %s failed", target.name)
+                    await reply_fn(f"[error] {target.name}: {exc}")
+                await _end_fn()
+                return
+
+            # All other message-passing agents: a chat turn is not an actor, so the
+            # reply address is a slot of the registry, which a RESULT sent to it
+            # settles; the slot is gone when the turn ends, however it ends.
+            if blocks:
+                await _say_files_not_sent(f"@{target.name} cannot read attachments")
+            # The target came out of this registry, so it is there; said for the
+            # type checker, which only knows the attribute may be unset.
+            registry = runtime.registry
+            if registry is None:
+                await reply_fn("[error] registry not available")
+                await _end_fn()
+                return
             try:
-                result = await target.chat(text)  # pyright: ignore[reportAttributeAccessIssue]
-                await reply_fn(str(result))
+                async with registry.reply_slot() as (slot_id, reply):
+                    msg = Message(
+                        type=MessageType.TASK,
+                        sender_id=slot_id,
+                        reply_to=slot_id,
+                        payload=task_payload(text),
+                    )
+                    await target.handle_message(msg)
+                    payload = await asyncio.wait_for(reply, timeout=150.0)
+
+                text_out = reply_text(payload)
+                if (
+                    isinstance(payload, dict)
+                    and "agents" in payload
+                    and isinstance(payload["agents"], list)
+                ):
+                    text_out = format_catalog_agents_response(payload)
+
+                await reply_fn(text_out)
+
+            except asyncio.TimeoutError:
+                await reply_fn(f"[error] @{target_name} did not reply within 150s.")
             except Exception as exc:
-                logger.exception("[io-gateway] chat() on %s failed", target.name)
+                logger.exception("[io-gateway] task dispatch to %s failed", target.name)
                 await reply_fn(f"[error] {target.name}: {exc}")
-            await _end_fn()
-            return
-
-        # All other message-passing agents: a chat turn is not an actor, so the
-        # reply address is a slot of the registry, which a RESULT sent to it
-        # settles; the slot is gone when the turn ends, however it ends.
-        if blocks:
-            await _say_files_not_sent(f"@{target.name} cannot read attachments")
-        # The target came out of this registry, so it is there; said for the
-        # type checker, which only knows the attribute may be unset.
-        registry = runtime.registry
-        if registry is None:
-            await reply_fn("[error] registry not available")
-            await _end_fn()
-            return
-        try:
-            async with registry.reply_slot() as (slot_id, reply):
-                msg = Message(
-                    type=MessageType.TASK,
-                    sender_id=slot_id,
-                    reply_to=slot_id,
-                    payload=task_payload(text),
-                )
-                await target.handle_message(msg)
-                payload = await asyncio.wait_for(reply, timeout=150.0)
-
-            text_out = reply_text(payload)
-            if (
-                isinstance(payload, dict)
-                and "agents" in payload
-                and isinstance(payload["agents"], list)
-            ):
-                text_out = format_catalog_agents_response(payload)
-
-            await reply_fn(text_out)
-
-        except asyncio.TimeoutError:
-            await reply_fn(f"[error] @{target_name} did not reply within 150s.")
-        except Exception as exc:
-            logger.exception("[io-gateway] task dispatch to %s failed", target.name)
-            await reply_fn(f"[error] {target.name}: {exc}")
-        finally:
-            await _end_fn()
+            finally:
+                await _end_fn()
 
 
 # ── REST chat endpoints ────────────────────────────────────────────────────

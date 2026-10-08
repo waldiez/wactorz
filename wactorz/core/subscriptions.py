@@ -30,6 +30,7 @@ from paho.mqtt.properties import Properties
 
 from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, agent_client_id, mqtt_client
 from .topic_bus import topic_matches
+from .turns import outside_any_turn
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +182,9 @@ class SubscriptionHub:
             self._subscribing.add(task)
             task.add_done_callback(self._subscribing.discard)
         if self._task is None or self._task.done():
-            self._task = asyncio.create_task(self.run())
+            # Outside any turn: a subscription made while answering a message
+            # outlives it, and what it receives belongs to no one's turn.
+            self._task = asyncio.create_task(outside_any_turn(self.run))
             return self._task
         return None
 

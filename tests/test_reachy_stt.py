@@ -150,7 +150,8 @@ class ProviderAbstractionTest(unittest.TestCase):
             text = asyncio.run(reachy_stt.OpenAIBackend().transcribe(b"RIFFmock", config))
 
         self.assertEqual(text, "hosted words")
-        module.AsyncOpenAI.assert_called_once_with(api_key="test-only")
+        # Bounded by the same setting as every hosted backend.
+        module.AsyncOpenAI.assert_called_once_with(api_key="test-only", timeout=60.0)
         kwargs = create.await_args_list[-1].kwargs
         self.assertEqual(kwargs["file"], ("reachy.wav", b"RIFFmock", "audio/wav"))
         self.assertEqual(kwargs["model"], "whisper-1")

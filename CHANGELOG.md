@@ -28,6 +28,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   an LLM call or robot connection. Focused guides cover movement, voice, camera, connection,
   volume, and Wactorz/Home Assistant.
 - **The Ultra add-on can build Reachy Mini's graphics dependencies** when its SDK is installed.
+- **Reachy says what voice input is missing before it listens.** Without a Deepgram key, or with the chosen recognizer not installed, `start conversation` and `listen and ask Wactorz` now refuse with the fix instead of failing after someone has spoken. A conversation that ends by itself (nobody spoke, repeated failures) says why in chat. New guides in `docs/reachy/` for users, developers and demonstrators, and `scripts/reachy_sim_check.py` runs the agent against the SDK's simulated robot.
+
+### Fixed (Reachy)
+
+- `stop` holds the head where it is instead of snapping it to neutral in a tenth of a second.
+- `REACHY_IDLE_LIFE=1`, `{"idle_life": true}` and `{"cmd": "life", "enabled": true}` now move the robot (the `alive` mood) instead of reporting motion on while it stays still.
+- `health` reports the IMU temperature on SDK 1.8.4.
+- Motion commands over MQTT while Reachy is offline say it is not connected, not `'NoneType' object has no attribute`.
+- Speech synthesis gives up after 20 s without data instead of hanging a reply or conversation; OpenAI transcription honours `REACHY_STT_TIMEOUT_S`; shutdown closes the robot link off the event loop.
 - **Reachy has opt-in ambient life and speech-matched gestures.** The `life` command provides
   `calm`, `antennas`, `alive`, and `showtime` presets, additive breathing and gaze motion,
   occasional attract beats, and word-timed movement while speaking. Ambient motion remains off

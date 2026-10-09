@@ -17,6 +17,9 @@ from wactorz.catalogue_agents.reachy_vad import VoiceCapture
 
 NS = {}
 exec(compile(AGENT_CODE, "reachy_mini_agent<AGENT_CODE>", "exec"), NS)
+# These tests stand in for transcription, so no recognizer or key is installed;
+# the check that one is lives in test_reachy_voice_preflight.py.
+NS["_voice_input_problem"] = lambda _payload, **_kwargs: None
 
 
 class FakeMedia:

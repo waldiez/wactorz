@@ -42,6 +42,9 @@ def _load_recipe_namespace():
 
 
 NS = _load_recipe_namespace()
+# These tests stand in for transcription, so no recognizer or key is installed;
+# the check that one is lives in test_reachy_voice_preflight.py.
+NS["_voice_input_problem"] = lambda _payload, **_kwargs: None
 
 
 _FAKE_REACHY_SDK = None

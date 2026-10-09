@@ -572,7 +572,7 @@ def _build_catalog() -> dict:
                 "stt_timeout_s": "float — hosted transcription timeout (default 60s)",
                 "stt_language": "str — prerecorded language lock; unset auto-detects",
                 "stt_streaming": "bool — stream Deepgram conversation audio (default true)",
-                "stt_stream_language": "str — Deepgram stream language (default en; use el for Greek)",
+                "stt_stream_language": "str — Deepgram stream language (default multi: English and Greek; en or el keeps one)",
                 "stt_endpointing_ms": "int — streaming silence that finalizes speech (default 500ms)",
                 "stt_utterance_end_ms": "int — streaming final-gap backstop (default 1200ms)",
                 "stt_hotwords": "str — optional comma-separated recognition hints",

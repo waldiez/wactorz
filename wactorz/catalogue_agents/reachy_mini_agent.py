@@ -698,7 +698,10 @@ async def _imu_temperature(agent) -> float | None:
     if mini is None:
         return None
     try:
-        data = await _do(mini.get_imu_data)
+        # The SDK serves IMU data as the cached `imu` property; `get_imu_data`
+        # is the accessor some other SDK builds expose instead.
+        reader = getattr(mini, "get_imu_data", None)
+        data = await _do(reader) if callable(reader) else await _do(getattr, mini, "imu")
     except Exception:
         return None
     if not isinstance(data, dict):
@@ -923,9 +926,11 @@ async def setup(agent):
         if "idle_life" in payload:
             enabled = bool(payload["idle_life"])
             agent.persist("idle_life", enabled)
-            agent.state["life_enabled"] = enabled
             if enabled:
+                _switch_life_on(agent)
                 _start_life_loop(agent)
+            else:
+                agent.state["life_enabled"] = False
             await agent.log(f"ambient life {'on' if enabled else 'off'}")
         if "life_amplitude" in payload:
             amplitude = _life_amplitude_setting(payload["life_amplitude"], None)
@@ -1062,9 +1067,13 @@ async def setup(agent):
     chosen = agent.recall("idle_preset") or os.environ.get("REACHY_IDLE_PRESET")
     _apply_life_preset(agent, _life_preset_name(chosen) if chosen else "off")
     if agent.recall("idle_life") is not None or os.environ.get("REACHY_IDLE_LIFE") is not None:
-        agent.state["life_enabled"] = _truthy(
-            agent.recall("idle_life"), os.environ.get("REACHY_IDLE_LIFE")
-        )
+        enabled = _truthy(agent.recall("idle_life"), os.environ.get("REACHY_IDLE_LIFE"))
+        if enabled and not chosen:
+            # On with no mood named means the default mood. A preset that was
+            # named, `off` included, is the more specific choice and stands.
+            _switch_life_on(agent)
+        else:
+            agent.state["life_enabled"] = enabled
     explicit_amplitude = agent.recall("life_amplitude") or os.environ.get(
         "REACHY_IDLE_LIFE_AMPLITUDE"
     )
@@ -3130,12 +3139,26 @@ async def cleanup(agent):
         return
     # NOTE: we intentionally do NOT call mini.goto_sleep() — it disables motors
     # and the daemon often drops us, requiring a full restart on next spawn.
+    # Closed off the event loop: it joins the SDK's socket and media threads,
+    # and cleanup runs while every other agent in the process is still live.
     try:
-        mini.__exit__(None, None, None)
+        await _do(mini.__exit__, None, None, None)
     except Exception as e:
         await agent.log(f"ReachyMini __exit__ failed: {e}", level="warning")
     # Persist bindings on graceful shutdown
     agent.persist("bindings", agent.state.get("bindings", {}))
+
+
+def _connection_target(agent):
+    """Where the link goes, as said in a reconnect reply.
+
+    Local mode connects to this computer whatever host is pinned (the pin is the
+    robot's own address, which local mode ignores), so naming the pin there
+    would point at a robot the agent is not talking to.
+    """
+    if agent.state.get("connection_mode") == "local":
+        return "localhost"
+    return agent.state.get("robot_host") or "autodetect"
 
 
 async def _reconnect(agent, payload=None):
@@ -3160,7 +3183,7 @@ async def _reconnect(agent, payload=None):
 
     ok, _reason = _is_connected(agent)
     if ok and not payload.get("force"):
-        where = agent.state.get("robot_host") or "autodetect"
+        where = _connection_target(agent)
         return {
             "connected": True,
             "reconnected": False,
@@ -3223,7 +3246,7 @@ async def _reconnect(agent, payload=None):
         agent.state["_reconnecting"] = False
 
     agent.state.pop("motion_link_error", None)
-    where = agent.state.get("robot_host") or "autodetect"
+    where = _connection_target(agent)
     return {
         "connected": True,
         "reconnected": True,
@@ -3316,6 +3339,10 @@ def _is_connected(agent):
 _MOTION_COMMANDS = frozenset(
     {"wake", "sleep", "pose", "turn", "antennas", "gesture", "emotion", "motors", "face_forward"}
 )
+#: Commands that drive the SDK handle directly. Chat checks the link before it
+#: dispatches; MQTT and reactive bindings reach the dispatcher without that
+#: check, so it refuses these itself while there is no handle.
+_ROBOT_HANDLE_COMMANDS = _MOTION_COMMANDS | {"stop", "look_at", "look_pixel", "set_pose", "diag"}
 _MOTION_LINK_ERROR_MARKERS = ("task did not complete in time", "lost connection with the server")
 _MOTION_RECONNECT_INITIAL_S = 1.0
 _MOTION_RECONNECT_MAX_S = 30.0
@@ -3475,6 +3502,8 @@ async def _dispatch(agent, cmd, payload, return_result=False):
             # Said before anything starts: a conversation opened here would
             # announce itself and then end at its first attempt to listen.
             raise RuntimeError(_MEDIA_UNAVAILABLE_NOTICE)
+        if cmd in _ROBOT_HANDLE_COMMANDS and agent.state.get("mini") is None:
+            raise RuntimeError(_is_connected(agent)[1])
         if cmd == "help":
             result = _help(agent, payload)
         elif cmd == "capability":
@@ -4251,18 +4280,33 @@ async def _shutup(agent, payload=None):
 
 
 async def _stop(agent):
-    """Best-effort motion abort — not all SDK versions have a stop primitive, so we re-target current pose."""
+    """Abort motion where it is, and cut any speech.
+
+    `cancel_move` ends a recorded move (an emotion clip); an interpolated
+    `goto_target` is ended by re-targeting the pose the head is in right now. A
+    stop must never become a move of its own, so when the current pose cannot be
+    read the head is left alone rather than sent anywhere.
+    """
     await _stop_audio(agent)  # a full 'stop' also cuts any speech
     mini = agent.state["mini"]
-    # If the SDK exposes a stop, use it.
+    cancel_move = getattr(mini, "cancel_move", None)
+    if callable(cancel_move):
+        try:
+            await _do(cancel_move)
+        except Exception as e:
+            # It also stops the media player, which a link without media lacks.
+            await agent.log(f"cancel_move failed (continuing): {e}", level="warning")
+    # Some SDK builds expose a single stop primitive; prefer it when present.
     fn = getattr(mini, "stop", None) or getattr(mini, "cancel", None)
-    if fn:
+    if callable(fn):
         await _do(fn)
-        return {"stopped": True}
-    # Fallback: short re-target to current pose with very short duration.
-    create_head_pose = agent.state["create_head_pose"]
-    await _do(mini.goto_target, head=create_head_pose(), body_yaw=None, duration=0.1)
-    return {"stopped": True, "fallback": True}
+        return {"stopped": True, "result": "Stopped."}
+    read_pose = getattr(mini, "get_current_head_pose", None)
+    if not callable(read_pose):
+        return {"stopped": True, "held": False, "result": "Stopped."}
+    current = await _do(read_pose)
+    await _do(mini.goto_target, head=current, body_yaw=None, duration=0.1)
+    return {"stopped": True, "held": True, "result": "Stopped where I am."}
 
 
 # ---------------------------------------------------------------------------
@@ -4421,6 +4465,18 @@ def _apply_life_preset(agent, name):
     agent.state["attract_enabled"] = bool(preset["attract"])
     agent.state["attract_min_gap"], agent.state["attract_max_gap"] = preset["gaps"]
     return resolved
+
+
+def _switch_life_on(agent):
+    """Turn ambient motion on, in the default mood when the preset is `off`.
+
+    `off` moves no joint at all, so switching motion on and leaving that preset
+    in place reports motion as on while the robot stays perfectly still.
+    """
+    if agent.state.get("life_preset", "off") == "off":
+        _apply_life_preset(agent, _LIFE_DEFAULT_PRESET)
+    else:
+        agent.state["life_enabled"] = True
 
 
 def _life_moves(agent, channel):
@@ -5023,7 +5079,10 @@ async def _life(agent, payload=None):
             raise ValueError(f"preset must be one of: {', '.join(_LIFE_PRESETS)}")
         _apply_life_preset(agent, requested)
     if "enabled" in payload or "on" in payload:
-        agent.state["life_enabled"] = bool(payload.get("enabled", payload.get("on")))
+        if bool(payload.get("enabled", payload.get("on"))):
+            _switch_life_on(agent)
+        else:
+            agent.state["life_enabled"] = False
     if "amplitude" in payload:
         agent.state["life_amplitude"] = max(0.0, min(1.0, float(payload["amplitude"])))
     if "attract" in payload:
@@ -5490,6 +5549,19 @@ async def _finish_barge_in_monitor(session, monitor, onset_seen):
     return None
 
 
+#: Longest the speech service may go without sending anything before a sentence
+#: is given up on. Generous: synthesis normally answers well inside a second.
+_TTS_STALL_TIMEOUT_S = 20.0
+
+
+def _unlink_quietly(path):
+    """Remove a temporary file that may already be gone."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 async def _prepare_speech(agent, text: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Turn one sentence into a file ready for play_sound.
 
@@ -5533,15 +5605,42 @@ async def _prepare_speech(agent, text: str, payload: dict[str, Any]) -> dict[str
     # Every word's (start, length) in seconds. The maximum waits out playback;
     # the individual timings drive speech-matched motion (`_speech_offsets`).
     beats = []
-    with open(raw_path, "wb") as _f:
-        async for chunk in communicate.stream():
-            if chunk.get("type") == "audio":
-                _f.write(chunk["data"])  # pyright: ignore[reportTypedDictNotRequiredAccess]
-            elif chunk.get("type") in ("WordBoundary", "SentenceBoundary"):
-                offset = int(chunk.get("offset", 0))
-                length = int(chunk.get("duration", 0))
-                speech_ticks = max(speech_ticks, offset + length)
-                beats.append((offset / 1e7, length / 1e7))
+    stream = communicate.stream().__aiter__()
+    try:
+        with open(raw_path, "wb") as _f:
+            while True:
+                # Bounded per chunk rather than in total: a long reply streams
+                # for as long as it needs, but a service that stops answering
+                # ends the reply instead of the conversation waiting forever.
+                try:
+                    chunk = await asyncio.wait_for(stream.__anext__(), _TTS_STALL_TIMEOUT_S)
+                except StopAsyncIteration:
+                    break
+                if chunk.get("type") == "audio":
+                    _f.write(chunk["data"])  # pyright: ignore[reportTypedDictNotRequiredAccess]
+                elif chunk.get("type") in ("WordBoundary", "SentenceBoundary"):
+                    offset = int(chunk.get("offset", 0))
+                    length = int(chunk.get("duration", 0))
+                    speech_ticks = max(speech_ticks, offset + length)
+                    beats.append((offset / 1e7, length / 1e7))
+    except asyncio.TimeoutError as error:
+        _unlink_quietly(raw_path)
+        raise RuntimeError(
+            f"the speech service sent nothing for {_TTS_STALL_TIMEOUT_S:.0f} seconds; "
+            "check this computer's internet connection"
+        ) from error
+    except BaseException:
+        # Cancelled too: a sentence prepared ahead for a reply that was cut
+        # short must not leave its half-written file behind.
+        _unlink_quietly(raw_path)
+        raise
+    finally:
+        close = getattr(stream, "aclose", None)
+        if callable(close):
+            try:
+                await close()
+            except Exception:
+                pass
     # edge-tts uses 100-ns ticks. Some versions default to SentenceBoundary
     # metadata while older versions may emit no timing metadata at all. Never
     # let an unknown duration become a zero wait: the next play_sound call would
@@ -7065,6 +7164,13 @@ async def _listen(agent, payload) -> dict[str, Any]:
     return result
 
 
+def _voice_input_problem(payload, *, needs_vad=False):
+    """Why voice input cannot work as configured, or None."""
+    from wactorz.catalogue_agents.reachy_stt import configuration_problem
+
+    return configuration_problem(_conversation_stt_payload(payload), needs_vad=needs_vad)
+
+
 def _voice_stage_failure(stage, message, fields, started) -> None:
     fields["total_duration_s"] = round(time.time() - started, 3)
     raise _CommandStageError(stage, message, fields)
@@ -7086,6 +7192,12 @@ async def _ask_voice(agent, payload: dict[str, Any]) -> dict[str, Any]:
         "include_b64": True,
         "publish": False,
     }
+    # Before recording: five seconds of someone talking to a robot that cannot
+    # understand them is the worst way to learn a key is missing.
+    problem = _voice_input_problem(payload)
+    if problem:
+        fields["result"] = f"I can't listen yet: {problem}"
+        _voice_stage_failure("stt_unavailable", problem, fields, started)
     try:
         clip = await _listen(agent, listen_payload)
         fields["capture_duration_s"] = float(
@@ -7813,6 +7925,14 @@ async def _conversation_start(agent, payload):
             fields,
         )
 
+    # Checked before the session opens. Otherwise it announces itself, and the
+    # missing key surfaces only as failed turns once someone has spoken.
+    problem = _voice_input_problem(payload, needs_vad=True)
+    if problem:
+        raise _CommandStageError(
+            "stt_unavailable", problem, {"result": f"I can't start a conversation yet: {problem}"}
+        )
+
     resolved_payload = dict(payload)
     # The XVF configuration improves capture, but on some physical robots the
     # microphone still hears Reachy's speaker clearly enough to trip VAD for
@@ -7918,6 +8038,7 @@ async def _conversation_turn_error(agent, session, turn, error, max_errors):
     too.
     """
     session["consecutive_errors"] = int(session.get("consecutive_errors") or 0) + 1
+    session["last_error"] = str(error)
     keep_going = session["consecutive_errors"] < max_errors
     await agent.log(
         f"voice turn {int(session.get('turn_index') or 0)} failed "
@@ -7976,6 +8097,7 @@ async def _conversation_loop(agent, session):
                     agent, session, "error", turn, ok=False, error=exc, stop_reason="capture_failed"
                 )
                 session["stop_reason"] = "capture_failed"
+                session["last_error"] = str(exc)
                 break
             _cancel_conversation_idle_motion(session)
             if tuple(session.get("_idle_angles") or (0, 0)) != (0, 0):
@@ -8206,6 +8328,7 @@ async def _conversation_loop(agent, session):
         session["stop_reason"] = session.get("stop_reason") or "cancelled"
     except Exception as exc:
         session["stop_reason"] = "error"
+        session["last_error"] = str(exc)
         try:
             await _conversation_publish(
                 agent, session, "error", turn, ok=False, error=exc, stop_reason="error"
@@ -8234,6 +8357,36 @@ async def _conversation_loop(agent, session):
             agent.state["conversation_session"] = None
         if not stopped_published:
             agent.state["conversation_state"] = "error"
+        try:
+            await _announce_conversation_end(agent, reason, session.get("last_error"))
+        except Exception:
+            pass
+
+
+#: What chat is told when a conversation ends without anyone asking it to. The
+#: microphone simply going quiet reads as a robot that has stopped working, and
+#: the turn events that explain why reach MQTT, which most people never see.
+_CONVERSATION_END_NOTICES = {
+    "inactivity_timeout": "I stopped listening because nobody spoke for a while.",
+    "too_many_errors": "I stopped listening because several voice turns in a row failed",
+    "capture_failed": "I stopped listening because I couldn't read my microphone",
+    "error": "I stopped listening because something went wrong",
+}
+
+
+async def _announce_conversation_end(agent, reason, error=None):
+    """Tell chat why a conversation ended by itself, and how to start again."""
+    notice = _CONVERSATION_END_NOTICES.get(reason)
+    if not notice:
+        return
+    if error and not notice.endswith("."):
+        notice = f"{notice}: {error}."
+    elif not notice.endswith("."):
+        notice = f"{notice}."
+    await agent.notify_user(
+        f'{notice} Say "start conversation" to talk again.',
+        **{"from": getattr(agent, "name", "reachy-mini"), "to": "user"},
+    )
 
 
 async def _doa(agent, payload: dict[str, Any]) -> dict[str, Any]:

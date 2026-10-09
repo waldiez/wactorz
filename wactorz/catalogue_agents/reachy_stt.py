@@ -8,8 +8,10 @@ configured. Local Whisper backends remain available by explicit selection.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import math
 import os
+import sys
 import tempfile
 import threading
 from collections.abc import Callable, Mapping
@@ -280,7 +282,7 @@ class OpenAIBackend:
             raise RuntimeError(
                 "openai is not installed; run: pip install 'wactorz[openai]'"
             ) from exc
-        client = AsyncOpenAI(api_key=api_key)
+        client = AsyncOpenAI(api_key=api_key, timeout=config.timeout_s)
         file_arg = ("reachy.wav", wav_bytes, "audio/wav")
         kwargs: dict[str, Any] = {"file": file_arg, "model": config.model}
         if config.language:
@@ -564,6 +566,64 @@ def capture_deepgram_turn(
     if capture is None:
         raise RuntimeError(stream_error or "Deepgram streaming capture failed")
     return StreamingTurn(capture, transcription, stream_error)
+
+
+#: For each backend: the Python module it imports, the package that provides it,
+#: and the environment variable holding its key (None for local backends).
+_BACKEND_REQUIREMENTS: dict[str, tuple[str, str, str | None]] = {
+    "deepgram": ("deepgram", "pip install 'wactorz[reachy]'", "DEEPGRAM_API_KEY"),
+    "faster-whisper": ("faster_whisper", "pip install faster-whisper", None),
+    "whisper": ("whisper", "pip install openai-whisper", None),
+    "openai": ("openai", "pip install 'wactorz[openai]'", "OPENAI_API_KEY"),
+}
+
+
+def _module_available(name: str, find_spec: Callable[[str], Any]) -> bool:
+    """Whether a module can be imported, without importing it."""
+    if name in sys.modules:
+        return True
+    try:
+        return find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def configuration_problem(
+    payload: Mapping[str, Any] | None = None,
+    environ: Mapping[str, str] | None = None,
+    *,
+    needs_vad: bool = False,
+    find_spec: Callable[[str], Any] = importlib.util.find_spec,
+) -> str | None:
+    """Why voice input cannot work as configured, in words a user can act on.
+
+    Checked before recording rather than discovered after it: a missing key
+    otherwise surfaces only once someone has spoken, as a transcription failure,
+    and a conversation session ends after a few of those without saying why.
+    Returns None when nothing is known to be missing. It does not contact the
+    service, so a key that is set but wrong is still found at first use.
+    """
+    environ = os.environ if environ is None else environ
+    try:
+        config = STTConfig.resolve(payload, environ)
+    except ValueError as exc:
+        return f"{exc}. Set REACHY_STT_BACKEND in .env and restart Wactorz."
+    module, install, key_name = _BACKEND_REQUIREMENTS[config.backend]
+    if not _module_available(module, find_spec):
+        return f"the {config.backend} speech recognizer is not installed. Run: {install}"
+    if key_name and not environ.get(key_name):
+        hint = (
+            " Or set REACHY_STT_BACKEND=faster-whisper to keep audio on this computer."
+            if config.backend == "deepgram"
+            else ""
+        )
+        return (
+            f"voice input with {config.backend} needs an API key. Put {key_name} in "
+            f"the .env file Wactorz reads, then restart Wactorz.{hint}"
+        )
+    if needs_vad and not _module_available("webrtcvad", find_spec):
+        return "voice detection is not installed. Run: pip install webrtcvad-wheels"
+    return None
 
 
 _BACKENDS: dict[str, STTBackend] = {

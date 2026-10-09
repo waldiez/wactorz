@@ -245,6 +245,25 @@ class ReconnectCommandTest(unittest.TestCase):
         stale.__exit__.assert_called_once()
 
 
+class ReconnectTargetTest(unittest.TestCase):
+    """A reconnect reply names where the link actually goes."""
+
+    def test_local_mode_names_this_computer_not_the_pinned_robot(self):
+        agent = FakeAgent(mini=object(), connection_mode="local")
+
+        res = _run(NS["_reconnect"](agent, {}))
+
+        self.assertIn("localhost", res["result"])
+        self.assertNotIn("192.168.68.64", res["result"])
+
+    def test_network_mode_names_the_pinned_robot(self):
+        agent = FakeAgent(mini=object(), connection_mode="network")
+
+        res = _run(NS["_reconnect"](agent, {}))
+
+        self.assertIn("192.168.68.64", res["result"])
+
+
 class ReconnectReachabilityTest(unittest.TestCase):
     """reconnect must survive the guards that refuse robot commands offline."""
 

@@ -50,3 +50,39 @@ def test_real_reachy_client_and_http_middleware_with_patched_starlette() -> None
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+#: What the catalogue agent calls on a connected ReachyMini. Run when the pinned
+#: SDK changes: an attribute missing here is a feature that silently does nothing
+#: on the robot while every hardware-free test, built on fakes, still passes.
+CONTRACT_CHECK = """
+from reachy_mini import ReachyMini
+from reachy_mini.io.ws_client import WSClient
+
+required = [
+    "goto_target", "set_target", "wake_up", "goto_sleep", "play_move", "cancel_move",
+    "enable_motors", "disable_motors", "get_current_joint_positions",
+    "get_current_head_pose", "look_at_world", "look_at_image", "media", "imu",
+    "_connect_single",
+]
+missing = [name for name in required if not hasattr(ReachyMini, name)]
+missing += ["client." + name for name in ("get_status", "disconnect") if not hasattr(WSClient, name)]
+assert not missing, "SDK no longer provides: " + ", ".join(missing)
+"""
+
+
+def test_the_sdk_provides_every_robot_call_the_agent_makes() -> None:
+    try:
+        importlib.metadata.version("reachy-mini")
+    except importlib.metadata.PackageNotFoundError:
+        pytest.skip("Reachy SDK contract requires the opt-in reachy extra")
+
+    result = subprocess.run(
+        [sys.executable, "-c", CONTRACT_CHECK],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -962,3 +962,55 @@ class TestTheFirstBeatArrivesPromptly:
 
         assert 'agent.state.get("attract_min_gap"' in block
         assert 'agent.state.get("attract_max_gap"' in block
+
+
+class TestSwitchingMotionOn:
+    """Turning ambient motion on has to produce motion.
+
+    `off` moves no joint at all, so switching motion on while that preset stays
+    in place would report motion as on and leave the robot perfectly still.
+    """
+
+    def _switch(self, agent: FakeAgent, payload: dict) -> dict:
+        started = []
+        saved = NS["_start_life_loop"]
+        NS["_start_life_loop"] = started.append
+        try:
+            return asyncio.run(NS["_life"](agent, payload))
+        finally:
+            NS["_start_life_loop"] = saved
+
+    def test_on_from_off_gives_the_default_mood(self) -> None:
+        agent = FakeAgent()
+        NS["_apply_life_preset"](agent, "off")
+
+        result = self._switch(agent, {"enabled": True})
+
+        assert result["life"] is True
+        assert result["preset"] == "alive"
+        assert agent.state["life_amplitude"] > 0
+        assert agent.state["life_channels"]
+
+    def test_on_keeps_a_mood_that_was_already_chosen(self) -> None:
+        agent = FakeAgent()
+        NS["_apply_life_preset"](agent, "calm")
+
+        result = self._switch(agent, {"enabled": True})
+
+        assert result["preset"] == "calm"
+
+    def test_off_holds_still_and_keeps_the_mood_for_next_time(self) -> None:
+        agent = FakeAgent()
+        NS["_apply_life_preset"](agent, "showtime")
+
+        result = self._switch(agent, {"enabled": False})
+
+        assert result["life"] is False
+        assert result["preset"] == "showtime"
+
+    def test_boot_switches_on_in_the_default_mood_unless_a_mood_was_named(self) -> None:
+        source = recipe_source()
+        block = source[source.index('if agent.recall("idle_life") is not None') :][:600]
+
+        assert "if enabled and not chosen:" in block
+        assert "_switch_life_on(agent)" in block

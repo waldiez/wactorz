@@ -96,6 +96,17 @@ SCRIPT = {
         capabilities=["asking"],
         code=ASKS_THE_MODEL,
     ),
+    # An agent that is a system prompt and nothing else, put on the node: what
+    # runs there is the bridge code main writes for it.
+    "start a helper on the node": _starts(
+        "Starting it there.",
+        name="helper",
+        type="llm",
+        node=NODE_NAME,
+        description="Answers in one sentence",
+        capabilities=["helping"],
+        system_prompt="You help. Answer in one short sentence.",
+    ),
     "how is the tide": "The tide is in.",
     # Asked of a planner, which finds no plan in it and answers directly: the
     # shortest run a planner has, from its start to its answer. Main adds the

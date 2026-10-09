@@ -44,7 +44,8 @@ def test_an_agent_on_the_node_is_deleted_from_its_card_too(
 
     dashboard.wait_for_no_card("asker")
     waiting.until(
-        lambda: _on_the_node(app) == {"counter"},
+        # Not the node's whole list: other journeys leave agents of their own there.
+        lambda: "asker" not in _on_the_node(app) and "counter" in _on_the_node(app),
         what="the node to be running 'counter' and no longer 'asker'",
         interval=NODE_POLL_S,
     )

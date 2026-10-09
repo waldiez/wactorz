@@ -199,6 +199,25 @@ def test_an_agent_on_the_node_asks_the_model_through_the_server(
     dashboard.expect("asker", "the model said: The tide is in.")
 
 
+def test_an_llm_agent_on_the_node_answers_through_the_server(
+    dashboard: browser.Dashboard, app: backend.Backend
+) -> None:
+    # The plainest agent there is -- a system prompt -- on the node: main writes
+    # the code that runs it there, and its every answer comes through the server.
+    dashboard.say("please start a helper on the node", to="main")
+    dashboard.expect_like("main", r"(?s).*Starting it there\.\n<spawn>\n\{.*\}\n</spawn>.*")
+    waiting.until(
+        lambda: "helper" in _on_the_node(app),
+        what="the node to be running 'helper'",
+        interval=NODE_POLL_S,
+    )
+    _placed_and_kept(dashboard, "helper", NODE_NAME)
+
+    dashboard.say("good morning", to="helper")
+
+    dashboard.expect("helper", "Good morning to you too.")
+
+
 def test_an_agent_on_the_node_that_ends_itself_leaves_the_dashboard_once(
     dashboard: browser.Dashboard, app: backend.Backend
 ) -> None:

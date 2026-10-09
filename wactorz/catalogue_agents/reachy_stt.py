@@ -1,6 +1,8 @@
 """Configurable speech-to-text backends for the Reachy Mini voice interface.
 
-All optional dependencies are imported lazily. This experimental branch uses
+Also serves the dashboard's microphone through the `stt` web extension, so the
+module imports with the standard library alone. All optional dependencies,
+numpy included, are imported lazily. This experimental branch uses
 Deepgram by default, so voice clips are uploaded when a Deepgram API key is
 configured. Local Whisper backends remain available by explicit selection.
 """
@@ -17,9 +19,10 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from wactorz.catalogue_agents.reachy_vad import VADConfig, VoiceCapture, capture_utterance
+if TYPE_CHECKING:
+    from wactorz.catalogue_agents.reachy_vad import VADConfig, VoiceCapture
 
 _DEFAULT_MODELS = {
     "deepgram": "nova-3",
@@ -401,6 +404,10 @@ def capture_deepgram_turn(
     ``speech_final``; if its socket fails, the completed local capture remains
     available to the caller for prerecorded fallback.
     """
+    # Imported here, not at the top: it needs numpy, and transcribing an upload
+    # through `transcribe_wav` (the dashboard's /api/stt) must not.
+    from wactorz.catalogue_agents.reachy_vad import capture_utterance
+
     resolved_payload = payload or {}
     config = STTConfig.resolve(resolved_payload)
     if config.backend != "deepgram":

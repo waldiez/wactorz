@@ -38,6 +38,8 @@ from .agents.main.commands.dispatch import REWRITES
 from .core.actor import Actor, ActorState
 from .core.task_text import reply_text, task_payload
 from .core.turns import acting_as
+from .errors import StartupError
+from .plugins import resolve_target
 
 if TYPE_CHECKING:
     from .agents.main import MainActor
@@ -333,16 +335,70 @@ class DirectOrchestrator:
         return "Unknown command. Type /help for available commands."
 
 
+#: The environment variable naming the orchestrator to run, as ``package.module:attr``.
+ENV_VAR = "WACTORZ_ORCHESTRATOR"
+
+
+def as_orchestrator(obj: Any, registry: "ActorRegistry", *, named: str = "") -> Orchestrator:
+    """``obj`` as the orchestrator it is or builds, or :class:`StartupError` saying why not.
+
+    An orchestrator may be handed over ready, or as a class or factory that is
+    called with the registry, since most need it to reach the agents. Anything
+    else is refused with ``named`` in the message, which is the target the
+    deployment wrote, so the error points at the setting to fix.
+    """
+    what = named or repr(obj)
+    # A class is a factory even though its unbound methods make it look like an
+    # instance to the protocol check, so it is asked first.
+    if not isinstance(obj, type) and isinstance(obj, Orchestrator):
+        return obj
+    if callable(obj):
+        try:
+            built = obj(registry)
+        except Exception as exc:
+            raise StartupError(f"orchestrator {what} could not be built: {exc}") from exc
+        if isinstance(built, Orchestrator):
+            return built
+        raise StartupError(
+            f"orchestrator {what} built {type(built).__name__}, which is not an Orchestrator "
+            "(handle_turn, handle_turn_stream and commands)"
+        )
+    raise StartupError(
+        f"orchestrator {what} is {type(obj).__name__}, which is neither an Orchestrator "
+        "nor something that builds one"
+    )
+
+
+def resolve_orchestrator(target: str, registry: "ActorRegistry") -> Orchestrator:
+    """The orchestrator ``package.module:attr`` names, built if it is a class or factory.
+
+    Loaded the way a ``WACTORZ_AGENTS`` entry is; one that cannot be imported
+    is a :class:`StartupError` naming it, since the deployment asked for it and
+    answering with main instead would be a silent substitution.
+    """
+    try:
+        obj = resolve_target(target)
+    except Exception as exc:
+        raise StartupError(
+            f"{ENV_VAR} names {target!r}, which could not be loaded: {exc}. The module must "
+            "be importable from where wactorz starts; set PYTHONPATH or install the package."
+        ) from exc
+    return as_orchestrator(obj, registry, named=repr(target))
+
+
 __all__ = [
     "CLI",
     "DASHBOARD",
     "DIRECT_COMMANDS",
+    "ENV_VAR",
     "REST",
     "SOCIAL",
     "TRUSTED_CHANNELS",
     "DirectOrchestrator",
     "MainOrchestrator",
     "Orchestrator",
+    "as_orchestrator",
     "is_trusted",
     "main_commands",
+    "resolve_orchestrator",
 ]

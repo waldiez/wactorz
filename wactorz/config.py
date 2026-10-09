@@ -574,6 +574,10 @@ class AppConfig:
     #: Start only the monitor and the agents this deployment brings: no
     #: orchestrator, catalogue or installer, so no model is needed.
     minimal: bool
+    #: ``package.module:attr`` of the orchestrator that answers chat, in place
+    #: of main or the model-free one; the value of WACTORZ_ORCHESTRATOR as
+    #: given, empty for the default. See wactorz/orchestration.py.
+    orchestrator_env: str
 
 
 CONFIG = AppConfig(
@@ -656,6 +660,7 @@ CONFIG = AppConfig(
     pipelines_env=os.getenv("WACTORZ_PIPELINES", ""),
     ha_agents=_env_choice("WACTORZ_HA_AGENTS", "auto", ("auto", "on", "off")),
     minimal=_env_truthy("WACTORZ_MINIMAL"),
+    orchestrator_env=os.getenv("WACTORZ_ORCHESTRATOR", "").strip(),
 )
 
 

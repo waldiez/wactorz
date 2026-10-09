@@ -668,21 +668,27 @@ wactorz<span class="w"> </span>--no-monitor
 
 <hr />
 <h2 id="adding-a-custom-interface">Adding a custom interface</h2>
-<p>All interfaces implement the same minimal pattern — call <code>process_user_input()</code> and stream or return the result. The simplest possible interface:</p>
-<div class="highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">MyInterface</span><span class="p">:</span>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">main_actor</span><span class="p">):</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">main</span> <span class="o">=</span> <span class="n">main_actor</span>
+<p>All interfaces implement the same minimal pattern — hand the message to the orchestrator, saying which channel it came in on, and stream or return the answer. The orchestrator is main unless the deployment installed another (see <em>Your own orchestrator</em> in the library guide), so an interface never names main. The simplest possible interface:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">wactorz.orchestration</span><span class="w"> </span><span class="kn">import</span> <span class="n">SOCIAL</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">MyInterface</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">orchestrator</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">orchestrator</span> <span class="o">=</span> <span class="n">orchestrator</span>
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="k">async</span> <span class="k">for</span> <span class="n">message</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_receive_messages</span><span class="p">():</span>
-            <span class="c1"># Streaming response</span>
-            <span class="k">async</span> <span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">main</span><span class="o">.</span><span class="n">process_user_input_stream</span><span class="p">(</span><span class="n">message</span><span class="p">):</span>
+        <span class="k">async</span> <span class="k">for</span> <span class="n">sender</span><span class="p">,</span> <span class="n">message</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">_receive_messages</span><span class="p">():</span>
+            <span class="c1"># A public channel: the orchestrator answers with the restrictions</span>
+            <span class="c1"># that go with one. "dashboard", "cli" and "rest" are the operator's own.</span>
+            <span class="k">async</span> <span class="k">for</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">orchestrator</span><span class="o">.</span><span class="n">handle_turn_stream</span><span class="p">(</span>
+                <span class="n">message</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="n">SOCIAL</span><span class="p">,</span> <span class="n">user</span><span class="o">=</span><span class="n">sender</span>
+            <span class="p">):</span>
                 <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">_send</span><span class="p">(</span><span class="n">chunk</span><span class="p">)</span>
 
 
-<span class="c1"># Register in cli.py alongside the other interfaces</span>
+<span class="c1"># Register in app.py alongside the other interfaces</span>
 <span class="k">elif</span> <span class="n">interface</span> <span class="o">==</span> <span class="s2">"my-interface"</span><span class="p">:</span>
-    <span class="n">iface</span> <span class="o">=</span> <span class="n">MyInterface</span><span class="p">(</span><span class="n">main_actor</span><span class="p">)</span>
+    <span class="n">iface</span> <span class="o">=</span> <span class="n">MyInterface</span><span class="p">(</span><span class="n">orchestrator</span><span class="p">)</span>
     <span class="k">await</span> <span class="n">asyncio</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span><span class="n">iface</span><span class="o">.</span><span class="n">run</span><span class="p">(),</span> <span class="n">system</span><span class="o">.</span><span class="n">run_forever</span><span class="p">())</span>
 </code></pre></div>
 

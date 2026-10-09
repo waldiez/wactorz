@@ -77,6 +77,12 @@ def parse_mention(content: str) -> tuple[str, str]:
 #: reachable. Heartbeats arrive far more often than this.
 NODE_FRESH_SECONDS = 30
 
+#: Why a command about remote nodes has nowhere to go without main: the nodes
+#: are reached through main, and a profile without it has none.
+NO_MAIN_FOR_NODES = (
+    "No main runs in this profile, so there are no remote nodes to deploy to or move agents to."
+)
+
 
 def remote_node_for(name: str) -> str | None:
     """The node running ``name``, or None if no node recently said it has it."""
@@ -242,7 +248,7 @@ async def slash_deploy(node: str, reply_fn) -> None:
     # Main itself, not the orchestrator: the installer is reached through main.
     main_actor = find_main_actor(runtime.registry)
     if main_actor is None:
-        await reply_fn("[error] Installer agent not available.")
+        await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
         return
 
     await reply_fn(f"[deploy] Deploying to {target.user}@{host} as '{node}'... (20-60s)")
@@ -320,7 +326,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
         # Main itself, not the orchestrator: moving an agent is main's.
         main_actor = find_main_actor(runtime.registry)
         if main_actor is None:
-            await reply_fn("[error] migrate_agent not available.")
+            await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
         result = await main_actor.migrate_agent(parts[1], parts[2], force=force)

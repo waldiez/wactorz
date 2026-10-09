@@ -520,6 +520,71 @@ by default: <code>asyncio.TimeoutError</code>. In every case nothing is left wai
 <code>RuntimeError</code> otherwise. Its reply address is a slot of the registry rather
 than an actor, so nothing is registered, listed or supervised on the caller's
 behalf.</p>
+<h2 id="your-own-orchestrator">Your own orchestrator</h2>
+<p>What answers a chat message, in the dashboard, the REST interface, the
+terminal, Discord, Telegram or WhatsApp, is an <em>orchestrator</em>. Main, the
+model-driven one, is the default. Without a model, in the minimal profile, a
+model-free one answers. And a deployment can supply its own: a LangGraph graph,
+a rule engine, anything that implements three methods.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">collections.abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">AsyncIterator</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">wactorz</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">Rules</span><span class="p">:</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_turn</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">channel</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">user</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">text</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"score "</span><span class="p">):</span>
+            <span class="n">ax</span><span class="p">,</span> <span class="n">ay</span><span class="p">,</span> <span class="n">az</span> <span class="o">=</span> <span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">v</span><span class="p">)</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">text</span><span class="p">[</span><span class="mi">6</span><span class="p">:]</span><span class="o">.</span><span class="n">split</span><span class="p">())</span>
+            <span class="n">verdict</span> <span class="o">=</span> <span class="k">await</span> <span class="n">wactorz</span><span class="o">.</span><span class="n">ask</span><span class="p">(</span><span class="s2">"imu-anomaly"</span><span class="p">,</span> <span class="p">{</span><span class="s2">"ax"</span><span class="p">:</span> <span class="n">ax</span><span class="p">,</span> <span class="s2">"ay"</span><span class="p">:</span> <span class="n">ay</span><span class="p">,</span> <span class="s2">"az"</span><span class="p">:</span> <span class="n">az</span><span class="p">})</span>
+            <span class="k">return</span> <span class="sa">f</span><span class="s2">"score </span><span class="si">{</span><span class="n">verdict</span><span class="p">[</span><span class="s1">'score'</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span>
+        <span class="k">return</span> <span class="s2">"Say: score &lt;ax&gt; &lt;ay&gt; &lt;az&gt;"</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle_turn_stream</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">text</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">channel</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">user</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">attachments</span><span class="o">=</span><span class="kc">None</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">AsyncIterator</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="k">yield</span> <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">handle_turn</span><span class="p">(</span><span class="n">text</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="n">channel</span><span class="p">,</span> <span class="n">user</span><span class="o">=</span><span class="n">user</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">commands</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">frozenset</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="nb">frozenset</span><span class="p">()</span>
+
+
+<span class="n">wactorz</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">agents</span><span class="o">=</span><span class="p">[</span><span class="n">detect</span><span class="p">],</span> <span class="n">minimal</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">orchestrator</span><span class="o">=</span><span class="n">Rules</span><span class="p">())</span>
+</code></pre></div>
+
+<p>No base class: <code>wactorz.Orchestrator</code> is a protocol, and a class with these
+three methods satisfies it. <code>handle_turn</code> answers a message in full;
+<code>handle_turn_stream</code> answers it in pieces, for the surfaces that show words as
+they arrive, and yields the whole answer once when there is nothing to stream;
+<code>commands</code> names the slash commands the orchestrator answers, by first word
+(<code>/help</code>), so a surface can say "unknown command" for the rest instead of
+handing it over.</p>
+<p><strong>The channel.</strong> Every call says where the message came from: <code>"dashboard"</code>,
+<code>"cli"</code> and <code>"rest"</code> are the operator's own surfaces; <code>"social"</code> is Discord,
+Telegram or WhatsApp, a public endpoint that anyone who finds it can talk to,
+and <code>user</code> is the sender's id there. Main answers a social message through its
+restricted path (conversation and device control, no spawning, deleting or
+code) and treats any channel it does not know as social, which is the safe
+default; an orchestrator of your own should draw the same line.</p>
+<p><strong>What stays with the agents and with main.</strong> Naming an agent, <code>@imu-anomaly
+{"ax": 9, "ay": 0, "az": 1}</code>, reaches that agent directly, whichever
+orchestrator is installed, and a task sent to one on a node travels as before.
+<code>/deploy</code>, <code>/migrate</code> and <code>/nodes</code> are main's, since the nodes are reached
+through it; in a profile without main they say so.</p>
+<p><strong>Choosing one.</strong> From a script, <code>run(orchestrator=...)</code> or
+<code>serve(orchestrator=...)</code>: an orchestrator object, or a class or factory that
+is called with the actor registry, since most orchestrators need it to reach
+the agents. From a deployment, <code>WACTORZ_ORCHESTRATOR=package.module:attr</code>,
+loaded the way a <code>WACTORZ_AGENTS</code> entry is; the target may be any of the
+three. Either wins over main and over the model-free one. A target that cannot
+be imported, or is not an orchestrator, refuses to start with the target in the
+message, since answering with main instead would be a silent substitution.</p>
+<p><strong>Without a model.</strong> In the minimal profile <code>wactorz.DirectOrchestrator</code>
+answers: <code>@name {json}</code> sends the JSON to that agent as its task and shows the
+reply, <code>@name words</code> sends <code>{"text": "words"}</code>, bare text is answered with the
+running agents and how to address one, and <code>/agents</code>, <code>/topics</code>, <code>/nodes</code> and
+<code>/help</code> are answered from the registry. The IMU example's README walks through
+it. <code>wactorz.MainOrchestrator</code> is main behind the same seam, for a program that
+wants to wrap or delegate to it.</p>
 <h2 id="profiles">Profiles</h2>
 <p>Without Home Assistant configured (<code>HA_URL</code> and <code>HA_TOKEN</code>) its agents do not
 start, and main and the planner are not told about it either: their prompts
@@ -530,7 +595,8 @@ assistant for your agents never offers to dim the lights (see
 <code>WACTORZ_MINIMAL=1</code> or <code>minimal=True</code> starts the monitor, the dashboard and
 your agents only. The minimal profile runs no planner, no generated code and
 no runtime package install, which is the reproducible mode a pinned
-environment wants.</p>
+environment wants. Its dashboard chat still reaches your agents, through the
+model-free orchestrator described above.</p>
 <h2 id="examples">Examples</h2>
 <p><code>examples/</code> in the repository holds complete programs, each with a README:</p>
 <ul>
@@ -604,6 +670,18 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <td>send an agent a task and wait for its reply, from host code or from another agent</td>
 </tr>
 <tr>
+<td><code>wactorz.Orchestrator</code></td>
+<td>what answers chat: <code>handle_turn</code>, <code>handle_turn_stream</code>, <code>commands</code>, with the channel named on every call</td>
+</tr>
+<tr>
+<td><code>orchestrator=</code> on <code>wactorz.run</code> and <code>wactorz.serve</code></td>
+<td>your own orchestrator, an object or a class or factory called with the registry</td>
+</tr>
+<tr>
+<td><code>wactorz.DirectOrchestrator</code>, <code>wactorz.MainOrchestrator</code></td>
+<td>the model-free orchestrator of the minimal profile, and main behind the same seam</td>
+</tr>
+<tr>
 <td><code>wactorz.spec_of</code></td>
 <td>the <code>AgentSpec</code> behind a decorated function, with <code>build()</code> for tests</td>
 </tr>
@@ -636,7 +714,7 @@ function; <code>actor.handle_message(...)</code> answers a task. Nothing connect
 <td>what <code>handle_message</code> receives</td>
 </tr>
 <tr>
-<td><code>WACTORZ_AGENTS</code>, <code>WACTORZ_PIPELINES</code>, <code>WACTORZ_MINIMAL</code>, <code>WACTORZ_HA_AGENTS</code></td>
+<td><code>WACTORZ_AGENTS</code>, <code>WACTORZ_PIPELINES</code>, <code>WACTORZ_MINIMAL</code>, <code>WACTORZ_HA_AGENTS</code>, <code>WACTORZ_ORCHESTRATOR</code></td>
 <td>the settings above</td>
 </tr>
 </tbody>

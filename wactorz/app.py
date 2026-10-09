@@ -35,7 +35,12 @@ from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_buffer import uninstall as uninstall_log_buffer
 from wactorz.monitoring.log_setup import install_fallback, setup_logging, uninstall_fallback
 from wactorz.monitoring.loop_lag import LoopLagMonitor
-from wactorz.orchestration import DirectOrchestrator, MainOrchestrator
+from wactorz.orchestration import (
+    DirectOrchestrator,
+    MainOrchestrator,
+    as_orchestrator,
+    resolve_orchestrator,
+)
 from wactorz.web import runtime
 from wactorz.web.auth import exposure_refusal
 
@@ -662,7 +667,9 @@ async def build_system(
     main_actor = find_main_actor(system.registry)
     if not main_actor and not minimal:
         raise StartupError("the main actor did not start; see the log above for why")
-    orchestrator = install_orchestrator(system, main_actor)
+    orchestrator = install_orchestrator(
+        system, main_actor, requested=getattr(args, "orchestrator", None)
+    )
     if main_actor is not None:
         # Recorded beside the planner's rules, so `/rules` lists a declared
         # pipeline and `/rules delete` stops the whole of it.
@@ -675,14 +682,23 @@ async def build_system(
     return system, main_actor, _db, orchestrator
 
 
-def install_orchestrator(system: "ActorSystem", main_actor: Any) -> "Orchestrator":
+def install_orchestrator(
+    system: "ActorSystem", main_actor: Any, requested: Any = None
+) -> "Orchestrator":
     """Choose what answers chat for this run, and make it ``runtime.orchestrator``.
 
-    Main's adapter when main runs; the model-free one otherwise, which is the
-    minimal profile, so the dashboard's chat reaches the agents without a model.
+    In order: what the script asked for (``run(orchestrator=...)``), what the
+    deployment named in ``WACTORZ_ORCHESTRATOR``, main's adapter when main
+    runs, and the model-free one otherwise, which is the minimal profile. An
+    orchestrator asked for by either override that cannot be loaded or built is
+    a :class:`~wactorz.errors.StartupError`, as a refused configuration is.
     """
     chosen: Orchestrator
-    if main_actor is not None:
+    if requested is not None:
+        chosen = as_orchestrator(requested, system.registry)
+    elif CONFIG.orchestrator_env:
+        chosen = resolve_orchestrator(CONFIG.orchestrator_env, system.registry)
+    elif main_actor is not None:
         chosen = MainOrchestrator(system.registry)
     else:
         chosen = DirectOrchestrator(system.registry)
@@ -1030,6 +1046,7 @@ async def serve(
     llm: str | None = None,
     state_dir: "str | os.PathLike[str] | None" = None,
     interface: str | None = None,
+    orchestrator: Any = None,
     handle_signals: bool = False,
     configure_logging: bool = False,
 ) -> None:
@@ -1049,7 +1066,9 @@ async def serve(
     not written to the environment. ``interface`` is the chat interface to
     run beside the dashboard (``"rest"``, ``"discord"``, ``"telegram"``,
     ``"whatsapp"``, ``"cli"``); by default there is none, so the system never
-    reads the host's stdin.
+    reads the host's stdin. ``orchestrator`` is what answers chat in place of
+    main or the model-free one: an :class:`~wactorz.orchestration.Orchestrator`,
+    or a class or factory called with the registry to build one.
 
     The agents and pipelines it is given are registered for this run only: a
     later ``serve`` in the same process starts what it is given, not what an
@@ -1072,6 +1091,7 @@ async def serve(
                 mqtt_port=mqtt_port,
                 llm=llm,
                 interface=interface or HEADLESS,
+                orchestrator=orchestrator,
             )
             await app(args, handle_signals=handle_signals, configure_logging=configure_logging)
     finally:
@@ -1091,6 +1111,7 @@ def run(
     llm: str | None = None,
     state_dir: "str | os.PathLike[str] | None" = None,
     interface: str | None = None,
+    orchestrator: Any = None,
 ) -> None:
     """Start Wactorz from a script: :func:`serve` on a loop of its own, until stopped.
 
@@ -1114,6 +1135,7 @@ def run(
                 llm=llm,
                 state_dir=state_dir,
                 interface=interface or CONFIG.interface,
+                orchestrator=orchestrator,
                 handle_signals=True,
                 configure_logging=True,
             )
@@ -1132,6 +1154,7 @@ def serve_args(
     mqtt_port: int | None = None,
     llm: str | None = None,
     interface: str | None = None,
+    orchestrator: Any = None,
 ) -> argparse.Namespace:
     """The settings :func:`serve`'s arguments stand for, in the form :func:`app` reads.
 
@@ -1152,4 +1175,7 @@ def serve_args(
         args.llm = llm
     if interface is not None:
         args.interface = interface
+    if orchestrator is not None:
+        # Not a command-line setting: an object only a script can hand over.
+        args.orchestrator = orchestrator
     return args

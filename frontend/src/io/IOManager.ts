@@ -68,8 +68,11 @@ export class IOManager {
     // eslint-disable-next-line @typescript-eslint/require-await
     async send(text: string, agent: AgentInfo | null, attachments: string[] = []): Promise<void> {
         let content = text;
-        // Prepend @name if a specific agent is selected and no prefix given.
-        if (agent && !text.startsWith("@")) {
+        // Prepend @name if a specific agent is selected and no prefix given. Not
+        // for a slash command: it is answered by the orchestrator before any
+        // agent sees it, and addressed to the thread's agent it would arrive as
+        // that agent's task text instead.
+        if (agent && !text.startsWith("@") && !text.startsWith("/")) {
             content = `@${agent.name} ${text}`;
         }
 

@@ -56,7 +56,7 @@ A journey that provokes one of these on purpose says which, with
 | 07 | An agent is stopped and started from its card; deleting asks first, and cancel keeps it. |
 | 08 | The broker goes away and comes back: the page says so, and so does an agent that cannot be reached. |
 | 09 | The server restarts: its agents, the node's agents, the conversations and the open tab all carry on. |
-| 10 | Agents are deleted one by one, then everything is wiped: what is left is what a fresh install runs. |
+| 10 | Agents are deleted one by one, then everything is wiped: what is left is what a fresh install runs, and the node, still deployed and running nothing. |
 
 ## Order
 

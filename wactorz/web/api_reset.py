@@ -111,6 +111,52 @@ def survives_factory_reset(name: str, protected: bool) -> bool:
     return protected or name in HA_SYSTEM_AGENTS
 
 
+def _agents_on_nodes(main_actor: Any) -> dict[str, set[str]]:
+    """The agents each node runs for this install, by node.
+
+    From everything that says so: main's spawn registry, which covers a node
+    that is away; the dashboard's agents; and each node's last heartbeat, which
+    covers an agent the other two never heard of.
+    """
+    on: dict[str, set[str]] = {}
+    registry = main_actor._get_spawn_registry() if main_actor is not None else None
+    for name, config in (registry or {}).items():
+        node = (config.get("node") or "").strip()
+        if node:
+            on.setdefault(node, set()).add(name)
+    for agent in runtime.state["agents"].values():
+        if agent.get("node") and agent.get("name"):
+            on.setdefault(agent["node"], set()).add(agent["name"])
+    for node, listed in runtime.state["nodes"].items():
+        names = {str(n) for n in listed.get("agents") or [] if n}
+        on.setdefault(node, set()).update(names)
+    return on
+
+
+async def _delete_on_nodes(on: dict[str, set[str]]) -> None:
+    """Have each node delete its agents, state and retained topics included.
+
+    At QoS 1, so a node that is away is told when it returns. One stop per
+    agent rather than ``stop_all``, which shuts the node itself down.
+    """
+    client = runtime.mqtt_client_ref
+    if client is None:
+        return
+    sends = []
+    for node, names in on.items():
+        for name in sorted(names):
+            payload = json.dumps({"name": name, "delete": True})
+            sends.append(
+                client.publish(
+                    f"nodes/{node}/stop",
+                    payload,
+                    qos=1,
+                    **signed_publish_kwargs(f"nodes/{node}/stop", payload),
+                )
+            )
+    await asyncio.gather(*sends, return_exceptions=True)
+
+
 async def reset_handler(request: web.Request) -> Response:
     """POST /api/reset  —  clear stored state and ws.broadcast a reset event.
 
@@ -189,30 +235,11 @@ async def reset_handler(request: web.Request) -> Response:
                 return_exceptions=True,
             )
 
-            # Stop agents living on runner nodes (not in this registry) and clear the
-            # retained spawn directives that would otherwise replay on reconnect.
-            # Harmless when there are no nodes.
-            node_names = set(runtime.state["nodes"].keys())
+            # Delete the agents running on nodes, not in this registry. The
+            # nodes themselves stay: a reset clears what was built on the
+            # install, and a node is the machine it runs on.
             main_actor = find_main_actor(runtime.registry)
-            if main_actor is not None:
-                for cfg in (main_actor._get_spawn_registry() or {}).values():
-                    n = (cfg.get("node") or "").strip()
-                    if n:
-                        node_names.add(n)
-            wipe_payload = json.dumps({"reason": "wipe everything"})
-            if runtime.mqtt_client_ref and node_names:
-                await asyncio.gather(
-                    *[
-                        runtime.mqtt_client_ref.publish(
-                            f"nodes/{n}/stop_all",
-                            wipe_payload,
-                            qos=1,
-                            **signed_publish_kwargs(f"nodes/{n}/stop_all", wipe_payload),
-                        )
-                        for n in node_names
-                    ],
-                    return_exceptions=True,
-                )
+            await _delete_on_nodes(_agents_on_nodes(main_actor))
 
             # Purge retained MQTT for EVERY non-protected agent, tombstone each so a
             # late/in-flight frame can't re-admit it once _hard_resetting clears, and
@@ -270,7 +297,9 @@ async def reset_handler(request: web.Request) -> Response:
             except Exception as exc:
                 logger.debug("[reset] reset_global_cost skipped: %s", exc)
             runtime.state["agents"].clear()
-            runtime.state["nodes"].clear()
+            # Each node is kept, running nothing now; its next heartbeat says so too.
+            for listed in runtime.state["nodes"].values():
+                listed["agents"] = []
             runtime.state["alerts"].clear()
             runtime.state["log_feed"].clear()
         finally:

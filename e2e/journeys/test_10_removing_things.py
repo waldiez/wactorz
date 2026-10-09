@@ -1,4 +1,4 @@
-"""Agents deleted one by one, and then everything wiped: what is left is a fresh install.
+"""Agents deleted one by one, then everything wiped: a fresh install, its node still there.
 
 Last, because nothing after it has anything to start from.
 """
@@ -6,6 +6,12 @@ Last, because nothing after it has anything to start from.
 from harness import backend, browser, node, waiting
 from harness.probe import NODE_POLL_S
 from harness.run import NODE_NAME
+
+#: Long enough for the node to report what it runs: a heartbeat or two.
+REPORTED_WITHIN_S = 25.0
+
+#: Where the node keeps the state of the agent journey 06 moved there.
+COUNTER_STATE = f"{node.HOME}/wactorz/state/counter_state.json"
 
 
 def _on_the_node(app: backend.Backend) -> set[str] | None:
@@ -45,7 +51,7 @@ def test_an_agent_on_the_node_is_deleted_from_its_card_too(
     dashboard.wait_for_no_card("asker")
     waiting.until(
         # Not the node's whole list: other journeys leave agents of their own there.
-        lambda: "asker" not in _on_the_node(app) and "counter" in _on_the_node(app),
+        lambda: "counter" in (running := _on_the_node(app) or set()) and "asker" not in running,
         what="the node to be running 'counter' and no longer 'asker'",
         interval=NODE_POLL_S,
     )
@@ -97,14 +103,24 @@ def test_nothing_that_was_said_or_spent_is_kept(
     assert dashboard.all_said() == []
 
 
-def test_the_node_was_told_to_stop(app: backend.Backend) -> None:
-    # A wipe stops every node that was running something for this install. The
-    # machine stays deployed, and its node stays stopped until it is deployed
-    # again.
-    waiting.until(lambda: not node.running(), what="the node's process to stop", timeout=60.0)
-    waiting.until(
-        lambda: _on_the_node(app) is None,
-        what="the server to list no node",
+def test_the_node_stays_and_runs_nothing_of_the_install(
+    dashboard: browser.Dashboard, app: backend.Backend
+) -> None:
+    # A wipe clears what was built on this install. The node is the machine it
+    # runs on: it stays deployed, connected and listed, with none of the agents
+    # it ran and none of their state.
+    def kept_and_empty() -> bool:
+        return node.running() and _on_the_node(app) == set()
+
+    waiting.becomes_and_stays(
+        kept_and_empty,
+        what="the node to be running, listed, and running no agent",
         timeout=90.0,
+        window=REPORTED_WITHIN_S,
         interval=NODE_POLL_S,
+    )
+    assert node.run_on(f"test -e {COUNTER_STATE}").returncode != 0
+    waiting.until(
+        lambda: dashboard.node_rows().get(NODE_NAME) == [],
+        what="the nodes panel to list the node with no agents",
     )

@@ -37,11 +37,9 @@ def task_payload(text: str) -> dict[str, Any]:
 def reply_text(payload: Any) -> str:
     """The words in an agent's reply, whatever shape the agent chose.
 
-    One function for both ways a reply arrives, because they had drifted apart:
-    an in-process agent was read `reply` first and one answering from a node was
-    read `result` first. Nothing carried two of these fields, so nothing was
-    visibly wrong -- but the same agent moved onto a node would have started
-    rendering differently, with no way to see why.
+    Every reply is read here, whether the agent runs in this process or answers
+    from a node, so an agent moved between the two shows the same words. The
+    fields are tried in one order, and the first with something in it wins.
 
     A dict with none of them is shown as JSON: a function declared with
     ``@wactorz.agent`` answers with its return value, which is data, and JSON

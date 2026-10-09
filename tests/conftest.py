@@ -19,6 +19,7 @@ from wactorz.agents import llm_agent
 from wactorz.core import mqtt
 from wactorz.core.persistence.stores import Stores
 from wactorz.ext import tts as tts_extension
+from wactorz.web import runtime as web_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -247,3 +248,16 @@ def _no_leaked_stores() -> Iterator[None]:
         Stores.db.close()  # don't leak the handle a test left installed
     Stores.db, Stores.pickle = saved
     Stores.memory.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_tombstones(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every test with no agent marked deleted and no reset under way.
+
+    The server ignores every heartbeat and event from an agent id it has marked
+    deleted, and everything at all while a factory reset runs. Tests reuse the
+    same few ids, so one left marked by an earlier test makes a later test's
+    heartbeat vanish, and which test fails then depends on the random order.
+    """
+    monkeypatch.setattr(web_runtime, "deleted_agent_ids", [])
+    monkeypatch.setattr(web_runtime, "hard_resetting", False)

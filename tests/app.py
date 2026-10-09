@@ -35,7 +35,7 @@ from wactorz.monitoring.log_buffer import install as install_log_buffer
 from wactorz.monitoring.log_buffer import uninstall as uninstall_log_buffer
 from wactorz.monitoring.log_setup import install_fallback, setup_logging, uninstall_fallback
 from wactorz.monitoring.loop_lag import LoopLagMonitor
-from wactorz.orchestration import DirectOrchestrator, MainOrchestrator
+from wactorz.orchestration import MainOrchestrator
 from wactorz.web import runtime
 from wactorz.web.auth import exposure_refusal
 
@@ -662,7 +662,7 @@ async def build_system(
     main_actor = find_main_actor(system.registry)
     if not main_actor and not minimal:
         raise StartupError("the main actor did not start; see the log above for why")
-    orchestrator = install_orchestrator(system, main_actor)
+    install_orchestrator(system, main_actor)
     if main_actor is not None:
         # Recorded beside the planner's rules, so `/rules` lists a declared
         # pipeline and `/rules delete` stops the whole of it.
@@ -672,20 +672,17 @@ async def build_system(
                 main_actor.save_pipeline_rule(pipe.record())
 
     logger.info("Wactorz system started. Supervision tree active.")
-    return system, main_actor, _db, orchestrator
+    return system, main_actor, _db
 
 
-def install_orchestrator(system: "ActorSystem", main_actor: Any) -> "Orchestrator":
+def install_orchestrator(system: "ActorSystem", main_actor: Any) -> "Orchestrator | None":
     """Choose what answers chat for this run, and make it ``runtime.orchestrator``.
 
-    Main's adapter when main runs; the model-free one otherwise, which is the
-    minimal profile, so the dashboard's chat reaches the agents without a model.
+    Main's adapter when main runs. Nothing otherwise, so a chat surface finds
+    no orchestrator rather than one left behind by an earlier run in the same
+    process.
     """
-    chosen: Orchestrator
-    if main_actor is not None:
-        chosen = MainOrchestrator(system.registry)
-    else:
-        chosen = DirectOrchestrator(system.registry)
+    chosen = MainOrchestrator(system.registry) if main_actor is not None else None
     runtime.set_orchestrator(chosen)
     return chosen
 
@@ -740,7 +737,7 @@ def _install_signal_handlers() -> None:
             signal.signal(sig, _request_stop)
 
 
-async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any, Any]:
+async def _build_system_or_stop(args: argparse.Namespace) -> tuple[Any, Any, Any]:
     """Build the system, and stop what had started if startup does not finish.
 
     A stop requested during startup arrives as a cancellation inside build_system,
@@ -832,8 +829,8 @@ async def app(
             await _shut_down(None)
             raise
 
-        system, main_actor, _db, orchestrator = await _build_system_or_stop(args)
-        await _run(args, system, main_actor, orchestrator)
+        system, main_actor, _db = await _build_system_or_stop(args)
+        await _run(args, system, main_actor)
     finally:
         _state_lock.release()
         own_tasks.stop(tagger)
@@ -899,15 +896,10 @@ async def _run_interface(
     args: argparse.Namespace,
     system: "ActorSystem",
     main_actor: Any,
-    orchestrator: "Orchestrator | None",
     interface: str,
     companions: list[Any],
 ) -> None:
-    """Run ``interface``, the system and ``companions`` until one of them ends.
-
-    ``orchestrator`` answers the chat turns; ``main_actor`` is for what still
-    needs main itself. Both are None in the minimal profile.
-    """
+    """Run ``interface``, the system and ``companions`` until one of them ends."""
     from wactorz.interfaces.chat_interfaces import (
         CLIInterface,
         DiscordInterface,
@@ -919,16 +911,14 @@ async def _run_interface(
         run_all_interfaces as _run_all,
     )
 
-    if main_actor is None or orchestrator is None:
-        # The minimal profile: the dashboard's chat answers through the
-        # orchestrator, but no chat interface of our own, since the command
-        # line and the REST interface lean on main for their lifecycle
-        # commands. The dashboard, the monitor and the deployment's own agents
-        # run until asked to stop.
+    if main_actor is None:
+        # The minimal profile: no orchestrator to talk to, so no chat
+        # interface. The dashboard, the monitor and the deployment's own
+        # agents run until asked to stop.
         system._running = True
         await system.run_forever()
     elif interface == "cli" and sys.stdin.isatty():
-        iface = CLIInterface(orchestrator, main_actor)
+        iface = CLIInterface(main_actor)
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     elif interface in ("cli", HEADLESS):
         # No chat interface of our own: what a library call asks for, and
@@ -942,16 +932,14 @@ async def _run_interface(
         await asyncio.gather(system.run_forever(), *_run_all(companions))
     elif interface == "rest":
         port = args.port or CONFIG.port
-        iface = RESTInterface(
-            orchestrator, main_actor, port=port, api_key=CONFIG.api_key, system=system
-        )
+        iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key, system=system)
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
     elif interface == "discord":
         discord_token = args.discord_token or CONFIG.discord_token
         if not discord_token:
             raise StartupError("DISCORD_BOT_TOKEN not set.")
         iface = DiscordInterface(
-            orchestrator,
+            main_actor,
             token=discord_token,
             allowed_user_ids=CONFIG.discord_allowed_user_ids,
         )
@@ -959,7 +947,7 @@ async def _run_interface(
     elif interface == "whatsapp":
         port = args.port or CONFIG.port
         iface = WhatsAppInterface(
-            orchestrator,
+            main_actor,
             account_sid=CONFIG.twilio_account_sid,
             auth_token=CONFIG.twilio_auth_token,
             from_number=CONFIG.twilio_whatsapp_number,
@@ -972,7 +960,7 @@ async def _run_interface(
         if not telegram_token:
             raise StartupError("TELEGRAM_BOT_TOKEN not set.")
         iface = TelegramInterface(
-            orchestrator,
+            main_actor,
             token=telegram_token,
             allowed_user_id=args.telegram_allowed_user_id or None,
             allowed_user_ids=CONFIG.telegram_allowed_user_ids,
@@ -985,12 +973,7 @@ async def _run_interface(
         )
 
 
-async def _run(
-    args: argparse.Namespace,
-    system: "ActorSystem",
-    main_actor: Any,
-    orchestrator: "Orchestrator | None",
-) -> None:
+async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any) -> None:
     """Run the built system under the chosen interface until stopped, then shut it down."""
     if not getattr(args, "no_monitor", False):
         _print_ready_banner(args.monitor_port)
@@ -1004,10 +987,10 @@ async def _run(
 
     # Configured social channels run alongside the primary interface, not
     # instead of it (the dashboard stays primary; the bots ride along).
-    companions = build_social_companions(orchestrator, interface) if orchestrator else []
+    companions = build_social_companions(main_actor, interface) if main_actor else []
 
     try:
-        await _run_interface(args, system, main_actor, orchestrator, interface, companions)
+        await _run_interface(args, system, main_actor, interface, companions)
     except StartupError:
         # The caller's to report: the command exits on it, a host program
         # catches it. Shutdown below still runs.

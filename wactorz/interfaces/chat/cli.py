@@ -18,9 +18,11 @@ from ...config import (
 from ...core.mqtt import mqtt_client
 from ...core.state_snapshot import FORCE_FLAG
 from ...core.turns import acting_as, begin_turn
+from ...orchestration import CLI
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
+    from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +51,14 @@ class CLIInterface:
       /deploy <node-name>           deploy remote runner (auto-discovers host)
       /help                         show commands
       quit / exit                   shutdown
+
+    A line that names no agent is the orchestrator's. Main is still held for
+    what needs main itself: the lifecycle commands, and reaching an agent that
+    is not in this process.
     """
 
-    def __init__(self, main_actor: "MainActor") -> None:
+    def __init__(self, orchestrator: "Orchestrator", main_actor: "MainActor") -> None:
+        self.orchestrator = orchestrator
         self.agent = main_actor
 
     def _print_help(self) -> None:
@@ -68,7 +75,7 @@ class CLIInterface:
     /help                       show this help
     quit / exit                 shutdown
 
-  Everything else goes to the main orchestrator.
+  Everything else goes to the orchestrator.
   Spawn on a remote node: "spawn a temp sensor on rpi-kitchen"
   Migrate via chat:       "move temp-sensor to rpi-bedroom"
 """)
@@ -471,19 +478,11 @@ class CLIInterface:
                     continue
 
                 print("\n@main: ", end="", flush=True)
-                system_msg = ""
-                # Main's own work, though it streams rather than going through
-                # its mailbox; the wrapper is here because a generator cannot
-                # safely set and reset a context variable across its yields.
-                with acting_as(self.agent.name):
-                    async for chunk in self.agent.process_user_input_stream(text):
-                        if isinstance(chunk, dict):
-                            system_msg = chunk.get("system_msg", "")
-                        else:
-                            print(chunk, end="", flush=True)
+                # The orchestrator labels its own work; what it has to say
+                # about the turn, it says in the stream.
+                async for chunk in self.orchestrator.handle_turn_stream(text, channel=CLI):
+                    print(chunk, end="", flush=True)
                 print()  # newline after streamed response
-                if system_msg:
-                    print(f"[System: {system_msg}]")
                 print()
 
             except (KeyboardInterrupt, EOFError):

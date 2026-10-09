@@ -1,4 +1,4 @@
-"""Chat interfaces — connect users to the MainActor via different channels.
+"""Chat interfaces — connect users to the orchestrator via different channels.
 
 Each channel lives in `interfaces.chat`; this module composes them and keeps
 the historical import path working. Supported: CLI (terminal), Discord,
@@ -17,15 +17,15 @@ from .chat.telegram import TelegramInterface
 from .chat.whatsapp import WhatsAppInterface
 
 if TYPE_CHECKING:
-    from ..agents.main import MainActor
+    from ..orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
 
-def build_social_companions(main_actor: "MainActor", primary: str) -> list:
+def build_social_companions(orchestrator: "Orchestrator", primary: str) -> list:
     """Discord/Telegram interfaces to run alongside the primary interface.
 
-    These talk to the main agent in restricted mode (no spawn/delete/code), so
+    These talk to the orchestrator as a social channel (no spawn/delete/code), so
     they run next to the dashboard rather than replacing it — how the HA add-on
     exposes them. Skips a channel that's already the primary (no duplicate login),
     one whose library is missing, and one with no sender allow-list — each with a
@@ -42,7 +42,7 @@ def build_social_companions(main_actor: "MainActor", primary: str) -> list:
         else:
             companions.append(
                 DiscordInterface(
-                    main_actor,
+                    orchestrator,
                     token=CONFIG.discord_token,
                     allowed_user_ids=CONFIG.discord_allowed_user_ids,
                 )
@@ -57,7 +57,7 @@ def build_social_companions(main_actor: "MainActor", primary: str) -> list:
         else:
             companions.append(
                 TelegramInterface(
-                    main_actor,
+                    orchestrator,
                     token=CONFIG.telegram_token,
                     allowed_user_ids=CONFIG.telegram_allowed_user_ids,
                 )

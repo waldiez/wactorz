@@ -79,14 +79,11 @@ SPAWN CONFIG
 import asyncio
 import json
 import logging
-import os
-import ssl
 import time
 from datetime import datetime
 from typing import Any
 
-import aiomqtt
-
+from wactorz.core.mqtt import mqtt_client
 from wactorz.core.persistence import get_db
 
 logger = logging.getLogger("anomaly-detector")
@@ -660,46 +657,11 @@ async def _discover_entities(agent) -> list[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _mqtt_tls_kwargs() -> dict[str, Any]:
-    """TLS for this program's own broker connection, as its host's connections use it.
-
-    A copy of the rule in wactorz/core/mqtt_tls.py, which tests/test_mqtt_tls.py
-    holds to the original.
-    """
-    if os.environ.get("MQTT_TLS", "").strip().lower() not in ("1", "true", "yes", "on"):
-        return {}
-    ca = os.environ.get("MQTT_TLS_CA", "").strip()
-    if ca.lower() == "system":
-        context = ssl.create_default_context()
-    else:
-        # The host says where its state is, since a program embedding it may
-        # have set that in code rather than in the environment.
-        state = (
-            globals().get("WACTORZ_STATE_DIR")
-            or os.environ.get("WACTORZ_STATE_DIR", "").strip()
-            or "./state"
-        )
-        cafile = os.path.expanduser(ca) if ca else os.path.join(state, "mqtt_tls", "ca.crt")
-        context = ssl.create_default_context(cafile=cafile)
-    override = os.environ.get("MQTT_TLS_CHECK_HOSTNAME", "").strip().lower()
-    if override in ("1", "true", "yes", "on", "0", "false", "no", "off"):
-        context.check_hostname = override in ("1", "true", "yes", "on")
-    else:
-        context.check_hostname = bool(ca)
-    return {"tls_context": context}
-
-
 async def _mqtt_detector(agent) -> None:
     """Subscribe to MQTT and score each reading against baselines."""
     while True:
         try:
-            async with aiomqtt.Client(
-                agent._actor._mqtt_broker,
-                agent._actor._mqtt_port,
-                username=os.environ.get("MQTT_USERNAME") or None,
-                password=os.environ.get("MQTT_PASSWORD") or None,
-                **_mqtt_tls_kwargs(),
-            ) as client:
+            async with mqtt_client(agent._actor._mqtt_broker, agent._actor._mqtt_port) as client:
                 for pattern in MONITOR_TOPICS:
                     await client.subscribe(pattern)
                 await agent.log(f"Real-time detector subscribed to {len(MONITOR_TOPICS)} patterns")

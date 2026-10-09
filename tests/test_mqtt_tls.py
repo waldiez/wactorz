@@ -1,11 +1,10 @@
 """TLS for the broker connection: one rule for trusting the broker, and its certificates.
 
 Every connection to the broker follows one rule, written in
-`wactorz/core/mqtt_tls.py`. The catalogue programs that open a connection of
-their own carry a copy, because those run as a quoted string with no import of
-the package, and the first tests hold each copy to the rule. The rest cover the
-CA and broker certificate an install issues itself, including a TLS handshake
-made with them.
+`wactorz/core/mqtt_tls.py`, and the catalogue programs that open a connection of
+their own reach it through the same `mqtt_client` as everything else. The rest
+cover the CA and broker certificate an install issues itself, including a TLS
+handshake made with them.
 """
 
 import ast
@@ -14,7 +13,6 @@ import logging
 import os
 import ssl
 import stat
-from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -24,6 +22,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID
 
+from tests.programs import program_namespace
 from wactorz import broker_certificates, config
 from wactorz.config import DeployTarget
 from wactorz.core import broker_tls, mqtt_tls
@@ -85,100 +84,61 @@ class TestTheRule:
             mqtt_tls.client_context("")
 
 
-# ── The copies follow it ───────────────────────────────────────────────────────
+# ── Catalogue programs use it ─────────────────────────────────────────────────
 
 
-def _catalogue_helper(
-    module: str, injected: dict[str, Any] | None = None
-) -> Callable[[], dict[str, Any]]:
-    """The TLS helper a catalogue program carries, executed on its own.
+def _clients_built_by_hand(path: Path) -> list[int]:
+    """Lines in ``path`` that construct an ``aiomqtt.Client`` rather than ask for one."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    lines = [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Client"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "aiomqtt"
+    ]
+    lines.extend(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "aiomqtt"
+        and any(alias.name == "Client" for alias in node.names)
+    )
+    return lines
 
-    ``injected`` is what the host puts in the program's namespace.
+
+def test_catalogue_programs_connect_through_the_shared_client() -> None:
+    """A program's broker connection takes its account and TLS from where the host's do.
+
+    `mqtt_client` reads both from `CONFIG`, which on a node is the node's own
+    `.env`; a client built by hand would have to repeat the rule, and drift.
     """
-    source = (ROOT / "wactorz" / "catalogue_agents" / module).read_text(encoding="utf-8")
-    program = ast.parse(source)
-    assert any(
-        isinstance(node, ast.Import) and any(alias.name == "ssl" for alias in node.names)
-        for node in program.body
-    ), f"{module} does not import ssl at the top of its program"
-    helper = next(
-        node
-        for node in program.body
-        if isinstance(node, ast.FunctionDef) and node.name == "_mqtt_tls_kwargs"
-    )
-    namespace: dict[str, Any] = {"os": os, "ssl": ssl, "Any": Any, **(injected or {})}
-    exec(compile(ast.Module(body=[helper], type_ignores=[]), module, "exec"), namespace)
-    return namespace["_mqtt_tls_kwargs"]
+    found = {
+        path.name: lines
+        for path in sorted((ROOT / "wactorz" / "catalogue_agents").glob("*.py"))
+        if (lines := _clients_built_by_hand(path))
+    }
+
+    assert found == {}
 
 
-CASES = [
-    {},
-    {"MQTT_TLS": "0"},
-    {"MQTT_TLS": "1"},
-    {"MQTT_TLS": "on", "MQTT_TLS_CA": "<ca>"},
-    {"MQTT_TLS": "yes", "MQTT_TLS_CA": "<ca>", "MQTT_TLS_CHECK_HOSTNAME": "0"},
-    {"MQTT_TLS": "true", "MQTT_TLS_CHECK_HOSTNAME": "1"},
-    {"MQTT_TLS": "1", "MQTT_TLS_CA": "system"},
-]
+def test_the_guard_sees_a_client_built_by_hand(tmp_path: Path) -> None:
+    program = tmp_path / "program.py"
+    program.write_text("import aiomqtt\n\nclient = aiomqtt.Client('broker', 1883)\n")
+
+    assert _clients_built_by_hand(program) == [3]
 
 
-@pytest.mark.parametrize(
-    "case", CASES, ids=lambda case: ",".join(f"{k}={v}" for k, v in case.items()) or "unset"
-)
-def test_every_copy_decides_as_the_rule_does(
-    case: dict[str, str], issued: broker_tls.BrokerFiles, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    environment = {key: value.replace("<ca>", str(issued.ca)) for key, value in case.items()}
-    for key, value in environment.items():
-        monkeypatch.setenv(key, value)
-
-    expected = (
-        mqtt_tls.client_context(
-            environment.get("MQTT_TLS_CA", ""), environment.get("MQTT_TLS_CHECK_HOSTNAME", "")
-        )
-        if mqtt_tls.tls_enabled(environment.get("MQTT_TLS", ""))
-        else None
-    )
-    copies = [_catalogue_helper(module)().get("tls_context") for module in CATALOGUE]
-
-    for copy in copies:
-        if expected is None:
-            assert copy is None
-        else:
-            assert copy is not None
-            assert copy.check_hostname == expected.check_hostname
-            assert _ca_subjects(copy) == _ca_subjects(expected)
-
-
+@pytest.mark.real_mqtt_client
 @pytest.mark.parametrize("module", CATALOGUE)
-def test_every_copy_reads_the_state_directory_the_host_resolved(
-    module: str, issued: broker_tls.BrokerFiles, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A host that set the state directory in code is heard over the environment.
+def test_a_program_connects_with_the_hosts_own_factory(module: str) -> None:
+    """The client a program opens is `mqtt_client`'s, so `TestTheServerFactory` covers its TLS.
 
-    The program cannot import wactorz, so the host hands the resolved directory
-    to its namespace under the variable's own name; the environment is the
-    fallback, for a node.
+    Unpatched here, so the name the program binds is the package's real one.
     """
-    from wactorz.agents.dynamic.agent import DynamicAgent
-    from wactorz.core import paths
-
-    monkeypatch.setenv("MQTT_TLS", "1")
-    monkeypatch.delenv("MQTT_TLS_CA", raising=False)
-    monkeypatch.setenv("WACTORZ_STATE_DIR", str(tmp_path / "nowhere"))
-    state_dir = str(issued.ca.parent.parent)
-    monkeypatch.setattr(paths, "_override", state_dir)
-
-    expected = mqtt_tls.client_context("")
-    agent = DynamicAgent(name="probe", code="", persistence_dir=str(tmp_path / "probe"))
-    assert agent._compile_code("") is None  # pyright: ignore[reportPrivateUsage]
-    injected = {"WACTORZ_STATE_DIR": agent._ns["WACTORZ_STATE_DIR"]}  # pyright: ignore[reportPrivateUsage]
-    assert injected["WACTORZ_STATE_DIR"] == state_dir
-
-    copy = _catalogue_helper(module, injected)()["tls_context"]
-    assert _ca_subjects(copy) == _ca_subjects(expected)
-    with pytest.raises(OSError):  # the environment alone would miss the CA
-        _catalogue_helper(module)()
+    assert program_namespace(module)["mqtt_client"] is core_mqtt.mqtt_client
 
 
 class TestTheNode:

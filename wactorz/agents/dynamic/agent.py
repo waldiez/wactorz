@@ -509,10 +509,10 @@ class DynamicAgent(Actor):
         self._ns["get_llm"] = _get_llm_shim
         self._ns["setup_llm"] = _get_llm_shim
         self._ns["create_llm"] = _get_llm_shim
-        # Where this process keeps its state, for a program that opens a broker
-        # connection of its own and needs the generated CA under it. The
-        # program cannot import wactorz, and the environment alone does not
-        # know what a host set in code.
+        # Where this process keeps its state, as a name agent code can use with
+        # no import: the API's own examples write files under it. Resolved here
+        # rather than read from the environment, which does not know what a
+        # host set in code.
         self._ns["WACTORZ_STATE_DIR"] = resolve_state_dir()
 
         # ── cv2 shim: wrap VideoCapture with retry + release-before-reopen ──

@@ -46,6 +46,8 @@ export { NODE_EVICT_MS };
 export class CardDashboard {
     private root: HTMLElement;
     private agents: Map<string, AgentInfo> = new Map();
+    /** Where each agent ran when last drawn: a node's name, or "" for local. */
+    private readonly _placed = new Map<string, string>();
     /** Last-heard-from times, and the card bits that show them. */
     private _heartbeats: Heartbeats;
     /** The activity view's model — agent events and application-log records. */
@@ -211,12 +213,19 @@ export class CardDashboard {
     /** Update an agent in place and refresh the affected views. */
     updateAgent(agent: AgentInfo): void {
         this.agents.set(agent.id, agent);
+        // Kept apart from the agent, which arrives as the same object it was
+        // changed on: only a copy of where it ran can say it has moved since.
+        const moved = this._placed.get(agent.id) !== (agent.node ?? "");
+        this._placed.set(agent.id, agent.node ?? "");
         if (!this.root.classList.contains("cd-visible")) {
             return;
         }
         this._overview.patchCard(agent);
         if (this.view === "overview") {
             this._overview.renderStats();
+            if (moved) {
+                this._overview.renderNodes();
+            }
         }
         if (this.view === "chat") {
             this._chat.renderSidebar();
@@ -227,6 +236,7 @@ export class CardDashboard {
     removeAgent(id: string): void {
         const removed = this.agents.get(id);
         this.agents.delete(id);
+        this._placed.delete(id);
         this._heartbeats.forget(id); // else churned agents leak dead entries _refreshTimestamps scans
         // history is keyed by agent NAME, not UUID — look up name before deleting
         if (removed) {

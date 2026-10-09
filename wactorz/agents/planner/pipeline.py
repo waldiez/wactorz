@@ -397,7 +397,13 @@ class PipelineMixin(_Host):
                 max_tokens=4000,
             )
             self._accrue_usage(_usage)
-            plan = loads_lenient(extract_json_array(response))
+            try:
+                plan = loads_lenient(extract_json_array(response))
+            except ValueError as exc:
+                # The model answered without a plan in it, which the caller
+                # handles by answering directly: an outcome, not a fault.
+                logger.warning("[%s] No pipeline plan in the model's answer (%s)", self.name, exc)
+                return []
             if isinstance(plan, list):
                 # Validate generated code — catch common LLM mistakes
                 plan = self._validate_pipeline_code(plan)

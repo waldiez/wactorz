@@ -75,6 +75,45 @@ name => {
     }).observe(document.body, { childList: true, subtree: true });
 }
 """
+#: As `_WATCH_CARD`, for every card whose name starts with a prefix: for agents
+#: whose names are made up as they start, such as a planner's.
+_WATCH_CARDS_LIKE = """
+prefix => {
+    const seen = {};
+    (window.__cardsLike = window.__cardsLike || {})[prefix] = seen;
+    const named = () => new Set(
+        [...document.querySelectorAll(".af-card[data-name]")]
+            .map(card => card.dataset.name)
+            .filter(name => name.startsWith(prefix)),
+    );
+    let present = named();
+    present.forEach(name => { seen[name] = ["present"]; });
+    new MutationObserver(() => {
+        const now = named();
+        now.forEach(name => { if (!present.has(name)) (seen[name] = seen[name] || []).push("added"); });
+        present.forEach(name => { if (!now.has(name)) (seen[name] = seen[name] || []).push("removed"); });
+        present = now;
+    }).observe(document.body, { childList: true, subtree: true });
+}
+"""
+#: The agents each row of the nodes panel lists, by row: `local`, then each node.
+_NODE_ROWS = """
+() => {
+    const listed = text => {
+        const value = (text || "").trim();
+        return value === "" || value === "no agents" ? [] : value.split(", ");
+    };
+    const rows = {};
+    for (const row of document.querySelectorAll("#af-node-list .af-node-item")) {
+        rows[row.querySelector(".af-node-name").textContent.trim()] =
+            listed(row.querySelector(".af-node-meta")?.textContent);
+    }
+    for (const card of document.querySelectorAll("#af-node-list .af-node-card")) {
+        rows[card.dataset.node] = listed(card.querySelector(".af-node-agents")?.textContent);
+    }
+    return rows;
+}
+"""
 HISTORY_BUTTON = "button:has-text('History')"
 HISTORY_PANEL = ".af-trend-panel"
 CHAT_INPUT = "#af-iobar-input"
@@ -211,6 +250,16 @@ class Dashboard:
         """What `watch_card` recorded for ``name``: "present", "added" and "removed", in order."""
         return list(self.page.evaluate("name => (window.__cardEvents || {})[name] || []", name))
 
+    def watch_cards_named_like(self, prefix: str) -> Dashboard:
+        """As `watch_card`, for every card whose name starts with ``prefix``."""
+        self.show("overview")
+        self.page.evaluate(_WATCH_CARDS_LIKE, prefix)
+        return self
+
+    def cards_named_like(self, prefix: str) -> dict[str, list[str]]:
+        """What `watch_cards_named_like` recorded: each matching name's comings and goings."""
+        return dict(self.page.evaluate("p => (window.__cardsLike || {})[p] || {}", prefix))
+
     def wait_for_no_card(self, name: str, *, timeout: float = 60.0) -> Dashboard:
         self.show("overview")
         waiting.until(
@@ -296,6 +345,15 @@ class Dashboard:
     def node_names(self) -> set[str]:
         names = self.page.locator(f"{NODE_LIST} .af-node-name").all_inner_texts()
         return {name.strip() for name in names}
+
+    def node_rows(self) -> dict[str, list[str]]:
+        """The agents each row of the nodes panel lists: `local`, then each node by name."""
+        self.show("overview")
+        return dict(self.page.evaluate(_NODE_ROWS))
+
+    def rows_listing(self, agent: str) -> set[str]:
+        """The rows of the nodes panel that list ``agent``: `local`, a node's name, or none."""
+        return {row for row, agents in self.node_rows().items() if agent in agents}
 
     def node_machine(self, name: str) -> str:
         """What the node's card says its machine is, or "" before its manifest arrives."""

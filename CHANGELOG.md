@@ -72,6 +72,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The dashboard after an agent moves home, and after a planner ends.** An agent moved from a node back to this server is listed under `local` in the overview's nodes panel again, rather than under no row at all: the server kept the node it had left in every snapshot. A planner that reached its lifetime cap left its card behind, marked stopped, because ending itself from its own watchdog cut off the step that withdraws the card; it now leaves the dashboard, and a planner ends a couple of seconds after answering on every path rather than waiting out its cap. A model that answers a planner without a plan in it is logged as a warning rather than an error with a traceback, since the planner then answers directly.
+
 - **The Docker Hub quickstart starts.** Followed as written, it left the server refusing to start (it listens on the network inside its container and the page set no `API_KEY`) and ran Mosquitto open to anyone, on every interface. Both options now have you make an API key and a broker password with one `docker run` (the same on Linux, macOS and Windows), run the broker pinned to the release `compose.yaml` uses with anonymous clients refused and its password file written from `.env` at start, and publish the ports on this machine only.
 
 - **Doc-to-pptx agent.** It starts on a machine without Node.js and says so in its missing-dependencies alert, rather than failing to start; each conversion removes its working directory (extracted images, the build script and a local `pptxgenjs` install) instead of leaving it in the temp directory; and a `slide_count` or image size that is not a whole number gets an answer instead of an error.

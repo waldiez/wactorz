@@ -242,6 +242,27 @@ describe("AgentStore — heartbeat", () => {
         expect(store.getAgents()[0]?.node).toBe("rpi");
     });
 
+    it("moves an agent home when its heartbeat says it runs here, and says so", () => {
+        // "" is how the server's own agents report where they run.
+        store.addOrUpdateAgent(agent({ node: "edge" }));
+        dash.updateAgent.mockClear();
+
+        store.onHeartbeat(hb({ node: "" }));
+
+        expect(store.getAgents()[0]?.node).toBe("");
+        expect(dash.updateAgent).toHaveBeenCalledOnce();
+    });
+
+    it("does not redraw for a heartbeat from where it already runs", () => {
+        store.addOrUpdateAgent(agent({ node: "edge" }));
+        dash.updateAgent.mockClear();
+
+        store.onHeartbeat(hb({ node: "edge" }));
+        store.onHeartbeat(hb({}));
+
+        expect(dash.updateAgent).not.toHaveBeenCalled();
+    });
+
     it("creates a card for an unknown agent and still pulses onHeartbeat", () => {
         store.onHeartbeat(hb({ agentId: "new", agentName: "newbie", node: "n2" }));
         expect(store.getAgents().map(a => a.id)).toEqual(["new"]);

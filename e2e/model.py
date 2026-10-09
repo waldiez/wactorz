@@ -12,6 +12,7 @@ program, and a program is readable as a string here and not as one escaped line.
 
 from __future__ import annotations
 
+import datetime
 import json
 
 from harness.run import NODE_NAME
@@ -54,6 +55,13 @@ async def handle_task(agent, payload):
 """
 
 
+#: A moment already past when any journey asks. With its offset, so it means
+#: the same moment whatever time zone the server reads schedules in.
+_JUST_NOW = (
+    datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=30)
+).isoformat(timespec="seconds")
+
+
 def _starts(words: str, **agent: object) -> str:
     """A reply from main that starts an agent: what it says, then the block that asks for it."""
     return f"{words}\n<spawn>\n{json.dumps(agent)}\n</spawn>"
@@ -89,6 +97,11 @@ SCRIPT = {
         code=ASKS_THE_MODEL,
     ),
     "how is the tide": "The tide is in.",
+    # Asked of a planner, which finds no plan in it and answers directly: the
+    # shortest run a planner has, from its start to its answer. Main adds the
+    # last few exchanges to a short planner task, and the longest key found
+    # wins, so this one is longer than any that conversation could contain.
+    "count the beans in the old blue jar": "There are seven beans.",
     "start a finisher here": _starts(
         "Starting it.",
         name="finisher",
@@ -97,6 +110,15 @@ SCRIPT = {
         capabilities=["finishing"],
         poll_interval=1,
         code=FINISHER,
+    ),
+    # A once-schedule whose moment is already past: it fires if that was within
+    # its catch-up window, and ends itself either way.
+    "start a reminder here": _starts(
+        "Setting it.",
+        name="reminder",
+        type="scheduled",
+        description="Reminds once",
+        schedule={"type": "once", "at": _JUST_NOW},
     ),
     "start a finisher on the node": _starts(
         "Starting it there.",

@@ -44,6 +44,37 @@ def _on_the_server(app: backend.Backend) -> set[str]:
     return {str(agent.get("name")) for agent in app.rest.agents()}
 
 
+#: Long enough to span the page's REST reconcile and several node heartbeats, any
+#: of which could put an agent's card or its place in the nodes panel back wrong.
+SETTLED_FOR_S = 35.0
+
+
+def _placed_and_kept(dashboard: browser.Dashboard, agent: str, row: str) -> None:
+    """``agent``'s card stays, and the nodes panel lists it under ``row`` alone.
+
+    Watched from here rather than across the move: saying something takes the
+    page to the chat view, and the cards with it.
+    """
+    dashboard.watch_card(agent)
+    try:
+        waiting.until(
+            lambda: dashboard.rows_listing(agent) == {row},
+            what=f"the nodes panel to list {agent!r} under {row!r} alone",
+            timeout=60,
+            interval=1,
+        )
+    except waiting.ConditionTimeout as wrong:
+        raise AssertionError(f"{wrong}; the panel lists {dashboard.node_rows()}") from wrong
+    waiting.holds_for(
+        lambda: dashboard.rows_listing(agent) == {row},
+        what=f"{agent!r} staying listed under {row!r} alone",
+        window=SETTLED_FOR_S,
+        interval=1,
+    )
+    seen = dashboard.card_comings_and_goings(agent)
+    assert "removed" not in seen, seen
+
+
 def test_main_starts_an_agent_on_the_node(
     dashboard: browser.Dashboard, app: backend.Backend
 ) -> None:
@@ -56,6 +87,7 @@ def test_main_starts_an_agent_on_the_node(
         interval=NODE_POLL_S,
     )
     assert "counter" not in _on_the_server(app)
+    _placed_and_kept(dashboard, "counter", NODE_NAME)
 
 
 def test_it_answers_from_there(dashboard: browser.Dashboard) -> None:
@@ -78,6 +110,7 @@ def test_moved_home_it_remembers(dashboard: browser.Dashboard, app: backend.Back
         what="the node to have let it go",
         interval=NODE_POLL_S,
     )
+    _placed_and_kept(dashboard, "counter", "local")
 
     dashboard.say("two", to="counter")
     dashboard.expect("counter", "counted 2")
@@ -138,6 +171,7 @@ def test_moved_out_again_it_still_remembers(
         interval=NODE_POLL_S,
     )
     waiting.until(lambda: "counter" not in _on_the_server(app), what="the server to have let it go")
+    _placed_and_kept(dashboard, "counter", NODE_NAME)
 
     dashboard.say("three", to="counter")
     dashboard.expect("counter", "counted 3")

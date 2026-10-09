@@ -71,6 +71,10 @@ _current_system: "ActorSystem | None" = None
 #: unless it is given an interface, so a library call never reads the host's stdin.
 HEADLESS = "none"
 
+#: The interfaces that need main itself, not only an orchestrator: the command
+#: line and the REST interface answer lifecycle commands through it.
+MAIN_INTERFACES = frozenset({"cli", "rest"})
+
 #: The names the system's own agents go by, whether or not this run starts
 #: them. The supervisor keeps one entry per name, so a plugin or pipeline agent
 #: under one of these would replace the built-in; it is refused instead.
@@ -935,33 +939,35 @@ async def _run_interface(
         run_all_interfaces as _run_all,
     )
 
-    if main_actor is None or orchestrator is None:
-        # The minimal profile: the dashboard's chat answers through the
-        # orchestrator, but no chat interface of our own, since the command
-        # line and the REST interface lean on main for their lifecycle
-        # commands. The dashboard, the monitor and the deployment's own agents
-        # run until asked to stop.
+    if orchestrator is None:
+        # Nothing to answer a chat turn: the dashboard, the monitor and the
+        # deployment's own agents run until asked to stop.
         system._running = True
         await system.run_forever()
-    elif interface == "cli" and sys.stdin.isatty():
+    elif interface == "cli" and main_actor is not None and sys.stdin.isatty():
         iface = CLIInterface(orchestrator, main_actor)
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-    elif interface in ("cli", HEADLESS):
-        # No chat interface of our own: what a library call asks for, and
-        # what a CLI with no TTY (piped/Docker/systemd) falls back to, since
-        # input() would raise EOFError on the first read and, paired with
-        # run_forever(), tear the whole system down a second after boot.
-        # The dashboard and any companion channels still talk to main.
-        if interface == "cli":
-            logger.info("stdin is not a TTY — running headless (no interactive CLI)")
-        system._running = True
-        await asyncio.gather(system.run_forever(), *_run_all(companions))
-    elif interface == "rest":
+    elif interface == "rest" and main_actor is not None:
         port = args.port or CONFIG.port
         iface = RESTInterface(
             orchestrator, main_actor, port=port, api_key=CONFIG.api_key, system=system
         )
         await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface in (*MAIN_INTERFACES, HEADLESS):
+        # No chat interface of our own: what a library call asks for; what a
+        # CLI with no TTY (piped/Docker/systemd) falls back to, since input()
+        # would raise EOFError on the first read and, paired with
+        # run_forever(), tear the whole system down a second after boot; and
+        # the minimal profile's, where no main runs for the command line or
+        # the REST interface to answer lifecycle commands through. The
+        # dashboard and any companion channels still answer through the
+        # orchestrator.
+        if main_actor is None and interface in MAIN_INTERFACES:
+            logger.info("No main runs in this profile; the %s interface needs it", interface)
+        elif interface == "cli":
+            logger.info("stdin is not a TTY — running headless (no interactive CLI)")
+        system._running = True
+        await asyncio.gather(system.run_forever(), *_run_all(companions))
     elif interface == "discord":
         discord_token = args.discord_token or CONFIG.discord_token
         if not discord_token:

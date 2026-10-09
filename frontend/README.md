@@ -193,21 +193,23 @@ topic there without touching the router.
 
 ## Gated UI
 
-Two things are gated, for two different reasons — and the difference decides
-where the switch belongs.
+Optional features are decided at runtime, by the server and the browser, never
+by how the bundle was built: one bundle is served by deployments that differ, and
+the committed `static/app` goes to all of them.
 
-### Not built yet — build-time
+### Voice input (the composer's mic)
 
-| Flag | Enables | Needs backend |
-| ---- | ------- | ------------- |
-| `VITE_STT_ENABLED=true` | Voice/mic button (speech-to-text) | `/api/stt` |
+The mic has two engines, chosen per click by `src/io/voiceInput.ts`:
 
-`STT_ENABLED` (`src/io/SpeechToText.ts`) is off by default because **`/api/stt`
-does not exist**. The client half is written and waiting; turning the flag on
-without the endpoint gives a mic button whose every recording fails. It is a
-switch for developing the feature, not a per-deploy option — when the endpoint
-lands, this should become a server capability like the one below and the flag
-should go.
+| Engine | How | Needs |
+| ------ | --- | ----- |
+| Browser | `src/io/WebSpeech.ts`, the browser's own Web Speech API, with live hypotheses | Chrome or Edge, and a secure context (`localhost` or HTTPS). Audio goes to the browser vendor. |
+| Server | `src/io/SpeechToText.ts` records, `src/io/wav.ts` converts to 16 kHz WAV, `POST /api/stt` transcribes | The `stt` backend extension with a configured recognizer: `stt.available` in `/api/config`, seeded into `wactorz-stt-available` |
+
+The person picks Auto, Browser, Server or Off in the audio popover
+(`wactorz-voice-input`, announced as `af-voice-mode`). Auto uses the server when
+it can transcribe and the browser otherwise. The mic is not rendered in a
+browser that can do neither.
 
 ### Optional per deployment — runtime, from the server
 

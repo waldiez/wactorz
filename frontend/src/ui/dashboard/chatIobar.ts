@@ -9,7 +9,15 @@
  */
 import type { ChatInput } from "./chatInput";
 import type { SpeechToText } from "../../io/SpeechToText";
-import { SpeechToText as Stt, STT_ENABLED } from "../../io/SpeechToText";
+import { WebSpeech } from "../../io/WebSpeech";
+import {
+    currentSupport,
+    micOffered,
+    resolveVoiceEngine,
+    unavailableReason,
+    voiceMode,
+    type VoiceEngine,
+} from "../../io/voiceInput";
 import { toast } from "../ToastManager";
 import { iconMarkup } from "./icons";
 import { uploadsEnabled, uploadFile, ACCEPTED_MIME, ACCEPTED_EXT } from "./uploads";
@@ -182,59 +190,153 @@ function wireGenerationLifecycle(sendBtn: HTMLButtonElement, stopBtn: HTMLButton
     });
 }
 
-async function startMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<void> {
-    try {
-        await stt.start();
-        btn.classList.add("recording");
-        btn.title = "Stop & transcribe";
-        btn.setAttribute("aria-label", "Stop & transcribe");
-    } catch {
-        toast.show({ type: "alert-error", title: "Mic blocked", message: "Microphone permission denied." });
-    }
-}
-
-async function finishMic(
-    stt: SpeechToText,
-    input: HTMLTextAreaElement,
-    btn: HTMLButtonElement,
-): Promise<void> {
+/** Put the mic back to its resting look. */
+function micIdle(btn: HTMLButtonElement): void {
     btn.classList.remove("recording");
     btn.title = "Voice input";
     btn.setAttribute("aria-label", "Voice input");
-    try {
-        const text = await stt.stopAndTranscribe();
-        if (text) {
-            input.value = input.value ? `${input.value} ${text}` : text;
-            input.dispatchEvent(new Event("input"));
-            input.focus();
-        }
-    } catch (err) {
-        toast.show({ type: "alert-error", title: "Transcription failed", message: String(err) });
+}
+
+/** Show that the mic is live, and which engine is listening. */
+function micLive(btn: HTMLButtonElement, engine: VoiceEngine): void {
+    btn.classList.add("recording");
+    const label = engine === "browser" ? "Stop listening" : "Stop & transcribe";
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+}
+
+/** Put recognized text in the composer after whatever was already typed. */
+function writeTranscript(input: HTMLTextAreaElement, prefix: string, text: string): void {
+    input.value = prefix ? `${prefix} ${text}` : text;
+    input.dispatchEvent(new Event("input"));
+}
+
+/** What a Web Speech error means for the person, or null when it needs no word. */
+export function webSpeechErrorMessage(code: string): string | null {
+    switch (code) {
+        case "no-speech":
+        case "aborted":
+            return null;
+        case "not-allowed":
+        case "service-not-allowed":
+            return "Microphone permission denied, or the page is not on localhost or HTTPS.";
+        case "network":
+            return "The browser's speech service could not be reached.";
+        default:
+            return `Speech recognition stopped: ${code}`;
     }
 }
 
-async function toggleMic(
+async function startServerMic(stt: SpeechToText, btn: HTMLButtonElement): Promise<boolean> {
+    try {
+        await stt.start();
+        micLive(btn, "server");
+        return true;
+    } catch {
+        toast.show({ type: "alert-error", title: "Mic blocked", message: "Microphone permission denied." });
+        return false;
+    }
+}
+
+async function finishServerMic(
     stt: SpeechToText,
     input: HTMLTextAreaElement,
     btn: HTMLButtonElement,
 ): Promise<void> {
-    if (stt.recording) {
-        await finishMic(stt, input, btn);
-    } else {
-        await startMic(stt, btn);
+    micIdle(btn);
+    try {
+        const text = await stt.stopAndTranscribe();
+        if (text) {
+            writeTranscript(input, input.value.trim(), text);
+            input.focus();
+        }
+    } catch (err) {
+        toast.show({
+            type: "alert-error",
+            title: "Transcription failed",
+            message: err instanceof Error ? err.message : String(err),
+        });
     }
 }
 
-/** Whether the voice mic button should be shown: backend enabled and the
- *  browser can actually capture audio. Otherwise it's simply not rendered. */
-function micAvailable(): boolean {
-    return STT_ENABLED && Stt.isSupported();
+/** Listen through the browser's recogniser, writing hypotheses as they arrive. */
+function startBrowserMic(
+    speech: WebSpeech,
+    input: HTMLTextAreaElement,
+    btn: HTMLButtonElement,
+    onEnd: () => void,
+): void {
+    // Hypotheses are revised as speech continues, so each one replaces the last
+    // rather than appending; only text typed before listening is kept in front.
+    const prefix = input.value.trim();
+    micLive(btn, "browser");
+    speech.start(
+        text => writeTranscript(input, prefix, text.trim()),
+        () => {
+            micIdle(btn);
+            input.focus();
+            onEnd();
+        },
+        code => {
+            const message = webSpeechErrorMessage(code);
+            if (message) {
+                toast.show({ type: "alert-error", title: "Voice input", message });
+            }
+        },
+    );
 }
 
-/** Mic button: click to record, click again to transcribe into the input. */
+/**
+ * Mic button. The engine is decided at each click from the voice-input setting
+ * and what the browser and server can do, since `/api/config` may answer after
+ * the bar is built. Browser: listen until a pause or a second click. Server:
+ * record until the second click, then transcribe.
+ */
 function buildMicBtn(stt: SpeechToText, input: HTMLTextAreaElement): HTMLButtonElement {
     const btn = iconButton("af-mic-btn", "Voice input", iconMarkup("mic", 16));
-    btn.addEventListener("click", () => void toggleMic(stt, input, btn));
+    const speech = new WebSpeech();
+    let active: VoiceEngine | null = null;
+
+    btn.addEventListener("click", () => {
+        if (active === "browser") {
+            speech.stop();
+            return;
+        }
+        if (active === "server") {
+            active = null;
+            void finishServerMic(stt, input, btn);
+            return;
+        }
+        const mode = voiceMode();
+        const support = currentSupport();
+        const engine = resolveVoiceEngine(mode, support);
+        if (!engine) {
+            toast.show({
+                type: "alert-warning",
+                title: "Voice input",
+                message: unavailableReason(mode, support),
+            });
+            return;
+        }
+        active = engine;
+        if (engine === "browser") {
+            startBrowserMic(speech, input, btn, () => {
+                active = null;
+            });
+            return;
+        }
+        void startServerMic(stt, btn).then(started => {
+            if (!started) {
+                active = null;
+            }
+        });
+    });
+
+    // Shown or hidden as the setting changes; page-lifetime, like the bar.
+    btn.hidden = !micOffered(voiceMode(), currentSupport());
+    listen("af-voice-mode", d => {
+        btn.hidden = !micOffered(d.mode, currentSupport());
+    });
     return btn;
 }
 
@@ -336,7 +438,8 @@ export function buildIobar(deps: IobarDeps): HTMLElement {
         // nested inside a button is invalid, hidden or not.
         bar.append(button, picker);
     }
-    if (micAvailable()) {
+    const support = currentSupport();
+    if (support.browser || support.recorder) {
         bar.appendChild(buildMicBtn(deps.stt, input));
     }
     const sendBtn = buildSendBtn(deps, input, mentionPanel);

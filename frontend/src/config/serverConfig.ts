@@ -22,6 +22,7 @@
 import { safeStorage } from "../safeStorage";
 import { SIGN_OUT_KEY } from "../ui/dashboard/signOut";
 import { UPLOADS_KEY } from "../ui/dashboard/uploads";
+import { STT_AVAILABLE_KEY } from "../io/voiceInput";
 
 /** Seed a single key from the server value; returns whether it wrote. */
 export function seedKeyFromServer(key: string, value: string | undefined | null): boolean {
@@ -75,6 +76,11 @@ registerConfigEntry(SIGN_OUT_KEY, c =>
 );
 registerConfigEntry(UPLOADS_KEY, c =>
     (c.uploads as Record<string, unknown> | undefined)?.enabled ? "1" : "0",
+);
+// Core entry: whether the server can transcribe the dashboard microphone
+// (`/api/stt`). "1"/"0" for the same reason as uploads.
+registerConfigEntry(STT_AVAILABLE_KEY, c =>
+    (c.stt as Record<string, unknown> | undefined)?.available ? "1" : "0",
 );
 
 /** Fetch `/api/config` and seed every registered client-side key from it.

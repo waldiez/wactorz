@@ -6,27 +6,26 @@
  * Backend-backed speech-to-text.
  *
  * Records microphone audio with MediaRecorder + getUserMedia (supported
- * wherever audio capture is allowed) and POSTs it to the server's STT endpoint,
- * so the actual recognition happens server-side.
+ * wherever audio capture is allowed), converts it to 16 kHz WAV and POSTs it to
+ * the server's `/api/stt`, so the actual recognition happens server-side with
+ * the recognizer the server is configured for. Whether that is available is
+ * the server's answer, seeded from `/api/config` (see `voiceInput.ts`).
  */
+import { toWav16k } from "./wav";
 
-/**
- * Whether the mic button is shown. Off by default, and `/api/stt` does not
- * exist yet — this is a switch for developing the feature, not a per-deploy
- * option. While off, the mic button is not rendered at all.
- *
- * Build-time for that reason alone. Once the endpoint lands this becomes a
- * question only the server can answer, and it should move to `/api/config`
- * beside `uploads.enabled` rather than stay in the bundle.
- */
-export const STT_ENABLED = import.meta.env["VITE_STT_ENABLED"] === "true";
+/** Turns a recording into the WAV the server accepts. */
+export type WavConverter = (recording: Blob) => Promise<Blob>;
 
+/** Records the dashboard microphone and transcribes it on the server. */
 export class SpeechToText {
     private recorder: MediaRecorder | null = null;
     private chunks: Blob[] = [];
     private stream: MediaStream | null = null;
 
-    constructor(private apiBase = "") {}
+    constructor(
+        private apiBase = "",
+        private toWav: WavConverter = toWav16k,
+    ) {}
 
     /** Whether the browser can capture audio at all. */
     static isSupported(): boolean {
@@ -80,13 +79,21 @@ export class SpeechToText {
         return blob ? this.transcribe(blob) : "";
     }
 
-    /** POST recorded audio to the backend STT endpoint for transcription. */
+    /** POST recorded audio to the backend STT endpoint for transcription.
+     *  A failure carries the server's reason when it gave one. */
     async transcribe(blob: Blob): Promise<string> {
+        const wav = blob.type === "audio/wav" ? blob : await this.toWav(blob);
         const body = new FormData();
-        body.append("audio", blob, "speech.webm");
+        body.append("audio", wav, "speech.wav");
         const res = await fetch(`${this.apiBase}/api/stt`, { method: "POST", body });
         if (!res.ok) {
-            throw new Error(`STT failed (${res.status})`);
+            let reason = "";
+            try {
+                reason = String(((await res.json()) as { error?: string }).error ?? "");
+            } catch {
+                // No JSON body: the status is all there is.
+            }
+            throw new Error(reason || `STT failed (${res.status})`);
         }
         const data = (await res.json()) as { text?: string };
         return data.text ?? "";

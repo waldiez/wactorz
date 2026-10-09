@@ -233,6 +233,12 @@
   color: rgba(255, 255, 255, 0.6);
   margin-bottom: -4px;
 }
+.af-audio-note {
+  font-size: 11px;
+  line-height: 1.35;
+  color: rgba(255, 255, 255, 0.55);
+  margin-top: -2px;
+}
 .af-audio-tracks {
   display: flex;
   flex-wrap: wrap;

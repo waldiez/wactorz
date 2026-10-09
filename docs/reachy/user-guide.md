@@ -92,6 +92,19 @@ transcribes them, sends the words to Wactorz and speaks the answer.
 
 Recognition works best within about a metre, facing the robot, one person at a time.
 
+### Three ways to talk to Reachy
+
+| Microphone | Speech turned into text by | Use it when |
+| --- | --- | --- |
+| **Reachy's own** (`start conversation`, `listen and ask Wactorz`) | The server's recognizer: Deepgram, or faster-whisper on the computer | The normal, hands-free way. |
+| **The dashboard's mic button**, Server engine | The same recognizer as Reachy's microphone | A noisy room, or a headset mic for the presenter. Works in any browser. |
+| **The dashboard's mic button**, Browser engine | Chrome's or Edge's built-in recognition | No recognizer is configured on the server. Chrome and Edge only. |
+
+The dashboard mic fills the message box; check it and press Send. With `@reachy-mini`
+selected as the chat target, Reachy answers out loud as it does for typed messages.
+Choose the engine under **Voice input** in the dashboard's audio settings: **Auto**
+(the default) uses the server when it has a recognizer and the browser otherwise.
+
 ## Camera
 
 | Say or type | What happens |

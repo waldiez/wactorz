@@ -30,6 +30,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **The Ultra add-on can build Reachy Mini's graphics dependencies** when its SDK is installed.
 - **Reachy says what voice input is missing before it listens.** Without a Deepgram key, or with the chosen recognizer not installed, `start conversation` and `listen and ask Wactorz` now refuse with the fix instead of failing after someone has spoken. A conversation that ends by itself (nobody spoke, repeated failures) says why in chat. New guides in `docs/reachy/` for users, developers and demonstrators, and `scripts/reachy_sim_check.py` runs the agent against the SDK's simulated robot.
 
+- **The dashboard's microphone works, with a choice of engine.** The mic button in the chat
+  can use the browser's own speech recognition (Chrome, Edge) or record and send the audio
+  to a new `POST /api/stt`, which transcribes it with the recognizer Reachy's microphone
+  uses (Deepgram, or faster-whisper on the machine). **Voice input** in the audio settings
+  picks Auto, Browser, Server or Off; Auto uses the server when it has a recognizer. The
+  `VITE_STT_ENABLED` build flag is gone: whether the server can transcribe now comes from
+  `/api/config`.
+
 ### Fixed (Reachy)
 
 - `stop` holds the head where it is instead of snapping it to neutral in a tenth of a second.

@@ -46,6 +46,10 @@ you will use, and keep a typed fallback for everything you plan to say.**
 - If the room is very noisy, prefer **push-to-talk** (`listen and ask Wactorz`, typed by
   the presenter) over a continuous conversation: one bounded recording at a time is easier
   to control.
+- Better still in a loud hall: let visitors speak into the **dashboard's mic button**
+  with a headset or handheld USB mic on the laptop, chat target `@reachy-mini`. Reachy
+  still answers aloud. Test it during setup; it needs the dashboard opened as
+  `localhost`.
 
 ## Startup sequence (about 5 minutes)
 

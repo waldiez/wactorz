@@ -77,6 +77,15 @@ also reconnects when asked.
 | "I stopped listening because several voice turns in a row failed: …" | The reason is in the message, often a rejected key or no internet. Fix it, then `start conversation`. |
 | "I stopped listening because nobody spoke for a while." | The conversation's idle limit was reached. `start conversation` again. |
 
+The dashboard's mic button:
+
+| What you see | Do this |
+| --- | --- |
+| No mic button | The browser can neither record nor recognize speech, or voice input is set to Off in the audio settings. Open the dashboard as `http://localhost:8888` (not an IP address) or over HTTPS. |
+| "This browser has no speech recognition…" | Use Chrome or Edge, or switch voice input to Server. |
+| "The server has no speech recognizer configured…" | Set `DEEPGRAM_API_KEY` (or the local recognizer) and restart Wactorz, or switch voice input to Browser. |
+| "Microphone permission denied…" | Allow the microphone for the page in the browser's address bar. |
+
 Reachy hears you but understands the wrong words:
 
 - Move within a metre and face the robot. Reduce background noise.

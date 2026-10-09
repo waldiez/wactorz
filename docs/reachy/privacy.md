@@ -22,8 +22,14 @@ compliant with GDPR or any other regulation by itself.
 | `openai` | **Sent to OpenAI.** |
 | `faster-whisper`, `whisper` | **Stays on the computer running Wactorz.** |
 
+The dashboard's mic button follows the same table when its engine is **Server**. With
+the **Browser** engine, the audio goes to the browser's own speech service instead:
+Google for Chrome, Microsoft for Edge. **Auto** uses the server when it has a
+recognizer, otherwise the browser.
+
 To keep voices on your own hardware, set `REACHY_STT_BACKEND=faster-whisper` (see
-[Configuration](configuration.md#speech-recognition)).
+[Configuration](configuration.md#speech-recognition)) and choose **Server** or **Off**
+for the dashboard mic.
 
 ## Where text and images go
 

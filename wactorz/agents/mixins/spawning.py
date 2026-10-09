@@ -122,7 +122,7 @@ class SpawnMixin(_Host):
             # here first, before anything is written under it: a state shipped
             # with a migration would otherwise be half applied and then lost
             # when the agent failed to start.
-            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
+            logger.error("[%s] Cannot spawn %r: %s", self.name, name, exc)  # noqa: TRY400  # an expected rejection, reported in full by its message
             return None
         return await self._spawn_local_named(
             config,
@@ -331,7 +331,7 @@ class SpawnMixin(_Host):
             return actor
         except ValueError as e:
             # An expected rejection of user input, reported in full by the message.
-            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400, RUF100  # an expected rejection of user input, reported in full
+            logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400  # an expected rejection of user input, reported in full
             return None
         except Exception:
             logger.exception("[%s] Failed to spawn ScheduledAgent '%s'", self.name, name)
@@ -343,7 +343,7 @@ class SpawnMixin(_Host):
             rule = RuleConfig.from_dict(config)
         except ValueError as exc:
             # An expected rejection of the config, reported in full by its message.
-            logger.error("[%s] Cannot spawn rule %r: %s", self.name, name, exc)  # noqa: TRY400, RUF100  # an expected rejection, reported in full by its message
+            logger.error("[%s] Cannot spawn rule %r: %s", self.name, name, exc)  # noqa: TRY400  # an expected rejection, reported in full by its message
             return None
         logger.info("[%s] Spawning rule %r on %s", self.name, name, ", ".join(rule.triggers))
         return await self.spawn(

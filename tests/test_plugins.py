@@ -142,6 +142,16 @@ class TestDiscover:
         assert "json:dumps" in caplog.text
         assert "PYTHONPATH" in caplog.text
 
+    def test_a_bad_target_is_logged_with_its_traceback(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A module that is found and fails needs its own frames to be fixed."""
+        plugins.discover(env="no.such.module:Thing")
+
+        failures = [r for r in caplog.records if "no.such.module:Thing" in r.getMessage()]
+        assert failures
+        assert all(r.exc_info is not None for r in failures)
+
     def test_targets_are_split_on_commas_and_spaces_once_each(self) -> None:
         assert plugins.targets_in(" a:b, c:d a:b\nc:d ") == ["a:b", "c:d"]
 

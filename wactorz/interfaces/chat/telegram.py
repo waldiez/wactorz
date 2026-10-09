@@ -49,7 +49,7 @@ class TelegramInterface:
                 filters,
             )
         except ImportError:
-            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+            logger.error(  # noqa: TRY400  # the ImportError is the whole diagnosis
                 "python-telegram-bot not installed. Run: pip install python-telegram-bot"
             )
             return

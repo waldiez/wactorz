@@ -301,8 +301,9 @@ def discover(*, env: str | None = None, refresh: bool = False) -> dict[str, Agen
         except Exception as exc:
             # An error, not a warning: the deployment named this agent and will
             # look for it on the dashboard. Said with the usual cause, since a
-            # module beside a script is not on the path of a `wactorz` start.
-            logger.error(
+            # module beside a script is not on the path of a `wactorz` start,
+            # and with the traceback, for a module that is found and fails.
+            logger.exception(
                 "[plugins] %s names %s, which could not be loaded: %s. The module must be "
                 "importable from where wactorz starts; set PYTHONPATH or install the package.",
                 ENV_VAR,

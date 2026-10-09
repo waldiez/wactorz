@@ -145,15 +145,15 @@ fmt: ## Format TypeScript
 format: fmt ## Format TypeScript
 
 fmt-py: ## Format Python (ruff format + safe autofixes) — run this to pass the gate
-	$(PYTHON) -m ruff format wactorz tests scripts e2e
-	$(PYTHON) -m ruff check wactorz tests scripts e2e --fix
+	$(PYTHON) -m ruff format wactorz tests scripts e2e examples
+	$(PYTHON) -m ruff check wactorz tests scripts e2e examples --fix
 
 lint: ## Full frontend lint (typecheck + prettier + eslint)
 	cd $(FRONTEND_DIR) && $(PKG_MGR) run lint
 
 lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff families (report only)
-	$(PYTHON) -m ruff check wactorz tests scripts e2e
-	$(PYTHON) -m ruff format --check wactorz tests scripts e2e
+	$(PYTHON) -m ruff check wactorz tests scripts e2e examples
+	$(PYTHON) -m ruff format --check wactorz tests scripts e2e examples
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
 	-$(PYTHON) -m ruff check wactorz --extend-select TRY,C90,PTH,T20 --ignore PTH123 --statistics
 	@echo "── gated: basedpyright (basic) ──"

@@ -285,6 +285,8 @@ select = [
     "LOG",     # flake8-logging — logger misuse
     "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
+    "TRY301",  # a raise inside a try that catches it: control flow by exception
+    "TRY400",  # logger.error in an except drops the traceback; log after the handler
 ]
 ignore = [
     "E501",    # line length is owned by the formatter
@@ -325,8 +327,9 @@ ignore = [
 # mechanism rather than a guard stripped under `-O`, the credentials are fixture
 # strings chosen to be obviously fake, `0.0.0.0` is a bind assertion and `/tmp`
 # a path a test asserts about rather than writes to, and `exec` is how the
-# catalogue programs get parsed. None of it reaches an installed wheel.
-"tests/*" = ["B", "E402", "D", "S"]
+# catalogue programs get parsed. None of it reaches an installed wheel. A test
+# raises inside a `try` to produce the exception, or the rollback, it examines.
+"tests/*" = ["B", "E402", "D", "S", "TRY301"]
 # Build and maintenance tooling, run by a developer on a checkout: every
 # subprocess here is a literal argv naming a tool expected on PATH (`bun`,
 # `npm`, `rsvg-convert`, `ruff`), which is what S603/S607 flag.

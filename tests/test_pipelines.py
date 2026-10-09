@@ -5,6 +5,7 @@ them, checked for wiring when it is declared rather than when a message goes
 nowhere.
 """
 
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -175,6 +176,24 @@ class TestDiscovery:
         assert found == {}
         assert "no.such:thing" in caplog.text
         assert "not a Pipeline" in caplog.text
+
+    def test_a_failure_is_logged_with_its_traceback(
+        self, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both ways in: a target named in the environment, and an entry point."""
+
+        def _broken() -> Any:
+            raise ImportError("the package's own import failed")
+
+        entry = SimpleNamespace(value="broken.pkg:pipes", load=_broken)
+        monkeypatch.setattr(pipelines, "_entry_points", lambda: [entry])
+
+        pipelines.discover(env="no.such:thing", refresh=True)
+
+        for name in ("broken.pkg:pipes", "no.such:thing"):
+            failures = [r for r in caplog.records if name in r.getMessage()]
+            assert failures, name
+            assert all(r.exc_info is not None for r in failures), name
 
     def test_a_declared_pipeline_survives_a_refresh(self) -> None:
         pipeline("kept", steps=[detect])

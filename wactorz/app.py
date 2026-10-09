@@ -877,6 +877,87 @@ def _check_startable(args: argparse.Namespace, *, handle_signals: bool) -> None:
         _install_signal_handlers()
 
 
+async def _run_interface(
+    args: argparse.Namespace,
+    system: "ActorSystem",
+    main_actor: Any,
+    interface: str,
+    companions: list[Any],
+) -> None:
+    """Run ``interface``, the system and ``companions`` until one of them ends."""
+    from wactorz.interfaces.chat_interfaces import (
+        CLIInterface,
+        DiscordInterface,
+        RESTInterface,
+        TelegramInterface,
+        WhatsAppInterface,
+    )
+    from wactorz.interfaces.chat_interfaces import (
+        run_all_interfaces as _run_all,
+    )
+
+    if main_actor is None:
+        # The minimal profile: no orchestrator to talk to, so no chat
+        # interface. The dashboard, the monitor and the deployment's own
+        # agents run until asked to stop.
+        system._running = True
+        await system.run_forever()
+    elif interface == "cli" and sys.stdin.isatty():
+        iface = CLIInterface(main_actor)
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface in ("cli", HEADLESS):
+        # No chat interface of our own: what a library call asks for, and
+        # what a CLI with no TTY (piped/Docker/systemd) falls back to, since
+        # input() would raise EOFError on the first read and, paired with
+        # run_forever(), tear the whole system down a second after boot.
+        # The dashboard and any companion channels still talk to main.
+        if interface == "cli":
+            logger.info("stdin is not a TTY — running headless (no interactive CLI)")
+        system._running = True
+        await asyncio.gather(system.run_forever(), *_run_all(companions))
+    elif interface == "rest":
+        port = args.port or CONFIG.port
+        iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key, system=system)
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface == "discord":
+        discord_token = args.discord_token or CONFIG.discord_token
+        if not discord_token:
+            raise StartupError("DISCORD_BOT_TOKEN not set.")
+        iface = DiscordInterface(
+            main_actor,
+            token=discord_token,
+            allowed_user_ids=CONFIG.discord_allowed_user_ids,
+        )
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface == "whatsapp":
+        port = args.port or CONFIG.port
+        iface = WhatsAppInterface(
+            main_actor,
+            account_sid=CONFIG.twilio_account_sid,
+            auth_token=CONFIG.twilio_auth_token,
+            from_number=CONFIG.twilio_whatsapp_number,
+            port=port,
+            allowed_numbers=CONFIG.whatsapp_allowed_numbers,
+        )
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    elif interface == "telegram":
+        telegram_token = args.telegram_token or CONFIG.telegram_token
+        if not telegram_token:
+            raise StartupError("TELEGRAM_BOT_TOKEN not set.")
+        iface = TelegramInterface(
+            main_actor,
+            token=telegram_token,
+            allowed_user_id=args.telegram_allowed_user_id or None,
+            allowed_user_ids=CONFIG.telegram_allowed_user_ids,
+        )
+        await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
+    else:
+        raise StartupError(
+            f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
+            f"telegram or {HEADLESS}"
+        )
+
+
 async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any) -> None:
     """Run the built system under the chosen interface until stopped, then shut it down."""
     if not getattr(args, "no_monitor", False):
@@ -885,17 +966,7 @@ async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any)
     # NOTE: the monitor web UI is now started inside build_system(), before the
     # supervisor, so it binds even if the broker stalls agent startup.
 
-    from wactorz.interfaces.chat_interfaces import (
-        CLIInterface,
-        DiscordInterface,
-        RESTInterface,
-        TelegramInterface,
-        WhatsAppInterface,
-        build_social_companions,
-    )
-    from wactorz.interfaces.chat_interfaces import (
-        run_all_interfaces as _run_all,
-    )
+    from wactorz.interfaces.chat_interfaces import build_social_companions
 
     interface = args.interface or CONFIG.interface
 
@@ -904,66 +975,7 @@ async def _run(args: argparse.Namespace, system: "ActorSystem", main_actor: Any)
     companions = build_social_companions(main_actor, interface) if main_actor else []
 
     try:
-        if main_actor is None:
-            # The minimal profile: no orchestrator to talk to, so no chat
-            # interface. The dashboard, the monitor and the deployment's own
-            # agents run until asked to stop.
-            system._running = True
-            await system.run_forever()
-        elif interface == "cli" and sys.stdin.isatty():
-            iface = CLIInterface(main_actor)
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        elif interface in ("cli", HEADLESS):
-            # No chat interface of our own: what a library call asks for, and
-            # what a CLI with no TTY (piped/Docker/systemd) falls back to, since
-            # input() would raise EOFError on the first read and, paired with
-            # run_forever(), tear the whole system down a second after boot.
-            # The dashboard and any companion channels still talk to main.
-            if interface == "cli":
-                logger.info("stdin is not a TTY — running headless (no interactive CLI)")
-            system._running = True
-            await asyncio.gather(system.run_forever(), *_run_all(companions))
-        elif interface == "rest":
-            port = args.port or CONFIG.port
-            iface = RESTInterface(main_actor, port=port, api_key=CONFIG.api_key, system=system)
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        elif interface == "discord":
-            discord_token = args.discord_token or CONFIG.discord_token
-            if not discord_token:
-                raise StartupError("DISCORD_BOT_TOKEN not set.")
-            iface = DiscordInterface(
-                main_actor,
-                token=discord_token,
-                allowed_user_ids=CONFIG.discord_allowed_user_ids,
-            )
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        elif interface == "whatsapp":
-            port = args.port or CONFIG.port
-            iface = WhatsAppInterface(
-                main_actor,
-                account_sid=CONFIG.twilio_account_sid,
-                auth_token=CONFIG.twilio_auth_token,
-                from_number=CONFIG.twilio_whatsapp_number,
-                port=port,
-                allowed_numbers=CONFIG.whatsapp_allowed_numbers,
-            )
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        elif interface == "telegram":
-            telegram_token = args.telegram_token or CONFIG.telegram_token
-            if not telegram_token:
-                raise StartupError("TELEGRAM_BOT_TOKEN not set.")
-            iface = TelegramInterface(
-                main_actor,
-                token=telegram_token,
-                allowed_user_id=args.telegram_allowed_user_id or None,
-                allowed_user_ids=CONFIG.telegram_allowed_user_ids,
-            )
-            await asyncio.gather(iface.run(), system.run_forever(), *_run_all(companions))
-        else:
-            raise StartupError(
-                f"unknown interface {interface!r}: use cli, rest, discord, whatsapp, "
-                f"telegram or {HEADLESS}"
-            )
+        await _run_interface(args, system, main_actor, interface, companions)
     except StartupError:
         # The caller's to report: the command exits on it, a host program
         # catches it. Shutdown below still runs.

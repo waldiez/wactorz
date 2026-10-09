@@ -86,6 +86,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -563,16 +564,38 @@ async def setup(agent):
             errors.append(f"pip install {pkg}")
 
     # Check node is available (pptxgenjs is installed locally at runtime if needed)
-    r = await _run_blocking(
-        ["node", "--version"], capture_output=True, text=True, shell=(os.name == "nt")
-    )
-    if r.returncode != 0:
+    # Not installed at all raises rather than returning a failure code.
+    try:
+        r = await _run_blocking(
+            ["node", "--version"], capture_output=True, text=True, shell=(os.name == "nt")
+        )
+        node_found = r.returncode == 0
+    except OSError:
+        node_found = False
+    if not node_found:
         errors.append("Node.js not found — install from nodejs.org")
 
     if errors:
         await agent.alert(f"doc-to-pptx-agent: missing deps — {'; '.join(errors)}", "warning")
     else:
         await agent.log("doc-to-pptx-agent ready (PyMuPDF + pdfplumber + Node.js)")
+
+
+def _failed(error: str, **progress: Any) -> dict[str, Any]:
+    """The answer to a conversion that produced no deck.
+
+    ``progress`` is how far it got -- ``slide_count``, ``title``,
+    ``images_extracted``, ``images_generated`` -- when it failed at the build.
+    """
+    return {
+        "pptx_path": None,
+        "slide_count": 0,
+        "title": "",
+        "images_extracted": 0,
+        "images_generated": 0,
+        **progress,
+        "error": error,
+    }
 
 
 async def handle_task(agent, payload: Any) -> Any:
@@ -595,6 +618,20 @@ async def handle_task(agent, payload: Any) -> Any:
     if not isinstance(payload, dict):
         payload = {}
     file_path = payload.get("file_path", "")
+    numbers = {}
+    for field, default in (("slide_count", 8), ("min_img_width", 200), ("min_img_height", 150)):
+        try:
+            numbers[field] = int(payload.get(field, default))
+        except (TypeError, ValueError):
+            return _failed(f"{field} must be a whole number")
+    slide_count = numbers["slide_count"]
+    min_w = numbers["min_img_width"]
+    min_h = numbers["min_img_height"]
+    nim_fallback = bool(payload.get("nim_fallback", True))
+
+    if not file_path or not Path(file_path).exists():
+        return _failed(f"File not found: {file_path}")
+
     # A private temp dir, not a fixed `/tmp/presentation.pptx`. That name was
     # predictable in a world-writable directory: two conversions at once
     # clobbered each other, and anything that got there first — a symlink, say —
@@ -604,20 +641,6 @@ async def handle_task(agent, payload: Any) -> Any:
     output_path = payload.get("output_path") or str(
         Path(tempfile.mkdtemp(prefix="wactorz-pptx-")) / "presentation.pptx"
     )
-    slide_count = int(payload.get("slide_count", 8))
-    nim_fallback = bool(payload.get("nim_fallback", True))
-    min_w = int(payload.get("min_img_width", 200))
-    min_h = int(payload.get("min_img_height", 150))
-
-    if not file_path or not Path(file_path).exists():
-        return {
-            "pptx_path": None,
-            "slide_count": 0,
-            "title": "",
-            "images_extracted": 0,
-            "images_generated": 0,
-            "error": f"File not found: {file_path}",
-        }
 
     is_pdf = Path(file_path).suffix.lower() == ".pdf"
     work_dir = tempfile.mkdtemp(prefix="doc2pptx_")
@@ -629,14 +652,7 @@ async def handle_task(agent, payload: Any) -> Any:
         await agent.log("Step 1/4 — Reading document text...")
         doc_text = _read_document(file_path)
         if not doc_text.strip():
-            return {
-                "pptx_path": None,
-                "slide_count": 0,
-                "title": "",
-                "images_extracted": 0,
-                "images_generated": 0,
-                "error": "Document appears empty or unreadable",
-            }
+            return _failed("Document appears empty or unreadable")
         await agent.log(f"Extracted {len(doc_text):,} characters of text")
 
         # ── Step 2: Extract PDF images ──────────────────────────────────────
@@ -694,6 +710,12 @@ async def handle_task(agent, payload: Any) -> Any:
 
         # ── Step 4: Build PPTX ──────────────────────────────────────────────
         await agent.log("Step 4/4 — Building .pptx with pptxgenjs...")
+        built = {
+            "slide_count": len(slides),
+            "title": title,
+            "images_extracted": n_extracted,
+            "images_generated": n_generated,
+        }
         js_script = _build_js(outline, assignment, output_path)
         js_path = Path(work_dir) / "build.js"
         js_path.write_text(js_script, encoding="utf-8")
@@ -712,14 +734,7 @@ async def handle_task(agent, payload: Any) -> Any:
             )
             if npm.returncode != 0:
                 err = (npm.stderr or npm.stdout or "npm failed").strip()
-                return {
-                    "pptx_path": None,
-                    "slide_count": len(slides),
-                    "title": title,
-                    "images_extracted": n_extracted,
-                    "images_generated": n_generated,
-                    "error": f"npm install pptxgenjs failed: {err[:300]}",
-                }
+                return _failed(f"npm install pptxgenjs failed: {err[:300]}", **built)
 
         result = await _run_blocking(
             ["node", str(js_path)],
@@ -731,14 +746,7 @@ async def handle_task(agent, payload: Any) -> Any:
         )
         if result.returncode != 0 or not Path(output_path).exists():
             err = (result.stderr or result.stdout or "Unknown error").strip()
-            return {
-                "pptx_path": None,
-                "slide_count": len(slides),
-                "title": title,
-                "images_extracted": n_extracted,
-                "images_generated": n_generated,
-                "error": f"pptxgenjs failed: {err[:400]}",
-            }
+            return _failed(f"pptxgenjs failed: {err[:400]}", **built)
 
         size_kb = Path(output_path).stat().st_size // 1024
         await agent.log(
@@ -746,38 +754,24 @@ async def handle_task(agent, payload: Any) -> Any:
             f"({size_kb} KB, {len(slides)} slides, "
             f"{n_extracted} PDF images, {n_generated} NIM images)"
         )
-        return {
-            "pptx_path": output_path,
-            "slide_count": len(slides),
-            "title": title,
-            "images_extracted": n_extracted,
-            "images_generated": n_generated,
-            "error": None,
-        }
 
     except json.JSONDecodeError as e:
         msg = f"LLM outline JSON parse failed: {e}"
         await agent.alert(msg, "error")
-        return {
-            "pptx_path": None,
-            "slide_count": 0,
-            "title": "",
-            "images_extracted": 0,
-            "images_generated": 0,
-            "error": msg,
-        }
+        return _failed(msg)
 
     except Exception as e:
         msg = f"doc-to-pptx failed: {e}"
         await agent.alert(msg, "error")
-        return {
-            "pptx_path": None,
-            "slide_count": 0,
-            "title": "",
-            "images_extracted": 0,
-            "images_generated": 0,
-            "error": msg,
-        }
+        return _failed(msg)
+
+    else:
+        return {"pptx_path": output_path, **built, "error": None}
+
+    finally:
+        # Extracted images, the script and a local pptxgenjs install; the deck
+        # has the images embedded and lives elsewhere, so none of it is needed.
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 async def process(agent) -> None:

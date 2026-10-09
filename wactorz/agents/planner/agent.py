@@ -136,9 +136,13 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
     async def on_stop(self) -> None:
         """Persist final cost metrics so lifetime spend survives agent termination."""
         # Stopped from outside, the watchdog would still wake at its deadline
-        # and tear down a planner that is already gone.
+        # and tear down a planner that is already gone. Ending itself, the
+        # planner's own teardown has seen to the watchdog -- and may be running
+        # in it: `stop()` runs this under `asyncio.shield`, in a task of its own,
+        # so `current_task()` here is never the watchdog, and cancelling it would
+        # cut the teardown off before it withdraws the planner's card.
         watchdog = self._lifetime_task
-        if watchdog is not None and not watchdog.done() and watchdog is not asyncio.current_task():
+        if not self._terminated and watchdog is not None and not watchdog.done():
             watchdog.cancel()
         if self.total_cost_usd > 0:
             self.persist(
@@ -215,6 +219,18 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
                 if self._spawned_by_planner:
                     reply["spawned"] = self._spawned_by_planner
                 await self.send(self._reply_to_id, MessageType.RESULT, reply)
+        self._end_once_answered()
+
+    def _end_once_answered(self) -> None:
+        """Stop shortly after replying, unless the plan asked to stay.
+
+        A planner lives for one request, so its answer is its end -- whether it
+        planned, answered directly, or returned a plan for approval. Only a
+        pipeline that still has work running in the planner (its state
+        bootstrap) turns `_auto_terminate` off, and the lifetime cap ends it.
+        """
+        if self._auto_terminate:
+            self.run_detached(self._deferred_stop(), name="self-stop")
 
     # ── Report wrapper (on_start path) ────────────────────────────────────
 
@@ -232,6 +248,7 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
             if self._spawned_by_planner:
                 reply["spawned"] = self._spawned_by_planner
             await self.send(self._reply_to_id, MessageType.RESULT, reply)
+        self._end_once_answered()
 
     # ── Pipeline registry ──────────────────────────────────────────────────
     # Each pipeline rule is stored here so users can list / delete them later.
@@ -339,9 +356,6 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
             await self._log("Plan cached for future reuse.")
 
         await self._log("Task complete.")
-        if self._auto_terminate:
-            self.run_detached(self._deferred_stop(), name="self-stop")
-
         return answer
 
     # ── Pipeline code validator ────────────────────────────────────────────
@@ -503,7 +517,13 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
                 max_tokens=1500,
             )
             self._accrue_usage(_usage)
-            plan = loads_lenient(extract_json_array(response))
+            try:
+                plan = loads_lenient(extract_json_array(response))
+            except ValueError as exc:
+                # The model answered without a plan in it, which the caller
+                # handles by answering directly: an outcome, not a fault.
+                logger.warning("[%s] No plan in the model's answer (%s)", self.name, exc)
+                return []
             if isinstance(plan, list) and plan:
                 return plan
         except Exception:
@@ -609,11 +629,12 @@ class PlannerAgent(Actor, SpawnMixin, ContextMixin, ExecutionMixin, PipelineMixi
             await self.stop()
         except Exception as exc:
             logger.debug("[%s] Stop failed: %s", self.name, exc)
-
-        # After stop(), so the final status it publishes cannot be mistaken for
-        # a planner that is still here. This is what tells the dashboard the
-        # card is gone; without it the planner's entry outlives the planner.
-        await self.withdraw_manifest()
+        finally:
+            # After stop(), so the final status it publishes cannot be mistaken
+            # for a planner that is still here; and in `finally`, so nothing
+            # stop() raises -- a cancellation included -- can skip it. This is
+            # what tells the dashboard the card is gone.
+            await self.withdraw_manifest()
 
     async def _deferred_stop(self, delay: float = 2.0) -> None:
         await asyncio.sleep(delay)

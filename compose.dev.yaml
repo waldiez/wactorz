@@ -430,6 +430,8 @@ services:
 
   homeassistant:
     profiles: [full]
+    # `stable`, not a pinned digest, on purpose: this profile is for trying Wactorz
+    # against a current Home Assistant, which is what people will connect it to.
     image: homeassistant/home-assistant:stable
     container_name: wactorz-homeassistant
     hostname: homeassistant.local

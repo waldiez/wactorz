@@ -77,6 +77,84 @@ def test_an_agent_that_ends_itself_leaves_the_dashboard_once(
     )
 
 
+def test_a_one_shot_schedule_leaves_the_dashboard_once_it_is_done(
+    dashboard: browser.Dashboard, app: backend.Backend
+) -> None:
+    # A once-schedule ends itself from a task of its own after it is done. It may
+    # be gone before the page draws it; whatever was drawn must go and stay gone.
+    dashboard.say("start a reminder here", to="main")
+    dashboard.expect_like("main", r"(?s)Setting it\.\n<spawn>\n\{.*\}\n</spawn>.*")
+    dashboard.watch_card("reminder")
+
+    waiting.until(
+        lambda: "reminder" not in dashboard.card_names(),
+        what="the reminder's card to go once it is done",
+        timeout=30,
+        interval=0.5,
+    )
+    waiting.holds_for(
+        lambda: "reminder" not in dashboard.card_names(),
+        what="the reminder's card staying gone",
+        window=35,
+        interval=1,
+    )
+    # Gone means gone: once its card went, it did not come back.
+    seen = dashboard.card_comings_and_goings("reminder")
+    if "removed" in seen:
+        assert "added" not in seen[seen.index("removed") :], seen
+    waiting.until(
+        lambda: app.rest.state_of("reminder") is None,
+        what="the server to have forgotten the reminder",
+    )
+
+
+def test_a_planner_leaves_the_dashboard_once_it_has_answered(
+    dashboard: browser.Dashboard, app: backend.Backend, run: Run
+) -> None:
+    # A planner lives for one request. Its card must go soon after main has its
+    # answer -- not when the planner's lifetime cap runs out -- once, and for good.
+    with Broker(run) as broker:
+        broker.subscribe("agents/+/manifest")
+        dashboard.say("plan: count the beans in the old blue jar", to="main")
+        dashboard.expect_like("main", r"(?s).*There are seven beans\.\s*")
+        dashboard.watch_cards_named_like("planner-")
+
+        def planner_cards() -> set[str]:
+            return {name for name in dashboard.card_names() if name.startswith("planner-")}
+
+        try:
+            waiting.until(
+                lambda: not planner_cards(),
+                what="the planner's card to go once it has answered",
+                timeout=20,
+                interval=0.5,
+            )
+        except waiting.ConditionTimeout as stuck:
+            # What the page shows and saw, and whether the planner's withdrawal --
+            # the one signal that takes its card away -- ever reached the broker.
+            states = {name: dashboard.card_state(name) for name in planner_cards()}
+            withdrawals = [topic for topic, payload in broker.messages if not payload.strip()]
+            raise AssertionError(
+                f"{stuck}; cards {states}, seen {dashboard.cards_named_like('planner-')}, "
+                f"withdrawals on the broker {withdrawals}"
+            ) from stuck
+
+    waiting.holds_for(
+        lambda: not planner_cards(),
+        what="no planner card coming back",
+        window=35,
+        interval=1,
+    )
+    # Gone means gone: no card that went came back.
+    for name, seen in dashboard.cards_named_like("planner-").items():
+        if "removed" in seen:
+            assert "added" not in seen[seen.index("removed") :], (name, seen)
+    waiting.until(
+        lambda: not any(str(a.get("name", "")).startswith("planner-") for a in app.rest.agents()),
+        what="the server to have forgotten the planner",
+    )
+
+
 def test_another_servers_agent_on_the_same_broker_keeps_its_card(
     dashboard: browser.Dashboard, run: Run
 ) -> None:

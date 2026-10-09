@@ -159,11 +159,13 @@ export class AgentStore {
         if (agent) {
             this._lastHeard.set(payload.agentId, Date.now());
             agent.state = payload.state;
-            // A card first made from an event that did not say where the agent
-            // runs (a spawn) learns it here, so it is not taken for a local
-            // agent the server has forgotten.
-            if (payload.node !== undefined && agent.node !== payload.node) {
+            // Where it runs, from the agent itself: a card first made from an
+            // event that did not say (a spawn) learns it here, and one that moved
+            // home learns it is local ("") -- which the nodes panel then shows.
+            let moved = false;
+            if (payload.node !== undefined && (agent.node ?? "") !== payload.node) {
                 agent.node = payload.node;
+                moved = true;
             }
             agent.lastHeartbeatAt = new Date(payload.timestampMs).toISOString();
             if (payload.cpu !== undefined) {
@@ -181,6 +183,9 @@ export class AgentStore {
                 payload.cpu,
                 payload.memory_mb,
             );
+            if (moved) {
+                this.cardDashboard?.updateAgent(agent);
+            }
         } else {
             this.addOrUpdateAgent({
                 id: payload.agentId,

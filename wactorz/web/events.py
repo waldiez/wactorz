@@ -98,11 +98,15 @@ def record_heartbeat(agent_id: str, data: Any) -> None:
     # refuses it.
     if "essential" in data:
         ag["essential"] = bool(data["essential"])
-    # Remote agents' heartbeats include "node" — capture it so the dashboard
-    # delete path can route the stop to the right runner. Local agents don't set
-    # this field; absence means "local".
-    if data.get("node"):
-        ag["node"] = data["node"]
+    # Where it runs, so the dashboard places it and routes a stop to the right
+    # runner. Every heartbeat says: a node's name, or "" for this server. Both are
+    # taken, the empty one too -- an agent moved home would otherwise keep the
+    # node it left in every snapshot, and the page would place it there.
+    if "node" in data:
+        if data["node"]:
+            ag["node"] = data["node"]
+        else:
+            ag.pop("node", None)
 
 
 def rebuild_from_registry(registry: Any) -> int:

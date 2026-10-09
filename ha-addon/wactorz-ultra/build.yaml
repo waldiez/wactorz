@@ -1,7 +1,9 @@
 # Home Assistant Supervisor source-build settings.
+# The base line, not a dated build of it: ha-addon/bases/Dockerfile pins the
+# dated build the published images use, and Dependabot moves it there alone.
 build_from:
-  aarch64: ghcr.io/home-assistant/aarch64-base-debian:trixie-2026.08.0
-  amd64: ghcr.io/home-assistant/amd64-base-debian:trixie-2026.08.0
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:trixie
+  amd64: ghcr.io/home-assistant/amd64-base-debian:trixie
 args:
   # The wactorz release this add-on version is built from, kept in step by
   # scripts/sync_versions.py. Set a branch, tag or sha in a local test copy.

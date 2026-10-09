@@ -403,12 +403,6 @@ branch = true
 omit = [
     "wactorz/_version.py",
     "tests/*",
-    # Catalogue programs that have yet to be measured on their own. They were source
-    # quoted in a string, which coverage could not see, until they became modules;
-    # each leaves this list in the branch that gives it tests.
-    # The list should only shrink.
-    "wactorz/catalogue_agents/doc_to_pptx_agent.py",
-    "wactorz/catalogue_agents/reachy_mini_agent.py",
 ]
 
 [tool.coverage.report]
@@ -421,7 +415,7 @@ exclude_also = [
     "class .*\\bProtocol\\b.*\\):",  # structural types: no runtime behaviour to cover
 ]
 # A ratchet: raise when coverage rises, never lower to pass a branch.
-fail_under = 90
+fail_under = 92
 precision = 2
 
 # ── pylint (advisory) ─────────────────────────────────────────────────────────

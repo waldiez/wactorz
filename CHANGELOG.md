@@ -72,6 +72,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Doc-to-pptx agent.** It starts on a machine without Node.js and says so in its missing-dependencies alert, rather than failing to start; each conversion removes its working directory (extracted images, the build script and a local `pptxgenjs` install) instead of leaving it in the temp directory; and a `slide_count` or image size that is not a whole number gets an answer instead of an error.
+
 - **Manual agent, without a model.** When it routes by keywords (no LLM configured, or the LLM's answer cannot be used), a question that mentions resetting or dropping something ("how do I reset the filter counter?") no longer discards the loaded manual, and a question about it that says "get" and "instructions" no longer starts a search for a device of that name; both are answered from the manual. A request that is only "clear", "forget it" or "reset the manual" still clears it.
 
 - **Anomaly detector.** Rate-of-change detection works: each live reading was recorded as the latest before it was scored, so its time since the previous reading was always zero and a value changing too fast was never flagged. `configure` now applies `learning_period_hours`, `rebuild_interval_hours` and `entities` at once rather than after a restart, and refuses a setting that is not a number; a Home Assistant state with no value no longer stops baselines being built for every other entity; and a report count that is not a positive number, or a request sent as a bare string, gets an answer instead of an error.

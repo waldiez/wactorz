@@ -8,15 +8,18 @@ plumbing under it.
 
 import asyncio
 import inspect
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from tests.waiting import until
+from wactorz import plugins
+from wactorz.agents.function_agent import FunctionAgent, agent
 from wactorz.core.actor import ActorState
 from wactorz.node.agent import NodeAgent
+from wactorz.node.hosted import NodeHosted
 from wactorz.node.runner import NodeRunner
 from wactorz.node.state import flush_states
 
@@ -870,3 +873,132 @@ async def _settle() -> None:
     """Let the tasks a control handler started run to completion."""
     for _ in range(6):
         await asyncio.sleep(0)
+
+
+@agent(subscribes="probe/in", publishes="probe/out", description="Echoes what it is sent.")
+def probe(reading: dict, me: FunctionAgent) -> dict:
+    """A library agent: counts what it has seen, and answers with it."""
+    me.persist("seen", int(me.recall("seen", 0)) + 1)
+    return {"echo": reading, "seen": me.recall("seen")}
+
+
+class TestALibraryAgent:
+    """`type: module`: an agent built from a package installed on this node.
+
+    Built from its plugin the way main builds it, with what a node adds in
+    front: its commands go through the node, a task reaches it on a topic,
+    and the state a migration brings is its own before it starts.
+    """
+
+    @pytest.fixture(autouse=True)
+    def target(self) -> Iterator[str]:
+        with plugins.registered([probe]) as (plugin,):
+            yield plugin.target
+
+    @staticmethod
+    def _config(target: str, **more: Any) -> dict[str, Any]:
+        return {"name": "probe", "type": "module", "target": target, **more}
+
+    async def test_it_is_built_from_the_plugin_and_runs_here(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(self._config(target))
+
+        hosted = runner.hosted("probe")
+        assert isinstance(hosted, NodeHosted)
+        assert isinstance(hosted, FunctionAgent)
+        assert hosted.node == "rpi"
+        assert "probe" in runner.agents, "it is in the node's heartbeat"
+        assert f"agents/{runner.node_name}/logs" in runner.topics
+
+    async def test_a_task_is_answered_by_the_function(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(self._config(target))
+        hosted = runner.hosted("probe")
+        assert hosted is not None
+
+        await runner._run_task(hosted, {"x": 1}, "reply/here")
+
+        assert [p for t, p, _r in runner.published if t == "reply/here"] == [
+            {"echo": {"x": 1}, "seen": 1}
+        ]
+
+    async def test_the_state_a_migration_brings_is_its_own(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(
+            self._config(target, _initial_state={"seen": 41}, _migration_token="tok")
+        )
+
+        hosted = runner.hosted("probe")
+        assert hosted is not None
+        assert hosted.recall("seen") == 41
+        acks = [p for t, p, _r in runner.published if t.endswith("/spawn_ack")]
+        assert [a["migration_token"] for a in acks] == ["tok"]
+
+    async def test_it_is_handed_back_with_its_config_and_state(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(self._config(target))
+        hosted = runner.hosted("probe")
+        assert hosted is not None
+        hosted.persist("seen", 7)
+
+        await runner._return_to_main(hosted, {"return_token": "tok"})
+
+        (returned,) = [p for t, p, _r in runner.published if t.endswith("/state_return")]
+        assert returned["config"]["type"] == "module"
+        assert returned["config"]["target"] == target
+        assert returned["state"] == {"seen": 7}
+        assert runner.hosted("probe") is None
+
+    async def test_a_delete_removes_what_it_kept(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner.spawn_agent(self._config(target))
+        hosted = runner.hosted("probe")
+        assert hosted is not None
+        hosted.persist("seen", 1)
+        state_file = hosted._persistence_dir / "state.pkl"
+
+        await runner.stop_agent("probe", delete=True)
+
+        assert not state_file.exists()
+
+    async def test_a_target_this_node_does_not_have_is_refused(
+        self, runner: RecordingRunner
+    ) -> None:
+        """Nothing starts, main hears no confirmation, and the dashboard says why."""
+        await runner.spawn_agent(
+            {
+                "name": "ghost",
+                "type": "module",
+                "target": "nowhere.pkg:ghost",
+                "_migration_token": "t",
+            }
+        )
+
+        assert runner.hosted("ghost") is None
+        assert not [t for t in runner.topics if t.endswith("/spawn_ack")]
+        await until(
+            lambda: any(
+                t == f"agents/{runner.node_name}/logs" and p.get("type") == "error"
+                for t, p, _r in runner.published
+            ),
+            "the refusal reaches the dashboard",
+        )
+        (error,) = [
+            p
+            for t, p, _r in runner.published
+            if t == f"agents/{runner.node_name}/logs" and p.get("type") == "error"
+        ]
+        assert "nowhere.pkg:ghost" in error["message"]
+
+    async def test_the_manifest_names_what_this_node_can_build(
+        self, runner: RecordingRunner, target: str
+    ) -> None:
+        await runner._publish_manifest()
+
+        manifest = [p for t, p, _r in runner.published if t.endswith("/manifest")][-1]
+        assert target in manifest["agents"]

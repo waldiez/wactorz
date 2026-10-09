@@ -130,9 +130,14 @@ class AgentSpec:
         persistence_dir: str | None = None,
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
+        actor_class: type[FunctionAgent] | None = None,
     ) -> FunctionAgent:
-        """The actor for this specification, under ``name`` or the spec's own."""
-        return FunctionAgent(
+        """The actor for this specification, under ``name`` or the spec's own.
+
+        ``actor_class`` is a subclass of :class:`FunctionAgent` to build
+        instead, for a host that adds to what the actor does where it runs.
+        """
+        return (actor_class or FunctionAgent)(
             self,
             name=name or self.name,
             persistence_dir=persistence_dir,

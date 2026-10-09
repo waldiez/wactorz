@@ -26,6 +26,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ... import plugins
 from ...config import MIGRATION_MAX_BLOB_BYTES, MIGRATION_MAX_STATE_BYTES
 from ...core.blob_transfer import (
     INBOX_DIRNAME,
@@ -53,7 +54,8 @@ from ...core.mqtt import (
     session_kwargs,
 )
 from ...core.paths import resolve_state_dir
-from ...core.state_snapshot import why_it_cannot_travel
+from ...core.state_snapshot import json_safe, why_it_cannot_travel
+from ...plugins import MODULE_TYPE, is_module_config
 from .spawns import why_a_node_cannot_run, without_transient_keys
 
 if TYPE_CHECKING:
@@ -82,6 +84,27 @@ INBOX_KEEP_S = 3600.0
 #: Identifies the code synthesized for an LLM agent sent out to a node, so it
 #: can be dropped when the agent comes back. Hand-written code never has it.
 BRIDGE_CODE_MARKER = "Auto-generated LLM bridge"
+
+
+def library_agent_config(agent_name: str, registry: Any) -> dict[str, Any] | None:
+    """The spawn config of a library agent, as a ``type: module`` spawn would state it.
+
+    None when no plugin goes by ``agent_name``, or the one that does was
+    registered in code under no import path, which nothing elsewhere could
+    name. The running actor's options go with it, those that can be written
+    as JSON: a path, a threshold. One starting with an underscore is the
+    actor's own working value -- a loaded model -- and is left.
+    """
+    plugin = plugins.for_name(agent_name)
+    if plugin is None or not plugin.target:
+        return None
+    local = registry.find_by_name(agent_name) if registry else None
+    held = getattr(local, "options", None)
+    options: dict[str, Any] = {}
+    if isinstance(held, dict):
+        options, _dropped = json_safe({k: v for k, v in held.items() if not k.startswith("_")})
+    return {"name": agent_name, "type": MODULE_TYPE, "target": plugin.target, "options": options}
+
 
 #: `from_node` for an agent that was running here rather than on a node. The
 #: source of a migration is a node name everywhere else, so the sentinel is what
@@ -898,6 +921,10 @@ class Migration:
             return {}
         reg = self.host._get_spawn_registry()
         config = reg.get(agent_name)
+        if config is None:
+            # A library agent started with the system has no entry: its config
+            # is what a `type: module` spawn of it would say.
+            config = library_agent_config(agent_name, self.host._registry)
         have_code = bool(config and config.get("code"))
 
         # ── Locate the agent via every source we have ─────────────────────────
@@ -1072,7 +1099,9 @@ class Migration:
         # Before anything stops: a node handed a config with no program starts
         # an empty agent and confirms it, and the migration would then purge
         # the only copy that worked.
-        unrunnable = why_a_node_cannot_run(dict(config or {}))
+        unrunnable = why_a_node_cannot_run(
+            dict(config or {}), self.host_nodes.targets_of(target_node)
+        )
         if unrunnable:
             return {
                 "success": False,
@@ -1283,7 +1312,7 @@ class Migration:
         if self.host is None:
             return {}
         message = f"Cannot migrate '{agent_name}': {reason}"
-        if config and config.get("code"):
+        if config and (config.get("code") or is_module_config(config)):
             await self._restore_local({"config": dict(config)})
             return {"success": False, "message": f"{message} It is running on 'local' again."}
         logger.warning(

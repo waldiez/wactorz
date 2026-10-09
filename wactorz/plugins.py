@@ -27,7 +27,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-from .agents.function_agent import AgentSpec, agent_name_from, spec_of
+from .agents.function_agent import AgentSpec, FunctionAgent, agent_name_from, spec_of
 from .config import CONFIG
 from .core.actor import Actor
 
@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 
 #: The entry-point group a package lists its agents under.
 ENTRY_POINT_GROUP = "wactorz.agents"
+#: The spawn config ``type`` of an agent built from a plugin, by its ``target``.
+MODULE_TYPE = "module"
 #: The environment variable naming targets to load, comma or space separated.
 ENV_VAR = "WACTORZ_AGENTS"
 
@@ -68,6 +70,7 @@ class AgentPlugin:
         persistence_dir: str | None = None,
         llm_provider: Any = None,
         options: dict[str, Any] | None = None,
+        mixin: type | None = None,
         **_ignored: Any,
     ) -> Actor:
         """The actor, built the way the catalogue builds a native one.
@@ -75,6 +78,11 @@ class AgentPlugin:
         Keyword-only and tolerant of extras, because every caller that spawns
         by factory -- ``Actor.spawn``, the supervisor, the catalogue -- passes
         what it has, and an actor class is told only what it accepts.
+
+        ``mixin`` is put in front of the actor's own class, for a host that
+        adds something to every agent it runs -- a node, which routes its
+        commands and keeps its state its own way -- without the agent's author
+        knowing where it will run.
         """
         if self.kind == "function":
             spec: AgentSpec = self.obj
@@ -83,8 +91,9 @@ class AgentPlugin:
                 persistence_dir=persistence_dir,
                 llm_provider=llm_provider,
                 options=options,
+                actor_class=hosted_by(mixin, FunctionAgent),
             )
-        cls: type[Actor] = self.obj
+        cls: type[Actor] = hosted_by(mixin, self.obj)
         kwargs: dict[str, Any] = {"name": name or self.name}
         if persistence_dir is not None:
             kwargs["persistence_dir"] = persistence_dir
@@ -109,6 +118,37 @@ class AgentPlugin:
             "requires": dict(self.requires),
             "plugin": self.target,
         }
+
+
+def is_module_config(config: dict[str, Any]) -> bool:
+    """Whether a spawn config names a plugin to build rather than code to run."""
+    return (config.get("type") or "").strip().lower() == MODULE_TYPE
+
+
+def targets_in(value: str) -> list[str]:
+    """The targets named in a ``WACTORZ_AGENTS`` value, in order, once each."""
+    found: list[str] = []
+    for raw in value.replace(",", " ").split():
+        if raw and raw not in found:
+            found.append(raw)
+    return found
+
+
+def hosted_by(mixin: type | None, cls: Any) -> Any:
+    """``cls`` with ``mixin`` in front of it, or ``cls`` itself when there is none."""
+    if mixin is None:
+        return cls
+    return type(f"{mixin.__name__}{cls.__name__}", (mixin, cls), {})
+
+
+def targets() -> list[str]:
+    """The import paths of every plugin this machine can build, sorted.
+
+    What a node reports in its manifest, so main can tell which library agents
+    it may place there. A plugin registered in code under no path is left out:
+    nothing elsewhere could name it.
+    """
+    return sorted({plugin.target for plugin in discover().values() if plugin.target})
 
 
 def _accepted_parameters(cls: type) -> set[str] | None:
@@ -188,15 +228,6 @@ def resolve_target(target: str) -> Any:
     for part in attr.split("."):
         obj = getattr(obj, part)
     return obj
-
-
-def targets_in(value: str) -> list[str]:
-    """The targets named in a ``WACTORZ_AGENTS`` value, in order, once each."""
-    found: list[str] = []
-    for raw in value.replace(",", " ").split():
-        if raw and raw not in found:
-            found.append(raw)
-    return found
 
 
 #: What has been found or registered, by agent name. None until first asked.

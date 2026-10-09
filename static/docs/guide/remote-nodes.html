@@ -325,6 +325,12 @@ and the account is not in the <code>systemd-journal</code> group), so it reports
 </code></pre></div>
 
 <p>The main machine publishes this config to <code>nodes/rpi-livingroom/spawn</code>. The runner picks it up, installs any declared <code>"install"</code> packages, compiles the code, and starts the agent under a local supervisor.</p>
+<h4 id="a-library-agent-type-module">A library agent (<code>type: module</code>)</h4>
+<p>An agent the deployment brings — a function declared with <code>@wactorz.agent</code>, an <code>Actor</code> subclass — is spawned on a node by its import path, as it is on main, and built there from the package installed on the node:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"imu-anomaly"</span><span class="p">,</span><span class="w"> </span><span class="nt">"node"</span><span class="p">:</span><span class="w"> </span><span class="s2">"rpi-kitchen"</span><span class="p">,</span><span class="w"> </span><span class="nt">"type"</span><span class="p">:</span><span class="w"> </span><span class="s2">"module"</span><span class="p">,</span><span class="w"> </span><span class="nt">"target"</span><span class="p">:</span><span class="w"> </span><span class="s2">"imu_anomaly.agent:detect"</span><span class="p">,</span><span class="w"> </span><span class="nt">"options"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"threshold"</span><span class="p">:</span><span class="w"> </span><span class="mf">4.0</span><span class="p">}}</span>
+</code></pre></div>
+
+<p>The node has to have it: the package installed into the runner's environment (or its folder on <code>PYTHONPATH</code> there), and the target named in <code>WACTORZ_AGENTS</code> in that environment — <code>~/wactorz/.env</code> under a deploy — or listed as a <code>wactorz.agents</code> entry point. A node reports the targets it can build in its manifest, and main spawns or migrates a library agent only to a node that names the target; otherwise it refuses, naming what to install. On the node the agent runs as it does on main, with no model: <code>me.llm</code> is <code>None</code> there. <em>Using Wactorz as a library</em> has the rest.</p>
 <blockquote>
 <p><strong>ℹ replace flag</strong> — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass <code>"replace": true</code> in the config to stop the old instance and spawn fresh.</p>
 </blockquote>
@@ -590,7 +596,7 @@ node holding the old one.</p>
 <tr>
 <td><code>nodes/{name}/manifest</code></td>
 <td>← runner</td>
-<td>What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, and the installed packages. Sent when the runner starts and after an install; cleared by <code>/nodes remove</code>.</td>
+<td>What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, the installed packages, and the library agents it can build (<code>agents</code>, by import path). Sent when the runner starts and after an install; cleared by <code>/nodes remove</code>.</td>
 </tr>
 <tr>
 <td><code>nodes/{name}/migrate</code></td>
@@ -761,7 +767,7 @@ crash starts from <code>restart_delay</code> again.</p>
 </code></pre></div>
 
 <p>Main routes every migration; a node never spawns on another node.</p>
-<p>A node runs an agent whose program goes with it: generated code, or an LLM agent (<code>type: llm</code>), for which main writes the code. An agent built into the server — a native catalogue agent such as <code>flic</code> or <code>weather-agent</code>, a Home Assistant actuator, a scheduled, rule or module agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.</p>
+<p>A node runs an agent whose program goes with it: generated code, or an LLM agent (<code>type: llm</code>), for which main writes the code. A library agent — a decorated function or an <code>Actor</code> subclass registered with the system, <code>type: module</code> — it builds from the package installed there, so one moves only to a node whose manifest names its target; see <a href="#a-library-agent-type-module">A library agent</a>. An agent built into the server — a native catalogue agent such as <code>flic</code> or <code>weather-agent</code>, a Home Assistant actuator, a scheduled or rule agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.</p>
 <p>The state is taken after the agent has stopped, so what its <code>on_stop</code> writes last (a final counter, an LLM agent's last turn) goes with it.</p>
 <p>State travels as JSON, and the agent's blobs — bytes, numpy arrays, torch tensors and modules, scikit-learn-family models — travel beside it, each in chunks on a topic of its own, checked against its SHA-256 when it arrives. A migration is refused, and the agent keeps running where it is, when:</p>
 <ul>

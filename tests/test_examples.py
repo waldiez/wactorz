@@ -436,6 +436,44 @@ class TestTheAG2Example:
         assert result["turns"] == 4, "write, critique, rewrite, approve"
 
 
+class TestTheImuDetectorKeepsItsModel:
+    """The model is read from the file once and kept in the agent's state."""
+
+    @staticmethod
+    def _model_file(tmp_path: Path) -> Path:
+        numpy = pytest.importorskip("numpy")
+        import pickle
+
+        model_module = _load("imu_anomaly", "model")
+        normal = numpy.random.default_rng(seed=7).normal(
+            loc=(0.0, 0.0, 1.0), scale=(0.3, 0.3, 0.2), size=(500, 3)
+        )
+        path = tmp_path / "imu_model.pkl"
+        path.write_bytes(pickle.dumps(model_module.MahalanobisModel.fit(normal)))
+        return path
+
+    async def test_it_scores_without_the_file_once_it_has_seen_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.syspath_prepend(str(EXAMPLES / "imu_anomaly"))
+        path = self._model_file(tmp_path)
+        spec = spec_of(_load("imu_anomaly").detect)
+        assert spec is not None
+        state = tmp_path / "state"
+        jolt = {"ax": 9.0, "ay": -7.5, "az": 1.0}
+
+        first = spec.build(persistence_dir=str(state), options={"model": str(path)})
+        assert (await first.call(jolt))["score"] > 4.0
+        assert first.recall("model") == path.read_bytes()
+
+        path.unlink()
+        again = spec.build(persistence_dir=str(state), options={"model": str(path)})
+        await again._load_persistent_state()
+
+        assert (await again.call(jolt))["score"] > 4.0
+        assert await again.call({"ax": 0.0, "ay": 0.0, "az": 1.0}) is None
+
+
 class TestTheImuRunScript:
     """`run.py` starts the minimal profile unless asked for the full system."""
 

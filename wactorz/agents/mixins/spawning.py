@@ -377,6 +377,9 @@ class SpawnMixin(_Host):
             )
             return None
         options = config.get("options")
+        # Coming home from a node: what it persisted there is written here
+        # before it starts, so its first recall finds it.
+        await self._apply_initial_state(name, config)
         logger.info("[%s] Spawning %r from %s", self.name, name, target)
         return await self.spawn(
             cast("type[Actor]", plugin.build),

@@ -205,3 +205,42 @@ class TestTheCatalogue:
 
         assert "plugin" not in catalog[packaged]
         assert "shadowed" in caplog.text
+
+
+class TestBuildingUnderAMixin:
+    """A host puts its own class in front of the agent's, without the author knowing."""
+
+    def test_a_decorated_function_carries_it(self, tmp_path: Path) -> None:
+        class Hosted:
+            pass
+
+        @agent(subscribes="in/x")
+        def hosted_fn(reading: dict) -> dict:
+            return reading
+
+        actor = plugins.plugin_from(hosted_fn).build(persistence_dir=str(tmp_path), mixin=Hosted)
+
+        assert isinstance(actor, Hosted)
+        assert isinstance(actor, FunctionAgent)
+
+    def test_an_actor_subclass_carries_it_too(self, tmp_path: Path) -> None:
+        class Hosted:
+            pass
+
+        class Own(Actor):
+            async def handle_message(self, message: Message) -> None:
+                return None
+
+        actor = plugins.plugin_from(Own).build(persistence_dir=str(tmp_path), mixin=Hosted)
+
+        assert isinstance(actor, Hosted)
+        assert isinstance(actor, Own)
+
+    def test_without_one_the_class_is_the_agents_own(self, tmp_path: Path) -> None:
+        @agent(subscribes="in/x")
+        def plain(reading: dict) -> dict:
+            return reading
+
+        assert (
+            type(plugins.plugin_from(plain).build(persistence_dir=str(tmp_path))) is FunctionAgent
+        )

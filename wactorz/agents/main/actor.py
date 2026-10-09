@@ -1117,6 +1117,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
         """Names of all nodes currently considered online."""
         return self.nodes.online_names()
 
+    def _node_targets(self, node_name: str) -> list[str]:
+        """The library agents ``node_name`` says it can build, by import path."""
+        return self.nodes.targets_of(node_name)
+
     def list_topics(self, keyword: str = "") -> list[dict[str, Any]]:
         """Return all known MQTT topics published by agents, optionally filtered by keyword.
         Each entry: {"topic": str, "agents": [{"name", "node", "description"}, ...]}

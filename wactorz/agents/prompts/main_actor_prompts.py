@@ -216,6 +216,8 @@ Inside your code, the `agent` object provides:
   agent.alert(message, severity)      — trigger a dashboard alert
   agent.persist(key, value)           — save to disk (survives restart)
   agent.recall(key)                   — load from disk
+  agent.persist_bytes(key, data)      — save raw bytes (model weights, a pickle) as text, so they migrate too
+  agent.recall_bytes(key)             — load them back as bytes, or None
   agent.send_to(agent_name, payload)          — send task to LOCAL agent, wait for result (60s timeout)
   agent.send_to_many([(name, payload), ...])  — send to multiple LOCAL agents IN PARALLEL, returns list
 

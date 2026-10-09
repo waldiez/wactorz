@@ -17,10 +17,13 @@ listening loses the agent, so the checks that come first are pinned first.
 
 import json
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
 
+from wactorz import plugins
+from wactorz.agents.function_agent import agent as declare_agent
 from wactorz.agents.main.actor import MainActor
 from wactorz.agents.main.manifests import ManifestRegistry
 from wactorz.agents.main.migration import Migration
@@ -744,3 +747,52 @@ class TestAnAgentANodeCannotRun:
         assert not agent.stopped
         assert not main.spawned_remote
         assert not main.actor.migration.pending_spawns
+
+
+@declare_agent(subscribes="probe/in")
+def probe(reading: dict) -> dict:
+    return reading
+
+
+class TestALibraryAgent:
+    """One started with the system: no registry entry, a plugin under its name.
+
+    It goes as a `type: module` spawn of its target, with its state, to a node
+    whose manifest says it can build that target; to any other node it is
+    refused, with what to install there.
+    """
+
+    @pytest.fixture(autouse=True)
+    def target(self) -> Iterator[str]:
+        with plugins.registered([probe]) as (plugin,):
+            yield plugin.target
+
+    @staticmethod
+    def _main(*, builds: list[str]) -> _Main:
+        main = _Main(nodes={"nuc": online()}, local=("probe",))
+        main.actor.nodes.node_manifests["nuc"] = {"manifest_v": 1, "agents": builds}
+        main.local("probe").holding(seen=3)
+        return main
+
+    async def test_it_goes_as_a_module_agent_with_its_state(self, target: str) -> None:
+        main = self._main(builds=[target])
+
+        result = await main.migrate("probe", "nuc")
+
+        assert result["success"] is True
+        config, node, _save = main.spawned_remote[0]
+        assert node == "nuc"
+        assert config["type"] == "module"
+        assert config["target"] == target
+        assert config["_initial_state"] == {"seen": 3}
+
+    async def test_a_node_that_cannot_build_it_is_refused(self, target: str) -> None:
+        main = self._main(builds=["other.pkg:agent"])
+
+        result = await main.migrate("probe", "nuc")
+
+        assert result["success"] is False
+        assert target in result["message"]
+        assert "WACTORZ_AGENTS" in result["message"]
+        assert main.spawned_remote == []
+        assert main.local("probe").stopped is False

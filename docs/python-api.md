@@ -27,6 +27,8 @@ maps to the same ID across restarts.
 | `async spawn(actor_class, **kwargs)` | Spawn a child actor (inherits MQTT, registry, persistence) |
 | `persist(key, value)` | Save a value (auto-routed to SQLite / memory / Pickle) |
 | `recall(key, default=None)` | Load a persisted value |
+| `persist_bytes(key, data)` | Save raw bytes as text, so a model travels with the state (JSON on a node and in a migration) |
+| `recall_bytes(key)` | Load them back as `bytes`, or `None` when nothing is stored |
 | `async publish_manifest(description="", publishes=None, capabilities=None, input_schema=None, output_schema=None)` | Publish a retained capability manifest so main can discover this actor |
 
 **Key attributes:**

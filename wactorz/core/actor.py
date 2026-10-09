@@ -5,6 +5,7 @@ Every agent IS an actor. Actors communicate via message passing only.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import functools
 import inspect
@@ -1527,6 +1528,27 @@ class Actor(ABC):
             result = self._persistence_api.get(key)
             return default if result is None else result
         return self._persistent_state.get(key, default)
+
+    def persist_bytes(self, key: str, data: bytes) -> None:
+        """Persist raw bytes as text, so they go wherever the state goes.
+
+        A migration ships the state as JSON and a node keeps it as JSON, and
+        neither carries ``bytes``: a value that does not encode is left behind.
+        Stored as base64 text, a pickled estimator, a ``state_dict`` or an ONNX
+        file is a string like any other and travels with the agent.
+        :meth:`recall_bytes` turns it back. The whole state must still fit a
+        migration's size limit, so this is for a model, not a dataset.
+        """
+        self.persist(key, base64.b64encode(data).decode("ascii"))
+
+    def recall_bytes(self, key: str) -> bytes | None:
+        """What :meth:`persist_bytes` stored under ``key``, or None when nothing is there."""
+        text = self.recall(key)
+        if text is None:
+            return None
+        if not isinstance(text, str):
+            raise TypeError(f"{key!r} holds a {type(text).__name__}, not what persist_bytes writes")
+        return base64.b64decode(text, validate=True)
 
     # ─── Subscriptions ────────────────────────────────────────────────────────
 

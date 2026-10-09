@@ -65,6 +65,8 @@ OUTPUT RULES:
         agent.window(topic, seconds=N)    — returns StreamWindow immediately
         agent.persist(key, val)           — save to disk
         agent.recall(key)                 — load from disk
+        agent.persist_bytes(key, data)    — save bytes (a model) as text
+        agent.recall_bytes(key)           — load them back, or None
         agent.declare_contract(...)       — register topic contract
         agent.agents()                    — list running agents
         agent.topics(keyword)             — list known topics

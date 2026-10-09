@@ -154,6 +154,41 @@ restored after a restart, and may be spawned under another name with a
 `type: "module"` spawn config; only registered targets are accepted there,
 because a spawn config can be written by the model.
 
+## On a node, and moving between machines
+
+A registered agent can run on a [node](remote-nodes.md) as well as on main,
+and move between the two with `/migrate`, as long as the node can build it.
+A node runs a dynamic agent from the program main sends it; a library agent
+it builds from a package installed there, exactly as main does, so the node
+needs the same two things main needed:
+
+- **the code, importable where the runner starts**: `pip install` your package
+  into the node's environment, or put its folder on `PYTHONPATH` there;
+- **the registration**: `WACTORZ_AGENTS=mypkg.agents:detect` in the runner's
+  environment (the `~/wactorz/.env` a deploy writes is read by its service),
+  or a `wactorz.agents` entry point in the installed package.
+
+A node says in its manifest which targets it can build, and main places a
+library agent only on a node that names its target; to any other it refuses
+the move, with what to install there. On the node the agent subscribes,
+publishes and persists as it does on main, answers tasks sent to it by name,
+and keeps its state under the node's state directory. It has no model there:
+`me.llm` is `None`, since a node makes no model calls.
+
+```text
+/migrate imu-anomaly rpi-kitchen      # the node's manifest lists imu_anomaly.agent:detect
+/migrate imu-anomaly local            # and back, with its state
+```
+
+What it persisted goes with it both ways, blobs included: a model, an array
+or bytes an agent persists is kept as a file of its own beside its state and
+travels beside the snapshot, so a detector that keeps its model with
+`persist()` arrives with it. A pickled model, or a torch module, loads by
+running code: main sends such a value to a node but does not take one from
+a node, so an agent that must come home keeps a `state_dict()` or plain
+bytes instead. On a restart of main, an agent the spawn registry places on a
+node is not started on main as well.
+
 ## An `Actor` subclass
 
 For an agent with its own lifecycle, subclass `Actor`. The base class
@@ -225,12 +260,17 @@ race. A plain `def` under concurrency runs on that many worker threads.
 ## Your own files
 
 `me.state_dir` (or `self.state_dir` in a subclass) is the agent's own
-directory under the state directory: for model weights, a checkpoint store, a
-local experiment log, anything too large or too un-JSON for `persist()`. It
-exists from construction, survives restarts, and is removed with the agent on
-a delete. What moves with a migration to another node is the persisted
-state, not these files; an agent that needs a file on another machine ships
-it.
+directory under the state directory: for a checkpoint store, a local
+experiment log, anything with a reader of its own. It exists from
+construction, survives restarts, and is removed with the agent on a delete.
+What moves with a migration to another node is the persisted state, not
+these files; an agent that needs a file on another machine ships it.
+
+A model is better persisted than written here. Bytes, a numpy array, a torch
+tensor or `state_dict()`, a scikit-learn-family model: `persist()` keeps each
+as a file of its own beside the state, written when its key is persisted
+rather than with every counter, and a migration carries it. The example in
+`examples/imu_anomaly/` reads its model file once and persists the bytes.
 
 ```python
 checkpointer = SqliteSaver.from_conn_string(str(me.state_dir / "graph.sqlite"))

@@ -81,6 +81,10 @@ class SpawnHost(Protocol):
 
     def _node_version_mismatch(self, node_name: str) -> str | None: ...
 
+    def _node_targets(self, node_name: str) -> list[str]:
+        """The library agents a node says it can build, by import path."""
+        ...
+
     def recall(self, key: str) -> Any: ...
 
     def persist(self, key: str, value: Any) -> None: ...
@@ -237,14 +241,17 @@ class NodeReaders(Protocol):
     """The live node view a migration consults.
 
     Named separately from the host because it is a different object: the node
-    collaborator, not the actor. A migration asks it two things — whether the
-    destination is up, and which node currently runs an agent — and both are
-    answered from the heartbeat table it owns.
+    collaborator, not the actor. A migration asks it three things — whether the
+    destination is up, which node currently runs an agent, and which library
+    agents a node can build — answered from the heartbeat table and the
+    manifests it owns.
     """
 
     known: dict[str, dict[str, Any]]
 
     def running_agent(self, name: str) -> str: ...
+
+    def targets_of(self, node_name: str) -> list[str]: ...
 
 
 class MigrationHost(NodeHost, Protocol):

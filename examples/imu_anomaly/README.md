@@ -171,8 +171,16 @@ def detect(reading: dict, me: wactorz.FunctionAgent) -> dict | None: ...
 
 The function is called once per reading, on a worker thread so a slow model
 never holds the event loop. Returning `None` publishes nothing. The second
-parameter is the actor, used here to load the model once and keep a count
-across restarts with `persist`/`recall`.
+parameter is the actor, used here to load the model once, to keep it, and to
+keep a count across restarts with `persist`/`recall`.
+
+The model is kept by the agent. On the first reading the file's bytes are
+read and persisted; bytes an agent persists are kept as a file of their own
+beside its state, and every later start reads them back and never opens the
+file. So the model survives a restart without `imu_model.pkl`, and goes with
+the agent when it moves. The stored copy wins over the file: after `train.py`
+writes a new model, delete the agent's state (its folder under the state
+directory) for the new file to be read.
 
 `run.py` hands the function to `wactorz.run()`, which supervises it beside the
 monitor, restarts it if it crashes, and serves the dashboard. Inside a program
@@ -295,3 +303,27 @@ imu-anomaly = "imu_anomaly.agent:detect"
 
 Either way the agent is supervised at startup, listed by `@catalog list`, and
 chat can ask it for a verdict on a reading: `@imu-anomaly {"ax": 9.0, "ay": 0, "az": 1}`.
+
+## On a node
+
+The detector runs on a [node](../../docs/remote-nodes.md) too, and moves there
+and back with its model. The node builds it from this folder, so the folder
+has to be on the node, on the runner's path, and named in its environment —
+the same two things main needed:
+
+```bash
+PYTHONPATH=/home/pi/imu_anomaly WACTORZ_AGENTS=agent:detect wactorz-node --node rpi-kitchen --mqtt-broker 192.168.1.10
+```
+
+Under a deploy, put both lines in the node's `~/wactorz/.env`. The node then
+lists `agent:detect` in its manifest, and from chat:
+
+```text
+/migrate imu-anomaly rpi-kitchen
+/migrate imu-anomaly local
+```
+
+The model goes along each way, as the bytes the agent persisted; the counter
+too. A node that does not list the target refuses the move and says what to
+install. On the node the agent has no model API: `me.llm` is `None` there,
+which this detector never uses.

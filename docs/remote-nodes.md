@@ -188,6 +188,16 @@ From the main Wactorz chat, add a `"node"` field to any spawn request. The plann
 
 The main machine publishes this config to `nodes/rpi-livingroom/spawn`. The runner picks it up, installs any declared `"install"` packages, compiles the code, and starts the agent under a local supervisor.
 
+#### A library agent (`type: module`)
+
+An agent the deployment brings — a function declared with `@wactorz.agent`, an `Actor` subclass — is spawned on a node by its import path, as it is on main, and built there from the package installed on the node:
+
+```json
+{"name": "imu-anomaly", "node": "rpi-kitchen", "type": "module", "target": "imu_anomaly.agent:detect", "options": {"threshold": 4.0}}
+```
+
+The node has to have it: the package installed into the runner's environment (or its folder on `PYTHONPATH` there), and the target named in `WACTORZ_AGENTS` in that environment — `~/wactorz/.env` under a deploy — or listed as a `wactorz.agents` entry point. A node reports the targets it can build in its manifest, and main spawns or migrates a library agent only to a node that names the target; otherwise it refuses, naming what to install. On the node the agent runs as it does on main, with no model: `me.llm` is `None` there. *Using Wactorz as a library* has the rest.
+
 > **ℹ replace flag** — If an agent with the same name is already running on the node, the spawn is ignored by default. Pass `"replace": true` in the config to stop the old instance and spawn fresh.
 
 ---
@@ -447,7 +457,7 @@ The runner subscribes to a set of control topics scoped to its node name, and pu
 | `nodes/{name}/list` | → runner | Request the list of running agents. Response on `nodes/{name}/agents`. |
 | `nodes/{name}/agents` | ← runner | Response to `list`. Contains agent names and actor IDs. |
 | `nodes/{name}/heartbeat` | ← runner | Runner heartbeat every 10 s. Contains node name, Wactorz version, runtime kind, agent count, broker address, whether the node checks signed commands, and how close the machine is to running out: CPU, memory (within a container's or a unit's memory limit), swap, load, free disk where the state is kept, the CPU's temperature and, on a Raspberry Pi, what is throttling it. A reading the node cannot take is `null`. |
-| `nodes/{name}/manifest` | ← runner | What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, and the installed packages. Sent when the runner starts and after an install; cleared by `/nodes remove`. |
+| `nodes/{name}/manifest` | ← runner | What the machine is, retained: architecture, system, Python, model, whether it is a container, CPUs and memory (within any limit), disk, accelerators, the devices an agent can use, the installed packages, and the library agents it can build (`agents`, by import path). Sent when the runner starts and after an install; cleared by `/nodes remove`. |
 | `nodes/{name}/migrate` | → runner | Hand a running agent back to main, which places it. Payload: `{"name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608}`. Signed. |
 | `nodes/{name}/migrate_result` | ← runner | Result of a migration request. A failure, including a refusal, is shown on the dashboard. |
 | `nodes/{name}/code_changed` | ← runner | An agent here repaired its own program. Carries the agent's name and no code. |
@@ -543,7 +553,7 @@ A running agent can be moved between main and a node, or from one node to anothe
 
 Main routes every migration; a node never spawns on another node.
 
-A node runs an agent whose program goes with it: generated code, or an LLM agent (`type: llm`), for which main writes the code. An agent built into the server — a native catalogue agent such as `flic` or `weather-agent`, a Home Assistant actuator, a scheduled, rule or module agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
+A node runs an agent whose program goes with it: generated code, or an LLM agent (`type: llm`), for which main writes the code. A library agent — a decorated function or an `Actor` subclass registered with the system, `type: module` — it builds from the package installed there, so one moves only to a node whose manifest names its target; see [A library agent](#a-library-agent-type-module). An agent built into the server — a native catalogue agent such as `flic` or `weather-agent`, a Home Assistant actuator, a scheduled or rule agent — has no program in its config, so moving or spawning one on a node is refused with the reason, and it stays where it is. The agent is stopped where it runs, its config and persisted state are sent to where it is going, and the source keeps its own copy until the destination confirms the agent started. Only then is the source's copy deleted. A destination that never confirms within five minutes is told to drop the agent, and the agent is started again where it was, from the copy that was kept.
 
 The state is taken after the agent has stopped, so what its `on_stop` writes last (a final counter, an LLM agent's last turn) goes with it.
 

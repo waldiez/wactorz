@@ -298,6 +298,37 @@ and left out. A registered agent is supervised, listed by <code>@catalog list</c
 restored after a restart, and may be spawned under another name with a
 <code>type: "module"</code> spawn config; only registered targets are accepted there,
 because a spawn config can be written by the model.</p>
+<h2 id="on-a-node-and-moving-between-machines">On a node, and moving between machines</h2>
+<p>A registered agent can run on a <a href="../guide/remote-nodes.html">node</a> as well as on main,
+and move between the two with <code>/migrate</code>, as long as the node can build it.
+A node runs a dynamic agent from the program main sends it; a library agent
+it builds from a package installed there, exactly as main does, so the node
+needs the same two things main needed:</p>
+<ul>
+<li><strong>the code, importable where the runner starts</strong>: <code>pip install</code> your package
+  into the node's environment, or put its folder on <code>PYTHONPATH</code> there;</li>
+<li><strong>the registration</strong>: <code>WACTORZ_AGENTS=mypkg.agents:detect</code> in the runner's
+  environment (the <code>~/wactorz/.env</code> a deploy writes is read by its service),
+  or a <code>wactorz.agents</code> entry point in the installed package.</li>
+</ul>
+<p>A node says in its manifest which targets it can build, and main places a
+library agent only on a node that names its target; to any other it refuses
+the move, with what to install there. On the node the agent subscribes,
+publishes and persists as it does on main, answers tasks sent to it by name,
+and keeps its state under the node's state directory. It has no model there:
+<code>me.llm</code> is <code>None</code>, since a node makes no model calls.</p>
+<div class="highlight"><pre><span></span><code>/migrate imu-anomaly rpi-kitchen      # the node's manifest lists imu_anomaly.agent:detect
+/migrate imu-anomaly local            # and back, with its state
+</code></pre></div>
+
+<p>What it persisted goes with it both ways, blobs included: a model, an array
+or bytes an agent persists is kept as a file of its own beside its state and
+travels beside the snapshot, so a detector that keeps its model with
+<code>persist()</code> arrives with it. A pickled model, or a torch module, loads by
+running code: main sends such a value to a node but does not take one from
+a node, so an agent that must come home keeps a <code>state_dict()</code> or plain
+bytes instead. On a restart of main, an agent the spawn registry places on a
+node is not started on main as well.</p>
 <h2 id="an-actor-subclass">An <code>Actor</code> subclass</h2>
 <p>For an agent with its own lifecycle, subclass <code>Actor</code>. The base class
 subscribes, keeps rolling windows and publishes for you, on one broker
@@ -359,12 +390,16 @@ once and read by every call is fine, a counter updated with <code>persist</code>
 race. A plain <code>def</code> under concurrency runs on that many worker threads.</p>
 <h2 id="your-own-files">Your own files</h2>
 <p><code>me.state_dir</code> (or <code>self.state_dir</code> in a subclass) is the agent's own
-directory under the state directory: for model weights, a checkpoint store, a
-local experiment log, anything too large or too un-JSON for <code>persist()</code>. It
-exists from construction, survives restarts, and is removed with the agent on
-a delete. What moves with a migration to another node is the persisted
-state, not these files; an agent that needs a file on another machine ships
-it.</p>
+directory under the state directory: for a checkpoint store, a local
+experiment log, anything with a reader of its own. It exists from
+construction, survives restarts, and is removed with the agent on a delete.
+What moves with a migration to another node is the persisted state, not
+these files; an agent that needs a file on another machine ships it.</p>
+<p>A model is better persisted than written here. Bytes, a numpy array, a torch
+tensor or <code>state_dict()</code>, a scikit-learn-family model: <code>persist()</code> keeps each
+as a file of its own beside the state, written when its key is persisted
+rather than with every counter, and a migration carries it. The example in
+<code>examples/imu_anomaly/</code> reads its model file once and persists the bytes.</p>
 <div class="highlight"><pre><span></span><code><span class="n">checkpointer</span> <span class="o">=</span> <span class="n">SqliteSaver</span><span class="o">.</span><span class="n">from_conn_string</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">me</span><span class="o">.</span><span class="n">state_dir</span> <span class="o">/</span> <span class="s2">"graph.sqlite"</span><span class="p">))</span>
 </code></pre></div>
 

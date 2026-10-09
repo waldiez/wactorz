@@ -145,6 +145,8 @@ MANIFEST_FIELDS = frozenset(
         "gpu",
         "devices",
         "packages",
+        # The library agents the node can build, by import path.
+        "agents",
     }
 )
 
@@ -171,6 +173,10 @@ SPAWN_CONFIG_FIELDS = frozenset(
         "replace",
         "_initial_state",
         "_migration_token",
+        # A library agent, built from a package on the node: what to build,
+        # and what its constructor or `agent.options` is given.
+        "target",
+        "options",
     }
 )
 

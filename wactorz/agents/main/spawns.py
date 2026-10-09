@@ -19,10 +19,12 @@ import json
 import logging
 import re
 import time
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from ...core.actor import ReplyError, ask_through
 from ...core.topics import topic_name_error
+from ...plugins import MODULE_TYPE, is_module_config
 
 if TYPE_CHECKING:
     from ...core.actor import Actor
@@ -49,16 +51,18 @@ SPAWN_REGISTRY_KEY = "_spawned_agents"
 TRANSIENT_CONFIG_KEYS = frozenset({"_initial_state"})
 
 
-def why_a_node_cannot_run(config: dict[str, Any]) -> str | None:
+def why_a_node_cannot_run(config: dict[str, Any], node_targets: Collection[str] = ()) -> str | None:
     """Why a node could not run the agent ``config`` describes, or None if it can.
 
-    A node runs every agent as generated code: what the config's ``code`` holds,
-    or, for an agent of type ``llm``, the bridge code main writes for it. Every
-    other kind of agent is a class built into this server -- a native catalogue
-    agent, a Home Assistant actuator, a scheduled or rule agent, a registered
-    module -- and its config carries no program. Sent to a node, it starts as an
-    agent with nothing to run, answers every message with an error, and is
-    reported as started all the same.
+    A node runs an agent as generated code: what the config's ``code`` holds,
+    or, for an agent of type ``llm``, the bridge code main writes for it. A
+    module agent it builds from a package installed there, so one is placed
+    only on a node whose manifest names the target among ``node_targets``.
+    Every other kind of agent is a class built into this server -- a native
+    catalogue agent, a Home Assistant actuator, a scheduled or rule agent --
+    and its config carries no program. Sent to a node, it starts as an agent
+    with nothing to run, answers every message with an error, and is reported
+    as started all the same.
     """
     if (config.get("code") or "").strip():
         return None
@@ -67,9 +71,19 @@ def why_a_node_cannot_run(config: dict[str, Any]) -> str | None:
         return None
     if agent_type == "dynamic":
         return "it has no program to send there"
+    if agent_type == MODULE_TYPE:
+        target = str(config.get("target") or "").strip()
+        if target and target in node_targets:
+            return None
+        return (
+            f"it is built from {target or 'a target it does not name'}, which that node has "
+            f"not said it has. Install the package on the node and name the agent in "
+            f"WACTORZ_AGENTS there, or list it as a wactorz.agents entry point"
+        )
     return (
         f"it is a {agent_type} agent, built into this server, and a node runs only an "
-        f"agent whose program goes with it: generated code, or an LLM agent"
+        f"agent whose program goes with it: generated code, an LLM agent, or a library "
+        f"agent from a package installed there"
     )
 
 
@@ -704,7 +718,10 @@ class SpawnService:
                 problem,
             )
             return
-        unrunnable = why_a_node_cannot_run(config)
+        # The node's targets are asked for only when they decide: a host that
+        # cannot say -- a test's stand-in -- places code and LLM agents as before.
+        targets = self.host._node_targets(node) if is_module_config(config) else ()
+        unrunnable = why_a_node_cannot_run(config, targets)
         if unrunnable:
             await self._refuse_remote_spawn(config, node, f"{unrunnable}.")
             return

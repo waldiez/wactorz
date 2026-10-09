@@ -54,7 +54,7 @@ SPAWN CONFIG
     "error":             "str|null  — error message if failed"
   },
   "poll_interval": 3600,
-  "code": "<copy AGENT_CODE string from the bottom of this file>"
+  "code": "<the source of this file>"
 }
 
 
@@ -82,11 +82,6 @@ No NIM (extracted images only, text-only for slides without one):
   }
 """
 
-# ──────────────────────────────────────────────────────────────────────────────
-# AGENT_CODE — copy this string into the "code" field of the spawn config
-# ──────────────────────────────────────────────────────────────────────────────
-
-AGENT_CODE = r'''
 import asyncio
 import json
 import os
@@ -102,7 +97,7 @@ from typing import Any
 
 def _read_pdf_text(path):
     """Extract text from PDF using pdfplumber (best for clean text)."""
-    import pdfplumber
+    import pdfplumber  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe
 
     pages = []
     with pdfplumber.open(path) as pdf:
@@ -147,7 +142,7 @@ def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[d
     Images smaller than min_w × min_h are skipped (logos, bullets, decorations).
     CMYK images are converted to RGB so they save cleanly as PNG.
     """
-    import fitz  # PyMuPDF  (pip install pymupdf)
+    import fitz  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe (pymupdf)
 
     results = []
     doc = fitz.open(pdf_path)
@@ -187,8 +182,7 @@ def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[d
                 )
                 pix = None
 
-            except Exception:
-                # Corrupt / unsupported image format — skip silently
+            except Exception:  # noqa: S112  # a corrupt or unsupported image is skipped, by design
                 continue
 
     doc.close()
@@ -549,7 +543,7 @@ async def _run_blocking(cmd, **kwargs) -> "subprocess.CompletedProcess":
     system is free in the meantime, which it was not before.
     """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: subprocess.run(cmd, **kwargs))
+    return await loop.run_in_executor(None, lambda: subprocess.run(cmd, **kwargs))  # noqa: S603  # argv built here, never from input
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -586,8 +580,8 @@ async def handle_task(agent, payload: Any) -> Any:
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
-        except Exception:
-            pass
+        except ValueError:
+            pass  # not JSON: the text is the request
     if isinstance(payload, dict):
         for key in ("text", "message", "query"):
             raw = payload.get(key, "")
@@ -595,8 +589,8 @@ async def handle_task(agent, payload: Any) -> Any:
                 try:
                     payload = json.loads(raw)
                     break
-                except Exception:
-                    pass
+                except ValueError:
+                    pass  # looked like JSON and was not; try the next field
     if not isinstance(payload, dict):
         payload = {}
     file_path = payload.get("file_path", "")
@@ -651,7 +645,7 @@ async def handle_task(agent, payload: Any) -> Any:
         if is_pdf:
             await agent.log(f"Step 2/4 — Extracting embedded images (min {min_w}×{min_h}px)...")
             try:
-                import fitz
+                import fitz  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe (pymupdf)
 
                 # Count pages for later page-to-slide mapping
                 doc_tmp = fitz.open(file_path)
@@ -790,6 +784,3 @@ async def handle_task(agent, payload: Any) -> Any:
 async def process(agent) -> None:
     # Task-driven only — no polling loop needed
     await asyncio.sleep(3600)
-
-
-'''

@@ -1013,7 +1013,7 @@ Every recipe, what it does and what it needs, is listed in [Catalogue agents](ca
 
 ### Adding New Recipes
 
-Drop a Python file into `catalogue_agents/` with an `AGENT_CODE` string (the same format as any dynamic agent), then add its entry to `catalog_agent.py`:
+Drop a Python module into `catalogue_agents/` holding the program itself (the same functions as any dynamic agent's code), then add its entry to `catalog_agent.py`. The module's source is what gets sent and exec'd:
 
 ```python
 # In catalog_agent.py — _build_catalog()

@@ -57,9 +57,6 @@ def _unpickle_sites() -> dict[str, int]:
     `self.pickle.load(...)` — that is `PickleStore.load`, nothing to do with the
     stdlib, and a text search reports four of them. A tripwire that cries wolf is
     one that gets deleted.
-
-    Does not see inside `catalogue_agents`' `AGENT_CODE`, which is a string
-    literal here and runs on a node rather than against this state tree.
     """
     found: dict[str, int] = {}
     for path in sorted(PACKAGE.rglob("*.py")):

@@ -20,10 +20,12 @@ from typing import Any
 
 import pytest
 
+from wactorz import catalogue_agents
 from wactorz.agents import catalog_agent
 from wactorz.agents.catalog_agent import (
     CatalogAgent,
     _dependency_is_satisfied,
+    _load_embedded_recipe,
     _load_recipe,
     get_native_factory,
 )
@@ -183,18 +185,34 @@ class TestRecipeLoading:
         assert isinstance(code, str)
         assert "async def" in code
 
-    def test_a_file_that_cannot_be_imported_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_a_recipe_is_the_source_of_its_file(self) -> None:
+        path = Path(catalogue_agents.__file__).parent / "manual_agent.py"
+
+        assert _load_recipe("manual_agent.py") == path.read_text(encoding="utf-8")
+
+    def test_an_embedded_recipe_yields_the_string_it_holds(self) -> None:
+        code = _load_embedded_recipe("reachy_mini_agent.py")
+
+        assert isinstance(code, str)
+        assert "AGENT_CODE" not in code
+        assert "async def" in code
+
+    def test_an_embedded_recipe_that_cannot_be_imported_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda *_a: None)
 
-        assert _load_recipe("anomaly_detector_agent.py") is None
+        assert _load_embedded_recipe("reachy_mini_agent.py") is None
 
-    def test_a_file_that_raises_on_import_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_an_embedded_recipe_that_raises_on_import_is_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         def _boom(*_args: Any) -> Any:
             raise SyntaxError("bad recipe")
 
         monkeypatch.setattr(importlib.util, "spec_from_file_location", _boom)
 
-        assert _load_recipe("anomaly_detector_agent.py") is None
+        assert _load_embedded_recipe("reachy_mini_agent.py") is None
 
     def test_native_factories_are_found_by_name(self) -> None:
         assert get_native_factory("weather-agent") is WeatherAgent

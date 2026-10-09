@@ -1,10 +1,10 @@
-"""Agent programs are Python held in a string, so the linters do not read them.
+"""The programs the catalogue hands to a DynamicAgent compile, and keep to the rules.
 
-Each catalogue agent keeps its program in `AGENT_CODE` and execs it at spawn.
-Ruff and the type checker see a string literal, so a syntax error there survives
-every check and surfaces as an agent that will not start.
-
-Parsing is not coverage. It is the floor.
+A catalogue program is source sent in a spawn config's `code` and exec'd at
+spawn. Most are modules of `wactorz.catalogue_agents`, which the linters read
+like any other; one still keeps its program in an `AGENT_CODE` string, which
+they see only as a literal. These checks run on what the catalogue actually
+sends, so they hold for both shapes.
 """
 
 import ast
@@ -13,32 +13,23 @@ import sys
 
 import pytest
 
+from wactorz.agents.catalog_agent import _build_catalog
+
 AGENTS = pathlib.Path(__file__).resolve().parent.parent / "wactorz" / "catalogue_agents"
 
-#: The name the loader asks for: `getattr(mod, "AGENT_CODE", None)`. Matching on
-#: it rather than on "a long string" keeps prompts out, and keeps this in step
-#: with what actually gets run.
+#: The name `_load_embedded_recipe` asks for.
 NAME = "AGENT_CODE"
 
 
-def agent_sources() -> list[tuple[str, str, str]]:
-    """(module, name, source) for every embedded agent program."""
-    found = []
-    for path in sorted(AGENTS.glob("*.py")):
-        for node in ast.parse(path.read_text(encoding="utf-8")).body:
-            if not isinstance(node, ast.Assign):
-                continue
-            value = node.value
-            if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
-                continue
-            if not any(isinstance(t, ast.Name) and t.id == NAME for t in node.targets):
-                continue
-            found.append((path.name, NAME, value.value))
-    return found
+def catalogue_programs() -> list[tuple[str, str]]:
+    """(recipe, source) for every catalogue recipe that runs as a program."""
+    return sorted(
+        (name, recipe["code"]) for name, recipe in _build_catalog().items() if recipe.get("code")
+    )
 
 
 def commented_out() -> list[str]:
-    """Modules whose program has been commented out and not put back.
+    """Modules whose `AGENT_CODE` has been commented out and not put back.
 
     An easy thing to leave behind after reading the code with the linter, and
     the recipe is dead until it goes back: the loader finds no attribute.
@@ -56,7 +47,7 @@ def commented_out() -> list[str]:
     return out
 
 
-SOURCES = agent_sources()
+PROGRAMS = catalogue_programs()
 
 
 def _enclosing(tree: ast.AST) -> dict[ast.AST, ast.AST]:
@@ -99,9 +90,9 @@ def function_local_stdlib_imports(source: str) -> list[tuple[str, int]]:
     return out
 
 
-def test_there_is_agent_source_to_check() -> None:
-    """Without this, renaming the convention would make every check below vacuous."""
-    assert SOURCES, f"no {NAME} found under {AGENTS}"
+def test_there_are_programs_to_check() -> None:
+    """Without this, a loader that found nothing would make every check below vacuous."""
+    assert PROGRAMS, "the catalogue built no recipe that carries code"
 
 
 def test_no_program_is_left_commented_out() -> None:
@@ -109,34 +100,20 @@ def test_no_program_is_left_commented_out() -> None:
     assert not commented_out(), f"{NAME} is commented out in: {', '.join(commented_out())}"
 
 
-@pytest.mark.parametrize(
-    ("module", "name", "source"), SOURCES, ids=[f"{m}:{n}" for m, n, _ in SOURCES]
-)
-def test_every_agent_program_parses(module: str, name: str, source: str) -> None:
+@pytest.mark.parametrize(("recipe", "source"), PROGRAMS, ids=[name for name, _ in PROGRAMS])
+def test_every_program_compiles(recipe: str, source: str) -> None:
     try:
-        ast.parse(source)
+        compile(source, recipe, "exec")
     except SyntaxError as exc:
-        pytest.fail(
-            f"{module}:{name} is not valid Python at line {exc.lineno} of the "
-            f"embedded source: {exc.msg}"
-        )
+        pytest.fail(f"{recipe} is not valid Python at line {exc.lineno}: {exc.msg}")
 
 
-#: How many of these the programs still carry. A ceiling, not a target: it fails
-#: on growth, never on progress, so it can be lowered whenever a program is
-#: cleaned up rather than having to move in the same commit.
-FUNCTION_LOCAL_STDLIB_CEILING = 62
-
-
-def test_stdlib_imports_do_not_spread() -> None:
+def test_no_program_imports_the_stdlib_inside_a_function() -> None:
     """A stdlib import cannot fail, so a function is never the place for it."""
     offenders = [
-        f"{module}:{imported}@{lineno}"
-        for module, _name, source in SOURCES
+        f"{recipe}:{imported}@{lineno}"
+        for recipe, source in PROGRAMS
         for imported, lineno in function_local_stdlib_imports(source)
     ]
 
-    assert len(offenders) <= FUNCTION_LOCAL_STDLIB_CEILING, (
-        f"{len(offenders) - FUNCTION_LOCAL_STDLIB_CEILING} new stdlib import(s) inside "
-        f"a function: {', '.join(offenders[FUNCTION_LOCAL_STDLIB_CEILING:])}"
-    )
+    assert offenders == []

@@ -95,16 +95,7 @@ def _catalogue_helper(
 
     ``injected`` is what the host puts in the program's namespace.
     """
-    source = next(
-        node.value.value
-        for node in ast.parse(
-            (ROOT / "wactorz" / "catalogue_agents" / module).read_text(encoding="utf-8")
-        ).body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == "AGENT_CODE" for t in node.targets)
-        and isinstance(node.value, ast.Constant)
-        and isinstance(node.value.value, str)
-    )
+    source = (ROOT / "wactorz" / "catalogue_agents" / module).read_text(encoding="utf-8")
     program = ast.parse(source)
     assert any(
         isinstance(node, ast.Import) and any(alias.name == "ssl" for alias in node.names)
@@ -115,7 +106,7 @@ def _catalogue_helper(
         for node in program.body
         if isinstance(node, ast.FunctionDef) and node.name == "_mqtt_tls_kwargs"
     )
-    namespace: dict[str, Any] = {"os": os, "ssl": ssl, **(injected or {})}
+    namespace: dict[str, Any] = {"os": os, "ssl": ssl, "Any": Any, **(injected or {})}
     exec(compile(ast.Module(body=[helper], type_ignores=[]), module, "exec"), namespace)
     return namespace["_mqtt_tls_kwargs"]
 

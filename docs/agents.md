@@ -147,7 +147,7 @@ Runs `pip install` in a subprocess on request. Called automatically by `CatalogA
 | **restarts** | 10 |
 | **recipes dir** | `wactorz/catalogue_agents/` |
 
-Pre-built agent recipe library. On startup it loads every `AGENT_CODE` string from `wactorz/catalogue_agents/*.py` and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and `trusted=True` — bypassing the code safety validator since catalog agents are pre-built and tested.
+Pre-built agent recipe library. On startup it reads every recipe's program from `wactorz/catalogue_agents/` and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and `trusted=True` — bypassing the code safety validator since catalog agents are pre-built and tested.
 
 #### Usage
 
@@ -560,7 +560,7 @@ See [API reference](api.md#cost-management) for the full endpoint spec.
 
 ## Catalog recipes
 
-Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `AGENT_CODE` string. They are loaded by `CatalogAgent` at startup and spawned on demand as DynamicAgents with `trusted=True` (safety validator bypassed).
+Recipes live in `wactorz/catalogue_agents/` as plain Python modules, each one the program itself; the module's source is what gets sent. They are loaded by `CatalogAgent` at startup and spawned on demand as DynamicAgents with `trusted=True` (safety validator bypassed).
 
 | Recipe name | File | Description | Deps |
 |-------------|------|-------------|------|
@@ -569,7 +569,7 @@ Recipes live in `wactorz/catalogue_agents/` as plain Python files exporting an `
 | `smart-energy` | `smart_energy_agent.py` | Conversational Home Assistant smart-plug helper. Imports power-reporting plugs, tracks live watts plus kWh/cost, publishes energy summaries, and only powers down plugs through explicit guarded rules. | none |
 | `manual-agent` | `manual_agent.py` | Searches the web for device manuals, downloads PDFs, extracts text, and answers questions about them using the agent's LLM. | `httpx`, `pdfplumber`, `duckduckgo_search` |
 
-> **💡 Adding a recipe** — Create `wactorz/catalogue_agents/my_agent.py` exporting `AGENT_CODE = r'''...'''`, then add an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The recipe is available on the next restart without any other changes.
+> **💡 Adding a recipe** — Write the program as `wactorz/catalogue_agents/my_agent.py` (`setup`, `process`, `handle_task`, `cleanup`, as any dynamic agent's code), then add an entry to `_build_catalog()` in `wactorz/agents/catalog_agent.py`. The recipe is available on the next restart without any other changes.
 
 ---
 

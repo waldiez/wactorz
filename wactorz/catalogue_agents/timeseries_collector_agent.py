@@ -70,13 +70,18 @@ TASK EXAMPLES (natural language also works via @mention)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-AGENT_CODE = r'''
 import asyncio
 import json
+import logging
 import os
-import ssl
 import re
+import ssl
 import time
+from typing import Any
+
+from wactorz.core.persistence import get_db
+
+logger = logging.getLogger("timeseries-collector")
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 
@@ -85,18 +90,19 @@ DEFAULT_TOPICS = [
     "custom/detections/#",
     "custom/sensors/#",
     "homeassistant/state_changes/#",
-    "sinergym/env/+/observation",        # Sinergym step observations
-    "sinergym/env/+/episode",            # Sinergym episode start/end events
+    "sinergym/env/+/observation",  # Sinergym step observations
+    "sinergym/env/+/episode",  # Sinergym episode start/end events
 ]
-DEFAULT_BATCH_INTERVAL   = 5.0      # flush every N seconds
-DEFAULT_BATCH_SIZE       = 200      # buffer hint
-DEFAULT_RETENTION_DAYS   = 90       # auto-prune after N days
-DEFAULT_PRUNE_INTERVAL_H = 6.0      # hours between prune passes
+DEFAULT_BATCH_INTERVAL = 5.0  # flush every N seconds
+DEFAULT_BATCH_SIZE = 200  # buffer hint
+DEFAULT_RETENTION_DAYS = 90  # auto-prune after N days
+DEFAULT_PRUNE_INTERVAL_H = 6.0  # hours between prune passes
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MESSAGE ROUTING — fills the per-type buffers in agent.state
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def _route_message(agent, topic, payload):
     """Route an MQTT message to the correct buffer based on topic."""
@@ -105,9 +111,9 @@ def _route_message(agent, topic, payload):
     if not isinstance(payload, dict):
         return
 
-    sensor_buf    = agent.state["sensor_buffer"]
+    sensor_buf = agent.state["sensor_buffer"]
     detection_buf = agent.state["detection_buffer"]
-    ha_buf        = agent.state["ha_buffer"]
+    ha_buf = agent.state["ha_buffer"]
 
     # ── Detection messages ─────────────────────────────────────────
     if "detections" in topic or "detection" in topic:
@@ -117,77 +123,134 @@ def _route_message(agent, topic, payload):
             detections = [payload]
         src_agent = payload.get("agent", topic.split("/")[-1] if "/" in topic else "")
         for det in detections:
-            detection_buf.append((
-                now,
-                src_agent,
-                det.get("class", "unknown"),
-                float(det.get("confidence", 0.0)),
-                json.dumps(det.get("bbox", [])),
-                int(det.get("frame_id", 0)),
-                json.dumps({k: v for k, v in det.items()
-                            if k not in ("class", "confidence", "bbox", "frame_id")}),
-                payload.get("node", ""),
-            ))
+            detection_buf.append(
+                (
+                    now,
+                    src_agent,
+                    det.get("class", "unknown"),
+                    float(det.get("confidence", 0.0)),
+                    json.dumps(det.get("bbox", [])),
+                    int(det.get("frame_id", 0)),
+                    json.dumps(
+                        {
+                            k: v
+                            for k, v in det.items()
+                            if k not in ("class", "confidence", "bbox", "frame_id")
+                        }
+                    ),
+                    payload.get("node", ""),
+                )
+            )
 
     # ── Sinergym observations ──────────────────────────────────────
     elif "sinergym/" in topic and "/observation" in topic:
-        env_id  = payload.get("env_id", "")
+        env_id = payload.get("env_id", "")
         episode = int(payload.get("episode", 0))
-        step    = int(payload.get("step", 0))
-        reward  = payload.get("reward")
-        mode    = payload.get("mode", "")
-        entity  = f"sinergym.{env_id}" if env_id else "sinergym"
+        step = int(payload.get("step", 0))
+        reward = payload.get("reward")
+        mode = payload.get("mode", "")
+        entity = f"sinergym.{env_id}" if env_id else "sinergym"
 
         # Store reward as a sensor reading
         if reward is not None:
-            sensor_buf.append((
-                now, topic, entity, "reward",
-                float(reward), "", "",
-                f"sinergym-{mode}", "",
-            ))
+            sensor_buf.append(
+                (
+                    now,
+                    topic,
+                    entity,
+                    "reward",
+                    float(reward),
+                    "",
+                    "",
+                    f"sinergym-{mode}",
+                    "",
+                )
+            )
 
         # Store each obs dimension as obs_0, obs_1, ...
         obs = payload.get("obs", [])
         if isinstance(obs, list):
             for i, val in enumerate(obs):
                 if isinstance(val, (int, float)):
-                    sensor_buf.append((
-                        now, topic, entity, f"obs_{i}",
-                        float(val), "", "",
-                        f"sinergym-{mode}", "",
-                    ))
+                    sensor_buf.append(
+                        (
+                            now,
+                            topic,
+                            entity,
+                            f"obs_{i}",
+                            float(val),
+                            "",
+                            "",
+                            f"sinergym-{mode}",
+                            "",
+                        )
+                    )
 
         # Store each action dimension
         action = payload.get("action", [])
         if isinstance(action, list):
             for i, val in enumerate(action):
                 if isinstance(val, (int, float)):
-                    sensor_buf.append((
-                        now, topic, entity, f"action_{i}",
-                        float(val), "", "",
-                        f"sinergym-{mode}", "",
-                    ))
+                    sensor_buf.append(
+                        (
+                            now,
+                            topic,
+                            entity,
+                            f"action_{i}",
+                            float(val),
+                            "",
+                            "",
+                            f"sinergym-{mode}",
+                            "",
+                        )
+                    )
 
         # Store step and episode as metadata
-        sensor_buf.append((
-            now, topic, entity, "step",
-            float(step), "", "", f"sinergym-{mode}", "",
-        ))
-        sensor_buf.append((
-            now, topic, entity, "episode",
-            float(episode), "", "", f"sinergym-{mode}", "",
-        ))
+        sensor_buf.append(
+            (
+                now,
+                topic,
+                entity,
+                "step",
+                float(step),
+                "",
+                "",
+                f"sinergym-{mode}",
+                "",
+            )
+        )
+        sensor_buf.append(
+            (
+                now,
+                topic,
+                entity,
+                "episode",
+                float(episode),
+                "",
+                "",
+                f"sinergym-{mode}",
+                "",
+            )
+        )
 
         # Store info dict fields (energy, comfort, etc.)
         info = payload.get("info", {})
         if isinstance(info, dict):
             for k, v in info.items():
                 if isinstance(v, (int, float)):
-                    sensor_buf.append((
-                        now, topic, entity, f"info_{k}",
-                        float(v), "", "",
-                        f"sinergym-{mode}", "",
-                    ))
+                    sensor_buf.append(
+                        (
+                            now,
+                            topic,
+                            entity,
+                            f"info_{k}",
+                            float(v),
+                            "",
+                            "",
+                            f"sinergym-{mode}",
+                            "",
+                        )
+                    )
 
     # ── Sinergym episode events ────────────────────────────────────
     elif "sinergym/" in topic and "/episode" in topic:
@@ -196,16 +259,30 @@ def _route_message(agent, topic, payload):
             # Store episode summary as sensor readings for easy querying
             env_id = payload.get("env_id", "")
             entity = f"sinergym.{env_id}" if env_id else "sinergym"
-            for field in ("total_reward", "mean_reward", "steps",
-                          "total_energy_W", "comfort_violations_degC_steps",
-                          "violation_timesteps", "duration_s"):
+            for field in (
+                "total_reward",
+                "mean_reward",
+                "steps",
+                "total_energy_W",
+                "comfort_violations_degC_steps",
+                "violation_timesteps",
+                "duration_s",
+            ):
                 val = payload.get(field)
                 if val is not None and isinstance(val, (int, float)):
-                    sensor_buf.append((
-                        now, topic, entity, f"ep_{field}",
-                        float(val), "", "",
-                        "sinergym-bridge", "",
-                    ))
+                    sensor_buf.append(
+                        (
+                            now,
+                            topic,
+                            entity,
+                            f"ep_{field}",
+                            float(val),
+                            "",
+                            "",
+                            "sinergym-bridge",
+                            "",
+                        )
+                    )
 
     # ── HA state changes ───────────────────────────────────────────
     elif "state_changes" in topic:
@@ -223,11 +300,23 @@ def _route_message(agent, topic, payload):
 
         old_val = old_state.get("state", "") if isinstance(old_state, dict) else str(old_state)
         domain = entity_id.split(".")[0] if "." in entity_id else ""
-        context = payload.get("context", {}).get("id", "") if isinstance(payload.get("context"), dict) else ""
+        context = (
+            payload.get("context", {}).get("id", "")
+            if isinstance(payload.get("context"), dict)
+            else ""
+        )
 
-        ha_buf.append((
-            now, entity_id, old_val, state_val, domain, attrs, context,
-        ))
+        ha_buf.append(
+            (
+                now,
+                entity_id,
+                old_val,
+                state_val,
+                domain,
+                attrs,
+                context,
+            )
+        )
 
     # ── Sensor data (everything else) ──────────────────────────────
     else:
@@ -243,18 +332,34 @@ def _route_message(agent, topic, payload):
                 continue
 
             if isinstance(value, (int, float)):
-                sensor_buf.append((
-                    now, topic, entity_id, field_name,
-                    float(value), "", "",
-                    src_agent, node,
-                ))
+                sensor_buf.append(
+                    (
+                        now,
+                        topic,
+                        entity_id,
+                        field_name,
+                        float(value),
+                        "",
+                        "",
+                        src_agent,
+                        node,
+                    )
+                )
             elif isinstance(value, str) and value not in ("", "null"):
                 # Non-numeric but potentially useful (on/off, states)
-                sensor_buf.append((
-                    now, topic, entity_id, field_name,
-                    None, value, "",
-                    src_agent, node,
-                ))
+                sensor_buf.append(
+                    (
+                        now,
+                        topic,
+                        entity_id,
+                        field_name,
+                        None,
+                        value,
+                        "",
+                        src_agent,
+                        node,
+                    )
+                )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -262,11 +367,11 @@ def _route_message(agent, topic, payload):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _mqtt_tls_kwargs():
+def _mqtt_tls_kwargs() -> dict[str, Any]:
     """TLS for this program's own broker connection, as its host's connections use it.
 
-    A copy of the rule in wactorz/core/mqtt_tls.py: on a node this program cannot
-    import wactorz. tests/test_mqtt_tls.py holds it to the original.
+    A copy of the rule in wactorz/core/mqtt_tls.py, which tests/test_mqtt_tls.py
+    holds to the original.
     """
     if os.environ.get("MQTT_TLS", "").strip().lower() not in ("1", "true", "yes", "on"):
         return {}
@@ -289,6 +394,7 @@ def _mqtt_tls_kwargs():
     else:
         context.check_hostname = bool(ca)
     return {"tls_context": context}
+
 
 async def _mqtt_subscriber(agent):
     """Subscribe to all configured topics and buffer incoming messages."""
@@ -323,7 +429,8 @@ async def _mqtt_subscriber(agent):
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         pass  # skip non-JSON messages
                     except Exception:
-                        pass  # don't spam logs
+                        # Per message, so at debug: a bad stream would flood the log.
+                        logger.debug("could not route a message on %s", topic, exc_info=True)
 
         except asyncio.CancelledError:
             break
@@ -339,25 +446,27 @@ async def _mqtt_subscriber(agent):
 # FLUSH — write buffered rows to SQLite
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _flush(agent):
     """Write all buffered data to SQLite."""
-    from wactorz.core.persistence import get_db
     db = get_db()
     if not db:
         return
 
     written = 0
-    sensor_buf    = agent.state["sensor_buffer"]
+    sensor_buf = agent.state["sensor_buffer"]
     detection_buf = agent.state["detection_buffer"]
-    ha_buf        = agent.state["ha_buffer"]
+    ha_buf = agent.state["ha_buffer"]
 
     if sensor_buf:
         try:
             db.write_sensor_batch(sensor_buf)
             written += len(sensor_buf)
             sensor_buf.clear()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "could not write %d sensor rows, kept for the next flush: %s", len(sensor_buf), e
+            )
 
     if detection_buf:
         try:
@@ -365,8 +474,12 @@ def _flush(agent):
                 db.write_detection(*row)
             written += len(detection_buf)
             detection_buf.clear()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "could not write %d detection rows, kept for the next flush: %s",
+                len(detection_buf),
+                e,
+            )
 
     if ha_buf:
         try:
@@ -374,8 +487,12 @@ def _flush(agent):
                 db.write_ha_state(*row)
             written += len(ha_buf)
             ha_buf.clear()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "could not write %d Home Assistant state rows, kept for the next flush: %s",
+                len(ha_buf),
+                e,
+            )
 
     if written:
         agent.state["total_written"] += written
@@ -399,8 +516,8 @@ async def _flush_loop(agent):
 # RETENTION PRUNING
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _do_prune(agent):
-    from wactorz.core.persistence import get_db
     db = get_db()
     if not db:
         return 0
@@ -422,6 +539,7 @@ async def _prune_loop(agent):
 # STORAGE REPORT — published hourly on agents/{id}/storage, and on demand
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _human_bytes(n: float) -> str:
     """A byte count in the largest unit that keeps it under 1024.
 
@@ -441,7 +559,6 @@ def _human_bytes(n: float) -> str:
 
 def _storage_report(agent):
     """Size of the SQLite database on disk (incl. WAL/SHM) + row counts."""
-    from wactorz.core.persistence import get_db
     db = get_db()
     if not db:
         return {"error": "persistence not initialised"}
@@ -474,27 +591,28 @@ async def _publish_storage_report(agent):
 # LIFECYCLE
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 async def setup(agent):
-    topics           = agent.recall("topics") or DEFAULT_TOPICS
-    batch_interval   = float(agent.recall("batch_interval")       or DEFAULT_BATCH_INTERVAL)
-    batch_size       = int(agent.recall("batch_size")             or DEFAULT_BATCH_SIZE)
-    retention_days   = float(agent.recall("retention_days")       or DEFAULT_RETENTION_DAYS)
+    topics = agent.recall("topics") or DEFAULT_TOPICS
+    batch_interval = float(agent.recall("batch_interval") or DEFAULT_BATCH_INTERVAL)
+    batch_size = int(agent.recall("batch_size") or DEFAULT_BATCH_SIZE)
+    retention_days = float(agent.recall("retention_days") or DEFAULT_RETENTION_DAYS)
     prune_interval_h = float(agent.recall("prune_interval_hours") or DEFAULT_PRUNE_INTERVAL_H)
 
-    agent.state["topics"]           = topics
-    agent.state["batch_interval"]   = batch_interval
-    agent.state["batch_size"]       = batch_size
-    agent.state["retention_days"]   = retention_days
+    agent.state["topics"] = topics
+    agent.state["batch_interval"] = batch_interval
+    agent.state["batch_size"] = batch_size
+    agent.state["retention_days"] = retention_days
     agent.state["prune_interval_s"] = prune_interval_h * 3600
 
     # Write buffers
-    agent.state["sensor_buffer"]    = []
+    agent.state["sensor_buffer"] = []
     agent.state["detection_buffer"] = []
-    agent.state["ha_buffer"]        = []
+    agent.state["ha_buffer"] = []
 
     # Stats
-    agent.state["total_received"]   = 0
-    agent.state["total_written"]    = 0
+    agent.state["total_received"] = 0
+    agent.state["total_written"] = 0
 
     # Declare TopicBus contract — publishes only the hourly storage report
     agent.declare_contract(
@@ -529,6 +647,7 @@ async def process(agent):
 # handle_task — manual commands
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 async def handle_task(agent, payload):
     # Parse JSON from "text" field when routed via @mention
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
@@ -536,13 +655,12 @@ async def handle_task(agent, payload):
             parsed = json.loads(payload["text"])
             if isinstance(parsed, dict):
                 payload = parsed
-        except Exception:
-            pass
+        except (ValueError, TypeError):
+            pass  # not JSON: the text is the request
 
     action = str(payload.get("action") or payload.get("text") or "").strip().lower()
 
     if action == "stats":
-        from wactorz.core.persistence import get_db
         db = get_db()
         stats = db.stats() if db else {}
         s = agent.state
@@ -558,13 +676,13 @@ async def handle_task(agent, payload):
                 f"  Retention: {s['retention_days']} days"
             ),
             "total_received": s["total_received"],
-            "total_written":  s["total_written"],
+            "total_written": s["total_written"],
             "buffer_sizes": {
-                "sensor":    len(s["sensor_buffer"]),
+                "sensor": len(s["sensor_buffer"]),
                 "detection": len(s["detection_buffer"]),
-                "ha":        len(s["ha_buffer"]),
+                "ha": len(s["ha_buffer"]),
             },
-            "table_rows":     stats,
+            "table_rows": stats,
             "retention_days": s["retention_days"],
         }
 
@@ -584,7 +702,6 @@ async def handle_task(agent, payload):
 
     # ── query: serve stored history to other agents (e.g. an optimizer) ────
     if action == "query":
-        from wactorz.core.persistence import get_db
         db = get_db()
         if not db:
             return {"result": "Persistence not initialised — no data.", "rows": []}
@@ -594,23 +711,34 @@ async def handle_task(agent, payload):
         limit = min(int(payload.get("limit") or 1000), 5000)
         entity = payload.get("entity_id") or None
         if table in ("sensors", "sensor", "sensor_readings"):
-            rows = db.query_sensor(hours=hours, entity_id=entity,
-                                   topic=payload.get("topic") or None,
-                                   field=payload.get("field") or None, limit=limit)
+            rows = db.query_sensor(
+                hours=hours,
+                entity_id=entity,
+                topic=payload.get("topic") or None,
+                field=payload.get("field") or None,
+                limit=limit,
+            )
         elif table in ("ha_states", "ha", "states", "ha_state_changes"):
-            rows = db.query_ha_states(hours=hours, entity_id=entity,
-                                      domain=payload.get("domain") or None, limit=limit)
+            rows = db.query_ha_states(
+                hours=hours, entity_id=entity, domain=payload.get("domain") or None, limit=limit
+            )
         elif table in ("detections", "detection"):
             rows = db.query_detections(hours=hours, limit=limit)
         elif table in ("actuations", "actuation"):
             rows = db.query_actuations(hours=hours, entity_id=entity, limit=limit)
         else:
-            return {"result": f"Unknown table '{table}'. "
-                              "Use: sensors | ha_states | detections | actuations."}
+            return {
+                "result": f"Unknown table '{table}'. "
+                "Use: sensors | ha_states | detections | actuations."
+            }
         return {
             "result": f"{len(rows)} row(s) from {table} (last {hours:g} h"
-                      + (f", entity={entity}" if entity else "") + ").",
-            "table": table, "hours": hours, "count": len(rows), "rows": rows,
+            + (f", entity={entity}" if entity else "")
+            + ").",
+            "table": table,
+            "hours": hours,
+            "count": len(rows),
+            "rows": rows,
         }
 
     # ── configure: change retention at runtime (persists across restarts) ──
@@ -631,12 +759,11 @@ async def handle_task(agent, payload):
             agent.persist("prune_interval_hours", hrs)
             changed.append(f"prune_interval_hours={hrs:g}")
         if not changed:
-            return {"result": "Nothing to configure. "
-                              "Fields: retention_days, prune_interval_hours."}
+            return {"result": "Nothing to configure. Fields: retention_days, prune_interval_hours."}
         pruned = _do_prune(agent)  # apply the new window immediately
         return {
             "result": f"Configured: {', '.join(changed)}. "
-                      f"Pruned {pruned} row(s) outside the new window.",
+            f"Pruned {pruned} row(s) outside the new window.",
             "retention_days": agent.state["retention_days"],
             "pruned_rows": pruned,
         }
@@ -648,16 +775,19 @@ async def handle_task(agent, payload):
             return {"result": report["error"]}
         return {
             "result": f"Database size: {report['db_size']} "
-                      f"({report['db_bytes']} bytes) | rows: {report['table_rows']} | "
-                      f"retention: {report['retention_days']:g} day(s).",
+            f"({report['db_bytes']} bytes) | rows: {report['table_rows']} | "
+            f"retention: {report['retention_days']:g} day(s).",
             **report,
         }
 
     # ── natural-language fallback (non-expert users via @mention) ──────────
     raw = str(payload.get("text") or action or "")
     low = raw.lower()
-    m = re.search(r"(?:keep|retain|store|hold)\D{0,24}?(\d+(?:\.\d+)?)\s*"
-                  r"(day|days|d\b|hour|hours|hr|hrs|h\b|week|weeks|month|months)", low)
+    m = re.search(
+        r"(?:keep|retain|store|hold)\D{0,24}?(\d+(?:\.\d+)?)\s*"
+        r"(day|days|d\b|hour|hours|hr|hrs|h\b|week|weeks|month|months)",
+        low,
+    )
     if m:
         n = float(m.group(1))
         unit = m.group(2)
@@ -672,8 +802,9 @@ async def handle_task(agent, payload):
         return await handle_task(agent, {"action": "configure", "retention_days": days})
     if any(k in low for k in ("storage", "how big", "db size", "disk", "space", "how much data")):
         return await handle_task(agent, {"action": "storage"})
-    if any(k in low for k in ("give me", "send", "get", "query", "data of", "last ")) and \
-       any(k in low for k in ("data", "history", "readings", "states")):
+    if any(k in low for k in ("give me", "send", "get", "query", "data of", "last ")) and any(
+        k in low for k in ("data", "history", "readings", "states")
+    ):
         hm = re.search(r"(\d+(?:\.\d+)?)\s*(hour|hours|h\b|day|days|d\b)", low)
         hours = 24.0
         if hm:
@@ -682,8 +813,7 @@ async def handle_task(agent, payload):
 
     return {
         "result": "Available actions: stats, prune, flush, query, configure, storage. "
-                  "Natural language works too — e.g. 'keep only 1 day of data', "
-                  "'how much storage?', 'give me the last 6 hours of data'.",
+        "Natural language works too — e.g. 'keep only 1 day of data', "
+        "'how much storage?', 'give me the last 6 hours of data'.",
         "commands": ["stats", "prune", "flush", "query", "configure", "storage"],
     }
-'''

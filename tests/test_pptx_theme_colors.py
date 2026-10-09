@@ -11,12 +11,11 @@ from typing import Any
 
 import pytest
 
-from wactorz.catalogue_agents.doc_to_pptx_agent import AGENT_CODE
+from tests.programs import program_namespace
 
 # The agent ships as source the framework exec's when spawning it, so its
 # helpers are reachable only the way the framework reaches them.
-_agent: dict = {}
-exec(AGENT_CODE, _agent)
+_agent = program_namespace("doc_to_pptx_agent.py")
 _hex_color = _agent["_hex_color"]
 _build_js = _agent["_build_js"]
 

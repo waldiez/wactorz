@@ -76,9 +76,9 @@ SPAWN CONFIG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-AGENT_CODE = r'''
 import asyncio
 import json
+import logging
 import os
 import ssl
 import time
@@ -86,6 +86,10 @@ from datetime import datetime
 from typing import Any
 
 import aiomqtt
+
+from wactorz.core.persistence import get_db
+
+logger = logging.getLogger("anomaly-detector")
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 
@@ -631,8 +635,6 @@ async def _discover_entities(agent) -> list[str]:
 
     try:
         # Check sensor_readings for distinct entity_ids
-        from wactorz.core.persistence import get_db
-
         db = get_db()
         if db:
             rows = db.conn.execute(
@@ -648,7 +650,7 @@ async def _discover_entities(agent) -> list[str]:
             for r in rows:
                 entities.add(r[0])
     except Exception:
-        pass
+        logger.debug("could not list entities from the time-series tables", exc_info=True)
 
     return sorted(entities)
 
@@ -658,12 +660,11 @@ async def _discover_entities(agent) -> list[str]:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-
-def _mqtt_tls_kwargs():
+def _mqtt_tls_kwargs() -> dict[str, Any]:
     """TLS for this program's own broker connection, as its host's connections use it.
 
-    A copy of the rule in wactorz/core/mqtt_tls.py: on a node this program cannot
-    import wactorz. tests/test_mqtt_tls.py holds it to the original.
+    A copy of the rule in wactorz/core/mqtt_tls.py, which tests/test_mqtt_tls.py
+    holds to the original.
     """
     if os.environ.get("MQTT_TLS", "").strip().lower() not in ("1", "true", "yes", "on"):
         return {}
@@ -686,6 +687,7 @@ def _mqtt_tls_kwargs():
     else:
         context.check_hostname = bool(ca)
     return {"tls_context": context}
+
 
 async def _mqtt_detector(agent) -> None:
     """Subscribe to MQTT and score each reading against baselines."""
@@ -711,7 +713,8 @@ async def _mqtt_detector(agent) -> None:
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         pass
                     except Exception:
-                        pass  # don't spam logs
+                        # Per message, so at debug: a bad stream would flood the log.
+                        logger.debug("could not process a reading on %s", topic, exc_info=True)
 
         except asyncio.CancelledError:
             break
@@ -857,7 +860,8 @@ async def _report_anomaly(
                 },
             )
         except Exception:
-            pass
+            # The optimizer is optional; most installs do not run one.
+            logger.debug("sinergym-optimizer did not take the anomaly", exc_info=True)
     else:
         # Real-world mode — publish to wactorz anomaly topic + alert
         await agent.publish(f"wactorz/anomalies/{entity_id}", anomaly_record)
@@ -877,8 +881,8 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
             parsed = json.loads(payload["text"])
             if isinstance(parsed, dict):
                 payload = parsed
-        except Exception:
-            pass
+        except (ValueError, TypeError):
+            pass  # not JSON: the text is the request
 
     cmd = str(payload.get("action") or payload.get("text") or "").strip().lower()
 
@@ -989,5 +993,3 @@ def _format_age(ts: float) -> str:
     if age < 86400:
         return f"{age / 3600:.1f}h ago"
     return f"{age / 86400:.1f}d ago"
-
-'''

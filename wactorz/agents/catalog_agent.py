@@ -109,11 +109,28 @@ def _wants_experimental(text: str) -> bool:
     return any(word in low for word in _EXPERIMENTAL_REVEAL_WORDS)
 
 
-def _load_recipe(filename: str) -> str | None:
-    path = pathlib.Path(__file__).parent.parent / "catalogue_agents" / filename
-    if not path.exists():
-        logger.warning("[catalog] Recipe file not found: %s", path)
+#: Where the catalogue's programs live. A program is an ordinary module of this
+#: package; its source travels, as text, in the spawn config's `code`, and is
+#: compiled into a DynamicAgent wherever the agent runs.
+_PROGRAMS = pathlib.Path(__file__).parent.parent / "catalogue_agents"
+
+
+def _load_recipe(relative: str) -> str | None:
+    """The source of the catalogue program at `relative`, or None if it cannot be read."""
+    path = _PROGRAMS / relative
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning("[catalog] Could not read recipe %s: %s", path, e)
         return None
+
+
+def _load_embedded_recipe(relative: str) -> str | None:
+    """The `AGENT_CODE` string a module under the catalogue holds as its program.
+
+    For a program not yet moved out of its string into a module of its own.
+    """
+    path = _PROGRAMS / relative
     try:
         spec = importlib.util.spec_from_file_location("_recipe", path)
         if spec is None or spec.loader is None:
@@ -123,7 +140,7 @@ def _load_recipe(filename: str) -> str | None:
         spec.loader.exec_module(mod)
         return getattr(mod, "AGENT_CODE", None)
     except Exception as e:
-        logger.warning("[catalog] Could not load recipe from %s: %s", filename, e)
+        logger.warning("[catalog] Could not load recipe from %s: %s", relative, e)
         return None
 
 
@@ -450,7 +467,7 @@ def _build_catalog() -> dict:
         logger.info("[catalog] Loaded manual-agent recipe")
 
     # ── reachy-mini ──────────────────────────────────────────────────────────
-    code = _load_recipe("reachy_mini_agent.py")
+    code = _load_embedded_recipe("reachy_mini_agent.py")
     if code:
         catalog["reachy-mini"] = {
             "name": "reachy-mini",

@@ -72,6 +72,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Smart-energy agent.** Answering an import with a plug's name no longer selects every plug when the name contains "all" ("the hall lamp", "the wall heater"); two rules added within the same second no longer replace one another; and a plug without an energy meter whose power sensor stops reporting is no longer charged for at its last wattage until it reports again.
+
 - **An agent that could not start on main after a move home is started again on its node.** The node had stopped it and kept its state, and it stayed stopped, running nowhere, until someone noticed. The announcement now says the move failed and that the agent is running on the node again. Not when the failed start left a copy running on main, which would make two.
 
 - **The Devices link goes when Home Assistant does.** The dashboard keeps the Home Assistant address it is given in the browser, and an empty one from the server was ignored, so a browser that had once used the dashboard with Home Assistant kept showing a Devices link to it after the server started running without — the minimal profile, or another install on the same address. The address is only ever the server's to give, so an empty one now clears it and the link is hidden.

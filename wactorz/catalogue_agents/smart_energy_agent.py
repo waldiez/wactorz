@@ -390,6 +390,8 @@ async def process(agent):
         if watts is not None:
             # Normalise to watts (a sensor reporting kW has power_scale 1000)
             watts *= float(plug.get("power_scale", 1.0))
+        # A reading from this poll, which alone is integrated into energy.
+        fresh = watts is not None
         if watts is None:
             # No reading this cycle — keep last known for rule continuity but skip accounting
             watts = agent.state["last_watts"].get(name)
@@ -433,7 +435,7 @@ async def process(agent):
             accum,
             name,
             now,
-            watts,
+            watts if fresh else None,
             dt_h,
             energy_kwh,
             plug.get("energy_kind"),
@@ -941,14 +943,17 @@ async def _handle_selection(agent, text: str) -> dict:
     }
 
 
+_EVERYTHING = re.compile(r"\b(all|every|everything|both|yes please)\b")
+
+
 async def _interpret_selection(agent, text: str, candidates: list) -> list:
     """Map a free-text reply to a subset of candidates. Robust without an LLM."""
     low = text.lower().strip()
     if not candidates:
         return []
 
-    # Fast paths
-    if any(w in low for w in ("all", "every", "everything", "both", "yes please", "yeah all")):
+    # Fast paths. Whole words: "all" is also inside "hall" and "wall".
+    if _EVERYTHING.search(low):
         return list(candidates)
     if low in ("none", "no", "neither"):
         return []
@@ -1402,11 +1407,21 @@ def _add_rule(agent, rule: Any) -> dict[str, Any]:
             ),
         }
 
-    rid = rule.get("id") or f"rule_{int(time.time())}"
+    rid = rule.get("id") or _new_rule_id(agent.state["rules"])
     rule["id"] = rid
     agent.state["rules"][rid] = rule
     agent.persist("rules", agent.state["rules"])
     return {"result": f"Added rule '{rid}' ({rule['type']}) on plug '{plug_name}'", "rule": rule}
+
+
+def _new_rule_id(rules: dict) -> str:
+    """A rule id no other rule has, readable as when it was made."""
+    base = rid = f"rule_{int(time.time())}"
+    n = 2
+    while rid in rules:
+        rid = f"{base}_{n}"
+        n += 1
+    return rid
 
 
 def _remove_rule(agent, rid: str | int) -> dict[str, Any]:

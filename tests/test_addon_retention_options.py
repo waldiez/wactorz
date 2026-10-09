@@ -11,8 +11,8 @@ update that brings it, so a default that deletes would act on an existing
 install before its owner could see the setting, let alone change it.
 """
 
-import os
 import re
+from pathlib import Path
 
 import pytest
 import yaml
@@ -27,14 +27,12 @@ OPTIONS = {
 }
 
 
-def _repo_path(relative: str) -> str:
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(root, relative)
+def _repo_path(relative: str) -> Path:
+    return Path(__file__).resolve().parents[1] / relative
 
 
 def _read(relative: str) -> str:
-    with open(_repo_path(relative), encoding="utf-8") as handle:
-        return handle.read()
+    return _repo_path(relative).read_text(encoding="utf-8")
 
 
 def _config(addon: str) -> dict:

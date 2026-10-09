@@ -13,7 +13,6 @@ import builtins
 import contextlib
 import json
 import logging
-import os
 import stat
 import sys
 import types
@@ -557,7 +556,7 @@ class TestKeepingAPairing:
 
         await agent._remember()
 
-        assert stat.S_IMODE(os.stat(agent._buttons_json).st_mode) == 0o600
+        assert stat.S_IMODE(Path(agent._buttons_json).stat().st_mode) == 0o600
 
     async def test_a_key_survives_the_round_trip(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

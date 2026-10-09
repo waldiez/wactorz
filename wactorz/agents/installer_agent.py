@@ -644,7 +644,7 @@ class InstallerAgent(Actor):
             entry = host if port == 22 else f"[{host}]:{port}"
             line = f"{entry} {key.export_public_key('openssh').decode().strip()}\n"
             path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "a", encoding="utf-8") as fh:
+            with path.open("a", encoding="utf-8") as fh:
                 fh.write(line)
             # 0600: the file is the only record of which key we trust, so a
             # writable-by-others copy would undo the check it exists to make.

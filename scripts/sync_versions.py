@@ -20,10 +20,10 @@ def update_package_json(new_version: str) -> None:
     files = [ROOT_DIR / "frontend" / "package.json"]
     for package_file in files:
         if package_file.exists():
-            with open(package_file) as f:
+            with package_file.open() as f:
                 data = json.load(f, strict=False)
             data["version"] = new_version
-            with open(package_file, "w") as f:
+            with package_file.open("w") as f:
                 json.dump(data, f, indent=2)
                 f.write("\n")
             print(f"Updated {package_file}")
@@ -110,13 +110,13 @@ def update_docs_versions_json(new_version: str) -> None:
     v_file = ROOT_DIR / "docs" / "versions.json"
     if v_file.exists():
         try:
-            with open(v_file) as f:
+            with v_file.open() as f:
                 data = json.load(f)
             # Check if version already exists
             exists = any(v.get("version") == new_version for v in data)
             if not exists:
                 data.append({"version": new_version, "title": new_version})
-                with open(v_file, "w") as f:
+                with v_file.open("w") as f:
                     json.dump(data, f, indent=2)
                     f.write("\n")
                 print(f"Updated {v_file}")

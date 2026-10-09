@@ -73,9 +73,9 @@ TASK EXAMPLES (natural language also works via @mention)
 import asyncio
 import json
 import logging
-import os
 import re
 import time
+from pathlib import Path
 
 from wactorz.core.mqtt import mqtt_client
 from wactorz.core.persistence import get_db
@@ -521,12 +521,13 @@ def _storage_report(agent):
     if not db:
         return {"error": "persistence not initialised"}
     db_bytes = 0
+    # Unset means nothing to measure; Path("") would be the working directory.
     base = str(getattr(db, "_path", "") or "")
-    for suffix in ("", "-wal", "-shm"):
+    for suffix in ("", "-wal", "-shm") if base else ():
         try:
-            db_bytes += os.path.getsize(base + suffix)
+            db_bytes += Path(base + suffix).stat().st_size
         except OSError:
-            pass
+            pass  # no WAL or SHM file while nothing is open
     return {
         "db_bytes": db_bytes,
         "db_size": _human_bytes(db_bytes),

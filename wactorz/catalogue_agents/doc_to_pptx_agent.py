@@ -88,6 +88,7 @@ import os
 import re
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -111,15 +112,14 @@ def _read_pdf_text(path):
 def _read_txt(path: str) -> str:
     for enc in ("utf-8", "latin-1"):
         try:
-            with open(path, encoding=enc) as f:
-                return f.read()
+            return Path(path).read_text(encoding=enc)
         except UnicodeDecodeError:
             continue
     raise ValueError(f"Cannot decode file: {path}")
 
 
 def _read_document(path: str) -> str:
-    ext = os.path.splitext(path)[1].lower()
+    ext = Path(path).suffix.lower()
     if ext == ".pdf":
         return _read_pdf_text(path)
     return _read_txt(path)
@@ -170,7 +170,7 @@ def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[d
                 if pix.n - pix.alpha > 3:
                     pix = fitz.Pixmap(fitz.csRGB, pix)
 
-                out_path = os.path.join(work_dir, f"pdf_img_p{page_idx}_x{xref}.png")
+                out_path = str(Path(work_dir) / f"pdf_img_p{page_idx}_x{xref}.png")
                 pix.save(out_path)
                 results.append(
                     {
@@ -337,7 +337,7 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
         prompt = slide.get("image_prompt", "")
         if not prompt:
             return idx, None
-        out_path = os.path.join(work_dir, f"nim_img_{idx}.png")
+        out_path = str(Path(work_dir) / f"nim_img_{idx}.png")
         try:
             result = await agent.send_to(
                 "image-gen-agent",
@@ -349,7 +349,7 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
                     "steps": 20,
                 },
             )
-            if result and result.get("image_path") and os.path.exists(result["image_path"]):
+            if result and result.get("image_path") and Path(result["image_path"]).exists():
                 return idx, result["image_path"]
             return idx, None
         except Exception as e:
@@ -600,15 +600,15 @@ async def handle_task(agent, payload: Any) -> Any:
     # decided where the file was actually written. `mkdtemp` is 0700 and honours
     # TMPDIR, so it is also correct off Linux. The path goes back to the caller
     # as `pptx_path`, so a generated name costs nothing.
-    output_path = payload.get("output_path") or os.path.join(
-        tempfile.mkdtemp(prefix="wactorz-pptx-"), "presentation.pptx"
+    output_path = payload.get("output_path") or str(
+        Path(tempfile.mkdtemp(prefix="wactorz-pptx-")) / "presentation.pptx"
     )
     slide_count = int(payload.get("slide_count", 8))
     nim_fallback = bool(payload.get("nim_fallback", True))
     min_w = int(payload.get("min_img_width", 200))
     min_h = int(payload.get("min_img_height", 150))
 
-    if not file_path or not os.path.exists(file_path):
+    if not file_path or not Path(file_path).exists():
         return {
             "pptx_path": None,
             "slide_count": 0,
@@ -618,10 +618,10 @@ async def handle_task(agent, payload: Any) -> Any:
             "error": f"File not found: {file_path}",
         }
 
-    is_pdf = os.path.splitext(file_path)[1].lower() == ".pdf"
+    is_pdf = Path(file_path).suffix.lower() == ".pdf"
     work_dir = tempfile.mkdtemp(prefix="doc2pptx_")
 
-    await agent.log(f"Processing: {os.path.basename(file_path)}")
+    await agent.log(f"Processing: {Path(file_path).name}")
 
     try:
         # ── Step 1: Read document text ──────────────────────────────────────
@@ -694,14 +694,12 @@ async def handle_task(agent, payload: Any) -> Any:
         # ── Step 4: Build PPTX ──────────────────────────────────────────────
         await agent.log("Step 4/4 — Building .pptx with pptxgenjs...")
         js_script = _build_js(outline, assignment, output_path)
-        js_path = os.path.join(work_dir, "build.js")
-        with open(js_path, "w", encoding="utf-8") as f:
-            f.write(js_script)
+        js_path = Path(work_dir) / "build.js"
+        js_path.write_text(js_script, encoding="utf-8")
 
         # Ensure pptxgenjs is available in the work dir.
         # Global npm installs are not always on NODE_PATH so we install locally.
-        node_modules = os.path.join(work_dir, "node_modules", "pptxgenjs")
-        if not os.path.exists(node_modules):
+        if not (Path(work_dir) / "node_modules" / "pptxgenjs").exists():
             await agent.log("Installing pptxgenjs locally...")
             npm = await _run_blocking(
                 ["npm", "install", "pptxgenjs", "--prefer-offline"],
@@ -723,14 +721,14 @@ async def handle_task(agent, payload: Any) -> Any:
                 }
 
         result = await _run_blocking(
-            ["node", js_path],
+            ["node", str(js_path)],
             capture_output=True,
             text=True,
             cwd=work_dir,
             timeout=60,
             shell=(os.name == "nt"),
         )
-        if result.returncode != 0 or not os.path.exists(output_path):
+        if result.returncode != 0 or not Path(output_path).exists():
             err = (result.stderr or result.stdout or "Unknown error").strip()
             return {
                 "pptx_path": None,
@@ -741,7 +739,7 @@ async def handle_task(agent, payload: Any) -> Any:
                 "error": f"pptxgenjs failed: {err[:400]}",
             }
 
-        size_kb = os.path.getsize(output_path) // 1024
+        size_kb = Path(output_path).stat().st_size // 1024
         await agent.log(
             f"Done! {output_path} "
             f"({size_kb} KB, {len(slides)} slides, "

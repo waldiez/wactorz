@@ -287,6 +287,7 @@ select = [
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
     "TRY301",  # a raise inside a try that catches it: control flow by exception
     "TRY400",  # logger.error in an except drops the traceback; log after the handler
+    "PTH",     # flake8-use-pathlib — a path is a Path, from where it enters to where it is used
 ]
 ignore = [
     "E501",    # line length is owned by the formatter
@@ -304,14 +305,9 @@ ignore = [
     # blocking I/O and idle-loop patterns in async code, confined to rare start/stop paths
     "ASYNC110", "ASYNC230", "ASYNC240",
 ]
-# Further families (exception style, complexity, pathlib, security) stay
-# advisory via `make lint-py` until each is triaged and gated. One member of the
-# pathlib family is settled rather than pending: PTH123 flags `open(p)` where `p`
-# is already a Path, and the convention here is that a path is a Path — which
-# those call sites satisfy — not that every read goes through `Path.open`. It is
-# declined on the `make lint-py` line itself rather than in the `ignore` above,
-# which a CLI `--extend-select` outranks; the per-file entries below still apply,
-# which is why the exemptions there work. Logging moved out
+# Further families (exception style, complexity, prints) stay advisory via
+# `make lint-py` until each is triaged and gated. Pathlib moved out once the tree
+# reached zero, every member included. Logging moved out
 # of that set once the tree reached zero: an f-string in a logging call is
 # formatted whether or not the level is enabled, so the cost is paid on every
 # debug line in production, and the message loses the structure that lets a log

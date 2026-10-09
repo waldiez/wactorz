@@ -281,24 +281,21 @@ def discover(*, env: str | None = None, refresh: bool = False) -> dict[str, Pipe
     for entry_point in _entry_points():
         try:
             found.update(_from_object(entry_point.load(), entry_point.value))
-        except Exception as exc:
-            # With the traceback: the fault is in the package's own code, which
-            # its author will want to find.
-            logger.exception(
-                "[pipelines] Entry point %s could not be loaded: %s", entry_point.value, exc
-            )
+        except Exception:
+            # With the traceback, which ends in the exception: the fault is in
+            # the package's own code, which its author will want to find.
+            logger.exception("[pipelines] Entry point %s could not be loaded", entry_point.value)
     if env is None:
         env = CONFIG.pipelines_env
     for target in plugins.targets_in(env):
         try:
             found.update(_from_object(plugins.resolve_target(target), target))
-        except Exception as exc:
+        except Exception:
             logger.exception(
-                "[pipelines] %s names %s, which could not be loaded: %s. The module must be "
+                "[pipelines] %s names %s, which could not be loaded. The module must be "
                 "importable from where wactorz starts; set PYTHONPATH or install the package.",
                 ENV_VAR,
                 target,
-                exc,
             )
     found.update(_registered)
     _pipelines = found

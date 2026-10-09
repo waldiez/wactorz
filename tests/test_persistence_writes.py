@@ -8,11 +8,11 @@ real WactorzDB and write through every public path, plus guard against
 reintroducing a version-gated function in the schema.
 """
 
-import os
 import sqlite3
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 from wactorz.core.persistence import SCHEMA_SQL, WactorzDB
 
@@ -21,7 +21,7 @@ class WactorzDBWritePathTest(unittest.TestCase):
     def setUp(self):
         self._dir = tempfile.TemporaryDirectory()
         # mirror cli.py's default relative layout: ./state/wactorz.db
-        self.db = WactorzDB(os.path.join(self._dir.name, "state", "wactorz.db"))
+        self.db = WactorzDB(Path(self._dir.name) / "state" / "wactorz.db")
 
     def tearDown(self):
         self.db.close()

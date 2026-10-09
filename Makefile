@@ -155,7 +155,7 @@ lint-py: ## Lint Python — gated ruff + basedpyright (fail) + advisory ruff fam
 	$(PYTHON) -m ruff check wactorz tests scripts e2e examples
 	$(PYTHON) -m ruff format --check wactorz tests scripts e2e examples
 	@echo "── advisory (non-blocking): not-yet-gated families ──"
-	-$(PYTHON) -m ruff check wactorz --extend-select TRY,C90,PTH,T20 --ignore PTH123 --statistics
+	-$(PYTHON) -m ruff check wactorz --extend-select TRY,C90,T20 --statistics
 	@echo "── gated: basedpyright (basic) ──"
 	$(PYTHON) -m basedpyright
 

@@ -10,6 +10,7 @@
  */
 import { ambient, AMBIENT_TRACKS } from "../../io/AmbientManager";
 import { tts } from "../../ext/tts";
+import { setVoiceMode, voiceMode, VOICE_MODES, type VoiceMode } from "../../io/voiceInput";
 import { toast } from "../ToastManager";
 import { listen } from "../../events";
 import { button, el, named, option } from "../dom";
@@ -78,6 +79,36 @@ function buildVoiceRow(): { row: HTMLElement; release: () => void } {
     };
 }
 
+/** Where each voice-input choice sends the audio, shown under the select. */
+const VOICE_MODE_NOTES: Record<VoiceMode, string> = {
+    auto: "Server when it has a recognizer, otherwise the browser.",
+    browser: "Audio goes to your browser's speech service (Google in Chrome).",
+    server: "Audio goes to the recognizer Wactorz is configured for.",
+    off: "No microphone button.",
+};
+
+/** Voice-input select: which engine the composer's mic uses. */
+export function buildVoiceInputRows(): DocumentFragment {
+    const frag = document.createDocumentFragment();
+    frag.appendChild(el("div", "af-audio-label", "Voice input"));
+
+    const row = el("div", "af-audio-row");
+    const select = named(el("select", "af-audio-select"), "voice-input", "Voice input", "af-voice-input");
+    select.title = "Which engine the chat microphone uses";
+    VOICE_MODES.forEach(({ mode, label }) => select.appendChild(option(mode, label)));
+    select.value = voiceMode();
+    row.appendChild(select);
+
+    const note = el("div", "af-audio-note", VOICE_MODE_NOTES[voiceMode()]);
+    select.addEventListener("change", () => {
+        const mode = select.value as VoiceMode;
+        setVoiceMode(mode);
+        note.textContent = VOICE_MODE_NOTES[mode];
+    });
+    frag.append(row, note);
+    return frag;
+}
+
 /** Ambient volume slider row (visibility toggled by the track buttons). */
 function buildVolumeRow(): HTMLElement {
     const volRow = el("div", "af-audio-row af-audio-vol-row");
@@ -134,7 +165,7 @@ export interface AudioPopover extends HTMLElement {
     _release: () => void;
 }
 
-/** Audio controls: beep/TTS toggles, voice select, ambient track + volume. */
+/** Audio controls: beep/TTS toggles, voice select, voice input, ambient track + volume. */
 export function buildAudioPopover(): AudioPopover {
     const pop = el("div", "af-audio-popover glass");
 
@@ -142,6 +173,8 @@ export function buildAudioPopover(): AudioPopover {
     pop.appendChild(buildAudioToggles(voiceRow));
     pop.appendChild(voiceRow);
 
+    pop.appendChild(el("div", "af-audio-divider"));
+    pop.appendChild(buildVoiceInputRows());
     pop.appendChild(el("div", "af-audio-divider"));
 
     pop.appendChild(buildAmbientRows());

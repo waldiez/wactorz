@@ -39,7 +39,7 @@ describe("buildAudioPopover", () => {
     it("renders beep/TTS toggles and the voice list (names cleaned up)", () => {
         const pop = buildAudioPopover();
         expect(pop.querySelectorAll(".af-audio-toggle").length).toBe(2);
-        const opts = [...pop.querySelectorAll<HTMLOptionElement>(".af-audio-select option")];
+        const opts = [...pop.querySelectorAll<HTMLOptionElement>("#af-tts-voice option")];
         // placeholder + 2 voices
         expect(opts.length).toBe(3);
         expect(opts.some(o => o.textContent === "Aria")).toBe(true); // "Microsoft …" and " Online…" stripped
@@ -135,6 +135,36 @@ describe("buildAudioPopover", () => {
         expect(liveVoices()).toBe(0);
         added.mockRestore();
         removed.mockRestore();
+    });
+});
+
+describe("buildAudioPopover: voice input", () => {
+    beforeEach(() => {
+        document.body.innerHTML = "";
+        localStorage.removeItem("wactorz-voice-input");
+    });
+
+    it("offers every voice-input engine, starting on auto", () => {
+        const select = buildAudioPopover().querySelector<HTMLSelectElement>("#af-voice-input")!;
+
+        expect(Array.from(select.options).map(o => o.value)).toEqual(["auto", "browser", "server", "off"]);
+        expect(select.value).toBe("auto");
+    });
+
+    it("saves a choice, announces it, and says where the audio goes", () => {
+        const pop = buildAudioPopover();
+        const select = pop.querySelector<HTMLSelectElement>("#af-voice-input")!;
+        const seen: string[] = [];
+        const handler = (e: Event) => seen.push((e as CustomEvent).detail.mode);
+        document.addEventListener("af-voice-mode", handler);
+
+        select.value = "browser";
+        select.dispatchEvent(new Event("change"));
+        document.removeEventListener("af-voice-mode", handler);
+
+        expect(localStorage.getItem("wactorz-voice-input")).toBe("browser");
+        expect(seen).toEqual(["browser"]);
+        expect(pop.querySelector(".af-audio-note")?.textContent).toContain("Google");
     });
 });
 

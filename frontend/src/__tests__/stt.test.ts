@@ -3,13 +3,12 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { SpeechToText, STT_ENABLED } from "../io/SpeechToText";
+import { SpeechToText } from "../io/SpeechToText";
 
-describe("SpeechToText (feature flags & happy-dom defaults)", () => {
-    it("exposes the STT_ENABLED feature constant as a boolean", () => {
-        expect(typeof STT_ENABLED).toBe("boolean");
-    });
+/** Stands in for the browser-side WAV conversion, which happy-dom cannot decode. */
+const asWav = vi.fn(async (_b: Blob) => new Blob(["RIFF"], { type: "audio/wav" }));
 
+describe("SpeechToText (happy-dom defaults)", () => {
     it("reports unsupported when MediaRecorder/getUserMedia are absent (happy-dom)", () => {
         expect(SpeechToText.isSupported()).toBe(false);
     });
@@ -99,10 +98,32 @@ describe("SpeechToText capture & transcription (mocked media APIs)", () => {
             ok: true,
             json: async () => ({ text: "hello there" }),
         })) as unknown as typeof fetch;
-        const stt = new SpeechToText("/ingress");
-        const text = await stt.transcribe(new Blob(["x"]));
+        const stt = new SpeechToText("/ingress", asWav);
+        const text = await stt.transcribe(new Blob(["x"], { type: "audio/webm" }));
         expect(text).toBe("hello there");
+        expect(asWav).toHaveBeenCalled();
         expect(fetch).toHaveBeenCalledWith("/ingress/api/stt", expect.objectContaining({ method: "POST" }));
+    });
+
+    it("transcribe() sends a WAV recording as it is", async () => {
+        asWav.mockClear();
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ text: "ok" }),
+        })) as unknown as typeof fetch;
+        await new SpeechToText("", asWav).transcribe(new Blob(["RIFF"], { type: "audio/wav" }));
+        expect(asWav).not.toHaveBeenCalled();
+    });
+
+    it("transcribe() carries the server's reason when it gives one", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: false,
+            status: 503,
+            json: async () => ({ error: "set DEEPGRAM_API_KEY" }),
+        })) as unknown as typeof fetch;
+        await expect(new SpeechToText("", asWav).transcribe(new Blob(["x"]))).rejects.toThrow(
+            "set DEEPGRAM_API_KEY",
+        );
     });
 
     it("transcribe() returns '' when the response has no text field", async () => {
@@ -110,12 +131,14 @@ describe("SpeechToText capture & transcription (mocked media APIs)", () => {
             ok: true,
             json: async () => ({}),
         })) as unknown as typeof fetch;
-        expect(await new SpeechToText().transcribe(new Blob(["x"]))).toBe("");
+        expect(await new SpeechToText("", asWav).transcribe(new Blob(["x"]))).toBe("");
     });
 
     it("transcribe() throws on a non-OK response", async () => {
         globalThis.fetch = vi.fn(async () => ({ ok: false, status: 500 })) as unknown as typeof fetch;
-        await expect(new SpeechToText().transcribe(new Blob(["x"]))).rejects.toThrow("STT failed (500)");
+        await expect(new SpeechToText("", asWav).transcribe(new Blob(["x"]))).rejects.toThrow(
+            "STT failed (500)",
+        );
     });
 
     it("stopAndTranscribe() records, stops, and transcribes in one step", async () => {
@@ -123,7 +146,7 @@ describe("SpeechToText capture & transcription (mocked media APIs)", () => {
             ok: true,
             json: async () => ({ text: "done" }),
         })) as unknown as typeof fetch;
-        const stt = new SpeechToText();
+        const stt = new SpeechToText("", asWav);
         await stt.start();
         last().ondataavailable!({ data: { size: 5 } });
         expect(await stt.stopAndTranscribe()).toBe("done");

@@ -72,6 +72,16 @@ describe("seedServerConfig", () => {
         expect(localStorage.getItem("wactorz-myext-flag")).toBe("on");
     });
 
+    it("seeds whether the server can transcribe the dashboard microphone", async () => {
+        globalThis.fetch = vi.fn(async () => ({
+            ok: true,
+            json: async () => ({ stt: { available: true, backend: "deepgram", problem: null } }),
+        })) as unknown as typeof fetch;
+
+        await seedServerConfig();
+        expect(localStorage.getItem("wactorz-stt-available")).toBe("1");
+    });
+
     it("ignores unregistered server fields (whitelist)", async () => {
         globalThis.fetch = vi.fn(async () => ({
             ok: true,

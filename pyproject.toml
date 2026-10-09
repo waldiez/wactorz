@@ -400,7 +400,20 @@ reportMissingTypeStubs = false
 [tool.coverage.run]
 source = ["wactorz"]
 branch = true
-omit = ["wactorz/_version.py", "tests/*"]
+omit = [
+    "wactorz/_version.py",
+    "tests/*",
+    # Catalogue programs that have yet to be measured on their own. They were source
+    # quoted in a string, which coverage could not see, until they became modules;
+    # each leaves this list in the branch that gives it tests.
+    # The list should only shrink.
+    "wactorz/catalogue_agents/anomaly_detector_agent.py",
+    "wactorz/catalogue_agents/doc_to_pptx_agent.py",
+    "wactorz/catalogue_agents/manual_agent.py",
+    "wactorz/catalogue_agents/reachy_mini_agent.py",
+    "wactorz/catalogue_agents/smart_energy_agent.py",
+    "wactorz/catalogue_agents/timeseries_collector_agent.py",
+]
 
 [tool.coverage.report]
 show_missing = true

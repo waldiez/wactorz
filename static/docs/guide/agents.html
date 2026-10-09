@@ -400,7 +400,7 @@
 </tr>
 </tbody>
 </table>
-<p>Pre-built agent recipe library. On startup it loads every <code>AGENT_CODE</code> string from <code>wactorz/catalogue_agents/*.py</code> and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and <code>trusted=True</code> — bypassing the code safety validator since catalog agents are pre-built and tested.</p>
+<p>Pre-built agent recipe library. On startup it reads every recipe's program from <code>wactorz/catalogue_agents/</code> and injects a manifest for each recipe into MainActor so the LLM is aware of what can be spawned. When asked to spawn a recipe it first asks InstallerAgent to install any declared dependencies, then creates a DynamicAgent with the recipe code and <code>trusted=True</code> — bypassing the code safety validator since catalog agents are pre-built and tested.</p>
 <h4 id="usage">Usage</h4>
 <div class="highlight"><pre><span></span><code><span class="nv">@catalog</span><span class="w"> </span><span class="n">list</span>
 <span class="nv">@catalog</span><span class="w"> </span><span class="n">info</span><span class="w"> </span><span class="n">anomaly</span><span class="o">-</span><span class="n">detector</span>
@@ -1041,7 +1041,7 @@ LLM_COST_LIMIT_PERIOD=daily   # daily | weekly | monthly | total
 <p>See <a href="https://github.com/waldiez/wactorz/blob/main/docs/api.md#cost-management">API reference</a> for the full endpoint spec.</p>
 <hr />
 <h2 id="catalog-recipes">Catalog recipes</h2>
-<p>Recipes live in <code>wactorz/catalogue_agents/</code> as plain Python files exporting an <code>AGENT_CODE</code> string. They are loaded by <code>CatalogAgent</code> at startup and spawned on demand as DynamicAgents with <code>trusted=True</code> (safety validator bypassed).</p>
+<p>Recipes live in <code>wactorz/catalogue_agents/</code> as plain Python modules, each one the program itself; the module's source is what gets sent. They are loaded by <code>CatalogAgent</code> at startup and spawned on demand as DynamicAgents with <code>trusted=True</code> (safety validator bypassed).</p>
 <table>
 <thead>
 <tr>
@@ -1079,7 +1079,7 @@ LLM_COST_LIMIT_PERIOD=daily   # daily | weekly | monthly | total
 </tbody>
 </table>
 <blockquote>
-<p><strong>💡 Adding a recipe</strong> — Create <code>wactorz/catalogue_agents/my_agent.py</code> exporting <code>AGENT_CODE = r'''...'''</code>, then add an entry to <code>_build_catalog()</code> in <code>wactorz/agents/catalog_agent.py</code>. The recipe is available on the next restart without any other changes.</p>
+<p><strong>💡 Adding a recipe</strong> — Write the program as <code>wactorz/catalogue_agents/my_agent.py</code> (<code>setup</code>, <code>process</code>, <code>handle_task</code>, <code>cleanup</code>, as any dynamic agent's code), then add an entry to <code>_build_catalog()</code> in <code>wactorz/agents/catalog_agent.py</code>. The recipe is available on the next restart without any other changes.</p>
 </blockquote>
 <hr />
 <h2 id="bringing-your-own-agents">Bringing your own agents</h2>

@@ -72,6 +72,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Anomaly detector.** Rate-of-change detection works: each live reading was recorded as the latest before it was scored, so its time since the previous reading was always zero and a value changing too fast was never flagged. `configure` now applies `learning_period_hours`, `rebuild_interval_hours` and `entities` at once rather than after a restart, and refuses a setting that is not a number; a Home Assistant state with no value no longer stops baselines being built for every other entity; and a report count that is not a positive number, or a request sent as a bare string, gets an answer instead of an error.
+
 - **Time-series collector.** A database write that fails partway through no longer leaves part of the batch written to be written again on the next flush, so a transient error cannot duplicate detections or Home Assistant state changes; a failed retention pass no longer ends pruning until the next restart; a prune interval set with `configure` takes effect without one; and a value that is not a number, or a request sent as a bare string, gets an answer instead of an error.
 
 - **Smart-energy agent.** Answering an import with a plug's name no longer selects every plug when the name contains "all" ("the hall lamp", "the wall heater"); two rules added within the same second no longer replace one another; and a plug without an energy meter whose power sensor stops reporting is no longer charged for at its last wattage until it reports again.

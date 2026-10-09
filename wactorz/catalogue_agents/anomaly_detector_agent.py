@@ -593,7 +593,7 @@ async def _rebuild_baselines(agent) -> None:
                 # Convert state changes to numeric where possible
                 numeric_rows = []
                 for r in entity_rows:
-                    state = r.get("new_state", "")
+                    state = str(r.get("new_state") or "")
                     try:
                         numeric_rows.append({"ts": r["ts"], "value": float(state)})
                     except (ValueError, TypeError):
@@ -742,15 +742,17 @@ async def _process_live_reading(agent, topic: str, payload: dict[str, Any]) -> N
             baseline = EntityBaseline(entity_id, field)
             baselines[key] = baseline
 
-        # Always update last value/ts (even during learning)
+        # Scored against the reading before it, which the rate check needs;
+        # only then remembered (even during learning).
+        anomalies = (
+            _score_reading(value, now, baseline, stat_k, rate_k)
+            if active and baseline.ready
+            else []
+        )
         baseline.last_value = value
         baseline.last_ts = now
-
-        # Only detect if active and baseline is ready
-        if not active or not baseline.ready:
+        if not anomalies:
             continue
-
-        anomalies = _score_reading(value, now, baseline, stat_k, rate_k)
 
         # Filter by sensitivity threshold
         significant = [a for a in anomalies if a["score"] >= agent.state["sensitivity"]]
@@ -846,6 +848,9 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
         except (ValueError, TypeError):
             pass  # not JSON: the text is the request
 
+    if not isinstance(payload, dict):
+        payload = {"action": str(payload)}
+
     cmd = str(payload.get("action") or payload.get("text") or "").strip().lower()
 
     if cmd == "status":
@@ -870,7 +875,12 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
     if cmd == "report":
         # Show recent anomalies
         history = agent.state.get("anomaly_history", [])
-        n = int(payload.get("n", 10))
+        try:
+            n = int(payload.get("n", 10))
+        except (TypeError, ValueError):
+            n = 10
+        if n <= 0:
+            n = 10  # history[-0:] would be all of it
         recent = history[-n:]
         if not recent:
             return {"result": "No anomalies detected yet."}
@@ -902,16 +912,21 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
         return {"result": "Anomaly detector reset — all baselines and history cleared."}
 
     if cmd == "configure":
-        for key in (
-            "baseline_hours",
-            "learning_period_hours",
-            "sensitivity",
-            "rebuild_interval_hours",
-            "entities",
-        ):
-            if key in payload:
-                agent.persist(key, payload[key])
-                agent.state[key] = payload[key]
+        updates = {}
+        for key, (state_key, kind) in _SETTINGS.items():
+            if key not in payload:
+                continue
+            if kind is list:
+                value = payload[key]
+                updates[key] = (state_key, [value] if isinstance(value, str) else list(value))
+                continue
+            try:
+                updates[key] = (state_key, kind(payload[key]))
+            except (TypeError, ValueError):
+                return {"result": f"{key} must be a number."}
+        for key, (state_key, value) in updates.items():
+            agent.persist(key, value)  # under the name setup() recalls
+            agent.state[state_key] = value
         # Recompute thresholds
         s = float(agent.state.get("sensitivity", DEFAULT_SENSITIVITY))
         agent.state["stat_k"] = DEFAULT_STAT_K * (1.0 + s)
@@ -942,6 +957,17 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
         "result": "Available commands: status, report, train, reset, configure, baselines, entities",
         "commands": ["status", "report", "train", "reset", "configure", "baselines", "entities"],
     }
+
+
+#: What `configure` accepts: each name as stored and recalled by setup(), the
+#: state key the running agent reads it from, and what it must convert to.
+_SETTINGS = {
+    "baseline_hours": ("baseline_hours", int),
+    "learning_period_hours": ("learning_period_h", int),
+    "sensitivity": ("sensitivity", float),
+    "rebuild_interval_hours": ("rebuild_interval_h", int),
+    "entities": ("monitored_entities", list),
+}
 
 
 def _format_age(ts: float) -> str:

@@ -42,10 +42,12 @@ from .agents import (
 from .agents.function_agent import spec_of
 from .agents.rule_agent import RuleAction, RuleCondition, RuleConfig
 from .errors import StartupError
+from .orchestration import DirectOrchestrator, MainOrchestrator, Orchestrator
 
 __all__ += [
     "AnthropicProvider",
     "CatalogAgent",
+    "DirectOrchestrator",
     "DynamicAgent",
     "FunctionAgent",
     "HomeAssistantActuatorAgent",
@@ -55,11 +57,13 @@ __all__ += [
     "InstallerAgent",
     "LLMAgent",
     "MainActor",
+    "MainOrchestrator",
     "MonitorActor",
     "NIMProvider",
     "OllamaProvider",
     "OneOffActuatorAgent",
     "OpenAIProvider",
+    "Orchestrator",
     "PlannerAgent",
     "RuleAction",
     "RuleAgent",

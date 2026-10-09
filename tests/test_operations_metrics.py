@@ -309,7 +309,9 @@ class TestTheEndpoint:
             discarded=0,
         )
         system = types.SimpleNamespace(_mqtt_client=publisher)
+        # Metrics never chat, so there is no orchestrator behind this interface.
         interface = RESTInterface(
+            cast(Any, None),
             cast(MainActor, main),
             port=0,
             system=system,  # pyright: ignore[reportArgumentType]
@@ -323,7 +325,7 @@ class TestTheEndpoint:
 
     def test_without_a_system_or_a_node_manager_it_still_renders(self) -> None:
         main = types.SimpleNamespace(_registry=None)
-        interface = RESTInterface(cast(MainActor, main), port=0)
+        interface = RESTInterface(cast(Any, None), cast(MainActor, main), port=0)
 
         samples = _samples(interface._monitor)
 

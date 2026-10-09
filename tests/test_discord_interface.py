@@ -3,8 +3,8 @@
 It fails closed: without an allow-list it does not log in at all, because a bot
 that answers anyone spends the LLM budget and controls the house for them. Once
 running it answers only a mention, only from an allowed user, only in its
-channel when one is set, through main's restricted path, and in pieces short
-enough for Discord's message limit.
+channel when one is set, through the orchestrator as a social channel, and in
+pieces short enough for Discord's message limit.
 
 Driven against a stand-in `discord` module, so neither the library nor a
 network is needed.
@@ -12,11 +12,11 @@ network is needed.
 
 import sys
 import types
-from typing import Any, cast
+from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
-from wactorz.agents.main import MainActor
 from wactorz.interfaces.chat.discord import DiscordInterface
 
 
@@ -89,14 +89,31 @@ class _Client:
             await self.handlers["on_message"](message)
 
 
-class _Main:
+class _Orchestrator:
+    """Records each turn's text and where it was said to come from."""
+
     def __init__(self) -> None:
         self.asked: list[str] = []
+        self.channels: list[tuple[str, str | None]] = []
         self.reply = "ok"
 
-    async def process_user_input_restricted(self, text: str) -> str:
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
         self.asked.append(text)
+        self.channels.append((channel, user))
         return self.reply
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        yield await self.handle_turn(text, channel=channel, user=user)
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
 
 
 @pytest.fixture(name="discord_module")
@@ -113,18 +130,18 @@ def discord_module_fixture(monkeypatch: pytest.MonkeyPatch) -> types.ModuleType:
     return module
 
 
-def _bot(main: _Main, **kwargs: Any) -> DiscordInterface:
-    return DiscordInterface(cast(MainActor, main), token="tok", **kwargs)
+def _bot(main: _Orchestrator, **kwargs: Any) -> DiscordInterface:
+    return DiscordInterface(main, token="tok", **kwargs)
 
 
 async def test_without_the_library_it_does_not_start(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "discord", None)
 
-    await _bot(_Main(), allowed_user_ids={7}).run()
+    await _bot(_Orchestrator(), allowed_user_ids={7}).run()
 
 
 async def test_without_an_allow_list_it_does_not_log_in(discord_module: types.ModuleType) -> None:
-    await _bot(_Main()).run()
+    await _bot(_Orchestrator()).run()
 
     assert _Client.instances == []
 
@@ -132,7 +149,7 @@ async def test_without_an_allow_list_it_does_not_log_in(discord_module: types.Mo
 async def test_only_a_mention_from_an_allowed_user_in_its_channel_is_answered(
     discord_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    main = _Main()
+    main = _Orchestrator()
     main.reply = "x" * 4500
     bot = _bot(main, channel_id=10, allowed_user_ids={7})
     home, elsewhere = _Channel(10), _Channel(11)
@@ -151,6 +168,8 @@ async def test_only_a_mention_from_an_allowed_user_in_its_channel_is_answered(
     (client,) = _Client.instances
     assert client.intents.message_content is True
     assert main.asked == ["turn on the lamp"]
+    # A public endpoint: the orchestrator is told so, and who is asking.
+    assert main.channels == [("social", "7")]
     assert [len(chunk) for chunk in home.sent] == [2000, 2000, 500]
     assert elsewhere.sent == []
 
@@ -158,7 +177,7 @@ async def test_only_a_mention_from_an_allowed_user_in_its_channel_is_answered(
 async def test_a_throttled_user_is_told_and_not_answered(
     discord_module: types.ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    main = _Main()
+    main = _Orchestrator()
     bot = _bot(main, allowed_user_ids={7})
     monkeypatch.setattr(bot.limiter, "check", lambda sender: "slow down")
     channel = _Channel(10)

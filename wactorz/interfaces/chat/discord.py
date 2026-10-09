@@ -3,10 +3,11 @@
 import logging
 from typing import TYPE_CHECKING
 
+from ...orchestration import SOCIAL
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
-    from ...agents.main import MainActor
+    from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -14,16 +15,19 @@ logger = logging.getLogger(__name__)
 class DiscordInterface:
     """Discord bot interface. Requires: pip install discord.py
     Set DISCORD_BOT_TOKEN in environment.
+
+    Answers through the orchestrator as a social channel: conversation and
+    device control, none of the admin surface.
     """
 
     def __init__(
         self,
-        main_actor: "MainActor",
+        orchestrator: "Orchestrator",
         token: str,
         channel_id: int | None = None,
         allowed_user_ids: frozenset[int] | set[int] | None = None,
     ) -> None:
-        self.agent = main_actor
+        self.orchestrator = orchestrator
         self.token = token
         self.channel_id = channel_id
         self.allowed_user_ids = frozenset(allowed_user_ids or ())
@@ -80,10 +84,11 @@ class DiscordInterface:
                 return
 
             text = message.content.replace(f"<@{me.id}>", "").replace(f"<@!{me.id}>", "").strip()
-            # Restricted mode: converse + control devices, no spawn/delete/code.
             try:
                 async with message.channel.typing():
-                    response = await self.agent.process_user_input_restricted(text)
+                    response = await self.orchestrator.handle_turn(
+                        text, channel=SOCIAL, user=sender
+                    )
             finally:
                 self.limiter.done(sender)
             for i in range(0, len(response), 2000):

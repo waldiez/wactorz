@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING, Any
 from aiohttp import web
 
 from ...config import CONFIG, MAX_REQUEST_BYTES
+from ...orchestration import SOCIAL
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
-    from ...agents.main import MainActor
+    from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -23,18 +24,21 @@ class WhatsAppInterface:
     """WhatsApp via Twilio. Runs an aiohttp webhook server.
     Requires: pip install aiohttp twilio
     Set TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN in environment.
+
+    Answers through the orchestrator as a social channel: conversation and
+    device control, none of the admin surface.
     """
 
     def __init__(
         self,
-        main_actor: "MainActor",
+        orchestrator: "Orchestrator",
         account_sid: str,
         auth_token: str,
         from_number: str,
         port: int = 8080,
         allowed_numbers: frozenset[str] | set[str] | None = None,
     ) -> None:
-        self.agent = main_actor
+        self.orchestrator = orchestrator
         self.account_sid = account_sid
         self.auth_token = auth_token
         self.from_number = from_number
@@ -110,8 +114,9 @@ class WhatsAppInterface:
     async def _reply(self, twilio: Any, message: str, to: str, sender: str) -> None:
         """Answer one message, after the webhook has already acknowledged it."""
         try:
-            # Restricted mode: same guarantees as the other social channels.
-            response_text = await self.agent.process_user_input_restricted(message)
+            response_text = await self.orchestrator.handle_turn(
+                message, channel=SOCIAL, user=sender
+            )
             await self._send_message(twilio, response_text, to)
         except Exception:
             logger.exception("[WhatsApp] Could not answer a message from %s", sender)

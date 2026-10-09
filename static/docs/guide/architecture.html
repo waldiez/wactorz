@@ -379,8 +379,8 @@
 <div class="highlight"><pre><span></span><code><span class="n">User</span><span class="w"> </span><span class="n">types</span><span class="p">:</span><span class="w">  </span><span class="s2">"@my-agent {"</span><span class="n">action</span><span class="s2">": "</span><span class="n">status</span><span class="s2">"}"</span>
 <span class="w">  </span><span class="err">│</span>
 <span class="w">  </span><span class="err">▼</span>
-<span class="n">Interface</span><span class="w"> </span><span class="p">(</span><span class="n">CLIInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">DiscordInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">RESTInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">WhatsAppInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TelegramInterface</span><span class="p">)</span>
-<span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">calls</span><span class="w"> </span><span class="n">main_actor</span><span class="o">.</span><span class="n">process_user_input</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+<span class="n">Interface</span><span class="w"> </span><span class="p">(</span><span class="n">dashboard</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">CLIInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">RESTInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">DiscordInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">WhatsAppInterface</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">TelegramInterface</span><span class="p">)</span>
+<span class="w">  </span><span class="err">│</span><span class="w">  </span><span class="n">calls</span><span class="w"> </span><span class="n">orchestrator</span><span class="o">.</span><span class="n">handle_turn</span><span class="p">(</span><span class="n">text</span><span class="p">,</span><span class="w"> </span><span class="n">channel</span><span class="o">=...</span><span class="p">)</span><span class="w">   </span><span class="err">←</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">seam</span><span class="p">;</span><span class="w"> </span><span class="n">main</span><span class="w"> </span><span class="k">is</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">default</span><span class="w"> </span><span class="n">behind</span><span class="w"> </span><span class="n">it</span>
 <span class="w">  </span><span class="err">▼</span>
 <span class="n">MainActor</span><span class="o">.</span><span class="n">_classify_intent</span><span class="p">()</span><span class="w">     </span><span class="err">←</span><span class="w"> </span><span class="n">one</span><span class="w"> </span><span class="n">LLM</span><span class="w"> </span><span class="n">call</span><span class="p">:</span><span class="w"> </span><span class="n">ACTUATE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">HA</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">PIPELINE</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">OTHER</span>
 <span class="w">  </span><span class="err">│</span>
@@ -400,6 +400,18 @@
 <span class="w">      </span><span class="n">main</span><span class="w"> </span><span class="n">receives</span><span class="w"> </span><span class="n">RESULT</span><span class="p">,</span><span class="w"> </span><span class="n">formats</span><span class="p">,</span><span class="w"> </span><span class="n">returns</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">user</span>
 </code></pre></div>
 
+<p><strong>The orchestrator seam.</strong> The chat surfaces never reach main by name. Each
+calls an <code>Orchestrator</code> (<code>wactorz/orchestration.py</code>: <code>handle_turn</code>,
+<code>handle_turn_stream</code>, <code>commands</code>) through <code>runtime.orchestrator</code>, naming the
+channel the message came in on: <code>dashboard</code>, <code>cli</code> and <code>rest</code> are the
+operator's, <code>social</code> is a public bot. <code>MainOrchestrator</code> adapts main's three
+entry points to it and routes a social channel to the restricted one;
+<code>DirectOrchestrator</code> answers the minimal profile without a model, by sending
+<code>@name {json}</code> to the agent as a task; a deployment supplies its own with
+<code>run(orchestrator=...)</code> or <code>WACTORZ_ORCHESTRATOR=package.module:attr</code>. A
+message that names an agent still reaches that agent directly, and the node
+commands (<code>/deploy</code>, <code>/migrate</code>, <code>/nodes</code>) still go to main, which holds the
+node table.</p>
 <h3 id="pipeline-ha-state-discord-notification">Pipeline (HA state → Discord notification)</h3>
 <div class="highlight"><pre><span></span><code>HA state changes (lamp turns on)
   │

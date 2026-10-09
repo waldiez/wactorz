@@ -218,7 +218,7 @@ class TestTheInterfaceOfALibraryCall:
                 record["ran"] = True
 
         class RecordingCLI:
-            def __init__(self, main: object) -> None:
+            def __init__(self, orchestrator: object, main: object) -> None:
                 record["cli"] = True
 
             async def run(self) -> None:
@@ -226,8 +226,8 @@ class TestTheInterfaceOfALibraryCall:
 
         fake_system = FakeSystem()
 
-        async def build(args: object) -> tuple[object, object, None]:
-            return fake_system, object(), None
+        async def build(args: object) -> tuple[object, object, None, object]:
+            return fake_system, object(), None, object()
 
         async def shut_down(system: object) -> None:
             return None
@@ -488,8 +488,8 @@ class TestAppAsALibraryCall:
         fake_system, fake_main = FakeSystem(), object()
         stopped: list[object] = []
 
-        async def built(args: object) -> tuple[object, object, None]:
-            return fake_system, fake_main, None
+        async def built(args: object) -> tuple[object, object, None, object]:
+            return fake_system, fake_main, None, object()
 
         async def shut_down(system: object) -> None:
             stopped.append(system)

@@ -1,8 +1,9 @@
 """Chat routing for the monitor.
 
-Decides where a user message goes — slash command, @mention, the main actor's
-LLM, or a plain ``handle_message`` agent — and exposes the REST chat endpoints
-plus the in-flight task tracker that ``POST /chat/stop`` cancels through.
+Decides where a user message goes — slash command, @mention, the orchestrator
+behind ``runtime.orchestrator`` (main, unless the deployment installed another),
+or a plain ``handle_message`` agent — and exposes the REST chat endpoints plus
+the in-flight task tracker that ``POST /chat/stop`` cancels through.
 """
 
 import asyncio
@@ -12,8 +13,8 @@ import logging
 import socket
 import time
 import uuid
-from collections.abc import Callable
-from typing import Any, NamedTuple
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from aiohttp import web
 from aiohttp.web import Response
@@ -25,9 +26,14 @@ from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deplo
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
 from ..core.state_snapshot import FORCE_FLAG
+from ..core.task_text import reply_text, task_payload
 from ..core.turns import acting_as, turn_scope
 from ..monitoring import chat_metrics
+from ..orchestration import DASHBOARD
 from . import runtime, uploads
+
+if TYPE_CHECKING:
+    from ..orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +77,16 @@ def parse_mention(content: str) -> tuple[str, str]:
 #: reachable. Heartbeats arrive far more often than this.
 NODE_FRESH_SECONDS = 30
 
+#: Why a command about remote nodes has nowhere to go without main: the nodes
+#: are reached through main, and a profile without it has none.
+NO_MAIN_FOR_NODES = (
+    "No main runs in this profile, so there are no remote nodes to deploy to or move agents to."
+)
+
 
 def remote_node_for(name: str) -> str | None:
     """The node running ``name``, or None if no node recently said it has it."""
+    # Main itself, not the orchestrator: the node table is main's.
     main_actor = find_main_actor(runtime.registry)
     if not main_actor:
         return None
@@ -186,6 +199,7 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
     """
     if agent_name in beta_warned_agents:
         return None
+    # Main itself, not the orchestrator: the manifests are main's.
     main = find_main_actor(runtime.registry)
     manifest = main._agent_manifests.get(agent_name) if main else None
     if not manifest or not manifest.get("experimental"):
@@ -231,9 +245,10 @@ async def slash_deploy(node: str, reply_fn) -> None:
             return
         await reply_fn(f"[discover] Found via mDNS: {node}.local → {host}")
 
+    # Main itself, not the orchestrator: the installer is reached through main.
     main_actor = find_main_actor(runtime.registry)
     if main_actor is None:
-        await reply_fn("[error] Installer agent not available.")
+        await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
         return
 
     await reply_fn(f"[deploy] Deploying to {target.user}@{host} as '{node}'... (20-60s)")
@@ -272,6 +287,7 @@ async def handle_slash(text: str, reply_fn) -> bool:
     cmd = parts[0].lower()
 
     if cmd == "/clear-plans":
+        # Main itself, not the orchestrator: the plan cache is main's.
         main_actor = find_main_actor(runtime.registry)
         if main_actor:
             main_actor.persist("_plan_cache", {})
@@ -307,9 +323,10 @@ async def handle_slash(text: str, reply_fn) -> bool:
         if len(parts) < 3:
             await reply_fn("[usage] /migrate <agent-name> <target-node> [--force]")
             return True
+        # Main itself, not the orchestrator: moving an agent is main's.
         main_actor = find_main_actor(runtime.registry)
         if main_actor is None:
-            await reply_fn("[error] migrate_agent not available.")
+            await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
             return True
         await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
         result = await main_actor.migrate_agent(parts[1], parts[2], force=force)
@@ -336,57 +353,6 @@ async def handle_slash(text: str, reply_fn) -> bool:
         return True
 
     return False
-
-
-#: Where a reply keeps its words, most likely first. `result` leads because that
-#: is the field the prompts tell a generated agent to fill -- "for agents that
-#: return plain text, use {"result": ...}" -- and what every other reader in the
-#: tree looks for before anything else.
-_REPLY_FIELDS = ("result", "reply", "text", "message", "content")
-
-
-def task_payload(text: str) -> dict[str, Any]:
-    """What a message-passing agent is handed for the text typed after its name.
-
-    A JSON object is the payload itself, so ``@imu-anomaly {"ax": 9, "ay": 0,
-    "az": 1}`` reaches a function declared with ``@wactorz.agent`` as the
-    reading its input schema describes, the way another agent's ``send_to``
-    would deliver it. Anything else travels as ``{"text": ...}``, which is what
-    an agent that reads natural language expects.
-    """
-    stripped = text.strip()
-    if stripped.startswith("{") and stripped.endswith("}"):
-        try:
-            parsed = json.loads(stripped)
-        except ValueError:
-            parsed = None
-        if isinstance(parsed, dict):
-            return parsed
-    return {"text": text}
-
-
-def reply_text(payload: Any) -> str:
-    """The words in an agent's reply, whatever shape the agent chose.
-
-    One function for both ways a reply arrives, because they had drifted apart:
-    an in-process agent was read `reply` first and one answering from a node was
-    read `result` first. Nothing carried two of these fields, so nothing was
-    visibly wrong -- but the same agent moved onto a node would have started
-    rendering differently, with no way to see why.
-
-    A dict with none of them is shown as JSON: a function declared with
-    ``@wactorz.agent`` answers with its return value, which is data, and JSON
-    can be read and pasted on where a Python repr can be neither. It is still
-    visibly not prose, so an agent that never learned to answer still gets
-    noticed. Anything that is not a dict is returned as it is.
-    """
-    if isinstance(payload, dict):
-        for field in _REPLY_FIELDS:
-            value = payload.get(field)
-            if value:
-                return str(value)
-        return json.dumps(payload, default=str)
-    return str(payload)
 
 
 def _takes_attachments(fn: Callable[..., Any]) -> bool:
@@ -422,10 +388,24 @@ class Destination(NamedTuple):
     remote_node: str | None = None
 
 
+def command_word(content: str) -> str:
+    """The command ``content`` calls, by its first word: ``/help()`` and ``/help x`` are ``/help``."""
+    words = content.split()
+    return words[0].rstrip("()") if words else ""
+
+
 def destination_of(content: str) -> Destination:
-    """Where ``content`` is going: a command, an agent here, one on a node, or nowhere."""
+    """Where ``content`` is going: a command, the orchestrator, an agent here, one on a node, or nowhere.
+
+    A message that names no agent is the orchestrator's, whichever one is
+    installed. Until one is (``runtime.orchestrator`` is None before the system
+    has started, and in a process that runs none), it is for whatever is
+    registered under main's name, as the ``@main`` form below would route it.
+    """
     if content.startswith("/"):
         return Destination(chat_metrics.COMMAND)
+    if not content.startswith("@") and runtime.orchestrator is not None:
+        return Destination(chat_metrics.ORCHESTRATOR, MAIN_ACTOR_NAME, content)
     name, text = parse_mention(content)
     target = runtime.registry.find_by_name(name) if runtime.registry else None
     if target is not None:
@@ -435,6 +415,27 @@ def destination_of(content: str) -> Destination:
     if remote_node:
         return Destination(chat_metrics.REMOTE, name, text, remote_node=remote_node)
     return Destination(chat_metrics.UNROUTED, name, text)
+
+
+async def _answer_through(
+    orchestrator: "Orchestrator",
+    text: str,
+    blocks: list[dict[str, Any]],
+    chunk_fn: Callable[[str], Awaitable[Any]],
+    end_fn: Callable[[], Awaitable[Any]],
+) -> None:
+    """Stream the orchestrator's answer to ``text`` through ``chunk_fn``, then end the turn.
+
+    The orchestrator labels its own work and decides what to do with the
+    attachments; the dashboard is the channel, whichever orchestrator answers.
+    """
+    try:
+        async for chunk in orchestrator.handle_turn_stream(
+            text, channel=DASHBOARD, attachments=blocks or None
+        ):
+            await chunk_fn(str(chunk))
+    finally:
+        await end_fn()
 
 
 async def route_chat(
@@ -500,26 +501,39 @@ async def _route_chat(
             await _say_files_not_sent("a command does not take attachments")
         handled = await handle_slash(content, reply_fn)
         if not handled:
-            main_actor = find_main_actor(runtime.registry)
-            # Forward unrecognized slash commands to main actor.
-            # main_actor.process_user_input handles the full command set
-            # (/help, /plans, /delete, /stop, /memory, /rules, /topics, etc.)
-            if main_actor:
-                _chunk_fn = stream_fn or reply_fn
+            # The rest of the command set (/help, /plans, /memory, /rules,
+            # /topics, ...) is the orchestrator's, if it says it answers it.
+            orchestrator = runtime.orchestrator
+            if orchestrator is not None and command_word(content) in orchestrator.commands():
+                await _answer_through(orchestrator, content, [], _chunk_fn, _end_fn)
+            elif orchestrator is None and (main_actor := find_main_actor(runtime.registry)):
+                # No orchestrator installed: main from the registry, as before.
                 async for chunk in main_actor.process_user_input_stream(content):
                     if isinstance(chunk, dict):
                         continue
                     await _chunk_fn(str(chunk))
-                if stream_end_fn:
-                    await stream_end_fn()
+                await _end_fn()
             else:
                 await reply_fn("Unknown command. Type /help for available commands.")
+        return
+
+    if destination.kind == chat_metrics.ORCHESTRATOR:
+        orchestrator = runtime.orchestrator
+        if orchestrator is None:
+            # Gone between deciding the destination and acting on it, which a
+            # shutdown under way can do: say so, rather than answer as nobody.
+            await reply_fn("[error] No orchestrator is running.")
+            await _end_fn()
+            return
+        logger.info("[io-gateway] → orchestrator: %r", destination.text[:60])
+        await _answer_through(orchestrator, destination.text, blocks, _chunk_fn, _end_fn)
         return
 
     target_name, text = destination.name, destination.text
     target = destination.target
 
     if target is None:
+        # Main itself, not the orchestrator: a node is reached over main's broker link.
         main_actor = find_main_actor(runtime.registry)
         # ── Remote agent fallback ─────────────────────────────────────────────
         # Agent not in local registry — check if it's running on a remote node.

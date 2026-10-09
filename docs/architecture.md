@@ -150,8 +150,8 @@ On first startup after upgrading from an older version, `migrate_from_pickle()` 
 User types:  "@my-agent {"action": "status"}"
   │
   ▼
-Interface (CLIInterface / DiscordInterface / RESTInterface / WhatsAppInterface / TelegramInterface)
-  │  calls main_actor.process_user_input(text)
+Interface (dashboard / CLIInterface / RESTInterface / DiscordInterface / WhatsAppInterface / TelegramInterface)
+  │  calls orchestrator.handle_turn(text, channel=...)   ← the seam; main is the default behind it
   ▼
 MainActor._classify_intent()     ← one LLM call: ACTUATE | HA | PIPELINE | OTHER
   │
@@ -170,6 +170,19 @@ MainActor._classify_intent()     ← one LLM call: ACTUATE | HA | PIPELINE | OTH
           ▼
       main receives RESULT, formats, returns to user
 ```
+
+**The orchestrator seam.** The chat surfaces never reach main by name. Each
+calls an `Orchestrator` (`wactorz/orchestration.py`: `handle_turn`,
+`handle_turn_stream`, `commands`) through `runtime.orchestrator`, naming the
+channel the message came in on: `dashboard`, `cli` and `rest` are the
+operator's, `social` is a public bot. `MainOrchestrator` adapts main's three
+entry points to it and routes a social channel to the restricted one;
+`DirectOrchestrator` answers the minimal profile without a model, by sending
+`@name {json}` to the agent as a task; a deployment supplies its own with
+`run(orchestrator=...)` or `WACTORZ_ORCHESTRATOR=package.module:attr`. A
+message that names an agent still reaches that agent directly, and the node
+commands (`/deploy`, `/migrate`, `/nodes`) still go to main, which holds the
+node table.
 
 ### Pipeline (HA state → Discord notification)
 

@@ -18,12 +18,14 @@ from ...agents.llm.cost import get_global_cost_info
 from ...config import CONFIG, MAX_REQUEST_BYTES
 from ...core.actor import forbidden
 from ...monitoring import PrometheusMonitor
+from ...orchestration import REST
 from ...web import origins, probes
 
 if TYPE_CHECKING:
     from ...agents.main import MainActor
     from ...core.actor import Actor
     from ...core.registry import ActorSystem
+    from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -78,15 +80,20 @@ async def _json_object(request: Request) -> dict[str, Any] | None:
 class RESTInterface:
     """Generic REST API interface. Connect any chat platform via webhooks.
     POST /chat with {"message": "..."} → returns {"response": "..."}
+
+    The chat is the orchestrator's. Main is still held for the rest: the actor
+    listing and lifecycle routes read its registry and send through it.
     """
 
     def __init__(
         self,
+        orchestrator: "Orchestrator",
         main_actor: "MainActor",
         port: int = 8000,
         api_key: str | None = None,
         system: "ActorSystem | None" = None,
     ) -> None:
+        self.orchestrator = orchestrator
         self.agent = main_actor
         self.port = port
         self.api_key = api_key
@@ -187,7 +194,9 @@ class RESTInterface:
                 return web.json_response({"error": parsed}, status=400)
             agent_name, message = parsed
 
-            response = await self.agent.process_user_input(addressed_to(agent_name, message))
+            response = await self.orchestrator.handle_turn(
+                addressed_to(agent_name, message), channel=REST
+            )
             return web.json_response(
                 {
                     "status": "sent",

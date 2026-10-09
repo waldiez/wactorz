@@ -103,7 +103,9 @@ async def monitor_fixture(
 
 
 def _rest_client(system: _System | None, api_key: str | None = KEY) -> TestClient:
+    # The probes never chat, so there is no orchestrator behind this interface.
     iface = RESTInterface(
+        cast(Any, None),
         cast(Any, _RestMain()),
         port=0,
         api_key=api_key,

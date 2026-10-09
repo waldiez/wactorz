@@ -415,6 +415,79 @@ by default: `asyncio.TimeoutError`. In every case nothing is left waiting.
 than an actor, so nothing is registered, listed or supervised on the caller's
 behalf.
 
+## Your own orchestrator
+
+What answers a chat message, in the dashboard, the REST interface, the
+terminal, Discord, Telegram or WhatsApp, is an *orchestrator*. Main, the
+model-driven one, is the default. Without a model, in the minimal profile, a
+model-free one answers. And a deployment can supply its own: a LangGraph graph,
+a rule engine, anything that implements three methods.
+
+```python
+from collections.abc import AsyncIterator
+
+import wactorz
+
+
+class Rules:
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        if text.startswith("score "):
+            ax, ay, az = (float(v) for v in text[6:].split())
+            verdict = await wactorz.ask("imu-anomaly", {"ax": ax, "ay": ay, "az": az})
+            return f"score {verdict['score']}"
+        return "Say: score <ax> <ay> <az>"
+
+    async def handle_turn_stream(
+        self, text: str, *, channel: str, user: str | None = None, attachments=None
+    ) -> AsyncIterator[str]:
+        yield await self.handle_turn(text, channel=channel, user=user)
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
+
+
+wactorz.run(agents=[detect], minimal=True, orchestrator=Rules())
+```
+
+No base class: `wactorz.Orchestrator` is a protocol, and a class with these
+three methods satisfies it. `handle_turn` answers a message in full;
+`handle_turn_stream` answers it in pieces, for the surfaces that show words as
+they arrive, and yields the whole answer once when there is nothing to stream;
+`commands` names the slash commands the orchestrator answers, by first word
+(`/help`), so a surface can say "unknown command" for the rest instead of
+handing it over.
+
+**The channel.** Every call says where the message came from: `"dashboard"`,
+`"cli"` and `"rest"` are the operator's own surfaces; `"social"` is Discord,
+Telegram or WhatsApp, a public endpoint that anyone who finds it can talk to,
+and `user` is the sender's id there. Main answers a social message through its
+restricted path (conversation and device control, no spawning, deleting or
+code) and treats any channel it does not know as social, which is the safe
+default; an orchestrator of your own should draw the same line.
+
+**What stays with the agents and with main.** Naming an agent, `@imu-anomaly
+{"ax": 9, "ay": 0, "az": 1}`, reaches that agent directly, whichever
+orchestrator is installed, and a task sent to one on a node travels as before.
+`/deploy`, `/migrate` and `/nodes` are main's, since the nodes are reached
+through it; in a profile without main they say so.
+
+**Choosing one.** From a script, `run(orchestrator=...)` or
+`serve(orchestrator=...)`: an orchestrator object, or a class or factory that
+is called with the actor registry, since most orchestrators need it to reach
+the agents. From a deployment, `WACTORZ_ORCHESTRATOR=package.module:attr`,
+loaded the way a `WACTORZ_AGENTS` entry is; the target may be any of the
+three. Either wins over main and over the model-free one. A target that cannot
+be imported, or is not an orchestrator, refuses to start with the target in the
+message, since answering with main instead would be a silent substitution.
+
+**Without a model.** In the minimal profile `wactorz.DirectOrchestrator`
+answers: `@name {json}` sends the JSON to that agent as its task and shows the
+reply, `@name words` sends `{"text": "words"}`, bare text is answered with the
+running agents and how to address one, and `/agents`, `/topics`, `/nodes` and
+`/help` are answered from the registry. The IMU example's README walks through
+it. `wactorz.MainOrchestrator` is main behind the same seam, for a program that
+wants to wrap or delegate to it.
+
 ## Profiles
 
 Without Home Assistant configured (`HA_URL` and `HA_TOKEN`) its agents do not
@@ -426,7 +499,8 @@ assistant for your agents never offers to dim the lights (see
 `WACTORZ_MINIMAL=1` or `minimal=True` starts the monitor, the dashboard and
 your agents only. The minimal profile runs no planner, no generated code and
 no runtime package install, which is the reproducible mode a pinned
-environment wants.
+environment wants. Its dashboard chat still reaches your agents, through the
+model-free orchestrator described above.
 
 ## Examples
 
@@ -486,6 +560,9 @@ What this guide uses is the surface you can rely on:
 | `wactorz.run`, `wactorz.serve` | start the system from a script, or on a running loop |
 | `wactorz.system` | the running `ActorSystem` (`registry`, `supervisor`), `None` outside a run |
 | `wactorz.ask`, `Actor.ask` | send an agent a task and wait for its reply, from host code or from another agent |
+| `wactorz.Orchestrator` | what answers chat: `handle_turn`, `handle_turn_stream`, `commands`, with the channel named on every call |
+| `orchestrator=` on `wactorz.run` and `wactorz.serve` | your own orchestrator, an object or a class or factory called with the registry |
+| `wactorz.DirectOrchestrator`, `wactorz.MainOrchestrator` | the model-free orchestrator of the minimal profile, and main behind the same seam |
 | `wactorz.spec_of` | the `AgentSpec` behind a decorated function, with `build()` for tests |
 | `wactorz.StartupError` | what `serve` and `run` raise for a configuration that cannot start |
 | `wactorz.Actor` with `subscribe`, `window`, `publish`, `persist`, `recall`, `send`, `notify_user`, `on_start`, `on_stop`, `handle_message`, `state_dir`, `record_llm_cost` | the base class |
@@ -494,7 +571,7 @@ What this guide uses is the surface you can rely on:
 | `wactorz.FunctionAgent` | the actor behind a decorated function: `call`, `options`, `log` |
 | `wactorz.RuleConfig`, `RuleCondition`, `RuleAction`, `wactorz.RuleAgent` | typed rules |
 | `wactorz.Message`, `MessageType` | what `handle_message` receives |
-| `WACTORZ_AGENTS`, `WACTORZ_PIPELINES`, `WACTORZ_MINIMAL`, `WACTORZ_HA_AGENTS` | the settings above |
+| `WACTORZ_AGENTS`, `WACTORZ_PIPELINES`, `WACTORZ_MINIMAL`, `WACTORZ_HA_AGENTS`, `WACTORZ_ORCHESTRATOR` | the settings above |
 
 Other names the package exports, the built-in agents among them, are the
 application's own and may change between releases.

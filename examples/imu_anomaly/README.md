@@ -43,8 +43,23 @@ mosquitto_sub -t 'anomalies/imu'
 
 ## Ask it from chat
 
-The same agent, with main, the planner and the catalogue around it, so you can
-see how a registered agent is discovered. Nothing in `agent.py` changes.
+**Without a model.** `python run.py` alone is the minimal profile: the monitor,
+the dashboard and the detector, no main and no model. The dashboard chat at
+`http://localhost:8888/` still reaches the agent. Type a reading as JSON after
+its name and the function's return value is the reply:
+
+```text
+@imu-anomaly {"ax": 9, "ay": -7.5, "az": 1}
+→ {"score": 39.75, "reading": {"ax": 9, "ay": -7.5, "az": 1}}
+```
+
+Plain text with no `@name` is answered with the running agents and how to
+address one, since there is no model to read it; `/agents`, `/topics`,
+`/nodes` and `/help` work, and nothing else does.
+
+**With main.** The same agent, with main, the planner and the catalogue around
+it, so you can see how a registered agent is discovered. Nothing in `agent.py`
+changes.
 
 ```bash
 python run.py --with-main --llm fake        # no API key: scripted main

@@ -271,10 +271,10 @@ class TestFindingWhereTheAgentIs:
 class TestBetweenTwoNodes:
     """Node-to-node migration is routed through main, in two legs.
 
-    The source used to publish `nodes/{target}/spawn` itself. That is lateral
+    Main asks the source to hand the agent back, then places it on the target
+    itself. A source never publishes `nodes/{target}/spawn`: that would be lateral
     remote code execution -- generated code on one node placing code on another
-    -- and a node holding a signing key refuses a spawn main did not sign. So main
-    asks the source to hand the agent back, then places it on the target itself.
+    -- and a node holding a signing key refuses a spawn main did not sign.
     """
 
     def _main(self) -> _Main:
@@ -294,8 +294,7 @@ class TestBetweenTwoNodes:
         assert payload["return_token"]
 
     async def test_the_source_is_never_asked_to_write_the_targets_topics(self) -> None:
-        # The whole point of the routing change: nothing tells one node to
-        # publish into another node's namespace.
+        # Nothing tells one node to publish into another node's namespace.
         main = self._main()
 
         await main.migrate("collector", "nuc")
@@ -312,9 +311,9 @@ class TestBetweenTwoNodes:
         assert main.publish_options[0].get("qos") == 1
 
     async def test_nothing_is_committed_before_the_agent_has_moved(self) -> None:
-        # The registry and both nodes' desired state used to be written the
-        # moment the command went out, so a migration that never completed left
-        # them claiming the agent had moved. Now they move on the ack.
+        # The registry and both nodes' desired state move on the ack, not when
+        # the command goes out: a migration that never completes must not leave
+        # them claiming the agent moved.
         main = self._main()
 
         await main.migrate("collector", "nuc")
@@ -389,11 +388,8 @@ class TestComingHome:
         assert main.publish_options[0].get("qos") == 1
 
     async def test_the_node_to_node_command_is_durable_too(self) -> None:
-        # This used to assert the opposite, and said the difference was
-        # deliberate: coming home went out at QoS 1, node-to-node at QoS 0.
-        # It was a defect either way -- a dropped migrate leaves the agent on
-        # the source while main waits -- and both paths are the same command
-        # now, so the asymmetry is gone rather than tidied away.
+        # The same command as coming home, at the same QoS 1: a dropped migrate
+        # leaves the agent on the source while main waits.
         main = _Main(
             spawn_registry={"collector": with_code(node="rpi")},
             nodes={"rpi": online(), "nuc": online()},
@@ -520,7 +516,7 @@ class TestGoingOut:
         assert [a["name"] for a in payload["agents"]] == []
 
     async def test_the_stop_that_undoes_the_spawn_is_durable(self) -> None:
-        # The spawn is no longer retained, so this is what corrects a node that
+        # The spawn is not retained, so this is what corrects a node that
         # was away while the migration was rolled back: it has to be queued
         # behind that spawn, which means surviving the same absence.
         main, token, _pending = await self._migrated()

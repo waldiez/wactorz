@@ -60,6 +60,13 @@ own speech do not need it.
 Before recording, Reachy checks that the selected recognizer is installed and has its key,
 and says what is missing instead of listening.
 
+### The dashboard microphone
+
+The chat's mic button uses the same speech-recognition settings when its engine is
+**Server**: the server transcribes through `/api/stt` with `REACHY_STT_BACKEND` and
+its key. Its **Browser** engine needs no server setting. The engine is a per-browser
+choice in the dashboard's audio settings (Auto, Browser, Server, Off).
+
 ### Conversation tuning
 
 Passed as fields of `{"cmd": "conversation_start", ...}`. Defaults suit a quiet room.

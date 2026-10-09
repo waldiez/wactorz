@@ -838,9 +838,9 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             "rules",
         )
         if _is_command:
-            # /deploy is the one slash command that needs to stream progress
-            # messages mid-execution (subnet scan, deploy phases). Other commands
-            # go through process_user_input which is request/response.
+            # /deploy streams its progress as it goes (the name lookup, the
+            # install). Other commands go through process_user_input, which
+            # answers once.
             if _stripped.startswith("/deploy"):
                 async for chunk in self._slash_deploy_stream(_stripped):
                     yield chunk
@@ -1202,10 +1202,10 @@ class MainActor(LLMAgent, SpawnMixin, MemoryMixin, RoutingMixin, PlanningMixin):
             /deploy <node>
 
         where ``<node>`` names a target configured in the environment
-        (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). The older
-        ``/deploy <node> <host> <user> <password> [broker]`` form is refused:
-        the password reached the reply stream and the persisted conversation
-        history, and running with no host port-scanned the local /24 for SSH.
+        (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). Anything after the
+        name is refused and never echoed: a host and credentials typed into chat
+        would reach the reply stream and the persisted conversation history.
+        Every chat channel's /deploy comes here.
         """
         parts = stripped.split()
         if len(parts) < 2:

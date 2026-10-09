@@ -10,7 +10,6 @@ import asyncio
 import inspect
 import json
 import logging
-import socket
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -22,10 +21,8 @@ from aiomqtt import MqttError
 
 from ..agents.llm.attachments import to_blocks
 from ..agents.lookup import MAIN_ACTOR_NAME, find_main_actor
-from ..config import deploy_env_prefix, deploy_target, deploy_target_help, deploy_target_names
 from ..core.actor import ActorState, Message, MessageType
 from ..core.mqtt import mqtt_client
-from ..core.state_snapshot import FORCE_FLAG
 from ..core.task_text import reply_text, task_payload
 from ..core.turns import acting_as, turn_scope
 from ..monitoring import chat_metrics
@@ -216,72 +213,17 @@ def experimental_first_use_banner(agent_name: str) -> str | None:
 # MQTT publisher or a WebSocket sender.  No global state, no monkey-patching.
 
 
-async def slash_deploy(node: str, reply_fn) -> None:
-    """Install and start a remote runner on the configured target for ``node``.
-
-    Everything about the target — host, user, SSH auth, broker — comes from the
-    environment (``DEPLOY_TARGETS`` plus a ``DEPLOY_<NODE>_*`` block). This used
-    to accept ``host``/``user``/``password`` as chat arguments and, when no host
-    was given, port-scan the local /24 for SSH. Both are gone: the scan turned a
-    chat message into a LAN sweep, and the password argument put a live
-    credential into the reply stream and the persisted conversation history.
-    """
-    target = deploy_target(node)
-    if target is None:
-        await reply_fn("[error] " + deploy_target_help(node))
-        return
-
-    host = target.host
-    if not host:
-        # No host configured — resolve <node>.local. A name lookup, not a sweep:
-        # it asks about one host and learns nothing about any other.
-        await reply_fn(f"[discover] No host configured for '{node}' — trying mDNS...")
-        host = await _resolve_mdns(node) or ""
-        if not host:
-            await reply_fn(
-                f"[error] Could not resolve '{node}.local'.\n"
-                f"Set {deploy_env_prefix(node)}_HOST in your environment."
-            )
-            return
-        await reply_fn(f"[discover] Found via mDNS: {node}.local → {host}")
-
-    # Main itself, not the orchestrator: the installer is reached through main.
-    main_actor = find_main_actor(runtime.registry)
-    if main_actor is None:
-        await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
-        return
-
-    await reply_fn(f"[deploy] Deploying to {target.user}@{host} as '{node}'... (20-60s)")
-    result = await main_actor.delegate_to_installer(
-        {
-            "action": "node_deploy",
-            "host": host,
-            "node_name": target.name,
-            "broker": target.broker or "localhost",
-            "port": target.broker_port,
-        },
-        timeout=120.0,
-    )
-
-    if result.get("success"):
-        await reply_fn(f"[OK] Node '{node}' is live!\n  \"spawn a CPU monitor agent on {node}\"")
-    else:
-        await reply_fn(f"[FAIL] {result.get('error', result)}")
+#: The slash commands only main answers, whichever orchestrator is installed.
+MAIN_COMMANDS = frozenset({"/deploy", "/migrate"})
 
 
-async def _resolve_mdns(node: str) -> str | None:
-    """Resolve ``<node>.local``, or None. Off the loop — a miss blocks for the
-    resolver's full timeout, which would freeze every actor in the process.
-    """
-    try:
-        return await asyncio.to_thread(socket.gethostbyname, f"{node}.local")
-    except OSError:
-        return None
-
-
-async def handle_slash(text: str, reply_fn) -> bool:
+async def handle_slash(text: str, reply_fn, stream_fn=None, stream_end_fn=None) -> bool:
     """Dispatch a slash command. Returns True if recognised.
-    `reply_fn` is an async callable that sends a string back to the user.
+
+    `reply_fn` is an async callable that sends a string back to the user as a
+    message of its own. Main's commands answer through `stream_fn` instead, one
+    message built up chunk by chunk and closed with `stream_end_fn`, so /deploy
+    shows its progress as it goes; without them each chunk is a reply.
     """
     parts = text.split()
     cmd = parts[0].lower()
@@ -317,39 +259,21 @@ async def handle_slash(text: str, reply_fn) -> bool:
         )
         return True
 
-    if cmd == "/migrate":
-        force = FORCE_FLAG in parts
-        parts = [p for p in parts if p != FORCE_FLAG]
-        if len(parts) < 3:
-            await reply_fn("[usage] /migrate <agent-name> <target-node> [--force]")
-            return True
-        # Main itself, not the orchestrator: moving an agent is main's.
+    if cmd in MAIN_COMMANDS:
+        # Main itself, not the orchestrator: nodes, and moving agents between
+        # them, are main's, and these are main's own commands as any channel
+        # reaches them.
         main_actor = find_main_actor(runtime.registry)
         if main_actor is None:
             await reply_fn(f"[error] {NO_MAIN_FOR_NODES}")
             return True
-        await reply_fn(f"[migrating] @{parts[1]} → {parts[2]}...")
-        result = await main_actor.migrate_agent(parts[1], parts[2], force=force)
-        sym = "OK" if result.get("success") else "FAIL"
-        await reply_fn(f"[{sym}] {result.get('message', str(result))}")
-        return True
-
-    if cmd == "/deploy":
-        if len(parts) < 2:
-            names = deploy_target_names()
-            listing = "\n".join(f"  {n}" for n in names) or "  (none configured)"
-            await reply_fn(f"[usage] /deploy <node-name>\nConfigured targets:\n{listing}")
-            return True
-        if len(parts) > 2:
-            # The old form took host/user/password/broker here. Refuse without
-            # echoing the extra words back — parts[3:] may be a live password,
-            # and the reply is persisted into conversation history.
-            await reply_fn(
-                "[error] /deploy takes a node name only — host and SSH credentials "
-                "now come from the environment, not from chat.\n\n" + deploy_target_help(parts[1])
-            )
-            return True
-        await slash_deploy(node=parts[1], reply_fn=reply_fn)
+        chunk_fn = stream_fn or reply_fn
+        async for chunk in main_actor.process_user_input_stream(text):
+            if isinstance(chunk, dict):
+                continue
+            await chunk_fn(str(chunk))
+        if stream_end_fn is not None:
+            await stream_end_fn()
         return True
 
     return False
@@ -499,7 +423,7 @@ async def _route_chat(
     if content.startswith("/"):
         if blocks:
             await _say_files_not_sent("a command does not take attachments")
-        handled = await handle_slash(content, reply_fn)
+        handled = await handle_slash(content, reply_fn, stream_fn, stream_end_fn)
         if not handled:
             # The rest of the command set (/help, /plans, /memory, /rules,
             # /topics, ...) is the orchestrator's, if it says it answers it.

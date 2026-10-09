@@ -6,7 +6,6 @@ to delete its agents one by one and leaves the node running and listed.
 """
 
 import json
-from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,17 +39,22 @@ class _Main:
 
 
 @pytest.fixture(name="broker")
-def broker_fixture(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Broker]:
-    """A reset run against a recording broker, with the server's state isolated."""
-    saved = {key: runtime.state[key] for key in ("agents", "nodes")}
-    runtime.state["agents"], runtime.state["nodes"] = {}, {}
+def broker_fixture(monkeypatch: pytest.MonkeyPatch) -> _Broker:
+    """A reset run against a recording broker, with the server's state isolated.
+
+    Everything the reset changes is put back afterwards, the agents it marks
+    deleted included: a test after this one that beats as one of them would
+    otherwise find its heartbeat ignored.
+    """
+    for key in ("agents", "nodes", "alerts", "log_feed"):
+        monkeypatch.setitem(runtime.state, key, type(runtime.state[key])())
+    monkeypatch.setattr(runtime, "deleted_agent_ids", [])
     broker = _Broker()
     monkeypatch.setattr(runtime, "mqtt_client_ref", broker)
     registry = MagicMock()
     registry.all_actors.return_value = []
     monkeypatch.setattr(runtime, "registry", registry)
-    yield broker
-    runtime.state.update(saved)
+    return broker
 
 
 def _node(name: str, *agents: str) -> None:

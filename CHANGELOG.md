@@ -72,6 +72,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **The Docker Hub quickstart starts.** Followed as written, it left the server refusing to start (it listens on the network inside its container and the page set no `API_KEY`) and ran Mosquitto open to anyone, on every interface. Both options now have you make an API key and a broker password with one `docker run` (the same on Linux, macOS and Windows), run the broker pinned to the release `compose.yaml` uses with anonymous clients refused and its password file written from `.env` at start, and publish the ports on this machine only.
+
 - **Doc-to-pptx agent.** It starts on a machine without Node.js and says so in its missing-dependencies alert, rather than failing to start; each conversion removes its working directory (extracted images, the build script and a local `pptxgenjs` install) instead of leaving it in the temp directory; and a `slide_count` or image size that is not a whole number gets an answer instead of an error.
 
 - **Manual agent, without a model.** When it routes by keywords (no LLM configured, or the LLM's answer cannot be used), a question that mentions resetting or dropping something ("how do I reset the filter counter?") no longer discards the loaded manual, and a question about it that says "get" and "instructions" no longer starts a search for a device of that name; both are answered from the manual. A request that is only "clear", "forget it" or "reset the manual" still clears it.

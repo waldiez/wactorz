@@ -12,6 +12,7 @@ adversarial string. Catastrophic backtracking would hang the logging path and
 take the process with it.
 """
 
+import base64
 import logging
 import sys
 import time
@@ -192,6 +193,42 @@ class TestKeysRecognisedByTheirShape:
         ],
     )
     def test_what_only_resembles_one_is_left_alone(self, line: str) -> None:
+        assert scrub(line) == line
+
+
+class TestTwilioCredentials:
+    """Twilio's auth token has no shape of its own: 32 hex digits, like any hash.
+
+    So it is not matched by shape -- that would take every request id and digest
+    with it -- and these say where it is caught instead: by its name, in the URL
+    the client builds, and in the Basic header that carries it.
+    """
+
+    # Built rather than written out, so no line here reads as a credential.
+    TOKEN = "".join(format(i, "x") for i in range(16)) * 2
+    SID = "AC" + "f" * 32
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "TWILIO_AUTH_TOKEN={token}",
+            "auth_token='{token}'",
+            "{{'auth_token': '{token}'}}",
+            "GET https://{sid}:{token}@api.twilio.com/2010-04-01/Accounts",
+        ],
+        ids=["environment", "keyword", "dict", "url"],
+    )
+    def test_where_it_is_logged_it_is_redacted(self, line: str) -> None:
+        assert self.TOKEN not in scrub(line.format(token=self.TOKEN, sid=self.SID))
+
+    def test_the_basic_header_that_carries_it(self) -> None:
+        header = base64.b64encode(f"{self.SID}:{self.TOKEN}".encode()).decode()
+
+        assert header not in scrub(f"Authorization: Basic {header}")
+
+    def test_a_bare_32_hex_id_is_left_alone(self) -> None:
+        line = f"message {self.TOKEN} queued"
+
         assert scrub(line) == line
 
 

@@ -904,9 +904,10 @@ class WeatherAgent(Actor):
                 lat, lon = float(lat_s.strip()), float(lon_s.strip())
                 resolved = (lat, lon, f"{lat:.3f},{lon:.3f}")
                 self._geo_cache[key] = resolved
-                return resolved
             except ValueError:
                 pass
+            else:
+                return resolved
         # try the full string, then progressively drop trailing tokens
         # ("paris france" → "paris"), so qualifier words never block a hit.
         candidates = [location]

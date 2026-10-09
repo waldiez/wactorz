@@ -328,7 +328,6 @@ class SpawnMixin(_Host):
                 schedule_spec.get("type"),
                 publish_topic,
             )
-            return actor
         except ValueError as e:
             # An expected rejection of user input, reported in full by the message.
             logger.error("[%s] Invalid schedule for '%s': %s", self.name, name, e)  # noqa: TRY400  # an expected rejection of user input, reported in full
@@ -336,6 +335,8 @@ class SpawnMixin(_Host):
         except Exception:
             logger.exception("[%s] Failed to spawn ScheduledAgent '%s'", self.name, name)
             return None
+        else:
+            return actor
 
     async def _spawn_rule_agent(self, config: dict, name: str) -> Actor | None:
         """Spawn a rule: triggers, conditions and actions, as `rule_agent` describes."""

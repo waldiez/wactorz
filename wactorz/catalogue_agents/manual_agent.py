@@ -499,9 +499,10 @@ async def _load_manual_bg(agent, device: str, explicit_url: str | None = None) -
     if hasattr(agent, "notify_user"):
         try:
             await agent.notify_user(message)
-            return
         except Exception as e:
             await agent.log(f"notify_user failed: {e}")
+        else:
+            return
     # No push channel available — at least leave it in the event log.
     await agent.log(message)
 

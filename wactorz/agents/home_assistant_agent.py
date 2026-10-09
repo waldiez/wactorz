@@ -789,7 +789,6 @@ class HomeAssistantAgent(LLMAgent):
                 ha_data = {}
             data = {"connected": True, "data": ha_data, "reason": ""}
             self._device_cache = {"timestamp": now, "data": data}
-            return data
         except Exception as exc:
             data = {
                 "connected": False,
@@ -797,6 +796,8 @@ class HomeAssistantAgent(LLMAgent):
                 "reason": f"Could not query Home Assistant devices: {exc}",
             }
             self._device_cache = {"timestamp": now, "data": data}
+            return data
+        else:
             return data
 
     async def _fetch_registry_items(self, fetcher: Any) -> tuple[list[dict[str, Any]], str | None]:
@@ -807,10 +808,11 @@ class HomeAssistantAgent(LLMAgent):
             items = await fetcher(self.ha_url, self.ha_token)
             if not isinstance(items, list):
                 items = []
-            return items, None
         except Exception as exc:
             logger.warning("[%s] Could not fetch Home Assistant registry data: %s", self.name, exc)
             return [], f"Could not fetch data from Home Assistant: {exc}"
+        else:
+            return items, None
 
     async def _list_areas(self) -> dict[str, Any]:
         areas, error = await self._fetch_registry_items(get_areas)
@@ -1276,9 +1278,10 @@ class HomeAssistantAgent(LLMAgent):
             return {"inserted": False, "error": "HA_URL or HA_TOKEN not configured"}
         try:
             response = await create_automation_via_rest(self.ha_url, self.ha_token, automation)
-            return {"inserted": True, "response": response}
         except Exception as exc:
             return {"inserted": False, "error": str(exc)}
+        else:
+            return {"inserted": True, "response": response}
 
     # ── Automation listing ────────────────────────────────────────────────────
 
@@ -1309,11 +1312,12 @@ class HomeAssistantAgent(LLMAgent):
                 if isinstance(a, dict)
             ]
             self._automation_cache = {"timestamp": now, "data": brief}
-            return brief
         except Exception as exc:
             logger.warning("[%s] Could not fetch automations: %s", self.name, exc)
             self._automation_cache = {"timestamp": now, "data": []}
             return []
+        else:
+            return brief
 
     def _list_automations(self, automations: list[dict[str, Any]]) -> dict[str, Any]:
         if not automations:
@@ -1380,12 +1384,13 @@ class HomeAssistantAgent(LLMAgent):
                     "automation_id": automation_id,
                     "automation_name": automation_name,
                 }
+        except Exception as exc:
+            return {"result": f"Error deleting automation: {exc}", "deleted": False}
+        else:
             return {
                 "result": f"Failed to delete automation '{automation_name}'. Home Assistant returned an error.",
                 "deleted": False,
             }
-        except Exception as exc:
-            return {"result": f"Error deleting automation: {exc}", "deleted": False}
 
     # ── Automation editing ────────────────────────────────────────────────────
 
@@ -1441,9 +1446,10 @@ class HomeAssistantAgent(LLMAgent):
             )
             if isinstance(match, dict):
                 return match
-            return {}
         except Exception as exc:
             logger.warning("[%s] Could not fetch full automation config: %s", self.name, exc)
+            return {}
+        else:
             return {}
 
     async def _generate_modified_automation_config(
@@ -1531,6 +1537,9 @@ class HomeAssistantAgent(LLMAgent):
         try:
             await update_automation(self.ha_url, self.ha_token, automation_id, updated_automation)
             self._automation_cache = {"timestamp": 0.0, "data": None}  # invalidate
+        except Exception as exc:
+            return {"result": f"Error updating automation: {exc}", "edited": False}
+        else:
             return {
                 "result": f"Automation '{automation_name}' updated successfully.",
                 "edited": True,
@@ -1538,8 +1547,6 @@ class HomeAssistantAgent(LLMAgent):
                 "automation_name": automation_name,
                 "automation": updated_automation,
             }
-        except Exception as exc:
-            return {"result": f"Error updating automation: {exc}", "edited": False}
 
     # ── Static helpers ────────────────────────────────────────────────────────
 

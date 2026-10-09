@@ -88,10 +88,11 @@ def middleware_for(server: str) -> Middleware:
         try:
             response = await handler(request)
             status = response.status
-            return response
         except web.HTTPException as exc:
             status = exc.status
             raise
+        else:
+            return response
         finally:
             RESPONSES.labels(server=server, method=method, route=route, status=str(status)).inc()
             if not is_websocket(request):

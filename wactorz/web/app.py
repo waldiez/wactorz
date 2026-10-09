@@ -58,11 +58,12 @@ async def check_ws_port() -> bool:
         server = await asyncio.start_server(lambda r, w: None, CONFIG.bind_host, runtime.WS_PORT)
         server.close()
         await server.wait_closed()
-        return True
     except OSError as exc:
         # The message is the whole story; a bind traceback adds nothing actionable.
         logger.error("[startup] Port %d already in use — %s", runtime.WS_PORT, exc)  # noqa: TRY400  # the message is the whole story; a bind traceback adds nothing
         return False
+    else:
+        return True
 
 
 def build_app() -> web.Application:

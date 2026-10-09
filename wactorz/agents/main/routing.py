@@ -91,12 +91,13 @@ class RoutingMixin(_Host):
             token = (decision or "").strip().upper().split()[0] if decision else "OTHER"
             if token in intent_tokens(self._prompt_fragments):
                 return token
-            return "OTHER"
         except asyncio.TimeoutError:
             logger.warning("[%s] Intent classification timed out after 60s", self.name)
             return "OTHER"
         except Exception as e:
             logger.debug("[%s] Intent classification failed: %s", self.name, e)
+            return "OTHER"
+        else:
             return "OTHER"
 
     async def _handle_actuate_intent(

@@ -502,13 +502,14 @@ class InstallerAgent(Actor):
                     timeout=180,
                 )
                 output = (result.stdout + result.stderr).decode("utf-8", errors="replace")
-                return result.returncode == 0, output
             except subprocess.TimeoutExpired:
                 return False, "pip timed out after 180s"
             except FileNotFoundError:
                 return False, f"Python executable not found: {sys.executable}"
             except Exception as e:
                 return False, f"{type(e).__name__}: {e}"
+            else:
+                return result.returncode == 0, output
 
         try:
             loop = asyncio.get_event_loop()
@@ -518,19 +519,20 @@ class InstallerAgent(Actor):
                 # Refresh import machinery so the new package is visible immediately
                 importlib.invalidate_caches()
 
-            return success, output
-
         except Exception as e:
             return False, f"Executor error: {type(e).__name__}: {e}"
+        else:
+            return success, output
 
     def _is_installed(self, import_name: str) -> bool:
         """Check importability, always refreshing the import cache first."""
         importlib.invalidate_caches()
         try:
             importlib.import_module(import_name)
-            return True
         except ImportError:
             return False
+        else:
+            return True
 
     # ── Helper actions ──────────────────────────────────────────────────────
 
@@ -1416,6 +1418,13 @@ class InstallerAgent(Actor):
             self._log_remote(f"[{node_name}] Deploy complete! Node is online.")
             # Record where the node lives; credentials stay in the environment.
             self._persist_node_info(node_name=node_name, host=host, user=user)
+
+        except Exception as e:
+            self._unmark_redeploying(node_name)
+            msg = f"Deploy failed for '{node_name}' on {host}: {e}"
+            self._log_remote(msg)
+            return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
+        else:
             return {
                 "success": True,
                 "node_name": node_name,
@@ -1433,12 +1442,6 @@ class InstallerAgent(Actor):
                     f"Its first heartbeat has arrived."
                 ),
             }
-
-        except Exception as e:
-            self._unmark_redeploying(node_name)
-            msg = f"Deploy failed for '{node_name}' on {host}: {e}"
-            self._log_remote(msg)
-            return {"success": False, "node_name": node_name, "host": host, "error": str(e)}
 
     async def _check_broker_reachable(
         self, conn: Any, node_name: str, broker: str, port: int

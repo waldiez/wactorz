@@ -563,7 +563,6 @@ class PlanningMixin(_Host):
             spawned_names = result_payload.get("spawned", [])
             if spawned_names:
                 answer += f"\n\n[System: Planner created new agents: {', '.join(spawned_names)} — saved for future use]"
-            return answer
 
         except asyncio.TimeoutError:
             logger.warning("[%s] Planner timed out for: %s", self.name, task[:60])
@@ -571,6 +570,8 @@ class PlanningMixin(_Host):
         except Exception:
             logger.exception("[%s] Planner error", self.name)
             return None
+        else:
+            return answer
         finally:
             self._result_futures.pop(task_id, None)
 

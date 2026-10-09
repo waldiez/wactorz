@@ -351,9 +351,10 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
             )
             if result and result.get("image_path") and Path(result["image_path"]).exists():
                 return idx, result["image_path"]
-            return idx, None
         except Exception as e:
             await agent.log(f"NIM fallback for slide {idx} failed: {e}")
+            return idx, None
+        else:
             return idx, None
 
     results = await asyncio.gather(*[_request(s) for s in missing])

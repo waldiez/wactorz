@@ -192,11 +192,12 @@ class GmailAgent(LLMAgent):
                 self._awaiting_draft = False
                 return {"result": result}
 
-            return {"result": f"Unsupported Gmail action: {action}"}
         except Exception as exc:
             self.metrics.tasks_failed += 1
             logger.warning("[%s] Gmail request failed: %s", self.name, exc)
             return {"result": f"Gmail error: {exc}", "error": str(exc)}
+        else:
+            return {"result": f"Unsupported Gmail action: {action}"}
 
     async def _answer_from_email(self, email_text: str, question: str) -> str:
         """Use the LLM to answer the user's question about a single email, or summarize it."""

@@ -195,11 +195,12 @@ class GoogleCalendarAgent(LLMAgent):
                 result = await self.client.call_tool("delete_event", {"eventId": event_id})
                 return {"result": result, "event_id": event_id}
 
-            return {"result": f"Unsupported calendar action: {action}"}
         except Exception as exc:
             self.metrics.tasks_failed += 1
             logger.warning("[%s] Calendar request failed: %s", self.name, exc)
             return {"result": f"Google Calendar error: {exc}", "error": str(exc)}
+        else:
+            return {"result": f"Unsupported calendar action: {action}"}
 
     async def _resolve_action(self, payload: dict[str, Any]) -> dict[str, Any]:
         operation = payload.get("operation") or payload.get("action")

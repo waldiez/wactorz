@@ -151,6 +151,7 @@ def quarantine_unreadable(path: Path) -> Path | None:
             target = path.with_name(f"{path.name}.corrupt.{int(time.time())}.{suffix}")
             suffix += 1
         os.replace(path, target)
-        return target
     except Exception:
         return None
+    else:
+        return target

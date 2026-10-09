@@ -1015,12 +1015,13 @@ class CatalogAgent(Actor):
                     {"type": "log", "message": msg, "timestamp": time.time()},
                 )
                 return {"ok": True, "message": msg, "agent": resolved}
-            return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
         except Exception as e:
             msg = f"Failed to spawn '{resolved}': {e}"
             logger.exception("[%s] %s", self.name, msg)
             return {"ok": False, "message": msg}
+        else:
+            return {"ok": False, "message": f"Spawn returned no actor for '{resolved}'"}
 
     # Public API ─────────────────────────────────────────────────────────────
 

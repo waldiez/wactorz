@@ -285,6 +285,7 @@ select = [
     "LOG",     # flake8-logging — logger misuse
     "DTZ",     # flake8-datetimez — datetimes that ignore the timezone they are in
     "S",       # flake8-bandit — every finding triaged; see per-file-ignores below
+    "TRY300",  # a try guards the call that can fail; the success return goes in its else
     "TRY301",  # a raise inside a try that catches it: control flow by exception
     "TRY400",  # logger.error in an except drops the traceback; log after the handler
     "PTH",     # flake8-use-pathlib — a path is a Path, from where it enters to where it is used

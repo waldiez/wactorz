@@ -569,12 +569,13 @@ async def _route_chat(
                             text_out = await asyncio.wait_for(_get_reply(), timeout=150.0)
                             await reply_fn(text_out)
                             await _end_fn()
-                            return
                         except asyncio.TimeoutError:
                             await reply_fn(
                                 f"[error] @{target_name} on {remote_node} did not reply within 150s."
                             )
                             await _end_fn()
+                            return
+                        else:
                             return
                 except (OSError, MqttError) as exc:
                     # The broker is not there to carry it. That is an outage,

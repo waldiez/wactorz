@@ -72,6 +72,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Time-series collector.** A database write that fails partway through no longer leaves part of the batch written to be written again on the next flush, so a transient error cannot duplicate detections or Home Assistant state changes; a failed retention pass no longer ends pruning until the next restart; a prune interval set with `configure` takes effect without one; and a value that is not a number, or a request sent as a bare string, gets an answer instead of an error.
+
 - **Smart-energy agent.** Answering an import with a plug's name no longer selects every plug when the name contains "all" ("the hall lamp", "the wall heater"); two rules added within the same second no longer replace one another; and a plug without an energy meter whose power sensor stops reporting is no longer charged for at its last wattage until it reports again.
 
 - **An agent that could not start on main after a move home is started again on its node.** The node had stopped it and kept its state, and it stayed stopped, running nowhere, until someone noticed. The announcement now says the move failed and that the agent is running on the node again. Not when the failed start left a copy running on main, which would make two.

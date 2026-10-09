@@ -426,10 +426,13 @@ def _flush(agent):
                 "could not write %d sensor rows, kept for the next flush: %s", len(sensor_buf), e
             )
 
+    # The per-row writes go in one transaction, so a failure partway leaves
+    # none of the buffer written and the retry adds no copies.
     if detection_buf:
         try:
-            for row in detection_buf:
-                db.write_detection(*row)
+            with db.transaction():
+                for row in detection_buf:
+                    db.write_detection(*row)
             written += len(detection_buf)
             detection_buf.clear()
         except Exception as e:
@@ -441,8 +444,9 @@ def _flush(agent):
 
     if ha_buf:
         try:
-            for row in ha_buf:
-                db.write_ha_state(*row)
+            with db.transaction():
+                for row in ha_buf:
+                    db.write_ha_state(*row)
             written += len(ha_buf)
             ha_buf.clear()
         except Exception as e:
@@ -483,14 +487,20 @@ def _do_prune(agent):
 
 
 async def _prune_loop(agent):
-    """Periodically prune old data beyond the retention window."""
-    interval = agent.state["prune_interval_s"]
+    """Periodically prune old data beyond the retention window.
+
+    The interval is read each time round, so `configure` changes it without a
+    restart; and a failed pass is logged and the next one tried, since a loop
+    that ended would leave the database growing with nobody told.
+    """
     while True:
         try:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(agent.state["prune_interval_s"])
             _do_prune(agent)
         except asyncio.CancelledError:
             break
+        except Exception as e:
+            await agent.log(f"Prune error: {e}", level="warning")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -607,6 +617,14 @@ async def process(agent):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _number(value):
+    """``value`` as a float, or None when it is not a number."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 async def handle_task(agent, payload):
     # Parse JSON from "text" field when routed via @mention
     if isinstance(payload, dict) and not payload.get("action") and payload.get("text"):
@@ -616,6 +634,9 @@ async def handle_task(agent, payload):
                 payload = parsed
         except (ValueError, TypeError):
             pass  # not JSON: the text is the request
+
+    if not isinstance(payload, dict):
+        payload = {"action": str(payload)}
 
     action = str(payload.get("action") or payload.get("text") or "").strip().lower()
 
@@ -666,8 +687,11 @@ async def handle_task(agent, payload):
             return {"result": "Persistence not initialised — no data.", "rows": []}
         _flush(agent)  # include anything still buffered
         table = str(payload.get("table") or "ha_states").strip().lower()
-        hours = float(payload.get("hours") or 24)
-        limit = min(int(payload.get("limit") or 1000), 5000)
+        try:
+            hours = float(payload.get("hours") or 24)
+            limit = min(int(payload.get("limit") or 1000), 5000)
+        except (TypeError, ValueError):
+            return {"result": "hours and limit must be a number.", "rows": []}
         entity = payload.get("entity_id") or None
         if table in ("sensors", "sensor", "sensor_readings"):
             rows = db.query_sensor(
@@ -704,14 +728,18 @@ async def handle_task(agent, payload):
     if action == "configure":
         changed = []
         if payload.get("retention_days") is not None:
-            days = float(payload["retention_days"])
+            days = _number(payload["retention_days"])
+            if days is None:
+                return {"result": "retention_days must be a number."}
             if days <= 0:
                 return {"result": "retention_days must be > 0."}
             agent.state["retention_days"] = days
             agent.persist("retention_days", days)
             changed.append(f"retention_days={days:g}")
         if payload.get("prune_interval_hours") is not None:
-            hrs = float(payload["prune_interval_hours"])
+            hrs = _number(payload["prune_interval_hours"])
+            if hrs is None:
+                return {"result": "prune_interval_hours must be a number."}
             if hrs <= 0:
                 return {"result": "prune_interval_hours must be > 0."}
             agent.state["prune_interval_s"] = hrs * 3600

@@ -411,7 +411,6 @@ omit = [
     "wactorz/catalogue_agents/doc_to_pptx_agent.py",
     "wactorz/catalogue_agents/manual_agent.py",
     "wactorz/catalogue_agents/reachy_mini_agent.py",
-    "wactorz/catalogue_agents/timeseries_collector_agent.py",
 ]
 
 [tool.coverage.report]

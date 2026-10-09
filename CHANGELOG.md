@@ -72,6 +72,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Manual agent, without a model.** When it routes by keywords (no LLM configured, or the LLM's answer cannot be used), a question that mentions resetting or dropping something ("how do I reset the filter counter?") no longer discards the loaded manual, and a question about it that says "get" and "instructions" no longer starts a search for a device of that name; both are answered from the manual. A request that is only "clear", "forget it" or "reset the manual" still clears it.
+
 - **Anomaly detector.** Rate-of-change detection works: each live reading was recorded as the latest before it was scored, so its time since the previous reading was always zero and a value changing too fast was never flagged. `configure` now applies `learning_period_hours`, `rebuild_interval_hours` and `entities` at once rather than after a restart, and refuses a setting that is not a number; a Home Assistant state with no value no longer stops baselines being built for every other entity; and a report count that is not a positive number, or a request sent as a bare string, gets an answer instead of an error.
 
 - **Time-series collector.** A database write that fails partway through no longer leaves part of the batch written to be written again on the next flush, so a transient error cannot duplicate detections or Home Assistant state changes; a failed retention pass no longer ends pruning until the next restart; a prune interval set with `configure` takes effect without one; and a value that is not a number, or a request sent as a bare string, gets an answer instead of an error.

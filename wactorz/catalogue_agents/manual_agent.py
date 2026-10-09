@@ -423,7 +423,20 @@ def _parse_router_json(raw: Any) -> dict[str, Any] | None:
 
 # Cheap keyword detector — only used as a last resort. The LLM router above
 # is the primary path.
-_CLEAR_RE = re.compile(r"\b(clear|reset|forget|unload|drop)\b", re.IGNORECASE)
+# The whole message, not a word in it: "reset" and "drop" are also what people
+# ask a manual about ("how do I reset the filter counter?").
+_CLEAR_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:clear|reset|forget|unload|drop)"
+    r"(?:\s+(?:it|that|this|everything|(?:the|this|current|the\s+current)\s+manual))?"
+    r"\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+# A question, by how it starts: with a manual loaded, one is about that manual,
+# even when it says "get" or "instructions" as a load request would.
+_QUESTION_RE = re.compile(
+    r"^\s*(?:how|what|why|where|when|which|who|is|are|does|do|did|should|will|would)\b",
+    re.IGNORECASE,
+)
 _STATUS_RE = re.compile(
     r"\b(status|what(?:'s| is) loaded|which manual|current manual)\b", re.IGNORECASE
 )
@@ -435,11 +448,14 @@ _LOAD_RE = re.compile(
 
 async def _heuristic_route(agent, text: str) -> dict[str, Any]:
     """No-LLM fallback. Tries to do the right thing with regex/keywords."""
-    if _CLEAR_RE.search(text) and len(text) < 40:
+    if _CLEAR_RE.search(text):
         return await _dispatch_action(agent, "clear", {})
 
     if _STATUS_RE.search(text):
         return _status(agent)
+
+    if agent.state.get("manual_text") and _QUESTION_RE.search(text):
+        return await _ask(agent, text)
 
     # Looks like a load request
     if _LOAD_RE.search(text):

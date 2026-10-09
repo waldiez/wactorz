@@ -408,7 +408,6 @@ omit = [
     # each leaves this list in the branch that gives it tests.
     # The list should only shrink.
     "wactorz/catalogue_agents/doc_to_pptx_agent.py",
-    "wactorz/catalogue_agents/manual_agent.py",
     "wactorz/catalogue_agents/reachy_mini_agent.py",
 ]
 

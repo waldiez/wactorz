@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from aiohttp import web
 
+from wactorz.core.persistence import chat_turn_recorded
 from wactorz.ext import stt
 from wactorz.ext.stt import listener, streaming
 
@@ -578,6 +579,34 @@ class TestWhatTheRoomLeavesBehind:
         assert len(answers) == 1
         assert answers[0]["content"] == "Hello there, the lights are on."
         assert len([m for m in shown if m["from"] != "user"]) == 1
+
+    async def test_the_agent_answering_does_not_record_the_turn_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Both halves are written above, so the agent must be told, as one
+        # answering the dashboard's socket is: otherwise an agent that keeps its
+        # own record puts every spoken turn in the log twice.
+        from wactorz.web import chat as chat_module
+        from wactorz.web import ws as ws_module
+
+        marked: list[bool] = []
+
+        async def route(_said: str, _reply: Any, **_kw: object) -> None:
+            marked.append(chat_turn_recorded.get())
+
+        async def broadcast(_msg: dict[str, Any]) -> None:
+            return None
+
+        monkeypatch.setattr(ws_module, "broadcast", broadcast)
+        monkeypatch.setattr(chat_module, "route_chat", route)
+        tasks: list[asyncio.Task[None]] = []
+        monkeypatch.setattr(chat_module, "track_chat_task", tasks.append)
+
+        await stt._route_as_typed("are the lights on")
+        await asyncio.gather(*tasks)
+
+        assert marked == [True]
+        assert chat_turn_recorded.get() is False  # only inside the turn's own task
 
     async def test_what_is_said_aloud_is_redacted_like_anything_typed(
         self, monkeypatch: pytest.MonkeyPatch

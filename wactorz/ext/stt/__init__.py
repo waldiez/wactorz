@@ -27,6 +27,7 @@ from aiohttp import BodyPartReader, web
 
 from ... import config
 from ...core import voice_settings
+from ...core.persistence import chat_turn_recorded
 from ...monitoring.log_redaction import redact
 from ..tts import speaker
 from . import listener, streaming
@@ -389,6 +390,9 @@ async def _route_as_typed(said: str, source: str = "") -> None:
         nothing reaches the log or the page, and the only trace is a warning from
         the collector long afterwards.
         """
+        # Both halves are written here, so the agent that answers is told not to
+        # write them again. Set inside this task, so no other turn sees it.
+        chat_turn_recorded.set(True)
         try:
             await chat.route_chat(said, whole, stream_fn=piece, stream_end_fn=ended)
         except asyncio.CancelledError:
@@ -446,11 +450,12 @@ async def _read_audio(request: web.Request) -> bytes:
 async def stt_handler(request: web.Request) -> web.Response:
     """POST /api/stt with an ``audio`` part — transcribe it.
 
-    Returns ``{"text": ...}``. 503 when wyoming is not installed, so a browser
-    can tell "this deployment does not recognise speech" from "it tried and
-    failed".
+    Returns ``{"text": ...}``, read by whichever recogniser this deployment
+    names. 503 when that one cannot be reached at all -- a Wyoming service
+    without wyoming installed -- so a browser can tell "this deployment does not
+    recognise speech" from "it tried and failed".
     """
-    if not _stt_state.available:
+    if not recogniser_reachable():
         return web.json_response(
             {"error": "wyoming not installed — pip install 'wactorz[stt]'"}, status=503
         )
@@ -471,7 +476,7 @@ async def stt_handler(request: web.Request) -> web.Response:
         return web.json_response({"error": "the audio part was empty"}, status=400)
 
     try:
-        text = await transcribe(raw)
+        text = await hear(raw)
     except wave.Error:
         return web.json_response({"error": "expected a WAV clip"}, status=415)
     except Exception as exc:  # pylint: disable=broad-exception-caught

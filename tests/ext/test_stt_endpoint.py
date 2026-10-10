@@ -288,6 +288,27 @@ class TestTheEndpoint:
         assert "wactorz[stt]" in body["error"]
 
 
+class TestARecordingReadByAStreamingRecogniser:
+    async def test_a_posted_clip_is_read_by_the_recogniser_this_deployment_names(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A browser that cannot capture on the audio thread records a clip and
+        # posts it instead. With a streaming recogniser named, that clip goes to
+        # it -- and needs no Wyoming client to get there.
+        async def stream(_uri: str, audio: Any, on_reading: Any) -> None:
+            async for _frame in audio:
+                pass
+            on_reading(stt.streaming.Partial(text="hello there", segment=0, final=True))
+
+        monkeypatch.setenv("WACTORZ_STT_URI", "ws://recogniser:6006")
+        monkeypatch.setattr(stt._stt_state, "available", False)
+        monkeypatch.setattr(stt.streaming, "transcribe_stream", stream)
+
+        status, body = await post_audio()
+
+        assert (status, body) == (200, {"text": "hello there"})
+
+
 class TestWhatTheBrowserIsTold:
     async def test_both_halves_of_the_answer_survive(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(config, "STT_MODE", "server")

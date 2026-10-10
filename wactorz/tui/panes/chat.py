@@ -29,6 +29,10 @@ _HINT = (
 )
 
 
+#: How the transcript names the person at the keyboard.
+_YOU = "you  "
+
+
 class ChatPane(VerticalScroll):
     """Scrolling transcript with in-place streaming of the current reply."""
 
@@ -55,10 +59,13 @@ class ChatPane(VerticalScroll):
         """
         if not rows:
             return
-        turns = [_stored_turn(row) for row in rows]
-        turns.append(
-            Static(f"── earlier conversation · {len(rows)} messages ──", classes="chat-divider")
-        )
+        # Headed and closed, so each rule names what follows it: what was said
+        # before, then this session.
+        turns = [
+            Static(f"── earlier conversation · {len(rows)} messages ──", classes="chat-divider"),
+            *(_stored_turn(row) for row in rows),
+            Static("── now ──", classes="chat-divider"),
+        ]
         self.mount(*turns, after=self.query_one(".chat-hint"))
         self.scroll_end(animate=False)
 
@@ -109,18 +116,24 @@ def _stored_turn(row: Mapping[str, Any]) -> Static:
     return Static(_reply_line(label, content), classes="chat-reply restored")
 
 
+def _indented(body: str, label: str) -> str:
+    """``body`` with each line after the first set under the first, past ``label``."""
+    return body.replace("\n", "\n" + " " * len(label))
+
+
 def _user_line(text: str, attachments: Iterable[object]) -> Text:
     line = Text()
-    line.append("you  ", style=f"bold {NODE}")
-    line.append(text)
+    line.append(_YOU, style=f"bold {NODE}")
+    line.append(_indented(text, _YOU))
     for item in attachments:
         if isinstance(item, Mapping):
-            line.append(f"\n     {describe(item)}", style="dim")
+            line.append(_indented(f"\n{describe(item)}", _YOU), style="dim")
     return line
 
 
 def _reply_line(label: str, body: str, *, body_dim: bool = False) -> Text:
     line = Text()
-    line.append(f"{label}  ", style="bold green")
-    line.append(body, style="dim" if body_dim else "")
+    speaker = f"{label}  "
+    line.append(speaker, style="bold green")
+    line.append(_indented(body, speaker), style="dim" if body_dim else "")
     return line

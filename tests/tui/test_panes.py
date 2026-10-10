@@ -19,6 +19,7 @@ from wactorz.tui.app import WactorzTUI
 from wactorz.tui.context import TUIContext
 from wactorz.tui.logo import LOGO_COMPACT
 from wactorz.tui.panes import AgentsPane, ChatPane, HomePane, LogsPane, SettingsPane
+from wactorz.tui.panes import chat as chat_mod
 from wactorz.tui.panes import home as home_mod
 from wactorz.tui.panes import settings as settings_mod
 from wactorz.tui.snapshot import HostStats, Snapshot
@@ -587,3 +588,31 @@ async def test_the_toolbar_buttons_drive_the_same_actions(app: WactorzTUI) -> No
 async def test_the_bridge_is_installed_while_the_pane_lives(app: WactorzTUI) -> None:
     async with app.run_test() as pilot:
         assert pilot.app.query_one(LogsPane).bridge._installed is True
+
+
+async def test_the_history_is_headed_and_closed(app: WactorzTUI) -> None:
+    # Each rule names what follows it: the earlier conversation, then now.
+    async with app.run_test() as pilot:
+        chat = pilot.app.query_one(ChatPane)
+        chat.restore([{"role": "user", "content": "earlier question", "agent_name": "main"}])
+        chat.add_user("typed just now")
+        await pilot.pause()
+        texts = _texts(chat)
+
+        def at(fragment: str) -> int:
+            return next(i for i, t in enumerate(texts) if fragment in t)
+
+        assert at("earlier conversation · 1 messages") < at("earlier question")
+        assert at("earlier question") < at("── now ──") < at("typed just now")
+
+
+def test_a_reply_over_several_lines_stays_under_its_text() -> None:
+    line = chat_mod._reply_line("counter", "first\nsecond")
+
+    assert line.plain == "counter  first\n         second"
+
+
+def test_so_does_a_message_over_several_lines() -> None:
+    line = chat_mod._user_line("first\nsecond", [{"name": "a.pdf", "size": 2048}])
+
+    assert line.plain.splitlines() == ["you  first", "     second", "     📎 a.pdf (2 KB)"]

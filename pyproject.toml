@@ -86,6 +86,11 @@ host      = [
 # and no musl build, which is why this is not available on the Alpine image.
 wake      = [
     "sherpa-onnx>=1.13.0",
+    # Named although sherpa-onnx requires it itself: its wheels disagree about
+    # that, the ARMv7 one (which carries its own libraries) declaring nothing,
+    # and the lockfile takes one wheel's word for all of them -- so without this
+    # line the lock leaves the core out and a hash-checked install fails.
+    "sherpa-onnx-core>=1.13.0; platform_machine != 'armv7l'",
 ]
 voice     = [
     "wactorz[stt]",

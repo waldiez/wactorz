@@ -220,3 +220,42 @@ def test_a_reinstall_after_uninstall_captures_again(root: logging.Logger) -> Non
     bridge.install()
     logging.getLogger("wactorz.test").info("second run")
     assert any("second run" in line for _lvl, line in bridge.buffer)
+
+
+# ── secrets ─────────────────────────────────────────────────────────────────
+
+#: Built rather than written out, so a secret scanner has nothing to flag.
+PASSWORD = "pw-" + "x" * 12
+
+
+def test_a_secret_never_reaches_the_pane(root: logging.Logger) -> None:
+    # The command's redaction is a filter on the handlers there at startup;
+    # this one comes later, so it redacts its own lines, as the dashboard's does.
+    bridge = LogBridge()
+    bridge.install()
+    try:
+        logging.getLogger("wactorz.test").warning(
+            "connecting to mqtt://wactorz:%s@broker", PASSWORD
+        )
+    finally:
+        bridge.uninstall()
+
+    [(_level, line)] = list(bridge.buffer)
+    assert PASSWORD not in line
+    assert "mqtt://wactorz:" in line
+
+
+def test_nor_through_a_traceback(root: logging.Logger) -> None:
+    bridge = LogBridge()
+    bridge.install()
+    try:
+        try:
+            raise ConnectionError(f"refused for mqtt://wactorz:{PASSWORD}@broker")
+        except ConnectionError:
+            logging.getLogger("wactorz.test").exception("broker unreachable")
+    finally:
+        bridge.uninstall()
+
+    [(_level, line)] = list(bridge.buffer)
+    assert "ConnectionError" in line
+    assert PASSWORD not in line

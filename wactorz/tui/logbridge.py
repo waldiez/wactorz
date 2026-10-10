@@ -16,6 +16,8 @@ import logging
 import sys
 from collections import deque
 
+from ..monitoring.log_redaction import redact
+
 
 def _writes_to_terminal(handler: logging.Handler) -> bool:
     """True if this stream handler targets the real terminal.
@@ -43,12 +45,20 @@ class _BufferHandler(logging.Handler):
     def __init__(self, buffer: deque, level: int = logging.INFO) -> None:
         super().__init__(level)
         self._buffer = buffer
-        self.setFormatter(logging.Formatter("%(asctime)s %(name)s: %(message)s", "%H:%M:%S"))
+        self.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S")
+        )
 
     def emit(self, record: logging.LogRecord) -> None:
-        """Buffer the formatted record; a bad log call must not crash the UI."""
+        """Buffer the formatted record, secrets removed; a bad log call must not crash the UI.
+
+        Redacted here, as the dashboard's buffer redacts its own: the redaction
+        the command sets up is a filter on each handler present at the time, and
+        this one is added later, while the TUI runs. The whole line is redacted,
+        so a traceback's text is covered too.
+        """
         try:
-            self._buffer.append((record.levelno, self.format(record)))
+            self._buffer.append((record.levelno, redact(self.format(record))))
         except (TypeError, ValueError):
             # Mismatched %-args or an unformattable value: report through
             # logging's own channel rather than propagating into the caller.

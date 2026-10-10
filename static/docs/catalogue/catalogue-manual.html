@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
@@ -181,8 +182,15 @@ what does error E18 mean?
 <td><code>question</code></td>
 <td>question about the loaded manual (for <code>ask</code>)</td>
 </tr>
+<tr>
+<td><code>url</code></td>
+<td>the manual's address, to skip the search (for <code>load_manual</code>)</td>
+</tr>
 </tbody>
 </table>
+<p>The agent fetches only public web addresses — a search result, a link in a page,
+or a <code>url</code> you give it — and checks every redirect the same way, so a manual on
+your own network cannot be loaded by URL. A download stops at 50 MB.</p>
 <p>Returns <code>success</code>, <code>device</code>, <code>url</code> (the PDF), <code>pages</code>, <code>chars</code>, a <code>preview</code>, and the LLM
 <code>answer</code>.</p>
   </main>

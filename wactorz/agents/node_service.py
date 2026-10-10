@@ -1,10 +1,10 @@
-"""Install the remote runner as a systemd service, at the least-privileged rung.
+"""Install the node runner as a systemd service, at the least-privileged rung.
 
-The deploy used to launch `remote_runner.py` with `nohup`, which does not
-survive a reboot and is not restarted when it crashes. This installs a unit
-instead, choosing the weakest privilege the node actually supports and
-reporting which one it got: a node that quietly fell back to `nohup` is
-otherwise indistinguishable from a supervised one.
+The deploy used to launch the runner with `nohup`, which does not survive a
+reboot and is not restarted when it crashes. This installs a unit instead,
+choosing the weakest privilege the node actually supports and reporting which
+one it got: a node that quietly fell back to `nohup` is otherwise
+indistinguishable from a supervised one.
 
 The ladder is root, then a user unit, then passwordless sudo, then `nohup`.
 A user unit sits ahead of sudo deliberately — it needs no privilege at all —
@@ -22,6 +22,9 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 UNIT_NAME = "wactorz-node.service"
+
+#: How long systemd waits to hear from a node before it restarts it, in seconds.
+WATCHDOG_S = 300
 SYSTEM_UNIT_PATH = f"/etc/systemd/system/{UNIT_NAME}"
 
 #: `systemctl --user` talks to the user manager over a bus named by
@@ -61,8 +64,8 @@ def unit_file(home: str, user: str, *, system: bool) -> str:
     command line would have needed escaping.
     """
     exec_start = (
-        f"{home}/wactorz/venv/bin/python {home}/wactorz/remote_runner.py "
-        "--broker ${WACTORZ_BROKER} --port ${WACTORZ_PORT} --name ${WACTORZ_NODE}"
+        f"{home}/wactorz/venv/bin/wactorz-node "
+        "--mqtt-broker ${WACTORZ_BROKER} --mqtt-port ${WACTORZ_PORT} --node ${WACTORZ_NODE}"
     )
     lines = [
         "[Unit]",
@@ -86,6 +89,17 @@ def unit_file(home: str, user: str, *, system: bool) -> str:
         # `always` would turn that command into a restart.
         "Restart=on-failure",
         "RestartSec=5",
+        # The node tells systemd its event loop is running, and is restarted
+        # when it stops saying so: a node frozen in blocking code is otherwise
+        # a process that exists and does nothing, which no restart policy sees.
+        # Minutes rather than seconds, since a slow board under load must not
+        # be mistaken for a frozen one.
+        f"WatchdogSec={WATCHDOG_S}",
+        "NotifyAccess=main",
+        # Killed outright. systemd's default is to abort the process, which
+        # writes a core dump of it each time, onto storage a node has little
+        # of; and a frozen event loop would not act on a politer signal.
+        "WatchdogSignal=SIGKILL",
         # Exit 2 is a node name containing an MQTT wildcard, which can never
         # succeed on retry. It is also argparse's error code, so a malformed
         # ExecStart fails once instead of hammering.

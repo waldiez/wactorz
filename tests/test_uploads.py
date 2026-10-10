@@ -290,3 +290,30 @@ class TestReadingItBackForTheModel:
         (store / ("d" * 32)).mkdir(parents=True)
 
         assert uploads.read_bytes("d" * 32) is None
+
+
+# ── storing bytes already in hand ───────────────────────────────────────────
+
+
+def test_bytes_in_hand_are_stored_like_an_upload(store: Path) -> None:
+    record = uploads.store(PNG, "../../evil name.png")
+    assert record["mime"] == "image/png"
+    assert record["name"] == "evil name.png"
+    assert record["size"] == len(PNG)
+    assert uploads.read_bytes(str(record["id"])) == PNG
+    assert uploads.metadata(str(record["id"])) == record
+    assert not list(store.glob(".*.part"))
+
+
+def test_an_svg_in_hand_is_still_stored_opaque(store: Path) -> None:
+    assert uploads.store(SVG, "x.svg")["mime"] == uploads.OPAQUE_TYPE
+
+
+@pytest.mark.parametrize("data", [b"", b"x" * 11], ids=["empty", "too-large"])
+def test_bytes_the_endpoint_would_refuse_are_refused(
+    store: Path, data: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config, "UPLOAD_MAX_BYTES", 10)
+    with pytest.raises(uploads.RefusedUpload):
+        uploads.store(data, "x.bin")
+    assert not (store.exists() and any(store.iterdir()))

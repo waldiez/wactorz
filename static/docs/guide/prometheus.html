@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
@@ -153,7 +154,7 @@
 <li>Python REST API metrics at <code>/metrics</code></li>
 <li>actor health and runtime metrics from the Python registry</li>
 <li>process/runtime metrics from the Python process</li>
-<li>Prometheus in Docker Compose</li>
+<li>Prometheus in Docker Compose, and Alertmanager to deliver its alerts</li>
 <li>optional Mosquitto availability probe controlled by <code>.env</code></li>
 </ul>
 <h2 id="what-is-monitored">What Is Monitored</h2>
@@ -169,16 +170,162 @@
 <li>actor restart count</li>
 <li>actor messages processed</li>
 <li>actor errors</li>
-<li>actor tasks completed and failed</li>
+<li>actor tasks completed, failed, and timed out (counted among the failed too)</li>
 <li>LLM input tokens</li>
 <li>LLM output tokens</li>
 <li>LLM cost in USD</li>
 <li>process/runtime metrics exported by <code>prometheus_client</code></li>
 </ul>
-<p>The app exposes these at:</p>
-<div class="highlight"><pre><span></span><code>GET /metrics
-</code></pre></div>
-
+<p>And, for what the dashboard does not show:</p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>What it says</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wactorz_mqtt_connected</code></td>
+<td><code>1</code> while the server's broker connection is up</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_queued</code></td>
+<td>Messages in memory waiting to be sent to the broker</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_backlog</code></td>
+<td>Stored messages waiting on disk for room in that queue</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_publish_failures_total</code></td>
+<td>Publishes that failed on a live connection and were held to retry</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_dropped_total</code></td>
+<td>Messages discarded because the outbox was full</td>
+</tr>
+<tr>
+<td><code>wactorz_mqtt_outbox_discarded_total</code></td>
+<td>Messages given up on: unsendable, expired undelivered, or failing every try</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_mailbox_depth{actor_name}</code></td>
+<td>Messages waiting in an actor's mailbox</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_messages_refused_total{actor_name}</code></td>
+<td>Messages a full mailbox had no room for: notifications dropped, anything else refused after a wait</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_handling_seconds{actor_name}</code></td>
+<td>How long an actor has been on the message it is handling; <code>0</code> when idle. An actor's heartbeat carries on while it waits on one message, so this is what shows it stuck</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_queue_wait_seconds{actor_name}</code></td>
+<td>Time from a message being made to the actor taking it: in the mailbox, or with its sender for room in a full one. An actor takes one message at a time, so a slow handler shows here as the wait of everything behind it, and a high wait beside <code>wactorz_actor_messages_refused_total</code> is a full mailbox</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_message_duration_seconds{actor_name}</code></td>
+<td>Time an actor's handler took over one message. A generated agent hands each task to a task of its own, so its handling time is in <code>wactorz_agent_task_duration_seconds</code> instead</td>
+</tr>
+<tr>
+<td><code>wactorz_ha_requests_total{command,outcome}</code></td>
+<td>Home Assistant WebSocket requests by command (<code>get_states</code>, <code>call_service</code>, the registry lists, <code>subscribe_events</code>) and how they ended: <code>ok</code>, <code>error</code> or <code>timeout</code>. The events a subscription then waits for are not requests, and are not counted</td>
+</tr>
+<tr>
+<td><code>wactorz_ha_request_duration_seconds{command}</code></td>
+<td>Time from a Home Assistant request to its answer, or to giving up on it</td>
+</tr>
+<tr>
+<td><code>wactorz_ha_connect_duration_seconds</code> / <code>wactorz_ha_connect_failures_total</code></td>
+<td>Time to open and authenticate a WebSocket to Home Assistant, and the attempts that failed (unreachable, or a refused token)</td>
+</tr>
+<tr>
+<td><code>wactorz_event_loop_lag_seconds</code></td>
+<td>Histogram of how long the event loop took to run a callback it was asked to run at once. Every agent shares the loop, so a long lag is all of them waiting</td>
+</tr>
+<tr>
+<td><code>wactorz_nodes{state}</code></td>
+<td>Edge nodes that are <code>up</code> and <code>down</code></td>
+</tr>
+<tr>
+<td><code>wactorz_node_up{node}</code></td>
+<td><code>1</code> while a node's heartbeat is recent</td>
+</tr>
+<tr>
+<td><code>wactorz_node_heartbeat_age_seconds{node}</code></td>
+<td>Seconds since a node's last heartbeat</td>
+</tr>
+<tr>
+<td><code>wactorz_node_agents{node}</code></td>
+<td>Agents a node reported running</td>
+</tr>
+<tr>
+<td><code>wactorz_node_info{node,version,runtime}</code></td>
+<td>The version and runtime a node reported</td>
+</tr>
+<tr>
+<td><code>wactorz_llm_requests_total{provider,outcome}</code></td>
+<td>LLM requests by how they ended: <code>ok</code>, <code>unavailable</code> (the provider kept failing through every retry) or <code>error</code> (anything else: a rejected request, a bad key)</td>
+</tr>
+<tr>
+<td><code>wactorz_llm_request_duration_seconds{provider}</code></td>
+<td>Time from a request to its answer or failure, retries included; for a streamed answer, to its last chunk</td>
+</tr>
+<tr>
+<td><code>wactorz_http_requests_total{server,method,route}</code></td>
+<td>HTTP requests, by <code>server</code>: <code>rest</code> (this interface) or <code>dashboard</code> (the dashboard's server, chat included). <code>route</code> is the registered pattern, never the path asked for</td>
+</tr>
+<tr>
+<td><code>wactorz_http_request_duration_seconds{server,method,route}</code></td>
+<td>Time a request took to answer. A WebSocket is counted but not timed, since it lasts as long as the connection</td>
+</tr>
+<tr>
+<td><code>wactorz_ws_connections</code></td>
+<td>Dashboard WebSocket connections open now</td>
+</tr>
+<tr>
+<td><code>wactorz_chat_first_reply_seconds{kind}</code></td>
+<td>Time from a chat message reaching the server to the first words of its reply, what a person notices while an answer streams in. <code>kind</code> is where it went: <code>command</code>, <code>local</code> (an agent in this process, main among them), <code>remote</code> (an agent on a node) or <code>unrouted</code></td>
+</tr>
+<tr>
+<td><code>wactorz_chat_turn_duration_seconds{kind}</code></td>
+<td>Time from a chat message reaching the server to its reply being complete. A turn the person stops is not counted</td>
+</tr>
+<tr>
+<td><code>wactorz_agent_task_duration_seconds{agent,outcome}</code></td>
+<td>Time a generated agent's <code>handle_task</code> took, by how it ended: <code>completed</code>, <code>failed</code> or <code>timed_out</code></td>
+</tr>
+<tr>
+<td><code>wactorz_agent_process_duration_seconds{agent}</code></td>
+<td>Time one cycle of a generated agent's <code>process()</code> took, whether it returned or raised</td>
+</tr>
+<tr>
+<td><code>wactorz_agent_process_timeouts_total{agent}</code></td>
+<td><code>process()</code> cycles still running when their time ran out</td>
+</tr>
+<tr>
+<td><code>wactorz_actor_slow_restarts{actor_name,node}</code></td>
+<td><code>1</code> for an agent that crashed so often in a row that its supervisor now restarts it slowly; <code>node</code> is empty for one on this server, and a node's come from its heartbeat</td>
+</tr>
+<tr>
+<td><code>wactorz_llm_spend_usd{period}</code></td>
+<td>Spent on models so far this spend period (<code>daily</code>, <code>weekly</code> or <code>monthly</code>), as Settings shows it</td>
+</tr>
+<tr>
+<td><code>wactorz_llm_spend_limit_usd{period}</code></td>
+<td>The spend limit for the period; absent when none is set. At it, model requests pause until the period ends or the limit is raised</td>
+</tr>
+</tbody>
+</table>
+<p>A request counts once however many attempts it took, and one the caller cancelled is not counted. The <code>wactorz_agent_*</code> series cover the agents that are running: an agent's go when it stops, so one-off agents do not accumulate, and one started again under the same name begins afresh, which Prometheus reads as a counter reset. Main forgets a node that stays silent, so the nodes named in your deploy targets are reported as down until they are heard from, rather than disappearing; a node started by hand shows only while main knows it.</p>
+<p>The app exposes these at <code>GET /metrics</code> on two ports:</p>
+<ul>
+<li>the dashboard's, <code>8888</code> by default (<code>MONITOR_PORT</code>), however Wactorz is started — the CLI, a library call, the Home Assistant add-on;</li>
+<li>the REST interface's, <code>8000</code> by default, when <code>INTERFACE=rest</code>, as in the compose stacks, whose Prometheus scrapes this one.</li>
+</ul>
+<p>Both pages hold the same metrics. Once <code>API_KEY</code> is set, both ask for it, and a scraper presents it as <code>Authorization: Bearer</code>.</p>
 <h3 id="mosquitto">Mosquitto</h3>
 <p>Mosquitto is an <strong>optional</strong> Prometheus target.</p>
 <p>It is monitored with the Blackbox Exporter:</p>
@@ -188,7 +335,7 @@
 <p>This is availability monitoring, not deep service-specific exporter telemetry.</p>
 <h2 id="authentication">Authentication</h2>
 <p><code>/metrics</code> is served by the API on port 8000, and once <code>API_KEY</code> is set every
-route there except <code>/health</code> requires it. An unauthenticated scrape gets <code>401</code>
+route there except the health probes requires it. An unauthenticated scrape gets <code>401</code>
 and the target goes down with nothing written to the log, so a keyed install
 loses its metrics silently unless the scrape carries the key.</p>
 <p>The endpoint accepts either <code>X-API-Key</code> or <code>Authorization: Bearer</code>.</p>
@@ -197,10 +344,10 @@ through and the scrape config is rendered with the header when a key is set.</p>
 <p><strong>Your own Prometheus</strong> must be told:</p>
 <div class="highlight"><pre><span></span><code><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">job_name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wactorz-python</span>
 <span class="w">    </span><span class="nt">static_configs</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">targets</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">&quot;wactorz:8000&quot;</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">targets</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"wactorz:8000"</span><span class="p p-Indicator">]</span>
 <span class="w">    </span><span class="nt">authorization</span><span class="p">:</span>
 <span class="w">      </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Bearer</span>
-<span class="w">      </span><span class="nt">credentials</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;your-api-key&#39;</span>
+<span class="w">      </span><span class="nt">credentials</span><span class="p">:</span><span class="w"> </span><span class="s">'your-api-key'</span>
 </code></pre></div>
 
 <p>Prefer <code>credentials_file</code> where the scraper reads its configuration from a
@@ -228,13 +375,17 @@ REST_EXTERNAL_PORT=8000
 </ul>
 <h2 id="docker-compose">Docker Compose</h2>
 <h3 id="main-stack">Main stack</h3>
-<p>Use the Python profiles:</p>
+<p>Prometheus, Alertmanager and the Blackbox Exporter belong to the <code>python</code> profile:</p>
 <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
-docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
+</code></pre></div>
+
+<p>The <code>full</code> profile adds Home Assistant and does not start them; give both profiles to have both:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>--profile<span class="w"> </span>full<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <h3 id="development-stack">Development stack</h3>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>up<span class="w"> </span>-d
+<p>There they belong to the <code>app</code> profile:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>compose.dev.yaml<span class="w"> </span>--profile<span class="w"> </span>app<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
 
 <p>Prometheus is available at:</p>
@@ -248,7 +399,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Then run:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>prometheus<span class="w"> </span>blackbox-exporter<span class="w"> </span>wactorz-python
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>prometheus<span class="w"> </span>alertmanager<span class="w"> </span>blackbox-exporter<span class="w"> </span>wactorz-python
 </code></pre></div>
 
 <h3 id="2-wactorz-from-terminal-prometheus-in-compose">2. Wactorz from terminal, Prometheus in Compose</h3>
@@ -257,7 +408,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Start Wactorz locally in REST mode, then run:</p>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-deps<span class="w"> </span>prometheus<span class="w"> </span>blackbox-exporter
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--no-deps<span class="w"> </span>prometheus<span class="w"> </span>alertmanager<span class="w"> </span>blackbox-exporter
 </code></pre></div>
 
 <p>This starts only the monitoring containers and points Prometheus at the Wactorz process running on your host.</p>
@@ -266,7 +417,10 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-fsS<span class="w"> </span>http://localhost:8000/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
 
 <span class="c1"># With API_KEY set:</span>
-curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">&quot;</span><span class="w"> </span>http://localhost:8000/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
+curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">"</span><span class="w"> </span>http://localhost:8000/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
+
+<span class="c1"># Without the REST interface, from the dashboard's port:</span>
+curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Authorization: Bearer </span><span class="nv">$API_KEY</span><span class="s2">"</span><span class="w"> </span>http://localhost:8888/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>head
 </code></pre></div>
 
 <p>You should see Prometheus-formatted output such as <code>wactorz_actors_total</code>, <code>wactorz_http_requests_total</code>, and process metrics.</p>
@@ -289,8 +443,34 @@ curl<span class="w"> </span>-fsS<span class="w"> </span>-H<span class="w"> </spa
 <ul>
 <li>Python app down</li>
 <li>actor heartbeat stale</li>
+<li>an actor on one message for over 30 minutes</li>
+<li>the event loop blocked for more than 5 seconds</li>
+<li>the broker connection lost for 2 minutes</li>
+<li>more than 100 outgoing messages waiting for 10 minutes</li>
+<li>outgoing messages dropped or given up on</li>
+<li>an edge node down for 5 minutes</li>
+<li>more than half the requests to an LLM provider failing for 10 minutes</li>
+<li>an agent recording more than 10 errors in 15 minutes</li>
+<li>an agent restarted slowly after repeated crashes, for 5 minutes, on the server or a node</li>
+<li>model spend past 80% of its limit, and at the limit (critical: model requests are paused)</li>
 <li>optional dependency probe failing</li>
 </ul>
+<p>They live in <code>infra/prometheus/alerts.yml</code>. Prometheus evaluates them and hands the ones that fire to Alertmanager, which the compose stack starts beside it.</p>
+<h2 id="where-alerts-go">Where Alerts Go</h2>
+<p>Nowhere, until you say. Out of the box Alertmanager lists what is firing on its own page and delivers nothing:</p>
+<div class="highlight"><pre><span></span><code>http://localhost:${ALERTMANAGER_EXTERNAL_PORT:-9093}
+</code></pre></div>
+
+<p>To be told about an alert, name a webhook in <code>.env</code>:</p>
+<div class="highlight"><pre><span></span><code>ALERT_WEBHOOK_URL=https://example.org/hooks/wactorz
+<span class="gh">#</span> Optional. Sent as "Authorization: Bearer &lt;token&gt;".
+ALERT_WEBHOOK_TOKEN=
+</code></pre></div>
+
+<p>and restart the service (<code>docker compose --profile python up -d alertmanager</code>). Every alert, and its resolution, is then sent there as an HTTP <code>POST</code> carrying <a href="https://prometheus.io/docs/alerting/latest/configuration/#webhook_config">Alertmanager's JSON</a>. The method and the body are Alertmanager's and are not settings; the token is the one credential it sends. Alerts with the same name are grouped into one notification, sent 30 seconds after the first fires and repeated every 4 hours while it lasts.</p>
+<p>The address and the token are written to files inside the container, in memory, and the configuration names those files, so neither shows on Alertmanager's status page.</p>
+<p>For anything a single webhook cannot express, such as email, Slack, several receivers, custom headers or routing by severity, write your own configuration to <code>infra/alertmanager/alertmanager.yml</code>. It is used exactly as written, the two settings above are then not read, and the file is ignored by git because it usually holds a credential. The <a href="https://prometheus.io/docs/alerting/latest/configuration/">Alertmanager documentation</a> describes the format.</p>
+<p>Alertmanager's page has no login and can silence an alert, so it is published to this host only, like Prometheus.</p>
   </main>
 </div>
 

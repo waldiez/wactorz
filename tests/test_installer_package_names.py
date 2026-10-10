@@ -18,7 +18,8 @@ from typing import Any
 import pytest
 
 from wactorz.agents.installer_agent import InstallerAgent, is_installable_name
-from wactorz.remote_runner import _is_installable_name
+from wactorz.core.pip import is_installable_name as core_is_installable_name
+from wactorz.core.registry import ActorRegistry
 
 REAL_NAMES = [
     "requests",
@@ -168,25 +169,30 @@ class TestValuesHandedToTheRemoteShell:
         source = Path("wactorz/agents/installer_agent.py").read_text(encoding="utf-8")
 
         assert "pkill -f {shlex.quote(pattern)}" in source
-        assert "--broker {shlex.quote(str(broker))}" in source
-        assert "--name {shlex.quote(node_name)}" in source
+        assert "--mqtt-broker {shlex.quote(str(broker))}" in source
+        assert "--node {shlex.quote(node_name)}" in source
 
 
 class TestTheEdgeRunnerCarriesTheSameRule:
-    """`remote_runner.py` is deployed as a single file to machines where wactorz
-    is not installed, so it cannot import the rule above and keeps a copy.
+    """A node installs what an agent says it imports, from the same payload.
 
-    A copy that is not checked is a copy that drifts, and it would drift in the
-    direction nobody notices: the runner accepting what the installer refuses.
+    There is one rule, in `wactorz.core.pip`, and both callers import it — the
+    installer here and the node runner. These check that what the installer
+    exposes is that rule rather than a second one that happens to agree today:
+    a copy would drift in the direction nobody notices, the node accepting what
+    the installer refuses.
     """
+
+    def test_the_installer_exposes_the_shared_rule(self) -> None:
+        assert is_installable_name is core_is_installable_name
 
     @pytest.mark.parametrize("name", REAL_NAMES)
     def test_it_accepts_the_same_names(self, name: str) -> None:
-        assert _is_installable_name(name) == is_installable_name(name) is True
+        assert core_is_installable_name(name) is True
 
     @pytest.mark.parametrize("value", NOT_NAMES)
     def test_it_refuses_the_same_values(self, value: str) -> None:
-        assert _is_installable_name(value) == is_installable_name(value) is False
+        assert core_is_installable_name(value) is False
 
 
 class TestTheEdgeRunnerInstall:
@@ -224,9 +230,9 @@ class TestTheEdgeRunnerInstall:
 
 
 def _runner() -> Any:
-    from wactorz.remote_runner import _RemoteRunner
+    from wactorz.node.runner import NodeRunner
 
-    return _RemoteRunner.__new__(_RemoteRunner)
+    return NodeRunner.__new__(NodeRunner)
 
 
 def _record_exec(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, ...]]:
@@ -276,10 +282,10 @@ class TestARefusalStopsTheSpawn:
         await runner.spawn_agent({"name": "scraper", "install": ["--index-url=http://evil"]})
 
         # The published reason is what makes this test discriminating. An empty
-        # `_agents` proves little on its own: drop the guard and the spawn runs
-        # on to a start that fails anyway, leaving the dict just as empty but
+        # registry proves little on its own: drop the guard and the spawn runs
+        # on to a start that fails anyway, leaving it just as empty but
         # reporting a start failure rather than a refused request.
-        assert not runner._agents
+        assert not runner.agents
         assert "Refused to spawn" in runner.published[0][1]["message"]
 
     async def test_the_reason_reaches_the_dashboard(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -312,7 +318,7 @@ def _spawn_runner(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(_asyncio, "create_subprocess_shell", _explode)
 
     runner = _runner()
-    runner._agents = {}
+    runner.registry = ActorRegistry()
     runner.node_name = "node-1"
     runner.published = []
 

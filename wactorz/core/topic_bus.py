@@ -62,6 +62,23 @@ logger = logging.getLogger(__name__)
 # ── Topic Contract ─────────────────────────────────────────────────────────────
 
 
+#: How much of an agent's description the planner is shown. Enough for what an
+#: agent says about its topics; a description written as an essay is cut, so
+#: one agent cannot crowd the others out of the prompt.
+PLANNER_DESCRIPTION_CHARS = 600
+
+#: How long a stream window waits before it tries the broker again.
+WINDOW_RECONNECT_DELAY_S = 5.0
+
+
+def planner_description(text: str) -> str:
+    """A description as one line for the planner, cut at `PLANNER_DESCRIPTION_CHARS`."""
+    line = " ".join(text.split())
+    if len(line) > PLANNER_DESCRIPTION_CHARS:
+        return line[:PLANNER_DESCRIPTION_CHARS].rstrip() + "…"
+    return line
+
+
 @dataclass
 class TopicContract:
     """Declares what an agent produces and consumes via MQTT topics.
@@ -108,6 +125,12 @@ class TopicContract:
     #       "example": {"temp": 30.5, "humidity": 47.7}
     #   }}
     observed_samples: dict = field(default_factory=dict)
+    #: What the agent says about itself in its manifest. Topics alone can be
+    #: indistinguishable — two buttons publish the same gestures under
+    #: different serials — and the description is where an agent says which
+    #: is which. Not stored with the contract: the retained manifest brings it
+    #: back after a restart.
+    description: str = ""
 
     def __post_init__(self):
         """Guard against LLM mistakes:
@@ -177,6 +200,7 @@ class TopicContract:
             "actor_id": self.actor_id,
             "timestamp": self.timestamp,
             "observed_samples": self.observed_samples,
+            "description": self.description,
         }
 
     @classmethod
@@ -192,6 +216,7 @@ class TopicContract:
             actor_id=d.get("actor_id"),
             timestamp=d.get("timestamp", time.time()),
             observed_samples=d.get("observed_samples", {}),
+            description=d.get("description", "") or "",
         )
 
     @classmethod
@@ -356,6 +381,8 @@ class TopicRegistry:
         lines = ["LIVE DATA FLOWS (topic contracts):"]
         for c in sorted(self._contracts.values(), key=lambda x: x.name):
             lines.append(f"\n  [{c.name}]" + (f" on {c.node}" if c.node else ""))
+            if c.description:
+                lines.append(f"    about     : {planner_description(c.description)}")
             if c.publishes:
                 lines.append(f"    publishes : {', '.join(c.publishes)}")
             if c.subscribes:
@@ -411,9 +438,7 @@ class SharedStateHub:
         """Publish to a shared state topic (retained by default)."""
         self._cache[topic] = data
         if self._mqtt:
-            import json as _json
-
-            payload = _json.dumps(data) if not isinstance(data, (str, bytes)) else data
+            payload = json.dumps(data) if not isinstance(data, (str, bytes)) else data
             await self._mqtt.publish(topic, payload, retain=retain, qos=1)
 
     async def publish_presence(
@@ -519,10 +544,22 @@ class StreamWindow:
         self._trim()
         return [e[key] for e in self._buffer if key in e]
 
-    def latest(self) -> dict | None:
-        """Return the most recent entry."""
+    def latest(self, key: str | None = None) -> Any:
+        """The most recent entry, or the newest value of one field in it.
+
+        Both spellings are in use in generated code — ``w.latest()`` for the
+        whole entry, ``w.latest('value')`` for one field — so the argument
+        chooses, rather than there being two windows with two meanings. Asking
+        for a field searches backwards for the newest entry that carries it: a
+        stream where only some messages report a key still answers.
+        """
         self._trim()
-        return self._buffer[-1] if self._buffer else None
+        if key is None:
+            return self._buffer[-1] if self._buffer else None
+        for entry in reversed(self._buffer):
+            if key in entry:
+                return entry[key]
+        return None
 
     def mean(self, key: str = "value") -> float | None:
         """Compute mean of a numeric field over the window."""
@@ -585,24 +622,29 @@ class StreamWindow:
         return count
 
     def start(self, mqtt_broker: str, mqtt_port: int):
-        """Start the background MQTT listener for this window."""
-        self._task = asyncio.create_task(self._listen(mqtt_broker, mqtt_port))
+        """Start the background MQTT listener for this window, once.
+
+        Idempotent: generated code calls `agent.window(...)` from a process loop
+        as readily as from setup, and a second listener would hold a second
+        broker connection and push every message into the buffer twice.
+        """
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._listen(mqtt_broker, mqtt_port))
         return self
 
     async def _listen(self, broker: str, port: int):
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
-                "[StreamWindow] aiomqtt not installed"
-            )  # the ImportError is the whole diagnosis
-            return
-        from .mqtt import mqtt_client  # local: avoids core/__init__ import cycle
+        from .mqtt import mqtt_client, reconnect_wait  # local: avoids core/__init__ import cycle
 
+        # Whether the connection is known to be down, so it is said when it
+        # goes and when it comes back, not at every attempt in between.
+        down = False
         while True:
             try:
                 async with mqtt_client(broker, port) as client:
                     await client.subscribe(self.topic)
+                    if down:
+                        down = False
+                        logger.info("[window] Reading %s again.", self.topic)
                     async for msg in client.messages:
                         try:
                             payload = json.loads(msg.payload.decode())
@@ -611,8 +653,17 @@ class StreamWindow:
                         self.push(payload)
             except asyncio.CancelledError:
                 break
-            except Exception:
-                await asyncio.sleep(5)
+            except Exception as exc:
+                if not down:
+                    down = True
+                    logger.warning(
+                        "[window] Lost the broker connection reading %s (%s). The window "
+                        "holds nothing newer until it is back; trying again every %gs or so.",
+                        self.topic,
+                        exc,
+                        WINDOW_RECONNECT_DELAY_S,
+                    )
+                await asyncio.sleep(reconnect_wait(WINDOW_RECONNECT_DELAY_S))
 
     def stop(self):
         if self._task:

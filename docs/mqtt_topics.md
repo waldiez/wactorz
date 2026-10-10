@@ -24,12 +24,15 @@ Every agent publishes to its own namespace: `agents/{actor_id}/...`
   "name":       "main",
   "timestamp":  1740000000.0,
   "state":      "running",
-  "cpu":        1.4,
   "memory_mb":  69.9,
   "task":       "idle",
-  "protected":  true
+  "protected":  true,
+  "essential":  false,
+  "node":       ""
 }
 ```
+
+`node` names the machine the agent runs on, and is empty for one running on main.
 
 ---
 
@@ -46,9 +49,14 @@ Every agent publishes to its own namespace: `agents/{actor_id}/...`
   "uptime":             342.5,
   "tasks_completed":    5,
   "tasks_failed":       0,
-  "restart_count":      0
+  "tasks_timed_out":    0,
+  "restart_count":      0,
+  "task_p50_s":         0.042,
+  "task_p95_s":         0.31
 }
 ```
+
+`tasks_failed` includes the tasks that timed out, which `tasks_timed_out` also counts. Every actor adds `queue_wait_p50_s`/`queue_wait_p95_s` (how long its messages waited in its mailbox) and `message_p50_s`/`message_p95_s` (how long it took over them) once it has handled any. An agent on a node that has asked the model adds `llm_round_trip_p50_s`/`llm_round_trip_p95_s` (each request there through main and back, the model's own time included), `llm_timeouts` (requests main never answered in time) and `llm_unsent` (requests that could not be sent at all, the broker being away). A generated agent also adds `task_p50_s`/`task_p95_s` for its `handle_task`, and `process_p50_s`/`process_p95_s` for its `process()` cycle, over its most recent calls, once it has made any. They are how an agent on a node, which serves no `/metrics`, reports what its work takes.
 
 **LLM agents additionally include:**
 ```json
@@ -328,26 +336,41 @@ Monitor heartbeat alerts use `last_seen_ago` and `state` instead of `message`.
 ## LLM Bridge & RPC Reply Topics
 
 Remote agents never hold API keys — they route LLM calls through `main`, which
-replies on a per-request ephemeral topic.
+replies on a per-request topic in the asking node's own reply space.
 
 ### `main/llm_request`
-**Published by:** Remote agents (`remote_runner.py`)
+**Published by:** Agents running on a node (`wactorz-node`)
 **Subscribed by:** MainActor's LLM bridge (`agents/main/llm_bridge.py`)
 **Purpose:** Centralized LLM calls so no API key leaves `main`.
 
 ```json
 {
-  "prompt":       "...",
-  "_reply_topic": "main/reply/{actor_id}/{uuid}"
+  "messages":     [{"role": "user", "content": "..."}],
+  "system":       "...",
+  "agent":        "collector",
+  "node":         "rpi-kitchen",
+  "_reply_topic": "nodes/rpi-kitchen/reply/{id}",
+  "_sig":         "{hex HMAC-SHA256}"
 }
 ```
 
+`prompt` may stand in for `messages`. `_sig` is made with the node's signing key
+over every other field, written canonically (sorted keys, compact separators);
+see `sign_request` in `core/node_signing.py`. Main answers only when
+`_reply_topic` is `nodes/<node>/reply/<hex id>` for the `node` the request names,
+and refuses an unsigned or wrongly signed request under
+`WACTORZ_NODE_SIGNING=enforce` with an error reply.
+
 ---
 
-### `main/reply/{actor_id}/{uuid}`
-**Published by:** MainActor (and any RPC responder)
-**Trigger:** Reply to an `main/llm_request` or task request
-**Purpose:** Ephemeral, per-request reply channel (UUID suffix, one-shot).
+### `nodes/{node}/reply/{id}`
+**Published by:** MainActor's LLM bridge
+**Trigger:** Reply to a `main/llm_request`
+**Purpose:** Per-request reply channel for one node (random id, one-shot).
+
+```json
+{ "text": "..." }
+```
 
 ---
 
@@ -512,14 +535,17 @@ agent can read current state without a request/response round-trip.
 | `nodes/{node}/stop_all` | Main actor | `{ "reason": "..." }` |
 | `nodes/{node}/restart` | Main actor | `{ "reason": "..." }` |
 | `nodes/{node}/restart_agent` | Main actor | `{ "name": "..." }` |
-| `nodes/{node}/migrate` | Main actor | `{ "name": "...", "target_node": "..." }` |
-| `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "version": "0.6.0", "runtime": "runner", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000 }` — `version` is the Wactorz release the node runs and `runtime` what kind of process answers; a node deployed before these fields sends neither and is recorded as `runner` at an unknown version |
+| `nodes/{node}/migrate` | Main actor | `{ "name": "...", "target_node": "@main", "return_token": "...", "force": false, "max_state_bytes": 8388608, "max_blob_bytes": 67108864 }` |
+| `nodes/{node}/blob/{sha256}` | Main actor | One blob of an agent main is placing on the node, in chunks: each payload is binary, an 8-byte header (chunk index and chunk count, big-endian 32-bit each) followed by up to 256 KiB of the blob. The spawn that follows names the blob in `_initial_state` as `{ "__wactorz_blob__": "<format>", "sha256": "...", "size": ... }`, and the node uses the blob only if its bytes hash to that. Not signed: the spawn is |
+| `nodes/{node}/heartbeat` | Remote runner | `{ "node": "...", "version": "0.7.0", "runtime": "node", "node_id": "...", "agents": [...], "agent_count": 1, "broker": "...", "pid": 123, "uptime_s": 12.3, "cpu_pct": 1.2, "mem_used_mb": 100, "mem_free_mb": 1000, "swap_used_mb": 0, "load_1m": 0.4, "load_5m": 0.3, "disk_free_mb": 20000, "temp_c": 56.8, "throttled": [] }` — `version` is the Wactorz release the node runs and `runtime` what kind of process answers (`node` for the package; the single-file runner said `runner`); a node deployed before these fields sends neither and is recorded as `runner` at an unknown version. Memory is in MiB and within any cgroup memory limit on the node (a container, a systemd `MemoryMax=`); `disk_free_mb` is where the node keeps agent state; `temp_c` is the CPU's. `throttled` lists what holds the board back now (`under_voltage`, `freq_capped`, `throttled`, `soft_temp_limit`), from a Raspberry Pi's firmware: `[]` is none, `null` a machine that cannot tell. Any reading the node cannot take is `null`, never 0 |
+| `nodes/{node}/manifest` | Remote runner | Retained, at start and after an install: what the machine is. `{ "node": "...", "version": "0.7.0", "runtime": "node", "timestamp": ..., "manifest_v": 1, "arch": "aarch64", "os": "linux", "os_release": "Debian GNU/Linux 13 (trixie)", "python": "3.13.5", "model": "Raspberry Pi 5 Model B Rev 1.0", "container": false, "cpu_count": 4, "ram_total_mb": 8058, "swap_total_mb": 2047, "disk": { "state": { "path": "...", "total_mb": 480001, "free_mb": 432492 }, "venv": { ... } }, "gpu": [], "devices": ["bluetooth", "speaker", "gpio", "i2c"], "packages": { "psutil": "7.1.0", ... } }` — `arch` is the interpreter's, one name per CPU on every system (`aarch64`, `x86_64`, `armv7l` for a 32-bit Pi system); memory and CPUs are within any cgroup limit; `gpu` lists accelerators by `kind` (`cuda`, `hailo`, `edgetpu`, `mps`); `devices` are what an agent can use (`bluetooth` with BlueZ reachable, a `camera` by its driver, `microphone`, `speaker`, `serial`, `gpio`, `i2c`); `packages` are the node environment's distributions by normalised name. `gpu` and `devices` are `null` where the node cannot tell, as is any field it cannot read. Cleared (empty, retained) by `/nodes remove` |
 | `agents/{node}/logs` | Remote runner | `{ "type": "spawned", "message": "...", "node": "...", "timestamp": ... }` |
 | `nodes/{node}/logs` | Remote runner | `{ "type": "log", "message": "...", "timestamp": ... }` |
 | `nodes/{node}/list` | Main actor | *(request)* published to make the runner emit `nodes/{node}/agents` |
 | `nodes/{node}/agents` | Remote runner | `{ "node": "...", "agents": [...] }` |
 | `nodes/{node}/migrate_result` | Remote runner | `{ "success": true, "agent": "...", "from_node": "...", "to_node": "..." }` |
-| `nodes/{node}/state_return` | Remote runner | `{ "agent": "...", "state": {...}, "return_token": "..." }` |
+| `nodes/{node}/state_return` | Remote runner | `{ "agent": "...", "config": {...}, "state": {...}, "state_keys_dropped": [...], "return_token": "..." }`, or with `"refused": "<reason>"` and no state when the agent stays where it is. A blob in `state` is a reference, as on `blob` above |
+| `nodes/{node}/blob_return/{sha256}` | Remote runner | One blob of an agent the node is handing back, in chunks shaped as on `blob`, sent before the `state_return` that names it. Never a format that runs code when it loads |
 | `nodes/{node}/reply/#` | Remote runner | Reply payloads for node requests |
 | `agents/by-name/{agent}/task` | Main actor | `{ "text": "...", "payload": "...", "_reply_topic": "...", "_remote_task": true }` |
 
@@ -613,6 +639,8 @@ mosquitto_pub -h localhost -p 1883 -t "agents/{actor_id}/commands" -m '{"command
 | `nodes/{node}/agents` | Remote runner | Agent list response |
 | `nodes/{node}/migrate_result` | Remote runner | Migration result |
 | `nodes/{node}/state_return` | Remote runner | Remote-to-local state return |
+| `nodes/{node}/blob/{sha256}` | Main actor | An agent's blob, in chunks, as main places it |
+| `nodes/{node}/blob_return/{sha256}` | Remote runner | An agent's blob, in chunks, as the node hands it back |
 | `agents/by-name/{agent}/task` | Main actor | Remote named-agent task |
 | `nodes/{node}/list` | Main actor | Request runner's agent list |
 | `main/llm_request` | Remote agents | Route LLM call through main |

@@ -86,7 +86,7 @@ class MyAgent(Actor):
 
     async def _poll(self):
         while True:
-            await self._mqtt_publish("custom/my-agent/tick", {"ts": time.time()})
+            await self.publish("custom/my-agent/tick", {"ts": time.time()})
             await asyncio.sleep(10)
 ```
 
@@ -137,6 +137,12 @@ system.supervisor.supervise(
 
 await system.supervisor.start()
 ```
+
+A crashed actor is restarted after `restart_delay`, doubled with each crash in a row up to
+60 s. Once it stays up for `restart_window` the streak ends. After `max_restarts` crashes in a
+row, restarts slow down — 5 minutes, doubling up to an hour — and main is told; the actor is
+never given up on automatically. An actor counts as crashed when its state is `FAILED`, its
+heartbeat goes silent, or it logs ten errors within a minute.
 
 To intentionally stop an actor without triggering a restart, call
 `supervisor.release(name)` before stopping it — the same pattern used by
@@ -205,6 +211,118 @@ planner executes the approved plan, spawns required agents, and self-terminates.
 
 ---
 
+## Library use
+
+The supported surface for a program that uses Wactorz as a library is the table
+at the end of [Using Wactorz as a library](library.md#stable-api); the rest of
+this page documents internals that may change between releases.
+
+### `wactorz.agent`
+
+Declares a function as an agent; see [Bringing your own agents](agents.md#bringing-your-own-agents).
+Returns the function unchanged with an `AgentSpec` attached, which `wactorz.plugins`
+reads and `spec.build()` turns into a `FunctionAgent`.
+
+| Argument | Meaning |
+|---|---|
+| `name` | Agent name; default from the function name (`detect_v2` → `detect-v2`) |
+| `subscribes` | A topic filter or a list of them; the function is called per message |
+| `publishes` | Topic the return value is published to (`None` publishes nothing) |
+| `description`, `capabilities`, `input_schema`, `output_schema` | The manifest |
+| `requires` | `{"ram_mb": ..., "packages": [...], ...}`, carried in the manifest and spawn record |
+| `autostart` | `False` keeps the agent in the catalogue until asked for |
+
+### `wactorz.pipeline(name, steps=(), *, inputs=(), schedule=None, rules=(), description="")`
+
+Declares a pipeline of agents and checks its wiring; see
+[Pipelines](agents.md#pipelines). Returns a `Pipeline` whose `agent_names`,
+`producers()`, `spawn_configs()` and `record()` describe it. Rules are
+`wactorz.RuleConfig` objects, built from `RuleCondition` and `RuleAction` and
+visible to the type checker, or the equivalent dicts.
+
+### `wactorz.serve(agents=(), *, pipelines_=(), web=True, minimal=False, monitor_port=None, mqtt_broker=None, mqtt_port=None, llm=None, state_dir=None, handle_signals=False, configure_logging=False)`
+
+A coroutine: runs the system on the caller's event loop with the given agents
+(decorated functions or `Actor` subclasses) supervised beside the built-ins, for
+a notebook, a web framework or any program that already has a loop. The host
+keeps its signals and its logging configuration; cancelling the task stops the
+system. `state_dir` is set for the run, not written to the environment.
+`minimal=True` starts the monitor, the dashboard and the given agents only, and
+builds no model unless `llm` names one. Raises `wactorz.StartupError` for a
+configuration that cannot be started, with what it started undone; the host's
+own tasks, whenever started, are left running at shutdown. Returns when the
+system stops, and raises `CancelledError` when cancelled, once it has.
+
+### `wactorz.run(...)`
+
+`asyncio.run(serve(...))` with signal handling and the command's logging on,
+for a script. Same arguments.
+
+### `wactorz.system()`
+
+The running `ActorSystem`, from the moment it is built until shutdown, or
+`None` outside a run: `wactorz.system().registry.find_by_name("imu-anomaly")`.
+
+### `wactorz.spec_of(fn)`
+
+The `AgentSpec` a `@wactorz.agent` decorator recorded on `fn`: `name`,
+`subscribes`, `publishes`, `options`, `build(**actor_kwargs)` for the
+`FunctionAgent`. `None` for an undecorated function.
+
+### `wactorz.StartupError`
+
+A `RuntimeError` for a configuration that cannot start: an exposed bind address
+without an API key, a broker certificate that cannot be loaded, a chat interface
+whose token is missing. The `wactorz` command logs it and exits with status 1;
+a host program catches it.
+
+### `Actor.subscribe(topic, callback, *, concurrency=1)`
+
+Calls `callback(payload)` for every message matching the MQTT filter `topic`,
+on one broker connection per actor. One message at a time, in order, unless
+`concurrency` is above one, which runs that many at once, out of order. The
+same `concurrency=` on `@wactorz.agent` covers a decorated function's
+messages and tasks alike.
+
+### `Actor.state_dir`
+
+The actor's own directory under the state directory, a `Path`, for files it
+keeps: weights, checkpoints, a local experiment store. Exists from
+construction, survives restarts, is removed with the actor on a delete. Not
+migrated between nodes.
+
+### `Actor.record_llm_cost(cost_usd, *, input_tokens=0, output_tokens=0, model="", provider="")`
+
+Counts a model call made outside the system's providers on the actor's
+dashboard counters and in the process-wide total the cost limit checks.
+`wactorz.core.integrations.langchain.CostCallback` and `wactorz.core.integrations.ag2.record_reply` call
+it for LangChain and AG2; `wactorz.core.integrations.ag2.model_config(me)` gives AG2's agents the
+system's model.
+
+### `Actor.publish(topic, payload, *, retain=False, qos=0)`
+
+Publishes on the broker: a dict or list as JSON, bytes as they are, anything
+else as text. The public name for what an actor sends; `_mqtt_publish` is the
+implementation.
+
+### `Actor.subscribe(topic, callback)` and `Actor.window(topic, seconds=300, max_size=1000)`
+
+On every actor. `subscribe` calls `callback(payload)` for each message matching
+the filter, on one shared broker connection; a plain function runs on a worker
+thread, a coroutine function on the loop. `window` returns the
+`StreamWindow` for a topic, one per topic, started on first use and stopped
+with the actor.
+
+### `wactorz.plugins`
+
+`discover()` finds every agent the deployment brings — `wactorz.agents` entry
+points, `WACTORZ_AGENTS`, and whatever `register()` was given — as `AgentPlugin`
+objects with a `build(name=, persistence_dir=, llm_provider=, options=)` method.
+`for_target("pkg.mod:attr")` is what a `type: "module"` spawn config resolves
+through, and finds registered targets only.
+
+---
+
 ## Persistence
 
 ### `wactorz.core.persistence`
@@ -215,7 +333,8 @@ Three-tier persistence layer routed automatically by key name:
 |---|---|---|
 | **SQLite** | `{state_dir}/wactorz.db` | Durable structured data: spawn registry, pipeline rules, user facts, contracts, time-series |
 | **Process memory** | in-process, lost on restart | Ephemeral fast-access: observed samples, metrics, heartbeat state |
-| **Pickle** | `{state_dir}/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state, ML models |
+| **Pickle** | `{state_dir}/{actor_name}/state.pkl` | Arbitrary Python objects: custom agent state |
+| **Blobs** | `{state_dir}/{actor_name}/blobs/` | Bytes, numpy arrays, torch tensors and modules, scikit-learn-family models |
 
 `state_dir` defaults to `WACTORZ_STATE_DIR`, else `./state` — see
 [Deployment](deployment.md#environment-variables).

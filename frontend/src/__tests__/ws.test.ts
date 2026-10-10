@@ -523,6 +523,7 @@ describe("WSClient", () => {
             }),
         });
         expect(eventSpy).toHaveBeenCalled();
+        expect((eventSpy.mock.calls[0]![0] as CustomEvent).detail).toEqual({ survivors: ["m1"] });
         expect(patchSpy).toHaveBeenCalledWith([{ agent_id: "m1", name: "main" }], undefined, {});
     });
 

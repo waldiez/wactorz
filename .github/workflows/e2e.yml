@@ -1,0 +1,48 @@
+name: End to end
+
+# What a person does with Wactorz, done in order against a real install: a
+# broker, the application as a process, a node deployed over SSH to a container,
+# and a browser. It takes minutes and needs Docker and a browser, so it runs
+# nightly and on request, not on every push. See e2e/README.md.
+on:
+  # Nightly. GitHub runs a schedule on the default branch only.
+  schedule:
+    - cron: "43 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-uv
+        with:
+          python-version: '3.13'
+
+      - name: Install
+        run: uv sync --locked --extra all --extra dev --extra e2e
+
+      # The browser, and the system libraries it needs on a bare runner.
+      - name: Install the browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Journeys
+        run: make e2e
+
+      # A run that fails keeps its directory: the server's, the broker's and the
+      # node's logs, and a trace of the page that replays every step.
+      - name: Upload what a failed run kept
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-run
+          path: e2e/out
+          if-no-files-found: ignore

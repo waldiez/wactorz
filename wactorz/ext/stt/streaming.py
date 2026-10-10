@@ -234,16 +234,11 @@ class LiveTranscription:
         same path, so a caller that says "stop" is not left holding a backlog
         that has nowhere to go.
         """
-        try:
-            self._frames.put_nowait(item)
-            return
-        except asyncio.QueueFull:
-            pass
-        try:
+        # Synchronous on the loop's own thread, so nothing changes the queue
+        # between asking whether it is full and putting into it.
+        if self._frames.full():
             self._frames.get_nowait()
-        except asyncio.QueueEmpty:  # pragma: no cover - raced to empty
-            pass
-        logger.warning("[stt] recogniser is behind; dropped a frame of audio")
+            logger.warning("[stt] recogniser is behind; dropped a frame of audio")
         self._frames.put_nowait(item)
 
     async def feed(self, pcm: bytes) -> None:

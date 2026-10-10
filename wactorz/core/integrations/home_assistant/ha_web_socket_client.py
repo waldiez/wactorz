@@ -1,9 +1,15 @@
 import asyncio
+import contextlib
 import json
 import time
-from typing import Any
+from collections.abc import Awaitable
+from typing import Any, TypeVar
 
 import websockets
+
+from ....monitoring import ha_metrics
+
+T = TypeVar("T")
 
 # How long a request/response exchange may take before it is treated as failed.
 #
@@ -23,6 +29,32 @@ import websockets
 _RESPONSE_TIMEOUT = 60
 
 
+async def _measured(command: str, request: Awaitable[T]) -> T:
+    """Await one request to Home Assistant, counting and timing it by ``command``.
+
+    A request cancelled by its caller is neither counted nor timed: it is the
+    caller giving up, not Home Assistant.
+    """
+    started = time.monotonic()
+    outcome = ha_metrics.ERROR
+    try:
+        result = await request
+    except (TimeoutError, asyncio.TimeoutError):
+        # Both: on Python 3.10 a frame that never comes raises asyncio's own
+        # TimeoutError, and a deadline run out raises the builtin one.
+        outcome = ha_metrics.TIMEOUT
+        raise
+    except asyncio.CancelledError:
+        outcome = ""
+        raise
+    else:
+        outcome = ha_metrics.OK
+        return result
+    finally:
+        if outcome:
+            ha_metrics.record_request(command, outcome, time.monotonic() - started)
+
+
 class HAWebSocketClient:
     def __init__(self, ws_url: str, token: str):
         self.ws_url = ws_url
@@ -31,8 +63,20 @@ class HAWebSocketClient:
         self._msg_id = 0
 
     async def __aenter__(self):
-        self._ws = await websockets.connect(self.ws_url, ping_interval=20, ping_timeout=20)
-        await self._authenticate()
+        started = time.monotonic()
+        try:
+            self._ws = await websockets.connect(self.ws_url, ping_interval=20, ping_timeout=20)
+            await self._authenticate()
+        except BaseException as exc:
+            if not isinstance(exc, asyncio.CancelledError):
+                ha_metrics.CONNECT_FAILURES.inc()
+            if self._ws is not None:
+                # A socket that opened but did not authenticate; closing it must
+                # not hide why.
+                with contextlib.suppress(Exception):
+                    await self._ws.close()
+            raise
+        ha_metrics.CONNECT_DURATION.observe(time.monotonic() - started)
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -61,7 +105,14 @@ class HAWebSocketClient:
             raise RuntimeError(f"Auth failed: {resp}")
 
     async def call(self, ws_type: str, **kwargs) -> Any:
-        """Call a Home Assistant WebSocket command and return result payload."""
+        """Call a Home Assistant WebSocket command and return result payload.
+
+        Counted and timed by command in `ha_metrics`; see `_measured`.
+        """
+        return await _measured(ws_type, self._call(ws_type, **kwargs))
+
+    async def _call(self, ws_type: str, **kwargs) -> Any:
+        """The exchange itself: send the command, read until its answer arrives."""
         if self._ws is None:
             raise RuntimeError("No WS client")
         self._msg_id += 1
@@ -100,7 +151,15 @@ class HAWebSocketClient:
         return payload
 
     async def subscribe_events(self, event_type: str | None = None) -> int:
-        """Subscribe to Home Assistant events and return the subscription id."""
+        """Subscribe to Home Assistant events and return the subscription id.
+
+        Counted and timed as a ``subscribe_events`` request, like every command;
+        the events that follow are a subscription's to wait for, and are not.
+        """
+        return await _measured("subscribe_events", self._subscribe(event_type))
+
+    async def _subscribe(self, event_type: str | None) -> int:
+        """The exchange itself: ask for the events, read until it is confirmed."""
         if self._ws is None:
             raise RuntimeError("No WS client")
         self._msg_id += 1

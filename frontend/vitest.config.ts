@@ -13,6 +13,7 @@ const BRANCHES_FLOOR = TARGET - 5;
 export default defineConfig({
     test: {
         environment: "happy-dom",
+        pool: "vmThreads",
         globals: true,
         include: ["src/**/*.test.ts"],
         setupFiles: ["src/__tests__/setup.ts"],

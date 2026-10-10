@@ -114,7 +114,11 @@ handlers in its eight numbered sections. It is **covered** by `src/__tests__/mai
 
 **DOM**
 
-- Build elements in code (`document.createElement`) — no `innerHTML` with user-controlled strings (XSS)
+- Build elements in code with the helpers in `src/ui/dom.ts` (`el`, `button`, `iconButton`, `option`,
+  `externalLink`, `named`) — they set text as text, give every button `type="button"`, and keep
+  links and form controls consistent. Reach for `document.createElement` only for what they do not
+  cover (a tag computed at runtime, `<template>`, `<style>`)
+- No `innerHTML` with user-controlled strings (XSS); icon markup from the icon registry is the exception
 - Use CSS classes for state (`.active`, `.hidden`) rather than inline styles where possible
 
 **Events**

@@ -18,6 +18,7 @@ import { buildChatMessageEl, buildChatEmptyState } from "./chatThread";
 import { buildIobar as buildChatIobar, composerPlaceholder } from "./chatIobar";
 import { fetchChatHistory, mergeChatHistory } from "./chatHistory";
 import { ChatInput } from "./chatInput";
+import { el } from "../dom";
 import {
     preferredChatTarget,
     replacementTarget,
@@ -30,7 +31,7 @@ import { SpeechToText } from "../../ext/stt";
 import { safeStorage } from "../../safeStorage";
 import { ChatStreamUI } from "./chatStreaming";
 import { postOrWarn } from "./mutate";
-import { MAIN_AGENT } from "../../agents/naming";
+import { IO_GATEWAY, MAIN_AGENT } from "../../agents/naming";
 import { toast } from "../ToastManager";
 import { dropAllAttachments, renderAttachTray, withoutAttachment } from "./attachTray";
 import { emit, listen } from "../../events";
@@ -167,8 +168,7 @@ export class DashboardChat {
     buildChatView(): HTMLElement {
         // Building the view is the first moment there is something to open on.
         this.resolveDefaultTarget();
-        const chat = document.createElement("div");
-        chat.className = "af-chat";
+        const chat = el("div", "af-chat");
         chat.append(
             buildChatSidebar(this.sidebarFilter, value => {
                 this.sidebarFilter = value;
@@ -292,7 +292,7 @@ export class DashboardChat {
 
     /** True when `msg` belongs to the currently open agent thread. */
     private _msgBelongsHere(msg: ChatMessage): boolean {
-        if (msg.from === "user" || msg.from === "io-gateway" || msg.from === "system") {
+        if (msg.from === "user" || msg.from === IO_GATEWAY || msg.from === "system") {
             return msg.to === this.chatTarget;
         }
         return msg.from === this.chatTarget;
@@ -628,9 +628,7 @@ export class DashboardChat {
         this._evChat = listen("af-chat-message", detail => {
             const msg = detail.msg;
             const stored: ChatMessage =
-                msg.from === "io-gateway" || msg.from === "system"
-                    ? { ...msg, to: this._lastSentTarget }
-                    : msg;
+                msg.from === IO_GATEWAY || msg.from === "system" ? { ...msg, to: this._lastSentTarget } : msg;
             this.chatMessages = [...this.chatMessages, stored].slice(-500);
             // Some agents answer with a single chat frame and no stream at all,
             // so for those turns this is the only ending there is. Attributed

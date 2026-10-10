@@ -7,24 +7,26 @@ Without this, an external broker with ``allow_anonymous false`` — e.g. the
 official Home Assistant Mosquitto add-on — rejects every connection, which is
 why the add-on historically only worked with its bundled, anonymous broker.
 
-Both ``aiomqtt`` and ``CONFIG`` are imported lazily inside the factory, so this
-module has **zero import-time side effects**. That matters because
-``core/actor.py`` imports this at the top and is itself imported very early by
-``wactorz/__init__.py`` — a module-level ``from ..config import CONFIG`` here
-re-enters the half-initialised package and causes a circular import.
+``CONFIG`` is imported inside the factory rather than at the top. That matters
+because ``core/actor.py`` imports this at the top and is itself imported very
+early by ``wactorz/__init__.py`` — a module-level ``from ..config import CONFIG``
+here re-enters the half-initialised package and causes a circular import.
 """
-
-from __future__ import annotations
 
 import logging
 import os
+import random
 import time
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:  # pragma: no cover
-    import aiomqtt
+import aiomqtt
+from paho.mqtt.packettypes import PacketTypes
+from paho.mqtt.properties import Properties
+
+from .mqtt_tls import client_context, tls_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +147,6 @@ def session_kwargs(expiry_seconds: int) -> dict[str, Any]:
 
     The protocol version is per connection, so callers adopt this one at a time.
     """
-    import aiomqtt
-    from paho.mqtt.packettypes import PacketTypes
-    from paho.mqtt.properties import Properties
-
     properties = Properties(PacketTypes.CONNECT)
     properties.SessionExpiryInterval = expiry_seconds
     return {
@@ -176,20 +174,47 @@ def client_id(role: str, scope: str, detail: str | None = None) -> str:
     return "-".join(parts)
 
 
-def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
-    """Build an ``aiomqtt.Client`` with broker credentials injected from CONFIG.
+def agent_client_id(actor_id: str, node: str = "", purpose: str | None = None) -> str:
+    """The client id of a connection an agent holds: scoped to where it runs.
 
-    Credentials are only added when configured *and* not already supplied by
-    the caller, so explicit per-call overrides still win.
+    Actor ids come from the agent's name, so the same agent has the same id on
+    every machine. Scoped by the id alone, a copy on a node and a copy on main --
+    the two sides of a migration, or a node still running what main took back --
+    took each other's connection in a loop, each one's connect the other's
+    disconnect. The scope is the node's name on a node and this install on main,
+    as it is for every other connection; ``purpose`` separates the connections
+    one agent holds.
     """
-    import aiomqtt
+    detail = f"{actor_id}-{purpose}" if purpose else actor_id
+    return client_id("agent", node or install_id(), detail)
 
+
+def reconnect_wait(delay: float) -> float:
+    """How long to wait before trying the broker again: ``delay``, and a little more.
+
+    Every actor holds a connection of its own, and a broker that restarts
+    drops them all in the same instant. Waiting the same time, they would all
+    come back in the same instant too, and again at each retry after. With up
+    to half the delay added, differently for each, they arrive a few at a time.
+    Never less than ``delay``: that is the pause the broker was promised.
+    """
+    return delay * random.uniform(1.0, 1.5)  # noqa: S311  # spreading retries, not a secret
+
+
+def mqtt_client(hostname: str, port: int, **kwargs: Any) -> aiomqtt.Client:
+    """Build an ``aiomqtt.Client`` with broker credentials and TLS injected from CONFIG.
+
+    Each is only added when configured *and* not already supplied by the caller,
+    so explicit per-call overrides still win.
+    """
     from ..config import CONFIG
 
     if "username" not in kwargs and CONFIG.mqtt_username:
         kwargs["username"] = CONFIG.mqtt_username
     if "password" not in kwargs and CONFIG.mqtt_password:
         kwargs["password"] = CONFIG.mqtt_password
+    if tls_enabled(CONFIG.mqtt_tls) and "tls_context" not in kwargs and "tls_params" not in kwargs:
+        kwargs["tls_context"] = client_context(CONFIG.mqtt_tls_ca, CONFIG.mqtt_tls_check_hostname)
     return aiomqtt.Client(hostname, port, **kwargs)
 
 
@@ -220,3 +245,14 @@ def broker_exposure_warning(host: str, username: str) -> str | None:
         "Keep the broker on localhost, or put it on a network you trust"
         f"{' and set MQTT_USERNAME/MQTT_PASSWORD' if anonymous else ''}."
     )
+
+
+def publish_properties(user_properties: Sequence[tuple[str, str]]) -> Properties:
+    """MQTT v5 PUBLISH properties carrying ``user_properties``, as (name, value) pairs.
+
+    Only v5 connections carry them; every connection here is one, see
+    :func:`session_kwargs`.
+    """
+    properties = Properties(PacketTypes.PUBLISH)
+    properties.UserProperty = list(user_properties)
+    return properties

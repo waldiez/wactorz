@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Lint the agent programs that are held in strings.
 
-Most of the catalogue agent keeps its program in ``AGENT_CODE`` and execs
-it at spawn. Ruff and the formatter see a string literal, so none of the
-project's rules reach that code. This writes each program to a temporary file,
+A catalogue agent not yet moved into a module of its own keeps its program in
+``AGENT_CODE``, exec'd at spawn. Ruff and the formatter see a string literal,
+so none of the project's rules reach that code. This writes each program to a temporary file,
 runs ruff over it with this repository's configuration, and reports findings
 against the real file and line so the output can be followed back.
 
@@ -14,8 +14,6 @@ against the real file and line so the output can be followed back.
 A fix or a format is written back into the string it came from, so the module
 around it is untouched.
 """
-
-from __future__ import annotations
 
 import argparse
 import ast
@@ -30,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 AGENTS = ROOT / "wactorz" / "catalogue_agents"
 CONFIG = ROOT / "pyproject.toml"
 
-#: The attribute the loader asks for; see `CatalogAgent._load_recipe`.
+#: The attribute the loader asks for; see `catalog_agent._load_embedded_recipe`.
 NAME = "AGENT_CODE"
 
 #: Ruff resolves configuration from the working directory when a file has no

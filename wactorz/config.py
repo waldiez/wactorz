@@ -32,8 +32,66 @@ else:
     load_dotenv(find_dotenv())
 
 
+#: Values of `MQTT_TLS` that turn TLS on. Mirrors wactorz/core/mqtt_tls.py, which
+#: this module does not import: it is read before anything else in the package.
+_MQTT_TLS_ON = frozenset({"1", "true", "yes", "on"})
+
+
+def mqtt_dial_port(tls: str, plain_port: int, tls_port: int) -> int:
+    """The port this server dials the broker on: its TLS port with TLS on, its plain one otherwise.
+
+    Two settings rather than one port that has to be changed alongside the switch:
+    `MQTT_PORT` stays the plain listener's port wherever it is pinned -- compose pins
+    it for the app -- so turning `MQTT_TLS` on cannot leave the server speaking TLS
+    to a listener that does not.
+    """
+    return tls_port if tls.strip().lower() in _MQTT_TLS_ON else plain_port
+
+
+def _env_choice(name: str, default: str, choices: tuple[str, ...]) -> str:
+    """The variable's value when it is one of ``choices`` (any case), else ``default``."""
+    value = os.getenv(name, "").strip().lower()
+    return value if value in choices else default
+
+
 def _env_truthy(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on", "dev"}
+
+
+def _api_key() -> str:
+    """``API_KEY``, or else the contents of the file ``API_KEY_FILE`` names.
+
+    The file form is for a key a deployment generates or mounts rather than
+    writes into its environment: compose's ``api-key`` service, or a Docker or
+    Kubernetes secret. The variable wins where both are set. A named file that
+    cannot be read is reported and counts as no key, which a wide bind then
+    refuses to start with.
+    """
+    key = os.getenv("API_KEY", "")
+    if key:
+        return key
+    path = os.getenv("API_KEY_FILE", "").strip()
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        warnings.warn(
+            f"API_KEY_FILE={path!r} could not be read ({exc}); running with no API key.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return ""
+
+
+def _dashboard_port() -> int:
+    """The port the dashboard is served on, from either of the names it has had.
+
+    ``MONITOR_PORT`` is the one the documentation and the compose files use.
+    ``WS_PORT`` is the older one, read when the other is unset, so a setup that
+    only ever set that keeps its port.
+    """
+    return _env_int("MONITOR_PORT", _env_int("WS_PORT", 8888))
 
 
 def _env_int(name: str, default: int) -> int:
@@ -290,6 +348,21 @@ def _tts_mode() -> str:
 #: Which branch this deployment speaks through. Read by the browser from
 #: ``/api/config``, the same way the recognition branch is.
 TTS_MODE = _tts_mode()
+
+#: Largest agent state a migration ships, as JSON. The snapshot goes over MQTT,
+#: waits in the outbox while the broker is away, and is parsed in one piece by
+#: the node that receives it, which may be a Raspberry Pi. A migration over the
+#: limit is refused before the agent is stopped. 0 sets no limit.
+MIGRATION_MAX_STATE_BYTES = _env_int("WACTORZ_MIGRATION_MAX_STATE_BYTES", 8 * 1024 * 1024)
+
+#: Largest total of blobs -- models, arrays, bytes -- a migration carries beside
+#: that JSON, and the largest blob a machine accepts from another. They travel
+#: in chunks and are written to disk as they arrive, so this bounds the disk a
+#: migration takes and how long it runs, not memory. Read on main and on each
+#: node alike. A migration over the limit leaves the agent where it was. 0 sets
+#: no limit.
+MIGRATION_MAX_BLOB_BYTES = _env_int("WACTORZ_MIGRATION_MAX_BLOB_BYTES", 64 * 1024 * 1024)
+
 #: How many days each store is kept before its old rows are deleted; 0 keeps it
 #: for ever. The job that applies them is `wactorz/retention.py`.
 #:
@@ -306,6 +379,76 @@ RETENTION_TIMESERIES_DAYS = _env_int("WACTORZ_RETENTION_TIMESERIES_DAYS", 365)
 #: replayed on every start — for ever, for one that never can be. A week outlasts
 #: any outage worth waiting for, and each one expired is logged with its topic.
 RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
+#: The per-minute samples of every agent and node the dashboard's trends read.
+#: A week shows a pattern across days; with a few dozen agents it is a few tens
+#: of megabytes, which a Raspberry Pi's card holds without noticing.
+RETENTION_METRICS_DAYS = _env_int("WACTORZ_RETENTION_METRICS_DAYS", 7)
+
+#: What a node does with a control message not signed for it, once it holds a key.
+#:
+#: ``enforce``  refuses it.
+#: ``warn``     acts on it and reports it in its heartbeat.
+#:
+#: Written into a node's ``.env`` by ``/deploy``, so it applies to a node from its
+#: next deploy. A node deployed before signing holds no key and acts on everything
+#: whichever this is. ``enforce`` is the default: a node that holds a key was
+#: deployed by a main that signs every command it sends, so an unsigned one comes
+#: from something else with access to the broker -- which is what signing is for.
+#: ``warn`` is for finding out, from those reports, what an install sends that is
+#: not signed before refusing it.
+NODE_SIGNING_MODES = ("warn", "enforce")
+
+#: The mode when none is set, or when the one set is not a mode.
+DEFAULT_NODE_SIGNING = "enforce"
+
+
+def _node_signing_mode() -> str:
+    """The configured mode, or ``DEFAULT_NODE_SIGNING`` when unset or unrecognised."""
+    value = _unquote(os.getenv("WACTORZ_NODE_SIGNING", "") or "").strip().lower()
+    if not value:
+        return DEFAULT_NODE_SIGNING
+    if value not in NODE_SIGNING_MODES:
+        # Named rather than ignored: a typo would otherwise leave every node on a
+        # mode nobody chose.
+        warnings.warn(
+            f"WACTORZ_NODE_SIGNING={value!r} is not one of {', '.join(NODE_SIGNING_MODES)} "
+            f"— using {DEFAULT_NODE_SIGNING!r}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return DEFAULT_NODE_SIGNING
+    return value
+
+
+NODE_SIGNING = _node_signing_mode()
+
+#: How a log line is written: ``text`` for a person reading it, ``json`` for a
+#: collector that parses it.
+LOG_FORMATS = ("text", "json")
+DEFAULT_LOG_FORMAT = "text"
+
+
+def log_format() -> str:
+    """The format ``WACTORZ_LOG_FORMAT`` asks for, or the default when unset or unrecognised.
+
+    Read when logging is set up rather than once at import, so it is in effect
+    for whichever process sets logging up: the server, or a node.
+    """
+    value = _unquote(os.getenv("WACTORZ_LOG_FORMAT", "") or "").strip().lower()
+    if not value:
+        return DEFAULT_LOG_FORMAT
+    if value not in LOG_FORMATS:
+        # Named rather than ignored: a collector expecting JSON would otherwise
+        # be handed text with nothing saying why.
+        warnings.warn(
+            f"WACTORZ_LOG_FORMAT={value!r} is not one of {', '.join(LOG_FORMATS)} "
+            f"— using {DEFAULT_LOG_FORMAT!r}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return DEFAULT_LOG_FORMAT
+    return value
+
 
 #: Whether this deployment sits behind Home Assistant's ingress. Off unless the
 #: add-on says so: the bypass below skips the origin and host checks, and a
@@ -315,10 +458,12 @@ RETENTION_OUTBOX_DAYS = _env_int("WACTORZ_RETENTION_OUTBOX_DAYS", 7)
 INGRESS_ENABLED = os.getenv("WACTORZ_INGRESS", "0").strip().lower() not in ("", "0", "false", "no")
 
 #: Addresses the Home Assistant ingress bypass is accepted from, comma-separated
-#: CIDRs. Defaults to the Supervisor proxy's own range. The bypass exists because
-#: Supervisor authenticates the user before proxying; a header alone cannot show
-#: a request came from it, since any peer on the container network can set one.
-INGRESS_PEERS = os.getenv("WACTORZ_INGRESS_PEERS", "").strip() or "172.30.32.0/23"
+#: CIDRs. Defaults to the Supervisor's own address, the one Home Assistant tells
+#: add-ons to accept ingress from. Not the network around it: every other add-on
+#: lives there too, and any of them can set the ingress header. The bypass exists
+#: because Supervisor authenticates the user before proxying; a header alone
+#: cannot show a request came from it.
+INGRESS_PEERS = os.getenv("WACTORZ_INGRESS_PEERS", "").strip() or "172.30.32.2/32"
 
 #: Extra browser origins allowed to call the API, comma-separated. The page the
 #: server serves is always allowed; this is for a dashboard hosted elsewhere.
@@ -329,6 +474,13 @@ CORS_ORIGINS = os.getenv("WACTORZ_CORS_ORIGINS", "")
 #: when it resolves here, because that is what a DNS rebinding attack looks
 #: like — set this to reach the dashboard by an mDNS or LAN name.
 ALLOWED_HOSTS = os.getenv("WACTORZ_ALLOWED_HOSTS", "")
+
+#: Reverse proxies whose ``X-Forwarded-*`` headers are believed, comma-separated
+#: addresses or CIDRs. Empty by default, and loopback is deliberately not implied:
+#: a browser on this machine connects from loopback too, and a rebound page can
+#: set these headers on its own same-origin requests without a preflight. Trusting
+#: them from anyone would let that page name ``localhost`` and pass the host check.
+TRUSTED_PROXIES = os.getenv("WACTORZ_TRUSTED_PROXIES", "")
 
 
 @dataclass(frozen=True)
@@ -361,6 +513,11 @@ class DeployTarget:
     #: Resolving late also keeps the secret out of a frozen, logged dataclass.
     broker_user: str = ""
     broker_password: str = field(default="", repr=False)
+    #: Whether ``/deploy`` puts this node on TLS. Unset, it checks from the node that
+    #: the broker answers TLS on ``broker_tls_port`` and keeps plain MQTT if not;
+    #: ``on`` and ``off`` decide instead. See ``InstallerAgent._decide_node_tls``.
+    broker_tls: str = ""
+    broker_tls_port: int = 8883
 
 
 def _env_slug(name: str) -> str:
@@ -428,6 +585,8 @@ def _deploy_targets() -> tuple[DeployTarget, ...]:
                 ssh_port=_env_int(f"DEPLOY_{slug}_SSH_PORT", 22),
                 broker_user=os.getenv(f"DEPLOY_{slug}_BROKER_USER", "").strip(),
                 broker_password=os.getenv(f"DEPLOY_{slug}_BROKER_PASSWORD", ""),
+                broker_tls=os.getenv(f"DEPLOY_{slug}_BROKER_TLS", "").strip(),
+                broker_tls_port=_env_int(f"DEPLOY_{slug}_BROKER_TLS_PORT", 8883),
             )
         )
     return tuple(targets)
@@ -458,9 +617,30 @@ class AppConfig:
     llm_timeout_s: float
     ollama_url: str
     mqtt_host: str
+    #: The port this server dials the broker on: `mqtt_tls_port` with TLS on.
     mqtt_port: int
     mqtt_username: str
     mqtt_password: str
+    #: TLS for this server's own broker connections. See wactorz/core/mqtt_tls.py.
+    mqtt_tls: str
+    mqtt_tls_ca: str
+    mqtt_tls_check_hostname: str
+    mqtt_tls_port: int
+    #: Where startup writes what a broker beside this server reads: its TLS
+    #: certificate, and the node accounts and access list when those are on.
+    #: Empty writes nothing.
+    mqtt_broker_dir: str
+    #: Whether a deployed node gets a broker account of its own, derived for it.
+    #: Only for a broker Wactorz configures, which is where those accounts exist.
+    node_accounts: bool
+    #: Data topics every node's agents may use, beyond the conventional ones the
+    #: access list already names. Comma-separated filters; `read:` before one
+    #: makes it read-only. See wactorz/core/broker_accounts.py.
+    node_topics: str
+    #: Other accounts on the same broker that keep all of it once nodes exist:
+    #: Home Assistant's, zigbee2mqtt's. Comma-separated; the server's own account
+    #: is always one of them.
+    broker_accounts: str
     ha_url: str
     ha_token: str
     ha_state_bridge_output_topic: str
@@ -496,6 +676,22 @@ class AppConfig:
     telegram_allowed_user_ids: frozenset[int]
     whatsapp_allowed_numbers: frozenset[str]
     social_rate_limit_per_min: int
+    #: ``package.module:attr`` targets of agents this deployment brings, comma
+    #: separated; the value of WACTORZ_AGENTS as given. See wactorz/plugins.py.
+    agents_env: str
+    #: ``package.module:attr`` targets of pipelines this deployment brings; the
+    #: value of WACTORZ_PIPELINES as given. See wactorz/pipelines.py.
+    pipelines_env: str
+    #: Whether the Home Assistant agents start: ``auto`` (when HA_URL and
+    #: HA_TOKEN are set), ``on``, or ``off``.
+    ha_agents: str
+    #: Start only the monitor and the agents this deployment brings: no
+    #: orchestrator, catalogue or installer, so no model is needed.
+    minimal: bool
+    #: ``package.module:attr`` of the orchestrator that answers chat, in place
+    #: of main or the model-free one; the value of WACTORZ_ORCHESTRATOR as
+    #: given, empty for the default. See wactorz/orchestration.py.
+    orchestrator_env: str
 
 
 CONFIG = AppConfig(
@@ -518,9 +714,19 @@ CONFIG = AppConfig(
     ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     bind_host=_bind_host(),
     mqtt_host=os.getenv("MQTT_HOST", "localhost"),
-    mqtt_port=_env_int("MQTT_PORT", 1883),
+    mqtt_port=mqtt_dial_port(
+        os.getenv("MQTT_TLS", ""), _env_int("MQTT_PORT", 1883), _env_int("MQTT_TLS_PORT", 8883)
+    ),
     mqtt_username=os.getenv("MQTT_USERNAME", ""),
     mqtt_password=os.getenv("MQTT_PASSWORD", ""),
+    mqtt_tls=os.getenv("MQTT_TLS", ""),
+    mqtt_tls_ca=os.getenv("MQTT_TLS_CA", ""),
+    mqtt_tls_check_hostname=os.getenv("MQTT_TLS_CHECK_HOSTNAME", ""),
+    mqtt_tls_port=_env_int("MQTT_TLS_PORT", 8883),
+    mqtt_broker_dir=os.getenv("MQTT_BROKER_DIR", "").strip(),
+    node_accounts=_env_truthy("WACTORZ_NODE_ACCOUNTS"),
+    node_topics=os.getenv("WACTORZ_NODE_TOPICS", "").strip(),
+    broker_accounts=os.getenv("WACTORZ_BROKER_ACCOUNTS", "").strip(),
     ha_url=os.getenv("HA_URL", ""),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_state_bridge_output_topic=os.getenv(
@@ -533,13 +739,13 @@ CONFIG = AppConfig(
     discord_webhook_url=os.getenv("DISCORD_WEBHOOK_URL", "").strip(),
     telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", "") or os.getenv("TELEGRAM_TOKEN", ""),
     telegram_allowed_user_id=_env_int("TELEGRAM_ALLOWED_USER_ID", 0),
-    ws_port=_env_int("WS_PORT", 8888),
+    ws_port=_dashboard_port(),
     nim_api_key=os.getenv("NIM_API_KEY", ""),
     nvidia_api_key=os.getenv("NVIDIA_API_KEY", ""),
     twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
     twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
     twilio_whatsapp_number=os.getenv("TWILIO_WHATSAPP_NUMBER", ""),
-    api_key=os.getenv("API_KEY", ""),
+    api_key=_api_key(),
     deploy_targets=_deploy_targets(),
     # Empty means "<state dir>/known_hosts", resolved at connect time so the
     # path follows WACTORZ_STATE_DIR instead of freezing the import-time value.
@@ -564,6 +770,11 @@ CONFIG = AppConfig(
         if n.strip()
     ),
     social_rate_limit_per_min=_env_int("SOCIAL_RATE_LIMIT_PER_MIN", 12),
+    agents_env=os.getenv("WACTORZ_AGENTS", ""),
+    pipelines_env=os.getenv("WACTORZ_PIPELINES", ""),
+    ha_agents=_env_choice("WACTORZ_HA_AGENTS", "auto", ("auto", "on", "off")),
+    minimal=_env_truthy("WACTORZ_MINIMAL"),
+    orchestrator_env=os.getenv("WACTORZ_ORCHESTRATOR", "").strip(),
 )
 
 

@@ -63,6 +63,15 @@ describe("IOManager.send", () => {
         expect(ws.send).toHaveBeenCalledWith("@alpha hello", "alpha", []);
     });
 
+    it("leaves a slash command unaddressed, whichever thread it was typed in", async () => {
+        const io = new IOManager(makeRouter());
+        const ws = makeWS();
+        io.setWSClient(ws as unknown as WSClient);
+        await io.send("/help", agentInfo);
+        // Addressed to the thread's agent it would reach it as the text "/help".
+        expect(ws.send).toHaveBeenCalledWith("/help", "alpha", []);
+    });
+
     it("toasts when the WebSocket send fails", async () => {
         const io = new IOManager(makeRouter());
         io.setWSClient(makeWS(false) as unknown as WSClient);

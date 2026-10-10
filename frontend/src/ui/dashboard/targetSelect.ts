@@ -9,6 +9,7 @@
  */
 import type { AgentInfo } from "../../types/agent";
 import { canDirectMessage, MESSAGEABLE_PRIORITY } from "./agentState";
+import { option } from "../dom";
 
 /** Pinned agents in their fixed order, then everyone else alphabetically. */
 function byPriorityThenName(a: AgentInfo, b: AgentInfo): number {
@@ -43,10 +44,7 @@ export function renderTargetSelect(select: HTMLSelectElement, agents: AgentInfo[
         .filter(canDirectMessage)
         .sort(byPriorityThenName)
         .forEach(agent => {
-            const opt = document.createElement("option");
-            opt.value = agent.name;
-            opt.textContent = `@${agent.name}`;
-            select.appendChild(opt);
+            select.appendChild(option(agent.name, `@${agent.name}`));
         });
     const hasTarget = [...select.options].some(o => o.value === target);
     select.value = hasTarget ? target : (select.options[0]?.value ?? "");

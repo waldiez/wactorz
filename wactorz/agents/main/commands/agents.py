@@ -5,11 +5,10 @@ machine. The checks that come first are the point — a command that acts on the
 wrong agent is not recoverable by typing the right one afterwards.
 """
 
-from __future__ import annotations
-
 import logging
 
 from ....core.actor import ActorState
+from ....core.state_snapshot import FORCE_FLAG
 from .dispatch import CommandContext, command
 
 logger = logging.getLogger(__name__)
@@ -22,19 +21,26 @@ logger = logging.getLogger(__name__)
     summary="move an agent to a different node",
 )
 async def migrate_agent_cmd(ctx: CommandContext, argument: str) -> str:
-    """Move an agent to a different node."""
-    parts = argument.split()
+    """Move an agent to a different node.
+
+    ``--force`` moves an agent whose state holds values that cannot travel as
+    JSON, leaving those behind; without it such a move is refused.
+    """
+    words = argument.split()
+    force = FORCE_FLAG in words
+    parts = [w for w in words if w != FORCE_FLAG]
     if len(parts) < 2:
         return (
-            "Usage: /migrate <agent-name> <target-node>\n"
+            "Usage: /migrate <agent-name> <target-node> [--force]\n"
             "Examples:\n"
             "  /migrate temp-sensor rpi-bedroom   — remote to remote\n"
             "  /migrate temp-sensor local         — remote back to main node\n"
-            "  /migrate temp-sensor rpi-a         — local to remote"
+            "  /migrate temp-sensor rpi-a         — local to remote\n"
+            "  --force moves it even if some of its state cannot travel, leaving that behind"
         )
     agent_name, target_node = parts[0], parts[1]
     try:
-        result = await ctx.actor.migrate_agent(agent_name, target_node)
+        result = await ctx.actor.migrate_agent(agent_name, target_node, force=force)
     except Exception as exc:
         logger.exception("[main] /migrate failed for %r → %r", agent_name, target_node)
         return f"Migrate failed: {exc}"

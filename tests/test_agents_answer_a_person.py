@@ -11,8 +11,6 @@ These agents genuinely cannot answer questions. Saying so is the fix; the
 structured fields stay for the callers that delegate to them and read them.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 from typing import Any
@@ -206,10 +204,11 @@ class TestBothDeliveryPathsAgree:
     def test_every_field_an_agent_might_use_is_read(self, field: str) -> None:
         assert reply_text({field: "the answer"}) == "the answer"
 
-    def test_a_reply_with_no_words_is_left_ugly(self) -> None:
-        # Deliberate: a repr gets reported, where a tidy rendering would hide an
-        # agent that never learned to answer.
-        assert reply_text({"actuations_count": 1}).startswith("{")
+    def test_a_reply_with_no_words_is_shown_as_data(self) -> None:
+        # JSON, not prose: readable for a function's structured answer, and
+        # still visibly not an answer in words from an agent that never
+        # learned to give one.
+        assert reply_text({"actuations_count": 1}) == '{"actuations_count": 1}'
 
     def test_a_reply_that_is_not_a_dict_still_renders(self) -> None:
         assert reply_text("just words") == "just words"

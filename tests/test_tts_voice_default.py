@@ -12,9 +12,7 @@ side: there, a variable is emptied rather than deleted precisely because
 `load_dotenv` refills an absent one.
 """
 
-from __future__ import annotations
-
-import os
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -72,11 +70,8 @@ class TestTheVoiceOfferedToTheBrowser:
 class TestTheTemplateAndTheCodeAgree:
     def test_the_template_still_documents_empty_as_the_default(self) -> None:
         """If that line ever goes, this test is what says the behaviour was deliberate."""
-        template = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env.template"
-        )
-        with open(template, encoding="utf-8") as handle:
-            text = handle.read()
+        template = Path(__file__).resolve().parents[1] / ".env.template"
+        text = template.read_text(encoding="utf-8")
 
         assert "Leave TTS_VOICE empty for the default" in text, (
             "the code treats an empty TTS_VOICE as a request for the default because "

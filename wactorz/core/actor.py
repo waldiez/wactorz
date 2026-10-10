@@ -5,23 +5,32 @@ Every agent IS an actor. Actors communicate via message passing only.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import functools
+import inspect
 import json
 import logging
-import pickle
 import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-import psutil
-
-from .atomic_io import quarantine_unreadable, write_pickle
+from ..monitoring import actor_metrics
+from ..monitoring.agent_metrics import RecentDurations
+from .atomic_io import quarantine_unreadable, write_bytes
+from .cancellation import cancel_all_until_done
 from .paths import agent_state_dir, resolve_state_dir
+from .persistence.api import EPHEMERAL_KEYS, SQLITE_KEYS
+from .persistence.pickle_store import encode_state, read_state_file
+from .state_versions import Upgrade, declared_version, upgraded
+from .subscriptions import SubscriptionHub, is_durable_actor
+from .topic_bus import StreamWindow, get_topic_bus
+from .turns import TURN_KEY, current_turn, is_task_topic, outside_any_turn, working_on
 
 if TYPE_CHECKING:
     # Imported for type hints only — avoids a runtime import cycle (registry imports actor).
@@ -125,6 +134,30 @@ class MessageType(str, Enum):
     STATUS_RESPONSE = "status_response"
 
 
+#: How long a sender waits for room in a full mailbox before its message is
+#: refused. Long enough to outlast a burst the recipient is working through,
+#: and bounded so that one actor which has stopped reading cannot hold every
+#: actor that writes to it.
+MAILBOX_WAIT_S = 30.0
+
+#: How long a listener waits before it tries the broker again.
+RECONNECT_DELAY_S = 5.0
+
+#: How often a waiting sender looks again for room.
+_MAILBOX_POLL_S = 0.05
+
+#: Message types that only report: losing one loses nothing a later one will
+#: not say again.
+_REPORT_TYPES = frozenset(
+    {
+        MessageType.HEARTBEAT,
+        MessageType.TICK,
+        MessageType.STATUS_REQUEST,
+        MessageType.STATUS_RESPONSE,
+    }
+)
+
+
 @dataclass
 class Message:
     """One unit of communication between actors."""
@@ -135,6 +168,25 @@ class Message:
     reply_to: str | None = None
     message_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp: float = field(default_factory=time.time)
+    #: The chat turn this message is part of, taken from where it was made;
+    #: "" for one that belongs to none. Its recipient works inside that turn.
+    turn_id: str = field(default_factory=current_turn)
+
+    @property
+    def is_notification(self) -> bool:
+        """Whether this only reports something, and asks nothing of its recipient.
+
+        A heartbeat, a status exchange, or an alert for main's notification
+        list. A full mailbox drops these at once: the sender is a supervisor or
+        a monitor, which must not be held up by the actor it is reporting to.
+        """
+        if self.type in _REPORT_TYPES:
+            return True
+        return (
+            self.type == MessageType.TASK
+            and isinstance(self.payload, dict)
+            and bool(self.payload.get("_monitor_notification"))
+        )
 
     def to_dict(self) -> dict:
         """A JSON-serialisable form, for MQTT and the dashboard."""
@@ -162,14 +214,162 @@ class ActorMetrics:
     start_time: float = field(default_factory=time.time)
     last_heartbeat: float = field(default_factory=time.time)
     tasks_completed: int = 0
+    #: Tasks that raised or ran out of time; the latter are also `tasks_timed_out`.
     tasks_failed: int = 0
+    tasks_timed_out: int = 0
     restart_count: int = 0  # incremented by Supervisor on each restart
     heartbeats: int = 0
+    #: Messages this actor's mailbox had no room for and did not take.
+    messages_refused: int = 0
+    #: Model calls this actor recorded itself, through :meth:`Actor.record_llm_cost`:
+    #: calls made outside the system's own providers, which record their own.
+    llm_calls: int = 0
+    llm_input_tokens: int = 0
+    llm_output_tokens: int = 0
+    llm_cost_usd: float = 0.0
 
     @property
     def uptime(self) -> float:
         """Seconds since the actor started."""
         return time.time() - self.start_time
+
+
+def is_coroutine_callable(fn: Any) -> bool:
+    """Whether calling ``fn`` is known to return a coroutine: an async function or method,
+    or an object whose ``__call__`` is one.
+    """
+    # The class's `__call__`, as Python itself looks it up when calling `fn`.
+    call = inspect.getattr_static(type(fn), "__call__", None)
+    return inspect.iscoroutinefunction(fn) or inspect.iscoroutinefunction(call)
+
+
+async def run_callable(fn: Callable[..., Any], *args: Any) -> Any:
+    """Call ``fn`` with ``args`` and return its result, whatever kind of callable it is.
+
+    A coroutine callable is awaited on the loop. Anything else runs on a worker
+    thread, so a call that blocks -- a model's `predict`, a file read -- does not
+    hold the event loop every other actor in the process shares. What a plain
+    callable returns may still be awaitable -- a lambda around a coroutine
+    function, an async function behind a plain decorator -- and is then awaited
+    on the loop, rather than dropped unawaited.
+    """
+    if is_coroutine_callable(fn):
+        return await fn(*args)
+    result = await asyncio.to_thread(fn, *args)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _as_coroutine_callback(callback: Callable[[Any], Any]) -> Callable[[Any], Any]:
+    """``callback`` as something the hub can await, whatever kind it was given; see
+    :func:`run_callable`.
+    """
+    if is_coroutine_callable(callback):
+        return callback
+    return functools.partial(run_callable, callback)
+
+
+#: How long an ask waits for its reply when the caller names no limit. The bug
+#: this prevents is an unbounded wait, so the limit is generous: an agent that
+#: calls a model or a device is slow and still healthy.
+DEFAULT_ASK_TIMEOUT_S = 60.0
+
+
+def ask_payload(payload: Any, *, task_id: str, reply_to: str) -> dict[str, Any]:
+    """The TASK payload of an ask: the request, tagged so the reply finds its way back.
+
+    A request that is not a dict travels as ``{"text": ...}``, which is what an
+    agent that reads natural language expects. The two tags are the convention
+    every agent already honours: ``_task_id`` is echoed on the RESULT, and
+    ``_reply_to`` says where the RESULT goes.
+    """
+    body = dict(payload) if isinstance(payload, dict) else {"text": str(payload)}
+    body["_task_id"] = task_id
+    body["_reply_to"] = reply_to
+    return body
+
+
+class ReplyError(RuntimeError):
+    """An agent answered an ask with an error, as the ``error`` of its reply says.
+
+    Raised rather than returned so a caller cannot mistake it for an answer;
+    ``reply`` is the whole payload, for a caller that reports what the agent
+    said rather than that it failed.
+    """
+
+    def __init__(self, target: str, reply: dict[str, Any]) -> None:
+        super().__init__(f"{target!r} answered with an error: {reply['error']}")
+        self.target = target
+        self.reply = reply
+
+
+class AskHost(Protocol):
+    """What :func:`ask_through` needs of the actor asking: the actor surface
+    every mixin host already declares.
+    """
+
+    name: str
+    actor_id: str
+    _registry: Any
+    _result_futures: Any
+
+    async def send(self, target_id: str, msg_type: Any, payload: Any) -> bool: ...
+
+
+async def ask_through(
+    host: AskHost, target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S
+) -> Any:
+    """Send the agent called ``target`` a task on ``host``'s behalf and wait for its reply.
+
+    The body of :meth:`Actor.ask`, callable on anything with an actor's surface,
+    so a mixin asks through its host the way the actor itself would. See
+    :meth:`Actor.ask` for the contract.
+    """
+    if host._registry is None:
+        raise RuntimeError(f"[{host.name}] cannot ask {target!r}: no registry attached")
+    actor = host._registry.find_by_name(target)
+    if actor is None:
+        raise LookupError(f"no agent named {target!r} is running")
+    task_id = f"ask_{uuid.uuid4().hex[:12]}"
+    future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+    host._result_futures[task_id] = future
+    try:
+        taken = await host.send(
+            actor.actor_id,
+            MessageType.TASK,
+            ask_payload(payload, task_id=task_id, reply_to=host.actor_id),
+        )
+        if taken is False:
+            raise RuntimeError(f"{target!r} is not taking messages: its mailbox is full")
+        try:
+            reply = await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError:
+            raise asyncio.TimeoutError(f"{target!r} did not answer within {timeout:g}s") from None
+    finally:
+        host._result_futures.pop(task_id, None)
+    return reply_value(reply, task_id=task_id, target=target)
+
+
+def reply_value(reply: Any, *, task_id: str, target: str) -> Any:
+    """What an ask returns from the RESULT payload it was answered with.
+
+    The correlation id is stripped, so the caller sees the agent's answer and
+    nothing of the plumbing. A reply whose ``error`` is set is an agent saying
+    it failed -- the shape a decorated function's exception takes, and what
+    the dynamic agents' ``send_to`` returns on failure -- and is raised rather
+    than handed back as a value, so a caller cannot mistake it for an answer.
+    """
+    if not isinstance(reply, dict):
+        return reply
+    if reply.get("error"):
+        raise ReplyError(target, reply)
+    cleaned = {k: v for k, v in reply.items() if k != "_task_id"}
+    # "task" is the older spelling of the id, still echoed by some agents; an
+    # agent that uses the key for its own text keeps it.
+    if cleaned.get("task") == task_id:
+        del cleaned["task"]
+    return cleaned
 
 
 class Actor(ABC):
@@ -197,6 +397,13 @@ class Actor(ABC):
 
         # Async mailbox (inbox)
         self._mailbox: asyncio.Queue = asyncio.Queue(maxsize=mailbox_size)
+        #: When the message being handled was taken up, on the monotonic clock;
+        #: None between messages.
+        self._handling_since: float | None = None
+        #: What recent messages waited and took, for the percentiles in the
+        #: metrics frame. See `wactorz.monitoring.actor_metrics`.
+        self._queue_waits = RecentDurations()
+        self._message_durations = RecentDurations()
         self._outbox: dict[str, asyncio.Queue] = {}  # actor_id -> queue ref
 
         # Registry reference (set by ActorSystem)
@@ -204,6 +411,21 @@ class Actor(ABC):
         self._mqtt_client: Any | None = None
         self._mqtt_broker: str = "localhost"
         self._mqtt_port: int = 1883
+
+        #: The node this actor runs on, empty when it runs on main. Set by the
+        #: node runner on the agents it starts; every heartbeat carries it, so
+        #: the dashboard can place an agent without having to ask which node
+        #: claimed it. The empty string is what the rest of the framework means
+        #: by local — see main's `is_target_local`.
+        self._node: str = ""
+
+        #: The one broker connection this actor's subscriptions share, made on
+        #: the first `subscribe`. None until then, so an actor that never
+        #: subscribes never connects for it.
+        self._sub_hub: SubscriptionHub | None = None
+        #: Rolling windows by topic, from `window`. One per topic: a second call
+        #: for the same topic returns the window that has been filling.
+        self._windows: dict[str, StreamWindow] = {}
 
         # Persistence
         # Use name as persistence folder so it survives restarts with same name
@@ -216,9 +438,14 @@ class Actor(ABC):
         # omitted the argument wrote somewhere nothing else would look.
         # Through `agent_state_dir`, so a name like `..` is refused rather than
         # walking out of the state directory it was given.
+        # Only named here: the directory is made when the actor starts, or when
+        # `state_dir` is first asked for, so an actor can be built without
+        # touching the disk.
         self._persistence_dir = agent_state_dir(persistence_dir or resolve_state_dir(), self.name)
-        self._persistence_dir.mkdir(parents=True, exist_ok=True)
         self._persistent_state: dict = {}
+        #: Without a persistence API: the pickled bytes of each value in the
+        #: state file that would not unpickle, written back until set again.
+        self._unreadable_state: dict[str, bytes] = {}
 
         # Unified persistence API — set by ActorSystem if available,
         # otherwise falls back to legacy pickle behavior
@@ -240,22 +467,17 @@ class Actor(ABC):
         # Handlers
         self._handlers: dict[MessageType, Callable] = {}
         #: Correlation id → the future waiting on that request's RESULT.
-        #: Populated by whoever sends a TASK carrying `_task_id`; drained by
-        #: `_resolve_pending_result` before the message reaches a handler.
+        #: Populated by whoever sends a TASK carrying `_task_id`; settled by
+        #: `_resolve_pending_result` as the RESULT is received, ahead of the
+        #: mailbox, so a handler waiting on it is not in its own way.
         self._result_futures: dict[str, asyncio.Future] = {}
         self._setup_default_handlers()
 
         # Background tasks
         self._tasks: list[asyncio.Task] = []
-
-        # Cached process handle for heartbeat metrics — one per actor so each
-        # has an independent cpu_percent baseline (interval=None, non-blocking).
-        self._proc: Any | None = None
-        try:
-            self._proc = psutil.Process()
-            self._proc.cpu_percent(interval=None)  # prime the baseline
-        except Exception:  # noqa: S110  # psutil is optional; the actor runs without it
-            pass
+        #: Resolved once this run's stop has finished; see stop(). Created by the
+        #: first stop, not here, and cleared by start().
+        self._stopped: asyncio.Future[None] | None = None
 
         logger.info("[%s] Actor created with id=%s", self.name, self.actor_id)
 
@@ -263,9 +485,12 @@ class Actor(ABC):
 
     async def start(self):
         """Start the actor's event loop."""
+        self._stopped = None
         self.state = ActorState.RUNNING
         self.metrics.start_time = time.time()
+        await asyncio.to_thread(self._persistence_dir.mkdir, parents=True, exist_ok=True)
         await self._load_persistent_state()
+        await self._bring_state_up_to_date(self.state_version, self._class_upgrade())
         # Restore the message count from a previous run — but only into a fresh
         # instance. The supervisor restarts by building a new actor, whose count
         # is zero; the start command restarts *this* object, whose count is
@@ -276,16 +501,40 @@ class Actor(ABC):
             if isinstance(saved_msgs, dict) and saved_msgs.get("count"):
                 self.metrics.messages_processed = int(saved_msgs["count"])
         await self.on_start()
-        self._tasks.append(asyncio.create_task(self._message_loop()))
-        self._tasks.append(asyncio.create_task(self._heartbeat_loop()))
-        self._tasks.append(asyncio.create_task(self._command_listener()))
+        # Outside whatever turn started this actor: each message brings its own.
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._message_loop, self.name)))
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._heartbeat_loop, self.name)))
+        self._tasks.append(asyncio.create_task(outside_any_turn(self._command_listener, self.name)))
         await self._publish_status()
         logger.info("[%s] Actor started.", self.name)
 
     async def stop(self):
-        """Gracefully stop the actor."""
+        """Gracefully stop the actor, once per run however many ask.
+
+        A second stop -- a replace or a migration that reaches an actor the
+        supervisor also stops, or shutdown meeting a delete -- would run
+        ``on_stop`` and the state saves again. It waits for the first to finish
+        instead, and returns: a caller that goes on to act on the stopped actor,
+        such as a delete purging its state, then acts after the stop and not
+        during it. ``start()`` begins a new run.
+        """
+        if self._stopped is not None:
+            await asyncio.shield(self._stopped)
+            return
+        self._stopped = asyncio.get_running_loop().create_future()
+        try:
+            await self._stop_once()
+        finally:
+            if not self._stopped.done():
+                self._stopped.set_result(None)
+
+    async def _stop_once(self):
+        """What stopping does: wind down, clean up, save, and say so."""
         self.state = ActorState.STOPPED
         await self._wind_down_tasks()
+        # Each window holds a broker connection of its own, and a restart builds
+        # a new actor with windows of its own.
+        self._close_windows()
         # Shield cleanup from CancelledError — chat tasks run as fire-and-forget
         # asyncio tasks outside actor._tasks and get cancelled by asyncio.run()
         # cleanup BEFORE these awaits if we don't shield them.
@@ -298,18 +547,24 @@ class Actor(ABC):
         # already marked cancelling. So it is remembered, both steps still run,
         # and it is re-raised once cleanup is done.
         cancelled = False
+        # A failure in either is said and the stop goes on: the actor still has
+        # to come off the broker and out of the registry, and an agent's own
+        # `on_stop` is code nobody here wrote.
         try:
             await asyncio.shield(self.on_stop())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
-            pass
+        except Exception:
+            logger.exception("[%s] on_stop failed; stopping anyway", self.name)
         try:
             await asyncio.shield(self._save_persistent_state())
         except asyncio.CancelledError:
             cancelled = True
-        except Exception:  # noqa: S110  # shielded shutdown; a failure must not stop the rest
-            pass
+        except Exception:
+            logger.exception(
+                "[%s] Could not save state while stopping; what it last persisted may be lost",
+                self.name,
+            )
 
         # ── Persist message count so overview survives restarts ──────────
         if self.metrics.messages_processed > 0:
@@ -355,6 +610,7 @@ class Actor(ABC):
                 bus.unregister(self.name)
         except Exception:  # noqa: S110  # TopicBus is optional; not being registered is not fatal
             pass  # TopicBus not initialised or unavailable — not fatal
+        actor_metrics.forget(self.name)
         logger.info("[%s] Actor stopped.", self.name)
         # Deferred to here rather than raised where it arrived: the shield exists
         # so cleanup completes, and stopping half way through would defeat it.
@@ -364,6 +620,51 @@ class Actor(ABC):
 
     #: How long stop() waits for a cancelled task before giving up on it.
     TASK_SHUTDOWN_TIMEOUT = 5.0
+
+    async def _discard_child(self, child: Actor) -> None:
+        """Stop and unregister a child whose start did not complete."""
+        with contextlib.suppress(Exception):
+            await child.stop()
+        if self._registry:
+            with contextlib.suppress(Exception):
+                await self._registry.unregister(child.actor_id)
+
+    def run_detached(
+        self, coro: Coroutine[Any, Any, Any], *, name: str | None = None
+    ) -> asyncio.Task[Any]:
+        """Run ``coro`` alongside the actor, as a task the actor owns.
+
+        For work the caller does not wait for. A bare ``asyncio.create_task``
+        keeps no reference, so the task can be garbage-collected part-way
+        through, and nothing cancels it when the actor stops: it goes on
+        running against an actor, or a system, that has already shut down.
+        This one is held in ``_tasks`` until it ends, so ``stop()`` cancels and
+        waits for it like the actor's own loops, and a failure is logged rather
+        than surfacing as "exception never retrieved" whenever it is collected.
+        """
+        task = asyncio.create_task(coro, name=name)
+        if self.state == ActorState.STOPPED:
+            # Too late to own it: stop() sets this before winding tasks down,
+            # so one added now would be cleared without being cancelled.
+            task.cancel()
+            logger.debug("[%s] Not starting %s: the actor has stopped", self.name, task.get_name())
+            return task
+        self._tasks.append(task)
+        task.add_done_callback(self._forget_detached)
+        return task
+
+    def _forget_detached(self, task: asyncio.Task[Any]) -> None:
+        """Drop a finished detached task, reporting how it failed if it did."""
+        # Already gone when stop() cleared the list while winding down.
+        if task in self._tasks:
+            self._tasks.remove(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            logger.error(
+                "[%s] Background task %s failed", self.name, task.get_name(), exc_info=error
+            )
 
     async def _wind_down_tasks(self) -> None:
         """Cancel the actor's own tasks and wait for them to actually finish.
@@ -381,30 +682,25 @@ class Actor(ABC):
         """
         current = asyncio.current_task()
         others = [task for task in self._tasks if task is not current]
-        for task in others:
-            task.cancel()
         try:
             if others:
                 # Bounded: a task that will not unwind must not hold up shutdown.
-                # asyncio.wait, not wait_for: on Python 3.10 a wait_for whose
-                # guarded future completes in the same instant the caller is
-                # cancelled returns the result from inside its CancelledError
-                # handler, and the caller never learns it was cancelled — the
-                # supervisor's watch loop resumed polling while Supervisor.stop()
-                # awaited it for ever. The tasks are already cancelled above, so
-                # there is nothing for wait_for's cancel-on-timeout to do that
-                # asyncio.wait does not.
-                _done, pending = await asyncio.wait(others, timeout=self.TASK_SHUTDOWN_TIMEOUT)
-                if pending:
+                # Each is asked again while it keeps running: on Python 3.10 and
+                # 3.11 a cancellation that lands inside a wait_for is discarded, and
+                # the broker and Home Assistant clients both wait that way, so one
+                # request can leave stop() waiting out the whole timeout.
+                # cancel_all_until_done never uses wait_for itself, for the same
+                # reason: a caller cancelled while waiting here still learns it was.
+                still_running = await cancel_all_until_done(
+                    others, timeout=self.TASK_SHUTDOWN_TIMEOUT
+                )
+                if still_running:
                     logger.warning(
                         "[%s] %d task(s) did not stop within %gs.",
                         self.name,
-                        len(pending),
+                        len(still_running),
                         self.TASK_SHUTDOWN_TIMEOUT,
                     )
-                for task in _done:
-                    if not task.cancelled():
-                        task.exception()  # retrieved, so the loop does not warn at GC
         # CancelledError is deliberately not caught. Swallowing it consumes the
         # caller's own cancellation: the supervisor's watch loop was cancelled
         # here while stopping an actor, never saw the error, resumed its poll
@@ -428,9 +724,17 @@ class Actor(ABC):
                     MessageType.STATUS_RESPONSE,
                     MessageType.STOP,
                 }
-                if msg.type not in _noise:
+                counted = msg.type not in _noise
+                if counted:
                     self.metrics.messages_processed += 1
-                await self._dispatch(msg)
+                    self._message_waited(msg)
+                self._handling_since = time.monotonic()
+                try:
+                    await self._dispatch(msg)
+                finally:
+                    if counted:
+                        self._message_handled(time.monotonic() - self._handling_since)
+                    self._handling_since = None
                 self._mailbox.task_done()
 
             except asyncio.TimeoutError:
@@ -441,6 +745,17 @@ class Actor(ABC):
                 self.metrics.errors += 1
                 logger.exception("[%s] Error in message loop", self.name)
 
+    def _message_waited(self, msg: Message) -> None:
+        """Record how long ``msg`` sat in the mailbox, from when it was made."""
+        waited = max(0.0, time.time() - msg.timestamp)
+        self._queue_waits.add(waited)
+        actor_metrics.QUEUE_WAIT.labels(actor_name=self.name).observe(waited)
+
+    def _message_handled(self, seconds: float) -> None:
+        """Record how long the handler took over one message."""
+        self._message_durations.add(seconds)
+        actor_metrics.MESSAGE_DURATION.labels(actor_name=self.name).observe(seconds)
+
     def _resolve_pending_result(self, msg: Message) -> bool:
         """Settle a waiting future from a RESULT's correlation id.
 
@@ -450,9 +765,10 @@ class Actor(ABC):
 
         It belongs here, ahead of every handler, so that any actor can receive a
         reply without opting in — a per-agent implementation makes the ability
-        depend on which agent is receiving. Returns True when the message was a
-        reply someone was waiting for, in which case there is nothing left to
-        dispatch: the caller already has it.
+        depend on which agent is receiving. Called on receipt, before the
+        mailbox, and again at dispatch for a reply handed in by another route.
+        Returns True when the message was a reply someone was waiting for, in
+        which case there is nothing left to dispatch: the caller already has it.
         """
         if msg.type != MessageType.RESULT or not isinstance(msg.payload, dict):
             return False
@@ -466,14 +782,15 @@ class Actor(ABC):
         return True
 
     async def _dispatch(self, msg: Message):
-        """Dispatch message to the appropriate handler."""
-        if self._resolve_pending_result(msg):
-            return
-        handler = self._handlers.get(msg.type)
-        if handler:
-            await handler(msg)
-        else:
-            await self.handle_message(msg)
+        """Dispatch message to the appropriate handler, inside the turn it belongs to."""
+        with working_on(msg.turn_id, self.name):
+            if self._resolve_pending_result(msg):
+                return
+            handler = self._handlers.get(msg.type)
+            if handler:
+                await handler(msg)
+            else:
+                await self.handle_message(msg)
 
     def _setup_default_handlers(self):
         self._handlers = {
@@ -561,34 +878,47 @@ class Actor(ABC):
         return total / (1024 * 1024)
 
     def _build_heartbeat(self) -> dict:
-        cpu = 0.0
-        try:
-            if self._proc is not None:
-                cpu = self._proc.cpu_percent(interval=None)
-        except Exception:  # noqa: S110  # a heartbeat reports 0.0 rather than not arriving
-            pass
+        """What this actor reports every heartbeat.
+
+        No CPU figure: actors share one process, and so one CPU reading, which
+        the monitor publishes once on `system/host`. Measured per actor it was
+        that same number under every agent's name.
+        """
         return {
             "actor_id": self.actor_id,
             "name": self.name,
             "timestamp": time.time(),
             "state": self.state.value,
-            "cpu": cpu,
             "memory_mb": self._estimate_memory_mb(),
             "task": self._current_task_description(),
             "protected": self.protected,
             "essential": self.essential,
+            "node": self._node,
         }
 
     def _build_metrics(self) -> dict:
-        return {
+        metrics = {
             "actor_id": self.actor_id,
             "messages_processed": self.metrics.messages_processed,
             "errors": self.metrics.errors,
             "uptime": self.metrics.uptime,
             "tasks_completed": self.metrics.tasks_completed,
             "tasks_failed": self.metrics.tasks_failed,
+            "tasks_timed_out": self.metrics.tasks_timed_out,
             "restart_count": self.metrics.restart_count,
         }
+        if self.metrics.llm_calls:
+            # The keys the dashboard reads from an LLM agent, so a card shows
+            # spend the same way whichever way the model was called.
+            metrics["cost_usd"] = round(self.metrics.llm_cost_usd, 6)
+            metrics["input_tokens"] = self.metrics.llm_input_tokens
+            metrics["output_tokens"] = self.metrics.llm_output_tokens
+            metrics["llm_calls"] = self.metrics.llm_calls
+        # The recent p50 and p95, once there are any: how a node's actors, which
+        # serve no `/metrics`, report what waiting and handling take.
+        metrics.update(self._queue_waits.summary("queue_wait"))
+        metrics.update(self._message_durations.summary("message"))
+        return metrics
 
     LIFECYCLE_COMMANDS = ("start", "stop", "delete")
 
@@ -603,6 +933,19 @@ class Actor(ABC):
             sup = self._registry._supervisor_ref
             if sup is not None:
                 sup.release(self.name)
+
+    def _leave_supervision(self) -> None:
+        """Tell the supervisor this actor is gone for good: deleted, or ended itself.
+
+        Stronger than :meth:`_release_from_supervision`, which keeps the entry so
+        a stopped actor can be supervised again when it starts. An actor that
+        will not come back needs no entry, and a kept one holds what the actor
+        was built from until the process exits.
+        """
+        if self._registry and hasattr(self._registry, "_supervisor_ref"):
+            sup = self._registry._supervisor_ref
+            if sup is not None:
+                sup.drop_supervised(self.name)
 
     def _resume_supervision(self) -> None:
         """Put this actor back under supervision after a deliberate stop.
@@ -646,7 +989,8 @@ class Actor(ABC):
             self._release_from_supervision()
             await self.stop()
         elif command == "delete":
-            self._release_from_supervision()
+            self._leave_supervision()
+            await self.delete_own_traces()
             if self._registry:
                 main = self._registry.find_by_name("main")
                 if main and hasattr(main, "_remove_from_spawn_registry"):
@@ -658,18 +1002,27 @@ class Actor(ABC):
             return False
         return True
 
+    async def delete_own_traces(self) -> None:
+        """Run `on_delete`, never letting a failure in it stop the deletion."""
+        try:
+            await self.on_delete()
+        except Exception:
+            logger.exception("[%s] on_delete failed; deleting anyway", self.name)
+
     async def _command_listener(self):
         """Carry commands from agents/{id}/commands to :meth:`apply_command`.
 
         Transport only. Needed for actors a caller cannot reach in process —
         after the direct-dispatch change that means agents on remote nodes.
         """
-        try:
-            import aiomqtt  # pylint: disable=unused-import  # noqa: F401
-        except ImportError:
-            return
         # local: avoids core/__init__ import cycle
-        from .mqtt import AGENT_SESSION_EXPIRY_SECONDS, client_id, mqtt_client, session_kwargs
+        from .mqtt import (
+            AGENT_SESSION_EXPIRY_SECONDS,
+            agent_client_id,
+            mqtt_client,
+            reconnect_wait,
+            session_kwargs,
+        )
 
         topic = f"agents/{self.actor_id}/commands"
         # Same rule the subscription hub follows: only an identity that
@@ -677,10 +1030,13 @@ class Actor(ABC):
         # connects clean rather than leaving one behind per incarnation.
         durable = has_derived_id(self.name, self.actor_id)
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
-        # A `commands` detail, not the bare actor id: SubscriptionHub already
-        # connects as `wactorz-agent-<actor id>`, and two connections sharing an
-        # id kick each other off the broker for ever.
-        identifier = client_id("agent", str(self.actor_id), "commands")
+        # A `commands` purpose: SubscriptionHub already holds this agent's
+        # unqualified id, and two connections sharing an id kick each other off
+        # the broker for ever.
+        identifier = agent_client_id(str(self.actor_id), self._node, "commands")
+        # Whether the connection is known to be down, so it is said when it
+        # goes and when it comes back, not at every attempt in between.
+        down = False
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
             try:
                 async with mqtt_client(
@@ -693,6 +1049,9 @@ class Actor(ABC):
                 ) as client:
                     await client.subscribe(topic, qos=1 if durable else 0)
                     logger.debug("[%s] Subscribed to %s", self.name, topic)
+                    if down:
+                        down = False
+                        logger.info("[%s] Listening for commands again.", self.name)
                     async for message in client.messages:
                         try:
                             data = json.loads(message.payload.decode())
@@ -708,9 +1067,19 @@ class Actor(ABC):
                             logger.exception("[%s] Command parse error", self.name)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception as exc:
                 if self.state not in (ActorState.STOPPED, ActorState.FAILED):
-                    await asyncio.sleep(5)
+                    if not down:
+                        down = True
+                        logger.warning(
+                            "[%s] Lost the broker connection it takes commands on (%s). A stop "
+                            "or delete sent over the broker will not reach it until it is "
+                            "back; trying again every %gs or so.",
+                            self.name,
+                            exc,
+                            RECONNECT_DELAY_S,
+                        )
+                    await asyncio.sleep(reconnect_wait(RECONNECT_DELAY_S))
 
     def _current_task_description(self) -> str:
         return "idle"  # Override in subclasses
@@ -725,14 +1094,93 @@ class Actor(ABC):
         msg = Message(type=msg_type, sender_id=self.actor_id, payload=payload)
         return await self._registry.deliver(target_id, msg)
 
+    async def ask(
+        self, target: str, payload: Any, *, timeout: float = DEFAULT_ASK_TIMEOUT_S
+    ) -> Any:
+        """Send the agent called ``target`` a task and wait for its reply.
+
+        The one way for an agent to ask another a question: the request goes
+        as a TASK with a correlation id and this actor as the reply address,
+        and the RESULT that echoes the id settles the wait. Returns what the
+        agent answered, less the plumbing (see :func:`reply_value`).
+
+        Raises ``LookupError`` when no agent of that name is in the registry,
+        ``RuntimeError`` when the target is not taking messages, :class:`ReplyError`
+        (a ``RuntimeError``) when it answers with an error, and
+        ``asyncio.TimeoutError`` after ``timeout`` seconds with no reply.
+        Whatever the outcome, nothing is left waiting.
+        """
+        return await ask_through(self, target, payload, timeout=timeout)
+
     async def broadcast(self, msg_type: MessageType, payload: Any = None):
         """Broadcast to all registered actors."""
         if self._registry:
             await self._registry.broadcast(self.actor_id, msg_type, payload)
 
-    async def receive(self, msg: Message):
-        """External entry point - put message in mailbox."""
-        await self._mailbox.put(msg)
+    @property
+    def handling_seconds(self) -> float:
+        """How long this actor has been on the message it is handling; 0 when idle.
+
+        The heartbeat is a task of its own and carries on whatever the message
+        loop is doing, so an actor waiting for ever on one message still looks
+        alive. This is what tells the two apart.
+        """
+        since = self._handling_since
+        return 0.0 if since is None else time.monotonic() - since
+
+    async def receive(self, msg: Message) -> bool:
+        """Put a message in this actor's mailbox. False if there was no room for it.
+
+        A mailbox with room takes the message at once. A full one means this
+        actor is not keeping up, and the sender is usually another actor in the
+        middle of handling a message of its own, so how long it may be held is
+        bounded: a notification is dropped on the spot, and anything else waits
+        ``MAILBOX_WAIT_S`` for room and is then refused. Either way the sender
+        is told, and can report that rather than hang.
+
+        A RESULT this actor is waiting for settles its future here, on receipt,
+        and never enters the mailbox. The wait is usually inside a handler, and
+        a handler runs on the message loop: a reply that had to go through the
+        mailbox would wait for the very handler that is waiting for it.
+        """
+        if self._resolve_pending_result(msg):
+            return True
+        if self.offer(msg):
+            return True
+        if msg.is_notification:
+            self._note_refused(msg, "dropped a notification")
+            return False
+        deadline = time.monotonic() + MAILBOX_WAIT_S
+        while time.monotonic() < deadline:
+            await asyncio.sleep(_MAILBOX_POLL_S)
+            if self.offer(msg):
+                return True
+        self._note_refused(msg, f"refused a message after waiting {MAILBOX_WAIT_S:g}s")
+        return False
+
+    def offer(self, msg: Message) -> bool:
+        """Put a message in the mailbox if it has room, without waiting. True if it did."""
+        try:
+            self._mailbox.put_nowait(msg)
+        except asyncio.QueueFull:
+            return False
+        return True
+
+    def _note_refused(self, msg: Message, what: str) -> None:
+        """Count a message the mailbox had no room for, and say so at a rate a log can carry."""
+        self.metrics.messages_refused += 1
+        refused = self.metrics.messages_refused
+        if refused == 1 or refused % 100 == 0:
+            logger.warning(
+                "[%s] Mailbox full at %d: %s (%s from %s; %d refused so far). The actor is "
+                "not keeping up with what it is sent, or is stuck on one message.",
+                self.name,
+                self._mailbox.maxsize,
+                what,
+                msg.type.value,
+                msg.sender_id[:8],
+                refused,
+            )
 
     # ─── Actor Spawning ───────────────────────────────────────────────────────
 
@@ -774,8 +1222,19 @@ class Actor(ABC):
         if self._registry:
             await self._registry.register(child)
 
-        # Start the child
-        await child.start()
+        # Start the child. Registered already, so a start that fails or is
+        # cancelled must take it back out: nothing else holds it to stop, and
+        # supervision has not adopted it yet.
+        try:
+            await child.start()
+        except BaseException:
+            # Shielded, so a second cancellation cannot cut the cleanup short;
+            # it is still passed on once the cleanup is done.
+            try:
+                await asyncio.shield(self._discard_child(child))
+            except asyncio.CancelledError:
+                raise asyncio.CancelledError from None
+            raise
 
         # ── Erlang/OTP: register child under Supervisor so it's never an orphan ──
         # We reach into the registry to find the ActorSystem's supervisor.
@@ -783,7 +1242,7 @@ class Actor(ABC):
         try:
             if self._registry and hasattr(self._registry, "_supervisor_ref"):
                 supervisor = self._registry._supervisor_ref
-                if supervisor is not None and child.name not in supervisor._specs:
+                if supervisor is not None:
                     # Snapshot what the child was built from. The factory runs
                     # again on every restart, possibly much later, and must
                     # rebuild the child as it was rather than from whatever this
@@ -816,20 +1275,18 @@ class Actor(ABC):
                                 pass
                         return c
 
-                    supervisor.supervise(
+                    # Adopted as it runs, so the watch loop monitors it at once
+                    # without a redundant restart -- and re-armed if the name
+                    # was supervised before and released, or it would not be.
+                    supervisor.adopt(
                         child.name,
                         _child_factory,
+                        child,
                         strategy=SupervisorStrategy.ONE_FOR_ONE,
                         max_restarts=5,
                         restart_window=60.0,
                         restart_delay=2.0,
                     )
-                    # Point spec.actor at the already-running child so the watch loop
-                    # starts monitoring immediately without a redundant restart.
-                    supervisor._specs[child.name].actor = child
-                    if child.name not in supervisor._order:
-                        supervisor._order.append(child.name)
-                    child.supervisor_id = str(id(supervisor))
                     logger.info(
                         "[%s] Child '%s' auto-registered under Supervisor.", self.name, child.name
                     )
@@ -863,45 +1320,117 @@ class Actor(ABC):
     async def _save_persistent_state(self):
         """Save state to disk. Called on stop() after on_stop()."""
         if self._persistence_api is not None:
-            # New path: state is written per-key via persist(), nothing to batch-save.
-            # But keep pickle save for agent.state (arbitrary objects) backward compat.
+            # State is kept per key as persist() is called, and its file is
+            # written a moment later. A stop does not leave that to the moment:
+            # once it returns, the file holds what the agent last persisted.
+            self._persistence_api.flush()
             return
-        # Legacy pickle path
-        try:
-            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
-        except Exception:
-            logger.exception("[%s] Failed to save state", self.name)
+        self._write_state_file()
 
     async def _load_persistent_state(self):
-        """Load state from disk. Called on start() before on_start()."""
+        """Load state from disk. Called on start() before on_start().
+
+        With a persistence API there is nothing to load here: the store reads
+        the agent's state file itself, a value at a time, the first time it is
+        asked. Reading it here as well would hold a second copy that `recall`
+        could fall back to after the store had dropped a key, and a single
+        value that no longer unpickles would cost the whole file.
+        """
         if self._persistence_api is not None:
-            # New path: state is loaded per-key via recall(), nothing to batch-load.
-            # But load legacy pickle for backward compat if it exists.
-            path = self._persistence_dir / "state.pkl"
-            if path.exists():
-                try:
-                    with open(path, "rb") as f:
-                        self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
-                            f
-                        )  # our own state file, under the state dir
-                    logger.info(
-                        "[%s] Loaded legacy persistent state (will migrate on first persist).",
-                        self.name,
-                    )
-                except Exception as e:
-                    self._keep_unreadable_state(path, e)
             return
-        # Legacy pickle path
         path = self._persistence_dir / "state.pkl"
-        if path.exists():
-            try:
-                with open(path, "rb") as f:
-                    self._persistent_state = pickle.load(  # noqa: S301  # our own state file, under the state dir
-                        f
-                    )  # our own state file, under the state dir
-                logger.info("[%s] Loaded persistent state.", self.name)
-            except Exception as e:
-                self._keep_unreadable_state(path, e)
+        if not path.exists():
+            return
+        try:
+            decoded = read_state_file(path)
+        except Exception as e:
+            self._keep_unreadable_state(path, e)
+            return
+        self._persistent_state = decoded.values
+        self._unreadable_state = dict(decoded.unreadable)
+        if decoded.unreadable:
+            logger.warning(
+                "[%s] Starting without %s, which could not be read: %s. Kept in %s.",
+                self.name,
+                ", ".join(sorted(decoded.unreadable)),
+                "; ".join(f"{k}: {r}" for k, r in sorted(decoded.reasons.items())),
+                path,
+            )
+        logger.info("[%s] Loaded persistent state.", self.name)
+
+    def _write_state_file(self) -> None:
+        """Write the whole state, for an actor with no persistence API."""
+        try:
+            data, unpicklable = encode_state(self._persistent_state, self._unreadable_state)
+            self._persistence_dir.mkdir(parents=True, exist_ok=True)
+            write_bytes(self._persistence_dir / "state.pkl", data)
+        except Exception:
+            logger.exception("[%s] Failed to save state", self.name)
+            return
+        if unpicklable:
+            logger.warning(
+                "[%s] Not writing %s: it cannot be pickled. The rest of the state was written.",
+                self.name,
+                ", ".join(unpicklable),
+            )
+
+    # ─── State versions ───────────────────────────────────────────────────────
+
+    #: The version of what this agent persists, for a subclass that upgrades it;
+    #: None for one that does not. See `wactorz.core.state_versions`.
+    state_version: int | None = None
+
+    def _class_upgrade(self) -> Upgrade | None:
+        """The subclass's ``upgrade_state(state, from_version)``, when it defines one."""
+        upgrade = getattr(self, "upgrade_state", None)
+        return upgrade if callable(upgrade) else None
+
+    async def _bring_state_up_to_date(self, declared: Any, upgrade: Upgrade | None) -> None:
+        """Upgrade what this agent persisted to ``declared``, before its code runs.
+
+        Raises `StateUpgradeError` when a step fails, with nothing written.
+        Nothing happens for an agent that declares no version.
+        """
+        version = declared_version(declared)
+        if declared is not None and version is None:
+            logger.warning(
+                "[%s] Its state version %r is not a whole number from 0; state left as it is.",
+                self.name,
+                declared,
+            )
+        if version is None:
+            return
+        state = self._own_state()
+        new = await upgraded(self.name, state, version, upgrade)
+        if new is not None:
+            self._replace_own_state(state, new)
+
+    def _own_state(self) -> dict[str, Any]:
+        """The keys this agent persists for itself, without the framework's own.
+
+        The keys routed to SQLite or memory are the framework's (conversation
+        history, metrics and the like) and are not the agent's to reshape.
+        """
+        if self._persistence_api is not None:
+            routed = SQLITE_KEYS | EPHEMERAL_KEYS
+            return {k: v for k, v in self._persistence_api.all().items() if k not in routed}
+        return dict(self._persistent_state)
+
+    def _replace_own_state(self, old: dict[str, Any], new: dict[str, Any]) -> None:
+        """Make ``new`` this agent's own state, where ``old`` was."""
+        if self._persistence_api is not None:
+            for key in old.keys() - new.keys():
+                self._persistence_api.delete(key)
+            for key, value in new.items():
+                self._persistence_api.set(key, value)
+            # Written now rather than a moment later, so the upgraded state is
+            # on disk before the agent's code runs against it. The store writes
+            # the whole file in one replace: a crash leaves either version.
+            self._persistence_api.flush()
+            return
+        self._persistent_state = dict(new)
+        self._unreadable_state = {k: v for k, v in self._unreadable_state.items() if k not in new}
+        self._write_state_file()
 
     def _keep_unreadable_state(self, path: Path, exc: Exception) -> None:
         """Move a state file we could not read out of the next save's way.
@@ -918,6 +1447,57 @@ class Actor(ABC):
             f"kept at {kept}" if kept else "the file could not be preserved",
         )
 
+    @property
+    def state_dir(self) -> Path:
+        """This actor's own directory under the state directory, for files it keeps.
+
+        Model weights, a checkpoint store, a local experiment log: anything
+        too large or too un-JSON for :meth:`persist`. It exists whenever it is
+        asked for, survives restarts and is removed with the actor on a
+        delete. What moves with a migration is the persisted state, not these
+        files; an agent that must find a file on another machine ships it.
+        """
+        self._persistence_dir.mkdir(parents=True, exist_ok=True)
+        return self._persistence_dir
+
+    def record_llm_cost(
+        self,
+        cost_usd: float,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        model: str = "",
+        provider: str = "",
+    ) -> None:
+        """Count a model call this actor made outside the system's own providers.
+
+        For a LangChain chain, an AG2 chat or an SDK called directly: the
+        system's providers record their own spend, and a call that bypasses
+        them would otherwise be invisible. The spend joins the dashboard's
+        counters for this actor and the process-wide total the cost limit is
+        checked against. ``model`` and ``provider`` are for the log line.
+        """
+        # A genuine circular import: the cost ledger lives with the LLM agents,
+        # whose package imports this module.
+        from ..agents.llm.cost import accumulate_global_cost
+
+        metrics = self.metrics
+        metrics.llm_calls += 1
+        metrics.llm_input_tokens += max(0, int(input_tokens))
+        metrics.llm_output_tokens += max(0, int(output_tokens))
+        cost = max(0.0, float(cost_usd))
+        metrics.llm_cost_usd += cost
+        accumulate_global_cost(cost)
+        logger.debug(
+            "[%s] LLM call %s%s: %d in / %d out, $%.6f",
+            self.name,
+            provider + "/" if provider else "",
+            model or "?",
+            input_tokens,
+            output_tokens,
+            cost,
+        )
+
     def persist(self, key: str, value: Any):
         """Persist a key-value pair. Routes to the correct backend:
           - Known structured keys → SQLite
@@ -931,31 +1511,103 @@ class Actor(ABC):
             self._persistence_api.set(key, value)
             return
 
-        # Legacy pickle path — the whole dict goes to disk on every call, so an
-        # interrupted write here would lose every key, not just this one.
+        # Without a store the whole state goes to disk on every call, written
+        # atomically, so an interrupted write cannot lose the keys beside this one.
         self._persistent_state[key] = value
-        try:
-            write_pickle(self._persistence_dir / "state.pkl", self._persistent_state)
-        except Exception as e:
-            logger.warning("[%s] persist write failed for %r: %s", self.name, key, e)
+        self._unreadable_state.pop(key, None)
+        self._write_state_file()
 
     def recall(self, key: str, default: Any = None) -> Any:
         """Recall a persisted value. Routes to the correct backend.
         Returns default if the key doesn't exist.
         """
         if self._persistence_api is not None:
-            # Check new store first, then fall back to legacy in-memory dict
-            # (handles migration period where some keys are in pickle, some in new store)
+            # A stored None reads as absent, so `recall(key, [])` never hands
+            # back None to code about to append to it.
             result = self._persistence_api.get(key)
-            if result is not None:
-                return result
-            # Fallback: check legacy in-memory state (loaded from old .pkl)
-            return self._persistent_state.get(key, default)
-
-        # Legacy pickle path
+            return default if result is None else result
         return self._persistent_state.get(key, default)
 
+    # ─── Subscriptions ────────────────────────────────────────────────────────
+
+    def _make_hub(self) -> SubscriptionHub:
+        """The hub that carries this actor's subscriptions.
+
+        A method so a subclass can hand out one with its own failure policy: a
+        generated program's hub asks the model to repair a failing callback.
+        """
+        return SubscriptionHub(self, durable=is_durable_actor(self))
+
+    def subscribe(
+        self, topic: str, callback: Callable[[Any], Any], *, concurrency: int = 1
+    ) -> None:
+        """Call ``callback(payload)`` for every message matching ``topic``.
+
+        ``topic`` is an MQTT filter, so ``sensors/#`` and ``sensors/+/temp``
+        work. The payload is the message decoded as JSON, or ``{"raw": text}``
+        when it is not JSON. The callback may be a coroutine function or a
+        plain one; messages on one topic are handled one at a time, in order,
+        so a callback that keeps state between calls is never run against
+        itself. Every subscription of this actor shares one broker connection,
+        opened by the first call and closed when the actor stops.
+
+        ``concurrency`` above one runs that many messages of the topic at once,
+        for a callback that waits on a model or a job rather than computes:
+        order is then not kept, and the callback runs against itself.
+
+        A callback that keeps raising marks the actor FAILED after a few
+        failures in a row, which is the supervisor's cue to restart it.
+        """
+        if not callable(callback):
+            raise TypeError(f"subscribe({topic!r}) needs a callable callback, got {callback!r}")
+        if self._sub_hub is None:
+            self._sub_hub = self._make_hub()
+        task = self._sub_hub.bind(topic, _as_coroutine_callback(callback), concurrency=concurrency)
+        if task is not None:
+            self._tasks.append(task)
+
+    def window(self, topic: str, seconds: float = 300, max_size: int = 1000) -> StreamWindow:
+        """A rolling window over the last ``seconds`` of messages on ``topic``.
+
+        Returns a :class:`~wactorz.core.topic_bus.StreamWindow`, with ``mean``,
+        ``min``, ``max``, ``rising``, ``falling``, ``absent_for`` and the rest,
+        fed from the broker from the moment it is made. One window per topic:
+        asking again for the same topic returns the one that has been filling.
+        """
+        existing = self._windows.get(topic)
+        if existing is not None:
+            return existing
+        bus = get_topic_bus()
+        if bus is not None:
+            made = bus.make_window(topic, seconds=seconds, max_size=max_size)
+        else:
+            made = StreamWindow(topic, seconds=seconds, max_size=max_size)
+            made.start(self._mqtt_broker, self._mqtt_port)
+        self._windows[topic] = made
+        return made
+
+    def _close_windows(self) -> None:
+        """Stop every window this actor opened."""
+        for topic, made in list(self._windows.items()):
+            try:
+                made.stop()
+            except Exception as exc:
+                logger.debug("[%s] Window on %s would not stop: %s", self.name, topic, exc)
+        self._windows.clear()
+
     # ─── MQTT ─────────────────────────────────────────────────────────────────
+
+    async def publish(
+        self, topic: str, payload: Any, *, retain: bool = False, qos: int = 0
+    ) -> None:
+        """Publish ``payload`` on ``topic`` for anything on the broker to read.
+
+        A dict or list goes out as JSON, bytes as they are, anything else as
+        text. ``retain`` keeps the last message on the broker for whoever
+        subscribes later; ``qos=1`` asks for at-least-once delivery, for a
+        message that must not be lost while the broker is away.
+        """
+        await self._mqtt_publish(topic, payload, retain=retain, qos=qos)
 
     async def _mqtt_publish(self, topic: str, payload: Any, retain: bool = False, qos: int = 0):
         if self._mqtt_client:
@@ -966,6 +1618,15 @@ class Actor(ABC):
                 # always knows self.name, so the feed can attribute the row.
                 if isinstance(payload, dict) and (topic.endswith(("/logs", "/spawned"))):
                     payload.setdefault("name", self.name)
+                # The turn travels with a task to another machine, and with what
+                # an agent reports while it works on one, so both can be found
+                # by it there and on the dashboard.
+                turn = current_turn()
+                if turn and isinstance(payload, dict):
+                    if is_task_topic(topic):
+                        payload.setdefault(TURN_KEY, turn)
+                    elif topic.endswith("/logs"):
+                        payload.setdefault("turn", turn)
                 # Empty bytes = clear a retained message (MQTT spec)
                 # Must send raw empty bytes, not JSON-encoded
                 if payload == b"" or (payload is None and retain):
@@ -974,9 +1635,19 @@ class Actor(ABC):
                     encoded = payload
                 else:
                     encoded = json.dumps(payload)
-                await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
+                user_properties = self._publish_properties(topic, encoded)
+                if user_properties:
+                    await self._mqtt_client.publish(
+                        topic, encoded, retain=retain, qos=qos, user_properties=user_properties
+                    )
+                else:
+                    await self._mqtt_client.publish(topic, encoded, retain=retain, qos=qos)
             except Exception as e:
                 logger.debug("[%s] MQTT publish failed: %s", self.name, e)
+
+    def _publish_properties(self, topic: str, encoded: Any) -> list[tuple[str, str]] | None:
+        """MQTT v5 user properties to send with ``encoded`` on ``topic``. None for most actors."""
+        return None
 
     async def _publish_status(self):
         await self._mqtt_publish(f"agents/{self.actor_id}/status", self.get_status())
@@ -1031,6 +1702,7 @@ class Actor(ABC):
         capabilities: list[str] | None = None,
         input_schema: dict[str, Any] | None = None,
         output_schema: dict[str, Any] | None = None,
+        subscribes: list[str] | None = None,
     ) -> None:
         """Publish a capability manifest so main's topic registry can discover this actor.
         Call from on_start() in any actor that wants to be discoverable.
@@ -1045,6 +1717,7 @@ class Actor(ABC):
             "actor_id": self.actor_id,
             "description": description,
             "publishes": publishes or [],
+            "subscribes": subscribes or [],
             "capabilities": capabilities or [],
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},
@@ -1070,6 +1743,22 @@ class Actor(ABC):
 
     async def on_stop(self):
         """Called when actor stops. Override for cleanup."""
+
+    async def on_delete(self):
+        """Called before the stop that ends a deletion. Override to remove what stop keeps.
+
+        A stop is expected to be undone later, so it keeps state; a delete
+        promises that no trace of the agent is left. The caller purges the
+        stores it knows about afterwards. This is for everything else the agent
+        owns: files of its own, and retained messages outside `agents/<id>/`.
+
+        It runs where an agent is deleted in this process: main's delete, the
+        actor's own `delete` command, and a factory reset forgetting it. A
+        node's runner does not call it. Its delete also drops the copy an agent
+        leaves behind when it migrates, and there the agent lives on elsewhere
+        under the same topics, so removing its retained messages would take
+        them from the copy that is running.
+        """
 
     @abstractmethod
     async def handle_message(self, msg: Message):

@@ -7,12 +7,14 @@ self.total_*_tokens, self._persist_cost, self.system_prompt) plus the Actor
 base (self.persist, self.recall, self._registry).
 """
 
-from __future__ import annotations
-
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..prompts.main_actor_prompts import FACTS_EXTRACT_PROMPT, ORCHESTRATOR_PROMPT
+from ... import plugins
+from ..prompts.assemble import PromptFragment
+from ..prompts.fragments import DEFAULT_FRAGMENTS
+from ..prompts.main_actor_prompts import facts_extract_prompt, orchestrator_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,10 @@ else:
 
 class MemoryMixin(_Host):
     """User facts + live system-prompt assembly. Mix into an LLMAgent host."""
+
+    #: The integrations the system prompt and fact extraction speak of. Every
+    #: one unless the host says otherwise.
+    _prompt_fragments: tuple[PromptFragment, ...] = DEFAULT_FRAGMENTS
 
     def get_user_facts(self) -> dict[str, Any]:
         return self.recall("_user_facts") or {}
@@ -69,6 +75,29 @@ class MemoryMixin(_Host):
             lines.append(f"  {actor.name} — {desc}" if desc else f"  {actor.name}")
         if not lines:
             return ""
+        return "\n".join(lines)
+
+    def _get_registered_agents_summary(self) -> str:
+        """The deployment's own agents that are not running, one line each, or "".
+
+        A registered agent that is not running is still something main can
+        start on demand, the way it starts a catalogue recipe, and the only way
+        to start it is the spawn config named here. Nothing is listed without a
+        registry, since "not running" cannot be judged then.
+        """
+        if not self._registry:
+            return ""
+        running = {actor.name for actor in self._registry.all_actors()}
+        lines = []
+        for name, plugin in sorted(plugins.discover().items()):
+            if name in running:
+                continue
+            desc = " ".join(str(plugin.description or "").split())[:120]
+            line = f"  {name} — {desc}" if desc else f"  {name}"
+            if plugin.target:
+                spawn_config = {"name": name, "type": "module", "target": plugin.target}
+                line += f"\n      spawn with: {json.dumps(spawn_config)}"
+            lines.append(line)
         return "\n".join(lines)
 
     def _prefix_with_live_context(self, user_text: str) -> str:
@@ -190,7 +219,7 @@ class MemoryMixin(_Host):
             "on every turn. Do not pretend to perform a separate lookup.\n"
         )
 
-        prompt = override + "\n" + ORCHESTRATOR_PROMPT
+        prompt = override + "\n" + orchestrator_prompt(self._prompt_fragments)
 
         # ── Block 1: live running agents (so main knows the truth, not its memory) ──
         # Wording is deliberately strong: the LLM tends to trust earlier conversation
@@ -213,6 +242,19 @@ class MemoryMixin(_Host):
             prompt += header + agents_summary
         else:
             prompt += header + "  (no user-spawned agents are currently running)"
+
+        # ── Block 1b: this deployment's own agents that are not running ──
+        # Registered but stopped, or declared not to start on their own. Main
+        # can start one with the spawn config named, and nothing else starts it.
+        registered_summary = self._get_registered_agents_summary()
+        if registered_summary:
+            prompt += (
+                "\n\n== REGISTERED BUT NOT RUNNING (this deployment's own agents) ==\n"
+                "These agents belong to this deployment and can be started on demand. To use\n"
+                'one, emit a <spawn> block with EXACTLY the spawn config shown — type "module"\n'
+                "and that target; no code, no other type. Do not write a dynamic agent that\n"
+                "does what one of these does.\n"
+            ) + registered_summary
 
         # ── Block 2: persisted user facts, grouped by bucket ──
         facts = self.get_user_facts()
@@ -289,21 +331,19 @@ class MemoryMixin(_Host):
         try:
             raw, _usage = await self.llm.complete(
                 messages=[{"role": "user", "content": exchange}],
-                system=FACTS_EXTRACT_PROMPT,
+                system=facts_extract_prompt(self._prompt_fragments),
                 max_tokens=300,
             )
             self.total_input_tokens += _usage.get("input_tokens", 0)
             self.total_output_tokens += _usage.get("output_tokens", 0)
             self.total_cost_usd += _usage.get("cost_usd", 0.0)
             self._persist_cost()
-            import json as _json
-
             clean = raw.strip().removeprefix("```json").removeprefix("```")
             clean = clean.removesuffix("```").strip()
             if not clean:
                 logger.warning("[%s] Facts extraction returned empty string", self.name)
                 return
-            new_facts = _json.loads(clean)
+            new_facts = json.loads(clean)
             if not isinstance(new_facts, dict):
                 logger.warning(
                     "[%s] Facts extraction returned non-dict: %s",
@@ -352,7 +392,7 @@ class MemoryMixin(_Host):
                 )
             else:
                 logger.info("[%s] User facts updated: %s", self.name, list(normalized.keys()))
-        except _json.JSONDecodeError as e:
+        except json.JSONDecodeError as e:
             logger.warning(
                 "[%s] Facts extraction JSON parse failed: %s. Raw response (first 200 chars): %r",
                 self.name,

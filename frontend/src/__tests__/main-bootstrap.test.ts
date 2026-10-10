@@ -21,6 +21,8 @@ const mockRouter: Record<string, (...a: any[]) => void> = {};
 const mockWs: Record<string, (...a: any[]) => void> = {};
 // A single known agent so `getAgents().find(...)` resolves in the metrics path.
 const mockStoreAgents = [{ id: "a", name: "A", state: "running", protected: false }];
+// The store main.ts builds, so a test can see what reached it.
+const mockStores: { onHeartbeat: ReturnType<typeof vi.fn> }[] = [];
 
 // Fetch a registered handler (asserting it exists) so the call sites below stay
 // branch-free — keeps each test's cyclomatic complexity low.
@@ -82,6 +84,9 @@ vi.mock("../io/IOManager", () => ({
 
 vi.mock("../agents/AgentStore", () => ({
     AgentStore: class {
+        constructor() {
+            mockStores.push(this);
+        }
         mount = vi.fn();
         reconcileAgents = vi.fn();
         onChat = vi.fn();
@@ -93,7 +98,7 @@ vi.mock("../agents/AgentStore", () => ({
         onHeartbeat = vi.fn();
         onSpawn = vi.fn();
         onAlert = vi.fn();
-        pruneStaleRemoteAgents = vi.fn();
+        pruneSilentRemoteAgents = vi.fn();
         updateRemoteNode = vi.fn();
         setHostStats = vi.fn();
         clearAll = vi.fn();
@@ -164,6 +169,24 @@ describe("main.ts bootstrap", () => {
         routerHandler("spawn")({ agentId: "del", agentName: "X", timestampMs: 0, agentType: "worker" });
         routerHandler("status")({ agentId: "del", agentName: "X", state: "running" }); // deleted → skip
         expect(true).toBe(true);
+    });
+
+    it("keeps an agent a wipe took away from coming back on a trailing heartbeat", () => {
+        // A wipe sends no delete per agent, and cards are otherwise kept until
+        // one says so: what it removed must be tombstoned as a delete would be.
+        mockStoreAgents.push({ id: "wiped", name: "W", state: "running", protected: false });
+        try {
+            emit("af-wipe-all", { survivors: ["a"] });
+        } finally {
+            mockStoreAgents.pop();
+        }
+        const store = mockStores[0]!;
+        store.onHeartbeat.mockClear();
+
+        routerHandler("heartbeat")({ agentId: "wiped", agentName: "W", timestampMs: Date.now() });
+        routerHandler("heartbeat")({ agentId: "a", agentName: "A", timestampMs: Date.now() });
+
+        expect(store.onHeartbeat.mock.calls.map(c => (c[0] as { agentId: string }).agentId)).toEqual(["a"]);
     });
 
     it("drives the agent lifecycle handlers", () => {
@@ -239,7 +262,7 @@ describe("main.ts bootstrap", () => {
         emit("af-agent-command", { command: "stop", agentId: "a" }); // non-delete
         emit("af-send-message", { content: "hi", target: "A", attachments: [] }); // agent found
         emit("af-send-message", { content: "hi", target: "nope", attachments: [] }); // null
-        emit("af-wipe-all");
+        emit("af-wipe-all", { survivors: ["a"] });
         emit("af-clear-feed");
         window.dispatchEvent(new Event("beforeunload"));
         expect(true).toBe(true);

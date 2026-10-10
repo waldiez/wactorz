@@ -236,9 +236,9 @@ class TestTheUnitItself:
         unit = node_service.unit_file("/home/pi", "pi", system=system)
 
         assert "EnvironmentFile=/home/pi/wactorz/.env" in unit
-        assert "--broker ${WACTORZ_BROKER}" in unit
-        assert "--port ${WACTORZ_PORT}" in unit
-        assert "--name ${WACTORZ_NODE}" in unit
+        assert "--mqtt-broker ${WACTORZ_BROKER}" in unit
+        assert "--mqtt-port ${WACTORZ_PORT}" in unit
+        assert "--node ${WACTORZ_NODE}" in unit
 
     async def test_the_unit_is_written_through_a_quoted_heredoc(self) -> None:
         # An unquoted delimiter would let the deploying shell expand

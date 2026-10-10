@@ -4,10 +4,11 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from ...orchestration import SOCIAL
 from .social import SocialRateLimiter
 
 if TYPE_CHECKING:
-    from ...agents.main import MainActor
+    from ...orchestration import Orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +20,19 @@ class TelegramInterface:
     the sender's user id and nothing else. That keeps the documented way of
     finding your id working (the id is needed to fill the allow-list) without
     letting a stranger reach the LLM or the user's devices.
+
+    Answers through the orchestrator as a social channel: conversation and
+    device control, none of the admin surface.
     """
 
     def __init__(
         self,
-        main_actor: "MainActor",
+        orchestrator: "Orchestrator",
         token: str,
         allowed_user_id: int | None = None,
         allowed_user_ids: frozenset[int] | set[int] | None = None,
     ) -> None:
-        self.agent = main_actor
+        self.orchestrator = orchestrator
         self.token = token
         # allowed_user_id (singular) is the older single-user form; fold it in.
         ids = set(allowed_user_ids or ())
@@ -49,7 +53,7 @@ class TelegramInterface:
                 filters,
             )
         except ImportError:
-            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
+            logger.error(  # noqa: TRY400  # the ImportError is the whole diagnosis
                 "python-telegram-bot not installed. Run: pip install python-telegram-bot"
             )
             return
@@ -118,9 +122,8 @@ class TelegramInterface:
                 chat_id=update.effective_chat.id, action=ChatAction.TYPING
             )
 
-            # Restricted mode: converse + control devices, no spawn/delete/code.
             try:
-                response = await self.agent.process_user_input_restricted(text)
+                response = await self.orchestrator.handle_turn(text, channel=SOCIAL, user=sender)
             finally:
                 self.limiter.done(sender)
             response = response or "(no response)"

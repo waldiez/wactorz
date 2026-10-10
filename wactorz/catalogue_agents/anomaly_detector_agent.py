@@ -76,15 +76,17 @@ SPAWN CONFIG
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
-AGENT_CODE = r'''
 import asyncio
 import json
-import os
+import logging
 import time
 from datetime import datetime
 from typing import Any
 
-import aiomqtt
+from wactorz.core.mqtt import mqtt_client
+from wactorz.core.persistence import get_db
+
+logger = logging.getLogger("anomaly-detector")
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
 
@@ -449,7 +451,7 @@ async def setup(agent) -> None:
     )
 
     # Start MQTT listener for real-time detection
-    asyncio.create_task(_mqtt_detector(agent))
+    agent.run_in_background(_mqtt_detector(agent))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -591,7 +593,7 @@ async def _rebuild_baselines(agent) -> None:
                 # Convert state changes to numeric where possible
                 numeric_rows = []
                 for r in entity_rows:
-                    state = r.get("new_state", "")
+                    state = str(r.get("new_state") or "")
                     try:
                         numeric_rows.append({"ts": r["ts"], "value": float(state)})
                     except (ValueError, TypeError):
@@ -630,8 +632,6 @@ async def _discover_entities(agent) -> list[str]:
 
     try:
         # Check sensor_readings for distinct entity_ids
-        from wactorz.core.persistence import get_db
-
         db = get_db()
         if db:
             rows = db.conn.execute(
@@ -647,7 +647,7 @@ async def _discover_entities(agent) -> list[str]:
             for r in rows:
                 entities.add(r[0])
     except Exception:
-        pass
+        logger.debug("could not list entities from the time-series tables", exc_info=True)
 
     return sorted(entities)
 
@@ -661,12 +661,7 @@ async def _mqtt_detector(agent) -> None:
     """Subscribe to MQTT and score each reading against baselines."""
     while True:
         try:
-            async with aiomqtt.Client(
-                agent._actor._mqtt_broker,
-                agent._actor._mqtt_port,
-                username=os.environ.get("MQTT_USERNAME") or None,
-                password=os.environ.get("MQTT_PASSWORD") or None,
-            ) as client:
+            async with mqtt_client(agent._actor._mqtt_broker, agent._actor._mqtt_port) as client:
                 for pattern in MONITOR_TOPICS:
                     await client.subscribe(pattern)
                 await agent.log(f"Real-time detector subscribed to {len(MONITOR_TOPICS)} patterns")
@@ -680,7 +675,8 @@ async def _mqtt_detector(agent) -> None:
                     except (json.JSONDecodeError, UnicodeDecodeError):
                         pass
                     except Exception:
-                        pass  # don't spam logs
+                        # Per message, so at debug: a bad stream would flood the log.
+                        logger.debug("could not process a reading on %s", topic, exc_info=True)
 
         except asyncio.CancelledError:
             break
@@ -746,15 +742,17 @@ async def _process_live_reading(agent, topic: str, payload: dict[str, Any]) -> N
             baseline = EntityBaseline(entity_id, field)
             baselines[key] = baseline
 
-        # Always update last value/ts (even during learning)
+        # Scored against the reading before it, which the rate check needs;
+        # only then remembered (even during learning).
+        anomalies = (
+            _score_reading(value, now, baseline, stat_k, rate_k)
+            if active and baseline.ready
+            else []
+        )
         baseline.last_value = value
         baseline.last_ts = now
-
-        # Only detect if active and baseline is ready
-        if not active or not baseline.ready:
+        if not anomalies:
             continue
-
-        anomalies = _score_reading(value, now, baseline, stat_k, rate_k)
 
         # Filter by sensitivity threshold
         significant = [a for a in anomalies if a["score"] >= agent.state["sensitivity"]]
@@ -826,7 +824,8 @@ async def _report_anomaly(
                 },
             )
         except Exception:
-            pass
+            # The optimizer is optional; most installs do not run one.
+            logger.debug("sinergym-optimizer did not take the anomaly", exc_info=True)
     else:
         # Real-world mode — publish to wactorz anomaly topic + alert
         await agent.publish(f"wactorz/anomalies/{entity_id}", anomaly_record)
@@ -846,8 +845,11 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
             parsed = json.loads(payload["text"])
             if isinstance(parsed, dict):
                 payload = parsed
-        except Exception:
-            pass
+        except (ValueError, TypeError):
+            pass  # not JSON: the text is the request
+
+    if not isinstance(payload, dict):
+        payload = {"action": str(payload)}
 
     cmd = str(payload.get("action") or payload.get("text") or "").strip().lower()
 
@@ -873,7 +875,12 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
     if cmd == "report":
         # Show recent anomalies
         history = agent.state.get("anomaly_history", [])
-        n = int(payload.get("n", 10))
+        try:
+            n = int(payload.get("n", 10))
+        except (TypeError, ValueError):
+            n = 10
+        if n <= 0:
+            n = 10  # history[-0:] would be all of it
         recent = history[-n:]
         if not recent:
             return {"result": "No anomalies detected yet."}
@@ -905,16 +912,21 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
         return {"result": "Anomaly detector reset — all baselines and history cleared."}
 
     if cmd == "configure":
-        for key in (
-            "baseline_hours",
-            "learning_period_hours",
-            "sensitivity",
-            "rebuild_interval_hours",
-            "entities",
-        ):
-            if key in payload:
-                agent.persist(key, payload[key])
-                agent.state[key] = payload[key]
+        updates = {}
+        for key, (state_key, kind) in _SETTINGS.items():
+            if key not in payload:
+                continue
+            if kind is list:
+                value = payload[key]
+                updates[key] = (state_key, [value] if isinstance(value, str) else list(value))
+                continue
+            try:
+                updates[key] = (state_key, kind(payload[key]))
+            except (TypeError, ValueError):
+                return {"result": f"{key} must be a number."}
+        for key, (state_key, value) in updates.items():
+            agent.persist(key, value)  # under the name setup() recalls
+            agent.state[state_key] = value
         # Recompute thresholds
         s = float(agent.state.get("sensitivity", DEFAULT_SENSITIVITY))
         agent.state["stat_k"] = DEFAULT_STAT_K * (1.0 + s)
@@ -947,6 +959,17 @@ async def handle_task(agent, payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: What `configure` accepts: each name as stored and recalled by setup(), the
+#: state key the running agent reads it from, and what it must convert to.
+_SETTINGS = {
+    "baseline_hours": ("baseline_hours", int),
+    "learning_period_hours": ("learning_period_h", int),
+    "sensitivity": ("sensitivity", float),
+    "rebuild_interval_hours": ("rebuild_interval_h", int),
+    "entities": ("monitored_entities", list),
+}
+
+
 def _format_age(ts: float) -> str:
     if ts <= 0:
         return "never"
@@ -958,5 +981,3 @@ def _format_age(ts: float) -> str:
     if age < 86400:
         return f"{age / 3600:.1f}h ago"
     return f"{age / 86400:.1f}d ago"
-
-'''

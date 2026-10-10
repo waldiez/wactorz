@@ -7,7 +7,9 @@ interface objects only construct a client on ``.run()``.
 """
 
 import logging
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -21,8 +23,24 @@ from wactorz.interfaces.chat_interfaces import (
 )
 
 
-class _DummyMain:
-    name = "main"
+class _DummyOrchestrator:
+    """Enough of an orchestrator to be handed to an interface that is never run."""
+
+    async def handle_turn(self, text: str, *, channel: str, user: str | None = None) -> str:
+        return ""
+
+    async def handle_turn_stream(
+        self,
+        text: str,
+        *,
+        channel: str,
+        user: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        yield ""
+
+    def commands(self) -> frozenset[str]:
+        return frozenset()
 
 
 def _set_tokens(
@@ -61,7 +79,7 @@ def test_both_tokens_start_alongside_rest(monkeypatch: pytest.MonkeyPatch) -> No
     _set_tokens(monkeypatch, discord="d-tok", telegram="t-tok")
 
     companions = build_social_companions(
-        _DummyMain(),  # pyright: ignore[reportArgumentType]
+        _DummyOrchestrator(),
         primary="rest",
     )
 
@@ -88,7 +106,7 @@ def test_channel_without_allow_list_refuses_to_start(
 
     with caplog.at_level(logging.WARNING):
         companions = build_social_companions(
-            _DummyMain(),  # pyright: ignore[reportArgumentType]
+            _DummyOrchestrator(),
             primary="rest",
         )
 
@@ -104,7 +122,7 @@ def test_no_tokens_no_companions(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_tokens(monkeypatch)
     assert (
         build_social_companions(
-            _DummyMain(),  # pyright: ignore[reportArgumentType]
+            _DummyOrchestrator(),
             primary="rest",
         )
         == []
@@ -116,14 +134,14 @@ def test_primary_channel_is_not_duplicated(monkeypatch: pytest.MonkeyPatch) -> N
 
     # Discord is the primary → only Telegram rides along (no double Discord login).
     companions = build_social_companions(
-        _DummyMain(),  # pyright: ignore[reportArgumentType]
+        _DummyOrchestrator(),
         primary="discord",
     )
     assert [type(c) for c in companions] == [TelegramInterface]
 
     # …and vice-versa.
     companions = build_social_companions(
-        _DummyMain(),  # pyright: ignore[reportArgumentType]
+        _DummyOrchestrator(),
         primary="telegram",
     )
     assert [type(c) for c in companions] == [DiscordInterface]
@@ -132,7 +150,7 @@ def test_primary_channel_is_not_duplicated(monkeypatch: pytest.MonkeyPatch) -> N
 def test_run_all_returns_coroutines(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_tokens(monkeypatch, telegram="t-tok")
     companions = build_social_companions(
-        _DummyMain(),  # pyright: ignore[reportArgumentType]
+        _DummyOrchestrator(),
         primary="rest",
     )
     coros = run_all_interfaces(companions)
@@ -154,7 +172,7 @@ def test_missing_library_is_skipped_with_loud_warning(
 
     with caplog.at_level(logging.WARNING):
         companions = build_social_companions(
-            _DummyMain(),  # pyright: ignore[reportArgumentType]
+            _DummyOrchestrator(),
             primary="rest",
         )
 

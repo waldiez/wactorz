@@ -154,6 +154,7 @@ async def handle_task(agent, payload):
 | `agent.persist(key, value)` / `agent.recall(key)` | Durable key-value state |
 | `agent.state["key"]` | In-memory dict (cleared on restart) |
 | `agent.llm.chat(prompt)` | Call the LLM |
+| `agent.llm.converse(text)` | Multi-turn chat. The conversation is kept in `agent.state["_chat_history"]`, persisted after each reply so it survives a restart and a migration, and limited to the last 32 exchanges |
 | `agent.send_to(name, payload)` | Send a task to another agent by name |
 | `agent.delegate(name, payload)` | Same, with cleaner syntax |
 | `agent.send_to_many(tasks)` | Fan-out to multiple agents in parallel |
@@ -336,13 +337,46 @@ If a worker agent returns an error during a planner step, the planner logs it an
 
 ## 7. Persistence & State
 
-Every actor has access to a simple key-value persistence API backed by pickle files in the `state/` directory. State is written to disk **immediately on every `persist()` call** — not just on graceful shutdown — so no state is ever lost on Ctrl+C or crashes.
+Every actor has access to a simple key-value persistence API. `persist()` and `recall()` are synchronous and cheap: an agent's state is held in memory, so a recall is a lookup, and a persist changes the copy in memory and returns.
 
 ```python
 # Inside any agent
-agent.persist('my_key', {'count': 42, 'data': [...]})   # write (immediate disk write)
+agent.persist('my_key', {'count': 42, 'data': [...]})   # write
 value = agent.recall('my_key', default={})               # read
 ```
+
+**When it reaches the disk.** The keys kept in SQLite (conversation history, user facts, the spawn registry and the like) are written as part of the call. Everything else — an agent's own keys, held in its `state.pkl`, or in its JSON file on a node — is written about a second later, from a worker thread, with the changes made in that second going out as one write. That keeps the disk off the event loop: forcing a file to an SD card takes tens of milliseconds, and done on every `persist()` it held every agent in the process each time.
+
+What that means in practice:
+
+- A stop, a restart of the agent, a migration and a clean shutdown (Ctrl+C included) all write what is waiting before they finish. Nothing is lost.
+- A process that is killed outright, or a machine that loses power, can lose what was persisted in the last second.
+- The keys kept in SQLite or in memory (the ones listed above) are stored as JSON. A value JSON cannot represent — a `datetime`, a numpy number, a `set` — raises a `TypeError` naming the key, and nothing is written; convert it first (`.isoformat()`, `.item()`, `list(...)`). An agent's own keys are pickled and take any Python object.
+- `recall(key, default)` returns `default` for a key that was never set and for one set to `None`, so `recall("items", [])` can be appended to straight away.
+- `recall()` returns the stored object itself, not a copy. Change it and call `persist()` again; do not rely on a recalled list or dict being private to the caller.
+- A value that cannot be pickled (an open camera, a lambda) is kept in memory and left out of the file; the rest is written, and the log names the key once.
+- Bytes, numpy arrays, torch tensors, `state_dict()`s and modules, and scikit-learn-family models are kept as files of their own under `blobs/` in the agent's directory, written when their key is persisted rather than with every other key. A value changed in place is saved by persisting it again. A blob that cannot be read back — its library not installed, its file gone — is missing at the next start like an unpicklable value, and kept for when it can be.
+- Each value in `state.pkl` is pickled on its own. A value that no longer unpickles — a model object after a library upgrade, a class that was renamed — is missing at the next start while the agent's other keys come back, and the log names it with the reason. Its bytes stay in the file, so it returns once the code that reads it does; persisting that key again replaces it.
+
+**Changing what an agent stores.** When a new version of an agent keeps its state in a different shape, it declares a version and how to upgrade to it, and the state is brought up to date when the agent starts, before its own code runs:
+
+```python
+STATE_VERSION = 2
+
+def upgrade_state(state, from_version):
+    if from_version == 0:
+        state["celsius"] = state.pop("temp")       # renamed in version 1
+    elif from_version == 1:
+        state["fahrenheit"] = state["celsius"] * 9 / 5 + 32
+    return state
+```
+
+A native `Actor` subclass sets `state_version = 2` and defines the same `upgrade_state(self, state, from_version)` method. The function is called once for each version still owed, in order, and may be `async`.
+
+- The version is kept in the state, under `_state_version`, so it goes with the agent when it migrates. State without one is at version 0.
+- Only the agent's own keys are passed in. The ones Wactorz keeps in SQLite or memory are not.
+- The steps run on a copy, and the result is written once all of them have worked. A step that raises leaves the stored state as it was, and the agent does not start: a generated agent is marked failed with the step named, and a native one's `start()` raises `StateUpgradeError`.
+- State newer than the code (after going back to an older version of the agent) is left alone, with a warning.
 
 Used internally for:
 
@@ -718,7 +752,7 @@ python -m wactorz --interface discord --discord-token YOUR_TOKEN
 | `/clear-plans` | Wipe the planner's plan cache |
 | `/deploy <node-name>` | Bootstrap a configured remote node via SSH (see `DEPLOY_TARGETS`) |
 | `/deploy-pkg <node> <pkg...>` | Install pip packages on a configured remote node |
-| `/migrate <agent> <node>` | Move a running agent to a different node |
+| `/migrate <agent> <node> [--force]` | Move a running agent to a different node. Refused when its state cannot travel as JSON; `--force` moves it without those keys |
 | `/help` | Show all available commands |
 | `@agent-name` | Route your next message directly to a specific agent |
 
@@ -797,7 +831,7 @@ TELEGRAM_ALLOWED_USER_IDS=123456789
 
 ### WhatsApp
 
-Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` and `WHATSAPP_ALLOWED_NUMBERS`, then start with `--interface whatsapp`. Wactorz runs an aiohttp webhook server that receives incoming messages from Twilio.
+Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_NUMBER` and `WHATSAPP_ALLOWED_NUMBERS`, then start with `--interface whatsapp`. Wactorz runs an aiohttp webhook server that receives incoming messages from Twilio.
 
 The webhook is a public HTTP endpoint, so the allow-list is required: without it the interface refuses to start, and messages from numbers outside it are dropped without ever reaching the LLM. Numbers are matched with or without the `whatsapp:` prefix Twilio adds.
 
@@ -920,7 +954,7 @@ Bridges every Home Assistant `state_changed` event to MQTT. Used as the trigger 
 
 Key options:
 - `HA_STATE_BRIDGE_DOMAINS` — comma-separated allow-list (e.g. `light,switch,sensor`); empty = all domains
-- `HA_STATE_BRIDGE_PER_ENTITY` — `1` (default) splits into per-entity sub-topics; `0` sends everything to one topic
+- `HA_STATE_BRIDGE_PER_ENTITY` — `1` splits into per-entity sub-topics; `0` (default) sends everything to one topic
 
 **Task commands**: `status`
 
@@ -947,7 +981,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 **Direct (from CLI):**
 
 ```text
-@catalog spawn image-gen-agent
+@catalog spawn weather-agent
 @catalog spawn doc-to-pptx-agent
 @catalog list
 @catalog info doc-to-pptx-agent
@@ -956,7 +990,7 @@ Some agents are too useful to re-invent every session but too specific to hardco
 **Natural language via main:**
 
 ```text
-"spawn the image generation agent"
+"spawn the weather agent"
 "what agents can you spawn for me?"
 "I need to convert a PDF to PowerPoint"
 ```
@@ -975,14 +1009,11 @@ Spawned agents are registered in main's spawn registry — they survive restarts
 
 ### Built-in Recipes
 
-| Recipe | Description | Key Dependencies |
-|--------|-------------|-----------------|
-| `image-gen-agent` | Generates images from text prompts using NVIDIA NIM FLUX.1-dev. Returns absolute PNG path. | `requests`, NIM API key |
-| `doc-to-pptx-agent` | Converts PDF or TXT documents into PowerPoint presentations. Extracts real embedded images from the PDF first; falls back to NIM FLUX generation for slides without images. | `pymupdf`, `pdfplumber`, `pptxgenjs` (Node.js) |
+Every recipe, what it does and what it needs, is listed in [Catalogue agents](catalogue-agents.md), with a page per recipe.
 
 ### Adding New Recipes
 
-Drop a Python file into `catalogue_agents/` with an `AGENT_CODE` string (the same format as any dynamic agent), then add its entry to `catalog_agent.py`:
+Drop a Python module into `catalogue_agents/` holding the program itself (the same functions as any dynamic agent's code), then add its entry to `catalog_agent.py`. The module's source is what gets sent and exec'd:
 
 ```python
 # In catalog_agent.py — _build_catalog()
@@ -1001,30 +1032,6 @@ if code:
 ```
 
 No changes to `cli.py` or any other file needed. On next restart the recipe is available system-wide.
-
-### image-gen-agent
-
-Generates images from text prompts via NVIDIA NIM FLUX.1-dev and saves them as PNG files. Requires a free NIM API key (1000 credits/month at [build.nvidia.com](https://build.nvidia.com)).
-
-**Setup:**
-
-```text
-@main remember nim_api_key = nvapi-xxxxxxxxxxxxxxxx
-```
-
-**Task payload:**
-
-```json
-{
-  "prompt": "minimalist flat illustration of renewable energy",
-  "output_path": "C:/Users/you/Documents/slide.png",
-  "width": 1024,
-  "height": 576,
-  "steps": 20
-}
-```
-
-**Result:** `{ "image_path": "...", "width": 1024, "height": 576, "size_kb": 312, "error": null }`
 
 ### doc-to-pptx-agent
 
@@ -1057,27 +1064,29 @@ Slides that received a real PDF image skip NIM generation. Slides without one fa
 
 ## 17. Remote Nodes & Edge Deployment
 
-Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. The edge node only needs a single file and one pip package.
+Wactorz can run agents on any machine on your network — Raspberry Pi, VM, cloud server, or any device with Python 3.10+. An edge node runs the same package, started in a different role.
 
 ### How It Works
 
 ```
 [Main machine]                        [Raspberry Pi / Edge node]
-main_actor ──MQTT──► nodes/{name}/spawn ──► remote_runner.py
+main_actor ──MQTT──► nodes/{name}/spawn ──► wactorz-node --node {name}
                                                │  compiles + runs agent
                                                │  heartbeats every 10s
 dashboard  ◄──MQTT── agents/{id}/heartbeat ◄───┘
 ```
 
-The `remote_runner.py` is fully self-contained — it reimplements the DynamicAgent contract inline without importing anything from the wactorz package. Remote agents appear in the dashboard and respond to MQTT commands exactly like local agents.
+A node runs the real `DynamicAgent`, compiled from the same code against the same `agent` API and supervised by the same OTP supervisor — so an agent behaves the same whether it was spawned here or there. Agents on a node appear in the dashboard and respond to MQTT commands exactly like local ones.
 
 ### Edge Node Requirements
 
 ```bash
-# That's it — one package, one file
-pip install aiomqtt --break-system-packages
-python3 remote_runner.py --broker 192.168.1.10 --name rpi-kitchen
+python3 -m venv ~/wactorz/venv
+~/wactorz/venv/bin/pip install wactorz     # the same version main runs
+~/wactorz/venv/bin/wactorz-node --node rpi-kitchen --mqtt-broker 192.168.1.10
 ```
+
+No extra is needed — everything a node uses is a core dependency. Anything an agent itself imports goes in its spawn config's `install` list.
 
 The broker address must be reachable **from the Pi** (your main machine's LAN IP, not `localhost`).
 
@@ -1105,10 +1114,11 @@ DEPLOY_RPI_KITCHEN_BROKER=192.168.1.10
 
 1. Use the configured host (or resolve `rpi-kitchen.local` over mDNS if no host is set)
 2. Verify the SSH host key, recording it on first contact
-3. Upload `remote_runner.py` via SFTP
-4. Install `aiomqtt` into a venv on the Pi
-5. Start the runner in the background
-6. The node appears in `/nodes` within ~15 seconds
+3. Check from the Pi that the broker's port answers, and from the server that the broker accepts the account the Pi will use
+4. Install `wactorz`, at main's own version, into a venv on the Pi
+5. Write the node's environment (broker, credentials, signing key) to `~/wactorz/.env`
+6. Start it under a systemd unit, so it survives a reboot
+7. Wait for the node's first heartbeat; a node that sends none fails the deploy with the last lines of its log
 
 **From the chat:**
 
@@ -1271,7 +1281,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `HA_MAP_AGENT_TARGET_ACTOR` | Route map updates to a named actor instead of MQTT |
 | `HA_STATE_BRIDGE_OUTPUT_TOPIC` | Base MQTT topic for `HomeAssistantStateBridgeAgent` (default: `homeassistant/state_changes`) |
 | `HA_STATE_BRIDGE_DOMAINS` | Comma-separated domain allow-list for state bridge (e.g. `light,switch,sensor`; empty = all) |
-| `HA_STATE_BRIDGE_PER_ENTITY` | `1` (default) = per-entity sub-topics; `0` = single shared topic |
+| `HA_STATE_BRIDGE_PER_ENTITY` | `1` = per-entity sub-topics; `0` (default) = single shared topic |
 | `DISCORD_BOT_TOKEN` | Discord bot token (for `--interface discord`, or to run it alongside another interface) |
 | `DISCORD_ALLOWED_USER_IDS` | **Required with the token** — comma-separated Discord user IDs allowed to talk to the bot |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather (for `--interface telegram`, or alongside another interface) |
@@ -1280,7 +1290,7 @@ By default Wactorz connects to `localhost:1883`. Override with `--mqtt-broker` a
 | `SOCIAL_RATE_LIMIT_PER_MIN` | Max messages per minute per sender on social channels (default `12`; `0` disables) |
 | `TWILIO_ACCOUNT_SID` | Twilio account SID (for `--interface whatsapp`) |
 | `TWILIO_AUTH_TOKEN` | Twilio auth token |
-| `TWILIO_WHATSAPP_FROM` | Twilio WhatsApp sender number |
+| `TWILIO_WHATSAPP_NUMBER` | Twilio WhatsApp sender number |
 | `WHATSAPP_ALLOWED_NUMBERS` | **Required with WhatsApp** — comma-separated numbers allowed to message the webhook |
 | `WACTORZ_URL` | Wactorz REST base URL used by the MCP server (default `http://localhost:8000`) |
 | `WACTORZ_API_KEY` | Optional MCP-to-REST API key; should match `API_KEY` when REST auth is enabled |
@@ -1346,7 +1356,8 @@ wactorz/
 ├── __main__.py                                Entry point — runs `cli.app()` via `python -m wactorz`
 ├── cli.py                                     argparse, supervision tree wiring, interface dispatch
 ├── config.py                                  Env-driven `AppConfig` (LLM_*, MQTT_*, HA_*, …)
-├── remote_runner.py                           Self-contained edge node runner — deploy to any Pi or machine
+├── node/                                      Edge node runtime — `wactorz-node --node <name>`
+├── remote_runner.py                           Shim: the module path the single-file runner had
 ├── reset.py                                   `wactorz-reset` CLI — clears persisted state
 │
 ├── core/
@@ -1368,14 +1379,17 @@ wactorz/
 │   ├── home_assistant_agent.py                HomeAssistantAgent — HA automation CRUD (LLM-backed, intent routing)
 │   ├── home_assistant_map_agent.py            HomeAssistantMapAgent — live entity/location map via HA WebSocket
 │   ├── home_assistant_state_bridge_agent.py   HomeAssistantStateBridgeAgent — HA state_changed → MQTT bridge
-│   ├── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
-│   └── timeseries_collector.py                TimeSeriesCollector — buffered MQTT → SQLite time-series tables
+│   └── home_assistant_actuator_agent.py       HomeAssistantActuatorAgent — reactive MQTT→HA service actuator
 │
 ├── catalogue_agents/                          Pre-built recipe files (loaded by CatalogAgent at startup)
-│   ├── image_gen_agent.py                     NIM FLUX.1-dev image generation
-│   ├── doc_to_pptx_agent.py                   PDF/TXT → PowerPoint conversion with real image extraction
 │   ├── anomaly_detector_agent.py              Statistical anomaly detection over HA + Sinergym streams
-│   └── manual_agent.py                        Device-manual search + PDF Q&A
+│   ├── doc_to_pptx_agent.py                   PDF/TXT → PowerPoint conversion with real image extraction
+│   ├── flic_agent.py                          Flic 2 buttons over Bluetooth
+│   ├── manual_agent.py                        Device-manual search + PDF Q&A
+│   ├── reachy_mini_agent.py                   Reachy Mini robot: voice, gestures, camera
+│   ├── smart_energy_agent.py                  Smart-plug power, energy and guarded power-down rules
+│   ├── timeseries_collector_agent.py          Buffered MQTT → SQLite time-series tables
+│   └── weather_agent.py                       Weather by place, no API key
 │
 └── interfaces/
     ├── chat_interfaces.py                     CLIInterface, RESTInterface, DiscordInterface, WhatsAppInterface, TelegramInterface
@@ -1384,7 +1398,9 @@ wactorz/
 state/                                         Persisted agent state (auto-created, never commit to git)
 ├── wactorz.db                                 SQLite — spawn registry, pipeline rules, user facts, conversation, time-series
 ├── mqtt_outbox.db                             SQLite — durable MQTT publish queue
-└── {agent-name}/state.pkl                     Per-agent pickle fallback (large/binary state)
+└── {agent-name}/
+    ├── state.pkl                              Per-agent pickle (the agent's own keys)
+    └── blobs/                                 One file per model, array or bytes value
 ```
 
 ---

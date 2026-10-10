@@ -387,3 +387,47 @@ class TestWhenTheInstallHangs:
 
         assert main.published_to("/spawn")[0] == "nodes/rpi/spawn"
         assert not main.actor._result_futures
+
+
+class TestWhatANodeCanRun:
+    """A node runs generated code, or an LLM agent whose code main writes.
+
+    Anything else -- a native catalogue agent, an actuator, a scheduled or rule
+    agent -- is a class built into this server, with no program in its config.
+    Sent anyway, it started as an agent with nothing to run and answered every
+    message with an error, while the spawn was reported as done.
+    """
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"name": "flic", "type": "native"},
+            {"name": "lights", "type": "ha_actuator"},
+            {"name": "nightly", "type": "scheduled"},
+            {"name": "helper", "system_prompt": "Be brief."},
+        ],
+    )
+    async def test_one_with_no_program_is_not_sent(self, config: dict[str, Any]) -> None:
+        main = _Main()
+
+        await main.spawn(config)
+
+        assert not [row for row in main.published if row[0].endswith("/spawn")]
+        assert main.saved == [], "nor recorded as running there"
+        (_, log, _) = main.published_to("/logs")
+        assert log["type"] == "error"
+        assert config["name"] in log["message"]
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {"name": "collector", "code": "async def process(agent):\n    pass\n"},
+            llm_agent(),
+        ],
+    )
+    async def test_generated_code_and_an_llm_agent_are(self, config: dict[str, Any]) -> None:
+        main = _Main()
+
+        await main.spawn(config)
+
+        main.published_to("/spawn")

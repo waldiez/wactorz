@@ -25,7 +25,6 @@ def _actor_payload(ag: dict) -> dict:
         "state": ag.get("state", "unknown"),
         "protected": ag.get("protected", False),
         "essential": ag.get("essential", False),
-        "cpu": ag.get("cpu"),
         "mem": ag.get("mem"),
         "task": ag.get("task"),
         "messagesProcessed": ag.get("messages_processed"),
@@ -181,7 +180,6 @@ async def actor_metrics_handler(request: web.Request) -> Response:
                 or (ag.get("messages_processed") if ag else None)
                 or 0
             ),
-            "cpu": ag.get("cpu") if ag else None,
             "mem": ag.get("mem") if ag else None,
             "task": ag.get("task") if ag else None,
             "cost_usd": (
@@ -194,13 +192,13 @@ async def actor_metrics_handler(request: web.Request) -> Response:
 async def actors_handler(request: web.Request) -> Response:
     """List every local actor for the dashboard grid.
 
-    Deliberately excludes remote-runner agents — see the CONTRACT note below.
+    Deliberately excludes agents running on a node — see the CONTRACT note below.
     """
     # Prefer the live registry (injected at boot via runtime.set_registry) —
     # actor objects carry the authoritative protected flag.  Fall back to the
     # MQTT-derived state dict when no registry was injected (legacy MQTT mode).
     #
-    # CONTRACT: the registry path intentionally excludes remote-runner agents
+    # CONTRACT: the registry path intentionally excludes agents on a node
     # (they are not in the local Python registry).  The frontend relies on this
     # to distinguish local vs remote agents: any agent absent from this response
     # but present via MQTT heartbeat with a "node" field is a remote agent and
@@ -221,7 +219,6 @@ async def actors_handler(request: web.Request) -> Response:
                 "name": actor.name,
                 "state": ag.get("state", "unknown"),
                 "protected": bool(getattr(actor, "protected", False)),
-                "cpu": ag.get("cpu"),
                 "mem": ag.get("mem"),
                 "task": ag.get("task"),
                 "messagesProcessed": ag.get("messages_processed")

@@ -54,7 +54,7 @@ SPAWN CONFIG
     "error":             "str|null  — error message if failed"
   },
   "poll_interval": 3600,
-  "code": "<copy AGENT_CODE string from the bottom of this file>"
+  "code": "<the source of this file>"
 }
 
 
@@ -82,17 +82,14 @@ No NIM (extracted images only, text-only for slides without one):
   }
 """
 
-# ──────────────────────────────────────────────────────────────────────────────
-# AGENT_CODE — copy this string into the "code" field of the spawn config
-# ──────────────────────────────────────────────────────────────────────────────
-
-AGENT_CODE = r'''
 import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 from typing import Any
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,7 +99,7 @@ from typing import Any
 
 def _read_pdf_text(path):
     """Extract text from PDF using pdfplumber (best for clean text)."""
-    import pdfplumber
+    import pdfplumber  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe
 
     pages = []
     with pdfplumber.open(path) as pdf:
@@ -116,15 +113,14 @@ def _read_pdf_text(path):
 def _read_txt(path: str) -> str:
     for enc in ("utf-8", "latin-1"):
         try:
-            with open(path, encoding=enc) as f:
-                return f.read()
+            return Path(path).read_text(encoding=enc)
         except UnicodeDecodeError:
             continue
     raise ValueError(f"Cannot decode file: {path}")
 
 
 def _read_document(path: str) -> str:
-    ext = os.path.splitext(path)[1].lower()
+    ext = Path(path).suffix.lower()
     if ext == ".pdf":
         return _read_pdf_text(path)
     return _read_txt(path)
@@ -147,7 +143,7 @@ def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[d
     Images smaller than min_w × min_h are skipped (logos, bullets, decorations).
     CMYK images are converted to RGB so they save cleanly as PNG.
     """
-    import fitz  # PyMuPDF  (pip install pymupdf)
+    import fitz  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe (pymupdf)
 
     results = []
     doc = fitz.open(pdf_path)
@@ -175,7 +171,7 @@ def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[d
                 if pix.n - pix.alpha > 3:
                     pix = fitz.Pixmap(fitz.csRGB, pix)
 
-                out_path = os.path.join(work_dir, f"pdf_img_p{page_idx}_x{xref}.png")
+                out_path = str(Path(work_dir) / f"pdf_img_p{page_idx}_x{xref}.png")
                 pix.save(out_path)
                 results.append(
                     {
@@ -187,8 +183,7 @@ def _extract_pdf_images(pdf_path: str, work_dir, min_w=200, min_h=150) -> list[d
                 )
                 pix = None
 
-            except Exception:
-                # Corrupt / unsupported image format — skip silently
+            except Exception:  # noqa: S112  # a corrupt or unsupported image is skipped, by design
                 continue
 
     doc.close()
@@ -343,7 +338,7 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
         prompt = slide.get("image_prompt", "")
         if not prompt:
             return idx, None
-        out_path = os.path.join(work_dir, f"nim_img_{idx}.png")
+        out_path = str(Path(work_dir) / f"nim_img_{idx}.png")
         try:
             result = await agent.send_to(
                 "image-gen-agent",
@@ -355,11 +350,12 @@ async def _nim_generate_missing(agent, slides, assignment, work_dir):
                     "steps": 20,
                 },
             )
-            if result and result.get("image_path") and os.path.exists(result["image_path"]):
+            if result and result.get("image_path") and Path(result["image_path"]).exists():
                 return idx, result["image_path"]
-            return idx, None
         except Exception as e:
             await agent.log(f"NIM fallback for slide {idx} failed: {e}")
+            return idx, None
+        else:
             return idx, None
 
     results = await asyncio.gather(*[_request(s) for s in missing])
@@ -549,7 +545,7 @@ async def _run_blocking(cmd, **kwargs) -> "subprocess.CompletedProcess":
     system is free in the meantime, which it was not before.
     """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: subprocess.run(cmd, **kwargs))
+    return await loop.run_in_executor(None, lambda: subprocess.run(cmd, **kwargs))  # noqa: S603  # argv built here, never from input
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -568,10 +564,15 @@ async def setup(agent):
             errors.append(f"pip install {pkg}")
 
     # Check node is available (pptxgenjs is installed locally at runtime if needed)
-    r = await _run_blocking(
-        ["node", "--version"], capture_output=True, text=True, shell=(os.name == "nt")
-    )
-    if r.returncode != 0:
+    # Not installed at all raises rather than returning a failure code.
+    try:
+        r = await _run_blocking(
+            ["node", "--version"], capture_output=True, text=True, shell=(os.name == "nt")
+        )
+        node_found = r.returncode == 0
+    except OSError:
+        node_found = False
+    if not node_found:
         errors.append("Node.js not found — install from nodejs.org")
 
     if errors:
@@ -580,14 +581,31 @@ async def setup(agent):
         await agent.log("doc-to-pptx-agent ready (PyMuPDF + pdfplumber + Node.js)")
 
 
+def _failed(error: str, **progress: Any) -> dict[str, Any]:
+    """The answer to a conversion that produced no deck.
+
+    ``progress`` is how far it got -- ``slide_count``, ``title``,
+    ``images_extracted``, ``images_generated`` -- when it failed at the build.
+    """
+    return {
+        "pptx_path": None,
+        "slide_count": 0,
+        "title": "",
+        "images_extracted": 0,
+        "images_generated": 0,
+        **progress,
+        "error": error,
+    }
+
+
 async def handle_task(agent, payload: Any) -> Any:
     # Normalise payload — the CLI wraps the user's message as {"text": "..."}
     # so if the payload is a string or contains a JSON string in "text", parse it.
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
-        except Exception:
-            pass
+        except ValueError:
+            pass  # not JSON: the text is the request
     if isinstance(payload, dict):
         for key in ("text", "message", "query"):
             raw = payload.get(key, "")
@@ -595,53 +613,46 @@ async def handle_task(agent, payload: Any) -> Any:
                 try:
                     payload = json.loads(raw)
                     break
-                except Exception:
-                    pass
+                except ValueError:
+                    pass  # looked like JSON and was not; try the next field
     if not isinstance(payload, dict):
         payload = {}
     file_path = payload.get("file_path", "")
+    numbers = {}
+    for field, default in (("slide_count", 8), ("min_img_width", 200), ("min_img_height", 150)):
+        try:
+            numbers[field] = int(payload.get(field, default))
+        except (TypeError, ValueError):
+            return _failed(f"{field} must be a whole number")
+    slide_count = numbers["slide_count"]
+    min_w = numbers["min_img_width"]
+    min_h = numbers["min_img_height"]
+    nim_fallback = bool(payload.get("nim_fallback", True))
+
+    if not file_path or not Path(file_path).exists():
+        return _failed(f"File not found: {file_path}")
+
     # A private temp dir, not a fixed `/tmp/presentation.pptx`. That name was
     # predictable in a world-writable directory: two conversions at once
     # clobbered each other, and anything that got there first — a symlink, say —
     # decided where the file was actually written. `mkdtemp` is 0700 and honours
     # TMPDIR, so it is also correct off Linux. The path goes back to the caller
     # as `pptx_path`, so a generated name costs nothing.
-    output_path = payload.get("output_path") or os.path.join(
-        tempfile.mkdtemp(prefix="wactorz-pptx-"), "presentation.pptx"
+    output_path = payload.get("output_path") or str(
+        Path(tempfile.mkdtemp(prefix="wactorz-pptx-")) / "presentation.pptx"
     )
-    slide_count = int(payload.get("slide_count", 8))
-    nim_fallback = bool(payload.get("nim_fallback", True))
-    min_w = int(payload.get("min_img_width", 200))
-    min_h = int(payload.get("min_img_height", 150))
 
-    if not file_path or not os.path.exists(file_path):
-        return {
-            "pptx_path": None,
-            "slide_count": 0,
-            "title": "",
-            "images_extracted": 0,
-            "images_generated": 0,
-            "error": f"File not found: {file_path}",
-        }
-
-    is_pdf = os.path.splitext(file_path)[1].lower() == ".pdf"
+    is_pdf = Path(file_path).suffix.lower() == ".pdf"
     work_dir = tempfile.mkdtemp(prefix="doc2pptx_")
 
-    await agent.log(f"Processing: {os.path.basename(file_path)}")
+    await agent.log(f"Processing: {Path(file_path).name}")
 
     try:
         # ── Step 1: Read document text ──────────────────────────────────────
         await agent.log("Step 1/4 — Reading document text...")
         doc_text = _read_document(file_path)
         if not doc_text.strip():
-            return {
-                "pptx_path": None,
-                "slide_count": 0,
-                "title": "",
-                "images_extracted": 0,
-                "images_generated": 0,
-                "error": "Document appears empty or unreadable",
-            }
+            return _failed("Document appears empty or unreadable")
         await agent.log(f"Extracted {len(doc_text):,} characters of text")
 
         # ── Step 2: Extract PDF images ──────────────────────────────────────
@@ -651,7 +662,7 @@ async def handle_task(agent, payload: Any) -> Any:
         if is_pdf:
             await agent.log(f"Step 2/4 — Extracting embedded images (min {min_w}×{min_h}px)...")
             try:
-                import fitz
+                import fitz  # pyright: ignore[reportMissingImports]  # optional: installed with the recipe (pymupdf)
 
                 # Count pages for later page-to-slide mapping
                 doc_tmp = fitz.open(file_path)
@@ -699,15 +710,19 @@ async def handle_task(agent, payload: Any) -> Any:
 
         # ── Step 4: Build PPTX ──────────────────────────────────────────────
         await agent.log("Step 4/4 — Building .pptx with pptxgenjs...")
+        built = {
+            "slide_count": len(slides),
+            "title": title,
+            "images_extracted": n_extracted,
+            "images_generated": n_generated,
+        }
         js_script = _build_js(outline, assignment, output_path)
-        js_path = os.path.join(work_dir, "build.js")
-        with open(js_path, "w", encoding="utf-8") as f:
-            f.write(js_script)
+        js_path = Path(work_dir) / "build.js"
+        js_path.write_text(js_script, encoding="utf-8")
 
         # Ensure pptxgenjs is available in the work dir.
         # Global npm installs are not always on NODE_PATH so we install locally.
-        node_modules = os.path.join(work_dir, "node_modules", "pptxgenjs")
-        if not os.path.exists(node_modules):
+        if not (Path(work_dir) / "node_modules" / "pptxgenjs").exists():
             await agent.log("Installing pptxgenjs locally...")
             npm = await _run_blocking(
                 ["npm", "install", "pptxgenjs", "--prefer-offline"],
@@ -719,77 +734,46 @@ async def handle_task(agent, payload: Any) -> Any:
             )
             if npm.returncode != 0:
                 err = (npm.stderr or npm.stdout or "npm failed").strip()
-                return {
-                    "pptx_path": None,
-                    "slide_count": len(slides),
-                    "title": title,
-                    "images_extracted": n_extracted,
-                    "images_generated": n_generated,
-                    "error": f"npm install pptxgenjs failed: {err[:300]}",
-                }
+                return _failed(f"npm install pptxgenjs failed: {err[:300]}", **built)
 
         result = await _run_blocking(
-            ["node", js_path],
+            ["node", str(js_path)],
             capture_output=True,
             text=True,
             cwd=work_dir,
             timeout=60,
             shell=(os.name == "nt"),
         )
-        if result.returncode != 0 or not os.path.exists(output_path):
+        if result.returncode != 0 or not Path(output_path).exists():
             err = (result.stderr or result.stdout or "Unknown error").strip()
-            return {
-                "pptx_path": None,
-                "slide_count": len(slides),
-                "title": title,
-                "images_extracted": n_extracted,
-                "images_generated": n_generated,
-                "error": f"pptxgenjs failed: {err[:400]}",
-            }
+            return _failed(f"pptxgenjs failed: {err[:400]}", **built)
 
-        size_kb = os.path.getsize(output_path) // 1024
+        size_kb = Path(output_path).stat().st_size // 1024
         await agent.log(
             f"Done! {output_path} "
             f"({size_kb} KB, {len(slides)} slides, "
             f"{n_extracted} PDF images, {n_generated} NIM images)"
         )
-        return {
-            "pptx_path": output_path,
-            "slide_count": len(slides),
-            "title": title,
-            "images_extracted": n_extracted,
-            "images_generated": n_generated,
-            "error": None,
-        }
 
     except json.JSONDecodeError as e:
         msg = f"LLM outline JSON parse failed: {e}"
         await agent.alert(msg, "error")
-        return {
-            "pptx_path": None,
-            "slide_count": 0,
-            "title": "",
-            "images_extracted": 0,
-            "images_generated": 0,
-            "error": msg,
-        }
+        return _failed(msg)
 
     except Exception as e:
         msg = f"doc-to-pptx failed: {e}"
         await agent.alert(msg, "error")
-        return {
-            "pptx_path": None,
-            "slide_count": 0,
-            "title": "",
-            "images_extracted": 0,
-            "images_generated": 0,
-            "error": msg,
-        }
+        return _failed(msg)
+
+    else:
+        return {"pptx_path": output_path, **built, "error": None}
+
+    finally:
+        # Extracted images, the script and a local pptxgenjs install; the deck
+        # has the images embedded and lives elsewhere, so none of it is needed.
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 async def process(agent) -> None:
     # Task-driven only — no polling loop needed
     await asyncio.sleep(3600)
-
-
-'''

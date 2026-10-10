@@ -12,6 +12,7 @@ Designed to be the actuator end of the pipeline:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import operator as _op
 import time
@@ -25,7 +26,7 @@ from ..core.integrations.home_assistant.ha_helper import normalize_ha_ws_url
 from ..core.integrations.home_assistant.ha_web_socket_client import HAWebSocketClient
 from ..core.mqtt import (
     AGENT_SESSION_EXPIRY_SECONDS,
-    client_id,
+    agent_client_id,
     mqtt_client,
     session_kwargs,
 )
@@ -277,21 +278,13 @@ class HomeAssistantActuatorAgent(Actor):
 
     async def _mqtt_listener(self) -> None:
         """Subscribe to configured MQTT topics and dispatch each message."""
-        try:
-            import aiomqtt  # noqa: F401
-        except ImportError:
-            logger.error(  # noqa: TRY400, RUF100  # the ImportError is the whole diagnosis
-                "[%s] aiomqtt not installed — MQTT listener disabled", self.name
-            )
-            return
-
         # A stable id and a kept session, like any other long-lived listener.
         # These topics carry actuation triggers -- another agent asking for a
         # light or a switch -- so one lost while this agent reconnects is a
         # device that never moves, with nothing anywhere saying why. The
         # `actuator` detail keeps this connection distinct from the actor's
         # command listener and from any subscription hub it may own.
-        identifier = client_id("agent", str(self.actor_id), "actuator")
+        identifier = agent_client_id(str(self.actor_id), self._node, "actuator")
         durable = has_derived_id(self.name, str(self.actor_id))
         session = session_kwargs(AGENT_SESSION_EXPIRY_SECONDS) if durable else {}
         while self.state not in (ActorState.STOPPED, ActorState.FAILED):
@@ -310,8 +303,6 @@ class HomeAssistantActuatorAgent(Actor):
                         if self.state in (ActorState.STOPPED, ActorState.FAILED):
                             break
                         try:
-                            import json
-
                             payload = json.loads(message.payload.decode())
                             await self._on_detection(payload)
                         except Exception:
@@ -439,7 +430,7 @@ class HomeAssistantActuatorAgent(Actor):
                 await asyncio.wait_for(self._ws_ready.wait(), timeout=10.0)
             except asyncio.TimeoutError:
                 # A TimeoutError traceback is the wait_for frame and nothing else.
-                logger.error(  # noqa: TRY400, RUF100  # a TimeoutError traceback is the wait_for frame and nothing else
+                logger.error(  # noqa: TRY400  # a TimeoutError traceback is the wait_for frame and nothing else
                     "[%s] No HA connection after 10s — cannot call service %s.%s",
                     self.name,
                     action.domain,

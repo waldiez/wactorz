@@ -109,7 +109,10 @@ export async function toWav(blob: Blob): Promise<Blob> {
             decoded.getChannelData(i),
         );
         const mono = resample(toMono(channels), decoded.sampleRate, TARGET_RATE);
-        return new Blob([encodeWav(mono, TARGET_RATE)], { type: "audio/wav" });
+        // A view of the buffer rather than the buffer itself: a DOM that is not
+        // the browser's own (happy-dom, which the tests run in) recognises an
+        // ArrayBuffer only from its own realm and would write its name instead.
+        return new Blob([new Uint8Array(encodeWav(mono, TARGET_RATE))], { type: "audio/wav" });
     } finally {
         void context.close();
     }

@@ -18,6 +18,8 @@
  * chooses it. Nothing destructive happens without the user aiming at it.
  */
 
+import { button, el } from "../dom";
+
 /** What to ask, and what to call the button that agrees to it. */
 export interface ConfirmOptions {
     /** The question, in a few words — "Delete agent?". */
@@ -33,46 +35,31 @@ function focusables(root: HTMLElement): HTMLElement[] {
     return [...root.querySelectorAll<HTMLElement>("button, [href], [tabindex]:not([tabindex='-1'])")];
 }
 
-/**
- * A `<div>` with a class, and its text set as text.
- *
- * Never as markup: an agent is named by whoever spawned it and the name reaches
- * the browser over MQTT, so anything the caller passes is untrusted.
- */
-function div(className: string, text = ""): HTMLElement {
-    const el = document.createElement("div");
-    el.className = className;
-    el.textContent = text;
-    return el;
-}
-
-/** A dialog button, wearing the same chrome as a card's own controls. */
-function button(className: string, label: string): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `af-mini-btn ${className}`;
-    btn.textContent = label;
-    return btn;
-}
-
 /** The overlay and its two buttons, assembled but not yet wired. */
 function buildOverlay(opts: ConfirmOptions): {
     overlay: HTMLElement;
     confirmBtn: HTMLButtonElement;
     cancelBtn: HTMLButtonElement;
 } {
-    const overlay = div("af-confirm-backdrop");
+    const overlay = el("div", "af-confirm-backdrop");
     overlay.setAttribute("role", "dialog");
     overlay.setAttribute("aria-modal", "true");
     overlay.setAttribute("aria-label", opts.title);
 
-    const cancelBtn = button("af-confirm-cancel", "Cancel");
-    const confirmBtn = button("danger af-confirm-ok", opts.confirmLabel);
-    const actions = div("af-confirm-actions");
+    // Dialog buttons wear the same chrome as a card's own controls. The title,
+    // message and label are set as text: an agent is named by whoever spawned
+    // it, and the name reaches the browser over MQTT.
+    const cancelBtn = button("af-mini-btn af-confirm-cancel", "Cancel");
+    const confirmBtn = button("af-mini-btn danger af-confirm-ok", opts.confirmLabel);
+    const actions = el("div", "af-confirm-actions");
     actions.append(cancelBtn, confirmBtn);
 
-    const box = div("af-confirm");
-    box.append(div("af-confirm-title", opts.title), div("af-confirm-message", opts.message), actions);
+    const box = el("div", "af-confirm");
+    box.append(
+        el("div", "af-confirm-title", opts.title),
+        el("div", "af-confirm-message", opts.message),
+        actions,
+    );
     overlay.appendChild(box);
     return { overlay, confirmBtn, cancelBtn };
 }

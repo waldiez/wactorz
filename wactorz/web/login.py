@@ -12,14 +12,12 @@ logged in are the same state) and why the origin gate is enough — see
 `auth.UNGUARDED_PATHS`.
 """
 
-from __future__ import annotations
-
 import hmac
 import logging
 
 from aiohttp import web
 
-from . import auth, sessions, throttle
+from . import auth, origins, sessions, throttle
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +198,7 @@ async def login_submit_handler(request: web.Request) -> Response:
     form = await request.post()
     presented = str(form.get("key", ""))
     target = auth.safe_next(str(form.get("next", "/")))
-    caller = request.remote or "an unknown address"
+    caller = origins.client_address(request) or "an unknown address"
 
     throttle.throttle.prune()
     waiting = throttle.throttle.retry_after(caller)
@@ -275,6 +273,8 @@ def _set_session_cookie(request: web.Request, response: web.Response, session_id
     `secure` only over HTTPS. Setting it unconditionally would break every
     install this is written for — a dashboard on `http://localhost:8888` or a
     LAN address — by making the browser drop the cookie it was just given.
+    Behind a trusted proxy that terminates TLS, HTTPS is what the proxy reports,
+    since the connection reaching this process is plain HTTP either way.
     """
     response.set_cookie(
         auth.SESSION_COOKIE,
@@ -283,5 +283,5 @@ def _set_session_cookie(request: web.Request, response: web.Response, session_id
         samesite="Lax",
         path="/",
         max_age=int(sessions.SESSION_TTL_SECONDS),
-        secure=request.scheme == "https",
+        secure=origins.request_scheme(request) == "https",
     )

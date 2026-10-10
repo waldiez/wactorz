@@ -60,8 +60,6 @@ fires, then loops. Every 5 minutes the sleep is also bounded so that DST
 transitions, system clock jumps, and laptop sleep don't strand the agent.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time
@@ -313,7 +311,7 @@ class ScheduledAgent(Actor):
                 if self._state.fire_count > 0:
                     # Already fired in a previous run — nothing to do
                     logger.info("[%s] One-shot already fired previously, exiting", self.name)
-                    asyncio.create_task(self._self_delete())
+                    self.run_detached(self._self_delete(), name="self-delete")
                     return
                 if fire_at < now:
                     delta = (now - fire_at).total_seconds()
@@ -332,7 +330,7 @@ class ScheduledAgent(Actor):
                             _ONESHOT_CATCHUP_S,
                         )
                     # Either way, a once-schedule that's past is done
-                    asyncio.create_task(self._self_delete())
+                    self.run_detached(self._self_delete(), name="self-delete")
                     return
             except Exception:
                 logger.exception("[%s] Once-schedule on_start error", self.name)
@@ -416,7 +414,7 @@ class ScheduledAgent(Actor):
                 # If this was a "once" schedule, we're done
                 if self._schedule.get("type") == "once":
                     logger.info("[%s] One-shot fired — self-deleting", self.name)
-                    asyncio.create_task(self._self_delete())
+                    self.run_detached(self._self_delete(), name="self-delete")
                     return
 
             except asyncio.CancelledError:

@@ -43,10 +43,11 @@ slug: wactorz_test
 Use this path when testing Dockerfile changes or Python changes from a branch.
 
 1. Remove the `image:` line from `/addons/wactorz-test/config.yaml`.
-2. Set the branch or commit to install in `/addons/wactorz-test/build.yaml`:
+2. Set the branch or commit to install in `/addons/wactorz-test/build.yaml`. It
+   ships naming the release this add-on version belongs to:
 
    ```diff
-   -  WACTORZ_REF: main
+   -  WACTORZ_REF: v0.7.0
    +  WACTORZ_REF: your-branch
    ```
 
@@ -62,7 +63,9 @@ Use this path when testing the published-image workflow.
 1. Run the **Add-on Image** workflow manually.
 2. Set `ref` to the branch or commit to install.
 3. Set `version_tag` to a test tag, for example `test`.
-4. Point the test add-on at that image tag:
+4. Untick **dry run**. Left ticked, the workflow builds and scans the image but
+   attaches no tag, so there is nothing for Supervisor to pull.
+5. Point the test add-on at that image tag:
 
    ```yaml
    image: "ghcr.io/waldiez/wactorz-addon-{arch}"

@@ -20,8 +20,6 @@ Three rules shape this, and each exists because the obvious version is worse:
   it without a second rule here.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 

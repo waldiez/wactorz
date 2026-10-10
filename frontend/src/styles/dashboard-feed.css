@@ -114,6 +114,46 @@
 .af-feed-agent-user {
   color: #6ee7b7;
 }
+/* A name or a turn that narrows the feed when clicked: text, not a button, to
+   look at, with an underline on hover to say it does something. */
+.af-feed-pick {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.af-feed-pick:hover,
+.af-feed-pick:focus-visible {
+  text-decoration: underline;
+}
+.af-feed-agent.af-feed-pick {
+  color: #93c5fd;
+  font-weight: 600;
+}
+.af-feed-agent-chip {
+  flex-shrink: 0;
+  color: #93c5fd;
+  font-size: 11px;
+}
+.af-feed-turn {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.06);
+}
+.af-feed-active {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.af-feed-active:empty {
+  display: none;
+}
 .af-feed-text {
   color: rgba(255, 255, 255, 0.65);
   overflow: hidden;
@@ -175,6 +215,12 @@
   /* Tracebacks are pre-formatted but can still run very wide. */
   white-space: pre-wrap;
   word-break: break-word;
+}
+/* An agent's message, expanded: prose, so the feed's own font, but its line
+   breaks kept. */
+.af-feed-full-prose {
+  font-family: inherit;
+  font-size: inherit;
 }
 
 /* ── Toolbar controls ────────────────────────────────────────────────────

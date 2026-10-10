@@ -14,11 +14,10 @@ produced order-dependent failures before. Nothing here needs a broker, because
 the part with rules was deliberately extracted from the part that needs one.
 """
 
-import asyncio
 import json
 from collections.abc import Iterator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -217,44 +216,3 @@ class TestTheConnectionBadge:
         await mqtt.set_mqtt_status(True)
 
         assert not sent
-
-
-def _open_ok() -> tuple[Any, Any]:
-    """A reader/writer pair shaped like asyncio's: close() is sync, wait_closed isn't."""
-    writer = MagicMock()
-    writer.wait_closed = AsyncMock()
-    return MagicMock(), writer
-
-
-class TestTheStartupProbe:
-    async def test_a_reachable_broker_passes_on_the_first_try(self) -> None:
-        opened = AsyncMock(return_value=_open_ok())
-        with patch.object(mqtt.asyncio, "open_connection", new=opened):
-            assert await mqtt.check_mqtt() is True
-
-        assert opened.await_count == 1
-
-    async def test_a_blip_is_retried_rather_than_aborting_startup(self) -> None:
-        # The aiomqtt client reconnects on its own, so a probe stricter than the
-        # client would abort a server whose broker is actually fine.
-        opened = AsyncMock(side_effect=[OSError("refused"), _open_ok()])
-        with patch.object(mqtt.asyncio, "open_connection", new=opened):
-            assert await mqtt.check_mqtt(attempts=3, delay=0) is True
-
-        assert opened.await_count == 2
-
-    async def test_it_gives_up_after_the_last_attempt(self) -> None:
-        opened = AsyncMock(side_effect=OSError("refused"))
-        with patch.object(mqtt.asyncio, "open_connection", new=opened):
-            assert await mqtt.check_mqtt(attempts=2, delay=0) is False
-
-        assert opened.await_count == 2
-
-    async def test_a_hanging_broker_is_a_failure_not_a_stall(self) -> None:
-        # Without the timeout a broker that accepts the TCP connection and then
-        # says nothing holds startup open indefinitely.
-        async def _hang(*_args: Any, **_kwargs: Any) -> None:
-            await asyncio.sleep(30)
-
-        with patch.object(mqtt.asyncio, "open_connection", new=_hang):
-            assert await mqtt.check_mqtt(attempts=1, delay=0) is False

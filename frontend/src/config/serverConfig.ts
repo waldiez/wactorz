@@ -37,15 +37,41 @@ export function seedKeyFromServer(key: string, value: string | undefined | null)
     return true;
 }
 
+/**
+ * Forget a key the server no longer sends, with its baseline. True if there
+ * was anything to forget.
+ *
+ * For a key only the server sets: there an empty answer is the truth, not a
+ * gap, and keeping the old value shows something the server has stopped having.
+ */
+export function clearKeyFromServer(key: string): boolean {
+    const baselineKey = `${key}__server`;
+    const had = safeStorage.get(key) !== null || safeStorage.get(baselineKey) !== null;
+    safeStorage.remove(key);
+    safeStorage.remove(baselineKey);
+    return had;
+}
+
 /** Extract a storable string from the parsed `/api/config` payload. */
 export type ConfigExtract = (cfg: Record<string, unknown>) => string | undefined;
 
-const _entries = new Map<string, ConfigExtract>();
+/** How a registered key is seeded. */
+export interface ConfigEntryOptions {
+    /** Clear the stored value when the server sends none. For a key nothing
+     *  but the server sets; a key a person may also set keeps its value. */
+    clearWhenAbsent?: boolean;
+}
+
+const _entries = new Map<string, { extract: ConfigExtract; clearWhenAbsent: boolean }>();
 
 /** Register a localStorage key to seed from `/api/config`. Extensions call
  *  this at module load, before `seedServerConfig()` runs. */
-export function registerConfigEntry(key: string, extract: ConfigExtract): void {
-    _entries.set(key, extract);
+export function registerConfigEntry(
+    key: string,
+    extract: ConfigExtract,
+    options: ConfigEntryOptions = {},
+): void {
+    _entries.set(key, { extract, clearWhenAbsent: options.clearWhenAbsent ?? false });
 }
 
 /** Where the running server's version is kept. */
@@ -57,10 +83,14 @@ export const VERSION_KEY = "wactorz-version";
 // someone is looking at it to find out what they are running.
 registerConfigEntry(VERSION_KEY, c => c["version"] as string | undefined);
 
-// Core entry — the HA URL for the external Devices link (never a token).
+// Core entry — the HA URL for the external Devices link (never a token). Only
+// the server sets it, so a server without Home Assistant clears it: kept, the
+// link would point a browser that once saw one at a Home Assistant no longer
+// there.
 registerConfigEntry(
     "wactorz-ha-url",
     c => (c.ha as Record<string, unknown> | undefined)?.url as string | undefined,
+    { clearWhenAbsent: true },
 );
 
 // Core entry — whether the server registered its upload routes, which is what
@@ -88,8 +118,10 @@ export async function seedServerConfig(): Promise<boolean> {
         }
         const cfg = (await resp.json()) as Record<string, unknown>;
         let haChanged = false;
-        for (const [key, extract] of _entries) {
-            const changed = seedKeyFromServer(key, extract(cfg));
+        for (const [key, { extract, clearWhenAbsent }] of _entries) {
+            const value = extract(cfg);
+            const changed =
+                !value && clearWhenAbsent ? clearKeyFromServer(key) : seedKeyFromServer(key, value);
             if (key === "wactorz-ha-url" && changed) {
                 haChanged = true;
             }

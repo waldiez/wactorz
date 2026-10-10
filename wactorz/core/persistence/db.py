@@ -14,6 +14,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any
 
+from .json_value import encode
+from .migrations import stamp_new_database
 from .schema import SCHEMA_SQL, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
@@ -69,6 +71,60 @@ def _with_attachments(row: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         row["attachments"] = []
     return row
+
+
+#: The columns of one agent's metrics sample, as `write_metrics_history` takes them.
+AGENT_HISTORY_COLUMNS = (
+    "ts",
+    "agent",
+    "node",
+    "state",
+    "memory_mb",
+    "messages_processed",
+    "errors",
+    "tasks_completed",
+    "tasks_failed",
+    "cost_usd",
+    "queue_wait_p95_s",
+    "message_p95_s",
+    "task_p95_s",
+)
+
+#: The columns of one node's metrics sample.
+NODE_HISTORY_COLUMNS = (
+    "ts",
+    "node",
+    "online",
+    "cpu_pct",
+    "mem_used_mb",
+    "mem_free_mb",
+    "agents",
+    "swap_used_mb",
+    "load_1m",
+    "disk_free_mb",
+    "temp_c",
+    "throttled",
+)
+
+
+def _node_sample(row: sqlite3.Row) -> dict[str, Any]:
+    """One stored node sample, its throttle flags a list again (None where not known)."""
+    sample = dict(row)
+    flags = sample.get("throttled")
+    if isinstance(flags, str):
+        try:
+            sample["throttled"] = json.loads(flags)
+        except ValueError:
+            sample["throttled"] = None
+    return sample
+
+
+def _insert_sql(table: str, columns: tuple[str, ...]) -> str:
+    """An INSERT for ``columns`` of ``table``; both are constants of this module."""
+    return (
+        f"INSERT INTO {table} ({', '.join(columns)}) "  # noqa: S608  # constants, never input
+        f"VALUES ({', '.join('?' for _ in columns)})"
+    )
 
 
 class WactorzDB:
@@ -140,10 +196,13 @@ class WactorzDB:
         logger.info("[Persistence] SQLite opened: %s", self._path)
 
     def _init_schema(self) -> None:
+        # Told apart before the schema creates anything: a file with tables in
+        # it is an existing database, whatever its version row says.
+        new = not self.conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table'").fetchone()
         self.conn.executescript(SCHEMA_SQL)
-        # Check/set version
-        row = self.conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-        if not row:
+        if new:
+            stamp_new_database(self.conn)
+        elif not self.conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone():
             self.conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
         # Direct, not via transaction(): this runs from __init__, before the
         # instance is reachable by anything that could contend for the lock.
@@ -198,6 +257,26 @@ class WactorzDB:
                 self._conn.close()
                 self._conn = None
 
+    def ping(self, timeout: float) -> bool:
+        """Whether the connection answers a trivial query. **Blocks; run it on a thread.**
+
+        Waits at most ``timeout`` for the connection lock rather than for as long
+        as a writer holds it, so a caller asking whether the database is usable
+        is not held up by the very stall it is asking about.
+        """
+        if not self._lock.acquire(timeout=timeout):
+            return False
+        try:
+            if self._conn is None:
+                return False
+            self._conn.execute("SELECT 1").fetchone()
+        except sqlite3.Error:
+            return False
+        else:
+            return True
+        finally:
+            self._lock.release()
+
     def __enter__(self) -> "WactorzDB":
         return self
 
@@ -220,14 +299,29 @@ class WactorzDB:
     def kv_set(self, agent: str, key: str, value: Any) -> None:
         """Insert or replace one key for one agent, and commit.
 
-        ``value`` is JSON-encoded, so it must be serialisable; objects that are
-        not fall back to ``str``, which round-trips as text rather than failing.
+        ``value`` is stored as JSON, and one JSON cannot represent raises
+        `NotJsonError` before anything is written.
         """
+        encoded = encode(agent, key, value)
         with self.transaction() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO kv_store (agent, key, value, updated) VALUES (?, ?, ?, ?)",
-                (agent, key, json.dumps(value, default=str), time.time()),
+                (agent, key, encoded, time.time()),
             )
+
+    @_serialised
+    def kv_sizes(self) -> dict[str, int]:
+        """How many bytes each agent keeps in `kv_store`, largest first.
+
+        `kv_store` is not pruned by the retention job: what is there is what
+        agents chose to keep, and it grows only as far as they let it. This is
+        how to see who has let it grow.
+        """
+        rows = self.conn.execute(
+            "SELECT agent, SUM(LENGTH(value)) AS size FROM kv_store "
+            "GROUP BY agent ORDER BY size DESC"
+        ).fetchall()
+        return {str(agent): int(size or 0) for agent, size in rows}
 
     @_serialised
     def kv_get(self, agent: str, key: str, default: Any = None) -> Any:
@@ -419,15 +513,6 @@ class WactorzDB:
                 if isinstance(item, dict) and item.get("id"):
                     ids.add(str(item["id"]))
         return ids
-
-    def clear_spawn_registry(self, agent_name: str | None = None) -> int:
-        """Delete spawn_registry rows. Pass agent_name to limit to one agent."""
-        with self.transaction() as conn:
-            if agent_name:
-                cur = conn.execute("DELETE FROM spawn_registry WHERE name=?", (agent_name,))
-            else:
-                cur = conn.execute("DELETE FROM spawn_registry")
-        return cur.rowcount
 
     @_serialised
     def query_chat_log(
@@ -621,6 +706,93 @@ class WactorzDB:
         if total:
             logger.info("[Persistence] Pruned %s rows older than %sd", total, days)
         return total
+
+    # ── Metrics history ─────────────────────────────────────────────────────
+
+    def write_metrics_history(
+        self, agents: list[dict[str, Any]], nodes: list[dict[str, Any]]
+    ) -> None:
+        """Store one sample of every agent and node, in one transaction.
+
+        Each dict holds the columns named in `AGENT_HISTORY_COLUMNS` or
+        `NODE_HISTORY_COLUMNS`; a missing one is stored as NULL.
+        """
+        with self.transaction() as conn:
+            if agents:
+                conn.executemany(
+                    _insert_sql("agent_metrics_history", AGENT_HISTORY_COLUMNS),
+                    [tuple(row.get(c) for c in AGENT_HISTORY_COLUMNS) for row in agents],
+                )
+            if nodes:
+                conn.executemany(
+                    _insert_sql("node_metrics_history", NODE_HISTORY_COLUMNS),
+                    [tuple(row.get(c) for c in NODE_HISTORY_COLUMNS) for row in nodes],
+                )
+
+    @_serialised
+    def query_agents_field(
+        self, column: str, since: float, limit: int = 50_000
+    ) -> dict[str, list[list[float | None]]]:
+        """One column of every agent's samples since ``since``: ``{agent: [[ts, value], ...]}``.
+
+        What a row of agent cards draws from, in one query rather than one per
+        agent. ``column`` is checked against `AGENT_HISTORY_COLUMNS` before it
+        reaches the query, and one that is not there finds nothing.
+        """
+        if column not in AGENT_HISTORY_COLUMNS:
+            return {}
+        rows = self.conn.execute(
+            f"SELECT ts, agent, {column} FROM agent_metrics_history "  # noqa: S608  # checked against the constant column list above
+            "WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
+            (float(since), int(limit)),
+        ).fetchall()
+        found: dict[str, list[list[float | None]]] = {}
+        for ts, agent, value in reversed(rows):
+            found.setdefault(agent, []).append([ts, value])
+        return found
+
+    @_serialised
+    def query_agent_history(
+        self, agent: str, since: float, limit: int = 10_000
+    ) -> list[dict[str, Any]]:
+        """``agent``'s samples since ``since``, oldest first."""
+        rows = self.conn.execute(
+            f"SELECT {', '.join(AGENT_HISTORY_COLUMNS)} FROM agent_metrics_history "  # noqa: S608  # the column list is a constant
+            "WHERE agent = ? AND ts >= ? ORDER BY ts DESC LIMIT ?",
+            (agent, float(since), int(limit)),
+        ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    @_serialised
+    def query_node_history(
+        self, node: str, since: float, limit: int = 10_000
+    ) -> list[dict[str, Any]]:
+        """``node``'s samples since ``since``, oldest first."""
+        rows = self.conn.execute(
+            f"SELECT {', '.join(NODE_HISTORY_COLUMNS)} FROM node_metrics_history "  # noqa: S608  # the column list is a constant
+            "WHERE node = ? AND ts >= ? ORDER BY ts DESC LIMIT ?",
+            (node, float(since), int(limit)),
+        ).fetchall()
+        return [_node_sample(r) for r in reversed(rows)]
+
+    def clear_metrics_history(self, agent: str | None = None) -> int:
+        """Delete ``agent``'s samples, or with none every agent's and node's. Returns rows removed."""
+        with self.transaction() as conn:
+            if agent:
+                cur = conn.execute("DELETE FROM agent_metrics_history WHERE agent = ?", (agent,))
+                return cur.rowcount
+            removed = conn.execute("DELETE FROM agent_metrics_history").rowcount
+            removed += conn.execute("DELETE FROM node_metrics_history").rowcount
+            return removed
+
+    def prune_metrics_history(self, days: float) -> int:
+        """Delete metrics samples older than ``days``. Returns rows removed."""
+        cutoff = time.time() - (days * 86400)
+        removed = self._delete_before("agent_metrics_history", cutoff)
+        removed += self._delete_before("node_metrics_history", cutoff)
+        if removed:
+            logger.info("[Persistence] Pruned %s metrics samples older than %sd", removed, days)
+        return removed
 
     def prune_chat_log(self, days: float) -> int:
         """Delete chat turns older than N days, in batches. Returns rows removed."""

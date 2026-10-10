@@ -233,6 +233,9 @@ class ManifestRegistry:
                 ),
                 actor_id=data.get("actor_id"),
                 node=data.get("node"),
+                # What tells the planner apart topics that differ only by an
+                # id, such as one button's serial from another's.
+                description=str(data.get("description") or ""),
             )
             if hasattr(contract, "observed_samples") and observed:
                 contract.observed_samples = dict(observed)

@@ -20,7 +20,7 @@ import pytest
 from wactorz.core.actor import Actor
 from wactorz.core.atomic_io import quarantine_unreadable
 from wactorz.core.persistence.pickle_store import PickleStore
-from wactorz.remote_runner import _RemoteAgent
+from wactorz.node.state import JsonState
 
 
 def _corrupt(path: Path) -> None:
@@ -89,31 +89,21 @@ class TestPickleStoreLoad:
         assert not _quarantined(tmp_path / "worker")
 
 
-class TestRemoteRunnerLoadState:
+class TestNodeStateLoad:
     def test_a_corrupt_file_is_kept_rather_than_silently_dropped(self, tmp_path: Path) -> None:
-        # This path swallowed the exception entirely — no log at all — so a
-        # remote agent could lose its state with nothing recorded anywhere.
-        agent = _RemoteAgent.__new__(_RemoteAgent)
-        agent.name = "worker"
-        agent._state_path = tmp_path / "state.json"
-        agent._persistent_state = {}
-        (tmp_path / "state.json").write_text("{not json", encoding="utf-8")
+        # This path swallowed the exception entirely — no log at all — so an
+        # agent on a node could lose its state with nothing recorded anywhere.
+        path = tmp_path / "state.json"
+        path.write_text("{not json", encoding="utf-8")
 
-        agent._load_state()
-
-        assert not agent._persistent_state
+        assert JsonState(path, "worker").load() == {}
         assert _quarantined(tmp_path), "nothing was kept"
 
     def test_a_readable_file_loads_and_is_left_alone(self, tmp_path: Path) -> None:
-        agent = _RemoteAgent.__new__(_RemoteAgent)
-        agent.name = "worker"
-        agent._state_path = tmp_path / "state.json"
-        agent._persistent_state = {}
-        (tmp_path / "state.json").write_text(json.dumps({"a": 1}), encoding="utf-8")
+        path = tmp_path / "state.json"
+        path.write_text(json.dumps({"a": 1}), encoding="utf-8")
 
-        agent._load_state()
-
-        assert agent._persistent_state == {"a": 1}
+        assert JsonState(path, "worker").load() == {"a": 1}
         assert not _quarantined(tmp_path)
 
 
@@ -134,19 +124,28 @@ def _bare_actor(state_dir: Path, persistence_api: Any) -> Any:
 
 
 class TestActorLegacyLoad:
-    """Both branches read the same legacy pickle, and both dropped it."""
+    """An actor without a store reads its own state file."""
 
-    @pytest.mark.parametrize("persistence_api", [None, object()])
-    async def test_a_corrupt_legacy_pickle_is_kept(
-        self, tmp_path: Path, persistence_api: Any
-    ) -> None:
-        actor = _bare_actor(tmp_path, persistence_api)
+    async def test_a_corrupt_legacy_pickle_is_kept(self, tmp_path: Path) -> None:
+        actor = _bare_actor(tmp_path, None)
         _corrupt(tmp_path / "state.pkl")
 
         await actor._load_persistent_state()
 
         assert not actor._persistent_state
         assert _quarantined(tmp_path), "nothing was kept"
+
+    async def test_with_a_store_the_file_is_left_to_the_store(self, tmp_path: Path) -> None:
+        # Read here as well, one value that no longer unpickles moved the whole
+        # file aside before the store could save the rest of it.
+        actor = _bare_actor(tmp_path, object())
+        _corrupt(tmp_path / "state.pkl")
+
+        await actor._load_persistent_state()
+
+        assert not actor._persistent_state
+        assert (tmp_path / "state.pkl").exists()
+        assert not _quarantined(tmp_path)
 
     async def test_a_readable_legacy_pickle_still_loads(self, tmp_path: Path) -> None:
         actor = _bare_actor(tmp_path, None)

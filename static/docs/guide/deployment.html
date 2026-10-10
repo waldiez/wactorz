@@ -120,6 +120,7 @@
       <a href="../guide/dockerhub.html" class="">Docker Hub</a>
       <a href="../guide/architecture.html" class="">Architecture</a>
       <a href="../guide/agents.html" class="">Agents</a>
+      <a href="../guide/library.html" class="">Library</a>
       <a href="../guide/mqtt_auto_wiring.html" class="">Auto-Wiring</a>
       <a href="../guide/interfaces.html" class="">Interfaces</a>
       <a href="../guide/pipelines.html" class="">Pipelines</a>
@@ -173,6 +174,9 @@
 <h2 id="docker-hub">Docker Hub</h2>
 <p>The fastest way to get started — no repo clone or Python needed. See the dedicated guide:</p>
 <p>→ <strong><a href="../guide/dockerhub.html">Quickstart: Docker Hub</a></strong></p>
+<p>The image comes in two sizes: <code>waldiez/wactorz:latest</code>, and <code>waldiez/wactorz:ultra</code> with
+PyTorch, Ultralytics, OpenCV and what the Reachy Mini SDK needs. <a href="../guide/dockerhub.html#which-image">Which image</a>
+says when the larger one is the one to pull.</p>
 <hr />
 <h2 id="full-docker-composeyaml">Full Docker  (<code>compose.yaml</code>)</h2>
 <h3 id="prerequisites">Prerequisites</h3>
@@ -191,6 +195,17 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 </code></pre></div>
 
 <p>Open <code>http://localhost:8888</code> (monitor UI) or <code>http://localhost:8000</code> (REST API).</p>
+<p>Compose builds the image from the checkout. For vision agents or the Reachy Mini agent,
+build the larger one (<a href="../guide/dockerhub.html#which-image">which image</a>) by setting
+<code>WACTORZ_FLAVOUR=ultra</code> in <code>.env</code>, then:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build
+</code></pre></div>
+
+<p>Both ask for the API key. With <code>API_KEY</code> blank in <code>.env</code>, the stack generates one
+on first start and keeps it in a volume. Read it with
+<code>docker compose exec wactorz-python cat /run/wactorz/api_key</code>, or follow the
+one-time sign-in link in <code>docker compose logs wactorz-python</code>. Set <code>API_KEY</code> in
+<code>.env</code> to choose your own.</p>
 <h3 id="services">Services</h3>
 <p>Default profile (no flag) starts Mosquitto only. Add <code>--profile</code> flags to bring up more services.</p>
 <table>
@@ -207,39 +222,79 @@ docker<span class="w"> </span>compose<span class="w"> </span>--profile<span clas
 <td><em>(all)</em></td>
 <td>mosquitto</td>
 <td><code>mosquitto:1883</code></td>
-<td><code>:1883</code></td>
+<td><code>127.0.0.1:1883</code>, and <code>:8883</code> (TLS)</td>
 </tr>
 <tr>
 <td><code>python</code></td>
 <td>wactorz-python</td>
 <td><code>wactorz-python:8000</code></td>
-<td><code>:8000</code> (REST API)</td>
+<td><code>127.0.0.1:8000</code> (REST API)</td>
 </tr>
 <tr>
 <td><code>python</code></td>
 <td>monitor UI</td>
 <td><code>wactorz-python:8888</code></td>
-<td><code>:8888</code></td>
+<td><code>127.0.0.1:8888</code></td>
 </tr>
 <tr>
 <td><code>python</code></td>
 <td>prometheus</td>
 <td><code>wactorz-prometheus:9090</code></td>
-<td><code>:9090</code></td>
+<td><code>127.0.0.1:9090</code></td>
+</tr>
+<tr>
+<td><code>python</code></td>
+<td>alertmanager</td>
+<td><code>alertmanager:9093</code></td>
+<td><code>127.0.0.1:9093</code></td>
 </tr>
 <tr>
 <td><code>full</code></td>
 <td>home-assistant</td>
 <td><code>homeassistant:8123</code></td>
-<td><code>:8123</code></td>
+<td><code>127.0.0.1:8123</code></td>
 </tr>
 </tbody>
 </table>
+<p>Every port except the broker's TLS one is published to this host only. Reach the
+dashboard and the API from elsewhere through a TLS proxy; <code>HA_EXTERNAL_BIND=0.0.0.0</code>
+opens Home Assistant to the network, and <code>MQTT_EXTERNAL_BIND=0.0.0.0</code> the plain
+broker port.</p>
+<p>Each container has a ceiling on memory and on process ids, so one that leaks is
+restarted instead of exhausting the host. The app's are settings, because what
+an agent loads varies: <code>WACTORZ_MEM_LIMIT</code> (default <code>8g</code>), <code>WACTORZ_PIDS_LIMIT</code>
+(<code>4096</code>, threads included) and <code>WACTORZ_CPUS</code> (cores; <code>0</code>, the default, is no
+limit). An app container that restarts under a heavy agent, with <code>OOMKilled</code> in
+<code>docker inspect</code>, needs <code>WACTORZ_MEM_LIMIT</code> raised. Home Assistant's container
+has none.</p>
 <div class="highlight"><pre><span></span><code><span class="c1"># Python stack (most common)</span>
 docker<span class="w"> </span>compose<span class="w"> </span>--profile<span class="w"> </span>python<span class="w"> </span>up<span class="w"> </span>-d
 <span class="c1"># Open: http://localhost:8888  (monitor UI)  http://localhost:8000  (REST API)</span>
 </code></pre></div>
 
+<h3 id="health-probes">Health probes</h3>
+<p>Both servers answer the same probes, with no key:</p>
+<ul>
+<li><code>/health</code> (also <code>/healthz</code>, <code>/livez</code>) is <strong>liveness</strong>. It fails only when the
+  process cannot answer, which is what the compose files and the image's
+  <code>HEALTHCHECK</code> restart on.</li>
+<li><code>/ready</code> (also <code>/readyz</code>) is <strong>readiness</strong>. It answers <code>503</code> while the agents
+  start or stop, and while the broker or the database is unreachable.</li>
+</ul>
+<p>On Kubernetes, point each probe at its own path, and give liveness a start
+period that covers startup:</p>
+<div class="highlight"><pre><span></span><code><span class="nt">livenessProbe</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> path</span><span class="p">:</span><span class="w"> </span><span class="nv">/livez</span><span class="p p-Indicator">,</span><span class="nt"> port</span><span class="p">:</span><span class="w"> </span><span class="nv">8888</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">initialDelaySeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">60</span>
+<span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span>
+<span class="nt">readinessProbe</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">httpGet</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt"> path</span><span class="p">:</span><span class="w"> </span><span class="nv">/readyz</span><span class="p p-Indicator">,</span><span class="nt"> port</span><span class="p">:</span><span class="w"> </span><span class="nv">8888</span><span class="w"> </span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">periodSeconds</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+</code></pre></div>
+
+<p>Never use <code>/ready</code> for liveness. A broker outage would then restart every
+replica in a loop, and restarting fixes nothing the broker's return would not.
+See <a href="https://github.com/waldiez/wactorz/blob/main/docs/api.md">the API reference</a> for what each check means.</p>
 <hr />
 <h2 id="home-assistant-add-on">Home Assistant add-on</h2>
 <p>Use the add-on when Wactorz should run inside Home Assistant OS or a Supervised
@@ -324,9 +379,39 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <td>Where all durable state lives — SQLite database, per-agent pickles, MQTT outbox. Set an absolute path when the working directory isn't durable (a container without a mounted volume loses it on restart); the Home Assistant add-on pins <code>/data/state</code>. <code>wactorz-reset</code> reads the same variable, so a wipe targets whatever the app is using</td>
 </tr>
 <tr>
+<td><code>WACTORZ_AGENTS</code></td>
+<td>—</td>
+<td>Agents this deployment brings, as <code>package.module:attr</code> targets (an <code>Actor</code> subclass or a function declared with <code>@wactorz.agent</code>), comma separated. Supervised at startup beside the built-ins; see <a href="../guide/agents.html#bringing-your-own-agents">Bringing your own agents</a></td>
+</tr>
+<tr>
+<td><code>WACTORZ_PIPELINES</code></td>
+<td>—</td>
+<td>Pipelines this deployment brings, as <code>package.module:attr</code> targets of what <code>wactorz.pipeline()</code> returned, comma separated; their steps, schedule and rules are supervised at startup</td>
+</tr>
+<tr>
+<td><code>WACTORZ_HA_AGENTS</code></td>
+<td><code>auto</code></td>
+<td>Whether the Home Assistant agents start: <code>auto</code> starts them when <code>HA_URL</code> and <code>HA_TOKEN</code> are set, <code>on</code> and <code>off</code> decide outright</td>
+</tr>
+<tr>
+<td><code>WACTORZ_MINIMAL</code></td>
+<td><code>0</code></td>
+<td>Start only the monitor, the dashboard and the agents this deployment brings: no orchestrator, catalogue or installer, so no model is needed. Same as <code>wactorz --minimal</code></td>
+</tr>
+<tr>
+<td><code>WACTORZ_ORCHESTRATOR</code></td>
+<td>—</td>
+<td>What answers chat, as one <code>package.module:attr</code> target: an object implementing <code>wactorz.Orchestrator</code>, or a class or factory called with the actor registry to build one. In place of main (the default when main runs) and of the model-free orchestrator of the minimal profile; a target that cannot be loaded or is not an orchestrator refuses to start. See <em>Your own orchestrator</em> in the library guide</td>
+</tr>
+<tr>
 <td><code>WACTORZ_TZ</code></td>
 <td><em>(unset)</em></td>
 <td>Override the timezone used in agents' date/time context (e.g. <code>Europe/Athens</code>). Precedence: a user's <code>pref_timezone</code> fact &gt; <code>WACTORZ_TZ</code> &gt; standard <code>TZ</code> &gt; host local zone. Blank or unknown values fall through to the next candidate</td>
+</tr>
+<tr>
+<td><code>WACTORZ_LOG_FORMAT</code></td>
+<td><code>text</code></td>
+<td><code>json</code> writes each log record as one JSON object on one line (JSON Lines), to the console and to <code>wactorz.log</code>, for a collector that parses logs: fields <code>ts</code> (UTC), <code>level</code>, <code>logger</code>, <code>message</code>, and <code>exception</code> holding the whole traceback. Redaction applies as in text. The dashboard's log view is unaffected. A node reads the setting from its own environment</td>
 </tr>
 <tr>
 <td><code>WACTORZ_RETENTION_CHAT_DAYS</code></td>
@@ -341,12 +426,62 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 <tr>
 <td><code>WACTORZ_RETENTION_OUTBOX_DAYS</code></td>
 <td><code>7</code></td>
-<td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic</td>
+<td>Days an MQTT message the broker never accepted stays in the outbox; <code>0</code> keeps it until delivered. Once expired it is not retried after a restart, and the log names its topic. A command — a non-retained message under <code>nodes/</code> or <code>agents/by-name/</code>, such as a spawn, a stop or a task for an agent — expires after 10 minutes whatever this says, since replaying one later would undo or repeat what has happened since; a node's retained <code>desired_state</code> follows this setting</td>
+</tr>
+<tr>
+<td><code>WACTORZ_RETENTION_METRICS_DAYS</code></td>
+<td><code>7</code></td>
+<td>Days the per-minute metrics history of every agent and node is kept (<code>/api/history/...</code>); <code>0</code> keeps it for ever. A metrics reset clears it</td>
+</tr>
+<tr>
+<td><code>WACTORZ_MIGRATION_MAX_STATE_BYTES</code></td>
+<td><code>8388608</code></td>
+<td>Largest agent state a <code>/migrate</code> ships, as JSON; a larger one is refused before the agent stops, and <code>--force</code> does not override it. Set on main, which sends it to the node it asks; <code>0</code> sets no limit</td>
+</tr>
+<tr>
+<td><code>WACTORZ_MIGRATION_MAX_BLOB_BYTES</code></td>
+<td><code>67108864</code></td>
+<td>Largest total of an agent's blobs (models, arrays, bytes) a <code>/migrate</code> carries beside its state, and the largest blob a machine accepts from another; over it, the agent stays where it was. Read on main and on each node; <code>0</code> sets no limit</td>
 </tr>
 <tr>
 <td><code>PROMETHEUS_EXTERNAL_PORT</code></td>
 <td><code>9090</code></td>
 <td>Prometheus host port</td>
+</tr>
+<tr>
+<td><code>ALERTMANAGER_EXTERNAL_PORT</code></td>
+<td><code>9093</code></td>
+<td>Alertmanager host port</td>
+</tr>
+<tr>
+<td><code>ALERT_WEBHOOK_URL</code></td>
+<td><em>(none)</em></td>
+<td>Compose only: where Alertmanager POSTs alerts. Unset, alerts are listed on its page and sent nowhere. See <code>prometheus.md</code></td>
+</tr>
+<tr>
+<td><code>ALERT_WEBHOOK_TOKEN</code></td>
+<td><em>(none)</em></td>
+<td>Compose only: sent to that webhook as a bearer token</td>
+</tr>
+<tr>
+<td><code>HA_EXTERNAL_BIND</code> / <code>HA_EXTERNAL_PORT</code></td>
+<td><code>127.0.0.1</code> / <code>8123</code></td>
+<td>Where compose publishes Home Assistant (profile <code>full</code>). <code>0.0.0.0</code> opens it to the network</td>
+</tr>
+<tr>
+<td><code>WACTORZ_MEM_LIMIT</code></td>
+<td><code>8g</code></td>
+<td>Compose only: the app container's memory ceiling</td>
+</tr>
+<tr>
+<td><code>WACTORZ_PIDS_LIMIT</code></td>
+<td><code>4096</code></td>
+<td>Compose only: the app container's ceiling on processes and threads</td>
+</tr>
+<tr>
+<td><code>WACTORZ_CPUS</code></td>
+<td><code>0</code></td>
+<td>Compose only: cores the app container may use; <code>0</code> is no limit</td>
 </tr>
 <tr>
 <td><code>PROMETHEUS_SCRAPE_INTERVAL</code></td>
@@ -376,11 +511,28 @@ Supervisor updates pull an image instead of building Wactorz on the device.</p>
 </tbody>
 </table>
 <hr />
+<h2 id="backing-up-and-moving-an-install">Backing up and moving an install</h2>
+<p><code>wactorz-state</code> writes a state directory to one archive, and puts one back:</p>
+<div class="highlight"><pre><span></span><code>wactorz-state<span class="w"> </span><span class="nb">export</span><span class="w">                       </span><span class="c1"># wactorz-state-&lt;date&gt;-&lt;time&gt;.tar.gz, here</span>
+wactorz-state<span class="w"> </span><span class="nb">export</span><span class="w"> </span>backup.tar.gz<span class="w"> </span>--no-secrets
+wactorz-state<span class="w"> </span>import<span class="w"> </span>backup.tar.gz<span class="w">         </span><span class="c1"># into WACTORZ_STATE_DIR, or ./state</span>
+wactorz-state<span class="w"> </span>import<span class="w"> </span>backup.tar.gz<span class="w"> </span>--replace
+</code></pre></div>
+
+<p>Both read <code>WACTORZ_STATE_DIR</code> as the server does; <code>--state-dir</code> names another directory.</p>
+<ul>
+<li><strong>What it holds:</strong> the database, each agent's state file and blobs, uploads, the install's id, the nodes' SSH host keys and, unless <code>--no-secrets</code> is given, the install's keys: <code>node_signing.key</code>, which every node checks main's messages against, and the broker's TLS keys in <code>mqtt_tls/</code>. With them, a restored install carries on as before; without them it makes new ones, and every node has to be deployed again. An archive with keys is written readable by its owner only, and is to be kept like the keys.</li>
+<li><strong>What it leaves out:</strong> logs, the MQTT outbox (what it holds would be stale by the time it was restored), dashboard sign-in sessions, files part way through being written or received, and files moved aside as unreadable.</li>
+<li><strong>Export while it runs.</strong> The database is copied with SQLite's own backup, consistent however busy it is, and every other file is replaced in one step whenever it is written. What was persisted in the last second may be missing.</li>
+<li><strong>Import with it stopped.</strong> A running server or node holds a lock on its state directory, and an import refuses while it is held; so does a second server started on the same directory by mistake. Import refuses a directory with anything in it unless <code>--replace</code> is given, which keeps what was there beside it as <code>&lt;directory&gt;.before-import-&lt;date&gt;-&lt;time&gt;</code>.</li>
+<li><strong>An archive is code.</strong> Agents' state files are pickles, unpickled when the system starts: importing an archive runs whatever its maker put in it. Import only archives you made. Import checks that an archive holds exactly the files its manifest lists, each matching its SHA-256, at a path inside the directory, which catches a damaged archive, not a forged one.</li>
+</ul>
+<p>A node's state is moved the same way, on the node: <code>wactorz-state export --state-dir ~/wactorz/state</code>, and an import there with the node stopped. The Home Assistant add-on's state is in <code>/data/state</code>, which Home Assistant's own backups already include.</p>
 <h2 id="ssh-key-management">SSH key management</h2>
 <p>Wactorz reaches remote machines over SSH when bootstrapping an edge node with
 <code>/deploy</code>. Key auth is preferred over a password — generate a dedicated deploy
 key:</p>
-<div class="highlight"><pre><span></span><code>ssh-keygen<span class="w"> </span>-t<span class="w"> </span>ed25519<span class="w"> </span>-C<span class="w"> </span><span class="s2">&quot;wactorz-deploy&quot;</span><span class="w"> </span>-f<span class="w"> </span>~/.ssh/wactorz_deploy<span class="w"> </span>-N<span class="w"> </span><span class="s2">&quot;&quot;</span>
+<div class="highlight"><pre><span></span><code>ssh-keygen<span class="w"> </span>-t<span class="w"> </span>ed25519<span class="w"> </span>-C<span class="w"> </span><span class="s2">"wactorz-deploy"</span><span class="w"> </span>-f<span class="w"> </span>~/.ssh/wactorz_deploy<span class="w"> </span>-N<span class="w"> </span><span class="s2">""</span>
 
 <span class="c1"># Authorise on the target host</span>
 ssh-copy-id<span class="w"> </span>-i<span class="w"> </span>~/.ssh/wactorz_deploy.pub<span class="w"> </span>-p<span class="w"> </span><span class="m">22</span><span class="w"> </span>pi@192.168.1.50
@@ -404,12 +556,12 @@ contact unless <code>DEPLOY_STRICT_HOST_KEYS=1</code>. Full details in
 <div class="highlight"><pre><span></span><code><span class="c1"># infra/homeassistant/configuration.yaml</span>
 <span class="nt">rest_command</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">wactorz_chat</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;http://wactorz-python:8000/api/chat&quot;</span>
+<span class="w">    </span><span class="nt">url</span><span class="p">:</span><span class="w"> </span><span class="s">"http://wactorz-python:8000/api/chat"</span>
 <span class="w">    </span><span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">POST</span>
-<span class="w">    </span><span class="nt">content_type</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;application/json&quot;</span>
+<span class="w">    </span><span class="nt">content_type</span><span class="p">:</span><span class="w"> </span><span class="s">"application/json"</span>
 <span class="w">    </span><span class="c1"># The endpoint reads `message`, plus an optional `agent_name` that defaults</span>
-<span class="w">    </span><span class="c1"># to the orchestrator. Add `&quot;agent_name&quot;: &quot;&lt;name&gt;&quot;` to address one agent.</span>
-<span class="w">    </span><span class="nt">payload</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;{&quot;message&quot;:&quot;{{</span><span class="nv"> </span><span class="s">message</span><span class="nv"> </span><span class="s">}}&quot;}&#39;</span>
+<span class="w">    </span><span class="c1"># to the orchestrator. Add `"agent_name": "&lt;name&gt;"` to address one agent.</span>
+<span class="w">    </span><span class="nt">payload</span><span class="p">:</span><span class="w"> </span><span class="s">'{"message":"{{</span><span class="nv"> </span><span class="s">message</span><span class="nv"> </span><span class="s">}}"}'</span>
 </code></pre></div>
 
 <p>Set <code>HA_URL</code> and <code>HA_TOKEN</code> in <code>.env</code>.</p>

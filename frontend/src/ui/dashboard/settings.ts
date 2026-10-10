@@ -3,10 +3,12 @@
  * Copyright 2025 - 2026 Waldiez & contributors
  */
 /**
- * Settings view: the LLM spend-limit panel. The panel delegates save/reset to
+ * Settings view: the LLM spend-limit panel, and the voice panel where this
+ * deployment listens or speaks. The spend panel delegates save/reset to
  * the dashboard via callbacks so it can hit the backend and re-render.
  */
 
+import { button, el, named, option } from "../dom";
 import { buildVoiceSection } from "./voiceSettings";
 
 export interface CostLimitInfo {
@@ -25,39 +27,25 @@ export interface CostLimitCallbacks {
 }
 
 function labelledField(labelText: string, control: HTMLElement): HTMLLabelElement {
-    const lbl = document.createElement("label");
-    lbl.className = "af-settings-field";
-    const span = document.createElement("span");
-    span.className = "af-settings-label";
-    span.textContent = labelText;
-    lbl.append(span, control);
+    const lbl = el("label", "af-settings-field");
+    lbl.append(el("span", "af-settings-label", labelText), control);
     return lbl;
 }
 
 function buildLimitInput(currentLimit: number): HTMLInputElement {
-    const input = document.createElement("input");
+    const input = named(el("input", "af-cfg-input"), "cost-limit", "Spend limit (USD)", "af-cost-limit");
     input.type = "number";
-    input.id = "af-cost-limit";
-    input.name = "cost-limit";
-    input.setAttribute("aria-label", "Spend limit (USD)");
     input.min = "0";
     input.step = "0.01";
-    input.className = "af-cfg-input";
     input.placeholder = "0.00";
     input.value = currentLimit ? String(currentLimit) : "";
     return input;
 }
 
 function buildPeriodSelect(currentPeriod: string): HTMLSelectElement {
-    const select = document.createElement("select");
-    select.className = "af-cfg-input";
-    select.id = "af-cost-period";
-    select.name = "cost-period";
-    select.setAttribute("aria-label", "Cost limit period");
+    const select = named(el("select", "af-cfg-input"), "cost-period", "Cost limit period", "af-cost-period");
     ["daily", "weekly", "monthly"].forEach(p => {
-        const opt = document.createElement("option");
-        opt.value = p;
-        opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+        const opt = option(p, p.charAt(0).toUpperCase() + p.slice(1));
         if (p === currentPeriod) {
             opt.selected = true;
         }
@@ -67,8 +55,7 @@ function buildPeriodSelect(currentPeriod: string): HTMLSelectElement {
 }
 
 function buildCostStatus(info: CostLimitInfo | null, currentLimit: number, period: string): HTMLElement {
-    const status = document.createElement("p");
-    status.className = "af-settings-note";
+    const status = el("p", "af-settings-note");
     const spend = info?.spend_usd ?? 0;
     const periodLabel = period === "daily" ? "today" : period === "weekly" ? "this week" : "this month";
     status.textContent =
@@ -93,12 +80,9 @@ function buildCostActions(
     periodSelect: HTMLSelectElement,
     cb: CostLimitCallbacks,
 ): HTMLElement {
-    const actions = document.createElement("div");
-    actions.className = "af-settings-actions";
+    const actions = el("div", "af-settings-actions");
 
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "af-mini-btn";
-    saveBtn.textContent = "Save limit";
+    const saveBtn = button("af-mini-btn", "Save limit");
     withBusy(saveBtn, async () => {
         const v = parseFloat(limitInput.value || "0");
         if (isNaN(v) || v < 0) {
@@ -108,9 +92,7 @@ function buildCostActions(
     });
     actions.appendChild(saveBtn);
 
-    const resetBtn = document.createElement("button");
-    resetBtn.className = "af-mini-btn danger";
-    resetBtn.textContent = "Reset spend";
+    const resetBtn = button("af-mini-btn danger", "Reset spend");
     resetBtn.title =
         "Clears the period budget counter only. The lifetime " +
         "“Cost” total is separate and is not affected (use wactorz-reset --metrics for that).";
@@ -133,19 +115,13 @@ function buildCostActions(
 
 /** The  LLM Spend Limit panel. */
 function buildCostLimitSection(info: CostLimitInfo | null, cb: CostLimitCallbacks): HTMLElement {
-    const section = document.createElement("div");
-    section.className = "af-settings-section";
-
-    const h = document.createElement("h3");
-    h.className = "af-settings-section-heading";
-    h.textContent = "🪙 LLM Spend Limit";
-    section.appendChild(h);
+    const section = el("div", "af-settings-section");
+    section.appendChild(el("h3", "af-settings-section-heading", "🪙 LLM Spend Limit"));
 
     const currentLimit = info?.limit_usd ?? 0;
     const currentPeriod = info?.period ?? "monthly";
 
-    const grid = document.createElement("div");
-    grid.className = "af-settings-grid";
+    const grid = el("div", "af-settings-grid");
     const limitInput = buildLimitInput(currentLimit);
     const periodSelect = buildPeriodSelect(currentPeriod);
     grid.appendChild(labelledField("Limit (USD, 0 to disable)", limitInput));
@@ -157,28 +133,22 @@ function buildCostLimitSection(info: CostLimitInfo | null, cb: CostLimitCallback
     return section;
 }
 
-/** Assemble the settings view. */
+/** Assemble the settings view: the LLM spend limit, and voice where there is any. */
 export function buildSettingsView(
     info: CostLimitInfo | null,
     cb: CostLimitCallbacks,
     apiBase = "",
     onVoiceChanged: () => void = () => {},
 ): HTMLElement {
-    const el = document.createElement("div");
-    el.className = "af-settings";
-
-    const title = document.createElement("h2");
-    title.className = "af-settings-title";
-    title.textContent = "Settings";
-    el.appendChild(title);
-
-    el.appendChild(buildCostLimitSection(info, cb));
+    const view = el("div", "af-settings");
+    view.appendChild(el("h2", "af-settings-title", "Settings"));
+    view.appendChild(buildCostLimitSection(info, cb));
     // Absent entirely when this deployment neither listens nor speaks.
     const voice = buildVoiceSection(apiBase, onVoiceChanged);
     if (voice) {
-        el.appendChild(voice);
+        view.appendChild(voice);
     }
     // No Home Assistant fields: the HA URL comes from /api/config and the Devices
     // nav button links straight to HA — the browser never holds a token.
-    return el;
+    return view;
 }
